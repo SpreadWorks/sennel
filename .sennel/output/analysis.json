@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-07T11:35:02.637Z",
+  "analyzedAt": "2026-09-07T15:24:44.565Z",
   "package": {
     "entries": [
       {
@@ -2931,9 +2931,9 @@
       },
       {
         "file": "src/flow/commands/review.js",
-        "hash": "8290318b709e78a75708507f8e6c3320",
-        "lines": 4983,
-        "mtime": "2026-09-07T07:08:53.690Z",
+        "hash": "60f064c8156146a9812c63c1c5bf511b",
+        "lines": 4969,
+        "mtime": "2026-09-07T12:57:01.633Z",
         "className": "review",
         "methods": [
           "TaskReviewSourceEffectObserver",
@@ -2997,7 +2997,6 @@
           "loadPreviousImplReviewMemory",
           "taskReviewRecurrenceHistory",
           "buildImplReviewPrompt",
-          "canonicalTaskReviewAttempt",
           "resolveRequirementIds",
           "loadImplReviewPolicyContext",
           "priorImplReviewFingerprintCounts",
@@ -3234,24 +3233,25 @@
         "extends": "ImplReviewPersistenceStrategy",
         "usedBy": null,
         "id": "331cf497",
-        "summary": "Implements the flow review command, coordinating draft, specification, implementation, task, and test review workflows.",
-        "detail": "The module validates canonical review inputs, execution identities, artifact revisions, file maps, and environment-bound work units before invoking review agents. It supports diff scoping, exclusion matching, loop-based reviews, proposal parsing, schema validation, repair retries, convergence tracking, and persistence of JSON and Markdown review artifacts. Separate review pipelines handle implementation findings, specification feedback, draft questions, task reviews, and test coverage analysis with typed artifacts and failure classifications. The command also enforces safe filesystem boundaries, canonical test topologies, requirement-to-file mappings, finding deduplication, attempt history, and configurable review policies.",
+        "summary": "Implements the flow review command, coordinating draft, specification, implementation, task, and test reviews through canonical inputs and structured artifacts. It validates agent responses, enforces scope and persistence policies, supports iterative review loops, and records review history and convergence evidence.",
+        "detail": "The module resolves review targets, diffs, guardrails, task identities, canonical file maps, test topologies, and revision-scoped work units from validated environment and flow state. It builds phase-specific prompts, invokes review agents with retry and transport policies, parses or repairs JSON responses, validates schemas, and filters findings against touched files and declared requirements. Implementation reviews support strict and trusted loop persistence strategies, finding disposition rules, recurrence memory, bounded loop execution, and deterministic finding keys. Test and specification reviews produce normalized coverage, finding, delta, Markdown, and JSON artifacts while enforcing output-directory boundaries, canonical paths, prompt-size limits, and review history conventions.",
         "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-07T11:36:06.618Z",
+          "processedAt": "2026-09-07T15:25:21.868Z",
           "attempts": 1
         },
         "keywords": [
           "flow review",
-          "CLI command",
           "code review",
-          "draft review",
-          "specification review",
-          "test coverage",
-          "artifact persistence",
+          "agent orchestration",
+          "diff analysis",
           "schema validation",
-          "review loop"
+          "review artifacts",
+          "test coverage",
+          "guardrails",
+          "retry loop",
+          "finding persistence"
         ]
       },
       {
@@ -4579,7 +4579,8 @@
           "src/flow/lib/review-recurrence.js",
           "src/flow/lib/task-execution-overrun.js",
           "src/flow/lib/definition-lifecycle-failure.js",
-          "src/flow/lib/run-gate.js"
+          "src/flow/lib/run-gate.js",
+          "src/flow/lib/task-review-accounting.js"
         ],
         "id": "ee25f72a",
         "summary": "Defines immutable canonical command-result artifacts, publications, and attempt histories. It provides attachment helpers for passing structured artifacts and publications through command results and validates persisted attempt sequences.",
@@ -4648,9 +4649,9 @@
       },
       {
         "file": "src/flow/lib/canonical-flow-manager-store.js",
-        "hash": "68c45d8a51814b2e0f569fb84d97849a",
-        "lines": 4562,
-        "mtime": "2026-09-07T10:37:26.929Z",
+        "hash": "10b41a83a7036a83cef96a769a36f602",
+        "lines": 4575,
+        "mtime": "2026-09-07T13:50:42.070Z",
         "className": "canonical-flow-manager-store",
         "methods": [
           "CanonicalRawActivityReplayOnlyError",
@@ -4749,6 +4750,7 @@
           "./task-mutation-lineage.js",
           "./step-transition-policy.js",
           "./retry-recovery.js",
+          "./task-review-recovery-checkpoint.js",
           "./upgrade-result-artifact.js",
           "./canonical-gate-artifacts.js",
           "./test-review-repair-timeout.js",
@@ -4769,24 +4771,25 @@
           "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "041f2538",
-        "summary": "CanonicalFlowManagerStore provides the authoritative persistence and transition layer for flow execution state, artifacts, attempts, reviews, gates, recoveries, and task lifecycle changes. It validates every operation against canonical snapshots, typed decisions, catalog ownership, and idempotency constraints before delegating durable mutations to the runtime.",
-        "detail": "The module normalizes identifiers, paths, execution modes, metrics, activities, attempts, artifacts, issue-log entries, and runtime metadata while rejecting malformed or conflicting state with explicit invariant and conflict errors. It projects canonical flow state into runtime views and records deterministic activity, transition, approval, outbox, and test-chain evidence for replay-safe operation. Specialized admission classes enforce stale-state detection and exact Definition-selected plans for gate settlement, test-chain recovery, draft promotion, implementation repair, acceptance repair, and execution-overrun handling. Public manager methods coordinate task start and completion, retries, rewinds, artifact publication, source-worker handoffs, issue logging, metrics, notes, policy updates, and interrupted finalize-sync recovery through the CanonicalFlowRuntime and AtomicFile-backed storage.",
+        "summary": "CanonicalFlowManagerStore provides the authoritative persistence and transition facade for Flow execution state, specifications, attempts, artifacts, reviews, gates, recoveries, and outbox operations.",
+        "detail": "The module validates and canonicalizes identifiers, execution modes, catalog paths, metrics, activities, attempts, decisions, and artifact payloads before delegating durable mutations to CanonicalFlowRuntime. It projects persisted snapshots into runtime views and enforces optimistic-concurrency checks using revisions, fingerprints, stable activity identities, sealed Definition plans, and exact recovery receipts. The store coordinates complex lifecycle transitions including task execution, gate settlement, test-chain repair, draft promotion, implementation recovery, approval, failure handling, artifact publication, and interrupted finalize-sync recovery. It uses atomic filesystem writes and catalog ownership checks to prevent stale, ambiguous, or unauthorized artifact and state updates.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-07T11:36:06.651Z",
+          "processedAt": "2026-09-07T15:25:21.888Z",
           "attempts": 1
         },
         "keywords": [
-          "canonical state management",
-          "flow runtime",
-          "state transitions",
+          "canonical flow state",
+          "runtime persistence",
+          "state machine",
           "artifact catalog",
-          "attempt recovery",
-          "idempotency",
-          "admission validation",
-          "outbox persistence",
-          "task lifecycle"
+          "optimistic concurrency",
+          "task lifecycle",
+          "gate settlement",
+          "recovery",
+          "outbox",
+          "atomic file writes"
         ]
       },
       {
@@ -5370,9 +5373,9 @@
       },
       {
         "file": "src/flow/lib/current-flow-state.js",
-        "hash": "772ce4e2a7a02f1ca8b66c9371380097",
-        "lines": 8639,
-        "mtime": "2026-09-05T00:14:25.201Z",
+        "hash": "4df68e1da1197e9fc3c288d6320e8e73",
+        "lines": 8648,
+        "mtime": "2026-09-07T13:18:39.619Z",
         "className": "current-flow-state",
         "methods": [
           "CanonicalFlowArtifactWrite",
@@ -5645,28 +5648,31 @@
           "src/flow/lib/run-finalize-cleanup.js",
           "src/flow/lib/run-prepare-spec.js",
           "src/flow/lib/run-recover-finalization.js",
+          "src/flow/lib/task-review-accounting.js",
           "src/flow/lib/task-review-execution-identity.js",
+          "src/flow/lib/task-review-recovery-checkpoint.js",
           "src/flow/lib/worker-artifact-handoff.js",
           "src/flow/registry.js"
         ],
         "id": "42607a0e",
-        "summary": "Implements the canonical current-flow state model, transition engine, artifact handling, and durable persistence for flow execution.",
-        "detail": "This module defines strongly validated immutable value objects for flow identities, nodes, attempts, policies, results, activities, artifacts, reviews, and recovery decisions. It enforces lifecycle invariants across hierarchical Flow, Step, and Task nodes, including retries, failure policies, dynamic task admission, review repair, artifact publication, and finalization. Canonical and runtime artifacts are written through typed contracts and atomic files, while activity records are appended to an integrity-checked journal. Current flow state is serialized, validated, locked, reconstructed from journal history, and stored atomically within version directories with semantic migration support.",
+        "summary": "Implements the canonical Flow state model, transition engine, activity journal, artifact handling, and durable Version Store.",
+        "detail": "Defines strongly validated immutable value objects for Flow identities, lifecycle, policies, nodes, attempts, failures, artifacts, reviews, and transition payloads. Enforces state-machine invariants for execution frontiers, retries, recovery, task admission, review workflows, finalization, and dynamic task materialization. Persists state and append-only Activities through atomic files, process-owned locks, revision checks, filesystem authority validation, and journal replay consistency checks. Provides canonical artifact publication, runtime observation, Spec revision management, semantic validation, migration support, and recovery paths for interrupted or failed operations.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-07T11:36:06.694Z",
+          "processedAt": "2026-09-07T15:25:21.905Z",
           "attempts": 1
         },
         "keywords": [
           "flow state machine",
-          "state validation",
           "activity journal",
-          "artifact contracts",
-          "retry recovery",
+          "immutable state",
+          "retry and recovery",
+          "artifact catalog",
+          "task admission",
+          "spec revision",
           "atomic persistence",
-          "task lifecycle",
-          "version migration"
+          "semantic validation"
         ]
       },
       {
@@ -7506,9 +7512,9 @@
       },
       {
         "file": "src/flow/lib/flow-repository-runtime-artifacts.js",
-        "hash": "8c6b2914bee345d4466e8e686c0a3615",
-        "lines": 81,
-        "mtime": "2026-08-18T10:53:57.611Z",
+        "hash": "3103042b895cd5e6fafbe061ccfe26d9",
+        "lines": 82,
+        "mtime": "2026-09-07T14:23:21.165Z",
         "className": "flow-repository-runtime-artifacts",
         "methods": [
           "FlowRepositoryRuntimeArtifactRegistry",
@@ -7529,20 +7535,21 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "d4a84dc3",
-        "summary": "Registers repository-relative runtime artifacts associated with Flow execution and version locks. It validates path safety and tracks exact artifact locations under target identity authority.",
-        "detail": "Repository runtime artifact paths must be normalized POSIX paths that remain inside the repository. The registry validates that runtime lock ownership uses FlowVersionRuntimeLockLocation values. Internal exact-location tracking supports membership checks for registered artifacts. Exposed collections are frozen to prevent callers from mutating the registry’s canonical artifact view.",
+        "summary": "Defines a registry for repository-relative runtime artifacts, including ownership validation for Flow version runtime locks. It normalizes paths and prevents artifacts from escaping the repository boundary.",
+        "detail": "The module uses POSIX normalization to canonicalize repository-relative artifact paths and rejects absolute or traversal-based locations. Runtime lock ownership is validated against FlowVersionRuntimeLockLocation values. The registry tracks exact artifact paths and exposes immutable collections for safe consumers. Errors are explicit and enforce repository confinement and typed ownership contracts.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-08-20T10:06:51.067Z",
+          "processedAt": "2026-09-07T15:25:21.922Z",
           "attempts": 1
         },
         "keywords": [
           "runtime artifacts",
-          "repository registry",
-          "version lock",
+          "repository paths",
+          "POSIX normalization",
+          "runtime locks",
           "path validation",
-          "target identity"
+          "artifact registry"
         ]
       },
       {
@@ -10127,9 +10134,9 @@
       },
       {
         "file": "src/flow/lib/retry-recovery.js",
-        "hash": "01685e0caf3afc83497b6b07e5aedf94",
-        "lines": 637,
-        "mtime": "2026-09-07T10:53:41.568Z",
+        "hash": "0fa54cd0a2cffe3789f9db4f53185dfe",
+        "lines": 747,
+        "mtime": "2026-09-07T15:12:38.336Z",
         "className": "retry-recovery",
         "methods": [
           "RetryRecoveryBaseline",
@@ -10143,6 +10150,7 @@
           "RetryRecoveryEvidence",
           "RetryRecoveryTarget",
           "readRetryBaseline",
+          "readRetryRecoveryReceipt",
           "RetryRecoveryInput",
           "CanonicalRetryRecoveryGrant",
           "CanonicalRetryRecovery",
@@ -10172,7 +10180,8 @@
           "./repair-fingerprint.js",
           "./runtime-module-identity.js",
           "./review-target-authority.js",
-          "./task-step-identity.js"
+          "./task-step-identity.js",
+          "./task-review-recovery-checkpoint.js"
         ],
         "exports": [
           "RetryRecoveryBaseline",
@@ -10186,6 +10195,7 @@
           "RetryRecoveryEvidence",
           "RetryRecoveryTarget",
           "readRetryBaseline",
+          "readRetryRecoveryReceipt",
           "RetryRecoveryInput",
           "CanonicalRetryRecoveryGrant",
           "CanonicalRetryRecovery",
@@ -10204,25 +10214,26 @@
           "src/flow/lib/get-next-action.js",
           "src/flow/lib/get-status.js",
           "src/flow/lib/review-recovery-authority.js",
+          "src/flow/lib/run-review.js",
           "src/flow/lib/set-retry.js"
         ],
         "id": "3de0db3f",
-        "summary": "Implements bounded retry recovery using durable baselines, route-specific evidence, changed-artifact validation, and canonical recovery grants. It authorizes exhausted recovery only when the failure and evidence satisfy strict policy constraints.",
-        "detail": "The module defines retry routes, baseline and receipt artifacts, recovery input, changed-evidence records, target bindings, and view models with strong validation. Baselines capture Flow, Attempt, project, runtime, and target identity digests, while receipts and publication wrappers bind artifacts to the owning Activities. Recovery checks that the target is active, belongs to the current Flow, has durable evidence, and represents a failed active Attempt. Exhausted recovery is restricted to tooling failures with no remaining definition budget and requires parent-derived baseline evidence whose project, runtime, target, and digest values demonstrate a real change. Canonical retry and exhausted-recovery FlowManager operations then produce a typed grant.",
+        "summary": "Implements the canonical retry and recovery model for failed Flow Attempts, including baselines, evidence, receipts, grants, and durable artifact publication. It validates recovery targets, identities, changed evidence, and authorization relationships across Flow state and review tooling.",
+        "detail": "The module defines typed recovery routes, baselines, receipts, inputs, grants, and views with strict validation for text, integers, digests, routes, and Flow version compatibility. Recovery baselines and receipts are serialized as canonical JSON artifacts and hashed with SHA-256 for tamper-evident comparison. Publication logic requires exact artifact writes and binds recovery records to Activities, Attempts, Flow identity, and Task Review authorization. Exhausted recovery requires changed evidence derived from a durable parent baseline, while normal retry recovery enforces active failed Attempts and configured retry limits.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-07T11:36:06.711Z",
+          "processedAt": "2026-09-07T15:25:21.922Z",
           "attempts": 1
         },
         "keywords": [
           "retry recovery",
           "recovery baseline",
-          "changed evidence",
-          "digest validation",
-          "retry route",
-          "canonical grant",
-          "tooling failure"
+          "attempt identity",
+          "durable evidence",
+          "artifact publication",
+          "Task Review authorization",
+          "SHA-256"
         ]
       },
       {
@@ -10651,9 +10662,9 @@
       },
       {
         "file": "src/flow/lib/review-recurrence.js",
-        "hash": "fbefefbf00508f7c832981c0af14ea9c",
-        "lines": 775,
-        "mtime": "2026-09-07T07:08:53.690Z",
+        "hash": "bc4d07060cb4fc73d704454a72358022",
+        "lines": 789,
+        "mtime": "2026-09-07T12:57:36.005Z",
         "className": "review-recurrence",
         "methods": [
           "CanonicalImplementationRepairRecord",
@@ -10685,6 +10696,7 @@
         "imports": [
           "node:crypto",
           "./canonical-command-result.js",
+          "./task-review-accounting.js",
           "./finding-disposition-policy.js",
           "./task-mutation-lineage.js"
         ],
@@ -10709,23 +10721,23 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "2f31740b",
-        "summary": "Defines canonical records, histories, candidates, and status objects for detecting and validating recurring findings during Task Review and Implementation Review.",
-        "detail": "The module uses typed immutable value objects, strict field validation, canonical fingerprints, stable serialization, and deep freezing to preserve review lineage integrity. It links findings to Attempt artifacts, repair records, Activity records, mutation manifests, and disposition cycles, rejecting incomplete or mismatched recurrence evidence. Task Review convergence evidence is assembled from artifact-catalog records and handoff lineage, while Implementation Review recurrence requires binding to the immediately preceding review lineage. Validation contracts distinguish prior repair insufficiency, recurrence explanations, and repair strategies, and expose normalized histories and recurrence status for downstream flow control.",
+        "summary": "Models recurrence across Task Review and Implementation Review cycles and verifies that repeated findings are connected to canonical prior evidence and repair lineage. It builds recurrence histories, candidates, validation results, convergence evidence, and implementation status from persisted artifacts.",
+        "detail": "The module uses stable serialization, SHA-256 fingerprints, exact-key checks, and deep freezing to create deterministic immutable records. Recurrence entries bind findings to Attempts, repair records, mutation manifests, review accounting, and canonical artifact history. Candidate validation requires exact prior findings, explanations, repair strategies, and matching fingerprints before a recurrence can be accepted. Implementation recurrence additionally enforces immediate review lineage, round ordering, budget consistency, and mutation handoff continuity.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-07T11:36:06.731Z",
+          "processedAt": "2026-09-07T15:25:21.922Z",
           "attempts": 1
         },
         "keywords": [
           "review recurrence",
-          "finding fingerprint",
-          "canonical repair record",
+          "finding cycles",
+          "repair lineage",
+          "mutation manifests",
+          "canonical history",
           "Task Review",
           "Implementation Review",
-          "attempt lineage",
-          "mutation manifest",
-          "convergence evidence"
+          "convergence"
         ]
       },
       {
@@ -10826,9 +10838,9 @@
       },
       {
         "file": "src/flow/lib/review-transition-facts.js",
-        "hash": "b9488d00722e18ddb1307c38c0bd3c45",
+        "hash": "67efdb0b7be3f5037c02f3e2d365e83c",
         "lines": 318,
-        "mtime": "2026-09-03T02:55:38.465Z",
+        "mtime": "2026-09-07T12:57:01.504Z",
         "className": "review-transition-facts",
         "methods": [
           "ReviewDeferralEvidence",
@@ -10850,6 +10862,7 @@
         "imports": [
           "./flow-findings.js",
           "./canonical-command-result.js",
+          "./task-review-accounting.js",
           "./review-route.js"
         ],
         "exports": [
@@ -10864,23 +10877,22 @@
           "src/flow/lib/review-transition-persistence.js"
         ],
         "id": "995061c5",
-        "summary": "Derives review transition facts from canonical review artifacts, finding dispositions, mechanical markers, retry state, and Task budgets. It distinguishes valid, invalid, deferred, repaired, and unavailable review evidence.",
-        "detail": "The module normalizes review finding kinds and validates verdicts, dispositions, SHA-256 fingerprints, and test revisions. ReviewDeferralEvidence and ReviewRepairEvidence encode whether review evidence is available, malformed, mechanically caused, or requires a reason. ReviewTransitionFacts aggregates tooling outcomes, attempt counts, Task rounds, current attempt artifacts, source findings, and repair or deferral evidence for the active scope. Helpers map Flow step identifiers to review phases and calculate Task review budgets from the current lifecycle state.",
+        "summary": "Extracts and validates the canonical facts needed to transition between review phases. It normalizes review verdicts, finding dispositions, tooling outcomes, fingerprints, deferrals, repairs, and Task Review accounting into typed transition data.",
+        "detail": "The module identifies blocking, advisory, and mechanical findings from review artifacts while supporting canonical fingerprint and test-revision validation. ReviewDeferralEvidence and ReviewRepairEvidence encode whether evidence is available, invalid, or not applicable, with reasons required only for unavailable or invalid states. ReviewTransitionFacts captures tooling outcomes, attempt counts, Task rounds, and current attempt artifacts using canonical Flow history. Review phase resolution delegates step identifiers to the shared review route model.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-03T02:57:01.044Z",
+          "processedAt": "2026-09-07T15:25:21.922Z",
           "attempts": 1
         },
         "keywords": [
-          "review transition",
-          "review findings",
+          "review transitions",
+          "verdicts",
+          "finding dispositions",
+          "tooling outcomes",
           "deferral evidence",
           "repair evidence",
-          "verdict",
-          "finding fingerprint",
-          "Task budget",
-          "mechanical failure"
+          "phase resolution"
         ]
       },
       {
@@ -12864,9 +12876,9 @@
       },
       {
         "file": "src/flow/lib/run-review.js",
-        "hash": "565c00886d5a80dd08ab3199dd354aac",
-        "lines": 1458,
-        "mtime": "2026-09-07T07:08:53.691Z",
+        "hash": "a8d12cdcf00ebc42f1db9324178c0095",
+        "lines": 1671,
+        "mtime": "2026-09-07T15:12:38.238Z",
         "className": "run-review",
         "methods": [
           "appendIssueLogFromTestReviewToolingFailure",
@@ -12909,6 +12921,11 @@
           "taskReviewBaselineInput",
           "newTaskReviewBaselineInput",
           "partialTaskReviewEffectFailure",
+          "captureStoppedTaskReviewCheckpoint",
+          "stoppedTaskReviewFailure",
+          "taskReviewCanonicalVersionPrefix",
+          "taskReviewRecoveryPublicationPaths",
+          "assertTaskReviewUnsealedCleanupAuthorized",
           "reconcileUnsealedTaskReviewSources"
         ],
         "imports": [
@@ -12943,7 +12960,10 @@
           "./task-canonical-context.js",
           "./finding-disposition-policy.js",
           "./review-recurrence.js",
-          "./task-review-execution-identity.js"
+          "./task-review-execution-identity.js",
+          "./task-review-accounting.js",
+          "./task-review-recovery-checkpoint.js",
+          "./retry-recovery.js"
         ],
         "exports": [
           "appendIssueLogFromTestReviewToolingFailure",
@@ -12969,22 +12989,22 @@
         "extends": "FlowCommand",
         "usedBy": null,
         "id": "d4e97204",
-        "summary": "Implements the Flow review runner for specification, draft, test, and implementation reviews. It executes review subprocesses, canonicalizes findings, manages retries and execution leases, and persists failure or recovery evidence against the current Flow state.",
-        "detail": "The module parses phase-specific review output and tooling failures, including structured implementation-review artifacts and normalized verdicts. It assigns stable finding identifiers and fingerprints, separates blocking, advisory, and repair-target findings, and binds review decisions to the current target tree and repair state. Task reviews isolate work units and agent runtime directories, persist source baselines and unsealed checkpoints, and detect partial effects or lineage mismatches during recovery. Canonical review execution validates active Flow nodes, observation boundaries, execution identities, and downstream reset behavior before returning an envelope result.",
-        "chapter": "internal_design",
+        "summary": "Runs canonical review commands across specification, proposal, implementation, test, and Task Review phases while preserving durable evidence and recovery boundaries. It parses subprocess output, retries tooling failures, validates review artifacts, and coordinates review execution with Flow state and Task mutation lineage.",
+        "detail": "The command resolves review phases and routes, admits execution against the current target tree, and launches the review subprocess with canonical source, context, topology, and execution identity inputs. It parses structured verdicts and artifacts, canonicalizes findings, and records tooling failures through controlled retry behavior. Task Review execution uses isolated work units, validated runtime directories, persisted baselines, unsealed checkpoints, and cleanup authorization tied to retry recovery receipts. The command returns structured failure envelopes when execution stops, artifacts are malformed, state is stale, or recovery evidence cannot authorize source cleanup.",
+        "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-07T11:36:06.748Z",
+          "processedAt": "2026-09-07T15:25:21.922Z",
           "attempts": 1
         },
         "keywords": [
-          "review orchestration",
-          "review findings",
-          "canonicalization",
-          "retry handling",
-          "execution lease",
-          "task recovery",
-          "lineage validation",
+          "review command",
+          "review phases",
+          "subprocess retry",
+          "canonical findings",
+          "Task Review",
+          "checkpoint recovery",
+          "failure envelopes",
           "Flow state"
         ]
       },
@@ -14067,9 +14087,9 @@
       },
       {
         "file": "src/flow/lib/set-retry.js",
-        "hash": "c0ff1ba759a05b61c92699296fe0c0fa",
-        "lines": 91,
-        "mtime": "2026-08-18T07:40:38.306Z",
+        "hash": "0087fe02d8eb45b60148a37441f1ff78",
+        "lines": 92,
+        "mtime": "2026-09-07T13:01:22.863Z",
         "className": "set-retry",
         "methods": [
           "deriveCurrentEvidence"
@@ -14085,21 +14105,21 @@
         "extends": "FlowCommand",
         "usedBy": null,
         "id": "ee559b7a",
-        "summary": "Records retry intent and derives current evidence for recovery operations.",
-        "detail": "The command delegates retry validation and state changes to the canonical retry subsystem. Invalid recovery input is converted into an INVALID_RECOVERY_INPUT response, while unavailable retries produce RETRY_NOT_AVAILABLE. Evidence derivation captures the current execution kind, phase, node, and related context needed for safe recovery. Successful results return structured retry metadata through the set-retry command boundary.",
+        "summary": "Provides the set-retry Flow command, converting recovery input into a validated retry operation and reporting unavailable recovery targets through structured envelopes. It also derives current evidence for the selected recovery route.",
+        "detail": "The command is implemented as a FlowCommand subclass and delegates input validation and recovery semantics to the retry-recovery domain model. Invalid recovery input is returned as an INVALID_RECOVERY_INPUT envelope with the original validation message. Targets that cannot be retried produce a RETRY_NOT_AVAILABLE envelope. Current evidence is derived from the command context, recovery kind, phase, and node identifier before the retry operation is assembled.",
         "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-08-20T10:06:51.206Z",
+          "processedAt": "2026-09-07T15:25:21.922Z",
           "attempts": 1
         },
         "keywords": [
-          "retry",
+          "set retry",
+          "Flow command",
           "recovery input",
           "retry availability",
           "current evidence",
-          "recovery state",
-          "Flow command"
+          "error envelopes"
         ]
       },
       {
@@ -15075,7 +15095,8 @@
           "src/flow/definition.js",
           "src/flow/lib/gate-transition.js",
           "src/flow/lib/task-execution-overrun.js",
-          "src/flow/lib/task-mutation-lineage.js"
+          "src/flow/lib/task-mutation-lineage.js",
+          "src/flow/lib/task-review-accounting.js"
         ],
         "id": "bbbc8d54",
         "summary": "Defines the bounded execution policy and domain value objects for task-execution overruns. It limits execution to two rounds and creates an overrun decision only when the supplied facts prove the budget was exceeded.",
@@ -15141,14 +15162,15 @@
       },
       {
         "file": "src/flow/lib/task-mutation-lineage.js",
-        "hash": "a0b6a7a267a789cf88b4526ea22dc66f",
-        "lines": 363,
-        "mtime": "2026-09-04T07:35:28.672Z",
+        "hash": "721bef59cb8c8fe8ff4d7340b6ac5336",
+        "lines": 373,
+        "mtime": "2026-09-07T13:18:39.248Z",
         "className": "task-mutation-lineage",
         "methods": [
           "TaskMutationLineage",
           "TaskMutationLineageSet",
           "readTaskMutationLineagesFromCatalog",
+          "TaskReviewSourceEffectRejection",
           "TaskReviewRepairManifest",
           "TaskReviewAcceptanceHandoff",
           "CurrentTaskSourceFile",
@@ -15167,6 +15189,7 @@
           "TaskMutationLineage",
           "TaskMutationLineageSet",
           "readTaskMutationLineagesFromCatalog",
+          "TaskReviewSourceEffectRejection",
           "TaskReviewRepairManifest",
           "TaskReviewAcceptanceHandoff",
           "CurrentTaskSourceFile",
@@ -15175,7 +15198,7 @@
           "captureCurrentTaskSource",
           "TaskExecutionBudget"
         ],
-        "extends": "CurrentTaskSourceEntry",
+        "extends": "Error",
         "usedBy": [
           "src/flow/lib/canonical-flow-manager-store.js",
           "src/flow/lib/canonical-review-artifacts.js",
@@ -15186,34 +15209,80 @@
           "src/flow/lib/run-review.js",
           "src/flow/lib/task-canonical-context.js",
           "src/flow/lib/task-execution-overrun.js",
+          "src/flow/lib/task-review-recovery-checkpoint.js",
           "src/flow/lib/worker-artifact-handoff.js",
           "src/flow/registry.js"
         ],
         "id": "20288ddf",
-        "summary": "Defines immutable lineage, review-repair, acceptance-handoff, and source-snapshot models for tracking task mutations across implementation attempts.",
-        "detail": "TaskMutationLineage validates manifest binding and source fingerprints, then derives a SHA-256 fingerprint from its serialized representation. TaskMutationLineageSet enforces ordered, unique implementation rounds and verifies that repair budgets match their corresponding implementation lineage. Review-repair manifests constrain changed paths to the task allow-list, require evidence for must-fix findings, and encode strict acceptance rules for rejected reviews and no-change repairs. Source snapshot classes safely capture files and deletions under the repository root, while catalog loading and acceptance handoff validation preserve consistency across published artifacts and review attempts.",
+        "summary": "Defines the source-mutation lineage and Task Review repair contracts used to prove which Task-owned files may change across implementation and review rounds. It captures immutable source snapshots, repair manifests, acceptance handoffs, and catalog-readable mutation lineage.",
+        "detail": "TaskMutationLineage binds a source fingerprint and mutation manifest to an exact Attempt, while TaskMutationLineageSet enforces implementation round ordering and shared execution budgets. Task Review repair manifests restrict changes to the current Task allow-list and to files owned by must-fix findings, rejecting unauthorized or unnecessary mutations. Acceptance handoffs require the fourth repaired rejected review, matching repair lineage, and local review accounting. CurrentTaskSourceSnapshot safely captures files and deletions beneath a repository root, records a deterministic fingerprint, and verifies that entries match the lineage allow-list.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-04T07:39:47.481Z",
+          "processedAt": "2026-09-07T15:25:21.922Z",
           "attempts": 1
         },
         "keywords": [
-          "task mutation lineage",
-          "review repair",
+          "mutation lineage",
           "source snapshot",
-          "artifact manifest",
-          "SHA-256 fingerprint",
-          "allow-list validation",
+          "repair manifest",
+          "Task allow-list",
           "acceptance handoff",
-          "execution budget"
+          "Attempt binding",
+          "file safety",
+          "mutation fingerprint"
+        ]
+      },
+      {
+        "file": "src/flow/lib/task-review-accounting.js",
+        "hash": "44c08ddd0c003fcce0d63077d0f30a06",
+        "lines": 148,
+        "mtime": "2026-09-07T12:57:35.908Z",
+        "className": "task-review-accounting",
+        "methods": [
+          "TaskReviewAccounting",
+          "text",
+          "taskReviewDescriptor",
+          "historyFromCatalog",
+          "currentBudget"
+        ],
+        "imports": [
+          "./current-flow-state.js",
+          "./canonical-command-result.js",
+          "./task-execution-policy.js"
+        ],
+        "exports": [
+          "TaskReviewAccounting"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/lib/review-recurrence.js",
+          "src/flow/lib/review-transition-facts.js",
+          "src/flow/lib/run-review.js"
+        ],
+        "id": "b79ca185",
+        "summary": "Defines canonical accounting for Task Review rounds, attempts, budgets, and semantic review ordinals. It rejects inconsistent histories, attempts, budgets, and non-canonical Flow state.",
+        "detail": "The module derives review descriptors, canonical attempt history, and the current Task execution budget from published Flow state. TaskReviewAccounting validates that accounting history belongs to the active Task and Attempt, that round boundaries are valid, and that completed or in-flight review counts remain within the four-result round limit. It also enforces monotonic history and attempt relationships. Helper methods resolve completed and unpublished review ordinals while rejecting invalid or missing Attempt sequences.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-07T15:25:21.939Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "Task Review",
+          "accounting",
+          "attempt history",
+          "execution budget",
+          "review ordinal",
+          "canonical Flow state"
         ]
       },
       {
         "file": "src/flow/lib/task-review-execution-identity.js",
-        "hash": "dc539ddb561f864d8cdc8723e02dc1fd",
-        "lines": 69,
-        "mtime": "2026-09-07T07:08:53.566Z",
+        "hash": "32d22a1c5017e76a9c4cdf5b1d2fa1a4",
+        "lines": 73,
+        "mtime": "2026-09-07T12:57:01.444Z",
         "className": "task-review-execution-identity",
         "methods": [
           "TaskReviewExecutionIdentity",
@@ -15231,21 +15300,84 @@
           "src/flow/lib/run-review.js"
         ],
         "id": "d2bfc925",
-        "summary": "Provides canonical identity validation for Task Review execution attempts.",
-        "detail": "The module validates required strings and exact object shapes, rejecting unexpected or missing fields through explicit errors. `TaskReviewExecutionIdentity` verifies that a review execution attempt belongs to the expected Task and that the Flow state is canonical and contains the active canonical Attempt. It can construct identities from persisted documents and compare them against canonical Task inputs. Serialized output is frozen and limited to the task identifier and normalized attempt representation.",
+        "summary": "Represents and validates the canonical execution identity of a Task Review attempt. It binds a Task, Flow Attempt, and review-attempt number into a stable serialized identity.",
+        "detail": "TaskReviewExecutionIdentity requires non-empty identifiers and exact object schemas for identity components. It verifies that the execution Attempt matches the canonical Task and Flow state, and restricts reviewAttempt to the inclusive range of one through four. Construction supports validation from canonical documents and produces a frozen JSON representation. Mismatches in Task inputs, active Attempt state, or identity fields raise explicit errors.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-07T11:36:06.766Z",
+          "processedAt": "2026-09-07T15:25:21.939Z",
           "attempts": 1
         },
         "keywords": [
           "Task Review",
           "execution identity",
-          "attempt validation",
-          "canonical Flow state",
-          "exact object shape",
-          "task inputs"
+          "canonical Attempt",
+          "Task binding",
+          "schema validation",
+          "review attempt"
+        ]
+      },
+      {
+        "file": "src/flow/lib/task-review-recovery-checkpoint.js",
+        "hash": "600a008137433fba2f26898bb5795862",
+        "lines": 289,
+        "mtime": "2026-09-07T15:04:56.686Z",
+        "className": "task-review-recovery-checkpoint",
+        "methods": [
+          "sameTaskReviewRepositorySnapshot",
+          "TaskReviewUnsealedCheckpoint",
+          "TaskReviewRecoveryAuthorization",
+          "taskReviewCheckpointArtifact",
+          "taskReviewAuthorizationArtifact",
+          "readTaskReviewUnsealedCheckpoint",
+          "readTaskReviewRecoveryAuthorization",
+          "readTaskReviewRetryBaselinePublication",
+          "text",
+          "exact",
+          "sha",
+          "digest",
+          "sameAttempt",
+          "publicationActivity"
+        ],
+        "imports": [
+          "node:crypto",
+          "./current-flow-state.js",
+          "./worker-artifact-handoff.js",
+          "./task-mutation-lineage.js"
+        ],
+        "exports": [
+          "sameTaskReviewRepositorySnapshot",
+          "TaskReviewUnsealedCheckpoint",
+          "TaskReviewRecoveryAuthorization",
+          "taskReviewCheckpointArtifact",
+          "taskReviewAuthorizationArtifact",
+          "readTaskReviewUnsealedCheckpoint",
+          "readTaskReviewRecoveryAuthorization",
+          "readTaskReviewRetryBaselinePublication"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/lib/canonical-flow-manager-store.js",
+          "src/flow/lib/retry-recovery.js",
+          "src/flow/lib/run-review.js"
+        ],
+        "id": "e9a3edcc",
+        "summary": "Implements signed-by-digest checkpoints and recovery authorization for failed Task Review Attempts. It verifies repository baselines, zero-effect worker boundaries, publication provenance, and active or failed Attempt bindings.",
+        "detail": "The module captures repository mutation baselines and current Task source, then hashes checkpoint and authorization payloads with SHA-256. TaskReviewUnsealedCheckpoint proves that a review Attempt stopped without unauthorized worker effects, while recovery authorization binds a validated checkpoint to the recovered Attempt. Readers and artifact writers enforce canonical logical keys, catalog publication, unique activity records, and requested Attempt identity. Retry-baseline loading additionally confirms that ordinary retry artifacts were published by the preceding Attempt.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-07T15:25:21.939Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "Task Review recovery",
+          "checkpoint",
+          "recovery authorization",
+          "SHA-256 digest",
+          "repository snapshot",
+          "artifact publication",
+          "retry baseline"
         ]
       },
       {
@@ -16317,7 +16449,8 @@
           "src/flow/lib/run-review.js",
           "src/flow/lib/run-seal-handoff.js",
           "src/flow/lib/task-mutation-lineage.js",
-          "src/upgrade.js"
+          "src/upgrade.js",
+          "src/flow/lib/task-review-recovery-checkpoint.js"
         ],
         "id": "58154956",
         "summary": "Implements the versioned worker artifact handoff protocol for Flow execution, validation, publication, and recovery. It coordinates secure payload exchange between workers and the parent process while enforcing step-specific contracts and repository ownership boundaries.",
@@ -18016,9 +18149,9 @@
       },
       {
         "file": "src/lib/flow-artifact-contract.js",
-        "hash": "d1657a12196876e04710d1af0170f012",
-        "lines": 1909,
-        "mtime": "2026-09-04T07:35:28.674Z",
+        "hash": "a4ce123023ea723db0d9bdeadff5efee",
+        "lines": 1913,
+        "mtime": "2026-09-07T14:16:59.415Z",
         "className": "flow-artifact-contract",
         "methods": [
           "FlowArtifactUpdater",
@@ -18125,24 +18258,24 @@
           "src/lib/specs-migration.js"
         ],
         "id": "8f224e2b",
-        "summary": "Defines the typed artifact contract system that governs canonical paths, ownership, authority, retention, mutation, evidence, and inventory registration. It validates artifact schemas and rejects ambiguous paths, unauthorized publishers, invalid placements, and inconsistent switch targets.",
-        "detail": "The module models artifact logical keys, normalized POSIX paths, placement categories, mutation policies, attempt histories, content contracts, and typed producer or updater ownership. Specialized review and activity evidence classes derive canonical paths and authority slots from typed owners and digests, enforcing immutable content and provenance consistency. A path automaton detects overlaps among parameterized canonical and legacy patterns, including exclusions, so registry entries cannot collide. The exported registry combines the contract list, switch targets, normal-flow inventory, ownership mappings, and authority rules into a single validation source.",
+        "summary": "Provides the typed contract system and registry for canonical Flow artifacts. It governs paths, ownership, authority, retention, mutation policy, content schemas, evidence, switch targets, and inventory consistency.",
+        "detail": "The module defines validated value objects for identifiers, relative paths, logical keys, attempts, placements, owners, authority slots, and canonical artifact paths. FlowArtifactContract combines these types with producer or updater authorization, cardinality, cataloging, content immutability, and parameterized path resolution. Specialized review and activity evidence types enforce provenance, digests, JSON schemas, and owner relationships. FlowArtifactRegistry indexes contracts and rejects overlapping paths, invalid switch targets, undeclared actors, inconsistent inventory entries, and unsupported artifact histories.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-04T07:39:47.517Z",
+          "processedAt": "2026-09-07T15:25:21.939Z",
           "attempts": 1
         },
         "keywords": [
-          "artifact contracts",
+          "Flow artifacts",
+          "contract registry",
           "canonical paths",
-          "artifact ownership",
-          "authority slots",
-          "content validation",
-          "path overlap",
+          "artifact authority",
+          "ownership",
+          "content contract",
           "review evidence",
           "activity evidence",
-          "inventory registry"
+          "inventory"
         ]
       },
       {
@@ -22806,10 +22939,10 @@
       }
     ],
     "summary": {
-      "total": 397,
-      "totalMethods": 4265
+      "total": 399,
+      "totalMethods": 4290
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-07T11:36:06.785Z"
+  "enrichedAt": "2026-09-07T15:25:21.939Z"
 }
