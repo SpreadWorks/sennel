@@ -37,6 +37,12 @@
 
 ## 必須の検証
 
+### 欠損した Task Review 証拠の明示的な整理
+
+- `reconcile-task-review` は、baseline を欠いた未公表の復旧済み Task Review が tooling/provider failure で停止した場合だけ、Definition が許可する明示的な経路である。通常の retry や旧フォーマット互換処理として使用しない。
+- 過去の baseline やゼロ副作用の主張を補作せず、現在の入力を未レビューとして採用する。旧 Activity と未完了 work unit を保持し、入力の記録・新 Attempt の baseline・一回限りの再評価を同一 canonical transaction で保存する。Review の成功や Gate への進行を代行しない。
+- 対象 binding、preview digest、理由、既存 Review lease を適用前に検証し、catalog lock 内で状態・入力を再検証する。再開側は保存された採用入力と work unit の同一性を確認する。変更済み入力や別 Attempt への権限流用を認めない。
+
 状態遷移を追加または移行する変更では、影響する範囲に応じて次を検証する。
 
 - facts と disposition の状態表、および各 disposition から transition plan への対応

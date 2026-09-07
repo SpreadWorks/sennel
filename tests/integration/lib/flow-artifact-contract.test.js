@@ -68,6 +68,7 @@ describe("Flow artifact contract registry", () => {
     assert.equal(paths.get("task.review"), "steps/impl/:{taskId}/review/result.json");
     assert.equal(paths.get("task.review.unsealed.checkpoint"), "steps/impl/:{taskId}/review/recovery/unsealed/:{attemptId}.json");
     assert.equal(paths.get("task.review.recovery.authorization"), "steps/impl/:{taskId}/review/recovery/authorizations/:{attemptId}.json");
+    assert.equal(paths.get("task.review.reconciliation"), "steps/impl/:{taskId}/review/recovery/reconciliations/:{attemptId}.json");
     assert.equal(paths.get("task.mutation.lineage"), "steps/impl/:{taskId}/impl/mutation-lineage/:{attemptId}.json");
     assert.equal(paths.get("activity.evidence"), "steps/:{ownerPath}/activity-evidence/:{digest}.json");
     assert.deepEqual(
@@ -75,7 +76,7 @@ describe("Flow artifact contract registry", () => {
       [
         "flow.activities", "spec.snapshot", "spec.review", "artifact.catalog", "test.review.repair.progress", "test.bootstrap.observation", "acceptance.decision",
         "retry.recovery.baseline", "retry.recovery.receipt",
-        "task.review.unsealed.checkpoint", "task.review.recovery.authorization",
+        "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation",
         "task.review", "task.mutation.lineage", "activity.evidence", "runtime.step-metadata",
       ],
     );

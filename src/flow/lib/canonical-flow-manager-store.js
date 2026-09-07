@@ -73,6 +73,8 @@ import {
 } from "./canonical-command-result.js";
 import { PlanGateRepairRecord } from "./plan-gate-repair.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
+import { TaskReviewReconciliationRecord } from "./task-review-reconciliation-record.js";
+import { TaskReviewReconciliationAdmission } from "./task-review-reconciliation.js";
 import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
 import { readTaskExecutionOverrunFacts, TaskExecutionOverrunAdmission } from "./task-execution-overrun.js";
 import { CanonicalImplementationRepairRecord } from "./review-recurrence.js";
@@ -2167,6 +2169,21 @@ export class CanonicalFlowManagerStore {
       activityId: activityId("final-regression-repair-started"),
       attempt,
       retryRecoveryPublication: this.#retryBaselinePublication(state, "final-regression", attempt),
+    });
+  }
+
+  reconcileTaskReview({ specId = null, record, baseline, admission } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (!(record instanceof TaskReviewReconciliationRecord) || !(admission instanceof TaskReviewReconciliationAdmission)
+      || admission.proposal.digest !== record.proposal.digest || record.proposal.specId !== resolved) {
+      throw new CurrentFlowStateInvariantError("Task Review reconciliation requires its exact typed admission and record");
+    }
+    const state = this.runtime.load(resolved);
+    return this.runtime.retryRecoveryAttempt({
+      specId: resolved, activityId: activityId("task-review-reconciled"),
+      attempt: exhaustedRecoveryAttempt(state, record.currentAttempt.id), admission,
+      retryRecoveryPublication: new RetryRecoveryArtifactPublication({ baseline, reconciliation: record }),
+      references: { evaluations: [], findings: [], repairs: [], artifacts: [] },
     });
   }
 

@@ -338,7 +338,7 @@ export class NextActionDirectiveResolver {
       return new BlockedDirective({
         code: "CANONICAL_PRODUCER_ARTIFACT_NOT_READY",
         reason,
-        resumeInstruction: "Record changed canonical evidence and use the guarded retry-reset recovery, or repair a historical consumer claim with recover-missing-producer-artifact. Do not create an artifact manually.",
+        resumeInstruction: "No automatic recovery is admitted. Inspect the failed producer and its durable baseline before choosing a recovery. For an orphaned recovered Task Review without a result or baseline, inspect reconcile-task-review --dry-run with the exact target guards. recover-missing-producer-artifact is only for a historical consumer claim or gap. Do not create an artifact manually.",
       });
     }
     const reviewDisposition = this.descriptor.reviewDisposition;

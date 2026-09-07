@@ -93,6 +93,7 @@ import {
 import { CanonicalTaskContext, canonicalTaskContextKinds } from "./task-canonical-context.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { readTaskExecutionOverrunFacts } from "./task-execution-overrun.js";
+import { assertReconciledTaskReviewInput } from "./task-review-reconciliation.js";
 
 // New non-Gate Step migrations use this shared read → Definition → route
 // validation → Action projection contract. Existing Step migrations retain
@@ -816,7 +817,14 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     planGateRepairRoute: planGateRepair?.route ?? null,
     planGateRepairReason: planGateRepair?.reason ?? null,
   }).resolve();
-  const selectedDirective = userDecisionDirective ?? draftDecisionDirective ?? approvalDirective ?? strictDirective ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
+  let selectedDirective = userDecisionDirective ?? draftDecisionDirective ?? approvalDirective ?? strictDirective ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
+  if (selectedDirective instanceof ExecuteStepDirective && target.scope === "task" && target.stepId === "task-review" && typedState.attempt?.failure === null) {
+    try { assertReconciledTaskReviewInput({ flowManager: ctx.flowManager, state: typedState, taskId: target.taskId, root: ctx.executionRoot || ctx.root }); }
+    catch (error) {
+      selectedDirective = new BlockedDirective({ code: "TASK_REVIEW_RECONCILIATION_INPUT_CHANGED", reason: error.message,
+        resumeInstruction: "Preserve the recorded reconciliation and inspect the changed input before running Review. Do not reset retry counters or edit evidence." });
+    }
+  }
   const claimRequired = selectedDirective instanceof ExecuteStepDirective
     && ["start", "recover", "retry"].includes(descriptor.operation);
   const claimDirective = claimRequired

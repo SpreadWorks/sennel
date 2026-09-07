@@ -10952,6 +10952,86 @@
       "taskId": "T-7",
       "timestamp": "2026-09-07T06:47:04.065Z",
       "issueLogId": "source-handoff:96dabf266efc77626c7d5cfa80d3a1b25550248b96c553c68d6e722e3beab114:0"
+    },
+    {
+      "step": "T-7-gate",
+      "level": "task",
+      "phase": "task-impl",
+      "reason": "No Hardcoded Secrets — no observations emitted; No Silent Error Swallowing — no observations emitted; No Sensitive Data in Logs — no observations emitted; No Disabling Existing Tests — no observations emitted; Escalate Pre-Existing Test Failures — no observations emitted; Project Test Integrity — no observations emitted; Code Placement — no observations emitted; Avoid Overengineering — no observations emitted; Exit Code Contract — no observations emitted; No Synchronous I/O in Hot Paths — no observations emitted; Validate User Input at Entry Point — no observations emitted",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-07T20:11:36.524Z",
+      "passedGuardrails": [
+        "no-hardcoded-secrets",
+        "no-silent-error-swallowing",
+        "no-sensitive-data-in-logs",
+        "no-disabling-existing-tests",
+        "pre-existing-test-failure-escalation",
+        "project-test-integrity",
+        "code-placement",
+        "no-overengineering",
+        "exit-code-contract",
+        "no-synchronous-io-in-hot-paths",
+        "validate-user-input-at-entry-point"
+      ],
+      "taskId": "T-7",
+      "gateReceipt": {
+        "attempt": {
+          "id": "attempt-T-7-gate-a374bdf0-8aaa-474c-a90c-50590bbc15cc",
+          "sequence": 1
+        },
+        "catalogFingerprint": "6f640dfc5e3f904f651f5a5d5acdfc31b9b407e3b0372ece545833012b1b7937",
+        "lineage": {
+          "sourceAttempt": {
+            "id": "attempt-T-7-gate-a374bdf0-8aaa-474c-a90c-50590bbc15cc",
+            "sequence": 1
+          },
+          "canonicalAttempt": {
+            "id": "attempt-T-7-gate-a374bdf0-8aaa-474c-a90c-50590bbc15cc",
+            "sequence": 1
+          },
+          "sourceFingerprint": "6f640dfc5e3f904f651f5a5d5acdfc31b9b407e3b0372ece545833012b1b7937",
+          "canonicalFingerprint": "6f640dfc5e3f904f651f5a5d5acdfc31b9b407e3b0372ece545833012b1b7937",
+          "sourceRevisionFingerprint": null,
+          "canonicalRevisionFingerprint": null
+        }
+      },
+      "issueLogId": "task-gate-b519595c64638a6e8d5c0f82ccb1fcebd46eb40e20b99084d384dc69c998b4ce"
+    },
+    {
+      "step": "T-8-impl",
+      "classification": "quality",
+      "reason": "Integration tests were not run because execution is centralized in later Flow steps for this guarded implementation action.",
+      "origin": {
+        "sourceStep": "task-impl",
+        "sourceNodeId": "T-8-impl"
+      },
+      "evidence": {
+        "ref": "worker-handoff:ae93f2291357d6f2262bca7553cc7d56419b24e0272676be181beb6489bb25a9#effects.json",
+        "digest": "ae93f2291357d6f2262bca7553cc7d56419b24e0272676be181beb6489bb25a9"
+      },
+      "recoveryStep": "T-8-review",
+      "remainingRisk": "The migrated fixture subprocess and lifecycle matrix still require centralized integration execution to verify runtime compatibility.",
+      "taskId": "T-8",
+      "timestamp": "2026-09-07T20:25:44.791Z",
+      "issueLogId": "source-handoff:ae93f2291357d6f2262bca7553cc7d56419b24e0272676be181beb6489bb25a9:0"
+    },
+    {
+      "step": "T-8-impl",
+      "classification": "quality",
+      "reason": "The required freshness check returned indeterminate because a source path was unreadable and lock diagnostics were emitted.",
+      "origin": {
+        "sourceStep": "task-impl",
+        "sourceNodeId": "T-8-impl"
+      },
+      "evidence": {
+        "ref": "worker-handoff:ae93f2291357d6f2262bca7553cc7d56419b24e0272676be181beb6489bb25a9#effects.json",
+        "digest": "ae93f2291357d6f2262bca7553cc7d56419b24e0272676be181beb6489bb25a9"
+      },
+      "recoveryStep": "T-8-review",
+      "remainingRisk": "Documentation freshness remains unverified until the unreadable source path and process-owned lock condition are resolved.",
+      "taskId": "T-8",
+      "timestamp": "2026-09-07T20:25:44.791Z",
+      "issueLogId": "source-handoff:ae93f2291357d6f2262bca7553cc7d56419b24e0272676be181beb6489bb25a9:1"
     }
   ]
 }

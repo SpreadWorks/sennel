@@ -49,6 +49,7 @@ import {
 } from "./review-work-unit.js";
 import { isCanonicalFlowState } from "./canonical-test-artifacts.js";
 import { ReviewExecutionLease } from "./review-execution-lease.js";
+import { assertReconciledTaskReviewInput, readTaskReviewReconciliations, isReconciledTaskReviewWorkUnit } from "./task-review-reconciliation.js";
 import { resolveCurrentReviewTransition } from "./review-transition-persistence.js";
 import {
   CurrentTaskSourceSnapshot,
@@ -1119,10 +1120,12 @@ function reconcileUnsealedTaskReviewSources({ workUnit, state, flowManager, task
     });
   }
   const cleanup = [];
+  const reconciliations = readTaskReviewReconciliations({ flowManager, state, taskId });
   for (const recovered of retained.workUnits) {
     let checkpoint;
     let current;
     try {
+      if (isReconciledTaskReviewWorkUnit(recovered, reconciliations)) continue;
       const authorized = assertTaskReviewUnsealedCleanupAuthorized({
         recovered,
         state,
@@ -1255,6 +1258,10 @@ export class RunReviewCommand extends FlowCommand {
       );
     }
 
+    if (taskId !== null) {
+      try { assertReconciledTaskReviewInput({ flowManager: ctx.flowManager, state, taskId, root: executionRoot }); }
+      catch (error) { return Envelope.fail("run", "review", "TASK_REVIEW_RECONCILIATION_INPUT_CHANGED", error.message); }
+    }
     const treeSha = this.resolveTreeSha(ctx);
     const targetStateDigest = this.resolveTargetStateDigest(ctx, persistedPhase);
     const workUnit = new CanonicalReviewWorkUnit({

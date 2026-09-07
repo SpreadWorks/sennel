@@ -334,13 +334,14 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  retryRecoveryAttempt({ specId, activityId, attempt, artifactWrites = undefined, timing = null, provider = null, model = null, effort = null, usage = null, references, retryRecoveryPublication = undefined } = {}) {
+  retryRecoveryAttempt({ specId, activityId, attempt, artifactWrites = undefined, timing = null, provider = null, model = null, effort = null, usage = null, references, retryRecoveryPublication = undefined, admission = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
       nodeId: this.#currentNodeId(state),
       operation: "retry_recovery_attempt",
       attempt: requiredAttempt(attempt, "retryRecoveryAttempt"),
+      admission,
       timing, provider, model, effort, usage, references, artifactWrites, retryRecoveryPublication,
     });
   }

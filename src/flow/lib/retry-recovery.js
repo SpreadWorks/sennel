@@ -15,6 +15,7 @@ import { buildRepairFingerprint } from "./repair-fingerprint.js";
 import { RuntimeModuleIdentity } from "./runtime-module-identity.js";
 import { ReviewTargetAuthority } from "./review-target-authority.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
+import { TaskReviewReconciliationRecord, TASK_REVIEW_RECONCILIATION_KEY } from "./task-review-reconciliation-record.js";
 import {
   readTaskReviewUnsealedCheckpoint,
   TaskReviewRecoveryAuthorization,
@@ -26,6 +27,7 @@ export const RECOVERY_REASON_MAX_LENGTH = 500;
 export const RETRY_RECOVERY_ARTIFACT_KEYS = Object.freeze(new Set([
   "retry.recovery.baseline",
   "retry.recovery.receipt",
+  TASK_REVIEW_RECONCILIATION_KEY,
 ]));
 
 const BASELINE_PHASES = new Map([
@@ -274,7 +276,7 @@ function assertExactPublicationWrite(actualWrites, expectedWrite, field) {
  * its exact route/Attempt/Flow-bound bytes in one catalog transaction.
  */
 export class RetryRecoveryArtifactPublication {
-  constructor({ baseline = null, receipt = null, taskReviewAuthorization = null } = {}) {
+  constructor({ baseline = null, receipt = null, taskReviewAuthorization = null, reconciliation = null } = {}) {
     if ((baseline === null) === (receipt === null)) {
       throw new Error("retry recovery artifact publication requires exactly one typed payload");
     }
@@ -293,6 +295,10 @@ export class RetryRecoveryArtifactPublication {
     this.baseline = baseline;
     this.receipt = receipt;
     this.taskReviewAuthorization = taskReviewAuthorization;
+    if (reconciliation !== null && (!(reconciliation instanceof TaskReviewReconciliationRecord) || baseline === null || taskReviewAuthorization !== null)) {
+      throw new Error("Task Review reconciliation requires its typed record and a new baseline only");
+    }
+    this.reconciliation = reconciliation;
     Object.freeze(this);
   }
 
@@ -301,6 +307,7 @@ export class RetryRecoveryArtifactPublication {
 
   get artifactWrites() {
     const primary = this.baseline === null ? retryReceiptArtifact(this.receipt) : retryBaselineArtifact(this.baseline);
+    if (this.reconciliation !== null) return Object.freeze([primary, this.reconciliation.artifactWrite]);
     return Object.freeze(this.taskReviewAuthorization === null
       ? [primary]
       : [primary, taskReviewAuthorizationArtifact({ taskId: this.taskReviewAuthorization.currentAttempt.nodeId.slice(0, -"-review".length), authorization: this.taskReviewAuthorization })]);
@@ -310,7 +317,9 @@ export class RetryRecoveryArtifactPublication {
     const route = retryEvidenceRouteForNode(state, activity?.nodeId);
     if (route === null) throw new Error("retry recovery artifact publication requires a retryable owning leaf");
     if (this.baseline !== null) {
-      if (!new Set(["start_attempt", "rewind", "recover_attempt", "retry_attempt"]).has(activity.transition.operation)) {
+      if (this.reconciliation !== null) {
+        this.reconciliation.assertPublication({ state, activity, baseline: this.baseline });
+      } else if (!new Set(["start_attempt", "rewind", "recover_attempt", "retry_attempt"]).has(activity.transition.operation)) {
         throw new Error("retry recovery baseline publication requires a start, rewind, recovery, or retry Activity");
       }
       if (!this.baseline.route.equals(route)) {
@@ -318,7 +327,9 @@ export class RetryRecoveryArtifactPublication {
       }
       assertPublicationAttempt(activity, this.baseline, "retry recovery baseline");
       assertPublicationFlow(this.baseline, state, "retry recovery baseline");
-      assertExactPublicationWrite(artifactWrites, retryBaselineArtifact(this.baseline), "retry recovery baseline");
+      const expected = this.artifactWrites;
+      if (!Array.isArray(artifactWrites) || artifactWrites.length !== expected.length) throw new Error("retry recovery publication has unexpected artifact writes");
+      expected.forEach((write, index) => assertExactPublicationWrite([artifactWrites[index]], write, "retry recovery baseline"));
       return this;
     }
     if (activity.transition.operation !== "retry_recovery_attempt") {

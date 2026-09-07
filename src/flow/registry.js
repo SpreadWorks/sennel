@@ -2088,6 +2088,24 @@ export const FLOW_COMMANDS = {
         "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
       ].join("\n"),
     },
+    "reconcile-task-review": {
+      helpKey: "flow.run.reconcile-task-review",
+      runtimeLog: { stepMetadata: false },
+      explicitTargetResolution: true,
+      command: () => import("./lib/run-reconcile-task-review.js"),
+      args: {
+        flags: [...FLOW_TARGET_GUARD_FLAGS, "--dry-run", "--yes"],
+        options: [...FLOW_RUN_OPTIONS, "--expect-digest", "--reason"],
+      },
+      help: [
+        "Usage: sennel flow run reconcile-task-review --expect-run-id <runId> --expect-spec <specId> [--expect-issue <number> | --expect-no-issue] --dry-run",
+        "",
+        "Explicitly adopt current unreviewed input for an orphaned, unpublished recovered Task Review Attempt.",
+        "Preview first, then supply --yes --expect-digest <preview-digest> --reason <20-500 characters>.",
+        "Preserves failed evidence and retained work units, grants one reevaluation, and never executes Review or advances to Gate.",
+        ...FLOW_TARGET_GUARD_HELP_LINES,
+      ].join("\n"),
+    },
     "recover-finalization": {
       helpKey: "flow.run.recover-finalization",
       runtimeLog: { stepMetadata: false, authority: "main-repository" },

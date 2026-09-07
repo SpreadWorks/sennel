@@ -815,8 +815,13 @@
           "kind": "task",
           "id": "T-7",
           "key": "T-7",
-          "status": "in_progress",
-          "result": null,
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for T-7-gate",
+            "confirmedAt": "2026-09-07T20:11:39.878Z",
+            "artifactRefs": []
+          },
           "attemptSequence": 0,
           "steps": [
             {
@@ -846,18 +851,28 @@
               "kind": "step",
               "id": "T-7-review",
               "key": "task.task-review",
-              "status": "in_progress",
-              "result": null,
-              "attemptSequence": 1,
+              "status": "done",
+              "result": {
+                "outcome": "passed",
+                "summary": "canonical runtime transition for T-7-review",
+                "confirmedAt": "2026-09-07T20:10:31.655Z",
+                "artifactRefs": []
+              },
+              "attemptSequence": 2,
               "steps": []
             },
             {
               "kind": "step",
               "id": "T-7-gate",
               "key": "impl.impl-gate",
-              "status": "invalidated",
-              "result": null,
-              "attemptSequence": 0,
+              "status": "done",
+              "result": {
+                "outcome": "passed",
+                "summary": "canonical runtime transition for T-7-gate",
+                "confirmedAt": "2026-09-07T20:11:39.878Z",
+                "artifactRefs": []
+              },
+              "attemptSequence": 1,
               "steps": []
             }
           ]
@@ -866,7 +881,7 @@
           "kind": "task",
           "id": "T-8",
           "key": "T-8",
-          "status": "invalidated",
+          "status": "in_progress",
           "result": null,
           "attemptSequence": 0,
           "steps": [
@@ -874,18 +889,32 @@
               "kind": "step",
               "id": "T-8-impl",
               "key": "task.task-impl",
-              "status": "invalidated",
-              "result": null,
-              "attemptSequence": 0,
+              "status": "done",
+              "result": {
+                "outcome": "passed",
+                "summary": "Worker handoff confirmed for task-impl.",
+                "confirmedAt": "2026-09-07T20:25:44.791Z",
+                "artifactRefs": [
+                  {
+                    "kind": "worker-handoff",
+                    "id": "ae93f2291357d6f2262bca7553cc7d56419b24e0272676be181beb6489bb25a9"
+                  },
+                  {
+                    "kind": "worker-handoff-request",
+                    "id": "b5353a2944ec2456cb6f41812d3e77e6fe29524a1cfba90d685521e534454fe6"
+                  }
+                ]
+              },
+              "attemptSequence": 1,
               "steps": []
             },
             {
               "kind": "step",
               "id": "T-8-review",
               "key": "task.task-review",
-              "status": "invalidated",
+              "status": "in_progress",
               "result": null,
-              "attemptSequence": 0,
+              "attemptSequence": 1,
               "steps": []
             },
             {
@@ -1121,22 +1150,22 @@
       ]
     }
   ],
-  "current": "T-7-review",
+  "current": "T-8-review",
   "attempt": {
-    "id": "attempt-T-7-review-37526d10-2496-4af1-b5e4-bd6a39e4fba1",
-    "nodeId": "T-7-review",
+    "id": "attempt-T-8-review-b9c88375-86a9-43ff-9754-863a47a878c9",
+    "nodeId": "T-8-review",
     "sequence": 1,
-    "startedAt": "2026-09-07T06:47:12.789Z",
+    "startedAt": "2026-09-07T20:25:53.812Z",
     "consumption": {
       "semantic": 0,
       "tooling": 0
     },
     "failure": {
-      "category": "tooling",
-      "code": "TASK_REVIEW_PROTOCOL_INVALID_RESPONSE",
-      "message": "Task Review provider output did not satisfy its complete phase contract after protocol attempt 2/2. impl review output failed schema validation: (root): must be object, got array",
+      "category": "source-integrity",
+      "code": "TASK_REVIEW_SOURCE_EFFECT_REJECTED",
+      "message": "Task Review repair mutated paths not owned by must-fix Review findings: tests/integration/flow/query.test.js",
       "retryable": false,
-      "retryKind": "tooling"
+      "retryKind": null
     },
     "blocker": null,
     "incomplete": [],
@@ -1151,7 +1180,7 @@
       }
     ]
   },
-  "confirmationOrder": 818,
+  "confirmationOrder": 833,
   "artifacts": [],
   "outbox": [],
   "context": null,
