@@ -2684,6 +2684,39 @@ class WorkerArtifactSourceRollbackCheckpoint {
   }
 }
 
+/**
+ * Invocation-local rollback capability for a source mutation baseline.
+ *
+ * Review and worker handoff adapters share the same repository ownership
+ * checks and multi-file restore implementation instead of maintaining
+ * separate rollback rules.
+ */
+export class SourceMutationRollbackCheckpoint {
+  #checkpoint;
+
+  constructor({ baseline } = {}) {
+    if (!(baseline instanceof SourceMutationBaseline)) {
+      throw new Error("source mutation rollback requires a source baseline");
+    }
+    this.baseline = baseline;
+    this.#checkpoint = new WorkerArtifactSourceRollbackRepositoryCheckpoint(baseline.snapshot);
+    Object.freeze(this);
+  }
+
+  restore() {
+    this.#checkpoint.restore();
+    const restored = WorkerArtifactRepositoryMutationSnapshot.capture({
+      root: this.baseline.snapshot.root,
+      authorities: this.baseline.snapshot.authorities,
+      ignoredDirectories: this.baseline.snapshot.ignoredDirectories,
+      runtimeLocks: this.baseline.snapshot.runtimeLocks,
+    });
+    if (restored.digest !== this.baseline.snapshot.digest) {
+      throw new Error("source mutation rollback did not restore its baseline");
+    }
+  }
+}
+
 export class WorkerArtifactSemanticInputRevision {
   constructor({
     inputDigest,
