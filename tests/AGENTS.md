@@ -48,6 +48,70 @@ the repository's `.sennel`, Git state, or a shared lock.
   before the product fix. Do not encode the chosen implementation as the
   expected behavior.
 
+## Backward causal scenario design
+
+- **MUST: Start with the observable outcomes to guarantee, then trace their
+  necessary conditions backward.** Include successful completion, safe refusal,
+  exhausted retries, recovery, and durable intermediate checkpoints. Changes to
+  implementation identify review targets; they are not the coverage model.
+- For each outcome, record the condition, its consumer, every legal producer
+  path, authoritative storage, readback boundary, and covering test. Trace IDs,
+  revisions, attempt ordinals, bindings, and recovery baselines where they affect
+  the decision. Use current source, specifications, and incident evidence; do not
+  assume that a previous fix or its explanation is correct. Derive expected
+  behavior from the required contract, not merely from what current code does.
+- Treat the backward trace as a dependency graph, not necessarily a single
+  line. Cover jointly required conditions, rejection when each required condition
+  is absent, alternative producer paths, and combinations that change downstream
+  behavior. Merge histories only when the consumer cannot distinguish them under
+  the contract. Do not claim coverage from either one happy path or a mechanical
+  Cartesian product of every branch.
+- Reuse existing tests for isolated decisions and immutable setup. Add scenario
+  tests for missing causal connections: production generation, validation,
+  classification, persistence, readback, and the resulting decision or effect.
+  Fake external provider responses and other nondeterministic boundaries, not
+  the internal producer or saved evidence whose correctness is being tested.
+  A preconstructed final artifact cannot prove that production creates it.
+- For restart and recovery contracts, discard in-memory managers and reconstruct
+  them from persisted state without passing the previous result forward. Check
+  relevant interruption boundaries, such as before and after publication or
+  settlement, and assert failure atomicity and absence of duplicate effects.
+  This proves readback behavior, not OS-crash or cross-process behavior unless
+  those boundaries are separately exercised.
+- A final-outcome scenario may cover an intermediate transition only if its
+  assertions would fail when that transition violates its contract. Keep separate
+  tests for independently observable intermediate guarantees, refusal paths, or
+  recovery checkpoints that a successful final outcome could hide.
+- When changing a mechanism, update the outcome-to-condition mapping and check
+  all affected consumers and producer paths, not just the newly added branch.
+  Record uncovered conditions explicitly. Correct an invalid fixture or expected
+  result only with evidence of the legal production contract; never weaken a
+  valid regression assertion, skip it, or alter evidence merely to obtain green
+  tests or advance a Flow. Product fixes require authorization for that scope.
+
+## Verify regression detection
+
+- Compare the same test inputs, assertions, and fixtures before and after a
+  product fix. When evaluating historical fixes, retain the regression tests
+  while removing only the relevant product changes in isolated copies. Never
+  peel fixes from the live worktree or mutate a running Flow's canonical state,
+  evidence, or Git state. Ensure copied Git metadata cannot point writes back to
+  the original repository.
+- Account for dependencies between fixes. Cumulative removal can expose a first
+  failure that masks later defects; use separate cases or isolated comparisons
+  to attribute each detected contract violation. A failed test counts as evidence
+  for a fix only when that contract passes with the fix and fails without it.
+  Syntax/import failures, timeouts, and impossible fixture states do not count.
+- Keep unresolved baseline failures separate from newly exposed regressions.
+  Report source revisions and relevant uncommitted changes, the frozen test set,
+  per-case outcomes, logs, and the fault-to-test mapping. Distinguish measured
+  results, inference, and untested boundaries. Detecting every known historical
+  fault does not establish completeness against unknown faults or prove the
+  fixes themselves correct in all cases.
+- Keep expensive historical comparisons separate from the normal test suite.
+  Use deterministic local fixtures for Flow integration tests and follow
+  `src/flow/AGENTS.md`; do not advance the actual Flow to test its behavior.
+
 ## Coverage without duplication
 
 - Search existing tests before adding a case. One rule belongs to one primary
