@@ -384,17 +384,7 @@ function routeId(route) {
   return `${route.kind}-${route.phase}${route.taskId ? `-${route.taskId}` : ""}`;
 }
 
-export function readRetryBaseline(flowManager, state, route) {
-  const source = flowManager.readArtifact({
-    specId: state.specId,
-    logicalKey: "retry.recovery.baseline",
-    parameters: { routeId: routeId(route), attemptId: state.attempt.id },
-    consumerNodeId: state.attempt.nodeId,
-    optional: true,
-  });
-  if (source === null) return null;
-  let baseline;
-  try { baseline = new RetryRecoveryBaseline(JSON.parse(source.bytes.toString("utf8"))); } catch (error) { throw new Error(`retry baseline is invalid: ${error.message}`); }
+function assertActiveRetryBaseline(baseline, state, route) {
   if (
     !baseline.route.equals(route)
     || baseline.attemptId !== state.attempt.id
@@ -404,6 +394,34 @@ export function readRetryBaseline(flowManager, state, route) {
     || baseline.issue !== (state.issue ?? null)
   ) throw new Error("retry baseline identity does not match the active Attempt and Flow");
   return baseline;
+}
+
+export function readRetryBaseline(flowManager, state, route) {
+  const parameters = { routeId: routeId(route), attemptId: state.attempt.id };
+  const baselineSource = flowManager.readArtifact({
+    specId: state.specId,
+    logicalKey: "retry.recovery.baseline",
+    parameters,
+    consumerNodeId: state.attempt.nodeId,
+    optional: true,
+  });
+  if (baselineSource !== null) {
+    let baseline;
+    try { baseline = new RetryRecoveryBaseline(JSON.parse(baselineSource.bytes.toString("utf8"))); } catch (error) { throw new Error(`retry baseline is invalid: ${error.message}`); }
+    return assertActiveRetryBaseline(baseline, state, route);
+  }
+
+  const receiptSource = flowManager.readArtifact({
+    specId: state.specId,
+    logicalKey: "retry.recovery.receipt",
+    parameters,
+    consumerNodeId: state.attempt.nodeId,
+    optional: true,
+  });
+  if (receiptSource === null) return null;
+  let receipt;
+  try { receipt = new RetryRecoveryReceipt(JSON.parse(receiptSource.bytes.toString("utf8"))); } catch (error) { throw new Error(`retry receipt is invalid: ${error.message}`); }
+  return assertActiveRetryBaseline(receipt.current, state, route);
 }
 
 function canonicalState(state) {
