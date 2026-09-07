@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "phase": "task-impl",
+  "taskId": "T-2",
+  "generatedAt": "2026-09-02T10:12:40.872Z",
+  "result": "fail",
+  "evaluations": [
+    {
+      "guardrail_id": "no-overengineering",
+      "result": "fail",
+      "reason": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+      "category": "code-quality",
+      "title": "Avoid Overengineering",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "no-overengineering",
+          "where": {
+            "file": "src/flow/lib/current-flow-state.js",
+            "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+          },
+          "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+          "severity": "blocking",
+          "refs": [
+            "no-overengineering"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "no-overengineering",
+      "result": "fail",
+      "reason": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+      "category": "code-quality",
+      "title": "Avoid Overengineering",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "no-overengineering",
+          "where": {
+            "file": "src/flow/query.js",
+            "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+          },
+          "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+          "severity": "blocking",
+          "refs": [
+            "no-overengineering"
+          ]
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "no-overengineering",
+      "where": {
+        "file": "src/flow/lib/current-flow-state.js",
+        "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+      },
+      "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+      "severity": "blocking",
+      "refs": [
+        "no-overengineering"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "no-overengineering",
+      "where": {
+        "file": "src/flow/query.js",
+        "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+      },
+      "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+      "severity": "blocking",
+      "refs": [
+        "no-overengineering"
+      ]
+    }
+  ],
+  "issues": [],
+  "reasons": [
+    {
+      "verdict": "FAIL",
+      "detail": "Avoid Overengineering — The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+      "guardrail_id": "no-overengineering",
+      "category": "code-quality"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Avoid Overengineering — The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+      "guardrail_id": "no-overengineering",
+      "category": "code-quality"
+    }
+  ],
+  "failureKind": "ai_semantic_fail",
+  "failureCategory": {
+    "category": "semantic",
+    "code": "ai_semantic_fail"
+  },
+  "lineage": "4eaf7a10fcbb749acddd4b98f3c7063f2e42c116636520e2f5e7fce125333bc7"
+}

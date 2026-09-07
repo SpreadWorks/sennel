@@ -1,0 +1,631 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "T-6-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "df442998f1e92c4934329f420b21dda83d6904d30f12bd9fef137775a1a0dfe3",
+          "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+          "targetStateDigest": "bcb30b2f817cf0a0ad93799cc9048e8f547aa0d6e807e7c9c8864a4bdd7c83e3",
+          "blockingCount": 1,
+          "nonBlockingCount": 0,
+          "taskId": "T-6",
+          "sourceFingerprint": "e5c0d42a20cfe52d9dfaff0cd97cbf5c200b89cab8e05e5b676b2049cb1a5a74",
+          "noChange": false,
+          "noChangeReasons": [],
+          "repairMutationCount": 1,
+          "reviewRepairComplete": false
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-05T01:26:02.557Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 1,
+            "nonBlocking": 0,
+            "total": 1
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "request-range-objects-not-exact",
+              "title": "Specified page and recordedAt objects accepted without required fields",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R9",
+              "issue": "QueryPage and DateRange previously defaulted missing members, so explicitly supplied `{}` or partial objects were accepted instead of enforcing the required exact `{ limit, after }` and `{ gte, lt }` shapes.",
+              "suggestion": "Enforce exact member presence for explicitly supplied page and recordedAt objects while retaining defaults only when the objects are omitted.",
+              "disposition": "must-fix",
+              "rationale": "R9 mandates exact object shapes for specified page and recordedAt values. The implementation was repaired by adding requireRequestObject validation and preserving omission-only defaults.",
+              "findingId": "2d1074684ea0b62f0566777dba65b025846d1b25ca5defd095e822b9c439f368",
+              "fingerprint": "2d1074684ea0b62f0566777dba65b025846d1b25ca5defd095e822b9c439f368",
+              "repeatCount": 1
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "c53336a43c73ae8902439cbb61b284706d7d8d19862409c3a54fe2064a433516",
+          "reviewedTree": "c53336a43c73ae8902439cbb61b284706d7d8d19862409c3a54fe2064a433516",
+          "reviewedHead": "ef7a110cb14febf85b3389584e8de37a8d1df7cf",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-6",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/da5129c9ef4aa1fed8ae2a7f783000ae/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 1,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "828486e2398c0293eab37441d9cf7afb84d2c3e994571a782580dc286ba15763"
+          },
+          "workerOutput": {
+            "digest": "9c88af4ebde981b25a49a8fe41d7a5088dc43765f9c1343ee351cb9bb7d2a841",
+            "byteLength": 2293,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-6",
+            "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+            "targetStateDigest": "bcb30b2f817cf0a0ad93799cc9048e8f547aa0d6e807e7c9c8864a4bdd7c83e3",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "d9ad4d7867d0085a8e6a0df0fdcaba99a76c4e29c7f051c1abc0b2eb22edcab9",
+              "capturedAt": "2026-09-05T01:26:02.557Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "2d1074684ea0b62f0566777dba65b025846d1b25ca5defd095e822b9c439f368",
+                "summary": "Specified page and recordedAt objects accepted without required fields",
+                "fingerprint": "2d1074684ea0b62f0566777dba65b025846d1b25ca5defd095e822b9c439f368",
+                "evidenceRefs": [
+                  "impl-review.json#2d1074684ea0b62f0566777dba65b025846d1b25ca5defd095e822b9c439f368"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-6",
+              "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "d9ad4d7867d0085a8e6a0df0fdcaba99a76c4e29c7f051c1abc0b2eb22edcab9",
+                "capturedAt": "2026-09-05T01:26:02.557Z"
+              },
+              "evidenceDigest": "df442998f1e92c4934329f420b21dda83d6904d30f12bd9fef137775a1a0dfe3"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+            "targetStateDigest": "bcb30b2f817cf0a0ad93799cc9048e8f547aa0d6e807e7c9c8864a4bdd7c83e3"
+          },
+          "canonicalTaskSource": {
+            "fingerprint": "e5c0d42a20cfe52d9dfaff0cd97cbf5c200b89cab8e05e5b676b2049cb1a5a74",
+            "lineageFingerprints": [
+              "781ca6cc2aec6a010be6ca1f42d6f31da7daa6c9c10525644cad4f859007fa63",
+              "dffc6c423972ae4dea5e11d0146278081b9321497d3441de6f427bf95c44a93b"
+            ],
+            "reviewRepairLineageFingerprint": "dffc6c423972ae4dea5e11d0146278081b9321497d3441de6f427bf95c44a93b",
+            "reviewRepairComplete": false
+          },
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "T-6-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "5e6200c7305cdc63b9f61b1dab32000c7f1721911f66fe1aa9a2eb7351c15535",
+          "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+          "targetStateDigest": "c53336a43c73ae8902439cbb61b284706d7d8d19862409c3a54fe2064a433516",
+          "blockingCount": 1,
+          "nonBlockingCount": 0,
+          "taskId": "T-6",
+          "sourceFingerprint": "76bd96def3ee8a9f87fbc03950713099d90ab73742545e5cad6ed60a81d006f9",
+          "noChange": false,
+          "noChangeReasons": [],
+          "repairMutationCount": 1,
+          "reviewRepairComplete": false
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-05T01:29:16.845Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 1,
+            "nonBlocking": 0,
+            "total": 1
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "malformed-cursor-classified-as-invalid-request",
+              "title": "Malformed cursors must use INVALID_CURSOR",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R10",
+              "issue": "QueryPage previously rejected malformed cursor encodings as INVALID_REQUEST before Cursor.decode could classify them, violating the required distinction for malformed cursors.",
+              "suggestion": "Let Cursor.decode own cursor encoding validation and invoke it for non-null activities page.after values; retain INVALID_REQUEST only for non-string, empty, or oversized values.",
+              "disposition": "must-fix",
+              "rationale": "R10 mandates INVALID_CURSOR for invalid cursor encoding, while CURSOR_QUERY_MISMATCH is reserved for structurally valid cursors bound to another query. The implementation was repaired accordingly.",
+              "findingId": "606399f05a2f17eea9e054694e77baba3c25f5a7a743e4572ddaa484ec7638f8",
+              "fingerprint": "606399f05a2f17eea9e054694e77baba3c25f5a7a743e4572ddaa484ec7638f8",
+              "repeatCount": 1
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "df68a50e0315e9cc3906d6b5c5dd2b5b0122947083305716c840513cb24ca2a6",
+          "reviewedTree": "df68a50e0315e9cc3906d6b5c5dd2b5b0122947083305716c840513cb24ca2a6",
+          "reviewedHead": "ef7a110cb14febf85b3389584e8de37a8d1df7cf",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-6",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/335a6c4bdcdb800620960f1025f1fe85/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 1,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "46f9e69452104d0252611fc5952048f1f56f31c0c30c57003521cce5b624fee7"
+          },
+          "workerOutput": {
+            "digest": "f5753ccb8e5a493ab892b00367d0147b011826a06b1de20cc64eea2407e3bb37",
+            "byteLength": 2294,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-6",
+            "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+            "targetStateDigest": "c53336a43c73ae8902439cbb61b284706d7d8d19862409c3a54fe2064a433516",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "ad7c6106fd39931752f6fab95d2465d1b743f89e024eb961c01485bfc36c3dc4",
+              "capturedAt": "2026-09-05T01:29:16.845Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "606399f05a2f17eea9e054694e77baba3c25f5a7a743e4572ddaa484ec7638f8",
+                "summary": "Malformed cursors must use INVALID_CURSOR",
+                "fingerprint": "606399f05a2f17eea9e054694e77baba3c25f5a7a743e4572ddaa484ec7638f8",
+                "evidenceRefs": [
+                  "impl-review.json#606399f05a2f17eea9e054694e77baba3c25f5a7a743e4572ddaa484ec7638f8"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-6",
+              "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "ad7c6106fd39931752f6fab95d2465d1b743f89e024eb961c01485bfc36c3dc4",
+                "capturedAt": "2026-09-05T01:29:16.845Z"
+              },
+              "evidenceDigest": "5e6200c7305cdc63b9f61b1dab32000c7f1721911f66fe1aa9a2eb7351c15535"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+            "targetStateDigest": "c53336a43c73ae8902439cbb61b284706d7d8d19862409c3a54fe2064a433516"
+          },
+          "canonicalTaskSource": {
+            "fingerprint": "76bd96def3ee8a9f87fbc03950713099d90ab73742545e5cad6ed60a81d006f9",
+            "lineageFingerprints": [
+              "781ca6cc2aec6a010be6ca1f42d6f31da7daa6c9c10525644cad4f859007fa63",
+              "dffc6c423972ae4dea5e11d0146278081b9321497d3441de6f427bf95c44a93b",
+              "d1b2de83ea63c4bbf51ccb602bc203e228c5aabc0138bc557e5d655788ef9f04"
+            ],
+            "reviewRepairLineageFingerprint": "d1b2de83ea63c4bbf51ccb602bc203e228c5aabc0138bc557e5d655788ef9f04",
+            "reviewRepairComplete": false
+          },
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "T-6-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "bbbae96a849d02f07cf2f94514d0b9064027c4df3f2e2bcd5ca8b4eaf5644211",
+          "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+          "targetStateDigest": "df68a50e0315e9cc3906d6b5c5dd2b5b0122947083305716c840513cb24ca2a6",
+          "blockingCount": 0,
+          "nonBlockingCount": 0,
+          "taskId": "T-6",
+          "sourceFingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+          "noChange": false,
+          "noChangeReasons": [],
+          "repairMutationCount": 0,
+          "reviewRepairComplete": true
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-05T01:32:46.027Z",
+          "verdict": "PASS",
+          "summary": {
+            "blocking": 0,
+            "nonBlocking": 0,
+            "total": 0
+          },
+          "blockingFindings": [],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "df68a50e0315e9cc3906d6b5c5dd2b5b0122947083305716c840513cb24ca2a6",
+          "reviewedTree": "df68a50e0315e9cc3906d6b5c5dd2b5b0122947083305716c840513cb24ca2a6",
+          "reviewedHead": "ef7a110cb14febf85b3389584e8de37a8d1df7cf",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-6",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/9a0358e83c66966725a54db79224b22d/impl-review.json",
+            "verdict": "PASS",
+            "result": "PASS",
+            "blockingCount": 0,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "d002770d4769b6c9d4b47210700dffafc031b2cbb4948235e88730e9ca9b9a19"
+          },
+          "workerOutput": {
+            "digest": "892625f1cd7eb5b3c2ff8e8d93c550a6bf46eb2ff70083dcf7da20222c72192f",
+            "byteLength": 1174,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-6",
+            "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+            "targetStateDigest": "df68a50e0315e9cc3906d6b5c5dd2b5b0122947083305716c840513cb24ca2a6",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "bf1e19ed7a864a5e2dd5e2b3125b666a4421e274aa6c8ef40260d83ea3ac930a",
+              "capturedAt": "2026-09-05T01:32:46.027Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-6",
+              "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "bf1e19ed7a864a5e2dd5e2b3125b666a4421e274aa6c8ef40260d83ea3ac930a",
+                "capturedAt": "2026-09-05T01:32:46.027Z"
+              },
+              "evidenceDigest": "bbbae96a849d02f07cf2f94514d0b9064027c4df3f2e2bcd5ca8b4eaf5644211"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+            "targetStateDigest": "df68a50e0315e9cc3906d6b5c5dd2b5b0122947083305716c840513cb24ca2a6"
+          },
+          "canonicalTaskSource": {
+            "fingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+            "lineageFingerprints": [
+              "781ca6cc2aec6a010be6ca1f42d6f31da7daa6c9c10525644cad4f859007fa63",
+              "dffc6c423972ae4dea5e11d0146278081b9321497d3441de6f427bf95c44a93b",
+              "d1b2de83ea63c4bbf51ccb602bc203e228c5aabc0138bc557e5d655788ef9f04",
+              "58483be2593df82111c1845fdd7c038aa5b7c5fd0b0945f99947ae4c773ebbee"
+            ],
+            "reviewRepairLineageFingerprint": "58483be2593df82111c1845fdd7c038aa5b7c5fd0b0945f99947ae4c773ebbee",
+            "reviewRepairComplete": true
+          },
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      }
+    },
+    {
+      "attempt": 4,
+      "nodeId": "T-6-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "69982e5ca00d353d889b59daad09ae0464c4e3f3cc5b31011114bd41b15e6d14",
+          "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+          "targetStateDigest": "fd650015a609143d635bb5c29a0eed46892eec6482dd7191fed65548e26d0a6a",
+          "blockingCount": 1,
+          "nonBlockingCount": 0,
+          "taskId": "T-6",
+          "sourceFingerprint": "9ab7b816d16084fece79afa7ca652e13756691f5c7df984ec9dfd5dd4ad87be5",
+          "noChange": false,
+          "noChangeReasons": [],
+          "repairMutationCount": 1,
+          "reviewRepairComplete": false
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-05T01:50:45.589Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 1,
+            "nonBlocking": 0,
+            "total": 1
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "cursor-append-rejected-by-catalog-hash",
+              "title": "Cursor continuation rejects an appended active-ledger suffix",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R10",
+              "issue": "Catalog verification previously hashed the entire activities ledger, so appending an unconfirmed suffix caused the query to fail before the cursor could resume from confirmationOrder.",
+              "suggestion": "Verify the confirmed prefix through replay and typed Activity associations, while excluding only the mutable ledger suffix from full-file hash verification and continuing to verify every other catalog artifact.",
+              "disposition": "must-fix",
+              "rationale": "R10 explicitly requires cursor position stability after an active ledger append. The implementation has been repaired accordingly; the finding remains for the parent to bind the mutation.",
+              "findingId": "550bb59b5ebbd0907c8c25b2d973948fb255c75cdee47fbde36738cf1b662303",
+              "fingerprint": "550bb59b5ebbd0907c8c25b2d973948fb255c75cdee47fbde36738cf1b662303",
+              "repeatCount": 1
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "d74d9ecfd35bc8058a04f12c5073852b370344c2572c87f5a1405ee6e40ed985",
+          "reviewedTree": "d74d9ecfd35bc8058a04f12c5073852b370344c2572c87f5a1405ee6e40ed985",
+          "reviewedHead": "ef7a110cb14febf85b3389584e8de37a8d1df7cf",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-6",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/35119053a20f562a52c1e7f0eaa0e3a2/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 1,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "38816e76cf90d81cca6fab4c59fc02a7ee99806e4d6bd74c2c887f91e57a5583"
+          },
+          "workerOutput": {
+            "digest": "eb3cb587015519de1a287044f19303034994b6440015c0b7948935f3b6f836ca",
+            "byteLength": 2337,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-6",
+            "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+            "targetStateDigest": "fd650015a609143d635bb5c29a0eed46892eec6482dd7191fed65548e26d0a6a",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "f5d5332f5d8c907ce58ba1f652ecfc5ad576c785660d8ea3d7810e9b9dd9c4d8",
+              "capturedAt": "2026-09-05T01:50:45.589Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "550bb59b5ebbd0907c8c25b2d973948fb255c75cdee47fbde36738cf1b662303",
+                "summary": "Cursor continuation rejects an appended active-ledger suffix",
+                "fingerprint": "550bb59b5ebbd0907c8c25b2d973948fb255c75cdee47fbde36738cf1b662303",
+                "evidenceRefs": [
+                  "impl-review.json#550bb59b5ebbd0907c8c25b2d973948fb255c75cdee47fbde36738cf1b662303"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-6",
+              "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "f5d5332f5d8c907ce58ba1f652ecfc5ad576c785660d8ea3d7810e9b9dd9c4d8",
+                "capturedAt": "2026-09-05T01:50:45.589Z"
+              },
+              "evidenceDigest": "69982e5ca00d353d889b59daad09ae0464c4e3f3cc5b31011114bd41b15e6d14"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+            "targetStateDigest": "fd650015a609143d635bb5c29a0eed46892eec6482dd7191fed65548e26d0a6a"
+          },
+          "canonicalTaskSource": {
+            "fingerprint": "9ab7b816d16084fece79afa7ca652e13756691f5c7df984ec9dfd5dd4ad87be5",
+            "lineageFingerprints": [
+              "781ca6cc2aec6a010be6ca1f42d6f31da7daa6c9c10525644cad4f859007fa63",
+              "dffc6c423972ae4dea5e11d0146278081b9321497d3441de6f427bf95c44a93b",
+              "d1b2de83ea63c4bbf51ccb602bc203e228c5aabc0138bc557e5d655788ef9f04",
+              "58483be2593df82111c1845fdd7c038aa5b7c5fd0b0945f99947ae4c773ebbee",
+              "3860952aca3a469030b9067a286de9a5959c672a41d826eb37ff616d9e414a68",
+              "0c0ec0f8f56715f723951403865c95368bdc68d8c08de0b6f34bc3d719a731f3"
+            ],
+            "reviewRepairLineageFingerprint": "0c0ec0f8f56715f723951403865c95368bdc68d8c08de0b6f34bc3d719a731f3",
+            "reviewRepairComplete": false
+          },
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      }
+    },
+    {
+      "attempt": 13,
+      "nodeId": "T-6-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "4348f64f03056ddf6a04a42b3c77386d249cbdc8dc88e649984d5180ef988eb9",
+          "treeSha": "37655bd493390ce2f0ea318f01d66472b550644d",
+          "targetStateDigest": "c640215e8275d244b9a4421f26d55d4d2b4c986b85d1978d98cf4133effd16db",
+          "blockingCount": 0,
+          "nonBlockingCount": 0,
+          "taskId": "T-6",
+          "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+          "noChange": false,
+          "noChangeReasons": [],
+          "repairMutationCount": 0,
+          "reviewRepairComplete": true
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-07T06:37:16.915Z",
+          "verdict": "PASS",
+          "summary": {
+            "blocking": 0,
+            "nonBlocking": 0,
+            "total": 0
+          },
+          "blockingFindings": [],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "c640215e8275d244b9a4421f26d55d4d2b4c986b85d1978d98cf4133effd16db",
+          "reviewedTree": "c640215e8275d244b9a4421f26d55d4d2b4c986b85d1978d98cf4133effd16db",
+          "reviewedHead": "5cf1d97e0dc157ae419b855801197e89d1f31974",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-6",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/c90035f1f02dd5b08ffa631f42c7e01b/impl-review.json",
+            "verdict": "PASS",
+            "result": "PASS",
+            "blockingCount": 0,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "7ed9c7d025db28525837da17bdc6ca8e57dcfe374fa8da45a55f7452673c438c"
+          },
+          "workerOutput": {
+            "digest": "4c63a27f3ba4d6577cacdc51e382a6dc4207ea7329a361a5ef77825581b9f006",
+            "byteLength": 1174,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-6",
+            "treeSha": "37655bd493390ce2f0ea318f01d66472b550644d",
+            "targetStateDigest": "c640215e8275d244b9a4421f26d55d4d2b4c986b85d1978d98cf4133effd16db",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "e04facbf3848587f7dc165db43e47662f93a8c21d96a85b1096c20faf0f888d3",
+              "capturedAt": "2026-09-07T06:37:16.915Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-6",
+              "treeSha": "37655bd493390ce2f0ea318f01d66472b550644d",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "e04facbf3848587f7dc165db43e47662f93a8c21d96a85b1096c20faf0f888d3",
+                "capturedAt": "2026-09-07T06:37:16.915Z"
+              },
+              "evidenceDigest": "4348f64f03056ddf6a04a42b3c77386d249cbdc8dc88e649984d5180ef988eb9"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "37655bd493390ce2f0ea318f01d66472b550644d",
+            "targetStateDigest": "c640215e8275d244b9a4421f26d55d4d2b4c986b85d1978d98cf4133effd16db"
+          },
+          "canonicalTaskSource": {
+            "fingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+            "lineageFingerprints": [
+              "781ca6cc2aec6a010be6ca1f42d6f31da7daa6c9c10525644cad4f859007fa63",
+              "dffc6c423972ae4dea5e11d0146278081b9321497d3441de6f427bf95c44a93b",
+              "d1b2de83ea63c4bbf51ccb602bc203e228c5aabc0138bc557e5d655788ef9f04",
+              "58483be2593df82111c1845fdd7c038aa5b7c5fd0b0945f99947ae4c773ebbee",
+              "3860952aca3a469030b9067a286de9a5959c672a41d826eb37ff616d9e414a68",
+              "0c0ec0f8f56715f723951403865c95368bdc68d8c08de0b6f34bc3d719a731f3",
+              "a778476d51308e967ed82c17aaab42f2fbdd9e2f798a1e4130f35f83527a46cd"
+            ],
+            "reviewRepairLineageFingerprint": "a778476d51308e967ed82c17aaab42f2fbdd9e2f798a1e4130f35f83527a46cd",
+            "reviewRepairComplete": true
+          },
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      }
+    }
+  ]
+}

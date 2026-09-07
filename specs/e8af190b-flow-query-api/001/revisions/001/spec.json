@@ -1,0 +1,21 @@
+{
+  "goal": "",
+  "scope": {
+    "in": [],
+    "out": []
+  },
+  "constraints": [],
+  "design_principles": [],
+  "overview": {
+    "modules": [],
+    "data_flow": [],
+    "decisions": []
+  },
+  "background": "",
+  "requirements": [],
+  "acceptance_criteria": [],
+  "clarifications": [],
+  "alternatives_considered": [],
+  "open_questions": [],
+  "tasks": []
+}

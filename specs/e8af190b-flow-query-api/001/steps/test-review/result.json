@@ -1,0 +1,1599 @@
+{
+  "attempts": [
+    {
+      "attempt": 3,
+      "nodeId": "test-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "test",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "ba5b5a674db48ccb9da7b5fa0525a9633382c0e9585c60957dad74e9beb35c48",
+          "treeSha": "2dc656670469fa6d4ff71e933c63badf957305c1",
+          "targetStateDigest": "b528d3bc3806e0408b60735a3f1c244eaa0d57c613116f6dee75df0af8bf0346",
+          "blockingCount": 13,
+          "advisoryCount": 0
+        }
+      },
+      "artifact": {
+        "logicalKey": "test.review",
+        "payload": {
+          "version": 1,
+          "phase": "test",
+          "generatedAt": "2026-09-01T08:16:40.136Z",
+          "verdict": "REJECTED",
+          "counts": {
+            "blocking": 13,
+            "advisory": 0,
+            "total": 13
+          },
+          "coverageArtifact": "test-coverage.json",
+          "sourceTestArtifactRevision": {
+            "version": 1,
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "stepId": "test",
+            "digest": "c974951679e6dc516f760324df0ac825a387297e92653a989105efa7b460c7ee",
+            "byteLength": 33544,
+            "finalizedAt": "2026-09-01T08:01:31.663Z"
+          },
+          "blockingFindings": [
+            {
+              "kind": "blocking",
+              "title": "R1 boundary matrix is incomplete",
+              "target": "tests/flow-query-api.test.js — R1 test",
+              "findingId": "d53584ac193a45d0675f009bd3dd777e950014d609c034173070719702191964",
+              "fingerprint": "d53584ac193a45d0675f009bd3dd777e950014d609c034173070719702191964",
+              "disposition": "must-fix",
+              "rationale": "A generic lifecycle path or multi-value parser could pass the current tests while violating the dedicated query dispatch contract.",
+              "issue": "Only valid stdin, valid request-file input, direct stdin, and one competing-input case are covered. Missing cases include absent input, scalar/array JSON, trailing or multiple values, MAX_REQUEST_BYTES, and invalid request-file paths. No test observes early validation before worktree, container, logger, config, ambient Flow, or hooks.",
+              "requiredChange": "Add explicit boundary rejection cases and pre-bootstrap probes for both entrypoints, including root/source handoff and success/failure lifecycle suppression.",
+              "whyBlocking": "A generic lifecycle path or multi-value parser could pass the current tests while violating the dedicated query dispatch contract.",
+              "origin": "R1",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "R2 does not test the plain-object and exact-shape contract",
+              "target": "tests/flow-query-api.test.js — R2 test",
+              "findingId": "8df6c7f157da32c7b4006049886106025dd609dc2f972e49d77efd6c8d5a21f2",
+              "fingerprint": "8df6c7f157da32c7b4006049886106025dd609dc2f972e49d77efd6c8d5a21f2",
+              "disposition": "must-fix",
+              "rationale": "The implementation could accept non-object requests or invalid selectors without any spec-local test failing.",
+              "issue": "The test does not reject scalar/array/null requests, invalid resource or condition types, missing or whitespace-only specId, or unsafe/non-positive flowVersion values.",
+              "requiredChange": "Add cases for every invalid top-level/resource/condition shape and the complete specId and flowVersion boundary matrix.",
+              "whyBlocking": "The implementation could accept non-object requests or invalid selectors without any spec-local test failing.",
+              "origin": "R2",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Canonical version integrity and bound handling are not covered",
+              "target": "tests/flow-query-api.test.js — R3 test",
+              "findingId": "37c3187526d2cbe1f02d1e57f46bc9befd3b2871968b2497c73a36ecd17c6336",
+              "fingerprint": "37c3187526d2cbe1f02d1e57f46bc9befd3b2871968b2497c73a36ecd17c6336",
+              "disposition": "must-fix",
+              "rationale": "Version discovery and record validation are core safety boundaries; an implementation can skip them and still pass the current selection assertions.",
+              "issue": "The manually copied Version 2 fixture is only used to verify selection. There are no tests for duplicate versions, available-version overflow, truncation rejection, directory/state identity mismatch, unsupported independent revisions, malformed envelopes, or state/result version confusion.",
+              "requiredChange": "Add canonical fixtures that independently corrupt each identity/revision and exceed enumeration limits, asserting the required canonical error and no fallback.",
+              "whyBlocking": "Version discovery and record validation are core safety boundaries; an implementation can skip them and still pass the current selection assertions.",
+              "origin": "R3",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Response-size enforcement is untested",
+              "target": "tests/flow-query-api.test.js — R4 test",
+              "findingId": "685f5187f43b28bf22eaa62b67abed9c3a33f95717f922639620c6d95442c5c1",
+              "fingerprint": "685f5187f43b28bf22eaa62b67abed9c3a33f95717f922639620c6d95442c5c1",
+              "disposition": "must-fix",
+              "rationale": "The current tests cannot detect violation of the required MAX_RESPONSE_BYTES and no-truncation guarantees.",
+              "issue": "The metadata success test uses a small fixture and never creates an available-version list or public response exceeding its configured byte limit.",
+              "requiredChange": "Add over-limit fixtures and assert that oversized results fail canonically rather than succeeding or being silently truncated.",
+              "whyBlocking": "The current tests cannot detect violation of the required MAX_RESPONSE_BYTES and no-truncation guarantees.",
+              "origin": "R4",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Metadata derivation and blocker precedence lack regression coverage",
+              "target": "tests/flow-query-api.test.js — R5/R6 tests",
+              "findingId": "cf5e1c70481d5cf7c156fd0ec6861f8f7e61ef61ea5ebfe9f6363d18adb7dddf",
+              "fingerprint": "cf5e1c70481d5cf7c156fd0ec6861f8f7e61ef61ea5ebfe9f6363d18adb7dddf",
+              "disposition": "must-fix",
+              "rationale": "Incorrect live-Git/timestamp fallback or blocker derivation can pass all current assertions while exposing non-canonical data.",
+              "issue": "The tests cover only a missing Git snapshot, one failure-derived blocker, and one finalized timestamp set. They do not cover validated Git snapshots, issue relationships, capabilities fallback prevention, unavailable timestamps, observation exclusion, persisted blocker precedence, failure fallback, failure-disposition fallback, or the required inconsistency when all blocker sources are empty.",
+              "requiredChange": "Add canonical fixture variants for each source and precedence branch, including observation-only ledgers and no-evidence timestamps.",
+              "whyBlocking": "Incorrect live-Git/timestamp fallback or blocker derivation can pass all current assertions while exposing non-canonical data.",
+              "origin": "R5/R6",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "R6 asserts an unspecified provenance literal",
+              "target": "tests/flow-query-api.test.js — R6 test",
+              "findingId": "3c99999c610d337929d3597a38d26d51a3ec051689197ce6eea95c267f2de244",
+              "fingerprint": "3c99999c610d337929d3597a38d26d51a3ec051689197ce6eea95c267f2de244",
+              "disposition": "must-fix",
+              "rationale": "A compliant implementation using a different valid provenance string would be rejected by this test.",
+              "issue": "The test requires createdAt.provenance to equal \"activity.timing.finishedAt\", but the requirement only fixes provenance as a non-empty string and does not fix that literal.",
+              "requiredChange": "Assert the required non-empty provenance and availability relationships, or use a provenance value explicitly fixed by the public contract.",
+              "whyBlocking": "A compliant implementation using a different valid provenance string would be rejected by this test.",
+              "origin": "R6",
+              "failureKind": "incorrect-premise"
+            },
+            {
+              "kind": "blocking",
+              "title": "Artifact reference and integrity boundaries are largely untested",
+              "target": "tests/flow-query-api.test.js — R7 test",
+              "findingId": "a2d7cf46a9b9bee32b21cb2f50062df56264f24da87b57e01a8bb05920765120",
+              "fingerprint": "a2d7cf46a9b9bee32b21cb2f50062df56264f24da87b57e01a8bb05920765120",
+              "disposition": "must-fix",
+              "rationale": "An implementation could return stored IDs, infer relations from paths, expose unsupported fields, or skip integrity limits while passing the current test.",
+              "issue": "Only one catalog descriptor's hash is checked. There are no cases for path/logical/catalog-pair lookup, optional versus canonical unresolved references, migrationMaterialization, logical contract schemaRevision, canonical JSON depth/size/cycle failures, relation mapping, or collection limits.",
+              "requiredChange": "Add catalog and Activity fixtures covering each reference kind, relation outcome, descriptor integrity boundary, and required canonical failure.",
+              "whyBlocking": "An implementation could return stored IDs, infer relations from paths, expose unsupported fields, or skip integrity limits while passing the current test.",
+              "origin": "R7",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Bounded reader and side-effect-free guarantees are not statically exercised",
+              "target": "tests/flow-query-api.test.js — R8/R16 tests",
+              "findingId": "874f06b38795a373d8be57c9d3c36f8fa6a4d342132ceb047cfbb161744067e5",
+              "fingerprint": "874f06b38795a373d8be57c9d3c36f8fa6a4d342132ceb047cfbb161744067e5",
+              "disposition": "must-fix",
+              "rationale": "The current snapshots can pass even if the reader uses materializing APIs, reads beyond bounds, follows symlinks, or changes Git state.",
+              "issue": "Tree snapshots only compare regular files under the temporary root. They do not verify O_RDONLY|O_NOFOLLOW behavior, symlink/regular-file identity, per-record byte limits, confirmed-prefix parsing, unreadable versus inconsistent classification, forbidden store/runtime construction, hook suppression, or Git status. The before/after status check is Flow status, not Git status.",
+              "requiredChange": "Add direct reader tests and observable sentinels for each reader entrypoint, malformed filesystem fixture, forbidden API, hook, runtime, cache, lock, temporary, and Git mutation path.",
+              "whyBlocking": "The current snapshots can pass even if the reader uses materializing APIs, reads beyond bounds, follows symlinks, or changes Git state.",
+              "origin": "R8/R16",
+              "failureKind": "static-anti-pattern"
+            },
+            {
+              "kind": "blocking",
+              "title": "Cursor tests accept arbitrary pagination tokens and use an invalid mismatch target",
+              "target": "tests/flow-query-api.test.js — R10 test",
+              "findingId": "c9c8753447771324b8fcc3a68e59e6123163371b7aa8efe3cbf54daa5b0b171f",
+              "fingerprint": "c9c8753447771324b8fcc3a68e59e6123163371b7aa8efe3cbf54daa5b0b171f",
+              "disposition": "must-fix",
+              "rationale": "An offset cursor or weakly validated token could satisfy the current assertions, and the nonexistent-spec case does not isolate CURSOR_QUERY_MISMATCH behavior.",
+              "issue": "The test only checks that a returned string advances pagination and that one malformed token fails. It does not validate canonical payload encoding, digest, exact bindings, reuse, invalid order/types, or offset exclusion. Its mismatch case uses a nonexistent spec, conflating cursor mismatch with spec lookup.",
+              "requiredChange": "Create a second valid spec/version, mutate each cursor payload field and digest, test reuse and all mismatch dimensions, and assert the canonical cursor representation rather than only pagination advancement.",
+              "whyBlocking": "An offset cursor or weakly validated token could satisfy the current assertions, and the nonexistent-spec case does not isolate CURSOR_QUERY_MISMATCH behavior.",
+              "origin": "R10",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Activity projection semantics are only structurally checked",
+              "target": "tests/flow-query-api.test.js — R11 test",
+              "findingId": "e5f32eb403ff33624f0f49983983c823d46a8d877945e65ae20d7b51b2e02fa0",
+              "fingerprint": "e5f32eb403ff33624f0f49983983c823d46a8d877945e65ae20d7b51b2e02fa0",
+              "disposition": "must-fix",
+              "rationale": "A projection that leaks stored references or selects/merges invalid attempt data could pass the current structural assertions.",
+              "issue": "The fixture does not exercise usage cost provenance, failure/outcome projection, artifact reference resolution, activity blocker/incomplete sourcing, multiple incomplete claims, metric/note fields, or collection limits. The helper mostly checks key names and a few primitive values.",
+              "requiredChange": "Add confirmed Activity fixtures for every non-null component, source precedence, unresolved-reference outcome, and collection/incomplete cardinality rule.",
+              "whyBlocking": "A projection that leaks stored references or selects/merges invalid attempt data could pass the current structural assertions.",
+              "origin": "R11",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Error classification and public-path matrix is incomplete",
+              "target": "tests/flow-query-api.test.js — R12/R13 tests",
+              "findingId": "2eb1815c00d4331c911a052e2737e9dc89752be6a1a0c016c7185a552d77e267",
+              "fingerprint": "2eb1815c00d4331c911a052e2737e9dc89752be6a1a0c016c7185a552d77e267",
+              "disposition": "must-fix",
+              "rationale": "The implementation can misclassify canonical failures or leak internal paths without any current test detecting it.",
+              "issue": "Only invalid JSON, missing spec, one broken state, an unknown top-level field, and one resource-incompatible field are checked. Missing are unreadable versus inconsistent file failures, missing records, invalid flow-version selection, all public JSON-pointer paths, complete internal-name redaction, and known-resource envelopes for the remaining failure branches.",
+              "requiredChange": "Add an error matrix covering every required code/path/classification and both resources, with assertions that no internal storage path, filename, catalog key, or lock name is exposed.",
+              "whyBlocking": "The implementation can misclassify canonical failures or leak internal paths without any current test detecting it.",
+              "origin": "R12/R13",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "R15 does not establish the shared reader boundary",
+              "target": "tests/flow-query-api.test.js — R15 test",
+              "findingId": "44f9e0abe66a9f6326ef9bb46d62793f18105325c20e100cba40355ac9f33009",
+              "fingerprint": "44f9e0abe66a9f6326ef9bb46d62793f18105325c20e100cba40355ac9f33009",
+              "disposition": "must-fix",
+              "rationale": "A Version 1-only or migration-dependent implementation can pass the current public-shape comparison.",
+              "issue": "It queries activities from one manually copied Version 2 fixture and compares public envelopes. It does not cover fresh versus migrated flows, metadata/artifact reads across versions, Version 1 direct records versus Version 2 envelopes, or prove that the same bounded reader is used without a Version 1 facade or migration report.",
+              "requiredChange": "Add fresh and migrated fixtures and exercise state, Spec, ledger, catalog, metadata, and activities through the same reader boundary, including instrumentation or targeted module tests for forbidden legacy APIs.",
+              "whyBlocking": "A Version 1-only or migration-dependent implementation can pass the current public-shape comparison.",
+              "origin": "R15",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Migration-parity inventory is absent",
+              "target": "tests/flow-query-api.test.js — R17 test",
+              "findingId": "9d0c05eac58e879982a101f4dfe30094ba203ac4c97f9e18b9f0d72f84a99756",
+              "fingerprint": "9d0c05eac58e879982a101f4dfe30094ba203ac4c97f9e18b9f0d72f84a99756",
+              "disposition": "must-fix",
+              "rationale": "The stated migration-parity acceptance requirement has no corresponding spec-local coverage beyond a superficial help/status comparison.",
+              "issue": "The test compares help and status output before and after one query and checks command names in help. It does not preserve or verify the required route/args, prepare/resume/run lifecycle, config/target resolution, hooks, generated artifacts, authority, or lock/cache/temporary/Git behavior inventory.",
+              "requiredChange": "Add an explicit owner/behavior/regression mapping fixture and executable checks for every listed existing public behavior.",
+              "whyBlocking": "The stated migration-parity acceptance requirement has no corresponding spec-local coverage beyond a superficial help/status comparison.",
+              "origin": "R17",
+              "failureKind": "missing-coverage"
+            }
+          ],
+          "advisoryFindings": [],
+          "contractSummary": {
+            "targetStep": "test-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/abb5d6e973da325b6a9687c4d981a86c/test-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 13,
+            "failureKind": null,
+            "completionKind": "non_normal",
+            "progressSignature": "092e7e39cf9dfde970e93deced3414da5c798ac0a6e93269ac7c54a99abd9c23"
+          },
+          "workerOutput": {
+            "digest": "8226a875fab514fbe24201d8cc1f5d835e6a4eb781c939afce249e6a16074166",
+            "byteLength": 17395,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "test",
+            "taskId": null,
+            "treeSha": "2dc656670469fa6d4ff71e933c63badf957305c1",
+            "targetStateDigest": "b528d3bc3806e0408b60735a3f1c244eaa0d57c613116f6dee75df0af8bf0346",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "6bdefc312e62ddee03062bc764af498005b5673dd69fa7ce2897de546ed3851d",
+              "capturedAt": "2026-09-01T08:16:40.136Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "d53584ac193a45d0675f009bd3dd777e950014d609c034173070719702191964",
+                "summary": "R1 boundary matrix is incomplete",
+                "fingerprint": "d53584ac193a45d0675f009bd3dd777e950014d609c034173070719702191964",
+                "evidenceRefs": [
+                  "test-review.json#d53584ac193a45d0675f009bd3dd777e950014d609c034173070719702191964"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "8df6c7f157da32c7b4006049886106025dd609dc2f972e49d77efd6c8d5a21f2",
+                "summary": "R2 does not test the plain-object and exact-shape contract",
+                "fingerprint": "8df6c7f157da32c7b4006049886106025dd609dc2f972e49d77efd6c8d5a21f2",
+                "evidenceRefs": [
+                  "test-review.json#8df6c7f157da32c7b4006049886106025dd609dc2f972e49d77efd6c8d5a21f2"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "37c3187526d2cbe1f02d1e57f46bc9befd3b2871968b2497c73a36ecd17c6336",
+                "summary": "Canonical version integrity and bound handling are not covered",
+                "fingerprint": "37c3187526d2cbe1f02d1e57f46bc9befd3b2871968b2497c73a36ecd17c6336",
+                "evidenceRefs": [
+                  "test-review.json#37c3187526d2cbe1f02d1e57f46bc9befd3b2871968b2497c73a36ecd17c6336"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "685f5187f43b28bf22eaa62b67abed9c3a33f95717f922639620c6d95442c5c1",
+                "summary": "Response-size enforcement is untested",
+                "fingerprint": "685f5187f43b28bf22eaa62b67abed9c3a33f95717f922639620c6d95442c5c1",
+                "evidenceRefs": [
+                  "test-review.json#685f5187f43b28bf22eaa62b67abed9c3a33f95717f922639620c6d95442c5c1"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "cf5e1c70481d5cf7c156fd0ec6861f8f7e61ef61ea5ebfe9f6363d18adb7dddf",
+                "summary": "Metadata derivation and blocker precedence lack regression coverage",
+                "fingerprint": "cf5e1c70481d5cf7c156fd0ec6861f8f7e61ef61ea5ebfe9f6363d18adb7dddf",
+                "evidenceRefs": [
+                  "test-review.json#cf5e1c70481d5cf7c156fd0ec6861f8f7e61ef61ea5ebfe9f6363d18adb7dddf"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "3c99999c610d337929d3597a38d26d51a3ec051689197ce6eea95c267f2de244",
+                "summary": "R6 asserts an unspecified provenance literal",
+                "fingerprint": "3c99999c610d337929d3597a38d26d51a3ec051689197ce6eea95c267f2de244",
+                "evidenceRefs": [
+                  "test-review.json#3c99999c610d337929d3597a38d26d51a3ec051689197ce6eea95c267f2de244"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "a2d7cf46a9b9bee32b21cb2f50062df56264f24da87b57e01a8bb05920765120",
+                "summary": "Artifact reference and integrity boundaries are largely untested",
+                "fingerprint": "a2d7cf46a9b9bee32b21cb2f50062df56264f24da87b57e01a8bb05920765120",
+                "evidenceRefs": [
+                  "test-review.json#a2d7cf46a9b9bee32b21cb2f50062df56264f24da87b57e01a8bb05920765120"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "874f06b38795a373d8be57c9d3c36f8fa6a4d342132ceb047cfbb161744067e5",
+                "summary": "Bounded reader and side-effect-free guarantees are not statically exercised",
+                "fingerprint": "874f06b38795a373d8be57c9d3c36f8fa6a4d342132ceb047cfbb161744067e5",
+                "evidenceRefs": [
+                  "test-review.json#874f06b38795a373d8be57c9d3c36f8fa6a4d342132ceb047cfbb161744067e5"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "c9c8753447771324b8fcc3a68e59e6123163371b7aa8efe3cbf54daa5b0b171f",
+                "summary": "Cursor tests accept arbitrary pagination tokens and use an invalid mismatch target",
+                "fingerprint": "c9c8753447771324b8fcc3a68e59e6123163371b7aa8efe3cbf54daa5b0b171f",
+                "evidenceRefs": [
+                  "test-review.json#c9c8753447771324b8fcc3a68e59e6123163371b7aa8efe3cbf54daa5b0b171f"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "e5f32eb403ff33624f0f49983983c823d46a8d877945e65ae20d7b51b2e02fa0",
+                "summary": "Activity projection semantics are only structurally checked",
+                "fingerprint": "e5f32eb403ff33624f0f49983983c823d46a8d877945e65ae20d7b51b2e02fa0",
+                "evidenceRefs": [
+                  "test-review.json#e5f32eb403ff33624f0f49983983c823d46a8d877945e65ae20d7b51b2e02fa0"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "2eb1815c00d4331c911a052e2737e9dc89752be6a1a0c016c7185a552d77e267",
+                "summary": "Error classification and public-path matrix is incomplete",
+                "fingerprint": "2eb1815c00d4331c911a052e2737e9dc89752be6a1a0c016c7185a552d77e267",
+                "evidenceRefs": [
+                  "test-review.json#2eb1815c00d4331c911a052e2737e9dc89752be6a1a0c016c7185a552d77e267"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "44f9e0abe66a9f6326ef9bb46d62793f18105325c20e100cba40355ac9f33009",
+                "summary": "R15 does not establish the shared reader boundary",
+                "fingerprint": "44f9e0abe66a9f6326ef9bb46d62793f18105325c20e100cba40355ac9f33009",
+                "evidenceRefs": [
+                  "test-review.json#44f9e0abe66a9f6326ef9bb46d62793f18105325c20e100cba40355ac9f33009"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "9d0c05eac58e879982a101f4dfe30094ba203ac4c97f9e18b9f0d72f84a99756",
+                "summary": "Migration-parity inventory is absent",
+                "fingerprint": "9d0c05eac58e879982a101f4dfe30094ba203ac4c97f9e18b9f0d72f84a99756",
+                "evidenceRefs": [
+                  "test-review.json#9d0c05eac58e879982a101f4dfe30094ba203ac4c97f9e18b9f0d72f84a99756"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "test",
+              "taskId": null,
+              "treeSha": "2dc656670469fa6d4ff71e933c63badf957305c1",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "6bdefc312e62ddee03062bc764af498005b5673dd69fa7ce2897de546ed3851d",
+                "capturedAt": "2026-09-01T08:16:40.136Z"
+              },
+              "evidenceDigest": "ba5b5a674db48ccb9da7b5fa0525a9633382c0e9585c60957dad74e9beb35c48"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "2dc656670469fa6d4ff71e933c63badf957305c1",
+            "targetStateDigest": "b528d3bc3806e0408b60735a3f1c244eaa0d57c613116f6dee75df0af8bf0346"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 4,
+      "nodeId": "test-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "test",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "ecaa4967960d11aee5cbd3f6cc63ba83c85acbd087eedfdee3a3cedf7ecb872e",
+          "treeSha": "94cef2cc368f4db3d184535e118f25c20d43ed7a",
+          "targetStateDigest": "586ee1898a9e3ec9400fc3ea76c2ded01382a90cc3ad721b1e6bccf8e05d1ba4",
+          "blockingCount": 10,
+          "advisoryCount": 1
+        }
+      },
+      "artifact": {
+        "logicalKey": "test.review",
+        "payload": {
+          "version": 1,
+          "phase": "test",
+          "generatedAt": "2026-09-01T11:08:55.123Z",
+          "verdict": "REJECTED",
+          "counts": {
+            "blocking": 10,
+            "advisory": 1,
+            "total": 11
+          },
+          "coverageArtifact": "test-coverage.json",
+          "sourceTestArtifactRevision": {
+            "version": 1,
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "stepId": "test",
+            "digest": "5aa17dfa5fcbbf332ec45cb2aaac382ffe1f51062435f90bdc043c5f4533ccee",
+            "byteLength": 159763,
+            "finalizedAt": "2026-09-01T10:59:18.063Z"
+          },
+          "blockingFindings": [
+            {
+              "kind": "blocking",
+              "title": "Reader module path and export are not specified",
+              "target": "tests/flow-query-api.test.js: canonicalReaderPath(), importCanonicalReader()",
+              "findingId": "dada7511d4ff6c4eebba476a1dfcf3f6ff83397dc4c92fec6648e24dab12d3a4",
+              "fingerprint": "dada7511d4ff6c4eebba476a1dfcf3f6ff83397dc4c92fec6648e24dab12d3a4",
+              "disposition": "must-fix",
+              "rationale": "A conforming implementation with different module organization is rejected before query behavior is exercised.",
+              "issue": "The tests require src/flow/lib/canonical-flow-version-reader.js and a named CanonicalFlowVersionReader export, but the requirements specify neither module path nor export shape.",
+              "requiredChange": "Either fix the specification with this module contract or test through a specified public boundary without assuming this path/export.",
+              "whyBlocking": "A conforming implementation with different module organization is rejected before query behavior is exercised.",
+              "origin": "R8/R15",
+              "failureKind": "invented_module_path_or_export"
+            },
+            {
+              "kind": "blocking",
+              "title": "Version 2 fixture contradicts the required state identity format",
+              "target": "tests/flow-query-api.test.js: addVersionTwo() and R15 scenarios",
+              "findingId": "fe9d0653d76a436fb434e2ee9ada4e0455f9bc18df62d5c09905af90d6375a04",
+              "fingerprint": "fe9d0653d76a436fb434e2ee9ada4e0455f9bc18df62d5c09905af90d6375a04",
+              "disposition": "must-fix",
+              "rationale": "A correct reader must reject the current Version 2 fixture, while a reader that ignores the inner identity binding can pass.",
+              "issue": "addVersionTwo() copies Version 1 state into the Version 2 envelope without setting inner state.flowVersion. R15 requires that value and its exact match with the directory version. The negative cases also never corrupt inner state.flowVersion.",
+              "requiredChange": "Build a valid Version 2 fixture with inner flowVersion: 2 and add a mismatch regression; add direct Version 1 validation regressions through the same reader.",
+              "whyBlocking": "A correct reader must reject the current Version 2 fixture, while a reader that ignores the inner identity binding can pass.",
+              "origin": "R3/R15",
+              "failureKind": "fixture_contradiction_and_missing_identity_coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Cursor test invents an unspecified digest contract",
+              "target": "tests/flow-query-api.test.js: assertCanonicalCursor(), encodeSignedCursorPayload()",
+              "findingId": "6b82034a2869aaff7519d8279a9837137bcbd0d6900bfc6335e3d8450b5c3657",
+              "fingerprint": "6b82034a2869aaff7519d8279a9837137bcbd0d6900bfc6335e3d8450b5c3657",
+              "disposition": "must-fix",
+              "rationale": "A compliant opaque cursor implementation using a different specified digest representation would be rejected.",
+              "issue": "The test requires exact cursor keys including digest and assumes sorted-key JSON plus SHA-256 over the unsigned payload. R10 does not define that field, digest algorithm, or canonicalization algorithm.",
+              "requiredChange": "Restrict assertions to cursor fields and encoding fixed by the requirements, or explicitly specify the complete digest payload contract before testing it.",
+              "whyBlocking": "A compliant opaque cursor implementation using a different specified digest representation would be rejected.",
+              "origin": "R10",
+              "failureKind": "invented_artifact_shape"
+            },
+            {
+              "kind": "blocking",
+              "title": "Tests hardcode limits whose numeric values are not fixed",
+              "target": "tests/flow-query-api.test.js: MAX_* declarations and overflow cases in R1/R4/R7/R8",
+              "findingId": "fc81d0a10b35cc8dd3e61cc6bf8d38090311eb68da74a91c58785cc9b9cd18bb",
+              "fingerprint": "fc81d0a10b35cc8dd3e61cc6bf8d38090311eb68da74a91c58785cc9b9cd18bb",
+              "disposition": "must-fix",
+              "rationale": "A conforming implementation with different specified limits would fail these tests, and the coverage artifact would not be specification-grounded.",
+              "issue": "The tests assume exact values for MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, MAX_AVAILABLE_FLOW_VERSIONS, MAX_ARTIFACTS, collection limits, record byte limits, and related bounds, but the supplied requirements only name most of these limits.",
+              "requiredChange": "Define every tested numeric limit in the specification or obtain it from a fixed public contract; otherwise test relative boundary behavior without invented values.",
+              "whyBlocking": "A conforming implementation with different specified limits would fail these tests, and the coverage artifact would not be specification-grounded.",
+              "origin": "R1/R3/R4/R5/R7/R8",
+              "failureKind": "invented_constant"
+            },
+            {
+              "kind": "blocking",
+              "title": "Request-file boundary coverage is incomplete",
+              "target": "tests/flow-query-api.test.js: R1 requestFilePath and boundaryCases loops",
+              "findingId": "1b87a2598d33820b8c0b0aa6926d348415da2627923ee691c777434c637c3416",
+              "fingerprint": "1b87a2598d33820b8c0b0aa6926d348415da2627923ee691c777434c637c3416",
+              "disposition": "must-fix",
+              "rationale": "Required R1 path-validation and root/source handoff branches can be absent while the claimed R1 coverage still passes.",
+              "issue": "The tests cover missing, directory, and empty paths, but not a successful normalized-relative path, an unreadable regular file, duplicate request-file options, or NUL handling at a parser boundary. invoke() also always supplies work/source bindings, so the no-binding fallback is untested.",
+              "requiredChange": "Add those request-file and binding cases, using a parser-level fixture for NUL if the OS cannot carry NUL in argv.",
+              "whyBlocking": "Required R1 path-validation and root/source handoff branches can be absent while the claimed R1 coverage still passes.",
+              "origin": "R1",
+              "failureKind": "missing_required_coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Metadata blocker fallback precedence is not fully tested",
+              "target": "tests/flow-query-api.test.js: R5 blocker fixtures",
+              "findingId": "21fc5d266b835ef4fde9af6bdca8541c8cd3da40d000fe6cee2f4bffd1f5053b",
+              "fingerprint": "21fc5d266b835ef4fde9af6bdca8541c8cd3da40d000fe6cee2f4bffd1f5053b",
+              "disposition": "must-fix",
+              "rationale": "Incorrect blocker precedence or live Git derivation can pass the current tests.",
+              "issue": "The tests cover persisted blocker, current failure, and empty sources, but never cover the required failure-disposition reason fallback. They also test missing gitSnapshot only outside a real Git repository, so live-Git fallback is not excluded.",
+              "requiredChange": "Add fixtures with only a non-empty failure-disposition reason and with an initialized Git repository lacking gitSnapshot; assert the exact fallback and unavailable Git result.",
+              "whyBlocking": "Incorrect blocker precedence or live Git derivation can pass the current tests.",
+              "origin": "R5",
+              "failureKind": "missing_required_coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Timestamp tests do not enforce the complete evidence rule",
+              "target": "tests/flow-query-api.test.js: R6 timestamp test",
+              "findingId": "2e1a50bd3111f042ce3b574b4000715bca890c535eeacad6b0dc47feeefdec8b",
+              "fingerprint": "2e1a50bd3111f042ce3b574b4000715bca890c535eeacad6b0dc47feeefdec8b",
+              "disposition": "must-fix",
+              "rationale": "An implementation that counts record_nonblocking or any create_flow type can pass despite violating R6.",
+              "issue": "createdAt is selected by operation without checking type === flow_created, and only record_metric/record_note are tested as observations; record_nonblocking is never placed after a state-changing Activity. The filter set is therefore only partially regression-tested.",
+              "requiredChange": "Add a wrong-type create_flow case and a later record_nonblocking case, asserting the required unavailable/unchanged timestamps.",
+              "whyBlocking": "An implementation that counts record_nonblocking or any create_flow type can pass despite violating R6.",
+              "origin": "R6",
+              "failureKind": "missing_required_coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Activities filtering does not prove timing.finishedAt authority",
+              "target": "tests/flow-query-api.test.js: R9 applies the default page and finishedAt datetime filter",
+              "findingId": "b806db8459a30ea48955efcfbcaf15767da5545716d3e9ab1f3b5a0d985af27c",
+              "fingerprint": "b806db8459a30ea48955efcfbcaf15767da5545716d3e9ab1f3b5a0d985af27c",
+              "disposition": "must-fix",
+              "rationale": "A filesystem-time implementation or permissive boundary parser can pass the current tests.",
+              "issue": "The only filter assertion uses a future empty range, which would also pass if filtering used filesystem timestamps. Exact page and recordedAt object rejection is also not tested for extra or missing fields.",
+              "requiredChange": "Set filesystem mtimes independently from Activity timing.finishedAt and assert filtering follows timing; add exact-shape and unknown-field cases for page and recordedAt.",
+              "whyBlocking": "A filesystem-time implementation or permissive boundary parser can pass the current tests.",
+              "origin": "R9",
+              "failureKind": "missing_authority_and_shape_coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Static substring checks do not enforce the reader boundary",
+              "target": "tests/flow-query-api.test.js: R15/R16 readerSource.includes() checks and stderr substring checks",
+              "findingId": "efcab63049d3180c5e59d85a92bc453912e4b218c49c02842592a9c8dd7943ee",
+              "fingerprint": "efcab63049d3180c5e59d85a92bc453912e4b218c49c02842592a9c8dd7943ee",
+              "disposition": "must-fix",
+              "rationale": "The critical side-effect and initialization invariants have no reliable behavioral regression test.",
+              "issue": "Absence of owner names in source and absence of diagnostic words in stderr do not prove that stores, runtime, config events, logger sinks, or ambient-flow resolution were not invoked. Aliased or dynamic calls can pass, and silent calls are invisible.",
+              "requiredChange": "Use a fixed injectable seam or call-level probes for forbidden constructors/events and assert zero calls across successful and failed query paths.",
+              "whyBlocking": "The critical side-effect and initialization invariants have no reliable behavioral regression test.",
+              "origin": "R1/R8/R15/R16",
+              "failureKind": "static_antipattern"
+            },
+            {
+              "kind": "blocking",
+              "title": "Migration-parity coverage is mostly declarative or help-only",
+              "target": "tests/flow-query-api.test.js: R17 inventory and parity test",
+              "findingId": "a768d070c2ea9b2111570cd3226161997b1b055abd1019952a4ee3e34dc711d6",
+              "fingerprint": "a768d070c2ea9b2111570cd3226161997b1b055abd1019952a4ee3e34dc711d6",
+              "disposition": "must-fix",
+              "rationale": "Query changes could remove or alter existing behavior while all current R17 assertions still pass.",
+              "issue": "Owner-file existence, function type checks, help/args checks, and selected prepare/status/context/resume calls do not execute the inventoried run lifecycle, task, review, gate, finalize, hook error-policy, or most artifact/config behavior.",
+              "requiredChange": "Add executable regression coverage for each inventoried category, especially hook invocation/order/error handling and gate/review/finalize behavior, with observable artifact and side-effect assertions.",
+              "whyBlocking": "Query changes could remove or alter existing behavior while all current R17 assertions still pass.",
+              "origin": "R17",
+              "failureKind": "missing_required_coverage"
+            }
+          ],
+          "advisoryFindings": [
+            {
+              "kind": "advisory",
+              "title": "Repeated test IDs reduce failure localization",
+              "target": "tests/flow-query-api.test.js: repeated R3, R7, R8, R11, and R16 test names",
+              "findingId": "f1bf2e90018d388358c6b10e3bb013893839a43283e5ba1b857335ee4c6df1d8",
+              "fingerprint": "f1bf2e90018d388358c6b10e3bb013893839a43283e5ba1b857335ee4c6df1d8",
+              "disposition": "informational",
+              "rationale": "This affects review and failure diagnostics only, not executable correctness.",
+              "improvement": "Use unique case identifiers or suffixes for each repeated requirement test.",
+              "whyNonBlocking": "This affects review and failure diagnostics only, not executable correctness."
+            }
+          ],
+          "contractSummary": {
+            "targetStep": "test-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/ff707e5f35fbea1f82fc8838b5486902/test-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 10,
+            "failureKind": null,
+            "completionKind": "non_normal",
+            "progressSignature": "269d26f892e0a772d0a81fc6cf788b24870ca12cf536f9d9181e59710011cd51"
+          },
+          "workerOutput": {
+            "digest": "7465de3ea8152a526cb376f6fc61b0d868ac5723896b047f9420c2305b9a4838",
+            "byteLength": 13877,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "test",
+            "taskId": null,
+            "treeSha": "94cef2cc368f4db3d184535e118f25c20d43ed7a",
+            "targetStateDigest": "586ee1898a9e3ec9400fc3ea76c2ded01382a90cc3ad721b1e6bccf8e05d1ba4",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "f2340c6971eda0829281d208e17eb2791905a8f4887255f60839fc84df98b4ae",
+              "capturedAt": "2026-09-01T11:08:55.123Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "dada7511d4ff6c4eebba476a1dfcf3f6ff83397dc4c92fec6648e24dab12d3a4",
+                "summary": "Reader module path and export are not specified",
+                "fingerprint": "dada7511d4ff6c4eebba476a1dfcf3f6ff83397dc4c92fec6648e24dab12d3a4",
+                "evidenceRefs": [
+                  "test-review.json#dada7511d4ff6c4eebba476a1dfcf3f6ff83397dc4c92fec6648e24dab12d3a4"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "fe9d0653d76a436fb434e2ee9ada4e0455f9bc18df62d5c09905af90d6375a04",
+                "summary": "Version 2 fixture contradicts the required state identity format",
+                "fingerprint": "fe9d0653d76a436fb434e2ee9ada4e0455f9bc18df62d5c09905af90d6375a04",
+                "evidenceRefs": [
+                  "test-review.json#fe9d0653d76a436fb434e2ee9ada4e0455f9bc18df62d5c09905af90d6375a04"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "6b82034a2869aaff7519d8279a9837137bcbd0d6900bfc6335e3d8450b5c3657",
+                "summary": "Cursor test invents an unspecified digest contract",
+                "fingerprint": "6b82034a2869aaff7519d8279a9837137bcbd0d6900bfc6335e3d8450b5c3657",
+                "evidenceRefs": [
+                  "test-review.json#6b82034a2869aaff7519d8279a9837137bcbd0d6900bfc6335e3d8450b5c3657"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "fc81d0a10b35cc8dd3e61cc6bf8d38090311eb68da74a91c58785cc9b9cd18bb",
+                "summary": "Tests hardcode limits whose numeric values are not fixed",
+                "fingerprint": "fc81d0a10b35cc8dd3e61cc6bf8d38090311eb68da74a91c58785cc9b9cd18bb",
+                "evidenceRefs": [
+                  "test-review.json#fc81d0a10b35cc8dd3e61cc6bf8d38090311eb68da74a91c58785cc9b9cd18bb"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "1b87a2598d33820b8c0b0aa6926d348415da2627923ee691c777434c637c3416",
+                "summary": "Request-file boundary coverage is incomplete",
+                "fingerprint": "1b87a2598d33820b8c0b0aa6926d348415da2627923ee691c777434c637c3416",
+                "evidenceRefs": [
+                  "test-review.json#1b87a2598d33820b8c0b0aa6926d348415da2627923ee691c777434c637c3416"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "21fc5d266b835ef4fde9af6bdca8541c8cd3da40d000fe6cee2f4bffd1f5053b",
+                "summary": "Metadata blocker fallback precedence is not fully tested",
+                "fingerprint": "21fc5d266b835ef4fde9af6bdca8541c8cd3da40d000fe6cee2f4bffd1f5053b",
+                "evidenceRefs": [
+                  "test-review.json#21fc5d266b835ef4fde9af6bdca8541c8cd3da40d000fe6cee2f4bffd1f5053b"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "2e1a50bd3111f042ce3b574b4000715bca890c535eeacad6b0dc47feeefdec8b",
+                "summary": "Timestamp tests do not enforce the complete evidence rule",
+                "fingerprint": "2e1a50bd3111f042ce3b574b4000715bca890c535eeacad6b0dc47feeefdec8b",
+                "evidenceRefs": [
+                  "test-review.json#2e1a50bd3111f042ce3b574b4000715bca890c535eeacad6b0dc47feeefdec8b"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "b806db8459a30ea48955efcfbcaf15767da5545716d3e9ab1f3b5a0d985af27c",
+                "summary": "Activities filtering does not prove timing.finishedAt authority",
+                "fingerprint": "b806db8459a30ea48955efcfbcaf15767da5545716d3e9ab1f3b5a0d985af27c",
+                "evidenceRefs": [
+                  "test-review.json#b806db8459a30ea48955efcfbcaf15767da5545716d3e9ab1f3b5a0d985af27c"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "efcab63049d3180c5e59d85a92bc453912e4b218c49c02842592a9c8dd7943ee",
+                "summary": "Static substring checks do not enforce the reader boundary",
+                "fingerprint": "efcab63049d3180c5e59d85a92bc453912e4b218c49c02842592a9c8dd7943ee",
+                "evidenceRefs": [
+                  "test-review.json#efcab63049d3180c5e59d85a92bc453912e4b218c49c02842592a9c8dd7943ee"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "a768d070c2ea9b2111570cd3226161997b1b055abd1019952a4ee3e34dc711d6",
+                "summary": "Migration-parity coverage is mostly declarative or help-only",
+                "fingerprint": "a768d070c2ea9b2111570cd3226161997b1b055abd1019952a4ee3e34dc711d6",
+                "evidenceRefs": [
+                  "test-review.json#a768d070c2ea9b2111570cd3226161997b1b055abd1019952a4ee3e34dc711d6"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [
+              {
+                "findingId": "f1bf2e90018d388358c6b10e3bb013893839a43283e5ba1b857335ee4c6df1d8",
+                "summary": "Repeated test IDs reduce failure localization",
+                "fingerprint": "f1bf2e90018d388358c6b10e3bb013893839a43283e5ba1b857335ee4c6df1d8",
+                "evidenceRefs": [
+                  "test-review.json#f1bf2e90018d388358c6b10e3bb013893839a43283e5ba1b857335ee4c6df1d8"
+                ],
+                "disposition": "informational"
+              }
+            ],
+            "identity": {
+              "phase": "test",
+              "taskId": null,
+              "treeSha": "94cef2cc368f4db3d184535e118f25c20d43ed7a",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "f2340c6971eda0829281d208e17eb2791905a8f4887255f60839fc84df98b4ae",
+                "capturedAt": "2026-09-01T11:08:55.123Z"
+              },
+              "evidenceDigest": "ecaa4967960d11aee5cbd3f6cc63ba83c85acbd087eedfdee3a3cedf7ecb872e"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "94cef2cc368f4db3d184535e118f25c20d43ed7a",
+            "targetStateDigest": "586ee1898a9e3ec9400fc3ea76c2ded01382a90cc3ad721b1e6bccf8e05d1ba4"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 5,
+      "nodeId": "test-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "test",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "0bf15392ba4df4c3c1d85d159abd4f6d1cace92bc97a1f21212f662b9e188c97",
+          "treeSha": "b54ca71e64c2c8ce0de80b1f63ce32d0be965942",
+          "targetStateDigest": "77805929cb612e622988388ceebdfe35f55c6e629ffec040f2bfd46ecb5d06c7",
+          "blockingCount": 5,
+          "advisoryCount": 0
+        }
+      },
+      "artifact": {
+        "logicalKey": "test.review",
+        "payload": {
+          "version": 1,
+          "phase": "test",
+          "generatedAt": "2026-09-01T12:48:59.608Z",
+          "verdict": "REJECTED",
+          "counts": {
+            "blocking": 5,
+            "advisory": 0,
+            "total": 5
+          },
+          "coverageArtifact": "test-coverage.json",
+          "sourceTestArtifactRevision": {
+            "version": 1,
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "stepId": "test",
+            "digest": "743ff8dffbeb6e7f8469c743ca2fcfed0c91c304e0e82093066e960c73a2dd81",
+            "byteLength": 194958,
+            "finalizedAt": "2026-09-01T12:45:36.971Z"
+          },
+          "blockingFindings": [
+            {
+              "kind": "blocking",
+              "title": "Request-file content validation is untested",
+              "target": "tests/flow-query-api.test.js: R1 test",
+              "findingId": "a990ef8e6957b833f27c0e6b48c733baceeb2fb18a7d822104eaa87bbad06cc0",
+              "fingerprint": "a990ef8e6957b833f27c0e6b48c733baceeb2fb18a7d822104eaa87bbad06cc0",
+              "disposition": "must-fix",
+              "rationale": "R1 requires identical exactly-one-object validation for both input sources.",
+              "issue": "Malformed JSON, trailing/multiple values, oversized input, and boundary-field validation are exercised only through stdin; request-file is tested only for path handling and one valid file.",
+              "requiredChange": "Exercise representative content-validation cases through --request-file and assert the same boundary envelopes.",
+              "whyBlocking": "R1 requires identical exactly-one-object validation for both input sources.",
+              "origin": "R1",
+              "failureKind": "missing required coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "R6 test expects the wrong updatedAt behavior",
+              "target": "tests/flow-query-api.test.js: R6 wrong-type create_flow and observation-only cases",
+              "findingId": "05e83237f1ec5094e5d74b7401123ff860d9f260994b4a6176578000a207789f",
+              "fingerprint": "05e83237f1ec5094e5d74b7401123ff860d9f260994b4a6176578000a207789f",
+              "disposition": "must-fix",
+              "rationale": "The test directly contradicts the required timestamp derivation and would reject a conforming implementation.",
+              "issue": "The tests expect updatedAt to be unavailable when create_flow has the wrong type or when only observation activities are appended. create_flow remains in the explicitly listed state-changing operation set, so its timing.finishedAt must supply updatedAt.",
+              "requiredChange": "Assert updatedAt is available from the confirmed create_flow Activity; only createdAt should become unavailable when its type is not flow_created.",
+              "whyBlocking": "The test directly contradicts the required timestamp derivation and would reject a conforming implementation.",
+              "origin": "R6",
+              "failureKind": "test contradicts target API"
+            },
+            {
+              "kind": "blocking",
+              "title": "Cursor replay assertion contradicts R10",
+              "target": "tests/flow-query-api.test.js: R10 replay case",
+              "findingId": "260f970ea7cff308ca031bd6d586ee71b5ce215c3ba228029300dde2b441baa0",
+              "fingerprint": "260f970ea7cff308ca031bd6d586ee71b5ce215c3ba228029300dde2b441baa0",
+              "disposition": "must-fix",
+              "rationale": "A conforming implementation would fail this test.",
+              "issue": "The test expects reusing the same cursor query to succeed and return the same response, while R10 classifies a cursor reused in a query as CURSOR_QUERY_MISMATCH.",
+              "requiredChange": "Change the replay case to assert CURSOR_QUERY_MISMATCH, consistent with R10's stated reuse rule.",
+              "whyBlocking": "A conforming implementation would fail this test.",
+              "origin": "R10",
+              "failureKind": "test contradicts target API"
+            },
+            {
+              "kind": "blocking",
+              "title": "Cursor canonical digest is not verified",
+              "target": "tests/flow-query-api.test.js: assertOpaqueCursor and R10 tamperedFields",
+              "findingId": "d7abe1d44c44ec7f93847a4033a4146106a391d8356e81888cadb8a3b34268cf",
+              "fingerprint": "d7abe1d44c44ec7f93847a4033a4146106a391d8356e81888cadb8a3b34268cf",
+              "disposition": "must-fix",
+              "rationale": "An implementation can omit cursor integrity validation while all current R10 tests pass.",
+              "issue": "The tests check base64url round-tripping and selected binding fields but never require or validate the cursor's canonical digest, canonical serialization, or missing/incorrect digest rejection.",
+              "requiredChange": "Assert the specified canonical digest/integrity representation and add tampered, missing, and non-canonical payload cases expecting INVALID_CURSOR.",
+              "whyBlocking": "An implementation can omit cursor integrity validation while all current R10 tests pass.",
+              "origin": "R10",
+              "failureKind": "missing required coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Shared reader boundary is asserted only by output equivalence",
+              "target": "tests/flow-query-api.test.js: R15 shared-reader test and createQueryCallProbe",
+              "findingId": "5e17a5ca9c5a809d2ed7d04526cf6953a50f30ecd187b3f9aee2537bc8504dd5",
+              "fingerprint": "5e17a5ca9c5a809d2ed7d04526cf6953a50f30ecd187b3f9aee2537bc8504dd5",
+              "disposition": "must-fix",
+              "rationale": "R15 makes the shared non-migration reader architecture and entrypoints a required invariant, not merely an output requirement.",
+              "issue": "The test does not observe CanonicalFlowVersionReader construction or its required entrypoints, so separate Version 1 and Version 2 readers or a Version 1 facade can pass while producing equivalent output.",
+              "requiredChange": "Instrument the fixed reader boundary and assert both Version 1 and Version 2+ state, Spec, ledger, and catalog reads use the same bounded reader entrypoints, with no legacy facade.",
+              "whyBlocking": "R15 makes the shared non-migration reader architecture and entrypoints a required invariant, not merely an output requirement.",
+              "origin": "R15",
+              "failureKind": "missing required coverage"
+            }
+          ],
+          "advisoryFindings": [],
+          "contractSummary": {
+            "targetStep": "test-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/e6c4c45a11d82bfc81a5bd5d40856e08/test-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 5,
+            "failureKind": null,
+            "completionKind": "non_normal",
+            "progressSignature": "e240cbc6fb6f50235633f7a5682a0604443d13643b901d6c365a73b508b4886a"
+          },
+          "workerOutput": {
+            "digest": "5e94c1c6bee71887aee0e92931d667616c7a531540907effe7214eb69550930b",
+            "byteLength": 6635,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "test",
+            "taskId": null,
+            "treeSha": "b54ca71e64c2c8ce0de80b1f63ce32d0be965942",
+            "targetStateDigest": "77805929cb612e622988388ceebdfe35f55c6e629ffec040f2bfd46ecb5d06c7",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "394832a4c7d076916d7e0ffa17dac57adb970b28da23e47ca8e734f860b5d6b4",
+              "capturedAt": "2026-09-01T12:48:59.608Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "a990ef8e6957b833f27c0e6b48c733baceeb2fb18a7d822104eaa87bbad06cc0",
+                "summary": "Request-file content validation is untested",
+                "fingerprint": "a990ef8e6957b833f27c0e6b48c733baceeb2fb18a7d822104eaa87bbad06cc0",
+                "evidenceRefs": [
+                  "test-review.json#a990ef8e6957b833f27c0e6b48c733baceeb2fb18a7d822104eaa87bbad06cc0"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "05e83237f1ec5094e5d74b7401123ff860d9f260994b4a6176578000a207789f",
+                "summary": "R6 test expects the wrong updatedAt behavior",
+                "fingerprint": "05e83237f1ec5094e5d74b7401123ff860d9f260994b4a6176578000a207789f",
+                "evidenceRefs": [
+                  "test-review.json#05e83237f1ec5094e5d74b7401123ff860d9f260994b4a6176578000a207789f"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "260f970ea7cff308ca031bd6d586ee71b5ce215c3ba228029300dde2b441baa0",
+                "summary": "Cursor replay assertion contradicts R10",
+                "fingerprint": "260f970ea7cff308ca031bd6d586ee71b5ce215c3ba228029300dde2b441baa0",
+                "evidenceRefs": [
+                  "test-review.json#260f970ea7cff308ca031bd6d586ee71b5ce215c3ba228029300dde2b441baa0"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "d7abe1d44c44ec7f93847a4033a4146106a391d8356e81888cadb8a3b34268cf",
+                "summary": "Cursor canonical digest is not verified",
+                "fingerprint": "d7abe1d44c44ec7f93847a4033a4146106a391d8356e81888cadb8a3b34268cf",
+                "evidenceRefs": [
+                  "test-review.json#d7abe1d44c44ec7f93847a4033a4146106a391d8356e81888cadb8a3b34268cf"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "5e17a5ca9c5a809d2ed7d04526cf6953a50f30ecd187b3f9aee2537bc8504dd5",
+                "summary": "Shared reader boundary is asserted only by output equivalence",
+                "fingerprint": "5e17a5ca9c5a809d2ed7d04526cf6953a50f30ecd187b3f9aee2537bc8504dd5",
+                "evidenceRefs": [
+                  "test-review.json#5e17a5ca9c5a809d2ed7d04526cf6953a50f30ecd187b3f9aee2537bc8504dd5"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "test",
+              "taskId": null,
+              "treeSha": "b54ca71e64c2c8ce0de80b1f63ce32d0be965942",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "394832a4c7d076916d7e0ffa17dac57adb970b28da23e47ca8e734f860b5d6b4",
+                "capturedAt": "2026-09-01T12:48:59.608Z"
+              },
+              "evidenceDigest": "0bf15392ba4df4c3c1d85d159abd4f6d1cace92bc97a1f21212f662b9e188c97"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "b54ca71e64c2c8ce0de80b1f63ce32d0be965942",
+            "targetStateDigest": "77805929cb612e622988388ceebdfe35f55c6e629ffec040f2bfd46ecb5d06c7"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 6,
+      "nodeId": "test-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "test",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "8f681a887ec2249749b3a7b7a823aa8654c953d89becbf94144388c045430d2d",
+          "treeSha": "b54ca71e64c2c8ce0de80b1f63ce32d0be965942",
+          "targetStateDigest": "670d713100d2a56081c147b0143b7e9edf9926bacd6ad642c103ec864677a187",
+          "blockingCount": 8,
+          "advisoryCount": 3
+        }
+      },
+      "artifact": {
+        "logicalKey": "test.review",
+        "payload": {
+          "version": 1,
+          "phase": "test",
+          "generatedAt": "2026-09-01T13:07:41.774Z",
+          "verdict": "REJECTED",
+          "counts": {
+            "blocking": 8,
+            "advisory": 3,
+            "total": 11
+          },
+          "coverageArtifact": "test-coverage.json",
+          "sourceTestArtifactRevision": {
+            "version": 1,
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "stepId": "test",
+            "digest": "897e6f840509e0eb5f0a29c000beae67bca83d11cd9bc5a08a4d8b82a95204af",
+            "byteLength": 202229,
+            "finalizedAt": "2026-09-01T13:02:23.766Z"
+          },
+          "blockingFindings": [
+            {
+              "kind": "blocking",
+              "title": "Replay assertion requires cross-process state",
+              "target": "R10 test: `it(\"R10: validates opaque cursor payloads, replay, bindings, and pagination position\", ...)`",
+              "findingId": "f34e719aecce69834052144fcb7a7c8c5effbef4207b7b35d183298bf50f0deb",
+              "fingerprint": "f34e719aecce69834052144fcb7a7c8c5effbef4207b7b35d183298bf50f0deb",
+              "disposition": "must-fix",
+              "rationale": "This rejects a correct stateless implementation and would force forbidden persistent replay state.",
+              "issue": "The test invokes a new CLI process twice with the same request and cursor, then expects the second invocation to return `CURSOR_QUERY_MISMATCH`. A side-effect-free CLI has no state with which to distinguish these invocations.",
+              "requiredChange": "Remove the one-time replay expectation or replace it with a stateless binding/position mismatch case. A one-use cursor requires an explicitly stateful API contract.",
+              "whyBlocking": "This rejects a correct stateless implementation and would force forbidden persistent replay state.",
+              "origin": "R10",
+              "failureKind": "incorrect-implementation-premise"
+            },
+            {
+              "kind": "blocking",
+              "title": "Migration-parity inventory is not executable coverage",
+              "target": "R17 tests and `EXISTING_SURFACE_PARITY_FIXTURE`",
+              "findingId": "cc5e360baa1fb6ebe6b4761067e6b0aa5468439ba391abcfdd1f709764e26a96",
+              "fingerprint": "cc5e360baa1fb6ebe6b4761067e6b0aa5468439ba391abcfdd1f709764e26a96",
+              "disposition": "must-fix",
+              "rationale": "R17 requires an observable migration-parity mapping for every retained public surface, and the current tests leave major regressions undetected.",
+              "issue": "The inventory claims coverage for every lifecycle, task, review, gate, finalize, config, target, hook, and canonical-artifact behavior, but executable command tests cover only a subset. Most lifecycle routes are checked only for registry presence/help/args, which would pass even if their behavior or artifact/side-effect contracts were removed.",
+              "requiredChange": "Add executable regressions for each inventoried behavior, or narrow the inventory to the behaviors actually tested; route metadata checks alone are insufficient for R17.",
+              "whyBlocking": "R17 requires an observable migration-parity mapping for every retained public surface, and the current tests leave major regressions undetected.",
+              "origin": "R17",
+              "failureKind": "coverage-gap"
+            },
+            {
+              "kind": "blocking",
+              "title": "The exact timestamp operation set is not regression-tested",
+              "target": "R6 test: `it(\"R6: sources Timestamp availability only from confirmed state-changing Activity timing\", ...)`",
+              "findingId": "b7cdffdd66f3c86d35ce5d52251ee8f95288ace118f6cae7814e6c54b987197e",
+              "fingerprint": "b7cdffdd66f3c86d35ce5d52251ee8f95288ace118f6cae7814e6c54b987197e",
+              "disposition": "must-fix",
+              "rationale": "An implementation can use an incomplete or incorrect operation set while all current assertions still pass.",
+              "issue": "The test redeclares the required operation set but the fixtures exercise only a small subset (`create_flow`, `finalize_flow`, and a few observation operations). The computed `updated` value therefore does not detect omission or misclassification of most listed state-changing operations.",
+              "requiredChange": "Add table-driven canonical ledger fixtures for every listed state-changing operation and explicit observation cases, asserting that each included operation updates timestamps and each excluded operation does not.",
+              "whyBlocking": "An implementation can use an incomplete or incorrect operation set while all current assertions still pass.",
+              "origin": "R6",
+              "failureKind": "coverage-gap"
+            },
+            {
+              "kind": "blocking",
+              "title": "Side-effect checks do not cover canonical-error paths",
+              "target": "R16 test: `it(\"R16: leaves canonical files, runtime side effects, and Git state unchanged on success and failure\", ...)`",
+              "findingId": "0a699ae5fc559e0719a92e4e2a7c5bdbcf4f443d98ea9943a68bf8d005331c55",
+              "fingerprint": "0a699ae5fc559e0719a92e4e2a7c5bdbcf4f443d98ea9943a68bf8d005331c55",
+              "disposition": "must-fix",
+              "rationale": "A query implementation could create logs, locks, cache, or temporary files only while handling canonical failures and still pass the current R16 coverage.",
+              "issue": "The side-effect test covers one success and `FLOW_VERSION_NOT_FOUND`, and only through the top-level entrypoint. Missing, malformed, symlinked, unreadable, digest/schema-inconsistent, and response-limit failures are tested elsewhere without before/after side-effect assertions.",
+              "requiredChange": "Run representative canonical read/integrity failures through both `src/sennel.js` and direct `src/flow.js`, comparing the full tree, Git status, runtime state, and probes before and after each failure.",
+              "whyBlocking": "A query implementation could create logs, locks, cache, or temporary files only while handling canonical failures and still pass the current R16 coverage.",
+              "origin": "R16",
+              "failureKind": "coverage-gap"
+            },
+            {
+              "kind": "blocking",
+              "title": "stderr diagnostic routing is never asserted",
+              "target": "R1/R13 boundary and known-error assertions",
+              "findingId": "ce6bb87771296e4c74c2829e741ef383a7945397be1780ea0b24bebb29eade14",
+              "fingerprint": "ce6bb87771296e4c74c2829e741ef383a7945397be1780ea0b24bebb29eade14",
+              "disposition": "must-fix",
+              "rationale": "The diagnostic-channel and single-stdout-document requirements have no executable coverage.",
+              "issue": "`assertBoundaryError` and `assertKnownError` inspect the JSON response but do not assert that diagnostics are emitted on stderr, that stdout contains only the response document, or that successful queries leave stderr clean.",
+              "requiredChange": "Add raw stdout/stderr assertions for representative boundary, canonical, and success paths, including the required stderr-only diagnostic behavior.",
+              "whyBlocking": "The diagnostic-channel and single-stdout-document requirements have no executable coverage.",
+              "origin": "R1/R13",
+              "failureKind": "coverage-gap"
+            },
+            {
+              "kind": "blocking",
+              "title": "Activity schema assertions are incomplete",
+              "target": "`assertActivityItem` and R11 Activity projection tests",
+              "findingId": "19cf46cd1800b19d23dcd330834e7ccc3922ac823b36a93f083446a08fe958c8",
+              "fingerprint": "19cf46cd1800b19d23dcd330834e7ccc3922ac823b36a93f083446a08fe958c8",
+              "disposition": "must-fix",
+              "rationale": "A malformed public Activity schema can pass the current tests despite violating R11.",
+              "issue": "The helper mostly checks key presence. It does not validate the required scalar types, enums, positive/non-negative bounds, ISO-8601 values, or nested shapes for all non-null `outcome`, `metric`, `tokens`, `artifactRefs`, and related fields across returned items.",
+              "requiredChange": "Make the ActivityItem assertions recursively validate every public field and add fixtures covering each non-null component and its boundary values.",
+              "whyBlocking": "A malformed public Activity schema can pass the current tests despite violating R11.",
+              "origin": "R11",
+              "failureKind": "coverage-gap"
+            },
+            {
+              "kind": "blocking",
+              "title": "Missing-source blocked state does not test the required canonical error",
+              "target": "R5 test: `dispositionReasonFallback` fixture",
+              "findingId": "f38f4eae934466c8c9ccb2831457809bfa3d3ef9fdf4065396d332e641e2db93",
+              "fingerprint": "f38f4eae934466c8c9ccb2831457809bfa3d3ef9fdf4065396d332e641e2db93",
+              "disposition": "must-fix",
+              "rationale": "The required no-source error path is untested and can silently return an invented or empty blocker.",
+              "issue": "The fallback case leaves the definition-provided failure-disposition reason intact and expects it to be used. There is no fixture where the persisted blocker, failure code/message, and disposition reason are all absent while `nextAction.operation` is `blocked`.",
+              "requiredChange": "Add a fixture that removes all three sources and assert `CANONICAL_RECORD_INCONSISTENT` with the resource-specific empty projection.",
+              "whyBlocking": "The required no-source error path is untested and can silently return an invented or empty blocker.",
+              "origin": "R5",
+              "failureKind": "coverage-gap"
+            },
+            {
+              "kind": "blocking",
+              "title": "Versioned canonical validation coverage is incomplete",
+              "target": "R3/R15 integrity and shared-reader tests",
+              "findingId": "ed21472cfbd67223508dabc558726071da73f68c62ec8d59bb033a971db33ef2",
+              "fingerprint": "ed21472cfbd67223508dabc558726071da73f68c62ec8d59bb033a971db33ef2",
+              "disposition": "must-fix",
+              "rationale": "R3/R15 can regress in a version-specific or discovery-specific path while the current mutation cases continue to pass.",
+              "issue": "The tests cover several envelope, state, ledger-contiguity, and catalog mutations, but do not independently exercise every required Spec/ledger/catalog revision validator or discovery filtering against unrelated Spec directories. The available-version overflow fixture also uses empty directories, so the error is not isolated to enumeration overflow.",
+              "requiredChange": "Add independent corruption cases for every supported revision and identity binding, an unrelated-Spec discovery fixture, and a valid-record overflow fixture that proves enumeration is rejected rather than failing due to missing records.",
+              "whyBlocking": "R3/R15 can regress in a version-specific or discovery-specific path while the current mutation cases continue to pass.",
+              "origin": "R3/R15",
+              "failureKind": "coverage-gap"
+            }
+          ],
+          "advisoryFindings": [
+            {
+              "kind": "advisory",
+              "title": "Add valid identifier boundary cases",
+              "target": "R2 identifier tests",
+              "findingId": "77cc7ff58a581a8ff7a85ed439c1c9c8c1e30d386476572b68ddea434db1c3f2",
+              "fingerprint": "77cc7ff58a581a8ff7a85ed439c1c9c8c1e30d386476572b68ddea434db1c3f2",
+              "disposition": "informational",
+              "rationale": "Invalid and ordinary valid identifiers are already covered.",
+              "improvement": "Include valid identifiers using dots, underscores, and hyphens, plus the shortest valid form, to pin the accepted format positively.",
+              "whyNonBlocking": "Invalid and ordinary valid identifiers are already covered."
+            },
+            {
+              "kind": "advisory",
+              "title": "Avoid duplicate requirement IDs in test names",
+              "target": "R3, R7, R11, and R15 test names",
+              "findingId": "b05caae1b7398e71a6a169eb14e9671e5b88cd5375e2c344ab95af8ecf0e8631",
+              "fingerprint": "b05caae1b7398e71a6a169eb14e9671e5b88cd5375e2c344ab95af8ecf0e8631",
+              "disposition": "informational",
+              "rationale": "This affects traceability only, not executable behavior.",
+              "improvement": "Use unique TC identifiers or descriptive suffixes so coverage reports can distinguish the separate cases.",
+              "whyNonBlocking": "This affects traceability only, not executable behavior."
+            },
+            {
+              "kind": "advisory",
+              "title": "Parsing prose to obtain limits is brittle",
+              "target": "`queryLimitsFromSpec()`",
+              "findingId": "65cde64adf85a9d4c93e6551b53ddac4f371ebf7c0983aa7c467c90e2e445b89",
+              "fingerprint": "65cde64adf85a9d4c93e6551b53ddac4f371ebf7c0983aa7c467c90e2e445b89",
+              "disposition": "informational",
+              "rationale": "The current helper still derives limits from the immutable spec artifact and does not inherently invalidate the tests.",
+              "improvement": "Prefer a dedicated machine-readable test contract or explicit fixture constants synchronized with the specification.",
+              "whyNonBlocking": "The current helper still derives limits from the immutable spec artifact and does not inherently invalidate the tests."
+            }
+          ],
+          "contractSummary": {
+            "targetStep": "test-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/7f974d6130bce42b8ec66a537bd39b77/test-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 8,
+            "failureKind": null,
+            "completionKind": "non_normal",
+            "progressSignature": "f650facddddbe1f11c9287067122c1f3021d7a729111fdf7060d48a64e64c581"
+          },
+          "workerOutput": {
+            "digest": "b270549551ba3cdd030ea4930b5046a6b38c66a2e5952c6110f6f3932f468ffd",
+            "byteLength": 13332,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "test",
+            "taskId": null,
+            "treeSha": "b54ca71e64c2c8ce0de80b1f63ce32d0be965942",
+            "targetStateDigest": "670d713100d2a56081c147b0143b7e9edf9926bacd6ad642c103ec864677a187",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "e9190046af8b328da3635c0faf6fd36f56d544b5f14bd2ed245a3e2ca2c5aac5",
+              "capturedAt": "2026-09-01T13:07:41.774Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "f34e719aecce69834052144fcb7a7c8c5effbef4207b7b35d183298bf50f0deb",
+                "summary": "Replay assertion requires cross-process state",
+                "fingerprint": "f34e719aecce69834052144fcb7a7c8c5effbef4207b7b35d183298bf50f0deb",
+                "evidenceRefs": [
+                  "test-review.json#f34e719aecce69834052144fcb7a7c8c5effbef4207b7b35d183298bf50f0deb"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "cc5e360baa1fb6ebe6b4761067e6b0aa5468439ba391abcfdd1f709764e26a96",
+                "summary": "Migration-parity inventory is not executable coverage",
+                "fingerprint": "cc5e360baa1fb6ebe6b4761067e6b0aa5468439ba391abcfdd1f709764e26a96",
+                "evidenceRefs": [
+                  "test-review.json#cc5e360baa1fb6ebe6b4761067e6b0aa5468439ba391abcfdd1f709764e26a96"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "b7cdffdd66f3c86d35ce5d52251ee8f95288ace118f6cae7814e6c54b987197e",
+                "summary": "The exact timestamp operation set is not regression-tested",
+                "fingerprint": "b7cdffdd66f3c86d35ce5d52251ee8f95288ace118f6cae7814e6c54b987197e",
+                "evidenceRefs": [
+                  "test-review.json#b7cdffdd66f3c86d35ce5d52251ee8f95288ace118f6cae7814e6c54b987197e"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "0a699ae5fc559e0719a92e4e2a7c5bdbcf4f443d98ea9943a68bf8d005331c55",
+                "summary": "Side-effect checks do not cover canonical-error paths",
+                "fingerprint": "0a699ae5fc559e0719a92e4e2a7c5bdbcf4f443d98ea9943a68bf8d005331c55",
+                "evidenceRefs": [
+                  "test-review.json#0a699ae5fc559e0719a92e4e2a7c5bdbcf4f443d98ea9943a68bf8d005331c55"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "ce6bb87771296e4c74c2829e741ef383a7945397be1780ea0b24bebb29eade14",
+                "summary": "stderr diagnostic routing is never asserted",
+                "fingerprint": "ce6bb87771296e4c74c2829e741ef383a7945397be1780ea0b24bebb29eade14",
+                "evidenceRefs": [
+                  "test-review.json#ce6bb87771296e4c74c2829e741ef383a7945397be1780ea0b24bebb29eade14"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "19cf46cd1800b19d23dcd330834e7ccc3922ac823b36a93f083446a08fe958c8",
+                "summary": "Activity schema assertions are incomplete",
+                "fingerprint": "19cf46cd1800b19d23dcd330834e7ccc3922ac823b36a93f083446a08fe958c8",
+                "evidenceRefs": [
+                  "test-review.json#19cf46cd1800b19d23dcd330834e7ccc3922ac823b36a93f083446a08fe958c8"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "f38f4eae934466c8c9ccb2831457809bfa3d3ef9fdf4065396d332e641e2db93",
+                "summary": "Missing-source blocked state does not test the required canonical error",
+                "fingerprint": "f38f4eae934466c8c9ccb2831457809bfa3d3ef9fdf4065396d332e641e2db93",
+                "evidenceRefs": [
+                  "test-review.json#f38f4eae934466c8c9ccb2831457809bfa3d3ef9fdf4065396d332e641e2db93"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "ed21472cfbd67223508dabc558726071da73f68c62ec8d59bb033a971db33ef2",
+                "summary": "Versioned canonical validation coverage is incomplete",
+                "fingerprint": "ed21472cfbd67223508dabc558726071da73f68c62ec8d59bb033a971db33ef2",
+                "evidenceRefs": [
+                  "test-review.json#ed21472cfbd67223508dabc558726071da73f68c62ec8d59bb033a971db33ef2"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [
+              {
+                "findingId": "77cc7ff58a581a8ff7a85ed439c1c9c8c1e30d386476572b68ddea434db1c3f2",
+                "summary": "Add valid identifier boundary cases",
+                "fingerprint": "77cc7ff58a581a8ff7a85ed439c1c9c8c1e30d386476572b68ddea434db1c3f2",
+                "evidenceRefs": [
+                  "test-review.json#77cc7ff58a581a8ff7a85ed439c1c9c8c1e30d386476572b68ddea434db1c3f2"
+                ],
+                "disposition": "informational"
+              },
+              {
+                "findingId": "b05caae1b7398e71a6a169eb14e9671e5b88cd5375e2c344ab95af8ecf0e8631",
+                "summary": "Avoid duplicate requirement IDs in test names",
+                "fingerprint": "b05caae1b7398e71a6a169eb14e9671e5b88cd5375e2c344ab95af8ecf0e8631",
+                "evidenceRefs": [
+                  "test-review.json#b05caae1b7398e71a6a169eb14e9671e5b88cd5375e2c344ab95af8ecf0e8631"
+                ],
+                "disposition": "informational"
+              },
+              {
+                "findingId": "65cde64adf85a9d4c93e6551b53ddac4f371ebf7c0983aa7c467c90e2e445b89",
+                "summary": "Parsing prose to obtain limits is brittle",
+                "fingerprint": "65cde64adf85a9d4c93e6551b53ddac4f371ebf7c0983aa7c467c90e2e445b89",
+                "evidenceRefs": [
+                  "test-review.json#65cde64adf85a9d4c93e6551b53ddac4f371ebf7c0983aa7c467c90e2e445b89"
+                ],
+                "disposition": "informational"
+              }
+            ],
+            "identity": {
+              "phase": "test",
+              "taskId": null,
+              "treeSha": "b54ca71e64c2c8ce0de80b1f63ce32d0be965942",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "e9190046af8b328da3635c0faf6fd36f56d544b5f14bd2ed245a3e2ca2c5aac5",
+                "capturedAt": "2026-09-01T13:07:41.774Z"
+              },
+              "evidenceDigest": "8f681a887ec2249749b3a7b7a823aa8654c953d89becbf94144388c045430d2d"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "b54ca71e64c2c8ce0de80b1f63ce32d0be965942",
+            "targetStateDigest": "670d713100d2a56081c147b0143b7e9edf9926bacd6ad642c103ec864677a187"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 7,
+      "nodeId": "test-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "test",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "b45933202ebce51d0ac0dad63608abf9ecb22d5d52e1e787aae9ac5135267ef3",
+          "treeSha": "68f838408358355067f769be9364b266db778670",
+          "targetStateDigest": "40385c168379bb7b5263d8d1e7ae458a8fc96ca3cf8c94904c9cc7487270fcd0",
+          "blockingCount": 7,
+          "advisoryCount": 3
+        }
+      },
+      "artifact": {
+        "logicalKey": "test.review",
+        "payload": {
+          "version": 1,
+          "phase": "test",
+          "generatedAt": "2026-09-01T14:10:36.085Z",
+          "verdict": "REJECTED",
+          "counts": {
+            "blocking": 7,
+            "advisory": 3,
+            "total": 10
+          },
+          "coverageArtifact": "test-coverage.json",
+          "sourceTestArtifactRevision": {
+            "version": 1,
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "stepId": "test",
+            "digest": "9e37e3a52726d860ad4b8e55100f78406027f31a40e6a32f7802103808f580e1",
+            "byteLength": 227523,
+            "finalizedAt": "2026-09-01T14:06:50.982Z"
+          },
+          "blockingFindings": [
+            {
+              "kind": "blocking",
+              "title": "Migration-parity baseline is self-referential",
+              "target": "R17: preserves the inventoried owners and behavior of every existing Flow surface",
+              "findingId": "9378e484e4f5c29a6b8850f8d3f54324a50f7f966c67e26fbdc997d5c9d19e47",
+              "fingerprint": "9378e484e4f5c29a6b8850f8d3f54324a50f7f966c67e26fbdc997d5c9d19e47",
+              "disposition": "must-fix",
+              "rationale": "R17 requires regression coverage for existing public routes; this test can pass without preserving production behavior.",
+              "issue": "runCommands is derived from the current FLOW_COMMANDS.run, and legacy snapshots are captured after implementation. Removing an unlisted existing route or changing its help/args can therefore pass.",
+              "requiredChange": "Use an immutable pre-query route/help/args inventory covering every retained Flow command and assert the current registry against it.",
+              "whyBlocking": "R17 requires regression coverage for existing public routes; this test can pass without preserving production behavior.",
+              "origin": "R17",
+              "failureKind": "static-antipattern"
+            },
+            {
+              "kind": "blocking",
+              "title": "Hook tests bypass command lifecycle wiring",
+              "target": "R17: executes every retained lifecycle hook and preserves priority and error policy",
+              "findingId": "af810441860a38431dd49495df44f3ced0cfbd8f335fe6e398f615f98389fb35",
+              "fingerprint": "af810441860a38431dd49495df44f3ced0cfbd8f335fe6e398f615f98389fb35",
+              "disposition": "must-fix",
+              "rationale": "Lifecycle pre/post/error attachment is an acceptance requirement, but direct runner tests do not exercise production command behavior.",
+              "issue": "The test directly calls discoverFlowCommandHooks/runFlowCommandHooks with synthetic contexts. Only prepare has an actual command-level hook assertion; gate, review, and finalize wiring can be removed while these tests still pass.",
+              "requiredChange": "Invoke each retained command with installed hooks, including representative success and error paths, and assert the registered callbacks execute through the command route.",
+              "whyBlocking": "Lifecycle pre/post/error attachment is an acceptance requirement, but direct runner tests do not exercise production command behavior.",
+              "origin": "R17",
+              "failureKind": "static-antipattern"
+            },
+            {
+              "kind": "blocking",
+              "title": "Bootstrap ordering is not observed",
+              "target": "R1: accepts exactly one stdin or request-file object through both public entrypoints",
+              "findingId": "0ab5420da1f4c5a80af8a52f82cc66fc5859177f9fc1d75fb68b76afb2e9b45a",
+              "fingerprint": "0ab5420da1f4c5a80af8a52f82cc66fc5859177f9fc1d75fb68b76afb2e9b45a",
+              "disposition": "must-fix",
+              "rationale": "R1 explicitly requires request parsing and validation to be the first I/O and forbids pre-bootstrap initialization.",
+              "issue": "The probes reject selected container/manager calls and Git discovery, but do not observe config reads or establish that request parsing and boundary validation precede every configuration/bootstrap I/O.",
+              "requiredChange": "Add an ordering probe or fail-fast fixture proving malformed/oversized input returns the boundary error before config, logger, attribution, or canonical-root reads occur.",
+              "whyBlocking": "R1 explicitly requires request parsing and validation to be the first I/O and forbids pre-bootstrap initialization.",
+              "origin": "R1",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Confirmed-prefix bounded reading is not verified",
+              "target": "R8: classifies missing or symlinked records and stops at the confirmed ledger prefix",
+              "findingId": "e43acc1f11763a94225a30b508361745ebc780859b8dfec7eeb4c37e3b6d0030",
+              "fingerprint": "e43acc1f11763a94225a30b508361745ebc780859b8dfec7eeb4c37e3b6d0030",
+              "disposition": "must-fix",
+              "rationale": "The test does not catch a violation of the required bounded confirmed-prefix reader behavior.",
+              "issue": "The sentinel records open flags but not read offsets or lengths. A reader can read the malformed ledger suffix and then ignore it, while the test still passes.",
+              "requiredChange": "Record canonical file read ranges and assert that ledger reads stop at the confirmed prefix boundary.",
+              "whyBlocking": "The test does not catch a violation of the required bounded confirmed-prefix reader behavior.",
+              "origin": "R8",
+              "failureKind": "static-antipattern"
+            },
+            {
+              "kind": "blocking",
+              "title": "Side-effect regression coverage omits failed activities queries",
+              "target": "R16: leaves canonical files, runtime state, Git, and probes unchanged on canonical failures",
+              "findingId": "196a951538ee807d7188b7718170d769f9ab445b59046eb33b43afd2c44107b5",
+              "fingerprint": "196a951538ee807d7188b7718170d769f9ab445b59046eb33b43afd2c44107b5",
+              "disposition": "must-fix",
+              "rationale": "R16 requires side-effect freedom on all successful and failed query paths, including both public resources.",
+              "issue": "The side-effect snapshot matrix invokes only metadata failures. A resource-specific activities failure path could mutate files, runtime state, Git, or invoke lifecycle code without being detected.",
+              "requiredChange": "Run the same success/failure side-effect assertions for activities, including unreadable, inconsistent, and response-limit cases where applicable.",
+              "whyBlocking": "R16 requires side-effect freedom on all successful and failed query paths, including both public resources.",
+              "origin": "R16",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Artifact collection overflow enforcement is untested",
+              "target": "R7: enforces canonical artifact identity size/depth boundaries and public collection limits",
+              "findingId": "07366cac0e19f2043f84b00c10b51ab3a883786ad06fb5c9fc677e6af70c373e",
+              "fingerprint": "07366cac0e19f2043f84b00c10b51ab3a883786ad06fb5c9fc677e6af70c373e",
+              "disposition": "must-fix",
+              "rationale": "An implementation can omit these limit checks and still satisfy the current tests.",
+              "issue": "The tests assert that existing relation arrays are within bounds but never create MAX_IDS_PER_ARTIFACT+1 relations or MAX_ARTIFACTS+1 descriptors. The exact MAX_ARTIFACTS fixture is rejected for response size, so it does not isolate the artifact-count limit.",
+              "requiredChange": "Add fixtures exceeding each artifact/relation bound and assert CANONICAL_RECORD_INCONSISTENT without truncation or partial output.",
+              "whyBlocking": "An implementation can omit these limit checks and still satisfy the current tests.",
+              "origin": "R7",
+              "failureKind": "missing-coverage"
+            },
+            {
+              "kind": "blocking",
+              "title": "Cost inference prohibition lacks a negative regression",
+              "target": "R11: projects every non-null ActivityItem component from confirmed canonical facts",
+              "findingId": "4d44995e066aeca3539c31421ce558f7aa1859ce02d571f894bb66e31e2a4422",
+              "fingerprint": "4d44995e066aeca3539c31421ce558f7aa1859ce02d571f894bb66e31e2a4422",
+              "disposition": "must-fix",
+              "rationale": "R11 explicitly forbids estimated cost exposure, but the current assertions cannot detect inference.",
+              "issue": "The only usage fixture supplies cost: 0, so an implementation that infers cost from tokens or timing can pass. No fixture proves that absent provider-measured cost remains null.",
+              "requiredChange": "Add a nonzero-token/timing Activity with canonical cost absent and assert public cost is null, plus retain a fixture proving recorded provider cost is copied unchanged.",
+              "whyBlocking": "R11 explicitly forbids estimated cost exposure, but the current assertions cannot detect inference.",
+              "origin": "R11",
+              "failureKind": "missing-coverage"
+            }
+          ],
+          "advisoryFindings": [
+            {
+              "kind": "advisory",
+              "title": "Page validation cases are incomplete",
+              "target": "R9: applies the default page, exact page bounds, and finishedAt datetime filter",
+              "findingId": "43ca62ee3cb38a2778402f9e84a9de8aed975cff671c340ec72fcb1dc2e205fe",
+              "fingerprint": "43ca62ee3cb38a2778402f9e84a9de8aed975cff671c340ec72fcb1dc2e205fe",
+              "disposition": "informational",
+              "rationale": "Existing tests already cover defaulting, representative bounds, malformed cursor input, ordering, and empty results.",
+              "improvement": "Add explicit cases for non-integer and non-number limits, empty/padded cursor encodings, and invalid datetime types.",
+              "whyNonBlocking": "Existing tests already cover defaulting, representative bounds, malformed cursor input, ordering, and empty results."
+            },
+            {
+              "kind": "advisory",
+              "title": "Finalized repeatability is checked only for metadata",
+              "target": "R14: represents active, parked, derived-blocked, and finalized Versions as public lifecycle data",
+              "findingId": "8fe3aed4b6828f0292032b87cbe1c12b0aa7c0b6d438c2deed90caf76658deee",
+              "fingerprint": "8fe3aed4b6828f0292032b87cbe1c12b0aa7c0b6d438c2deed90caf76658deee",
+              "disposition": "informational",
+              "rationale": "Both resources have independent success coverage, so this is an additional determinism check.",
+              "improvement": "Repeat both metadata and activities queries for a finalized Version and compare complete responses.",
+              "whyNonBlocking": "Both resources have independent success coverage, so this is an additional determinism check."
+            },
+            {
+              "kind": "advisory",
+              "title": "Test identifiers are reused across separate cases",
+              "target": "Test names such as multiple R3, R7, R11, and R15 cases",
+              "findingId": "e809f251d23fb2049b00a7a675905bc31d5a65e60fe385c8914bfd3039e620fd",
+              "fingerprint": "e809f251d23fb2049b00a7a675905bc31d5a65e60fe385c8914bfd3039e620fd",
+              "disposition": "informational",
+              "rationale": "This affects review diagnostics only and does not weaken executable coverage.",
+              "improvement": "Use unique TC identifiers or descriptive suffixes for easier traceability in reports.",
+              "whyNonBlocking": "This affects review diagnostics only and does not weaken executable coverage."
+            }
+          ],
+          "contractSummary": {
+            "targetStep": "test-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/6608eccdc2251f30b9d0414b1fb2a30f/test-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 7,
+            "failureKind": null,
+            "completionKind": "non_normal",
+            "progressSignature": "7d2178701f0c093a9ab64ce229b191d26a9badce5ec2890a400130bba8099ab4"
+          },
+          "workerOutput": {
+            "digest": "f295fa397ad920677f760ca6058b554d57363edf37aea47adc838aedd0ce12eb",
+            "byteLength": 11580,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "test",
+            "taskId": null,
+            "treeSha": "68f838408358355067f769be9364b266db778670",
+            "targetStateDigest": "40385c168379bb7b5263d8d1e7ae458a8fc96ca3cf8c94904c9cc7487270fcd0",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "ca837c732139702327e9c18443332b965e589f1ad825f547f9d9ede544b84ff3",
+              "capturedAt": "2026-09-01T14:10:36.085Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "9378e484e4f5c29a6b8850f8d3f54324a50f7f966c67e26fbdc997d5c9d19e47",
+                "summary": "Migration-parity baseline is self-referential",
+                "fingerprint": "9378e484e4f5c29a6b8850f8d3f54324a50f7f966c67e26fbdc997d5c9d19e47",
+                "evidenceRefs": [
+                  "test-review.json#9378e484e4f5c29a6b8850f8d3f54324a50f7f966c67e26fbdc997d5c9d19e47"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "af810441860a38431dd49495df44f3ced0cfbd8f335fe6e398f615f98389fb35",
+                "summary": "Hook tests bypass command lifecycle wiring",
+                "fingerprint": "af810441860a38431dd49495df44f3ced0cfbd8f335fe6e398f615f98389fb35",
+                "evidenceRefs": [
+                  "test-review.json#af810441860a38431dd49495df44f3ced0cfbd8f335fe6e398f615f98389fb35"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "0ab5420da1f4c5a80af8a52f82cc66fc5859177f9fc1d75fb68b76afb2e9b45a",
+                "summary": "Bootstrap ordering is not observed",
+                "fingerprint": "0ab5420da1f4c5a80af8a52f82cc66fc5859177f9fc1d75fb68b76afb2e9b45a",
+                "evidenceRefs": [
+                  "test-review.json#0ab5420da1f4c5a80af8a52f82cc66fc5859177f9fc1d75fb68b76afb2e9b45a"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "e43acc1f11763a94225a30b508361745ebc780859b8dfec7eeb4c37e3b6d0030",
+                "summary": "Confirmed-prefix bounded reading is not verified",
+                "fingerprint": "e43acc1f11763a94225a30b508361745ebc780859b8dfec7eeb4c37e3b6d0030",
+                "evidenceRefs": [
+                  "test-review.json#e43acc1f11763a94225a30b508361745ebc780859b8dfec7eeb4c37e3b6d0030"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "196a951538ee807d7188b7718170d769f9ab445b59046eb33b43afd2c44107b5",
+                "summary": "Side-effect regression coverage omits failed activities queries",
+                "fingerprint": "196a951538ee807d7188b7718170d769f9ab445b59046eb33b43afd2c44107b5",
+                "evidenceRefs": [
+                  "test-review.json#196a951538ee807d7188b7718170d769f9ab445b59046eb33b43afd2c44107b5"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "07366cac0e19f2043f84b00c10b51ab3a883786ad06fb5c9fc677e6af70c373e",
+                "summary": "Artifact collection overflow enforcement is untested",
+                "fingerprint": "07366cac0e19f2043f84b00c10b51ab3a883786ad06fb5c9fc677e6af70c373e",
+                "evidenceRefs": [
+                  "test-review.json#07366cac0e19f2043f84b00c10b51ab3a883786ad06fb5c9fc677e6af70c373e"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "4d44995e066aeca3539c31421ce558f7aa1859ce02d571f894bb66e31e2a4422",
+                "summary": "Cost inference prohibition lacks a negative regression",
+                "fingerprint": "4d44995e066aeca3539c31421ce558f7aa1859ce02d571f894bb66e31e2a4422",
+                "evidenceRefs": [
+                  "test-review.json#4d44995e066aeca3539c31421ce558f7aa1859ce02d571f894bb66e31e2a4422"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [
+              {
+                "findingId": "43ca62ee3cb38a2778402f9e84a9de8aed975cff671c340ec72fcb1dc2e205fe",
+                "summary": "Page validation cases are incomplete",
+                "fingerprint": "43ca62ee3cb38a2778402f9e84a9de8aed975cff671c340ec72fcb1dc2e205fe",
+                "evidenceRefs": [
+                  "test-review.json#43ca62ee3cb38a2778402f9e84a9de8aed975cff671c340ec72fcb1dc2e205fe"
+                ],
+                "disposition": "informational"
+              },
+              {
+                "findingId": "8fe3aed4b6828f0292032b87cbe1c12b0aa7c0b6d438c2deed90caf76658deee",
+                "summary": "Finalized repeatability is checked only for metadata",
+                "fingerprint": "8fe3aed4b6828f0292032b87cbe1c12b0aa7c0b6d438c2deed90caf76658deee",
+                "evidenceRefs": [
+                  "test-review.json#8fe3aed4b6828f0292032b87cbe1c12b0aa7c0b6d438c2deed90caf76658deee"
+                ],
+                "disposition": "informational"
+              },
+              {
+                "findingId": "e809f251d23fb2049b00a7a675905bc31d5a65e60fe385c8914bfd3039e620fd",
+                "summary": "Test identifiers are reused across separate cases",
+                "fingerprint": "e809f251d23fb2049b00a7a675905bc31d5a65e60fe385c8914bfd3039e620fd",
+                "evidenceRefs": [
+                  "test-review.json#e809f251d23fb2049b00a7a675905bc31d5a65e60fe385c8914bfd3039e620fd"
+                ],
+                "disposition": "informational"
+              }
+            ],
+            "identity": {
+              "phase": "test",
+              "taskId": null,
+              "treeSha": "68f838408358355067f769be9364b266db778670",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "ca837c732139702327e9c18443332b965e589f1ad825f547f9d9ede544b84ff3",
+                "capturedAt": "2026-09-01T14:10:36.085Z"
+              },
+              "evidenceDigest": "b45933202ebce51d0ac0dad63608abf9ecb22d5d52e1e787aae9ac5135267ef3"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "68f838408358355067f769be9364b266db778670",
+            "targetStateDigest": "40385c168379bb7b5263d8d1e7ae458a8fc96ca3cf8c94904c9cc7487270fcd0"
+          }
+        }
+      }
+    }
+  ]
+}

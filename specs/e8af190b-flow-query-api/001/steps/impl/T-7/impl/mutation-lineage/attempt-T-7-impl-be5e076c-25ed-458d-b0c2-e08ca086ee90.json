@@ -1,0 +1,35 @@
+{
+  "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+  "specId": "e8af190b-flow-query-api",
+  "taskId": "T-7",
+  "role": "implementation",
+  "attempt": {
+    "id": "attempt-T-7-impl-be5e076c-25ed-458d-b0c2-e08ca086ee90",
+    "sequence": 1
+  },
+  "budget": {
+    "round": 1,
+    "reviewAttemptSequenceAtStart": 0,
+    "gateAttemptSequenceAtStart": 0
+  },
+  "sourceFingerprint": "0306f3b90d15584243c74ac6172a1d1c20959cc950dbd47f78d856bd4592519a",
+  "manifest": {
+    "attempt": {
+      "id": "attempt-T-7-impl-be5e076c-25ed-458d-b0c2-e08ca086ee90",
+      "nodeId": "T-7-impl",
+      "sequence": 1
+    },
+    "baselineDigest": "7732a837ba56c3619c2c7a13d8b2148226f7be9b426f051340c516f7d3b969e4",
+    "mutations": [
+      {
+        "mutationId": "c29f43d065f06e05e9e133249a7eb68f0a5ceb388588a50fbe3f9e8170e54256",
+        "path": "src/flow.js",
+        "changeKind": "content",
+        "beforeDigest": "6ec68ec155ae327b6b605e8fe028f96a4158edb0f5719f2f085c10584bf98165",
+        "afterDigest": "5a6088dafcc1e1c75aa524b6e0498775c8f81ceadd905fb6f27bb1f295ef4606"
+      }
+    ],
+    "digest": "0306f3b90d15584243c74ac6172a1d1c20959cc950dbd47f78d856bd4592519a"
+  },
+  "noChangeReason": null
+}

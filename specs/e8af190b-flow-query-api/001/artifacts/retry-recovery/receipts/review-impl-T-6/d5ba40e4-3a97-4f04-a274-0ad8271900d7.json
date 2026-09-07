@@ -1,0 +1,34 @@
+{
+  "previous": {
+    "route": {
+      "kind": "review",
+      "phase": "impl",
+      "taskId": "T-6"
+    },
+    "attemptId": "400215a8-7456-4fdc-bee8-be2396bccfcc",
+    "attempt": 9,
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "projectDigest": "be9910e1adbdd41ae22bc28d755511794d79e48aa70d6954c6f4db996aa7491a",
+    "runtimeDigest": "e2ce6893b72b178536985fa938624aee310f3dce565aa1bb3063474e69d1332b",
+    "targetDigest": "be9910e1adbdd41ae22bc28d755511794d79e48aa70d6954c6f4db996aa7491a"
+  },
+  "current": {
+    "route": {
+      "kind": "review",
+      "phase": "impl",
+      "taskId": "T-6"
+    },
+    "attemptId": "d5ba40e4-3a97-4f04-a274-0ad8271900d7",
+    "attempt": 10,
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "projectDigest": "dc804610eed5e1b13aa54702c6a3030c87ba095b12ca4f9977d96b4b3f36e207",
+    "runtimeDigest": "119709cb30490464f6490b7cadf04f14a751ed1e6dc62f24888b73b54d86ce0f",
+    "targetDigest": "dc804610eed5e1b13aa54702c6a3030c87ba095b12ca4f9977d96b4b3f36e207"
+  },
+  "reason": "The direct recovery receipt now authorizes only its verified committed baseline advance and transient Review records.",
+  "reevaluationCount": 1
+}

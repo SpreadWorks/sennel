@@ -1,0 +1,610 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "T-2-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-2.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "no-overengineering",
+              "result": "fail",
+              "reason": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+              "category": "code-quality",
+              "title": "Avoid Overengineering",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/lib/current-flow-state.js",
+                    "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+                  },
+                  "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-overengineering",
+              "result": "fail",
+              "reason": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+              "category": "code-quality",
+              "title": "Avoid Overengineering",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+                  },
+                  "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "Avoid Overengineering — The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+              "guardrail_id": "no-overengineering",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Avoid Overengineering — The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+              "guardrail_id": "no-overengineering",
+              "category": "code-quality"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "2 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/lib/current-flow-state.js",
+                    "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+                  },
+                  "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+                  },
+                  "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "taskId": "T-2",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "4eaf7a10fcbb749acddd4b98f3c7063f2e42c116636520e2f5e7fce125333bc7",
+          "gateTransitionAttemptId": "attempt-T-2-gate-4f82ba7b-357b-49cb-88b7-15c3e79b6a74",
+          "gateTransitionAttemptSequence": 1
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-2.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "no-overengineering",
+                "result": "fail",
+                "reason": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+                "category": "code-quality",
+                "title": "Avoid Overengineering",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/lib/current-flow-state.js",
+                      "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+                    },
+                    "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-overengineering",
+                "result": "fail",
+                "reason": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+                "category": "code-quality",
+                "title": "Avoid Overengineering",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+                    },
+                    "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "Avoid Overengineering — The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+                "guardrail_id": "no-overengineering",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Avoid Overengineering — The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+                "guardrail_id": "no-overengineering",
+                "category": "code-quality"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "2 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/lib/current-flow-state.js",
+                      "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+                    },
+                    "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/query.js. Centralize the shared mapping or expose it from the owning module.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "AGGREGATE_METRIC_PROVENANCE declaration"
+                    },
+                    "observed": "The diff adds a provenance mapping that duplicates the same production mapping in src/flow/lib/current-flow-state.js. Reuse a shared mapping instead of introducing duplicate behavior.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "taskId": "T-2",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "4eaf7a10fcbb749acddd4b98f3c7063f2e42c116636520e2f5e7fce125333bc7",
+            "gateTransitionAttemptId": "attempt-T-2-gate-4f82ba7b-357b-49cb-88b7-15c3e79b6a74",
+            "gateTransitionAttemptSequence": 1
+          }
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "T-2-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "pass",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-2.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "no-hardcoded-secrets",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "security",
+              "title": "No Hardcoded Secrets",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-silent-error-swallowing",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "No Silent Error Swallowing",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-sensitive-data-in-logs",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "security",
+              "title": "No Sensitive Data in Logs",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-disabling-existing-tests",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "testing",
+              "title": "No Disabling Existing Tests",
+              "observations": []
+            },
+            {
+              "guardrail_id": "pre-existing-test-failure-escalation",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "testing",
+              "title": "Escalate Pre-Existing Test Failures",
+              "observations": []
+            },
+            {
+              "guardrail_id": "project-test-integrity",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "testing",
+              "title": "Project Test Integrity",
+              "observations": []
+            },
+            {
+              "guardrail_id": "code-placement",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Code Placement",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-overengineering",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Avoid Overengineering",
+              "observations": []
+            },
+            {
+              "guardrail_id": "exit-code-contract",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Exit Code Contract",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": []
+            },
+            {
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "requirements",
+              "title": "Validate User Input at Entry Point",
+              "observations": []
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "PASS",
+              "detail": "No Hardcoded Secrets — no observations emitted",
+              "guardrail_id": "no-hardcoded-secrets",
+              "category": "security"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Silent Error Swallowing — no observations emitted",
+              "guardrail_id": "no-silent-error-swallowing",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Sensitive Data in Logs — no observations emitted",
+              "guardrail_id": "no-sensitive-data-in-logs",
+              "category": "security"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Disabling Existing Tests — no observations emitted",
+              "guardrail_id": "no-disabling-existing-tests",
+              "category": "testing"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Escalate Pre-Existing Test Failures — no observations emitted",
+              "guardrail_id": "pre-existing-test-failure-escalation",
+              "category": "testing"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Project Test Integrity — no observations emitted",
+              "guardrail_id": "project-test-integrity",
+              "category": "testing"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Code Placement — no observations emitted",
+              "guardrail_id": "code-placement",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Avoid Overengineering — no observations emitted",
+              "guardrail_id": "no-overengineering",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Exit Code Contract — no observations emitted",
+              "guardrail_id": "exit-code-contract",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Synchronous I/O in Hot Paths — no observations emitted",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Validate User Input at Entry Point — no observations emitted",
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "category": "requirements"
+            }
+          ],
+          "nextAction": {
+            "diagnosis": {
+              "summary": "No blocking observations.",
+              "observations": []
+            },
+            "prescription": "Continue with the Definition-selected Gate action."
+          },
+          "taskId": "T-2",
+          "gateTransitionLineage": "0ce7e8b7698909f566d868f4444b714bb15205a97d242c4a11b1aaba73a8f51d",
+          "gateTransitionAttemptId": "attempt-T-2-gate-cc29d4d1-9002-49e6-8cb8-97afd9fc0f37",
+          "gateTransitionAttemptSequence": 2
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "pass",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-2.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "no-hardcoded-secrets",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "security",
+                "title": "No Hardcoded Secrets",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-silent-error-swallowing",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "No Silent Error Swallowing",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-sensitive-data-in-logs",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "security",
+                "title": "No Sensitive Data in Logs",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-disabling-existing-tests",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "testing",
+                "title": "No Disabling Existing Tests",
+                "observations": []
+              },
+              {
+                "guardrail_id": "pre-existing-test-failure-escalation",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "testing",
+                "title": "Escalate Pre-Existing Test Failures",
+                "observations": []
+              },
+              {
+                "guardrail_id": "project-test-integrity",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "testing",
+                "title": "Project Test Integrity",
+                "observations": []
+              },
+              {
+                "guardrail_id": "code-placement",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Code Placement",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-overengineering",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Avoid Overengineering",
+                "observations": []
+              },
+              {
+                "guardrail_id": "exit-code-contract",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Exit Code Contract",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": []
+              },
+              {
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "requirements",
+                "title": "Validate User Input at Entry Point",
+                "observations": []
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "PASS",
+                "detail": "No Hardcoded Secrets — no observations emitted",
+                "guardrail_id": "no-hardcoded-secrets",
+                "category": "security"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Silent Error Swallowing — no observations emitted",
+                "guardrail_id": "no-silent-error-swallowing",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Sensitive Data in Logs — no observations emitted",
+                "guardrail_id": "no-sensitive-data-in-logs",
+                "category": "security"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Disabling Existing Tests — no observations emitted",
+                "guardrail_id": "no-disabling-existing-tests",
+                "category": "testing"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Escalate Pre-Existing Test Failures — no observations emitted",
+                "guardrail_id": "pre-existing-test-failure-escalation",
+                "category": "testing"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Project Test Integrity — no observations emitted",
+                "guardrail_id": "project-test-integrity",
+                "category": "testing"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Code Placement — no observations emitted",
+                "guardrail_id": "code-placement",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Avoid Overengineering — no observations emitted",
+                "guardrail_id": "no-overengineering",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Exit Code Contract — no observations emitted",
+                "guardrail_id": "exit-code-contract",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Synchronous I/O in Hot Paths — no observations emitted",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Validate User Input at Entry Point — no observations emitted",
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "category": "requirements"
+              }
+            ],
+            "nextAction": {
+              "diagnosis": {
+                "summary": "No blocking observations.",
+                "observations": []
+              },
+              "prescription": "Continue with the Definition-selected Gate action."
+            },
+            "taskId": "T-2",
+            "gateTransitionLineage": "0ce7e8b7698909f566d868f4444b714bb15205a97d242c4a11b1aaba73a8f51d",
+            "gateTransitionAttemptId": "attempt-T-2-gate-cc29d4d1-9002-49e6-8cb8-97afd9fc0f37",
+            "gateTransitionAttemptSequence": 2
+          }
+        }
+      }
+    }
+  ]
+}

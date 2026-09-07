@@ -1,0 +1,27 @@
+{
+  "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+  "specId": "e8af190b-flow-query-api",
+  "taskId": "T-6",
+  "role": "review-repair",
+  "attempt": {
+    "id": "f1f3a654-3d3a-4aad-baa0-3566e9306f9a",
+    "sequence": 13
+  },
+  "budget": {
+    "round": 2,
+    "reviewAttemptSequenceAtStart": 3,
+    "gateAttemptSequenceAtStart": 5
+  },
+  "sourceFingerprint": "0a23a40aa9b9f5a58ad8a7e3b295e80b0b8ef1f0398213e006143b2a5e4b111c",
+  "manifest": {
+    "attempt": {
+      "id": "f1f3a654-3d3a-4aad-baa0-3566e9306f9a",
+      "nodeId": "T-6-review",
+      "sequence": 13
+    },
+    "baselineDigest": "1115888589b27bb76de176688e40f874c41f2c814934c03795f85ab42b12ac8d",
+    "mutations": [],
+    "digest": "0a23a40aa9b9f5a58ad8a7e3b295e80b0b8ef1f0398213e006143b2a5e4b111c"
+  },
+  "noChangeReason": null
+}

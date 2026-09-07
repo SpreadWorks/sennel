@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-6",
+  "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+  "targetStateDigest": "bcb30b2f817cf0a0ad93799cc9048e8f547aa0d6e807e7c9c8864a4bdd7c83e3",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "d9ad4d7867d0085a8e6a0df0fdcaba99a76c4e29c7f051c1abc0b2eb22edcab9",
+    "capturedAt": "2026-09-05T01:26:02.557Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "2d1074684ea0b62f0566777dba65b025846d1b25ca5defd095e822b9c439f368",
+      "summary": "Specified page and recordedAt objects accepted without required fields",
+      "fingerprint": "2d1074684ea0b62f0566777dba65b025846d1b25ca5defd095e822b9c439f368",
+      "evidenceRefs": [
+        "impl-review.json#2d1074684ea0b62f0566777dba65b025846d1b25ca5defd095e822b9c439f368"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

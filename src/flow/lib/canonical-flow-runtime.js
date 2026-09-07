@@ -475,7 +475,7 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  rewind({ specId, activityId, nodeId, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, expectedAttempt = null } = {}) {
+  rewind({ specId, activityId, nodeId, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, admission = undefined, retryRecoveryPublication = undefined, expectedAttempt = null } = {}) {
     const state = this.#state(specId);
     const expected = expectedAttempt === null ? null : CurrentAttemptIdentity.from(expectedAttempt);
     if (expected !== null && !expected.matchesFailed(state)) return null;
@@ -491,6 +491,8 @@ export class CanonicalFlowRuntime {
       usage,
       references,
       artifactWrites,
+      admission,
+      retryRecoveryPublication,
     });
   }
 
@@ -721,7 +723,7 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  recover({ specId, activityId, nodeId, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references } = {}) {
+  recover({ specId, activityId, nodeId, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, admission = undefined, retryRecoveryPublication = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
@@ -734,6 +736,9 @@ export class CanonicalFlowRuntime {
       effort,
       usage,
       references,
+      artifactWrites,
+      admission,
+      retryRecoveryPublication,
     });
   }
 

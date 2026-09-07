@@ -297,8 +297,8 @@ export class RetryRecoveryArtifactPublication {
     const route = retryEvidenceRouteForNode(state, activity?.nodeId);
     if (route === null) throw new Error("retry recovery artifact publication requires a retryable owning leaf");
     if (this.baseline !== null) {
-      if (!new Set(["start_attempt", "recover_attempt", "retry_attempt"]).has(activity.transition.operation)) {
-        throw new Error("retry recovery baseline publication requires a start, recovery, or retry Activity");
+      if (!new Set(["start_attempt", "rewind", "recover_attempt", "retry_attempt"]).has(activity.transition.operation)) {
+        throw new Error("retry recovery baseline publication requires a start, rewind, recovery, or retry Activity");
       }
       if (!this.baseline.route.equals(route)) {
         throw new Error("retry recovery baseline route does not match its owning Activity");

@@ -1,0 +1,2444 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "T-6-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "project-test-integrity",
+              "result": "fail",
+              "reason": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+              "category": "testing",
+              "title": "Project Test Integrity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "project-test-integrity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-6].test_strategy"
+                  },
+                  "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                  "severity": "blocking",
+                  "refs": [
+                    "project-test-integrity"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "Project Test Integrity — The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+              "guardrail_id": "project-test-integrity",
+              "category": "testing"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "1 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "project-test-integrity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-6].test_strategy"
+                  },
+                  "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                  "severity": "blocking",
+                  "refs": [
+                    "project-test-integrity"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "sourceFingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+          "taskId": "T-6",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "4190743dee50ee7f93dbca473d9c96ff7b734f13ec2c0a192fac01392de2fb2d",
+          "gateTransitionAttemptId": "attempt-T-6-gate-a24ac047-ba70-4a4f-9e76-0bb2e6f70088",
+          "gateTransitionAttemptSequence": 1
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "project-test-integrity",
+                "result": "fail",
+                "reason": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                "category": "testing",
+                "title": "Project Test Integrity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "project-test-integrity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-6].test_strategy"
+                    },
+                    "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                    "severity": "blocking",
+                    "refs": [
+                      "project-test-integrity"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "Project Test Integrity — The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                "guardrail_id": "project-test-integrity",
+                "category": "testing"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "1 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "project-test-integrity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-6].test_strategy"
+                    },
+                    "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                    "severity": "blocking",
+                    "refs": [
+                      "project-test-integrity"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "sourceFingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+            "taskId": "T-6",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "4190743dee50ee7f93dbca473d9c96ff7b734f13ec2c0a192fac01392de2fb2d",
+            "gateTransitionAttemptId": "attempt-T-6-gate-a24ac047-ba70-4a4f-9e76-0bb2e6f70088",
+            "gateTransitionAttemptSequence": 1
+          }
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "T-6-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "project-test-integrity",
+              "result": "fail",
+              "reason": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+              "category": "testing",
+              "title": "Project Test Integrity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "project-test-integrity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-6].test_strategy"
+                  },
+                  "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                  "severity": "blocking",
+                  "refs": [
+                    "project-test-integrity"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "Project Test Integrity — The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+              "guardrail_id": "project-test-integrity",
+              "category": "testing"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "1 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "project-test-integrity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-6].test_strategy"
+                  },
+                  "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                  "severity": "blocking",
+                  "refs": [
+                    "project-test-integrity"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "sourceFingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+          "taskId": "T-6",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "797af34a5c5d9ff706408784a1b8abdb2f575d7c4aaafb5f38ebcc889db8010f",
+          "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-8c11a05b-594c-4998-ad72-14d506d9c228",
+          "gateTransitionAttemptSequence": 2
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "project-test-integrity",
+                "result": "fail",
+                "reason": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                "category": "testing",
+                "title": "Project Test Integrity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "project-test-integrity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-6].test_strategy"
+                    },
+                    "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                    "severity": "blocking",
+                    "refs": [
+                      "project-test-integrity"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "Project Test Integrity — The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                "guardrail_id": "project-test-integrity",
+                "category": "testing"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "1 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "project-test-integrity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-6].test_strategy"
+                    },
+                    "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                    "severity": "blocking",
+                    "refs": [
+                      "project-test-integrity"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "sourceFingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+            "taskId": "T-6",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "797af34a5c5d9ff706408784a1b8abdb2f575d7c4aaafb5f38ebcc889db8010f",
+            "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-8c11a05b-594c-4998-ad72-14d506d9c228",
+            "gateTransitionAttemptSequence": 2
+          }
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "T-6-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "project-test-integrity",
+              "result": "fail",
+              "reason": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+              "category": "testing",
+              "title": "Project Test Integrity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "project-test-integrity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-6].test_strategy"
+                  },
+                  "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                  "severity": "blocking",
+                  "refs": [
+                    "project-test-integrity"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "Project Test Integrity — The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+              "guardrail_id": "project-test-integrity",
+              "category": "testing"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "1 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "project-test-integrity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-6].test_strategy"
+                  },
+                  "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                  "severity": "blocking",
+                  "refs": [
+                    "project-test-integrity"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "sourceFingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+          "taskId": "T-6",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "d60e880d6960dc64a0a154946d45cb70b3321248a597b5960c08e3acd3a5d88a",
+          "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-f594558c-da8e-41dd-84bf-085f4125f819",
+          "gateTransitionAttemptSequence": 3
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "project-test-integrity",
+                "result": "fail",
+                "reason": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                "category": "testing",
+                "title": "Project Test Integrity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "project-test-integrity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-6].test_strategy"
+                    },
+                    "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                    "severity": "blocking",
+                    "refs": [
+                      "project-test-integrity"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "Project Test Integrity — The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                "guardrail_id": "project-test-integrity",
+                "category": "testing"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "1 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "project-test-integrity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-6].test_strategy"
+                    },
+                    "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                    "severity": "blocking",
+                    "refs": [
+                      "project-test-integrity"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "sourceFingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+            "taskId": "T-6",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "d60e880d6960dc64a0a154946d45cb70b3321248a597b5960c08e3acd3a5d88a",
+            "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-f594558c-da8e-41dd-84bf-085f4125f819",
+            "gateTransitionAttemptSequence": 3
+          }
+        }
+      }
+    },
+    {
+      "attempt": 4,
+      "nodeId": "T-6-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "project-test-integrity",
+              "result": "fail",
+              "reason": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+              "category": "testing",
+              "title": "Project Test Integrity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "project-test-integrity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-6].test_strategy"
+                  },
+                  "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                  "severity": "blocking",
+                  "refs": [
+                    "project-test-integrity"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "Project Test Integrity — The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+              "guardrail_id": "project-test-integrity",
+              "category": "testing"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "1 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "project-test-integrity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-6].test_strategy"
+                  },
+                  "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                  "severity": "blocking",
+                  "refs": [
+                    "project-test-integrity"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "sourceFingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+          "taskId": "T-6",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "7e877e2c9e80e03f266c435bb0e9d819b89d5fb025d287c8feee3bdca4f395c7",
+          "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-5a341fb0-cc5f-433b-b415-1a1e240e9294",
+          "gateTransitionAttemptSequence": 4
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "project-test-integrity",
+                "result": "fail",
+                "reason": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                "category": "testing",
+                "title": "Project Test Integrity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "project-test-integrity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-6].test_strategy"
+                    },
+                    "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                    "severity": "blocking",
+                    "refs": [
+                      "project-test-integrity"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "Project Test Integrity — The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                "guardrail_id": "project-test-integrity",
+                "category": "testing"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "1 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "project-test-integrity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-6].test_strategy"
+                    },
+                    "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                    "severity": "blocking",
+                    "refs": [
+                      "project-test-integrity"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "sourceFingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+            "taskId": "T-6",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "7e877e2c9e80e03f266c435bb0e9d819b89d5fb025d287c8feee3bdca4f395c7",
+            "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-5a341fb0-cc5f-433b-b415-1a1e240e9294",
+            "gateTransitionAttemptSequence": 4
+          }
+        }
+      }
+    },
+    {
+      "attempt": 5,
+      "nodeId": "T-6-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "project-test-integrity",
+              "result": "fail",
+              "reason": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+              "category": "testing",
+              "title": "Project Test Integrity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "project-test-integrity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-6].test_strategy"
+                  },
+                  "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                  "severity": "blocking",
+                  "refs": [
+                    "project-test-integrity"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "Project Test Integrity — The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+              "guardrail_id": "project-test-integrity",
+              "category": "testing"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "1 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "project-test-integrity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-6].test_strategy"
+                  },
+                  "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                  "severity": "blocking",
+                  "refs": [
+                    "project-test-integrity"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "sourceFingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+          "taskId": "T-6",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "fb686a8a3476d25cfa2d8f73bcc7c82ef7e12d5b99cdbdde44fd32d60a33e749",
+          "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-6bb25407-5a15-42a2-9b84-23764641be8a",
+          "gateTransitionAttemptSequence": 5
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "project-test-integrity",
+                "result": "fail",
+                "reason": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                "category": "testing",
+                "title": "Project Test Integrity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "project-test-integrity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-6].test_strategy"
+                    },
+                    "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                    "severity": "blocking",
+                    "refs": [
+                      "project-test-integrity"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "Project Test Integrity — The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                "guardrail_id": "project-test-integrity",
+                "category": "testing"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "1 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "project-test-integrity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-6].test_strategy"
+                    },
+                    "observed": "The task requires integration coverage for cursor pagination, including multi-page gaps/duplicates, cursor mismatch/tampering, append stability, and limits, but no corresponding project test code is present in the current allow-listed source.",
+                    "severity": "blocking",
+                    "refs": [
+                      "project-test-integrity"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "sourceFingerprint": "80258a3744e15004e2aa7863a0c2d514d252464316064edb9f97bb7e8a2a93e9",
+            "taskId": "T-6",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "fb686a8a3476d25cfa2d8f73bcc7c82ef7e12d5b99cdbdde44fd32d60a33e749",
+            "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-6bb25407-5a15-42a2-9b84-23764641be8a",
+            "gateTransitionAttemptSequence": 5
+          }
+        }
+      }
+    },
+    {
+      "attempt": 6,
+      "nodeId": "T-6-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                  },
+                  "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous stat I/O is used inside a bulk-processing loop.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                  },
+                  "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                  },
+                  "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous directory I/O is used during recursive bulk catalog traversal.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous stat I/O is used inside a bulk-processing loop.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous file I/O is used inside a loop over cataloged artifacts.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "3 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                  },
+                  "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                  },
+                  "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                  },
+                  "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+          "taskId": "T-6",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "62c76d98033a8c900cc122e2efafe9acde55dac62ad82c847f94ed5df60083a4",
+          "gateTransitionAttemptId": "attempt-T-6-gate-84734210-70cf-46cd-a93d-0d44dd16f3a4",
+          "gateTransitionAttemptSequence": 6
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                    },
+                    "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                    },
+                    "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                    },
+                    "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous stat I/O is used inside a bulk-processing loop.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "3 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                    },
+                    "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                    },
+                    "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                    },
+                    "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+            "taskId": "T-6",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "62c76d98033a8c900cc122e2efafe9acde55dac62ad82c847f94ed5df60083a4",
+            "gateTransitionAttemptId": "attempt-T-6-gate-84734210-70cf-46cd-a93d-0d44dd16f3a4",
+            "gateTransitionAttemptSequence": 6
+          }
+        }
+      }
+    },
+    {
+      "attempt": 7,
+      "nodeId": "T-6-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                  },
+                  "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous stat I/O is used inside a bulk-processing loop.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                  },
+                  "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                  },
+                  "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous directory I/O is used during recursive bulk catalog traversal.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous stat I/O is used inside a bulk-processing loop.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous file I/O is used inside a loop over cataloged artifacts.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "3 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                  },
+                  "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                  },
+                  "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                  },
+                  "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+          "taskId": "T-6",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "c33a84538a9b356143b948ff7dda8c6304835b2b6552be40fb3e5fd7fc2d1bd4",
+          "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-c86c54f3-d41e-448d-9f5b-58dfa6c65a8f",
+          "gateTransitionAttemptSequence": 7
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                    },
+                    "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                    },
+                    "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                    },
+                    "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous stat I/O is used inside a bulk-processing loop.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "3 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                    },
+                    "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                    },
+                    "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                    },
+                    "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+            "taskId": "T-6",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "c33a84538a9b356143b948ff7dda8c6304835b2b6552be40fb3e5fd7fc2d1bd4",
+            "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-c86c54f3-d41e-448d-9f5b-58dfa6c65a8f",
+            "gateTransitionAttemptSequence": 7
+          }
+        }
+      }
+    },
+    {
+      "attempt": 8,
+      "nodeId": "T-6-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                  },
+                  "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous stat I/O is used inside a bulk-processing loop.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                  },
+                  "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                  },
+                  "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous directory I/O is used during recursive bulk catalog traversal.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous stat I/O is used inside a bulk-processing loop.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous file I/O is used inside a loop over cataloged artifacts.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "3 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                  },
+                  "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                  },
+                  "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                  },
+                  "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+          "taskId": "T-6",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "41979e622ff0a79c3daa60530fdc7cf173a915151f7dbbbfa745241a682b9832",
+          "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-2658c4f1-f6a2-4bac-9f3f-731068104176",
+          "gateTransitionAttemptSequence": 8
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                    },
+                    "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                    },
+                    "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                    },
+                    "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous stat I/O is used inside a bulk-processing loop.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "3 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                    },
+                    "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                    },
+                    "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                    },
+                    "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+            "taskId": "T-6",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "41979e622ff0a79c3daa60530fdc7cf173a915151f7dbbbfa745241a682b9832",
+            "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-2658c4f1-f6a2-4bac-9f3f-731068104176",
+            "gateTransitionAttemptSequence": 8
+          }
+        }
+      }
+    },
+    {
+      "attempt": 9,
+      "nodeId": "T-6-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                  },
+                  "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous stat I/O is used inside a bulk-processing loop.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                  },
+                  "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                  },
+                  "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous directory I/O is used during recursive bulk catalog traversal.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous stat I/O is used inside a bulk-processing loop.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous file I/O is used inside a loop over cataloged artifacts.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "3 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                  },
+                  "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                  },
+                  "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                  },
+                  "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+          "taskId": "T-6",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "365879e549f476b3b03da02f9222d352ce2990537e65769bb98963c8203ad80d",
+          "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-3b81b95b-127e-4ce0-b4b7-7145492fd5f5",
+          "gateTransitionAttemptSequence": 9
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                    },
+                    "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                    },
+                    "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                    },
+                    "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous stat I/O is used inside a bulk-processing loop.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "3 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                    },
+                    "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                    },
+                    "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                    },
+                    "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+            "taskId": "T-6",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "365879e549f476b3b03da02f9222d352ce2990537e65769bb98963c8203ad80d",
+            "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-3b81b95b-127e-4ce0-b4b7-7145492fd5f5",
+            "gateTransitionAttemptSequence": 9
+          }
+        }
+      }
+    },
+    {
+      "attempt": 10,
+      "nodeId": "T-6-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                  },
+                  "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous stat I/O is used inside a bulk-processing loop.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                  },
+                  "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "fail",
+              "reason": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                  },
+                  "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous directory I/O is used during recursive bulk catalog traversal.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous stat I/O is used inside a bulk-processing loop.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "No Synchronous I/O in Hot Paths — Synchronous file I/O is used inside a loop over cataloged artifacts.",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "3 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                  },
+                  "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                  },
+                  "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-synchronous-io-in-hot-paths",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                  },
+                  "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-synchronous-io-in-hot-paths"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+          "taskId": "T-6",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "30183a30a49b72df1f42db038363bbe07d6c4492e6d73d786f72367fe8bc6155",
+          "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-c0aef3d7-0d8a-439f-9f7e-d2f1777d877c",
+          "gateTransitionAttemptSequence": 10
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-6.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                    },
+                    "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                    },
+                    "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "fail",
+                "reason": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                    },
+                    "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous stat I/O is used inside a bulk-processing loop.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "No Synchronous I/O in Hot Paths — Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "3 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+                    },
+                    "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+                    },
+                    "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-synchronous-io-in-hot-paths",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+                    },
+                    "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-synchronous-io-in-hot-paths"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c",
+            "taskId": "T-6",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "30183a30a49b72df1f42db038363bbe07d6c4492e6d73d786f72367fe8bc6155",
+            "gateTransitionAttemptId": "attempt-T-6-gate-gate-retry-c0aef3d7-0d8a-439f-9f7e-d2f1777d877c",
+            "gateTransitionAttemptSequence": 10
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "previous": {
+    "route": {
+      "kind": "review",
+      "phase": "impl",
+      "taskId": "T-6"
+    },
+    "attemptId": "d5ba40e4-3a97-4f04-a274-0ad8271900d7",
+    "attempt": 10,
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "projectDigest": "dc804610eed5e1b13aa54702c6a3030c87ba095b12ca4f9977d96b4b3f36e207",
+    "runtimeDigest": "119709cb30490464f6490b7cadf04f14a751ed1e6dc62f24888b73b54d86ce0f",
+    "targetDigest": "dc804610eed5e1b13aa54702c6a3030c87ba095b12ca4f9977d96b4b3f36e207"
+  },
+  "current": {
+    "route": {
+      "kind": "review",
+      "phase": "impl",
+      "taskId": "T-6"
+    },
+    "attemptId": "5653c62d-0d11-40f8-848b-84c33cac1f3a",
+    "attempt": 11,
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "projectDigest": "af7931c1c1102bac40c1f26e6f7815bee1ec256479459193fb5bd992a3617c44",
+    "runtimeDigest": "29e2a68276e82c8ddc14459be3ba0d4ad6ed1010e201a88dcf38f06c5b63ca7e",
+    "targetDigest": "af7931c1c1102bac40c1f26e6f7815bee1ec256479459193fb5bd992a3617c44"
+  },
+  "reason": "The contiguous canonical recovery receipt chain now authorizes only its verified committed baseline and transient Review records.",
+  "reevaluationCount": 1
+}

@@ -1,0 +1,42 @@
+{
+  "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+  "specId": "e8af190b-flow-query-api",
+  "taskId": "T-4",
+  "role": "review-repair",
+  "attempt": {
+    "id": "attempt-T-4-review-c31354f0-10b3-4293-ada5-b6ac614b6838",
+    "sequence": 1
+  },
+  "budget": {
+    "round": 1,
+    "reviewAttemptSequenceAtStart": 0,
+    "gateAttemptSequenceAtStart": 0
+  },
+  "sourceFingerprint": "881be6997eaa8ecef647927ebb4268a3ef9f682184edce505d53f20ebd85ee4f",
+  "manifest": {
+    "attempt": {
+      "id": "attempt-T-4-review-c31354f0-10b3-4293-ada5-b6ac614b6838",
+      "nodeId": "T-4-review",
+      "sequence": 1
+    },
+    "baselineDigest": "c122096c3781d31c975f74e0e0558053a6ab4662970c0de34392b618b71c9039",
+    "mutations": [
+      {
+        "mutationId": "9ada8e32964a2abb3b36facb017427554ec8b51f90fa97aaad6a0ca2332c2b89",
+        "path": "src/flow/lib/current-flow-state.js",
+        "changeKind": "content",
+        "beforeDigest": "05bd1897e72d4e471099f67591d7871495458bf8cdb7bac8249926ac5a3b6ef4",
+        "afterDigest": "4383fa62afee71b156e2abac9f29b324e69ce9beb88b2d25f68b8f225a0a9398"
+      },
+      {
+        "mutationId": "199849022eb08b6818586fd4fd69f2132611a3ca6d7a53be6d50352028f8f554",
+        "path": "src/flow/query.js",
+        "changeKind": "content",
+        "beforeDigest": "94e70090834b3b12e3565162c7d2d9515d02b67ccbc7b7f80498c1504e8e66d3",
+        "afterDigest": "b476920bdbfa1b6f4c69f150fedaaf93cc12a2e2428883554a0f8d60eb0da4ae"
+      }
+    ],
+    "digest": "881be6997eaa8ecef647927ebb4268a3ef9f682184edce505d53f20ebd85ee4f"
+  },
+  "noChangeReason": null
+}

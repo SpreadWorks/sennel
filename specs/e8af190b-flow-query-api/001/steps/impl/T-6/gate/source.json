@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "phase": "task-impl",
+  "taskId": "T-6",
+  "generatedAt": "2026-09-07T06:42:45.157Z",
+  "result": "fail",
+  "evaluations": [
+    {
+      "guardrail_id": "no-synchronous-io-in-hot-paths",
+      "result": "fail",
+      "reason": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+      "category": "code-quality",
+      "title": "No Synchronous I/O in Hot Paths",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "no-synchronous-io-in-hot-paths",
+          "where": {
+            "file": "src/flow/query.js",
+            "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+          },
+          "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+          "severity": "blocking",
+          "refs": [
+            "no-synchronous-io-in-hot-paths"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "no-synchronous-io-in-hot-paths",
+      "result": "fail",
+      "reason": "Synchronous stat I/O is used inside a bulk-processing loop.",
+      "category": "code-quality",
+      "title": "No Synchronous I/O in Hot Paths",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "no-synchronous-io-in-hot-paths",
+          "where": {
+            "file": "src/flow/query.js",
+            "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+          },
+          "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+          "severity": "blocking",
+          "refs": [
+            "no-synchronous-io-in-hot-paths"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "no-synchronous-io-in-hot-paths",
+      "result": "fail",
+      "reason": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+      "category": "code-quality",
+      "title": "No Synchronous I/O in Hot Paths",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "no-synchronous-io-in-hot-paths",
+          "where": {
+            "file": "src/flow/query.js",
+            "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+          },
+          "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+          "severity": "blocking",
+          "refs": [
+            "no-synchronous-io-in-hot-paths"
+          ]
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "no-synchronous-io-in-hot-paths",
+      "where": {
+        "file": "src/flow/query.js",
+        "locator": "queryCatalogManagedFiles: fs.readdirSync(current, { withFileTypes: true })"
+      },
+      "observed": "Synchronous directory I/O is used during recursive bulk catalog traversal.",
+      "severity": "blocking",
+      "refs": [
+        "no-synchronous-io-in-hot-paths"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "no-synchronous-io-in-hot-paths",
+      "where": {
+        "file": "src/flow/query.js",
+        "locator": "queryCatalogManagedFiles: fs.lstatSync(absolute) inside the directory-entry loop"
+      },
+      "observed": "Synchronous stat I/O is used inside a bulk-processing loop.",
+      "severity": "blocking",
+      "refs": [
+        "no-synchronous-io-in-hot-paths"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "no-synchronous-io-in-hot-paths",
+      "where": {
+        "file": "src/flow/query.js",
+        "locator": "verifyQueryCatalog: fs.readFileSync(location.resolve(artifact.relativePath)) inside the cataloged-artifact loop"
+      },
+      "observed": "Synchronous file I/O is used inside a loop over cataloged artifacts.",
+      "severity": "blocking",
+      "refs": [
+        "no-synchronous-io-in-hot-paths"
+      ]
+    }
+  ],
+  "issues": [],
+  "reasons": [
+    {
+      "verdict": "FAIL",
+      "detail": "No Synchronous I/O in Hot Paths — Synchronous directory I/O is used during recursive bulk catalog traversal.",
+      "guardrail_id": "no-synchronous-io-in-hot-paths",
+      "category": "code-quality"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "No Synchronous I/O in Hot Paths — Synchronous stat I/O is used inside a bulk-processing loop.",
+      "guardrail_id": "no-synchronous-io-in-hot-paths",
+      "category": "code-quality"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "No Synchronous I/O in Hot Paths — Synchronous file I/O is used inside a loop over cataloged artifacts.",
+      "guardrail_id": "no-synchronous-io-in-hot-paths",
+      "category": "code-quality"
+    }
+  ],
+  "failureKind": "ai_semantic_fail",
+  "failureCategory": {
+    "category": "semantic",
+    "code": "ai_semantic_fail"
+  },
+  "lineage": "30183a30a49b72df1f42db038363bbe07d6c4492e6d73d786f72367fe8bc6155",
+  "sourceFingerprint": "ad75626b2881799d9debed8302f11e3f169991b65b71d65c9ab1aeba7aaa972c"
+}

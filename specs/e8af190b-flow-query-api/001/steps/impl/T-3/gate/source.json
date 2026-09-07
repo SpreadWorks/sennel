@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "phase": "task-impl",
+  "taskId": "T-3",
+  "generatedAt": "2026-09-02T10:54:55.624Z",
+  "result": "fail",
+  "evaluations": [
+    {
+      "guardrail_id": "no-overengineering",
+      "result": "fail",
+      "reason": "The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+      "category": "code-quality",
+      "title": "Avoid Overengineering",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "no-overengineering",
+          "where": {
+            "file": "spec.json",
+            "locator": "Open Questions"
+          },
+          "observed": "The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+          "severity": "blocking",
+          "refs": [
+            "no-overengineering"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "no-overengineering",
+      "result": "fail",
+      "reason": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+      "category": "code-quality",
+      "title": "Avoid Overengineering",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "no-overengineering",
+          "where": {
+            "file": "src/flow/query.js",
+            "locator": "QueryProjector.activityItem(): publicArtifactIds"
+          },
+          "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+          "severity": "blocking",
+          "refs": [
+            "no-overengineering"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "no-overengineering",
+      "result": "fail",
+      "reason": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+      "category": "code-quality",
+      "title": "Avoid Overengineering",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "no-overengineering",
+          "where": {
+            "file": "src/flow/query.js",
+            "locator": "QueryProjector.activityItem(): outcome.artifactRefs"
+          },
+          "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+          "severity": "blocking",
+          "refs": [
+            "no-overengineering"
+          ]
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "no-overengineering",
+      "where": {
+        "file": "spec.json",
+        "locator": "Open Questions"
+      },
+      "observed": "The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+      "severity": "blocking",
+      "refs": [
+        "no-overengineering"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "no-overengineering",
+      "where": {
+        "file": "src/flow/query.js",
+        "locator": "QueryProjector.activityItem(): publicArtifactIds"
+      },
+      "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+      "severity": "blocking",
+      "refs": [
+        "no-overengineering"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "no-overengineering",
+      "where": {
+        "file": "src/flow/query.js",
+        "locator": "QueryProjector.activityItem(): outcome.artifactRefs"
+      },
+      "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+      "severity": "blocking",
+      "refs": [
+        "no-overengineering"
+      ]
+    }
+  ],
+  "issues": [],
+  "reasons": [
+    {
+      "verdict": "FAIL",
+      "detail": "Avoid Overengineering — The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+      "guardrail_id": "no-overengineering",
+      "category": "code-quality"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Avoid Overengineering — Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+      "guardrail_id": "no-overengineering",
+      "category": "code-quality"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Avoid Overengineering — Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+      "guardrail_id": "no-overengineering",
+      "category": "code-quality"
+    }
+  ],
+  "failureKind": "ai_semantic_fail",
+  "failureCategory": {
+    "category": "semantic",
+    "code": "ai_semantic_fail"
+  },
+  "lineage": "b3c187f8675a2cbd0b7353093cf67a3a690cba94ee59b4474eb7a1841a82fe01"
+}

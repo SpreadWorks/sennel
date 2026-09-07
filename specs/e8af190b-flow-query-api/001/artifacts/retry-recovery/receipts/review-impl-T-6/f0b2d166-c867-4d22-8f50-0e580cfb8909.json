@@ -1,0 +1,34 @@
+{
+  "previous": {
+    "route": {
+      "kind": "review",
+      "phase": "impl",
+      "taskId": "T-6"
+    },
+    "attemptId": "attempt-T-6-review-c61c8599-e609-492a-9251-f3c7c010101c",
+    "attempt": 6,
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "projectDigest": "47ed2319da7536d85db9a5f691ddc35fb232109efbdefce60c29deb010ebc647",
+    "runtimeDigest": "74d843d7a88445fa6f758e383f97b2095e1a460f46c40861c84e99ef0be0391b",
+    "targetDigest": "47ed2319da7536d85db9a5f691ddc35fb232109efbdefce60c29deb010ebc647"
+  },
+  "current": {
+    "route": {
+      "kind": "review",
+      "phase": "impl",
+      "taskId": "T-6"
+    },
+    "attemptId": "f0b2d166-c867-4d22-8f50-0e580cfb8909",
+    "attempt": 7,
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "projectDigest": "95bcee8c62cc2b60edfaee3d5158dba8b28326f9f0f39bc3363da667d533f30c",
+    "runtimeDigest": "1793b11b3cc5536e3dc15b862ab65e516913288ed0bca6e5eee1d261f514fb0c",
+    "targetDigest": "95bcee8c62cc2b60edfaee3d5158dba8b28326f9f0f39bc3363da667d533f30c"
+  },
+  "reason": "Task Review tooling boundary was corrected by commit 897325d6d; canonical execution identity and metric settlement validation have changed.",
+  "reevaluationCount": 1
+}

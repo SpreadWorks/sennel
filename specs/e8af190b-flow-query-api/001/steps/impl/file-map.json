@@ -1,0 +1,90 @@
+{
+  "R1": [
+    "src/sennel.js",
+    "src/flow.js",
+    "src/flow/registry.js",
+    "src/flow/query.js",
+    "src/lib/worktree-cli-execution.js"
+  ],
+  "R2": [
+    "src/flow/query.js",
+    "src/sennel.js"
+  ],
+  "R3": [
+    "src/flow/query.js",
+    "src/flow/lib/canonical-flow-version-reader.js",
+    "tests/integration/flow/query.test.js",
+    "src/flow/lib/test-chain-transition-facts.js"
+  ],
+  "R4": [
+    "src/flow/query.js",
+    "src/sennel.js"
+  ],
+  "R5": [
+    "src/flow/query.js",
+    "src/flow/lib/current-flow-state.js",
+    "src/sennel.js",
+    "src/flow/lib/run-prepare-spec.js",
+    "src/lib/git-helpers.js"
+  ],
+  "R6": [
+    "src/flow/query.js",
+    "src/flow/lib/current-flow-state.js"
+  ],
+  "R7": [
+    "src/flow/query.js",
+    "src/sennel.js",
+    "src/lib/flow-version.js"
+  ],
+  "R8": [
+    "src/flow/query.js",
+    "src/flow/lib/canonical-flow-version-reader.js",
+    "src/sennel.js",
+    "tests/integration/flow/query.test.js"
+  ],
+  "R9": [
+    "src/flow/query.js",
+    "tests/integration/flow/query.test.js"
+  ],
+  "R10": [
+    "src/flow/query.js",
+    "tests/integration/flow/query.test.js"
+  ],
+  "R11": [
+    "src/flow/query.js",
+    "src/sennel.js",
+    "src/flow/lib/worker-artifact-handoff.js",
+    "tests/integration/flow/query.test.js"
+  ],
+  "R12": [
+    "src/flow/query.js",
+    "src/sennel.js",
+    "src/flow/lib/current-flow-state.js",
+    "src/flow.js"
+  ],
+  "R13": [
+    "src/flow/query.js",
+    "src/sennel.js",
+    "tests/integration/flow/query.test.js",
+    "src/flow.js"
+  ],
+  "R14": [
+    "src/flow/query.js"
+  ],
+  "R15": [
+    "src/flow/query.js",
+    "src/flow/lib/canonical-flow-version-reader.js"
+  ],
+  "R16": [
+    "src/sennel.js",
+    "src/flow.js",
+    "src/flow/query.js",
+    "src/flow/lib/current-flow-state.js",
+    "src/flow/lib/canonical-flow-manager-store.js",
+    "src/flow/lib/canonical-flow-runtime.js",
+    "src/flow/lib/run-prepare-spec.js"
+  ],
+  "R17": [
+    "src/flow/registry.js"
+  ]
+}

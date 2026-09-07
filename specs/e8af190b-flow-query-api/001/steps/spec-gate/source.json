@@ -1,0 +1,334 @@
+{
+  "version": 1,
+  "phase": "spec",
+  "generatedAt": "2026-09-01T07:15:48.134Z",
+  "result": "fail",
+  "evaluations": [
+    {
+      "guardrail_id": "spec-test-coverage",
+      "result": "pass",
+      "reason": "spec phase does not own downstream test-file or runtime evidence",
+      "category": "testing",
+      "title": "Spec Test Coverage",
+      "authority": "mechanical"
+    },
+    {
+      "guardrail_id": "unambiguous-requirements",
+      "result": "fail",
+      "reason": "「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+      "category": "code-quality",
+      "title": "Unambiguous Requirements",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "/tasks/9/acceptance/0"
+          },
+          "observed": "「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "complete-context",
+      "result": "fail",
+      "reason": "「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+      "category": "process",
+      "title": "Complete Context",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "/tasks/9/acceptance/0"
+          },
+          "observed": "「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "req-diff-verifiability",
+      "result": "fail",
+      "reason": "Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+      "category": "process",
+      "title": "REQ Diff-Verifiability",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "/tasks/2/acceptance/2"
+          },
+          "observed": "Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "req-diff-verifiability",
+      "result": "fail",
+      "reason": "Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+      "category": "process",
+      "title": "REQ Diff-Verifiability",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "/acceptance_criteria/10"
+          },
+          "observed": "Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "bounded-resource-usage",
+      "result": "fail",
+      "reason": "state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+      "category": "code-quality",
+      "title": "Bounded Resource Usage",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "/constraints/10"
+          },
+          "observed": "state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "bounded-resource-usage",
+      "result": "fail",
+      "reason": "Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+      "category": "code-quality",
+      "title": "Bounded Resource Usage",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "/requirements/6/desc"
+          },
+          "observed": "Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "spec-no-fabrication",
+      "result": "fail",
+      "reason": "Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+      "category": "process",
+      "title": "Record Unresolved Points as Open Questions",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "spec-no-fabrication",
+          "where": {
+            "file": "spec.json",
+            "locator": "/overview/decisions/13"
+          },
+          "observed": "Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+          "severity": "blocking",
+          "refs": [
+            "spec-no-fabrication"
+          ]
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "unambiguous-requirements",
+      "where": {
+        "file": "spec.json",
+        "locator": "/tasks/9/acceptance/0"
+      },
+      "observed": "「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+      "severity": "blocking",
+      "refs": [
+        "unambiguous-requirements"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "complete-context",
+      "where": {
+        "file": "spec.json",
+        "locator": "/tasks/9/acceptance/0"
+      },
+      "observed": "「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+      "severity": "blocking",
+      "refs": [
+        "complete-context"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "req-diff-verifiability",
+      "where": {
+        "file": "spec.json",
+        "locator": "/tasks/2/acceptance/2"
+      },
+      "observed": "Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+      "severity": "blocking",
+      "refs": [
+        "req-diff-verifiability"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "req-diff-verifiability",
+      "where": {
+        "file": "spec.json",
+        "locator": "/acceptance_criteria/10"
+      },
+      "observed": "Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+      "severity": "blocking",
+      "refs": [
+        "req-diff-verifiability"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "bounded-resource-usage",
+      "where": {
+        "file": "spec.json",
+        "locator": "/constraints/10"
+      },
+      "observed": "state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+      "severity": "blocking",
+      "refs": [
+        "bounded-resource-usage"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "bounded-resource-usage",
+      "where": {
+        "file": "spec.json",
+        "locator": "/requirements/6/desc"
+      },
+      "observed": "Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+      "severity": "blocking",
+      "refs": [
+        "bounded-resource-usage"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "spec-no-fabrication",
+      "where": {
+        "file": "spec.json",
+        "locator": "/overview/decisions/13"
+      },
+      "observed": "Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+      "severity": "blocking",
+      "refs": [
+        "spec-no-fabrication"
+      ]
+    }
+  ],
+  "issues": [],
+  "reasons": [
+    {
+      "verdict": "PASS",
+      "detail": "Spec Test Coverage — spec phase does not own downstream test-file or runtime evidence",
+      "guardrail_id": "spec-test-coverage",
+      "category": "testing"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Unambiguous Requirements — 「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+      "guardrail_id": "unambiguous-requirements",
+      "category": "code-quality"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Complete Context — 「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+      "guardrail_id": "complete-context",
+      "category": "process"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "REQ Diff-Verifiability — Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+      "guardrail_id": "req-diff-verifiability",
+      "category": "process"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "REQ Diff-Verifiability — Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+      "guardrail_id": "req-diff-verifiability",
+      "category": "process"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Bounded Resource Usage — state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+      "guardrail_id": "bounded-resource-usage",
+      "category": "code-quality"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Bounded Resource Usage — Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+      "guardrail_id": "bounded-resource-usage",
+      "category": "code-quality"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Record Unresolved Points as Open Questions — Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+      "guardrail_id": "spec-no-fabrication",
+      "category": "process"
+    }
+  ],
+  "failureKind": "ai_semantic_fail",
+  "failureCategory": {
+    "category": "semantic",
+    "code": "ai_semantic_fail"
+  },
+  "lineage": "c903da9eca540f993cf1f9552b3736d1517bea9636729b4a3d541dbb29838084"
+}

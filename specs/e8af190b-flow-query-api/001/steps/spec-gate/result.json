@@ -1,0 +1,3860 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "spec-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/spec.json",
+          "level": "parent",
+          "phase": "spec",
+          "evaluations": [
+            {
+              "guardrail_id": "spec-test-coverage",
+              "result": "pass",
+              "reason": "spec phase does not own downstream test-file or runtime evidence",
+              "category": "testing",
+              "title": "Spec Test Coverage",
+              "authority": "mechanical"
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "resource 不適合 field の拒否は要求されているが、resource ごとの許可フィールド集合が列挙されておらず、実装の判定基準が一意でない。",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R1].desc"
+                  },
+                  "observed": "resource 不適合 field の拒否は要求されているが、resource ごとの許可フィールド集合が列挙されておらず、実装の判定基準が一意でない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "location、structure、relationships、capabilities の公開フィールド、型、nullability が具体化されておらず、二者が同じ適合判定をできない。",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R5].desc"
+                  },
+                  "observed": "location、structure、relationships、capabilities の公開フィールド、型、nullability が具体化されておらず、二者が同じ適合判定をできない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "timestamps.updated の対象である「state を変更した Activity」の transition.operation 集合や判定規則が定義されていない。",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R6].desc"
+                  },
+                  "observed": "timestamps.updated の対象である「state を変更した Activity」の transition.operation 集合や判定規則が定義されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "updated timestamp の「state-changing transition」が再度使われているが、対象 operation の集合や判定規則が定義されていない。",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-4].implementation_notes"
+                  },
+                  "observed": "updated timestamp の「state-changing transition」が再度使われているが、対象 operation の集合や判定規則が定義されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "Timing、Usage、Outcome、Failure、Blocker、Incomplete、Metric の whitelist フィールド、型、nullability が示されておらず、ActivityItem の完全な公開形状を判定できない。",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R11].desc"
+                  },
+                  "observed": "Timing、Usage、Outcome、Failure、Blocker、Incomplete、Metric の whitelist フィールド、型、nullability が示されておらず、ActivityItem の完全な公開形状を判定できない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "SPEC_NOT_FOUND や FLOW_VERSION_NOT_FOUND のように selected Version が存在しないエラーで、selected Version を null にするのか省略するのかが定義されていない。",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R12].desc"
+                  },
+                  "observed": "SPEC_NOT_FOUND や FLOW_VERSION_NOT_FOUND のように selected Version が存在しないエラーで、selected Version を null にするのか省略するのかが定義されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "INVALID_REQUEST の path が「request field」としか指定されておらず、unknown field や resource 不適合 field の具体的な public path が一意に決まらない。",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R13].desc"
+                  },
+                  "observed": "INVALID_REQUEST の path が「request field」としか指定されておらず、unknown field や resource 不適合 field の具体的な public path が一意に決まらない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "「少なくとも一つの Flow command behavior」を維持するとあるが、対象 command、入力、観測可能な期待結果が指定されていない。",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-7].acceptance[2]"
+                  },
+                  "observed": "「少なくとも一つの Flow command behavior」を維持するとあるが、対象 command、入力、観測可能な期待結果が指定されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "bounded-resource-usage",
+              "result": "fail",
+              "reason": "availableFlowVersions を全列挙する処理と配列に、Version 数または読み込み・応答サイズの上限がない。",
+              "category": "code-quality",
+              "title": "Bounded Resource Usage",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R3].desc"
+                  },
+                  "observed": "availableFlowVersions を全列挙する処理と配列に、Version 数または読み込み・応答サイズの上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "bounded-resource-usage",
+              "result": "fail",
+              "reason": "metadata success の availableFlowVersions 配列に、要素数またはシリアライズ済みサイズの上限がない。",
+              "category": "code-quality",
+              "title": "Bounded Resource Usage",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R4].desc"
+                  },
+                  "observed": "metadata success の availableFlowVersions 配列に、要素数またはシリアライズ済みサイズの上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "bounded-resource-usage",
+              "result": "fail",
+              "reason": "artifacts および node/task ID のコレクションに、要素数または応答サイズの上限がない。",
+              "category": "code-quality",
+              "title": "Bounded Resource Usage",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R5].desc"
+                  },
+                  "observed": "artifacts および node/task ID のコレクションに、要素数または応答サイズの上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "bounded-resource-usage",
+              "result": "fail",
+              "reason": "activityIds、nodeIds、taskIds の配列に、ArtifactDescriptor ごとの要素数またはサイズ上限がない。",
+              "category": "code-quality",
+              "title": "Bounded Resource Usage",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R7].desc"
+                  },
+                  "observed": "activityIds、nodeIds、taskIds の配列に、ArtifactDescriptor ごとの要素数またはサイズ上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "bounded-resource-usage",
+              "result": "fail",
+              "reason": "confirmed prefix の読取り・走査範囲に count または byte size の上限がない。page.limit は応答ページだけを制限し、入力 ledger の処理量を制限しない。",
+              "category": "code-quality",
+              "title": "Bounded Resource Usage",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R8].desc"
+                  },
+                  "observed": "confirmed prefix の読取り・走査範囲に count または byte size の上限がない。page.limit は応答ページだけを制限し、入力 ledger の処理量を制限しない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "bounded-resource-usage",
+              "result": "fail",
+              "reason": "evaluationIds、findingIds、repairIds、artifactIds および nested public payload の要素数・サイズ上限がない。",
+              "category": "code-quality",
+              "title": "Bounded Resource Usage",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R11].desc"
+                  },
+                  "observed": "evaluationIds、findingIds、repairIds、artifactIds および nested public payload の要素数・サイズ上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "bounded-resource-usage",
+              "result": "fail",
+              "reason": "confirmed Activity prefix を一度走査して timestamp と aggregate metrics を計算する処理に、Activity 数または読み込みサイズの上限がない。",
+              "category": "code-quality",
+              "title": "Bounded Resource Usage",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-4].implementation_notes"
+                  },
+                  "observed": "confirmed Activity prefix を一度走査して timestamp と aggregate metrics を計算する処理に、Activity 数または読み込みサイズの上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "impact-on-existing-features",
+              "result": "fail",
+              "reason": "既存機能への影響一覧、または既存機能に影響しないことの明示がない。T-7 の一つの Flow command の回帰条件だけでは、既存機能全体への影響を列挙していない。",
+              "category": "code-quality",
+              "title": "Impact on Existing Features",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "impact-on-existing-features",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "impact-on-existing-features (missing)"
+                  },
+                  "observed": "既存機能への影響一覧、または既存機能に影響しないことの明示がない。T-7 の一つの Flow command の回帰条件だけでは、既存機能全体への影響を列挙していない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "impact-on-existing-features"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "result": "fail",
+              "reason": "ユーザー向けの --request-file について、引数の型、パス形式、存在・可読性の検証条件が列挙されていない。",
+              "category": "requirements",
+              "title": "Validate User Input at Entry Point",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "validate-user-input-at-entry-point",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R1].desc"
+                  },
+                  "observed": "ユーザー向けの --request-file について、引数の型、パス形式、存在・可読性の検証条件が列挙されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "validate-user-input-at-entry-point"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "result": "fail",
+              "reason": "condition.specId は non-empty としか定義されておらず、入力値の型と形式が明示されていない。",
+              "category": "requirements",
+              "title": "Validate User Input at Entry Point",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "validate-user-input-at-entry-point",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R2].desc"
+                  },
+                  "observed": "condition.specId は non-empty としか定義されておらず、入力値の型と形式が明示されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "validate-user-input-at-entry-point"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "result": "fail",
+              "reason": "page.after は初回 null と malformed cursor の扱いだけが示され、入力時の型および受理する cursor 形式が明示されていない。",
+              "category": "requirements",
+              "title": "Validate User Input at Entry Point",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "validate-user-input-at-entry-point",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R9].desc"
+                  },
+                  "observed": "page.after は初回 null と malformed cursor の扱いだけが示され、入力時の型および受理する cursor 形式が明示されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "validate-user-input-at-entry-point"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "migration-parity",
+              "result": "fail",
+              "reason": "既存 canonical runtime の identity、state、Activity history、Artifact authority を新しい public query boundary として外部化しているが、移行対象となる既存 public behavior と影響を受ける command、API、hook、config、generated artifact、side effect の inventory がない。",
+              "category": "process",
+              "title": "Migration Parity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "background"
+                  },
+                  "observed": "既存 canonical runtime の identity、state、Activity history、Artifact authority を新しい public query boundary として外部化しているが、移行対象となる既存 public behavior と影響を受ける command、API、hook、config、generated artifact、side effect の inventory がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "migration-parity",
+              "result": "fail",
+              "reason": "新しい reader/projector/adapter の構成は示されているが、保持する各既存 behavior を新 owner に割り当てる mapping、または削除判断が定義されていない。",
+              "category": "process",
+              "title": "Migration Parity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.modules"
+                  },
+                  "observed": "新しい reader/projector/adapter の構成は示されているが、保持する各既存 behavior を新 owner に割り当てる mapping、または削除判断が定義されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "migration-parity",
+              "result": "fail",
+              "reason": "既存 Flow command について「少なくとも一つ」の回帰確認しか要求しておらず、保持する各既存 public surface ごとの behavior-level verification が定義されていない。",
+              "category": "process",
+              "title": "Migration Parity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-7].acceptance"
+                  },
+                  "observed": "既存 Flow command について「少なくとも一つ」の回帰確認しか要求しておらず、保持する各既存 public surface ごとの behavior-level verification が定義されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "PASS",
+              "detail": "Spec Test Coverage — spec phase does not own downstream test-file or runtime evidence",
+              "guardrail_id": "spec-test-coverage",
+              "category": "testing"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — resource 不適合 field の拒否は要求されているが、resource ごとの許可フィールド集合が列挙されておらず、実装の判定基準が一意でない。",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — location、structure、relationships、capabilities の公開フィールド、型、nullability が具体化されておらず、二者が同じ適合判定をできない。",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — timestamps.updated の対象である「state を変更した Activity」の transition.operation 集合や判定規則が定義されていない。",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — updated timestamp の「state-changing transition」が再度使われているが、対象 operation の集合や判定規則が定義されていない。",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — Timing、Usage、Outcome、Failure、Blocker、Incomplete、Metric の whitelist フィールド、型、nullability が示されておらず、ActivityItem の完全な公開形状を判定できない。",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — SPEC_NOT_FOUND や FLOW_VERSION_NOT_FOUND のように selected Version が存在しないエラーで、selected Version を null にするのか省略するのかが定義されていない。",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — INVALID_REQUEST の path が「request field」としか指定されておらず、unknown field や resource 不適合 field の具体的な public path が一意に決まらない。",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — 「少なくとも一つの Flow command behavior」を維持するとあるが、対象 command、入力、観測可能な期待結果が指定されていない。",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Bounded Resource Usage — availableFlowVersions を全列挙する処理と配列に、Version 数または読み込み・応答サイズの上限がない。",
+              "guardrail_id": "bounded-resource-usage",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Bounded Resource Usage — metadata success の availableFlowVersions 配列に、要素数またはシリアライズ済みサイズの上限がない。",
+              "guardrail_id": "bounded-resource-usage",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Bounded Resource Usage — artifacts および node/task ID のコレクションに、要素数または応答サイズの上限がない。",
+              "guardrail_id": "bounded-resource-usage",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Bounded Resource Usage — activityIds、nodeIds、taskIds の配列に、ArtifactDescriptor ごとの要素数またはサイズ上限がない。",
+              "guardrail_id": "bounded-resource-usage",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Bounded Resource Usage — confirmed prefix の読取り・走査範囲に count または byte size の上限がない。page.limit は応答ページだけを制限し、入力 ledger の処理量を制限しない。",
+              "guardrail_id": "bounded-resource-usage",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Bounded Resource Usage — evaluationIds、findingIds、repairIds、artifactIds および nested public payload の要素数・サイズ上限がない。",
+              "guardrail_id": "bounded-resource-usage",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Bounded Resource Usage — confirmed Activity prefix を一度走査して timestamp と aggregate metrics を計算する処理に、Activity 数または読み込みサイズの上限がない。",
+              "guardrail_id": "bounded-resource-usage",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Impact on Existing Features — 既存機能への影響一覧、または既存機能に影響しないことの明示がない。T-7 の一つの Flow command の回帰条件だけでは、既存機能全体への影響を列挙していない。",
+              "guardrail_id": "impact-on-existing-features",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Validate User Input at Entry Point — ユーザー向けの --request-file について、引数の型、パス形式、存在・可読性の検証条件が列挙されていない。",
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "category": "requirements"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Validate User Input at Entry Point — condition.specId は non-empty としか定義されておらず、入力値の型と形式が明示されていない。",
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "category": "requirements"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Validate User Input at Entry Point — page.after は初回 null と malformed cursor の扱いだけが示され、入力時の型および受理する cursor 形式が明示されていない。",
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "category": "requirements"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Migration Parity — 既存 canonical runtime の identity、state、Activity history、Artifact authority を新しい public query boundary として外部化しているが、移行対象となる既存 public behavior と影響を受ける command、API、hook、config、generated artifact、side effect の inventory がない。",
+              "guardrail_id": "migration-parity",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Migration Parity — 新しい reader/projector/adapter の構成は示されているが、保持する各既存 behavior を新 owner に割り当てる mapping、または削除判断が定義されていない。",
+              "guardrail_id": "migration-parity",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Migration Parity — 既存 Flow command について「少なくとも一つ」の回帰確認しか要求しておらず、保持する各既存 public surface ごとの behavior-level verification が定義されていない。",
+              "guardrail_id": "migration-parity",
+              "category": "process"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "22 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R1].desc"
+                  },
+                  "observed": "resource 不適合 field の拒否は要求されているが、resource ごとの許可フィールド集合が列挙されておらず、実装の判定基準が一意でない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R5].desc"
+                  },
+                  "observed": "location、structure、relationships、capabilities の公開フィールド、型、nullability が具体化されておらず、二者が同じ適合判定をできない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R6].desc"
+                  },
+                  "observed": "timestamps.updated の対象である「state を変更した Activity」の transition.operation 集合や判定規則が定義されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-4].implementation_notes"
+                  },
+                  "observed": "updated timestamp の「state-changing transition」が再度使われているが、対象 operation の集合や判定規則が定義されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R11].desc"
+                  },
+                  "observed": "Timing、Usage、Outcome、Failure、Blocker、Incomplete、Metric の whitelist フィールド、型、nullability が示されておらず、ActivityItem の完全な公開形状を判定できない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R12].desc"
+                  },
+                  "observed": "SPEC_NOT_FOUND や FLOW_VERSION_NOT_FOUND のように selected Version が存在しないエラーで、selected Version を null にするのか省略するのかが定義されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R13].desc"
+                  },
+                  "observed": "INVALID_REQUEST の path が「request field」としか指定されておらず、unknown field や resource 不適合 field の具体的な public path が一意に決まらない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-7].acceptance[2]"
+                  },
+                  "observed": "「少なくとも一つの Flow command behavior」を維持するとあるが、対象 command、入力、観測可能な期待結果が指定されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R3].desc"
+                  },
+                  "observed": "availableFlowVersions を全列挙する処理と配列に、Version 数または読み込み・応答サイズの上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R4].desc"
+                  },
+                  "observed": "metadata success の availableFlowVersions 配列に、要素数またはシリアライズ済みサイズの上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R5].desc"
+                  },
+                  "observed": "artifacts および node/task ID のコレクションに、要素数または応答サイズの上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R7].desc"
+                  },
+                  "observed": "activityIds、nodeIds、taskIds の配列に、ArtifactDescriptor ごとの要素数またはサイズ上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R8].desc"
+                  },
+                  "observed": "confirmed prefix の読取り・走査範囲に count または byte size の上限がない。page.limit は応答ページだけを制限し、入力 ledger の処理量を制限しない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R11].desc"
+                  },
+                  "observed": "evaluationIds、findingIds、repairIds、artifactIds および nested public payload の要素数・サイズ上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-4].implementation_notes"
+                  },
+                  "observed": "confirmed Activity prefix を一度走査して timestamp と aggregate metrics を計算する処理に、Activity 数または読み込みサイズの上限がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "impact-on-existing-features",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "impact-on-existing-features (missing)"
+                  },
+                  "observed": "既存機能への影響一覧、または既存機能に影響しないことの明示がない。T-7 の一つの Flow command の回帰条件だけでは、既存機能全体への影響を列挙していない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "impact-on-existing-features"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "validate-user-input-at-entry-point",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R1].desc"
+                  },
+                  "observed": "ユーザー向けの --request-file について、引数の型、パス形式、存在・可読性の検証条件が列挙されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "validate-user-input-at-entry-point"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "validate-user-input-at-entry-point",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R2].desc"
+                  },
+                  "observed": "condition.specId は non-empty としか定義されておらず、入力値の型と形式が明示されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "validate-user-input-at-entry-point"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "validate-user-input-at-entry-point",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[R9].desc"
+                  },
+                  "observed": "page.after は初回 null と malformed cursor の扱いだけが示され、入力時の型および受理する cursor 形式が明示されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "validate-user-input-at-entry-point"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "background"
+                  },
+                  "observed": "既存 canonical runtime の identity、state、Activity history、Artifact authority を新しい public query boundary として外部化しているが、移行対象となる既存 public behavior と影響を受ける command、API、hook、config、generated artifact、side effect の inventory がない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.modules"
+                  },
+                  "observed": "新しい reader/projector/adapter の構成は示されているが、保持する各既存 behavior を新 owner に割り当てる mapping、または削除判断が定義されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "tasks[T-7].acceptance"
+                  },
+                  "observed": "既存 Flow command について「少なくとも一つ」の回帰確認しか要求しておらず、保持する各既存 public surface ごとの behavior-level verification が定義されていない。",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the specification evidence selected by Definition."
+          },
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "76cfdec980dcb8f908f255eafa77cf83f2df359de4d9b18322938de105a9ce10",
+          "gateTransitionAttemptId": "attempt-spec-gate-221d01f4-6582-4246-b3cb-72d2a92b6c19",
+          "gateTransitionAttemptSequence": 1
+        }
+      },
+      "artifact": {
+        "logicalKey": "spec.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/spec.json",
+            "level": "parent",
+            "phase": "spec",
+            "evaluations": [
+              {
+                "guardrail_id": "spec-test-coverage",
+                "result": "pass",
+                "reason": "spec phase does not own downstream test-file or runtime evidence",
+                "category": "testing",
+                "title": "Spec Test Coverage",
+                "authority": "mechanical"
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "resource 不適合 field の拒否は要求されているが、resource ごとの許可フィールド集合が列挙されておらず、実装の判定基準が一意でない。",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R1].desc"
+                    },
+                    "observed": "resource 不適合 field の拒否は要求されているが、resource ごとの許可フィールド集合が列挙されておらず、実装の判定基準が一意でない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "location、structure、relationships、capabilities の公開フィールド、型、nullability が具体化されておらず、二者が同じ適合判定をできない。",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R5].desc"
+                    },
+                    "observed": "location、structure、relationships、capabilities の公開フィールド、型、nullability が具体化されておらず、二者が同じ適合判定をできない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "timestamps.updated の対象である「state を変更した Activity」の transition.operation 集合や判定規則が定義されていない。",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R6].desc"
+                    },
+                    "observed": "timestamps.updated の対象である「state を変更した Activity」の transition.operation 集合や判定規則が定義されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "updated timestamp の「state-changing transition」が再度使われているが、対象 operation の集合や判定規則が定義されていない。",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-4].implementation_notes"
+                    },
+                    "observed": "updated timestamp の「state-changing transition」が再度使われているが、対象 operation の集合や判定規則が定義されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "Timing、Usage、Outcome、Failure、Blocker、Incomplete、Metric の whitelist フィールド、型、nullability が示されておらず、ActivityItem の完全な公開形状を判定できない。",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R11].desc"
+                    },
+                    "observed": "Timing、Usage、Outcome、Failure、Blocker、Incomplete、Metric の whitelist フィールド、型、nullability が示されておらず、ActivityItem の完全な公開形状を判定できない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "SPEC_NOT_FOUND や FLOW_VERSION_NOT_FOUND のように selected Version が存在しないエラーで、selected Version を null にするのか省略するのかが定義されていない。",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R12].desc"
+                    },
+                    "observed": "SPEC_NOT_FOUND や FLOW_VERSION_NOT_FOUND のように selected Version が存在しないエラーで、selected Version を null にするのか省略するのかが定義されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "INVALID_REQUEST の path が「request field」としか指定されておらず、unknown field や resource 不適合 field の具体的な public path が一意に決まらない。",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R13].desc"
+                    },
+                    "observed": "INVALID_REQUEST の path が「request field」としか指定されておらず、unknown field や resource 不適合 field の具体的な public path が一意に決まらない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "「少なくとも一つの Flow command behavior」を維持するとあるが、対象 command、入力、観測可能な期待結果が指定されていない。",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-7].acceptance[2]"
+                    },
+                    "observed": "「少なくとも一つの Flow command behavior」を維持するとあるが、対象 command、入力、観測可能な期待結果が指定されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "bounded-resource-usage",
+                "result": "fail",
+                "reason": "availableFlowVersions を全列挙する処理と配列に、Version 数または読み込み・応答サイズの上限がない。",
+                "category": "code-quality",
+                "title": "Bounded Resource Usage",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R3].desc"
+                    },
+                    "observed": "availableFlowVersions を全列挙する処理と配列に、Version 数または読み込み・応答サイズの上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "bounded-resource-usage",
+                "result": "fail",
+                "reason": "metadata success の availableFlowVersions 配列に、要素数またはシリアライズ済みサイズの上限がない。",
+                "category": "code-quality",
+                "title": "Bounded Resource Usage",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R4].desc"
+                    },
+                    "observed": "metadata success の availableFlowVersions 配列に、要素数またはシリアライズ済みサイズの上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "bounded-resource-usage",
+                "result": "fail",
+                "reason": "artifacts および node/task ID のコレクションに、要素数または応答サイズの上限がない。",
+                "category": "code-quality",
+                "title": "Bounded Resource Usage",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R5].desc"
+                    },
+                    "observed": "artifacts および node/task ID のコレクションに、要素数または応答サイズの上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "bounded-resource-usage",
+                "result": "fail",
+                "reason": "activityIds、nodeIds、taskIds の配列に、ArtifactDescriptor ごとの要素数またはサイズ上限がない。",
+                "category": "code-quality",
+                "title": "Bounded Resource Usage",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R7].desc"
+                    },
+                    "observed": "activityIds、nodeIds、taskIds の配列に、ArtifactDescriptor ごとの要素数またはサイズ上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "bounded-resource-usage",
+                "result": "fail",
+                "reason": "confirmed prefix の読取り・走査範囲に count または byte size の上限がない。page.limit は応答ページだけを制限し、入力 ledger の処理量を制限しない。",
+                "category": "code-quality",
+                "title": "Bounded Resource Usage",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R8].desc"
+                    },
+                    "observed": "confirmed prefix の読取り・走査範囲に count または byte size の上限がない。page.limit は応答ページだけを制限し、入力 ledger の処理量を制限しない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "bounded-resource-usage",
+                "result": "fail",
+                "reason": "evaluationIds、findingIds、repairIds、artifactIds および nested public payload の要素数・サイズ上限がない。",
+                "category": "code-quality",
+                "title": "Bounded Resource Usage",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R11].desc"
+                    },
+                    "observed": "evaluationIds、findingIds、repairIds、artifactIds および nested public payload の要素数・サイズ上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "bounded-resource-usage",
+                "result": "fail",
+                "reason": "confirmed Activity prefix を一度走査して timestamp と aggregate metrics を計算する処理に、Activity 数または読み込みサイズの上限がない。",
+                "category": "code-quality",
+                "title": "Bounded Resource Usage",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-4].implementation_notes"
+                    },
+                    "observed": "confirmed Activity prefix を一度走査して timestamp と aggregate metrics を計算する処理に、Activity 数または読み込みサイズの上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "impact-on-existing-features",
+                "result": "fail",
+                "reason": "既存機能への影響一覧、または既存機能に影響しないことの明示がない。T-7 の一つの Flow command の回帰条件だけでは、既存機能全体への影響を列挙していない。",
+                "category": "code-quality",
+                "title": "Impact on Existing Features",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "impact-on-existing-features",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "impact-on-existing-features (missing)"
+                    },
+                    "observed": "既存機能への影響一覧、または既存機能に影響しないことの明示がない。T-7 の一つの Flow command の回帰条件だけでは、既存機能全体への影響を列挙していない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "impact-on-existing-features"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "result": "fail",
+                "reason": "ユーザー向けの --request-file について、引数の型、パス形式、存在・可読性の検証条件が列挙されていない。",
+                "category": "requirements",
+                "title": "Validate User Input at Entry Point",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "validate-user-input-at-entry-point",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R1].desc"
+                    },
+                    "observed": "ユーザー向けの --request-file について、引数の型、パス形式、存在・可読性の検証条件が列挙されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "validate-user-input-at-entry-point"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "result": "fail",
+                "reason": "condition.specId は non-empty としか定義されておらず、入力値の型と形式が明示されていない。",
+                "category": "requirements",
+                "title": "Validate User Input at Entry Point",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "validate-user-input-at-entry-point",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R2].desc"
+                    },
+                    "observed": "condition.specId は non-empty としか定義されておらず、入力値の型と形式が明示されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "validate-user-input-at-entry-point"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "result": "fail",
+                "reason": "page.after は初回 null と malformed cursor の扱いだけが示され、入力時の型および受理する cursor 形式が明示されていない。",
+                "category": "requirements",
+                "title": "Validate User Input at Entry Point",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "validate-user-input-at-entry-point",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R9].desc"
+                    },
+                    "observed": "page.after は初回 null と malformed cursor の扱いだけが示され、入力時の型および受理する cursor 形式が明示されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "validate-user-input-at-entry-point"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "migration-parity",
+                "result": "fail",
+                "reason": "既存 canonical runtime の identity、state、Activity history、Artifact authority を新しい public query boundary として外部化しているが、移行対象となる既存 public behavior と影響を受ける command、API、hook、config、generated artifact、side effect の inventory がない。",
+                "category": "process",
+                "title": "Migration Parity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "background"
+                    },
+                    "observed": "既存 canonical runtime の identity、state、Activity history、Artifact authority を新しい public query boundary として外部化しているが、移行対象となる既存 public behavior と影響を受ける command、API、hook、config、generated artifact、side effect の inventory がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "migration-parity",
+                "result": "fail",
+                "reason": "新しい reader/projector/adapter の構成は示されているが、保持する各既存 behavior を新 owner に割り当てる mapping、または削除判断が定義されていない。",
+                "category": "process",
+                "title": "Migration Parity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.modules"
+                    },
+                    "observed": "新しい reader/projector/adapter の構成は示されているが、保持する各既存 behavior を新 owner に割り当てる mapping、または削除判断が定義されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "migration-parity",
+                "result": "fail",
+                "reason": "既存 Flow command について「少なくとも一つ」の回帰確認しか要求しておらず、保持する各既存 public surface ごとの behavior-level verification が定義されていない。",
+                "category": "process",
+                "title": "Migration Parity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-7].acceptance"
+                    },
+                    "observed": "既存 Flow command について「少なくとも一つ」の回帰確認しか要求しておらず、保持する各既存 public surface ごとの behavior-level verification が定義されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "PASS",
+                "detail": "Spec Test Coverage — spec phase does not own downstream test-file or runtime evidence",
+                "guardrail_id": "spec-test-coverage",
+                "category": "testing"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — resource 不適合 field の拒否は要求されているが、resource ごとの許可フィールド集合が列挙されておらず、実装の判定基準が一意でない。",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — location、structure、relationships、capabilities の公開フィールド、型、nullability が具体化されておらず、二者が同じ適合判定をできない。",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — timestamps.updated の対象である「state を変更した Activity」の transition.operation 集合や判定規則が定義されていない。",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — updated timestamp の「state-changing transition」が再度使われているが、対象 operation の集合や判定規則が定義されていない。",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — Timing、Usage、Outcome、Failure、Blocker、Incomplete、Metric の whitelist フィールド、型、nullability が示されておらず、ActivityItem の完全な公開形状を判定できない。",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — SPEC_NOT_FOUND や FLOW_VERSION_NOT_FOUND のように selected Version が存在しないエラーで、selected Version を null にするのか省略するのかが定義されていない。",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — INVALID_REQUEST の path が「request field」としか指定されておらず、unknown field や resource 不適合 field の具体的な public path が一意に決まらない。",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — 「少なくとも一つの Flow command behavior」を維持するとあるが、対象 command、入力、観測可能な期待結果が指定されていない。",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Bounded Resource Usage — availableFlowVersions を全列挙する処理と配列に、Version 数または読み込み・応答サイズの上限がない。",
+                "guardrail_id": "bounded-resource-usage",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Bounded Resource Usage — metadata success の availableFlowVersions 配列に、要素数またはシリアライズ済みサイズの上限がない。",
+                "guardrail_id": "bounded-resource-usage",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Bounded Resource Usage — artifacts および node/task ID のコレクションに、要素数または応答サイズの上限がない。",
+                "guardrail_id": "bounded-resource-usage",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Bounded Resource Usage — activityIds、nodeIds、taskIds の配列に、ArtifactDescriptor ごとの要素数またはサイズ上限がない。",
+                "guardrail_id": "bounded-resource-usage",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Bounded Resource Usage — confirmed prefix の読取り・走査範囲に count または byte size の上限がない。page.limit は応答ページだけを制限し、入力 ledger の処理量を制限しない。",
+                "guardrail_id": "bounded-resource-usage",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Bounded Resource Usage — evaluationIds、findingIds、repairIds、artifactIds および nested public payload の要素数・サイズ上限がない。",
+                "guardrail_id": "bounded-resource-usage",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Bounded Resource Usage — confirmed Activity prefix を一度走査して timestamp と aggregate metrics を計算する処理に、Activity 数または読み込みサイズの上限がない。",
+                "guardrail_id": "bounded-resource-usage",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Impact on Existing Features — 既存機能への影響一覧、または既存機能に影響しないことの明示がない。T-7 の一つの Flow command の回帰条件だけでは、既存機能全体への影響を列挙していない。",
+                "guardrail_id": "impact-on-existing-features",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Validate User Input at Entry Point — ユーザー向けの --request-file について、引数の型、パス形式、存在・可読性の検証条件が列挙されていない。",
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "category": "requirements"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Validate User Input at Entry Point — condition.specId は non-empty としか定義されておらず、入力値の型と形式が明示されていない。",
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "category": "requirements"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Validate User Input at Entry Point — page.after は初回 null と malformed cursor の扱いだけが示され、入力時の型および受理する cursor 形式が明示されていない。",
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "category": "requirements"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Migration Parity — 既存 canonical runtime の identity、state、Activity history、Artifact authority を新しい public query boundary として外部化しているが、移行対象となる既存 public behavior と影響を受ける command、API、hook、config、generated artifact、side effect の inventory がない。",
+                "guardrail_id": "migration-parity",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Migration Parity — 新しい reader/projector/adapter の構成は示されているが、保持する各既存 behavior を新 owner に割り当てる mapping、または削除判断が定義されていない。",
+                "guardrail_id": "migration-parity",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Migration Parity — 既存 Flow command について「少なくとも一つ」の回帰確認しか要求しておらず、保持する各既存 public surface ごとの behavior-level verification が定義されていない。",
+                "guardrail_id": "migration-parity",
+                "category": "process"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "22 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R1].desc"
+                    },
+                    "observed": "resource 不適合 field の拒否は要求されているが、resource ごとの許可フィールド集合が列挙されておらず、実装の判定基準が一意でない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R5].desc"
+                    },
+                    "observed": "location、structure、relationships、capabilities の公開フィールド、型、nullability が具体化されておらず、二者が同じ適合判定をできない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R6].desc"
+                    },
+                    "observed": "timestamps.updated の対象である「state を変更した Activity」の transition.operation 集合や判定規則が定義されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-4].implementation_notes"
+                    },
+                    "observed": "updated timestamp の「state-changing transition」が再度使われているが、対象 operation の集合や判定規則が定義されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R11].desc"
+                    },
+                    "observed": "Timing、Usage、Outcome、Failure、Blocker、Incomplete、Metric の whitelist フィールド、型、nullability が示されておらず、ActivityItem の完全な公開形状を判定できない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R12].desc"
+                    },
+                    "observed": "SPEC_NOT_FOUND や FLOW_VERSION_NOT_FOUND のように selected Version が存在しないエラーで、selected Version を null にするのか省略するのかが定義されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R13].desc"
+                    },
+                    "observed": "INVALID_REQUEST の path が「request field」としか指定されておらず、unknown field や resource 不適合 field の具体的な public path が一意に決まらない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-7].acceptance[2]"
+                    },
+                    "observed": "「少なくとも一つの Flow command behavior」を維持するとあるが、対象 command、入力、観測可能な期待結果が指定されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R3].desc"
+                    },
+                    "observed": "availableFlowVersions を全列挙する処理と配列に、Version 数または読み込み・応答サイズの上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R4].desc"
+                    },
+                    "observed": "metadata success の availableFlowVersions 配列に、要素数またはシリアライズ済みサイズの上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R5].desc"
+                    },
+                    "observed": "artifacts および node/task ID のコレクションに、要素数または応答サイズの上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R7].desc"
+                    },
+                    "observed": "activityIds、nodeIds、taskIds の配列に、ArtifactDescriptor ごとの要素数またはサイズ上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R8].desc"
+                    },
+                    "observed": "confirmed prefix の読取り・走査範囲に count または byte size の上限がない。page.limit は応答ページだけを制限し、入力 ledger の処理量を制限しない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R11].desc"
+                    },
+                    "observed": "evaluationIds、findingIds、repairIds、artifactIds および nested public payload の要素数・サイズ上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-4].implementation_notes"
+                    },
+                    "observed": "confirmed Activity prefix を一度走査して timestamp と aggregate metrics を計算する処理に、Activity 数または読み込みサイズの上限がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "impact-on-existing-features",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "impact-on-existing-features (missing)"
+                    },
+                    "observed": "既存機能への影響一覧、または既存機能に影響しないことの明示がない。T-7 の一つの Flow command の回帰条件だけでは、既存機能全体への影響を列挙していない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "impact-on-existing-features"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "validate-user-input-at-entry-point",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R1].desc"
+                    },
+                    "observed": "ユーザー向けの --request-file について、引数の型、パス形式、存在・可読性の検証条件が列挙されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "validate-user-input-at-entry-point"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "validate-user-input-at-entry-point",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R2].desc"
+                    },
+                    "observed": "condition.specId は non-empty としか定義されておらず、入力値の型と形式が明示されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "validate-user-input-at-entry-point"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "validate-user-input-at-entry-point",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[R9].desc"
+                    },
+                    "observed": "page.after は初回 null と malformed cursor の扱いだけが示され、入力時の型および受理する cursor 形式が明示されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "validate-user-input-at-entry-point"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "background"
+                    },
+                    "observed": "既存 canonical runtime の identity、state、Activity history、Artifact authority を新しい public query boundary として外部化しているが、移行対象となる既存 public behavior と影響を受ける command、API、hook、config、generated artifact、side effect の inventory がない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.modules"
+                    },
+                    "observed": "新しい reader/projector/adapter の構成は示されているが、保持する各既存 behavior を新 owner に割り当てる mapping、または削除判断が定義されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "tasks[T-7].acceptance"
+                    },
+                    "observed": "既存 Flow command について「少なくとも一つ」の回帰確認しか要求しておらず、保持する各既存 public surface ごとの behavior-level verification が定義されていない。",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the specification evidence selected by Definition."
+            },
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "76cfdec980dcb8f908f255eafa77cf83f2df359de4d9b18322938de105a9ce10",
+            "gateTransitionAttemptId": "attempt-spec-gate-221d01f4-6582-4246-b3cb-72d2a92b6c19",
+            "gateTransitionAttemptSequence": 1
+          }
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "spec-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/spec.json",
+          "level": "parent",
+          "phase": "spec",
+          "evaluations": [
+            {
+              "guardrail_id": "spec-test-coverage",
+              "result": "pass",
+              "reason": "spec phase does not own downstream test-file or runtime evidence",
+              "category": "testing",
+              "title": "Spec Test Coverage",
+              "authority": "mechanical"
+            },
+            {
+              "guardrail_id": "spec-no-fabrication",
+              "result": "fail",
+              "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved typed Flow identity/version-location authority check must be recorded as an Open Question rather than treated as resolved.",
+              "category": "process",
+              "title": "Record Unresolved Points as Open Questions",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[0].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved typed Flow identity/version-location authority check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "spec-no-fabrication",
+              "result": "fail",
+              "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved lifecycle and derived-blocked state-model check must be recorded as an Open Question rather than treated as resolved.",
+              "category": "process",
+              "title": "Record Unresolved Points as Open Questions",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[1].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved lifecycle and derived-blocked state-model check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "spec-no-fabrication",
+              "result": "fail",
+              "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved confirmed-Activity-prefix, contiguous-order, and finished-timestamp authority check must be recorded as an Open Question rather than treated as resolved.",
+              "category": "process",
+              "title": "Record Unresolved Points as Open Questions",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[2].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved confirmed-Activity-prefix, contiguous-order, and finished-timestamp authority check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "spec-no-fabrication",
+              "result": "fail",
+              "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved creation-evidence and Activity-creation-authority check must be recorded as an Open Question rather than treated as resolved.",
+              "category": "process",
+              "title": "Record Unresolved Points as Open Questions",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[3].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved creation-evidence and Activity-creation-authority check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "spec-no-fabrication",
+              "result": "fail",
+              "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved Artifact catalog authority and Activity-association check must be recorded as an Open Question rather than treated as resolved.",
+              "category": "process",
+              "title": "Record Unresolved Points as Open Questions",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[4].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved Artifact catalog authority and Activity-association check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "spec-no-fabrication",
+              "result": "fail",
+              "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved governed plan-gate repair source-binding check must be recorded as an Open Question rather than treated as resolved.",
+              "category": "process",
+              "title": "Record Unresolved Points as Open Questions",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[13].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved governed plan-gate repair source-binding check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "PASS",
+              "detail": "Spec Test Coverage — spec phase does not own downstream test-file or runtime evidence",
+              "guardrail_id": "spec-test-coverage",
+              "category": "testing"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved typed Flow identity/version-location authority check must be recorded as an Open Question rather than treated as resolved.",
+              "guardrail_id": "spec-no-fabrication",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved lifecycle and derived-blocked state-model check must be recorded as an Open Question rather than treated as resolved.",
+              "guardrail_id": "spec-no-fabrication",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved confirmed-Activity-prefix, contiguous-order, and finished-timestamp authority check must be recorded as an Open Question rather than treated as resolved.",
+              "guardrail_id": "spec-no-fabrication",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved creation-evidence and Activity-creation-authority check must be recorded as an Open Question rather than treated as resolved.",
+              "guardrail_id": "spec-no-fabrication",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved Artifact catalog authority and Activity-association check must be recorded as an Open Question rather than treated as resolved.",
+              "guardrail_id": "spec-no-fabrication",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved governed plan-gate repair source-binding check must be recorded as an Open Question rather than treated as resolved.",
+              "guardrail_id": "spec-no-fabrication",
+              "category": "process"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "6 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[0].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved typed Flow identity/version-location authority check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[1].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved lifecycle and derived-blocked state-model check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[2].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved confirmed-Activity-prefix, contiguous-order, and finished-timestamp authority check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[3].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved creation-evidence and Activity-creation-authority check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[4].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved Artifact catalog authority and Activity-association check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "overview.decisions[13].text"
+                  },
+                  "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved governed plan-gate repair source-binding check must be recorded as an Open Question rather than treated as resolved.",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the specification evidence selected by Definition."
+          },
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "29dfbeef1854e6e23b6ac08ab38954c5d5dfc1e5d1a48e7fb7c607e78dd0b67c",
+          "gateTransitionAttemptId": "attempt-spec-gate-aabea47f-f5b5-48d1-b901-ee273460d043",
+          "gateTransitionAttemptSequence": 2
+        }
+      },
+      "artifact": {
+        "logicalKey": "spec.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/spec.json",
+            "level": "parent",
+            "phase": "spec",
+            "evaluations": [
+              {
+                "guardrail_id": "spec-test-coverage",
+                "result": "pass",
+                "reason": "spec phase does not own downstream test-file or runtime evidence",
+                "category": "testing",
+                "title": "Spec Test Coverage",
+                "authority": "mechanical"
+              },
+              {
+                "guardrail_id": "spec-no-fabrication",
+                "result": "fail",
+                "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved typed Flow identity/version-location authority check must be recorded as an Open Question rather than treated as resolved.",
+                "category": "process",
+                "title": "Record Unresolved Points as Open Questions",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[0].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved typed Flow identity/version-location authority check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "spec-no-fabrication",
+                "result": "fail",
+                "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved lifecycle and derived-blocked state-model check must be recorded as an Open Question rather than treated as resolved.",
+                "category": "process",
+                "title": "Record Unresolved Points as Open Questions",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[1].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved lifecycle and derived-blocked state-model check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "spec-no-fabrication",
+                "result": "fail",
+                "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved confirmed-Activity-prefix, contiguous-order, and finished-timestamp authority check must be recorded as an Open Question rather than treated as resolved.",
+                "category": "process",
+                "title": "Record Unresolved Points as Open Questions",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[2].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved confirmed-Activity-prefix, contiguous-order, and finished-timestamp authority check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "spec-no-fabrication",
+                "result": "fail",
+                "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved creation-evidence and Activity-creation-authority check must be recorded as an Open Question rather than treated as resolved.",
+                "category": "process",
+                "title": "Record Unresolved Points as Open Questions",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[3].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved creation-evidence and Activity-creation-authority check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "spec-no-fabrication",
+                "result": "fail",
+                "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved Artifact catalog authority and Activity-association check must be recorded as an Open Question rather than treated as resolved.",
+                "category": "process",
+                "title": "Record Unresolved Points as Open Questions",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[4].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved Artifact catalog authority and Activity-association check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "spec-no-fabrication",
+                "result": "fail",
+                "reason": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved governed plan-gate repair source-binding check must be recorded as an Open Question rather than treated as resolved.",
+                "category": "process",
+                "title": "Record Unresolved Points as Open Questions",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[13].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved governed plan-gate repair source-binding check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "PASS",
+                "detail": "Spec Test Coverage — spec phase does not own downstream test-file or runtime evidence",
+                "guardrail_id": "spec-test-coverage",
+                "category": "testing"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved typed Flow identity/version-location authority check must be recorded as an Open Question rather than treated as resolved.",
+                "guardrail_id": "spec-no-fabrication",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved lifecycle and derived-blocked state-model check must be recorded as an Open Question rather than treated as resolved.",
+                "guardrail_id": "spec-no-fabrication",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved confirmed-Activity-prefix, contiguous-order, and finished-timestamp authority check must be recorded as an Open Question rather than treated as resolved.",
+                "guardrail_id": "spec-no-fabrication",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved creation-evidence and Activity-creation-authority check must be recorded as an Open Question rather than treated as resolved.",
+                "guardrail_id": "spec-no-fabrication",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved Artifact catalog authority and Activity-association check must be recorded as an Open Question rather than treated as resolved.",
+                "guardrail_id": "spec-no-fabrication",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Record Unresolved Points as Open Questions — This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved governed plan-gate repair source-binding check must be recorded as an Open Question rather than treated as resolved.",
+                "guardrail_id": "spec-no-fabrication",
+                "category": "process"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "6 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[0].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved typed Flow identity/version-location authority check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[1].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved lifecycle and derived-blocked state-model check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[2].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved confirmed-Activity-prefix, contiguous-order, and finished-timestamp authority check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[3].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved creation-evidence and Activity-creation-authority check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[4].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved Artifact catalog authority and Activity-association check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "overview.decisions[13].text"
+                    },
+                    "observed": "This decision is explicitly marked [VERIFY], but open_questions is empty. The unresolved governed plan-gate repair source-binding check must be recorded as an Open Question rather than treated as resolved.",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the specification evidence selected by Definition."
+            },
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "29dfbeef1854e6e23b6ac08ab38954c5d5dfc1e5d1a48e7fb7c607e78dd0b67c",
+            "gateTransitionAttemptId": "attempt-spec-gate-aabea47f-f5b5-48d1-b901-ee273460d043",
+            "gateTransitionAttemptSequence": 2
+          }
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "spec-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/spec.json",
+          "level": "parent",
+          "phase": "spec",
+          "evaluations": [
+            {
+              "guardrail_id": "spec-test-coverage",
+              "result": "pass",
+              "reason": "spec phase does not own downstream test-file or runtime evidence",
+              "category": "testing",
+              "title": "Spec Test Coverage",
+              "authority": "mechanical"
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "fail",
+              "reason": "「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/tasks/9/acceptance/0"
+                  },
+                  "observed": "「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/tasks/9/acceptance/0"
+                  },
+                  "observed": "「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "req-diff-verifiability",
+              "result": "fail",
+              "reason": "Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+              "category": "process",
+              "title": "REQ Diff-Verifiability",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "req-diff-verifiability",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/tasks/2/acceptance/2"
+                  },
+                  "observed": "Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "req-diff-verifiability"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "req-diff-verifiability",
+              "result": "fail",
+              "reason": "Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+              "category": "process",
+              "title": "REQ Diff-Verifiability",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "req-diff-verifiability",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/acceptance_criteria/10"
+                  },
+                  "observed": "Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "req-diff-verifiability"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "bounded-resource-usage",
+              "result": "fail",
+              "reason": "state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+              "category": "code-quality",
+              "title": "Bounded Resource Usage",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/constraints/10"
+                  },
+                  "observed": "state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "bounded-resource-usage",
+              "result": "fail",
+              "reason": "Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+              "category": "code-quality",
+              "title": "Bounded Resource Usage",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/requirements/6/desc"
+                  },
+                  "observed": "Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "spec-no-fabrication",
+              "result": "fail",
+              "reason": "Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+              "category": "process",
+              "title": "Record Unresolved Points as Open Questions",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/overview/decisions/13"
+                  },
+                  "observed": "Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "PASS",
+              "detail": "Spec Test Coverage — spec phase does not own downstream test-file or runtime evidence",
+              "guardrail_id": "spec-test-coverage",
+              "category": "testing"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Unambiguous Requirements — 「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — 「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "REQ Diff-Verifiability — Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+              "guardrail_id": "req-diff-verifiability",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "REQ Diff-Verifiability — Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+              "guardrail_id": "req-diff-verifiability",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Bounded Resource Usage — state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+              "guardrail_id": "bounded-resource-usage",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Bounded Resource Usage — Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+              "guardrail_id": "bounded-resource-usage",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Record Unresolved Points as Open Questions — Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+              "guardrail_id": "spec-no-fabrication",
+              "category": "process"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "7 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/tasks/9/acceptance/0"
+                  },
+                  "observed": "「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/tasks/9/acceptance/0"
+                  },
+                  "observed": "「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "req-diff-verifiability",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/tasks/2/acceptance/2"
+                  },
+                  "observed": "Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "req-diff-verifiability"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "req-diff-verifiability",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/acceptance_criteria/10"
+                  },
+                  "observed": "Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "req-diff-verifiability"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/constraints/10"
+                  },
+                  "observed": "state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "bounded-resource-usage",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/requirements/6/desc"
+                  },
+                  "observed": "Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "bounded-resource-usage"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "spec-no-fabrication",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "/overview/decisions/13"
+                  },
+                  "observed": "Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+                  "severity": "blocking",
+                  "refs": [
+                    "spec-no-fabrication"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the specification evidence selected by Definition."
+          },
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "c903da9eca540f993cf1f9552b3736d1517bea9636729b4a3d541dbb29838084",
+          "gateTransitionAttemptId": "attempt-spec-gate-28d9e99f-77db-4987-8a88-a72b85647b1b",
+          "gateTransitionAttemptSequence": 3
+        }
+      },
+      "artifact": {
+        "logicalKey": "spec.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/spec.json",
+            "level": "parent",
+            "phase": "spec",
+            "evaluations": [
+              {
+                "guardrail_id": "spec-test-coverage",
+                "result": "pass",
+                "reason": "spec phase does not own downstream test-file or runtime evidence",
+                "category": "testing",
+                "title": "Spec Test Coverage",
+                "authority": "mechanical"
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "fail",
+                "reason": "「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/tasks/9/acceptance/0"
+                    },
+                    "observed": "「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/tasks/9/acceptance/0"
+                    },
+                    "observed": "「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "req-diff-verifiability",
+                "result": "fail",
+                "reason": "Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+                "category": "process",
+                "title": "REQ Diff-Verifiability",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "req-diff-verifiability",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/tasks/2/acceptance/2"
+                    },
+                    "observed": "Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "req-diff-verifiability"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "req-diff-verifiability",
+                "result": "fail",
+                "reason": "Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+                "category": "process",
+                "title": "REQ Diff-Verifiability",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "req-diff-verifiability",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/acceptance_criteria/10"
+                    },
+                    "observed": "Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "req-diff-verifiability"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "bounded-resource-usage",
+                "result": "fail",
+                "reason": "state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+                "category": "code-quality",
+                "title": "Bounded Resource Usage",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/constraints/10"
+                    },
+                    "observed": "state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "bounded-resource-usage",
+                "result": "fail",
+                "reason": "Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+                "category": "code-quality",
+                "title": "Bounded Resource Usage",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/requirements/6/desc"
+                    },
+                    "observed": "Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "spec-no-fabrication",
+                "result": "fail",
+                "reason": "Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+                "category": "process",
+                "title": "Record Unresolved Points as Open Questions",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/overview/decisions/13"
+                    },
+                    "observed": "Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "PASS",
+                "detail": "Spec Test Coverage — spec phase does not own downstream test-file or runtime evidence",
+                "guardrail_id": "spec-test-coverage",
+                "category": "testing"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Unambiguous Requirements — 「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — 「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "REQ Diff-Verifiability — Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+                "guardrail_id": "req-diff-verifiability",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "REQ Diff-Verifiability — Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+                "guardrail_id": "req-diff-verifiability",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Bounded Resource Usage — state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+                "guardrail_id": "bounded-resource-usage",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Bounded Resource Usage — Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+                "guardrail_id": "bounded-resource-usage",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Record Unresolved Points as Open Questions — Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+                "guardrail_id": "spec-no-fabrication",
+                "category": "process"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "7 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/tasks/9/acceptance/0"
+                    },
+                    "observed": "「代表入力」が具体的に列挙されておらず、どの入力集合を代表的と判定するかが不明確です。対象コマンド、引数、fixture、期待する観測結果を明示してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/tasks/9/acceptance/0"
+                    },
+                    "observed": "「代表入力と観測結果が一致する」という受入条件だけでは、独立したレビュアーが同じ合否判定をできません。比較対象となる具体的な入力と期待値を定義してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "req-diff-verifiability",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/tasks/2/acceptance/2"
+                    },
+                    "observed": "Version 2 以降の fixture を Version 1 hardcode の変更なしで選択できる、という将来の拡張性・no-code-change 契約に依存しています。現在の diff と具体的な fixture テストで判定できる構造条件へ書き換えてください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "req-diff-verifiability"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "req-diff-verifiability",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/acceptance_criteria/10"
+                    },
+                    "observed": "Version 2 以降の fixture 追加を将来のコード変更なしで保証しており、現在の unified diff とテスト実行結果だけでは将来の追加を判定できません。現行実装の Version discovery 条件と具体的な Version 2 fixture テストに分解してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "req-diff-verifiability"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/constraints/10"
+                    },
+                    "observed": "state、Spec record、Artifact catalog の canonical input に対する明示的なファイル byte 上限がありません。MAX_RESPONSE_BYTES は出力上限であり、parse 前の bulk read 上限にはならないため、各 canonical record の入力 byte limit を定義してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "bounded-resource-usage",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/requirements/6/desc"
+                    },
+                    "observed": "Artifact descriptor の identity fields を recursively key-sort して canonical JSON 化しますが、再帰深度または canonicalJson 入力サイズの上限が定義されていません。再帰処理に明示的な上限を追加してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "bounded-resource-usage"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "spec-no-fabrication",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "/overview/decisions/13"
+                    },
+                    "observed": "Governed plan-gate repair の決定は sourceIssueLogId=c75a... と digest=d5ef... を根拠として断定していますが、Open Questions では別の sourceIssueLogId=8cc... と digest=7b26... の exact match が未確認です。未解決の binding を確定事項として扱わず、検証対象を一つに整理してください。",
+                    "severity": "blocking",
+                    "refs": [
+                      "spec-no-fabrication"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the specification evidence selected by Definition."
+            },
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "c903da9eca540f993cf1f9552b3736d1517bea9636729b4a3d541dbb29838084",
+            "gateTransitionAttemptId": "attempt-spec-gate-28d9e99f-77db-4987-8a88-a72b85647b1b",
+            "gateTransitionAttemptSequence": 3
+          }
+        }
+      }
+    },
+    {
+      "attempt": 4,
+      "nodeId": "spec-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "pass",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/spec.json",
+          "level": "parent",
+          "phase": "spec",
+          "evaluations": [
+            {
+              "guardrail_id": "spec-test-coverage",
+              "result": "pass",
+              "reason": "spec phase does not own downstream test-file or runtime evidence",
+              "category": "testing",
+              "title": "Spec Test Coverage",
+              "authority": "mechanical"
+            },
+            {
+              "guardrail_id": "single-responsibility",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Single Responsibility",
+              "observations": []
+            },
+            {
+              "guardrail_id": "task-single-responsibility",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Task Single Responsibility",
+              "observations": []
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": []
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": []
+            },
+            {
+              "guardrail_id": "req-diff-verifiability",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "REQ Diff-Verifiability",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-hardcoded-secrets",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "security",
+              "title": "No Hardcoded Secrets",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-silent-error-swallowing",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "No Silent Error Swallowing",
+              "observations": []
+            },
+            {
+              "guardrail_id": "prioritize-requirements",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Prioritize Requirements",
+              "observations": []
+            },
+            {
+              "guardrail_id": "impact-on-existing-features",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Impact on Existing Features",
+              "observations": []
+            },
+            {
+              "guardrail_id": "migration-parity",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Migration Parity",
+              "observations": []
+            },
+            {
+              "guardrail_id": "bounded-resource-usage",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Bounded Resource Usage",
+              "observations": []
+            },
+            {
+              "guardrail_id": "spec-includes-test-strategy",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "testing",
+              "title": "Spec Includes Test Strategy",
+              "observations": []
+            },
+            {
+              "guardrail_id": "spec-no-fabrication",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Record Unresolved Points as Open Questions",
+              "observations": []
+            },
+            {
+              "guardrail_id": "spec-include-rationale",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Include 'Why This Approach' Rationale",
+              "observations": []
+            },
+            {
+              "guardrail_id": "backward-compatible-cli-interface",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Backward-Compatible CLI Interface",
+              "observations": []
+            },
+            {
+              "guardrail_id": "exit-code-contract",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Exit Code Contract",
+              "observations": []
+            },
+            {
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "requirements",
+              "title": "Validate User Input at Entry Point",
+              "observations": []
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "PASS",
+              "detail": "Spec Test Coverage — spec phase does not own downstream test-file or runtime evidence",
+              "guardrail_id": "spec-test-coverage",
+              "category": "testing"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Single Responsibility — no observations emitted",
+              "guardrail_id": "single-responsibility",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Task Single Responsibility — no observations emitted",
+              "guardrail_id": "task-single-responsibility",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Unambiguous Requirements — no observations emitted",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Complete Context — no observations emitted",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "REQ Diff-Verifiability — no observations emitted",
+              "guardrail_id": "req-diff-verifiability",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Hardcoded Secrets — no observations emitted",
+              "guardrail_id": "no-hardcoded-secrets",
+              "category": "security"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Silent Error Swallowing — no observations emitted",
+              "guardrail_id": "no-silent-error-swallowing",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Prioritize Requirements — no observations emitted",
+              "guardrail_id": "prioritize-requirements",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Impact on Existing Features — no observations emitted",
+              "guardrail_id": "impact-on-existing-features",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Migration Parity — no observations emitted",
+              "guardrail_id": "migration-parity",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Bounded Resource Usage — no observations emitted",
+              "guardrail_id": "bounded-resource-usage",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Spec Includes Test Strategy — no observations emitted",
+              "guardrail_id": "spec-includes-test-strategy",
+              "category": "testing"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Record Unresolved Points as Open Questions — no observations emitted",
+              "guardrail_id": "spec-no-fabrication",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Include 'Why This Approach' Rationale — no observations emitted",
+              "guardrail_id": "spec-include-rationale",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Backward-Compatible CLI Interface — no observations emitted",
+              "guardrail_id": "backward-compatible-cli-interface",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Exit Code Contract — no observations emitted",
+              "guardrail_id": "exit-code-contract",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Validate User Input at Entry Point — no observations emitted",
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "category": "requirements"
+            }
+          ],
+          "nextAction": {
+            "diagnosis": {
+              "summary": "No blocking observations.",
+              "observations": []
+            },
+            "prescription": "Continue with the Definition-selected Gate action."
+          },
+          "gateTransitionLineage": "4b14b23c19ee298421280e64516357f3effda786fb042e56730bdabfab1389a2",
+          "gateTransitionAttemptId": "attempt-spec-gate-1f28a73a-a4ec-4fc7-9703-fd66367f6a1e",
+          "gateTransitionAttemptSequence": 4
+        }
+      },
+      "artifact": {
+        "logicalKey": "spec.gate",
+        "payload": {
+          "result": "pass",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/spec.json",
+            "level": "parent",
+            "phase": "spec",
+            "evaluations": [
+              {
+                "guardrail_id": "spec-test-coverage",
+                "result": "pass",
+                "reason": "spec phase does not own downstream test-file or runtime evidence",
+                "category": "testing",
+                "title": "Spec Test Coverage",
+                "authority": "mechanical"
+              },
+              {
+                "guardrail_id": "single-responsibility",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Single Responsibility",
+                "observations": []
+              },
+              {
+                "guardrail_id": "task-single-responsibility",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Task Single Responsibility",
+                "observations": []
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": []
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": []
+              },
+              {
+                "guardrail_id": "req-diff-verifiability",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "REQ Diff-Verifiability",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-hardcoded-secrets",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "security",
+                "title": "No Hardcoded Secrets",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-silent-error-swallowing",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "No Silent Error Swallowing",
+                "observations": []
+              },
+              {
+                "guardrail_id": "prioritize-requirements",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Prioritize Requirements",
+                "observations": []
+              },
+              {
+                "guardrail_id": "impact-on-existing-features",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Impact on Existing Features",
+                "observations": []
+              },
+              {
+                "guardrail_id": "migration-parity",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Migration Parity",
+                "observations": []
+              },
+              {
+                "guardrail_id": "bounded-resource-usage",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Bounded Resource Usage",
+                "observations": []
+              },
+              {
+                "guardrail_id": "spec-includes-test-strategy",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "testing",
+                "title": "Spec Includes Test Strategy",
+                "observations": []
+              },
+              {
+                "guardrail_id": "spec-no-fabrication",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Record Unresolved Points as Open Questions",
+                "observations": []
+              },
+              {
+                "guardrail_id": "spec-include-rationale",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Include 'Why This Approach' Rationale",
+                "observations": []
+              },
+              {
+                "guardrail_id": "backward-compatible-cli-interface",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Backward-Compatible CLI Interface",
+                "observations": []
+              },
+              {
+                "guardrail_id": "exit-code-contract",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Exit Code Contract",
+                "observations": []
+              },
+              {
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "requirements",
+                "title": "Validate User Input at Entry Point",
+                "observations": []
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "PASS",
+                "detail": "Spec Test Coverage — spec phase does not own downstream test-file or runtime evidence",
+                "guardrail_id": "spec-test-coverage",
+                "category": "testing"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Single Responsibility — no observations emitted",
+                "guardrail_id": "single-responsibility",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Task Single Responsibility — no observations emitted",
+                "guardrail_id": "task-single-responsibility",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Unambiguous Requirements — no observations emitted",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Complete Context — no observations emitted",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "REQ Diff-Verifiability — no observations emitted",
+                "guardrail_id": "req-diff-verifiability",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Hardcoded Secrets — no observations emitted",
+                "guardrail_id": "no-hardcoded-secrets",
+                "category": "security"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Silent Error Swallowing — no observations emitted",
+                "guardrail_id": "no-silent-error-swallowing",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Prioritize Requirements — no observations emitted",
+                "guardrail_id": "prioritize-requirements",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Impact on Existing Features — no observations emitted",
+                "guardrail_id": "impact-on-existing-features",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Migration Parity — no observations emitted",
+                "guardrail_id": "migration-parity",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Bounded Resource Usage — no observations emitted",
+                "guardrail_id": "bounded-resource-usage",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Spec Includes Test Strategy — no observations emitted",
+                "guardrail_id": "spec-includes-test-strategy",
+                "category": "testing"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Record Unresolved Points as Open Questions — no observations emitted",
+                "guardrail_id": "spec-no-fabrication",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Include 'Why This Approach' Rationale — no observations emitted",
+                "guardrail_id": "spec-include-rationale",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Backward-Compatible CLI Interface — no observations emitted",
+                "guardrail_id": "backward-compatible-cli-interface",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Exit Code Contract — no observations emitted",
+                "guardrail_id": "exit-code-contract",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Validate User Input at Entry Point — no observations emitted",
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "category": "requirements"
+              }
+            ],
+            "nextAction": {
+              "diagnosis": {
+                "summary": "No blocking observations.",
+                "observations": []
+              },
+              "prescription": "Continue with the Definition-selected Gate action."
+            },
+            "gateTransitionLineage": "4b14b23c19ee298421280e64516357f3effda786fb042e56730bdabfab1389a2",
+            "gateTransitionAttemptId": "attempt-spec-gate-1f28a73a-a4ec-4fc7-9703-fd66367f6a1e",
+            "gateTransitionAttemptSequence": 4
+          }
+        }
+      }
+    }
+  ]
+}

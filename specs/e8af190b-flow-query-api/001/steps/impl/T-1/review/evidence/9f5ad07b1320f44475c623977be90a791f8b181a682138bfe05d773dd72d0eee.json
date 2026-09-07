@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-1",
+  "treeSha": "c20d42c0c5f2a79ec146b8c3fec6c68964e7b61d",
+  "targetStateDigest": "a17c6e89ea18544b06262ab83f204d986b328bc27668e92372be89d565ceb060",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "ff8bc9039fcf9ad9ec1a2a5922d9f7b966cc621713033e96578314ee220869c2",
+    "capturedAt": "2026-09-02T05:36:37.595Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "e3057c2e03c4eb5aa7bcee5d143055a1a640df4278048548a3e8919933ccada8",
+      "summary": "Metadata projection crashes on ordinary Activities",
+      "fingerprint": "e3057c2e03c4eb5aa7bcee5d143055a1a640df4278048548a3e8919933ccada8",
+      "evidenceRefs": [
+        "impl-review.json#e3057c2e03c4eb5aa7bcee5d143055a1a640df4278048548a3e8919933ccada8"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b",
+      "summary": "Artifact catalog verification passes the wrong index type",
+      "fingerprint": "85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b",
+      "evidenceRefs": [
+        "impl-review.json#85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "e74ac041f34bd5dda75f418198b5bac00cb2547dcd20108ea4a39dc1c7f6260e",
+      "summary": "AggregateMetrics violates the exact contract",
+      "fingerprint": "e74ac041f34bd5dda75f418198b5bac00cb2547dcd20108ea4a39dc1c7f6260e",
+      "evidenceRefs": [
+        "impl-review.json#e74ac041f34bd5dda75f418198b5bac00cb2547dcd20108ea4a39dc1c7f6260e"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "260e6c0d7eba8c1ddf0b1f6384604a4afa5aa15fd973aaec4262e84c278c4beb",
+      "summary": "Metric totals use sources forbidden by the aggregation contract",
+      "fingerprint": "260e6c0d7eba8c1ddf0b1f6384604a4afa5aa15fd973aaec4262e84c278c4beb",
+      "evidenceRefs": [
+        "impl-review.json#260e6c0d7eba8c1ddf0b1f6384604a4afa5aa15fd973aaec4262e84c278c4beb"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "88fa7366bba492eb447882cea0115749a8ab6320797776c9a1eec74aaa6df824",
+      "summary": "MetadataItem is an open-ended wrapper",
+      "fingerprint": "88fa7366bba492eb447882cea0115749a8ab6320797776c9a1eec74aaa6df824",
+      "evidenceRefs": [
+        "impl-review.json#88fa7366bba492eb447882cea0115749a8ab6320797776c9a1eec74aaa6df824"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "ccd32b7f009a5f77e0b01694db4114c5693912aea8149efa44a8797a4687296c",
+      "summary": "ActivityItem is an open-ended wrapper",
+      "fingerprint": "ccd32b7f009a5f77e0b01694db4114c5693912aea8149efa44a8797a4687296c",
+      "evidenceRefs": [
+        "impl-review.json#ccd32b7f009a5f77e0b01694db4114c5693912aea8149efa44a8797a4687296c"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "7e430c51f795d66eac4ba5cb88bfd38363c91d349b296334b7e9d586cbed7a09",
+      "summary": "Artifact descriptor contract is not typed",
+      "fingerprint": "7e430c51f795d66eac4ba5cb88bfd38363c91d349b296334b7e9d586cbed7a09",
+      "evidenceRefs": [
+        "impl-review.json#7e430c51f795d66eac4ba5cb88bfd38363c91d349b296334b7e9d586cbed7a09"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "46a5c553fbd850d872174d1f1861abbe7f0c0cb3e55311551af08694daff774d",
+      "summary": "Resource-unknown errors omit the declared response envelope",
+      "fingerprint": "46a5c553fbd850d872174d1f1861abbe7f0c0cb3e55311551af08694daff774d",
+      "evidenceRefs": [
+        "impl-review.json#46a5c553fbd850d872174d1f1861abbe7f0c0cb3e55311551af08694daff774d"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "b8665d6ee34295ab311669589e5223aca15db775037490d5f4166b95f5d59a4e",
+      "summary": "Dynamic error paths are not public-safe JSON paths",
+      "fingerprint": "b8665d6ee34295ab311669589e5223aca15db775037490d5f4166b95f5d59a4e",
+      "evidenceRefs": [
+        "impl-review.json#b8665d6ee34295ab311669589e5223aca15db775037490d5f4166b95f5d59a4e"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "14e1848473b2ce6f2a1a96743c6597d15afae4b09662513117271bbc7cfd8c25",
+      "summary": "Public object collections are not bounded",
+      "fingerprint": "14e1848473b2ce6f2a1a96743c6597d15afae4b09662513117271bbc7cfd8c25",
+      "evidenceRefs": [
+        "impl-review.json#14e1848473b2ce6f2a1a96743c6597d15afae4b09662513117271bbc7cfd8c25"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

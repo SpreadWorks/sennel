@@ -1,0 +1,1282 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "T-3-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "no-silent-error-swallowing",
+              "result": "fail",
+              "reason": "The catch handler silently converts ENOENT/ENOTDIR filesystem failures into an empty version list without logging or re-throwing the error.",
+              "category": "code-quality",
+              "title": "No Silent Error Swallowing",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-silent-error-swallowing",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "CanonicalFlowVersionReader.readVersionDirectoryEntries"
+                  },
+                  "observed": "The catch handler silently converts ENOENT/ENOTDIR filesystem failures into an empty version list without logging or re-throwing the error.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-silent-error-swallowing"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-silent-error-swallowing",
+              "result": "fail",
+              "reason": "The catch handler silently converts missing configuration (ENOENT/ENOTDIR) into the default \"specs\" path without logging or re-throwing the error.",
+              "category": "code-quality",
+              "title": "No Silent Error Swallowing",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-silent-error-swallowing",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "specRoot"
+                  },
+                  "observed": "The catch handler silently converts missing configuration (ENOENT/ENOTDIR) into the default \"specs\" path without logging or re-throwing the error.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-silent-error-swallowing"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-overengineering",
+              "result": "fail",
+              "reason": "A new helper wraps a simple three-entry selection switch and has exactly one production caller, adding indirection without shared behavior, invariant enforcement, or an ownership boundary.",
+              "category": "code-quality",
+              "title": "Avoid Overengineering",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/lib/test-chain-transition-facts.js",
+                    "locator": "definitionFor(stepId)"
+                  },
+                  "observed": "A new helper wraps a simple three-entry selection switch and has exactly one production caller, adding indirection without shared behavior, invariant enforcement, or an ownership boundary.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-overengineering",
+              "result": "fail",
+              "reason": "This changed location duplicates the directory lstat/realpath/regular-directory validation performed again in CanonicalFlowVersionReader.open; the repeated control-flow shape could be centralized in a local helper.",
+              "category": "code-quality",
+              "title": "Avoid Overengineering",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "CanonicalFlowVersionReader.readVersionDirectoryEntries"
+                  },
+                  "observed": "This changed location duplicates the directory lstat/realpath/regular-directory validation performed again in CanonicalFlowVersionReader.open; the repeated control-flow shape could be centralized in a local helper.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-overengineering",
+              "result": "fail",
+              "reason": "This changed location duplicates the directory lstat/realpath/regular-directory validation already implemented in CanonicalFlowVersionReader.readVersionDirectoryEntries; the repeated control-flow shape could be centralized in a local helper.",
+              "category": "code-quality",
+              "title": "Avoid Overengineering",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "CanonicalFlowVersionReader.open"
+                  },
+                  "observed": "This changed location duplicates the directory lstat/realpath/regular-directory validation already implemented in CanonicalFlowVersionReader.readVersionDirectoryEntries; the repeated control-flow shape could be centralized in a local helper.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-overengineering",
+              "result": "fail",
+              "reason": "The spec marks multiple design-direction checks as 未確認, including typed Flow identity/version authority and lifecycle/Activity/artifact authority, while the diff implements the broad reader, projection, and bootstrap architecture without confirmation evidence.",
+              "category": "code-quality",
+              "title": "Avoid Overengineering",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "Open Questions"
+                  },
+                  "observed": "The spec marks multiple design-direction checks as 未確認, including typed Flow identity/version authority and lifecycle/Activity/artifact authority, while the diff implements the broad reader, projection, and bootstrap architecture without confirmation evidence.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "No Silent Error Swallowing — The catch handler silently converts ENOENT/ENOTDIR filesystem failures into an empty version list without logging or re-throwing the error.",
+              "guardrail_id": "no-silent-error-swallowing",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "No Silent Error Swallowing — The catch handler silently converts missing configuration (ENOENT/ENOTDIR) into the default \"specs\" path without logging or re-throwing the error.",
+              "guardrail_id": "no-silent-error-swallowing",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Avoid Overengineering — A new helper wraps a simple three-entry selection switch and has exactly one production caller, adding indirection without shared behavior, invariant enforcement, or an ownership boundary.",
+              "guardrail_id": "no-overengineering",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Avoid Overengineering — This changed location duplicates the directory lstat/realpath/regular-directory validation performed again in CanonicalFlowVersionReader.open; the repeated control-flow shape could be centralized in a local helper.",
+              "guardrail_id": "no-overengineering",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Avoid Overengineering — This changed location duplicates the directory lstat/realpath/regular-directory validation already implemented in CanonicalFlowVersionReader.readVersionDirectoryEntries; the repeated control-flow shape could be centralized in a local helper.",
+              "guardrail_id": "no-overengineering",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Avoid Overengineering — The spec marks multiple design-direction checks as 未確認, including typed Flow identity/version authority and lifecycle/Activity/artifact authority, while the diff implements the broad reader, projection, and bootstrap architecture without confirmation evidence.",
+              "guardrail_id": "no-overengineering",
+              "category": "code-quality"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "6 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-silent-error-swallowing",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "CanonicalFlowVersionReader.readVersionDirectoryEntries"
+                  },
+                  "observed": "The catch handler silently converts ENOENT/ENOTDIR filesystem failures into an empty version list without logging or re-throwing the error.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-silent-error-swallowing"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-silent-error-swallowing",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "specRoot"
+                  },
+                  "observed": "The catch handler silently converts missing configuration (ENOENT/ENOTDIR) into the default \"specs\" path without logging or re-throwing the error.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-silent-error-swallowing"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/lib/test-chain-transition-facts.js",
+                    "locator": "definitionFor(stepId)"
+                  },
+                  "observed": "A new helper wraps a simple three-entry selection switch and has exactly one production caller, adding indirection without shared behavior, invariant enforcement, or an ownership boundary.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "CanonicalFlowVersionReader.readVersionDirectoryEntries"
+                  },
+                  "observed": "This changed location duplicates the directory lstat/realpath/regular-directory validation performed again in CanonicalFlowVersionReader.open; the repeated control-flow shape could be centralized in a local helper.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "CanonicalFlowVersionReader.open"
+                  },
+                  "observed": "This changed location duplicates the directory lstat/realpath/regular-directory validation already implemented in CanonicalFlowVersionReader.readVersionDirectoryEntries; the repeated control-flow shape could be centralized in a local helper.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "Open Questions"
+                  },
+                  "observed": "The spec marks multiple design-direction checks as 未確認, including typed Flow identity/version authority and lifecycle/Activity/artifact authority, while the diff implements the broad reader, projection, and bootstrap architecture without confirmation evidence.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "taskId": "T-3",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "2fd562f552da3d8929344fc165c3205dc7941a3c5cc93138eef28ddc79e5766d",
+          "gateTransitionAttemptId": "attempt-T-3-gate-38a7ffbe-63d3-4e6b-bf85-122c84ff395c",
+          "gateTransitionAttemptSequence": 1
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "no-silent-error-swallowing",
+                "result": "fail",
+                "reason": "The catch handler silently converts ENOENT/ENOTDIR filesystem failures into an empty version list without logging or re-throwing the error.",
+                "category": "code-quality",
+                "title": "No Silent Error Swallowing",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-silent-error-swallowing",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "CanonicalFlowVersionReader.readVersionDirectoryEntries"
+                    },
+                    "observed": "The catch handler silently converts ENOENT/ENOTDIR filesystem failures into an empty version list without logging or re-throwing the error.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-silent-error-swallowing"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-silent-error-swallowing",
+                "result": "fail",
+                "reason": "The catch handler silently converts missing configuration (ENOENT/ENOTDIR) into the default \"specs\" path without logging or re-throwing the error.",
+                "category": "code-quality",
+                "title": "No Silent Error Swallowing",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-silent-error-swallowing",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "specRoot"
+                    },
+                    "observed": "The catch handler silently converts missing configuration (ENOENT/ENOTDIR) into the default \"specs\" path without logging or re-throwing the error.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-silent-error-swallowing"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-overengineering",
+                "result": "fail",
+                "reason": "A new helper wraps a simple three-entry selection switch and has exactly one production caller, adding indirection without shared behavior, invariant enforcement, or an ownership boundary.",
+                "category": "code-quality",
+                "title": "Avoid Overengineering",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/lib/test-chain-transition-facts.js",
+                      "locator": "definitionFor(stepId)"
+                    },
+                    "observed": "A new helper wraps a simple three-entry selection switch and has exactly one production caller, adding indirection without shared behavior, invariant enforcement, or an ownership boundary.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-overengineering",
+                "result": "fail",
+                "reason": "This changed location duplicates the directory lstat/realpath/regular-directory validation performed again in CanonicalFlowVersionReader.open; the repeated control-flow shape could be centralized in a local helper.",
+                "category": "code-quality",
+                "title": "Avoid Overengineering",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "CanonicalFlowVersionReader.readVersionDirectoryEntries"
+                    },
+                    "observed": "This changed location duplicates the directory lstat/realpath/regular-directory validation performed again in CanonicalFlowVersionReader.open; the repeated control-flow shape could be centralized in a local helper.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-overengineering",
+                "result": "fail",
+                "reason": "This changed location duplicates the directory lstat/realpath/regular-directory validation already implemented in CanonicalFlowVersionReader.readVersionDirectoryEntries; the repeated control-flow shape could be centralized in a local helper.",
+                "category": "code-quality",
+                "title": "Avoid Overengineering",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "CanonicalFlowVersionReader.open"
+                    },
+                    "observed": "This changed location duplicates the directory lstat/realpath/regular-directory validation already implemented in CanonicalFlowVersionReader.readVersionDirectoryEntries; the repeated control-flow shape could be centralized in a local helper.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-overengineering",
+                "result": "fail",
+                "reason": "The spec marks multiple design-direction checks as 未確認, including typed Flow identity/version authority and lifecycle/Activity/artifact authority, while the diff implements the broad reader, projection, and bootstrap architecture without confirmation evidence.",
+                "category": "code-quality",
+                "title": "Avoid Overengineering",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "Open Questions"
+                    },
+                    "observed": "The spec marks multiple design-direction checks as 未確認, including typed Flow identity/version authority and lifecycle/Activity/artifact authority, while the diff implements the broad reader, projection, and bootstrap architecture without confirmation evidence.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "No Silent Error Swallowing — The catch handler silently converts ENOENT/ENOTDIR filesystem failures into an empty version list without logging or re-throwing the error.",
+                "guardrail_id": "no-silent-error-swallowing",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "No Silent Error Swallowing — The catch handler silently converts missing configuration (ENOENT/ENOTDIR) into the default \"specs\" path without logging or re-throwing the error.",
+                "guardrail_id": "no-silent-error-swallowing",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Avoid Overengineering — A new helper wraps a simple three-entry selection switch and has exactly one production caller, adding indirection without shared behavior, invariant enforcement, or an ownership boundary.",
+                "guardrail_id": "no-overengineering",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Avoid Overengineering — This changed location duplicates the directory lstat/realpath/regular-directory validation performed again in CanonicalFlowVersionReader.open; the repeated control-flow shape could be centralized in a local helper.",
+                "guardrail_id": "no-overengineering",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Avoid Overengineering — This changed location duplicates the directory lstat/realpath/regular-directory validation already implemented in CanonicalFlowVersionReader.readVersionDirectoryEntries; the repeated control-flow shape could be centralized in a local helper.",
+                "guardrail_id": "no-overengineering",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Avoid Overengineering — The spec marks multiple design-direction checks as 未確認, including typed Flow identity/version authority and lifecycle/Activity/artifact authority, while the diff implements the broad reader, projection, and bootstrap architecture without confirmation evidence.",
+                "guardrail_id": "no-overengineering",
+                "category": "code-quality"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "6 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-silent-error-swallowing",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "CanonicalFlowVersionReader.readVersionDirectoryEntries"
+                    },
+                    "observed": "The catch handler silently converts ENOENT/ENOTDIR filesystem failures into an empty version list without logging or re-throwing the error.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-silent-error-swallowing"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-silent-error-swallowing",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "specRoot"
+                    },
+                    "observed": "The catch handler silently converts missing configuration (ENOENT/ENOTDIR) into the default \"specs\" path without logging or re-throwing the error.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-silent-error-swallowing"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/lib/test-chain-transition-facts.js",
+                      "locator": "definitionFor(stepId)"
+                    },
+                    "observed": "A new helper wraps a simple three-entry selection switch and has exactly one production caller, adding indirection without shared behavior, invariant enforcement, or an ownership boundary.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "CanonicalFlowVersionReader.readVersionDirectoryEntries"
+                    },
+                    "observed": "This changed location duplicates the directory lstat/realpath/regular-directory validation performed again in CanonicalFlowVersionReader.open; the repeated control-flow shape could be centralized in a local helper.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "CanonicalFlowVersionReader.open"
+                    },
+                    "observed": "This changed location duplicates the directory lstat/realpath/regular-directory validation already implemented in CanonicalFlowVersionReader.readVersionDirectoryEntries; the repeated control-flow shape could be centralized in a local helper.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "Open Questions"
+                    },
+                    "observed": "The spec marks multiple design-direction checks as 未確認, including typed Flow identity/version authority and lifecycle/Activity/artifact authority, while the diff implements the broad reader, projection, and bootstrap architecture without confirmation evidence.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "taskId": "T-3",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "2fd562f552da3d8929344fc165c3205dc7941a3c5cc93138eef28ddc79e5766d",
+            "gateTransitionAttemptId": "attempt-T-3-gate-38a7ffbe-63d3-4e6b-bf85-122c84ff395c",
+            "gateTransitionAttemptSequence": 1
+          }
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "T-3-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "no-overengineering",
+              "result": "fail",
+              "reason": "The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+              "category": "code-quality",
+              "title": "Avoid Overengineering",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "Open Questions"
+                  },
+                  "observed": "The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-overengineering",
+              "result": "fail",
+              "reason": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+              "category": "code-quality",
+              "title": "Avoid Overengineering",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "QueryProjector.activityItem(): publicArtifactIds"
+                  },
+                  "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "no-overengineering",
+              "result": "fail",
+              "reason": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+              "category": "code-quality",
+              "title": "Avoid Overengineering",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "QueryProjector.activityItem(): outcome.artifactRefs"
+                  },
+                  "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "Avoid Overengineering — The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+              "guardrail_id": "no-overengineering",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Avoid Overengineering — Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+              "guardrail_id": "no-overengineering",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Avoid Overengineering — Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+              "guardrail_id": "no-overengineering",
+              "category": "code-quality"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "3 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "Open Questions"
+                  },
+                  "observed": "The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "QueryProjector.activityItem(): publicArtifactIds"
+                  },
+                  "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "no-overengineering",
+                  "where": {
+                    "file": "src/flow/query.js",
+                    "locator": "QueryProjector.activityItem(): outcome.artifactRefs"
+                  },
+                  "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+                  "severity": "blocking",
+                  "refs": [
+                    "no-overengineering"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the Task implementation selected by Definition."
+          },
+          "taskId": "T-3",
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "b3c187f8675a2cbd0b7353093cf67a3a690cba94ee59b4474eb7a1841a82fe01",
+          "gateTransitionAttemptId": "attempt-T-3-gate-0ba52b00-f156-4e99-85e7-5b9861ba0dd7",
+          "gateTransitionAttemptSequence": 2
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "no-overengineering",
+                "result": "fail",
+                "reason": "The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+                "category": "code-quality",
+                "title": "Avoid Overengineering",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "Open Questions"
+                    },
+                    "observed": "The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-overengineering",
+                "result": "fail",
+                "reason": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+                "category": "code-quality",
+                "title": "Avoid Overengineering",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "QueryProjector.activityItem(): publicArtifactIds"
+                    },
+                    "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "no-overengineering",
+                "result": "fail",
+                "reason": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+                "category": "code-quality",
+                "title": "Avoid Overengineering",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "QueryProjector.activityItem(): outcome.artifactRefs"
+                    },
+                    "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "Avoid Overengineering — The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+                "guardrail_id": "no-overengineering",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Avoid Overengineering — Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+                "guardrail_id": "no-overengineering",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Avoid Overengineering — Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+                "guardrail_id": "no-overengineering",
+                "category": "code-quality"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "3 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "Open Questions"
+                    },
+                    "observed": "The diff adds a non-trivial query bootstrap, bounded reader, and public projector architecture, but the supplied spec/issue-log provides no evidence that this design direction was confirmed before implementation; relevant checks remain marked 未確認.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "QueryProjector.activityItem(): publicArtifactIds"
+                    },
+                    "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in the outcome.artifactRefs mapping; extract a shared local resolver.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "no-overengineering",
+                    "where": {
+                      "file": "src/flow/query.js",
+                      "locator": "QueryProjector.activityItem(): outcome.artifactRefs"
+                    },
+                    "observed": "Artifact reference lookup followed by publicArtifactId conversion is duplicated here and in publicArtifactIds; extract a shared local resolver.",
+                    "severity": "blocking",
+                    "refs": [
+                      "no-overengineering"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the Task implementation selected by Definition."
+            },
+            "taskId": "T-3",
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "b3c187f8675a2cbd0b7353093cf67a3a690cba94ee59b4474eb7a1841a82fe01",
+            "gateTransitionAttemptId": "attempt-T-3-gate-0ba52b00-f156-4e99-85e7-5b9861ba0dd7",
+            "gateTransitionAttemptSequence": 2
+          }
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "T-3-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "pass",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+          "level": "task",
+          "phase": "task-impl",
+          "evaluations": [
+            {
+              "guardrail_id": "no-hardcoded-secrets",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "security",
+              "title": "No Hardcoded Secrets",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-silent-error-swallowing",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "No Silent Error Swallowing",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-sensitive-data-in-logs",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "security",
+              "title": "No Sensitive Data in Logs",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-disabling-existing-tests",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "testing",
+              "title": "No Disabling Existing Tests",
+              "observations": []
+            },
+            {
+              "guardrail_id": "pre-existing-test-failure-escalation",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "testing",
+              "title": "Escalate Pre-Existing Test Failures",
+              "observations": []
+            },
+            {
+              "guardrail_id": "project-test-integrity",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "testing",
+              "title": "Project Test Integrity",
+              "observations": []
+            },
+            {
+              "guardrail_id": "code-placement",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Code Placement",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-overengineering",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Avoid Overengineering",
+              "observations": []
+            },
+            {
+              "guardrail_id": "exit-code-contract",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Exit Code Contract",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "No Synchronous I/O in Hot Paths",
+              "observations": []
+            },
+            {
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "requirements",
+              "title": "Validate User Input at Entry Point",
+              "observations": []
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "PASS",
+              "detail": "No Hardcoded Secrets — no observations emitted",
+              "guardrail_id": "no-hardcoded-secrets",
+              "category": "security"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Silent Error Swallowing — no observations emitted",
+              "guardrail_id": "no-silent-error-swallowing",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Sensitive Data in Logs — no observations emitted",
+              "guardrail_id": "no-sensitive-data-in-logs",
+              "category": "security"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Disabling Existing Tests — no observations emitted",
+              "guardrail_id": "no-disabling-existing-tests",
+              "category": "testing"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Escalate Pre-Existing Test Failures — no observations emitted",
+              "guardrail_id": "pre-existing-test-failure-escalation",
+              "category": "testing"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Project Test Integrity — no observations emitted",
+              "guardrail_id": "project-test-integrity",
+              "category": "testing"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Code Placement — no observations emitted",
+              "guardrail_id": "code-placement",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Avoid Overengineering — no observations emitted",
+              "guardrail_id": "no-overengineering",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Exit Code Contract — no observations emitted",
+              "guardrail_id": "exit-code-contract",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Synchronous I/O in Hot Paths — no observations emitted",
+              "guardrail_id": "no-synchronous-io-in-hot-paths",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Validate User Input at Entry Point — no observations emitted",
+              "guardrail_id": "validate-user-input-at-entry-point",
+              "category": "requirements"
+            }
+          ],
+          "nextAction": {
+            "diagnosis": {
+              "summary": "No blocking observations.",
+              "observations": []
+            },
+            "prescription": "Continue with the Definition-selected Gate action."
+          },
+          "taskId": "T-3",
+          "gateTransitionLineage": "3f5e1dcd5e94ac3a1b17803f50177d55f734f96bf96ae4dc18aedf785dfdb6d1",
+          "gateTransitionAttemptId": "attempt-T-3-gate-7b62a754-f53d-4263-8990-87c704d2f20a",
+          "gateTransitionAttemptSequence": 3
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.gate",
+        "payload": {
+          "result": "pass",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+            "level": "task",
+            "phase": "task-impl",
+            "evaluations": [
+              {
+                "guardrail_id": "no-hardcoded-secrets",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "security",
+                "title": "No Hardcoded Secrets",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-silent-error-swallowing",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "No Silent Error Swallowing",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-sensitive-data-in-logs",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "security",
+                "title": "No Sensitive Data in Logs",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-disabling-existing-tests",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "testing",
+                "title": "No Disabling Existing Tests",
+                "observations": []
+              },
+              {
+                "guardrail_id": "pre-existing-test-failure-escalation",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "testing",
+                "title": "Escalate Pre-Existing Test Failures",
+                "observations": []
+              },
+              {
+                "guardrail_id": "project-test-integrity",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "testing",
+                "title": "Project Test Integrity",
+                "observations": []
+              },
+              {
+                "guardrail_id": "code-placement",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Code Placement",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-overengineering",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Avoid Overengineering",
+                "observations": []
+              },
+              {
+                "guardrail_id": "exit-code-contract",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Exit Code Contract",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "No Synchronous I/O in Hot Paths",
+                "observations": []
+              },
+              {
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "requirements",
+                "title": "Validate User Input at Entry Point",
+                "observations": []
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "PASS",
+                "detail": "No Hardcoded Secrets — no observations emitted",
+                "guardrail_id": "no-hardcoded-secrets",
+                "category": "security"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Silent Error Swallowing — no observations emitted",
+                "guardrail_id": "no-silent-error-swallowing",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Sensitive Data in Logs — no observations emitted",
+                "guardrail_id": "no-sensitive-data-in-logs",
+                "category": "security"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Disabling Existing Tests — no observations emitted",
+                "guardrail_id": "no-disabling-existing-tests",
+                "category": "testing"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Escalate Pre-Existing Test Failures — no observations emitted",
+                "guardrail_id": "pre-existing-test-failure-escalation",
+                "category": "testing"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Project Test Integrity — no observations emitted",
+                "guardrail_id": "project-test-integrity",
+                "category": "testing"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Code Placement — no observations emitted",
+                "guardrail_id": "code-placement",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Avoid Overengineering — no observations emitted",
+                "guardrail_id": "no-overengineering",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Exit Code Contract — no observations emitted",
+                "guardrail_id": "exit-code-contract",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Synchronous I/O in Hot Paths — no observations emitted",
+                "guardrail_id": "no-synchronous-io-in-hot-paths",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Validate User Input at Entry Point — no observations emitted",
+                "guardrail_id": "validate-user-input-at-entry-point",
+                "category": "requirements"
+              }
+            ],
+            "nextAction": {
+              "diagnosis": {
+                "summary": "No blocking observations.",
+                "observations": []
+              },
+              "prescription": "Continue with the Definition-selected Gate action."
+            },
+            "taskId": "T-3",
+            "gateTransitionLineage": "3f5e1dcd5e94ac3a1b17803f50177d55f734f96bf96ae4dc18aedf785dfdb6d1",
+            "gateTransitionAttemptId": "attempt-T-3-gate-7b62a754-f53d-4263-8990-87c704d2f20a",
+            "gateTransitionAttemptSequence": 3
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-1",
+  "treeSha": "116da6d750ef8a57e0420b53b855601fbe585e71",
+  "targetStateDigest": "a526b725b4af5f29c682043ace595e19488a4eeece49b97434f5843fe9fef75d",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "77142e94ff19e2d1a523c3348fe83df55582918aef8cae67aa13f083a669e131",
+    "capturedAt": "2026-09-02T08:43:10.124Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "ead269bd947fe52f57bf9d7a07bb3f14581ade6447b397656af7e6925377cdbf",
+      "summary": "Query ignores Activity ledger entries beyond the confirmed prefix",
+      "fingerprint": "ead269bd947fe52f57bf9d7a07bb3f14581ade6447b397656af7e6925377cdbf",
+      "evidenceRefs": [
+        "impl-review.json#ead269bd947fe52f57bf9d7a07bb3f14581ade6447b397656af7e6925377cdbf"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "a04db66b6fcd005349dc09b44b1a5e0501bea0f99b9baa927e8f7709c87a0832",
+      "summary": "Aggregate metrics never process Activity metric observations",
+      "fingerprint": "a04db66b6fcd005349dc09b44b1a5e0501bea0f99b9baa927e8f7709c87a0832",
+      "evidenceRefs": [
+        "impl-review.json#a04db66b6fcd005349dc09b44b1a5e0501bea0f99b9baa927e8f7709c87a0832"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "329c9d790bc91d79455e0f8c9d0abde5e37b65b6d2d7bb5f79f50e0fd0f1c219",
+      "summary": "Worktree re-execution rejects valid request-file queries",
+      "fingerprint": "329c9d790bc91d79455e0f8c9d0abde5e37b65b6d2d7bb5f79f50e0fd0f1c219",
+      "evidenceRefs": [
+        "impl-review.json#329c9d790bc91d79455e0f8c9d0abde5e37b65b6d2d7bb5f79f50e0fd0f1c219"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "94799b6228e0c0946d60e7f7f213ec80571bbb61cf27f8c5a3a322d203727e37",
+      "summary": "Historical Flow replay compares the creation operation to the Activity type",
+      "fingerprint": "94799b6228e0c0946d60e7f7f213ec80571bbb61cf27f8c5a3a322d203727e37",
+      "evidenceRefs": [
+        "impl-review.json#94799b6228e0c0946d60e7f7f213ec80571bbb61cf27f8c5a3a322d203727e37"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-4",
+  "treeSha": "068a8cf699eb993b6c02597dcee36eac99e142b1",
+  "targetStateDigest": "77387409ecd5202e6315ff8f021545c279b88db1f42b988ea3a0d7a8f0dba6c8",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "486c86033df8b389e6af6102ae33ed4303c1ccf48c7e37c714aaebf26b148204",
+    "capturedAt": "2026-09-03T11:43:08.916Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "d95e632765a40ef032f2ff1eb403daaffa3e9a58c2340bd2fe6b97c0df404929",
+      "summary": "Query module imports an unexported contract",
+      "fingerprint": "d95e632765a40ef032f2ff1eb403daaffa3e9a58c2340bd2fe6b97c0df404929",
+      "evidenceRefs": [
+        "impl-review.json#d95e632765a40ef032f2ff1eb403daaffa3e9a58c2340bd2fe6b97c0df404929"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

@@ -1875,6 +1875,7 @@ export class CanonicalFlowManagerStore {
         attempt,
         expectedAttempt: expected,
         admission: this.#consumerAdmission(state, target),
+        retryRecoveryPublication: this.#retryBaselinePublication(state, target, attempt),
       });
       if (rewound === null) {
         throw new CurrentFlowStateInvariantError("canonical failed Attempt changed before rewind");
@@ -1888,6 +1889,7 @@ export class CanonicalFlowManagerStore {
         nodeId: target,
         attempt,
         admission: this.#consumerAdmission(state, target),
+        retryRecoveryPublication: this.#retryBaselinePublication(state, target, attempt),
       });
     }
     throw new CurrentFlowStateInvariantError(`canonical recovery is unavailable for ${target}`);

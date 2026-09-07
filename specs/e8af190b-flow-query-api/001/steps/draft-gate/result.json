@@ -1,0 +1,1350 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "draft-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/draft.json",
+          "level": "parent",
+          "phase": "draft",
+          "evaluations": [
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "fail",
+              "reason": "The terms “stable” and “resource-appropriate shapes” lack verifiable criteria; define the required response structures and compatibility conditions.",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.decisionPoints[0]"
+                  },
+                  "observed": "The terms “stable” and “resource-appropriate shapes” lack verifiable criteria; define the required response structures and compatibility conditions.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "The requirement defers the exact public response shapes to a later Spec, so reviewers cannot determine from this draft whether an implementation satisfies Schema Revision 1.",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.decisionPoints[0]"
+                  },
+                  "observed": "The requirement defers the exact public response shapes to a later Spec, so reviewers cannot determine from this draft whether an implementation satisfies Schema Revision 1.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "fail",
+              "reason": "“Required by the Issue” does not identify the required metadata fields and metrics; enumerate the required set or state verifiable selection rules.",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.decisionPoints[3]"
+                  },
+                  "observed": "“Required by the Issue” does not identify the required metadata fields and metrics; enumerate the required set or state verifiable selection rules.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "The metadata contract is not specific enough for independent reviewers to agree on the permitted state, relationship, timestamp, Artifact-reference, and aggregate-metric fields.",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.decisionPoints[3]"
+                  },
+                  "observed": "The metadata contract is not specific enough for independent reviewers to agree on the permitted state, relationship, timestamp, Artifact-reference, and aggregate-metric fields.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "fail",
+              "reason": "“Resource-stable where the resource is known” lacks criteria defining which error fields and values must remain stable.",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.decisionPoints[4]"
+                  },
+                  "observed": "“Resource-stable where the resource is known” lacks criteria defining which error fields and values must remain stable.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "fail",
+              "reason": "“Produce stable errors” is vague; specify the stable error codes, shape, and applicable resource behavior.",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "scopeVerification.in[2]"
+                  },
+                  "observed": "“Produce stable errors” is vague; specify the stable error codes, shape, and applicable resource behavior.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "fail",
+              "reason": "“Meaningful query values” is subjective; define which values require dedicated classes and what constructor invariants apply.",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.resolvedByProjectRules[1]"
+                  },
+                  "observed": "“Meaningful query values” is subjective; define which values require dedicated classes and what constructor invariants apply.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "“Verify consumer compatibility” does not state which consumer contracts or assertions determine compatibility.",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "scopeVerification.in[4]"
+                  },
+                  "observed": "“Verify consumer compatibility” does not state which consumer contracts or assertions determine compatibility.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "“Consumer schema compatibility” is named as validation but has no concrete consumer schema or pass/fail assertion.",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "analysis.validation"
+                  },
+                  "observed": "“Consumer schema compatibility” is named as validation but has no concrete consumer schema or pass/fail assertion.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "“Consumer-level verification around existing canonical runtime and migration behavior” does not identify the behavior-level checks that prove the stated impact.",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "impactOnExisting[3]"
+                  },
+                  "observed": "“Consumer-level verification around existing canonical runtime and migration behavior” does not identify the behavior-level checks that prove the stated impact.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "Unambiguous Requirements — The terms “stable” and “resource-appropriate shapes” lack verifiable criteria; define the required response structures and compatibility conditions.",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — The requirement defers the exact public response shapes to a later Spec, so reviewers cannot determine from this draft whether an implementation satisfies Schema Revision 1.",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Unambiguous Requirements — “Required by the Issue” does not identify the required metadata fields and metrics; enumerate the required set or state verifiable selection rules.",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — The metadata contract is not specific enough for independent reviewers to agree on the permitted state, relationship, timestamp, Artifact-reference, and aggregate-metric fields.",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Unambiguous Requirements — “Resource-stable where the resource is known” lacks criteria defining which error fields and values must remain stable.",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Unambiguous Requirements — “Produce stable errors” is vague; specify the stable error codes, shape, and applicable resource behavior.",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Unambiguous Requirements — “Meaningful query values” is subjective; define which values require dedicated classes and what constructor invariants apply.",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — “Verify consumer compatibility” does not state which consumer contracts or assertions determine compatibility.",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — “Consumer schema compatibility” is named as validation but has no concrete consumer schema or pass/fail assertion.",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — “Consumer-level verification around existing canonical runtime and migration behavior” does not identify the behavior-level checks that prove the stated impact.",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "10 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.decisionPoints[0]"
+                  },
+                  "observed": "The terms “stable” and “resource-appropriate shapes” lack verifiable criteria; define the required response structures and compatibility conditions.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.decisionPoints[0]"
+                  },
+                  "observed": "The requirement defers the exact public response shapes to a later Spec, so reviewers cannot determine from this draft whether an implementation satisfies Schema Revision 1.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.decisionPoints[3]"
+                  },
+                  "observed": "“Required by the Issue” does not identify the required metadata fields and metrics; enumerate the required set or state verifiable selection rules.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.decisionPoints[3]"
+                  },
+                  "observed": "The metadata contract is not specific enough for independent reviewers to agree on the permitted state, relationship, timestamp, Artifact-reference, and aggregate-metric fields.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.decisionPoints[4]"
+                  },
+                  "observed": "“Resource-stable where the resource is known” lacks criteria defining which error fields and values must remain stable.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "scopeVerification.in[2]"
+                  },
+                  "observed": "“Produce stable errors” is vague; specify the stable error codes, shape, and applicable resource behavior.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "decisionMap.resolvedByProjectRules[1]"
+                  },
+                  "observed": "“Meaningful query values” is subjective; define which values require dedicated classes and what constructor invariants apply.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "scopeVerification.in[4]"
+                  },
+                  "observed": "“Verify consumer compatibility” does not state which consumer contracts or assertions determine compatibility.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "analysis.validation"
+                  },
+                  "observed": "“Consumer schema compatibility” is named as validation but has no concrete consumer schema or pass/fail assertion.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "impactOnExisting[3]"
+                  },
+                  "observed": "“Consumer-level verification around existing canonical runtime and migration behavior” does not identify the behavior-level checks that prove the stated impact.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the draft evidence selected by Definition."
+          },
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "f54bd844be6ce7a09e2d3cf07641699f175a1ce3b6f9b35717fb39fc6d85ab46",
+          "gateTransitionAttemptId": "attempt-draft-gate-5c3c8704-c2f0-4ddc-a4ea-4f65ebc33922",
+          "gateTransitionAttemptSequence": 1
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/draft.json",
+            "level": "parent",
+            "phase": "draft",
+            "evaluations": [
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "fail",
+                "reason": "The terms “stable” and “resource-appropriate shapes” lack verifiable criteria; define the required response structures and compatibility conditions.",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.decisionPoints[0]"
+                    },
+                    "observed": "The terms “stable” and “resource-appropriate shapes” lack verifiable criteria; define the required response structures and compatibility conditions.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "The requirement defers the exact public response shapes to a later Spec, so reviewers cannot determine from this draft whether an implementation satisfies Schema Revision 1.",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.decisionPoints[0]"
+                    },
+                    "observed": "The requirement defers the exact public response shapes to a later Spec, so reviewers cannot determine from this draft whether an implementation satisfies Schema Revision 1.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "fail",
+                "reason": "“Required by the Issue” does not identify the required metadata fields and metrics; enumerate the required set or state verifiable selection rules.",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.decisionPoints[3]"
+                    },
+                    "observed": "“Required by the Issue” does not identify the required metadata fields and metrics; enumerate the required set or state verifiable selection rules.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "The metadata contract is not specific enough for independent reviewers to agree on the permitted state, relationship, timestamp, Artifact-reference, and aggregate-metric fields.",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.decisionPoints[3]"
+                    },
+                    "observed": "The metadata contract is not specific enough for independent reviewers to agree on the permitted state, relationship, timestamp, Artifact-reference, and aggregate-metric fields.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "fail",
+                "reason": "“Resource-stable where the resource is known” lacks criteria defining which error fields and values must remain stable.",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.decisionPoints[4]"
+                    },
+                    "observed": "“Resource-stable where the resource is known” lacks criteria defining which error fields and values must remain stable.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "fail",
+                "reason": "“Produce stable errors” is vague; specify the stable error codes, shape, and applicable resource behavior.",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "scopeVerification.in[2]"
+                    },
+                    "observed": "“Produce stable errors” is vague; specify the stable error codes, shape, and applicable resource behavior.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "fail",
+                "reason": "“Meaningful query values” is subjective; define which values require dedicated classes and what constructor invariants apply.",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.resolvedByProjectRules[1]"
+                    },
+                    "observed": "“Meaningful query values” is subjective; define which values require dedicated classes and what constructor invariants apply.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "“Verify consumer compatibility” does not state which consumer contracts or assertions determine compatibility.",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "scopeVerification.in[4]"
+                    },
+                    "observed": "“Verify consumer compatibility” does not state which consumer contracts or assertions determine compatibility.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "“Consumer schema compatibility” is named as validation but has no concrete consumer schema or pass/fail assertion.",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "analysis.validation"
+                    },
+                    "observed": "“Consumer schema compatibility” is named as validation but has no concrete consumer schema or pass/fail assertion.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "“Consumer-level verification around existing canonical runtime and migration behavior” does not identify the behavior-level checks that prove the stated impact.",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "impactOnExisting[3]"
+                    },
+                    "observed": "“Consumer-level verification around existing canonical runtime and migration behavior” does not identify the behavior-level checks that prove the stated impact.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "Unambiguous Requirements — The terms “stable” and “resource-appropriate shapes” lack verifiable criteria; define the required response structures and compatibility conditions.",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — The requirement defers the exact public response shapes to a later Spec, so reviewers cannot determine from this draft whether an implementation satisfies Schema Revision 1.",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Unambiguous Requirements — “Required by the Issue” does not identify the required metadata fields and metrics; enumerate the required set or state verifiable selection rules.",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — The metadata contract is not specific enough for independent reviewers to agree on the permitted state, relationship, timestamp, Artifact-reference, and aggregate-metric fields.",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Unambiguous Requirements — “Resource-stable where the resource is known” lacks criteria defining which error fields and values must remain stable.",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Unambiguous Requirements — “Produce stable errors” is vague; specify the stable error codes, shape, and applicable resource behavior.",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Unambiguous Requirements — “Meaningful query values” is subjective; define which values require dedicated classes and what constructor invariants apply.",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — “Verify consumer compatibility” does not state which consumer contracts or assertions determine compatibility.",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — “Consumer schema compatibility” is named as validation but has no concrete consumer schema or pass/fail assertion.",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — “Consumer-level verification around existing canonical runtime and migration behavior” does not identify the behavior-level checks that prove the stated impact.",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "10 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.decisionPoints[0]"
+                    },
+                    "observed": "The terms “stable” and “resource-appropriate shapes” lack verifiable criteria; define the required response structures and compatibility conditions.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.decisionPoints[0]"
+                    },
+                    "observed": "The requirement defers the exact public response shapes to a later Spec, so reviewers cannot determine from this draft whether an implementation satisfies Schema Revision 1.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.decisionPoints[3]"
+                    },
+                    "observed": "“Required by the Issue” does not identify the required metadata fields and metrics; enumerate the required set or state verifiable selection rules.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.decisionPoints[3]"
+                    },
+                    "observed": "The metadata contract is not specific enough for independent reviewers to agree on the permitted state, relationship, timestamp, Artifact-reference, and aggregate-metric fields.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.decisionPoints[4]"
+                    },
+                    "observed": "“Resource-stable where the resource is known” lacks criteria defining which error fields and values must remain stable.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "scopeVerification.in[2]"
+                    },
+                    "observed": "“Produce stable errors” is vague; specify the stable error codes, shape, and applicable resource behavior.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "decisionMap.resolvedByProjectRules[1]"
+                    },
+                    "observed": "“Meaningful query values” is subjective; define which values require dedicated classes and what constructor invariants apply.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "scopeVerification.in[4]"
+                    },
+                    "observed": "“Verify consumer compatibility” does not state which consumer contracts or assertions determine compatibility.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "analysis.validation"
+                    },
+                    "observed": "“Consumer schema compatibility” is named as validation but has no concrete consumer schema or pass/fail assertion.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "impactOnExisting[3]"
+                    },
+                    "observed": "“Consumer-level verification around existing canonical runtime and migration behavior” does not identify the behavior-level checks that prove the stated impact.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the draft evidence selected by Definition."
+            },
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "f54bd844be6ce7a09e2d3cf07641699f175a1ce3b6f9b35717fb39fc6d85ab46",
+            "gateTransitionAttemptId": "attempt-draft-gate-5c3c8704-c2f0-4ddc-a4ea-4f65ebc33922",
+            "gateTransitionAttemptSequence": 1
+          }
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "draft-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "pass",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/e8af190b-flow-query-api/001/draft.json",
+          "level": "parent",
+          "phase": "draft",
+          "evaluations": [
+            {
+              "guardrail_id": "single-responsibility",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Single Responsibility",
+              "observations": []
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": []
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-hardcoded-secrets",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "security",
+              "title": "No Hardcoded Secrets",
+              "observations": []
+            },
+            {
+              "guardrail_id": "prioritize-requirements",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Prioritize Requirements",
+              "observations": []
+            },
+            {
+              "guardrail_id": "impact-on-existing-features",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Impact on Existing Features",
+              "observations": []
+            },
+            {
+              "guardrail_id": "migration-parity",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Migration Parity",
+              "observations": []
+            },
+            {
+              "guardrail_id": "draft-recommend-with-reasoning",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Present Recommendations with Reasoning",
+              "observations": []
+            },
+            {
+              "guardrail_id": "draft-explore-before-asking",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Explore Before Asking",
+              "observations": []
+            },
+            {
+              "guardrail_id": "draft-raise-implications",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Proactively Raise Related Implications",
+              "observations": []
+            },
+            {
+              "guardrail_id": "draft-confirm-brainstorm-vs-decide",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Confirm Brainstorm vs. Decision Before Critiquing",
+              "observations": []
+            },
+            {
+              "guardrail_id": "draft-capture-digressions",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Capture Digressions in draft.md",
+              "observations": []
+            },
+            {
+              "guardrail_id": "backward-compatible-cli-interface",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Backward-Compatible CLI Interface",
+              "observations": []
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "PASS",
+              "detail": "Single Responsibility — no observations emitted",
+              "guardrail_id": "single-responsibility",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Unambiguous Requirements — no observations emitted",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Complete Context — no observations emitted",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Hardcoded Secrets — no observations emitted",
+              "guardrail_id": "no-hardcoded-secrets",
+              "category": "security"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Prioritize Requirements — no observations emitted",
+              "guardrail_id": "prioritize-requirements",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Impact on Existing Features — no observations emitted",
+              "guardrail_id": "impact-on-existing-features",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Migration Parity — no observations emitted",
+              "guardrail_id": "migration-parity",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Present Recommendations with Reasoning — no observations emitted",
+              "guardrail_id": "draft-recommend-with-reasoning",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Explore Before Asking — no observations emitted",
+              "guardrail_id": "draft-explore-before-asking",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Proactively Raise Related Implications — no observations emitted",
+              "guardrail_id": "draft-raise-implications",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Confirm Brainstorm vs. Decision Before Critiquing — no observations emitted",
+              "guardrail_id": "draft-confirm-brainstorm-vs-decide",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Capture Digressions in draft.md — no observations emitted",
+              "guardrail_id": "draft-capture-digressions",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Backward-Compatible CLI Interface — no observations emitted",
+              "guardrail_id": "backward-compatible-cli-interface",
+              "category": "code-quality"
+            }
+          ],
+          "nextAction": {
+            "diagnosis": {
+              "summary": "No blocking observations.",
+              "observations": []
+            },
+            "prescription": "Continue with the Definition-selected Gate action."
+          },
+          "gateTransitionLineage": "ad371215a4f78007511044c2ccbf662bdb20def8f885a2d5d35fe3a83bf011f2",
+          "gateTransitionAttemptId": "attempt-draft-gate-d0daca64-b330-4f59-8aaf-25512579c8e4",
+          "gateTransitionAttemptSequence": 2
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.gate",
+        "payload": {
+          "result": "pass",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/e8af190b-flow-query-api/001/draft.json",
+            "level": "parent",
+            "phase": "draft",
+            "evaluations": [
+              {
+                "guardrail_id": "single-responsibility",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Single Responsibility",
+                "observations": []
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": []
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-hardcoded-secrets",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "security",
+                "title": "No Hardcoded Secrets",
+                "observations": []
+              },
+              {
+                "guardrail_id": "prioritize-requirements",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Prioritize Requirements",
+                "observations": []
+              },
+              {
+                "guardrail_id": "impact-on-existing-features",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Impact on Existing Features",
+                "observations": []
+              },
+              {
+                "guardrail_id": "migration-parity",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Migration Parity",
+                "observations": []
+              },
+              {
+                "guardrail_id": "draft-recommend-with-reasoning",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Present Recommendations with Reasoning",
+                "observations": []
+              },
+              {
+                "guardrail_id": "draft-explore-before-asking",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Explore Before Asking",
+                "observations": []
+              },
+              {
+                "guardrail_id": "draft-raise-implications",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Proactively Raise Related Implications",
+                "observations": []
+              },
+              {
+                "guardrail_id": "draft-confirm-brainstorm-vs-decide",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Confirm Brainstorm vs. Decision Before Critiquing",
+                "observations": []
+              },
+              {
+                "guardrail_id": "draft-capture-digressions",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Capture Digressions in draft.md",
+                "observations": []
+              },
+              {
+                "guardrail_id": "backward-compatible-cli-interface",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Backward-Compatible CLI Interface",
+                "observations": []
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "PASS",
+                "detail": "Single Responsibility — no observations emitted",
+                "guardrail_id": "single-responsibility",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Unambiguous Requirements — no observations emitted",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Complete Context — no observations emitted",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Hardcoded Secrets — no observations emitted",
+                "guardrail_id": "no-hardcoded-secrets",
+                "category": "security"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Prioritize Requirements — no observations emitted",
+                "guardrail_id": "prioritize-requirements",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Impact on Existing Features — no observations emitted",
+                "guardrail_id": "impact-on-existing-features",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Migration Parity — no observations emitted",
+                "guardrail_id": "migration-parity",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Present Recommendations with Reasoning — no observations emitted",
+                "guardrail_id": "draft-recommend-with-reasoning",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Explore Before Asking — no observations emitted",
+                "guardrail_id": "draft-explore-before-asking",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Proactively Raise Related Implications — no observations emitted",
+                "guardrail_id": "draft-raise-implications",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Confirm Brainstorm vs. Decision Before Critiquing — no observations emitted",
+                "guardrail_id": "draft-confirm-brainstorm-vs-decide",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Capture Digressions in draft.md — no observations emitted",
+                "guardrail_id": "draft-capture-digressions",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Backward-Compatible CLI Interface — no observations emitted",
+                "guardrail_id": "backward-compatible-cli-interface",
+                "category": "code-quality"
+              }
+            ],
+            "nextAction": {
+              "diagnosis": {
+                "summary": "No blocking observations.",
+                "observations": []
+              },
+              "prescription": "Continue with the Definition-selected Gate action."
+            },
+            "gateTransitionLineage": "ad371215a4f78007511044c2ccbf662bdb20def8f885a2d5d35fe3a83bf011f2",
+            "gateTransitionAttemptId": "attempt-draft-gate-d0daca64-b330-4f59-8aaf-25512579c8e4",
+            "gateTransitionAttemptSequence": 2
+          }
+        }
+      }
+    }
+  ]
+}

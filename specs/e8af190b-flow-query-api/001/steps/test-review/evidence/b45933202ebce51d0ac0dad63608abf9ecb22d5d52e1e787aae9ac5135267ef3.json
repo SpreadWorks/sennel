@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "phase": "test",
+  "taskId": null,
+  "treeSha": "68f838408358355067f769be9364b266db778670",
+  "targetStateDigest": "40385c168379bb7b5263d8d1e7ae458a8fc96ca3cf8c94904c9cc7487270fcd0",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "ca837c732139702327e9c18443332b965e589f1ad825f547f9d9ede544b84ff3",
+    "capturedAt": "2026-09-01T14:10:36.085Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "9378e484e4f5c29a6b8850f8d3f54324a50f7f966c67e26fbdc997d5c9d19e47",
+      "summary": "Migration-parity baseline is self-referential",
+      "fingerprint": "9378e484e4f5c29a6b8850f8d3f54324a50f7f966c67e26fbdc997d5c9d19e47",
+      "evidenceRefs": [
+        "test-review.json#9378e484e4f5c29a6b8850f8d3f54324a50f7f966c67e26fbdc997d5c9d19e47"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "af810441860a38431dd49495df44f3ced0cfbd8f335fe6e398f615f98389fb35",
+      "summary": "Hook tests bypass command lifecycle wiring",
+      "fingerprint": "af810441860a38431dd49495df44f3ced0cfbd8f335fe6e398f615f98389fb35",
+      "evidenceRefs": [
+        "test-review.json#af810441860a38431dd49495df44f3ced0cfbd8f335fe6e398f615f98389fb35"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "0ab5420da1f4c5a80af8a52f82cc66fc5859177f9fc1d75fb68b76afb2e9b45a",
+      "summary": "Bootstrap ordering is not observed",
+      "fingerprint": "0ab5420da1f4c5a80af8a52f82cc66fc5859177f9fc1d75fb68b76afb2e9b45a",
+      "evidenceRefs": [
+        "test-review.json#0ab5420da1f4c5a80af8a52f82cc66fc5859177f9fc1d75fb68b76afb2e9b45a"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "e43acc1f11763a94225a30b508361745ebc780859b8dfec7eeb4c37e3b6d0030",
+      "summary": "Confirmed-prefix bounded reading is not verified",
+      "fingerprint": "e43acc1f11763a94225a30b508361745ebc780859b8dfec7eeb4c37e3b6d0030",
+      "evidenceRefs": [
+        "test-review.json#e43acc1f11763a94225a30b508361745ebc780859b8dfec7eeb4c37e3b6d0030"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "196a951538ee807d7188b7718170d769f9ab445b59046eb33b43afd2c44107b5",
+      "summary": "Side-effect regression coverage omits failed activities queries",
+      "fingerprint": "196a951538ee807d7188b7718170d769f9ab445b59046eb33b43afd2c44107b5",
+      "evidenceRefs": [
+        "test-review.json#196a951538ee807d7188b7718170d769f9ab445b59046eb33b43afd2c44107b5"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "07366cac0e19f2043f84b00c10b51ab3a883786ad06fb5c9fc677e6af70c373e",
+      "summary": "Artifact collection overflow enforcement is untested",
+      "fingerprint": "07366cac0e19f2043f84b00c10b51ab3a883786ad06fb5c9fc677e6af70c373e",
+      "evidenceRefs": [
+        "test-review.json#07366cac0e19f2043f84b00c10b51ab3a883786ad06fb5c9fc677e6af70c373e"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "4d44995e066aeca3539c31421ce558f7aa1859ce02d571f894bb66e31e2a4422",
+      "summary": "Cost inference prohibition lacks a negative regression",
+      "fingerprint": "4d44995e066aeca3539c31421ce558f7aa1859ce02d571f894bb66e31e2a4422",
+      "evidenceRefs": [
+        "test-review.json#4d44995e066aeca3539c31421ce558f7aa1859ce02d571f894bb66e31e2a4422"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": [
+    {
+      "findingId": "43ca62ee3cb38a2778402f9e84a9de8aed975cff671c340ec72fcb1dc2e205fe",
+      "summary": "Page validation cases are incomplete",
+      "fingerprint": "43ca62ee3cb38a2778402f9e84a9de8aed975cff671c340ec72fcb1dc2e205fe",
+      "evidenceRefs": [
+        "test-review.json#43ca62ee3cb38a2778402f9e84a9de8aed975cff671c340ec72fcb1dc2e205fe"
+      ],
+      "disposition": "informational"
+    },
+    {
+      "findingId": "8fe3aed4b6828f0292032b87cbe1c12b0aa7c0b6d438c2deed90caf76658deee",
+      "summary": "Finalized repeatability is checked only for metadata",
+      "fingerprint": "8fe3aed4b6828f0292032b87cbe1c12b0aa7c0b6d438c2deed90caf76658deee",
+      "evidenceRefs": [
+        "test-review.json#8fe3aed4b6828f0292032b87cbe1c12b0aa7c0b6d438c2deed90caf76658deee"
+      ],
+      "disposition": "informational"
+    },
+    {
+      "findingId": "e809f251d23fb2049b00a7a675905bc31d5a65e60fe385c8914bfd3039e620fd",
+      "summary": "Test identifiers are reused across separate cases",
+      "fingerprint": "e809f251d23fb2049b00a7a675905bc31d5a65e60fe385c8914bfd3039e620fd",
+      "evidenceRefs": [
+        "test-review.json#e809f251d23fb2049b00a7a675905bc31d5a65e60fe385c8914bfd3039e620fd"
+      ],
+      "disposition": "informational"
+    }
+  ]
+}

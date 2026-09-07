@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-1",
+  "treeSha": "f2636e433610d6c6feac30905abba09b2ff11577",
+  "targetStateDigest": "dddb5b46cabc7b3d5a15750f1b7f03d6c3006d35028e32461f43f6e62ce04f4a",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "af1e1e16f21ca022489129d8f928389edaeb563cecf447e5951c63514dc9da9d",
+    "capturedAt": "2026-09-02T09:27:35.059Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "ead269bd947fe52f57bf9d7a07bb3f14581ade6447b397656af7e6925377cdbf",
+      "summary": "Query ignores Activity ledger entries beyond the confirmed prefix",
+      "fingerprint": "ead269bd947fe52f57bf9d7a07bb3f14581ade6447b397656af7e6925377cdbf",
+      "evidenceRefs": [
+        "impl-review.json#ead269bd947fe52f57bf9d7a07bb3f14581ade6447b397656af7e6925377cdbf"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "a04db66b6fcd005349dc09b44b1a5e0501bea0f99b9baa927e8f7709c87a0832",
+      "summary": "Aggregate metrics never process Activity metric observations",
+      "fingerprint": "a04db66b6fcd005349dc09b44b1a5e0501bea0f99b9baa927e8f7709c87a0832",
+      "evidenceRefs": [
+        "impl-review.json#a04db66b6fcd005349dc09b44b1a5e0501bea0f99b9baa927e8f7709c87a0832"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "a3594cc06022dd43b999840f605dae7325a376901168e0199c9f777dc9c14eb9",
+      "summary": "Known-resource validation errors return the unknown-resource shape",
+      "fingerprint": "a3594cc06022dd43b999840f605dae7325a376901168e0199c9f777dc9c14eb9",
+      "evidenceRefs": [
+        "impl-review.json#a3594cc06022dd43b999840f605dae7325a376901168e0199c9f777dc9c14eb9"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}
