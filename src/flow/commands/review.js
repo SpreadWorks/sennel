@@ -81,7 +81,6 @@ import {
   TaskReviewConvergenceEvidence,
   TaskReviewRecurrenceContract,
 } from "../lib/review-recurrence.js";
-import { currentTaskReviewAttemptCount } from "../lib/task-review-attempt-accounting.js";
 import {
   FindingDispositionPolicy,
   MustFixDisposition,
@@ -1536,10 +1535,14 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementIds, diff =
   return pb.build();
 }
 
-function canonicalTaskReviewAttempt({ flowManager, flow, taskId }) {
+function canonicalTaskReviewAttempt({ flowManager, flow, taskId, executionIdentity }) {
   const lineage = flowManager.taskMutationLineages({ specId: flow.specId, taskId }).at(-1) ?? null;
   if (lineage === null) throw new Error("Task Review requires a current Task execution budget");
-  return currentTaskReviewAttemptCount({ attempt: flow.attempt, includesCurrentResult: true });
+  if (!(executionIdentity instanceof TaskReviewExecutionIdentity)) {
+    throw new Error("Task Review requires its parent-issued execution identity");
+  }
+  executionIdentity.assertTask(taskId);
+  return executionIdentity.reviewAttempt;
 }
 
 function resolveRequirementIds(spec) {
@@ -4785,7 +4788,12 @@ async function runReview(rawArgs) {
     taskId: taskSpec?.task?.id ?? null,
   });
   const taskReviewAttempt = taskSpec
-    ? canonicalTaskReviewAttempt({ flowManager, flow, taskId: taskSpec.task.id })
+    ? canonicalTaskReviewAttempt({
+      flowManager,
+      flow,
+      taskId: taskSpec.task.id,
+      executionIdentity: taskReviewExecution,
+    })
     : null;
   const taskReviewRecurrences = taskSpec
     ? taskReviewRecurrenceHistory({ flowManager, flow, taskId: taskSpec.task.id, cycle })

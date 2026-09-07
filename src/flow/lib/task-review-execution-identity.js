@@ -2,6 +2,10 @@ import {
   CurrentAttemptIdentity,
   CurrentFlowState,
 } from "./current-flow-state.js";
+import {
+  currentTaskReviewAttemptCount,
+  MAX_TASK_REVIEW_ATTEMPTS,
+} from "./task-review-attempt-accounting.js";
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -30,12 +34,16 @@ function exactObject(value, fields, label) {
  * become an accidental source of lifecycle identity.
  */
 export class TaskReviewExecutionIdentity {
-  constructor({ taskId, attempt } = {}) {
+  constructor({ taskId, attempt, reviewAttempt } = {}) {
     this.taskId = requiredText(taskId, "Task Review execution taskId");
     this.attempt = CurrentAttemptIdentity.from(attempt);
     if (this.attempt.nodeId !== `${this.taskId}-review`) {
       throw new Error("Task Review execution Attempt does not match its Task");
     }
+    if (!Number.isSafeInteger(reviewAttempt) || reviewAttempt < 1 || reviewAttempt > MAX_TASK_REVIEW_ATTEMPTS) {
+      throw new Error("Task Review execution reviewAttempt is invalid");
+    }
+    this.reviewAttempt = reviewAttempt;
     Object.freeze(this);
   }
 
@@ -43,7 +51,11 @@ export class TaskReviewExecutionIdentity {
     if (!(state instanceof CurrentFlowState)) {
       throw new Error("Task Review execution requires a canonical Flow state");
     }
-    const identity = new TaskReviewExecutionIdentity({ taskId, attempt: state.attempt });
+    const identity = new TaskReviewExecutionIdentity({
+      taskId,
+      attempt: state.attempt,
+      reviewAttempt: currentTaskReviewAttemptCount({ attempt: state.attempt, includesCurrentResult: true }),
+    });
     if (!identity.attempt.matches(state)) {
       throw new Error("Task Review execution requires its active canonical Attempt");
     }
@@ -51,7 +63,7 @@ export class TaskReviewExecutionIdentity {
   }
 
   static fromJSON(value) {
-    const document = exactObject(value, ["taskId", "attempt"], "Task Review execution identity");
+    const document = exactObject(value, ["taskId", "attempt", "reviewAttempt"], "Task Review execution identity");
     exactObject(document.attempt, ["id", "nodeId", "sequence"], "Task Review execution Attempt");
     return new TaskReviewExecutionIdentity(document);
   }
@@ -63,6 +75,10 @@ export class TaskReviewExecutionIdentity {
   }
 
   toJSON() {
-    return Object.freeze({ taskId: this.taskId, attempt: this.attempt.toJSON() });
+    return Object.freeze({
+      taskId: this.taskId,
+      attempt: this.attempt.toJSON(),
+      reviewAttempt: this.reviewAttempt,
+    });
   }
 }

@@ -1,7 +1,7 @@
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskExecutionBudget } from "./task-execution-policy.js";
 
-const MAX_TASK_REVIEW_ATTEMPTS = 4;
+export const MAX_TASK_REVIEW_ATTEMPTS = 4;
 
 function assertCount(count) {
   if (!Number.isSafeInteger(count) || count < 0 || count > MAX_TASK_REVIEW_ATTEMPTS) {
