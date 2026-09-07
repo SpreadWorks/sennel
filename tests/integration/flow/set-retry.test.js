@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, test } from "node:test";
 
 import SetRetryCommand from "../../../src/flow/lib/set-retry.js";
+import { ReviewTransitionFacts } from "../../../src/flow/lib/review-transition-facts.js";
 import {
   readRetryBaseline,
   retryEvidenceRouteForNode,
@@ -372,4 +373,12 @@ test("task review can recover again when the recovery Attempt fails before publi
   const secondRecoveredState = flow.manager.canonicalState(flow.flow.specId);
   assert.equal(secondRecoveredState.attempt.sequence, firstRecoveredState.attempt.sequence + 1);
   assert.notEqual(secondRecoveredState.attempt.id, firstRecoveredState.attempt.id);
+  const facts = ReviewTransitionFacts.forCurrentAttempt({
+    flowManager: flow.manager,
+    flowState: flow.manager.load(flow.flow.specId),
+    typedState: secondRecoveredState,
+    scope: "task",
+    phase: "impl",
+  });
+  assert.equal(facts.attemptCount, 0, "tooling recovery Attempts must not consume semantic Task Review attempts");
 });

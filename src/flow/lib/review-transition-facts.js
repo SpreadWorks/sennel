@@ -8,6 +8,7 @@ import {
   flowReviewRouteForPhase,
   reviewPhaseForFlowStepId,
 } from "./review-route.js";
+import { currentTaskReviewAttemptCount } from "./task-review-attempt-accounting.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const VERDICTS = new Set(["PASS", "ADVISORY", "REJECTED"]);
@@ -211,17 +212,10 @@ function taskReviewNodeId(state) {
   return `${state.currentTaskId}-review`;
 }
 
-function taskReviewBudget(state, flowManager) {
-  const task = state?.tasks?.find((candidate) => candidate.id === state.currentTaskId) ?? null;
-  const step = task?.steps?.find((candidate) => candidate.id === `${state.currentTaskId}-review`) ?? null;
-  if (!Number.isSafeInteger(step?.attemptSequence)) return { attempts: 0, round: null };
+function taskReviewRound(state, flowManager) {
   const current = flowManager.taskMutationLineages({ specId: state.specId, taskId: state.currentTaskId }).at(-1) ?? null;
   if (current === null) throw new Error("Task Review requires a canonical Task execution budget");
-  const attempts = step.attemptSequence - current.budget.reviewAttemptSequenceAtStart;
-  if (!Number.isSafeInteger(attempts) || attempts < 0 || attempts > 4) {
-    throw new Error("Task Review attempt count is outside the current Task round");
-  }
-  return Object.freeze({ attempts, round: current.budget.round });
+  return current.budget.round;
 }
 
 function currentAttemptArtifact({ flowManager, source, logicalKey, typedState }) {
@@ -286,13 +280,13 @@ export class ReviewTransitionFacts {
     const route = flowReviewRouteForPhase(phase);
     if (!route) throw new Error("review transition phase is invalid");
     const nodeId = scope === "task" ? taskReviewNodeId(flowState) : route.reviewStepId;
-    const taskBudget = scope === "task" ? taskReviewBudget(flowState, flowManager) : null;
+    const taskRound = scope === "task" ? taskReviewRound(flowState, flowManager) : null;
     if (nodeId === null || flowState?.currentNodeId !== nodeId) {
       return new ReviewTransitionFacts({
         scope,
         phase,
-        attemptCount: taskBudget?.attempts ?? null,
-        taskRound: taskBudget?.round ?? null,
+        attemptCount: null,
+        taskRound,
       });
     }
     const sourceArtifact = scope === "task" ? "task.review" : route.logicalKey;
@@ -306,8 +300,11 @@ export class ReviewTransitionFacts {
       toolingOutcome: artifact?.toolingOutcome ?? null,
       artifact,
       sourceArtifact,
-      attemptCount: taskBudget?.attempts ?? null,
-      taskRound: taskBudget?.round ?? null,
+      attemptCount: scope === "task" ? currentTaskReviewAttemptCount({
+        attempt: current.attempt,
+        includesCurrentResult: artifact !== null,
+      }) : null,
+      taskRound,
     });
   }
 }

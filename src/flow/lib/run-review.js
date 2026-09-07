@@ -68,6 +68,7 @@ import {
   TaskReviewRecurrenceContract,
 } from "./review-recurrence.js";
 import { TaskReviewExecutionIdentity } from "./task-review-execution-identity.js";
+import { currentTaskReviewAttemptCount } from "./task-review-attempt-accounting.js";
 
 const IMPL_REVIEW_PHASE = "impl";
 const REVIEW_VERDICT_VALUES = Object.freeze(["PASS", "ADVISORY", "REJECTED"]);
@@ -582,17 +583,6 @@ function reviewExecutionAdmission(ctx, { persistedPhase, executionRoot }) {
       reviewDisposition: selection.disposition.toJSON(),
     },
   );
-}
-
-function currentTaskReviewAttemptCount(state, taskId, lineageSet) {
-  const task = state.findNode(taskId);
-  const step = task?.steps?.find((candidate) => candidate.id === `${taskId}-review`) ?? null;
-  const budget = lineageSet.currentBudget;
-  const attempts = step?.attemptSequence - budget?.reviewAttemptSequenceAtStart;
-  if (!Number.isSafeInteger(attempts) || attempts < 1 || attempts > 4) {
-    throw new Error("Task Review Attempt is outside its current execution round");
-  }
-  return attempts;
 }
 
 function taskReviewTransientDirectories(executionRoot, workUnit) {
@@ -1287,7 +1277,7 @@ export class RunReviewCommand extends FlowCommand {
           baseline: taskRepairBaseline,
           manifest,
           artifact: promotion.sealedArtifact().artifact,
-          attemptCount: currentTaskReviewAttemptCount(state, taskId, lineageSet),
+          attemptCount: currentTaskReviewAttemptCount({ attempt: state.attempt, includesCurrentResult: true }),
         });
         taskMutationLineage = taskRepair.lineage({ attempt: state.attempt });
         resultingTaskLineageSet = new TaskMutationLineageSet({

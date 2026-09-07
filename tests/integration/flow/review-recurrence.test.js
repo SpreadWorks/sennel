@@ -236,6 +236,7 @@ describe("review recurrence projections", () => {
         priorRepairInsufficiency: "The direct branch was repaired but its shared caller remained uncovered.",
         repairStrategy: "Repair the shared caller and verify both branch paths.",
       })] }) },
+      { attempt: 3, payload: review({ taskId: "T-2" }) },
       { attempt: 4, payload: review({ taskId: "T-2", findings: [finding({ fingerprint: FINGERPRINT_TWO, file: "src/two.js" })] }) },
     ], t2Lineages);
 
