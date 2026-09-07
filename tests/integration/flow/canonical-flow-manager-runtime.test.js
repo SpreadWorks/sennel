@@ -8454,6 +8454,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.deepEqual(executionIdentity, {
       taskId: "T-1",
       attempt: { id: canonicalAttempt.id, nodeId: canonicalAttempt.nodeId, sequence: canonicalAttempt.sequence },
+      reviewAttempt: 1,
     });
     await FLOW_COMMANDS.run.review.post(ctx, result);
     const lineages = manager.taskMutationLineages({ specId, taskId: "T-1" });

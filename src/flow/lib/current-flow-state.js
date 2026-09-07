@@ -2208,6 +2208,15 @@ export class DefinitionFailurePolicy {
     const remaining = failure.retryKind === null
       ? 0
       : Math.max(0, contract.remainingRetries(consumption, failure.retryKind));
+    // An unaccepted source mutation is not evidence of a completed Review or
+    // an exhausted tooling budget. Neither retry nor record-and-advance may
+    // adopt it as the next Attempt's source baseline.
+    if (failure.category === "source-integrity") {
+      return new DefinitionFailureDecision({
+        policy: this, operation: "blocked", retryKind: null, remaining: 0, targetNodeId: null,
+        reason: "unaccepted source effects require explicit reconciliation before execution can continue",
+      });
+    }
     // This marker deliberately selects no lifecycle route.  Some Steps need
     // cataloged artifacts in addition to state before their dedicated
     // Definition can decide; CurrentFlowState therefore exposes only this

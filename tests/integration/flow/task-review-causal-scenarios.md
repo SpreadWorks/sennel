@@ -11,10 +11,10 @@ AIの応答とプロセス起動だけを決定論的な代替処理にする。
 | 観測したい結果 | 必要条件／生成元 | 主な確認 |
 | --- | --- | --- |
 | 上限消費後に再度復旧できる | 失敗Attemptと一致するbaselineまたは正当なreceipt | 2回の失敗・変更証跡・復旧を別Storeインスタンスで接続 |
-| semantic回数が保たれる | canonical consumption、現在ラウンド、親発行の実行identity | tooling復旧を挟んでも第2回のordinalをworkerへ渡す |
+| semantic回数が保たれる | 現在ラウンド内のcatalog公開済みReview件数、親発行の実行identity | tooling復旧を挟んでも第2回のordinalをworkerへ渡す。実行エラーのretry上限は別に維持 |
 | 不正応答で安全に停止できる | complete contractの検証、bounded protocol、親の失敗記録 | array／不正JSON→2回の応答→marker分類→親の保存→reload |
-| 不正な変更を次の応答へ持ち越さない | 応答前のソースsnapshot、応答と変更所有権の対応 | 不正JSON形状と、完成した応答が変更を申告しない場合のrollback |
-| 未確定Reviewから安全に復旧できる | 旧work unit、同じAttemptに結び付いた復旧receipt | 許可されたcommitは再開境界を通り、通常retryだけでは許可されない |
+| 未承認変更を次の実行の基準にしない | 応答前のソースsnapshot、変更所有権の検証、source-integrity失敗を保存しDefinitionがblockedを選択 | 不正応答＋変更／完成した応答＋未申告変更で停止。変更を消さず、reload後の通常retry・変更証跡による復旧・直接worker再実行を拒否 |
+| 未確定Reviewから安全に復旧できる | 旧work unit、親が保存した無変更checkpoint、同じAttemptに結び付いた復旧receiptと許可時checkout | 許可されたcommitは再開境界を通り、通常retryだけでは許可されない。許可後の追加変更、未承認Task変更、根拠欠落は拒否 |
 | 4回目の修正をGateへ一度だけ渡す（C1） | 同一Taskの修正lineage、semantic回数4、公開済みReview、definitionのhandoff | seal後／publication後の中断、tooling復旧の混在、別Storeからのsettlementと冪等性 |
 | PASSがGateに受理される | 現在AttemptのReview成果物と公開記録 | 親のpost→reload→Gateのclaim（Gate実行なし） |
 | 後の復旧判断に必要な状態が失われない | 通常開始、invalidated-nodeのclaim、直接recover／rewindが保存するAttempt固有のbaseline | 正規の実装handoff／Review PASSから各入口へ進み、array応答2回→親の失敗保存→別Store→変更証跡→復旧receiptと新Attemptを確認 |
@@ -95,7 +95,9 @@ precisionではない。既知修正に対する回帰検出感度としてだ�
 | さらに4dab68ee2を除去 | 9 | 7 | tooling失敗のsemantic回数混入、4回目のGate引き渡し失敗 |
 | さらに857c2a64cを除去 | 8 | 8 | 復旧Attemptが再び失敗した際のbaseline読取り失敗 |
 
-対象5修正に対する検出は **5/5**。未知の不具合の網羅率を意味しない。
+当時の期待値での対象5修正に対する検出は **5/5**。未知の不具合の網羅率を意味しない。
+ただし、後続の契約確認で任意のprovider変更を自動rollbackする期待値は採用しないと
+判断した。この履歴測定は保存するが、rollback修正の正当性の証明には使用しない。
 mainでの通常runnerによる追加テストの実行結果も8成功・8失敗だった。
 過去の修正をmainに戻したり、製品コードを直して緑にしたりはしていない。
 
@@ -183,3 +185,90 @@ reconcileそのものをこの比較だけで評価したとは扱わない。
 今回の修正後にnpm test全体、実AI、OSクラッシュ、実プロセス間競合は実行していない。
 停止Flowのcanonicalや実行worktreeは変更しておらず、既に欠落しているbaselineを
 この修正で後付け生成したり、停止Flowの再開を確認したりはしていない。
+
+## A〜Dの契約別検証
+
+比較元は `b4c610b471c4a60ca176a06bc12381ad3d8debc1`。Git接続を含まない
+`/tmp/sennel-task-review-abcd-before-Ee2Teu` に展開し、製品ソースを変更せず
+同じシナリオテストを配置して比較する。Dの前段でAの失敗に遮られないよう、
+`/tmp/sennel-task-review-a-only-FhOcLN` には同じ比較元とAのreceipt読取りだけを
+配置した。実行中worktreeやcanonicalデータへ修正を適用する比較ではない。
+
+| 契約 | 修正前に検出する違反 | 修正後に確認する結果 |
+| --- | --- | --- |
+| A: 反復復旧 | 再び失敗した復旧Attemptのbaselineを読み戻せない | exact Attempt/route/Flowとcatalog Activityに一致するreceipt.currentを読取り、古い証跡や不一致を拒否 |
+| B: Review回数 | toolingをReview件数に混ぜ、worker ordinalや4回目のhandoffがずれる | 現ラウンドの公開済みReview件数を使い、tooling上限とsemantic上限を別々に維持 |
+| C: 未承認変更 | 不正応答＋変更は変更証跡による復旧が通り、未申告変更は通常retryが通る | ソースを削除せず停止し、別Storeから両retryと直接worker再実行を拒否 |
+| D: 中断後の正当な復旧 | Aだけを直しても、許可されたruntime修正commitをworkerによるcommitとして拒否 | 親の無変更checkpointと復旧許可時の状態を照合し、未承認の変更は引き継がない |
+
+Cの以前のrollback期待値は訂正した。最初の停止と証跡保持だけのテストは修正前も
+成功するが、後続のretry／復旧まで接続すると上記の違反を検出する。
+`/tmp/sennel-C-safety-before-final.log` は同じ入力の2件でこの拒否不足を検出し、
+`/tmp/sennel-C-safety-r2.log` は修正後の2件が成功した記録である。
+`/tmp/sennel-D-before-with-A.log` はbaseline不足ではなく、commit後の
+`TASK_REVIEW_PARTIAL_EFFECT` を検出した記録である。
+
+既存recurrenceテストには、3件の公開結果をraw sequenceが4という理由で4回目と
+みなす入力があった。toolingによるsequence 3の欠番は残したまま、sequence 5に
+本当の4件目のReviewと修正lineageを追加した。4回目のhandoff要件と既存findingの
+再発件数は維持し、追加した別findingの履歴も検証する。
+
+Review実行leaseは一時的なプロセス管理情報であり、対象ソースのidentityではない。
+`repair-state-identity.test.js` は製品のleaseを取得／解放してもhashが変わらず、
+通常ソース変更ではhashが変わることを確認する。
+
+### 実装後の比較（2026-09-08）
+
+固定した19シナリオのSHA-256は
+`7977a155259aba06c26532635eed52d4fdf671a9771badd0c99164891c7e73b4`。
+比較元では11成功・8失敗、修正後では19成功・0失敗だった。
+失敗はbaseline不足、toolingの混算、worker ordinal欠落、未承認変更後のretry許可、
+部分変更の停止分類、4回目のhandoffであり、importやfixture起動エラーではない。
+D単独の違反は上記A-only比較で切り分けている。
+
+- 比較元: `/tmp/sennel-abcd-causal-before-final-r22.log`
+- 修正後: `/tmp/sennel-abcd-causal-final.log`
+- 部分変更後のblocked/retry拒否の個別比較:
+  `/tmp/sennel-C-partial-block-before-r19-escalated.log`（失敗）と
+  `/tmp/sennel-C-partial-block-r18-escalated.log`（成功）
+- 復旧・回数管理・前段admissionの関連65件:
+  `/tmp/sennel-abcd-recovery-final-r19.log`（65成功）
+- 既存runtimeのTask Review関連11件:
+  `/tmp/sennel-abcd-runtime-review-final.log`（11成功）
+- 復旧専用10件（通常retry、改変拒否、checkpoint欠落、複数retained、main/execution分離）:
+  `/tmp/sennel-D-checkpoint-suite-final-r31.log`（10成功）
+  複数retainedでは、失敗対象が後半の不正unitであることも追加assertし、
+  `/tmp/sennel-D-atomic-candidate-final-escalated.log`で成功を確認した。
+- work unitと成果物契約39件:
+  `/tmp/sennel-abcd-artifact-unit-final.log`（37成功、2件はGit起動EPERM）、
+  `/tmp/sennel-abcd-artifact-unit-environment-final.log`（該当2件成功）
+
+実装検証で補強した境界:
+
+- `TASK_REVIEW_PARTIAL_EFFECT`も、通常のtooling失敗として記録して進めず、
+  source-integrityとしてblockedにする。変更と旧work unitを保持する。
+- checkpointと復旧authorizationは自己digestだけでなく、実bytesとcatalog hash、
+  Task・Attempt・publication Activityの一致を検証する。
+- 通常retryでは、親が正規に公開したcheckpointと新Attemptのbaselineだけを
+  checkout差分から区別する。HEAD・indexや任意のcanonicalファイルは免除しない。
+  新workerのbaselineは、検証済み旧work unitのcleanup後に取得する。
+- checkpoint時のTask source fingerprintを保存し、復旧許可を保存する前にも
+  Task sourceが変わっていないことを確認する。
+- mainと実行checkoutが異なる場合、canonical Versionの`repositoryRoot`を
+  正規の証跡保存先として参照する。checkout外の親の記録はcheckout差分の例外に
+  加えない。独立した一時repositoryとworktree-mode Flowでこの構成を検証した。
+
+停止中Flowの保存状態は、過去測定の`original-before.json`とファイル単位で照合した。
+canonical 197ファイル、実worktreeのsrc 504ファイルと実行時データ460ファイル、
+HEAD、未コミット／未追跡状態は一致した。
+確認結果: `/tmp/sennel-abcd-live-preservation-final.json`。
+既存の不足baselineを後付けしたり、実Flowを再開したりはしていない。
+
+全体テスト成功とは主張しない。広めの既存runtime検証では、managed handoffの
+docsRead metric期待値の不一致が比較元でも再現している
+（`/tmp/sennel-abcd-existing-metrics-before.log`）。この独立した既存失敗は変更していない。
+実AI、OSクラッシュ、実Flowの再開は未検証であり、このシナリオ群の合格を
+それらの保証として扱わない。
+
+別担当による最終実装検証の判定は「承認」。部分変更のblocked分類、保存記録の
+bytes/catalog照合、通常retryのpayload identity、main/execution分離の指摘を解消した。

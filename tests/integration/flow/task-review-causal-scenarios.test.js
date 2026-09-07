@@ -68,7 +68,7 @@ function commitRuntimeEvidence(scenario, revision) {
 
 // Real protocol, response parser, artifact formatter, and seal. Only the AI
 // and child-process invocation are faked, not the parent's required evidence.
-function repairingWorker(scenario, invocation, { repair = true } = {}) {
+function repairingWorker(scenario, invocation, { repair = true, onProviderCall = () => {} } = {}) {
   return async (_command, _args, options) => withOutputDirectory(options.env.SENNEL_REVIEW_OUTPUT_DIR, async () => {
     const requirementIds = new Set(["R-1"]);
     const raw = await runTaskReviewProtocol({
@@ -76,6 +76,7 @@ function repairingWorker(scenario, invocation, { repair = true } = {}) {
       executionIdentity: TaskReviewExecutionIdentity.fromJSON(JSON.parse(options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY)),
       flowManager: scenario.manager, requirementIds, recurrenceHistory: [], sourcePaths: new Set(["README.md"]),
       agent: new DeterministicReviewAgent(async () => {
+          onProviderCall();
           if (repair) fs.appendFileSync(scenario.sourcePath, `repair ${invocation}\n`);
           return JSON.stringify({ blockingFindings: repair ? [{
             findingKey: `repair-${invocation}`, title: `Repair ${invocation}`,
@@ -234,38 +235,66 @@ for (const invalid of ["[]", "{not-json}"]) {
   });
 }
 
-for (const invalid of ["[]", JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] })]) {
-test(`unaccepted effects (${invalid}) roll back before retry and remain rolled back after reload`, async (t) => {
+// Arbitrary provider edits are not owned by the generic protocol. Invalid
+// output with effects must stop; shape-valid output still needs parent ownership
+// admission. These replace the unsupported rollback-and-retry expectations.
+for (const response of ["invalid", "unowned"]) {
+test(`${response} Review source effects stop without publication or implicit rollback after reload`, async (t) => {
   const scenario = new TaskReviewScenario(t);
   useScenarioContainer(t, scenario);
   let calls = 0;
-  const original = fs.readFileSync(scenario.sourcePath, "utf8");
+  const beforeAttempt = scenario.state().attempt;
+  const beforeLineages = scenario.manager.taskMutationLineages({ specId: scenario.specId, taskId: scenario.taskId });
   const extra = path.join(scenario.root, "unexpected.txt");
-  const outputDirectory = path.join(scenario.root, ".sennel", "protocol-output");
-  fs.mkdirSync(outputDirectory, { recursive: true });
-  const result = await withOutputDirectory(outputDirectory, () => runTaskReviewProtocol({
-    root: scenario.root,
-    executionIdentity: TaskReviewExecutionIdentity.fromCanonicalState({ state: scenario.state(), taskId: scenario.taskId }),
-    flowManager: scenario.manager, requirementIds: new Set(["R-1"]), recurrenceHistory: [], sourcePaths: new Set(["README.md"]),
-    agent: new DeterministicReviewAgent(async () => {
-        calls += 1;
-        if (calls === 1) {
-          fs.writeFileSync(scenario.sourcePath, "invalid partial edit\n");
-          fs.writeFileSync(extra, "unowned source\n");
-          return invalid;
-        }
-        assert.equal(fs.readFileSync(scenario.sourcePath, "utf8"), original);
-        assert.equal(fs.existsSync(extra), false);
-        return JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] });
-    }),
-    prompt: "Review the Task", systemPrompt: "Return a complete Review object",
-  }));
-  assert.equal(calls, 2);
-  assert.deepEqual(JSON.parse(result), { blockingFindings: [], nonBlockingImprovements: [] });
+  const mutate = () => {
+    calls += 1;
+    fs.writeFileSync(scenario.sourcePath, "unaccepted partial edit\n");
+    if (response === "invalid") fs.writeFileSync(extra, "unowned source\n");
+  };
+  const worker = response === "invalid"
+    ? invalidProtocolWorker(scenario, "[]", mutate)
+    : repairingWorker(scenario, 1, { repair: false, onProviderCall: mutate });
+  const result = await scenario.review(worker).execute(scenario.context());
+  assert.equal(result.ok, false, JSON.stringify(result));
+  assert.equal(calls, 1, "neither protocol nor parent may silently retry unaccepted source effects");
   scenario.reload();
-  assert.equal(fs.readFileSync(scenario.sourcePath, "utf8"), original);
-  assert.equal(fs.existsSync(extra), false);
-  assert.equal(scenario.state().attempt.failure, null);
+  const state = scenario.state();
+  assert.equal(state.attempt.id, beforeAttempt.id);
+  assert.equal(state.attempt.nodeId, "T-1-review");
+  assert.equal(state.attempt.consumption.semantic, beforeAttempt.consumption.semantic);
+  if (response === "invalid") {
+    assert.equal(state.attempt.failure.code, "TASK_REVIEW_SOURCE_EFFECT_OBSERVED");
+    assert.equal(state.attempt.failure.retryable, false);
+    assert.equal(fs.readFileSync(extra, "utf8"), "unowned source\n");
+  } else {
+    assert.match(state.attempt.failure.message, /not owned by must-fix Review findings/);
+  }
+  assert.equal(fs.readFileSync(scenario.sourcePath, "utf8"), "unaccepted partial edit\n");
+  assert.equal(scenario.manager.artifactCatalog(scenario.specId).artifacts.some((entry) => entry.logicalKey === "task.review"), false);
+  assert.deepEqual(scenario.manager.taskMutationLineages({ specId: scenario.specId, taskId: scenario.taskId }), beforeLineages);
+  assert.equal(state.findNode("T-1-gate").status, "pending");
+  const stopped = scenario.snapshot();
+  scenario.reload();
+  assert.equal(scenario.snapshot(), stopped, "fresh readers must retain the same failed Attempt and no success publication");
+  assert.throws(() => scenario.manager.retryCurrentAttempt({ specId: scenario.specId }), {
+    code: "CURRENT_FLOW_STATE_INVARIANT_INVALID",
+  });
+  assert.equal(scenario.reload().snapshot(), stopped, "refused retry must not adopt unaccepted edits");
+  scenario.changeEvidence(1).reload();
+  const recovery = scenario.recover();
+  assert.equal(recovery.ok, false, "changed evidence must not make unaccepted source effects recoverable");
+  assert.equal(recovery.errors[0].code, "RETRY_NOT_AVAILABLE");
+  assert.equal(scenario.reload().snapshot(), stopped, "changed runtime evidence cannot authorize unaccepted source effects");
+  const refused = await scenario.review(() => { calls += 1; return stoppedWorker(); }).execute(scenario.context());
+  assert.equal(refused.ok, false);
+  assert.equal(calls, 1, "blocked source effects must not reach another worker invocation");
+  assert.equal(scenario.reload().snapshot(), stopped);
+  assert.equal(fs.readFileSync(scenario.sourcePath, "utf8"), "unaccepted partial edit\n");
+  assert.equal(state.attempt.failure.category, "source-integrity");
+  assert.equal(state.attempt.failure.retryable, false);
+  assert.equal(state.attempt.failure.retryKind, null);
+  assert.equal(state.failureDisposition().operation, "blocked");
+  if (response === "unowned") assert.equal(state.attempt.failure.code, "TASK_REVIEW_SOURCE_EFFECT_REJECTED");
 });
 }
 
@@ -279,20 +308,23 @@ test("admitted Task Review retains a baseline before any provider can fail", (t)
 
 test("a receipt-authorized committed runtime change reconciles an unsealed Review after reload", async (t) => {
   const scenario = new TaskReviewScenario(t).exhaust();
+  // This contract compares a recovery-time target with a later invocation;
+  // use RunReview's production target resolver, not the fixture's constant.
+  const runtimeIdentity = { resolveTargetStateDigest: undefined };
   commitRuntimeEvidence(scenario, 1);
   assert.equal(scenario.recover().reset, true);
   let previousDirectory;
   await scenario.review((_command, _args, options) => {
     previousDirectory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
     return stoppedWorker();
-  }).execute(scenario.context());
+  }, runtimeIdentity).execute(scenario.context());
   assert.ok(fs.existsSync(previousDirectory));
   commitRuntimeEvidence(scenario, 2);
   const grant = scenario.reload().recover();
   assert.equal(grant.reset, true, JSON.stringify(grant));
   scenario.reload();
   let calls = 0;
-  const result = await scenario.review(() => { calls += 1; return stoppedWorker(); }).execute(scenario.context());
+  const result = await scenario.review(() => { calls += 1; return stoppedWorker(); }, runtimeIdentity).execute(scenario.context());
   assert.equal(calls, 1, JSON.stringify(result));
   assert.equal(fs.existsSync(previousDirectory), false, "accepted old work unit must be reconciled");
   assert.notEqual(scenario.state().attempt.failure.code, "TASK_REVIEW_PARTIAL_EFFECT");
@@ -316,6 +348,20 @@ test("an ordinary retry cannot authorize committed changes to an unsealed Review
   const result = await scenario.review(() => { calls += 1; return stoppedWorker(); }).execute(scenario.context());
   assert.equal(calls, 0);
   assert.equal(result.data.failureCode, "TASK_REVIEW_PARTIAL_EFFECT");
+  assert.equal(fs.existsSync(previousDirectory), true);
+  const state = scenario.reload().state();
+  const stopped = scenario.snapshot();
+  assert.equal(state.attempt.failure.category, "source-integrity");
+  assert.equal(state.attempt.failure.retryKind, null);
+  assert.equal(state.failureDisposition().operation, "blocked");
+  assert.throws(() => scenario.manager.retryCurrentAttempt({ specId: scenario.specId }));
+  scenario.changeEvidence(2);
+  const recovery = scenario.recover();
+  assert.equal(recovery.ok, false);
+  assert.equal(recovery.errors[0].code, "RETRY_NOT_AVAILABLE");
+  assert.equal(scenario.reload().snapshot(), stopped);
+  await scenario.review(() => { calls += 1; return stoppedWorker(); }).execute(scenario.context());
+  assert.equal(calls, 0, "partial effects remain blocked across re-entry");
   assert.equal(fs.existsSync(previousDirectory), true);
 });
 

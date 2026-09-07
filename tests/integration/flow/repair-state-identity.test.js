@@ -14,6 +14,7 @@ import {
   captureRepairBaseline,
   deleteRepairBaselineForFlow,
 } from "../../../src/flow/lib/repair-state-identity.js";
+import { ReviewExecutionLease } from "../../../src/flow/lib/review-execution-lease.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 const SPEC_PATH = "specs/demo/001/spec.json";
@@ -77,6 +78,27 @@ describe("canonical repair state identity", () => {
     assert.notEqual(fingerprint().hash, before.hash);
     write("app/value.js", "export const value = 1;\n");
     assert.equal(fingerprint().hash, before.hash);
+  });
+
+  it("excludes a live Review execution lease while retaining ordinary source changes", () => {
+    initializeRepository();
+    const before = fingerprint();
+    const lease = new ReviewExecutionLease({
+      mainRoot: root,
+      runId: "review-run",
+      nodeId: "impl-review",
+      attemptId: "review-attempt",
+    });
+    try {
+      lease.acquire();
+      assert.equal(fs.existsSync(lease.lock.lockPath), true, "the production lease is held");
+      assert.equal(fingerprint().hash, before.hash, "a held runtime lease is not execution input");
+    } finally {
+      lease.release();
+    }
+    assert.equal(fingerprint().hash, before.hash, "releasing the runtime lease preserves the same identity");
+    write("app/value.js", "export const value = 2;\n");
+    assert.notEqual(fingerprint().hash, before.hash, "ordinary source changes remain execution input");
   });
 
   it("excludes Version-owned evidence from the implementation identity", () => {

@@ -4,6 +4,7 @@
  */
 import { readCatalogedSourceArtifact } from "./flow-findings.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
+import { TaskReviewAccounting } from "./task-review-accounting.js";
 import {
   flowReviewRouteForPhase,
   reviewPhaseForFlowStepId,
@@ -212,16 +213,15 @@ function taskReviewNodeId(state) {
 }
 
 function taskReviewBudget(state, flowManager) {
-  const task = state?.tasks?.find((candidate) => candidate.id === state.currentTaskId) ?? null;
-  const step = task?.steps?.find((candidate) => candidate.id === `${state.currentTaskId}-review`) ?? null;
-  if (!Number.isSafeInteger(step?.attemptSequence)) return { attempts: 0, round: null };
-  const current = flowManager.taskMutationLineages({ specId: state.specId, taskId: state.currentTaskId }).at(-1) ?? null;
-  if (current === null) throw new Error("Task Review requires a canonical Task execution budget");
-  const attempts = step.attemptSequence - current.budget.reviewAttemptSequenceAtStart;
-  if (!Number.isSafeInteger(attempts) || attempts < 0 || attempts > 4) {
-    throw new Error("Task Review attempt count is outside the current Task round");
+  if (typeof state?.currentTaskId !== "string" || state.currentTaskId.trim() === "") {
+    return Object.freeze({ attempts: 0, round: null });
   }
-  return Object.freeze({ attempts, round: current.budget.round });
+  const accounting = TaskReviewAccounting.fromCanonicalState({
+    flowManager,
+    state: flowManager.canonicalState(state.specId),
+    taskId: state.currentTaskId,
+  });
+  return Object.freeze({ attempts: accounting.completedReviewCount, round: accounting.budget.round });
 }
 
 function currentAttemptArtifact({ flowManager, source, logicalKey, typedState }) {

@@ -25,6 +25,7 @@ const DIGEST_C = "c".repeat(64);
 const FINGERPRINT_ONE = "1".repeat(64);
 const FINGERPRINT_TWO = "2".repeat(64);
 const FINGERPRINT_THREE = "3".repeat(64);
+const FINGERPRINT_FOUR = "4".repeat(64);
 
 function implementationRepairRecord() {
   return new CanonicalImplementationRepairRecord({
@@ -130,7 +131,9 @@ function taskLineage({ taskId, sequence, round, reviewStart = 0, role = "review-
 
 function bindTaskReviews(attempts, lineages) {
   return attempts.map((entry) => {
-    const lineage = lineages.find((candidate) => candidate.attempt.sequence === entry.attempt);
+    const lineage = lineages.find((candidate) => (
+      candidate.role === "review-repair" && candidate.attempt.sequence === entry.attempt
+    ));
     return {
       ...entry,
       payload: lineage === undefined
@@ -219,12 +222,20 @@ describe("review recurrence projections", () => {
     ], t1RoundOne);
     t1Attempts.push({ attempt: 5, payload: review({ taskId: "T-1" }) });
 
-    const t2Lineages = [1, 2, 4].map((sequence) => taskLineage({
+    const t2Implementation = taskLineage({
+      taskId: "T-2",
+      sequence: 1,
+      round: 1,
+      role: "implementation",
+      path: "src/two.js",
+    });
+    const t2ReviewRepairs = [1, 2, 4, 5].map((sequence) => taskLineage({
       taskId: "T-2",
       sequence,
       round: 1,
       path: "src/two.js",
     }));
+    const t2Lineages = [t2Implementation, ...t2ReviewRepairs];
     const t2Attempts = bindTaskReviews([
       { attempt: 1, payload: review({ taskId: "T-2", findings: [
         finding({ fingerprint: FINGERPRINT_TWO, file: "src/two.js" }),
@@ -237,6 +248,9 @@ describe("review recurrence projections", () => {
         repairStrategy: "Repair the shared caller and verify both branch paths.",
       })] }) },
       { attempt: 4, payload: review({ taskId: "T-2", findings: [finding({ fingerprint: FINGERPRINT_TWO, file: "src/two.js" })] }) },
+      // Attempt 3 is a tooling lifecycle gap.  Attempt 5 is the actual
+      // fourth published Review result and owns the fourth-review handoff.
+      { attempt: 5, payload: review({ taskId: "T-2", findings: [finding({ fingerprint: FINGERPRINT_FOUR, file: "src/two.js" })] }) },
     ], t2Lineages);
 
     const manager = new ReviewRecurrenceFlowManagerFixture({
@@ -258,9 +272,10 @@ describe("review recurrence projections", () => {
     assert.deepEqual(convergence.recurrenceHistory("T-1").toJSON(), []);
     const taskHistory = convergence.recurrenceHistory("T-2");
     const t2History = taskHistory.toJSON();
-    assert.equal(t2History.length, 2, "a different target remains a distinct fingerprint");
+    assert.equal(t2History.length, 3, "the fourth Review's distinct repaired target remains in canonical history");
     assert.equal(t2History.find((entry) => entry.fingerprint === FINGERPRINT_TWO).recurrenceCount, 3);
     assert.equal(t2History.find((entry) => entry.fingerprint === FINGERPRINT_THREE).recurrenceCount, 1);
+    assert.equal(t2History.find((entry) => entry.fingerprint === FINGERPRINT_FOUR).recurrenceCount, 1);
     assert.equal(
       t2History.find((entry) => entry.fingerprint === FINGERPRINT_TWO).previous[1].finding.repairStrategy,
       "Repair the shared caller and verify both branch paths.",

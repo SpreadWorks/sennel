@@ -1535,18 +1535,6 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementIds, diff =
   return pb.build();
 }
 
-function canonicalTaskReviewAttempt({ flowManager, flow, taskId }) {
-  const lineage = flowManager.taskMutationLineages({ specId: flow.specId, taskId }).at(-1) ?? null;
-  if (lineage === null) throw new Error("Task Review requires a current Task execution budget");
-  const task = flow.tasks?.find((candidate) => candidate.id === taskId) ?? null;
-  const review = task?.steps?.find((candidate) => candidate.id === `${taskId}-review`) ?? null;
-  const attempt = review?.attemptSequence - lineage.budget.reviewAttemptSequenceAtStart;
-  if (!Number.isSafeInteger(attempt) || attempt < 1 || attempt > 4) {
-    throw new Error("Task Review Attempt is outside its current execution round");
-  }
-  return attempt;
-}
-
 function resolveRequirementIds(spec) {
   return new Set((Array.isArray(spec.requirements) ? spec.requirements : []).map((req) => req.id).filter(Boolean));
 }
@@ -4789,9 +4777,7 @@ async function runReview(rawArgs) {
     flow,
     taskId: taskSpec?.task?.id ?? null,
   });
-  const taskReviewAttempt = taskSpec
-    ? canonicalTaskReviewAttempt({ flowManager, flow, taskId: taskSpec.task.id })
-    : null;
+  const taskReviewAttempt = taskSpec ? taskReviewExecution.reviewAttempt : null;
   const taskReviewRecurrences = taskSpec
     ? taskReviewRecurrenceHistory({ flowManager, flow, taskId: taskSpec.task.id, cycle })
     : [];

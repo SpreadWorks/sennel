@@ -120,6 +120,16 @@ export function readTaskMutationLineagesFromCatalog({ state, catalog, activities
   return Object.freeze(lineages);
 }
 
+/** Unaccepted source changes cannot be retried as ordinary tooling failures. */
+export class TaskReviewSourceEffectRejection extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "TaskReviewSourceEffectRejection";
+    this.code = "TASK_REVIEW_SOURCE_EFFECT_REJECTED";
+    this.retryable = false;
+  }
+}
+
 /**
  * Validated source effect of one Task Review invocation. Review may mutate
  * only files already admitted by the current Task's implementation lineage,
@@ -151,14 +161,14 @@ export class TaskReviewRepairManifest {
       && lineageSet.noChangeReasons().length > 0;
     const outsideAllowList = mutated.filter((relativePath) => !allowed.has(relativePath));
     if (outsideAllowList.length > 0) {
-      throw new Error(`Task Review repair mutated paths outside the current Task allow-list: ${outsideAllowList.join(", ")}`);
+      throw new TaskReviewSourceEffectRejection(`Task Review repair mutated paths outside the current Task allow-list: ${outsideAllowList.join(", ")}`);
     }
     const withoutFinding = mutated.filter((relativePath) => !findingPaths.has(relativePath));
     if (withoutFinding.length > 0) {
-      throw new Error(`Task Review repair mutated paths not owned by must-fix Review findings: ${withoutFinding.join(", ")}`);
+      throw new TaskReviewSourceEffectRejection(`Task Review repair mutated paths not owned by must-fix Review findings: ${withoutFinding.join(", ")}`);
     }
     if (verdict !== "REJECTED" && mutated.length > 0) {
-      throw new Error("Task Review without must-fix findings must not mutate source");
+      throw new TaskReviewSourceEffectRejection("Task Review without must-fix findings must not mutate source");
     }
     if (verdict === "REJECTED") {
       if (mustFix.length === 0) {
@@ -175,7 +185,7 @@ export class TaskReviewRepairManifest {
           throw new Error("rejected no-change Task Review requires fileless missing_acceptance_requirement findings");
         }
         if (mutated.length > 0) {
-          throw new Error("rejected no-change Task Review must not mutate source before implementation correction");
+          throw new TaskReviewSourceEffectRejection("rejected no-change Task Review must not mutate source before implementation correction");
         }
       } else {
         const unprovable = mustFix.filter((finding) => (

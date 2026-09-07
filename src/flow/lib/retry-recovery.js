@@ -15,6 +15,11 @@ import { buildRepairFingerprint } from "./repair-fingerprint.js";
 import { RuntimeModuleIdentity } from "./runtime-module-identity.js";
 import { ReviewTargetAuthority } from "./review-target-authority.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
+import {
+  readTaskReviewUnsealedCheckpoint,
+  TaskReviewRecoveryAuthorization,
+  taskReviewAuthorizationArtifact,
+} from "./task-review-recovery-checkpoint.js";
 
 export const RECOVERY_REASON_MIN_LENGTH = 20;
 export const RECOVERY_REASON_MAX_LENGTH = 500;
@@ -269,7 +274,7 @@ function assertExactPublicationWrite(actualWrites, expectedWrite, field) {
  * its exact route/Attempt/Flow-bound bytes in one catalog transaction.
  */
 export class RetryRecoveryArtifactPublication {
-  constructor({ baseline = null, receipt = null } = {}) {
+  constructor({ baseline = null, receipt = null, taskReviewAuthorization = null } = {}) {
     if ((baseline === null) === (receipt === null)) {
       throw new Error("retry recovery artifact publication requires exactly one typed payload");
     }
@@ -279,18 +284,26 @@ export class RetryRecoveryArtifactPublication {
     if (receipt !== null && !(receipt instanceof RetryRecoveryReceipt)) {
       throw new Error("retry recovery receipt publication requires a typed receipt");
     }
+    if (taskReviewAuthorization !== null && !(taskReviewAuthorization instanceof TaskReviewRecoveryAuthorization)) {
+      throw new Error("Task Review recovery authorization publication requires a typed authorization");
+    }
+    if (taskReviewAuthorization !== null && receipt === null) {
+      throw new Error("Task Review recovery authorization requires a retry recovery receipt");
+    }
     this.baseline = baseline;
     this.receipt = receipt;
+    this.taskReviewAuthorization = taskReviewAuthorization;
     Object.freeze(this);
   }
 
   static baseline(baseline) { return new RetryRecoveryArtifactPublication({ baseline }); }
-  static receipt(receipt) { return new RetryRecoveryArtifactPublication({ receipt }); }
+  static receipt(receipt, taskReviewAuthorization = null) { return new RetryRecoveryArtifactPublication({ receipt, taskReviewAuthorization }); }
 
   get artifactWrites() {
-    return Object.freeze([
-      this.baseline === null ? retryReceiptArtifact(this.receipt) : retryBaselineArtifact(this.baseline),
-    ]);
+    const primary = this.baseline === null ? retryReceiptArtifact(this.receipt) : retryBaselineArtifact(this.baseline);
+    return Object.freeze(this.taskReviewAuthorization === null
+      ? [primary]
+      : [primary, taskReviewAuthorizationArtifact({ taskId: this.taskReviewAuthorization.currentAttempt.nodeId.slice(0, -"-review".length), authorization: this.taskReviewAuthorization })]);
   }
 
   assertFor({ state, activity, artifactWrites } = {}) {
@@ -323,7 +336,24 @@ export class RetryRecoveryArtifactPublication {
       || state.attempt.sequence !== this.receipt.previous.attempt
       || state.attempt.nodeId !== activity.nodeId
     ) throw new Error("retry recovery receipt previous Attempt does not match the failed active Attempt");
-    assertExactPublicationWrite(artifactWrites, retryReceiptArtifact(this.receipt), "retry recovery receipt");
+    const expected = [retryReceiptArtifact(this.receipt)];
+    if (this.taskReviewAuthorization !== null) {
+      const taskId = route.taskId;
+      if (route.kind !== "review" || route.phase !== "impl" || taskId === null
+        || this.taskReviewAuthorization.previousAttempt.nodeId !== activity.nodeId
+        || this.taskReviewAuthorization.currentAttempt.nodeId !== activity.nodeId
+        || this.taskReviewAuthorization.previousAttempt.sequence !== this.receipt.previous.attempt
+        || this.taskReviewAuthorization.previousAttempt.id !== this.receipt.previous.attemptId
+        || this.taskReviewAuthorization.currentAttempt.id !== this.receipt.current.attemptId
+        || this.taskReviewAuthorization.currentAttempt.sequence !== this.receipt.current.attempt
+        || this.taskReviewAuthorization.targetDigest !== this.receipt.current.targetDigest
+        || this.taskReviewAuthorization.receiptDigest !== crypto.createHash("sha256").update(JSON.stringify(this.receipt.toJSON())).digest("hex")) {
+        throw new Error("Task Review recovery authorization does not bind the retry receipt");
+      }
+      expected.push(taskReviewAuthorizationArtifact({ taskId, authorization: this.taskReviewAuthorization }));
+    }
+    if (!Array.isArray(artifactWrites) || artifactWrites.length !== expected.length) throw new Error("retry recovery publication has unexpected artifact writes");
+    expected.forEach((write, index) => assertExactPublicationWrite([artifactWrites[index]], write, "retry recovery publication"));
     return this;
   }
 }
@@ -392,7 +422,10 @@ export function readRetryBaseline(flowManager, state, route) {
     consumerNodeId: state.attempt.nodeId,
     optional: true,
   });
-  if (source === null) return null;
+  if (source === null) {
+    const receipt = readRetryRecoveryReceipt(flowManager, state, route);
+    return receipt === null ? null : receipt.current;
+  }
   let baseline;
   try { baseline = new RetryRecoveryBaseline(JSON.parse(source.bytes.toString("utf8"))); } catch (error) { throw new Error(`retry baseline is invalid: ${error.message}`); }
   if (
@@ -404,6 +437,58 @@ export function readRetryBaseline(flowManager, state, route) {
     || baseline.issue !== (state.issue ?? null)
   ) throw new Error("retry baseline identity does not match the active Attempt and Flow");
   return baseline;
+}
+
+/**
+ * Read the sole receipt that can establish recovery evidence for the active
+ * Attempt. A receipt is evidence only when its catalog publication belongs to
+ * that exact exhausted-recovery Activity; its presence never authorizes a
+ * downstream transition by itself.
+ */
+export function readRetryRecoveryReceipt(flowManager, state, route) {
+  const source = flowManager.readArtifact({
+    specId: state.specId,
+    logicalKey: "retry.recovery.receipt",
+    parameters: { routeId: routeId(route), attemptId: state.attempt.id },
+    consumerNodeId: state.attempt.nodeId,
+    optional: true,
+  });
+  if (source === null) return null;
+  let receipt;
+  try { receipt = new RetryRecoveryReceipt(JSON.parse(source.bytes.toString("utf8"))); } catch (error) { throw new Error(`retry recovery receipt is invalid: ${error.message}`); }
+  const current = receipt.current;
+  if (
+    !current.route.equals(route)
+    || current.attemptId !== state.attempt.id
+    || current.attempt !== state.attempt.sequence
+    || current.runId !== state.runId
+    || current.specId !== state.specId
+    || current.issue !== (state.issue ?? null)
+  ) throw new Error("retry recovery receipt identity does not match the active Attempt and Flow");
+  const catalog = flowManager.artifactCatalog(state.specId);
+  const descriptor = catalog.artifacts.find((entry) => entry.relativePath === source.relativePath) ?? null;
+  if (
+    descriptor === null
+    || descriptor.logicalKey !== "retry.recovery.receipt"
+    || descriptor.activityId === null
+    || source.descriptor.logicalKey !== descriptor.logicalKey
+    || source.descriptor.hash !== descriptor.hash
+    || source.descriptor.activityId !== descriptor.activityId
+    || crypto.createHash("sha256").update(source.bytes).digest("hex") !== descriptor.hash
+  ) throw new Error("retry recovery receipt is not a catalog-published Activity artifact");
+  const activities = flowManager.activityLedger(state.specId).filter((entry) => entry.id === descriptor.activityId);
+  const activity = activities.length === 1 ? activities[0] : null;
+  if (
+    activity === null
+    || activity.transition.operation !== "retry_recovery_attempt"
+    || activity.nodeId !== state.attempt.nodeId
+    || activity.attemptId !== current.attemptId
+    || activity.sequence !== current.attempt
+    || activity.transition.nodeId !== state.attempt.nodeId
+    || activity.transition.attempt.id !== current.attemptId
+    || activity.transition.attempt.sequence !== current.attempt
+  ) throw new Error("retry recovery receipt publication Activity does not match the active Attempt");
+  return receipt;
 }
 
 function canonicalState(state) {
@@ -496,13 +581,14 @@ export class CanonicalRetryRecoveryGrant {
  * state callback or filesystem authority.
  */
 export class CanonicalRetryRecovery {
-  constructor({ flowManager, state, request }) {
+  constructor({ flowManager, state, request, executionRoot = null }) {
     if (!flowManager || typeof flowManager.retryCurrentAttempt !== "function" || typeof flowManager.retryExhaustedAttempt !== "function") {
       throw new Error("canonical retry recovery requires retry and exhausted-recovery FlowManager operations");
     }
     this.flowManager = flowManager;
     this.state = canonicalState(state);
     this.request = request instanceof RetryRecoveryInput ? request : new RetryRecoveryInput(request);
+    this.executionRoot = executionRoot === null ? null : requiredText(executionRoot, "canonical retry recovery executionRoot");
     Object.freeze(this);
   }
 
@@ -569,7 +655,31 @@ export class CanonicalRetryRecovery {
         targetDigest: this.request.changedEvidence.targetDigest,
       });
       const receipt = new RetryRecoveryReceipt({ previous: baseline, current: currentBaseline, reason: this.request.reason, reevaluationCount: 1 });
-      this.flowManager.retryExhaustedAttempt({ specId: this.state.specId, receipt });
+      let taskReviewRecoveryAuthorization = null;
+      if (evidenceRoute.kind === "review" && evidenceRoute.phase === "impl" && evidenceRoute.taskId !== null && this.executionRoot !== null) {
+        const checkpoint = readTaskReviewUnsealedCheckpoint({
+          flowManager: this.flowManager, state: before, taskId: evidenceRoute.taskId, root: this.executionRoot,
+        });
+        if (checkpoint !== null) {
+          checkpoint.assertTaskSource({ flowManager: this.flowManager, state: before, root: this.executionRoot });
+          const fresh = captureRetryRecoveryBaseline({
+            flowState: before,
+            flowManager: this.flowManager,
+            executionRoot: this.executionRoot,
+            artifactRoot: this.flowManager.specLocation(before.specId).repositoryRoot,
+            nodeId: before.attempt.nodeId,
+            attempt: before.attempt,
+            specPath: this.flowManager.specLocation(before.specId)?.relativeSpecFile ?? null,
+          });
+          if (fresh === null || fresh.targetDigest !== currentBaseline.targetDigest) {
+            throw new Error("Task Review recovery authorization target does not match current checkout evidence");
+          }
+          taskReviewRecoveryAuthorization = TaskReviewRecoveryAuthorization.capture({
+            checkpoint, receipt, targetDigest: fresh.targetDigest,
+          });
+        }
+      }
+      this.flowManager.retryExhaustedAttempt({ specId: this.state.specId, receipt, taskReviewRecoveryAuthorization });
     }
     const after = this.flowManager.canonicalState(this.state.specId);
     const activity = this.flowManager.activityLedger(this.state.specId)[start];

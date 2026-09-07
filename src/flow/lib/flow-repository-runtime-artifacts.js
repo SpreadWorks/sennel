@@ -51,6 +51,7 @@ export class FlowRepositoryRuntimeArtifactRegistry {
       PRODUCT.managedPath(".flow-handoff-"),
       `${PRODUCT.managedPath("agent-cache")}/`,
       `${PRODUCT.managedPath("agent-work")}/`,
+      `${PRODUCT.managedPath("review-execution-locks")}/`,
       `${PRODUCT.managedPath("output")}/`,
       `${PRODUCT.managedPath("recovery")}/`,
       `${PRODUCT.managedPath("worktree")}/`,

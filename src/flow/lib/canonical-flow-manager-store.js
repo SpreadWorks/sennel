@@ -120,6 +120,11 @@ import {
   RetryRecoveryArtifactPublication,
   RetryRecoveryReceipt,
 } from "./retry-recovery.js";
+import {
+  TaskReviewUnsealedCheckpoint,
+  TaskReviewRecoveryAuthorization,
+  taskReviewCheckpointArtifact,
+} from "./task-review-recovery-checkpoint.js";
 import { validateUpgradeResultArtifact } from "./upgrade-result-artifact.js";
 import {
   taskGateSettlementIssueLogActivityId,
@@ -2165,10 +2170,13 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  retryExhaustedAttempt({ specId = null, receipt } = {}) {
+  retryExhaustedAttempt({ specId = null, receipt, taskReviewRecoveryAuthorization = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const typed = receipt instanceof RetryRecoveryReceipt ? receipt : new RetryRecoveryReceipt(receipt);
+    if (taskReviewRecoveryAuthorization !== null && !(taskReviewRecoveryAuthorization instanceof TaskReviewRecoveryAuthorization)) {
+      throw new CurrentFlowStateInvariantError("Task Review recovery authorization must be typed");
+    }
     const state = this.runtime.load(resolved);
     if (state.current === null || state.attempt?.failure === null) {
       throw new CurrentFlowStateInvariantError("canonical exhausted recovery requires a failed active Attempt");
@@ -2196,7 +2204,7 @@ export class CanonicalFlowManagerStore {
       specId: resolved,
       activityId: activityId("attempt-recovered-after-exhaustion"),
       attempt: nextAttempt,
-      retryRecoveryPublication: RetryRecoveryArtifactPublication.receipt(typed),
+      retryRecoveryPublication: RetryRecoveryArtifactPublication.receipt(typed, taskReviewRecoveryAuthorization),
       references: { evaluations: [], findings: [], repairs: [], artifacts: [] },
     });
   }
@@ -3375,7 +3383,7 @@ export class CanonicalFlowManagerStore {
    * error counterpart to `confirmCurrentAttempt`; callers never mutate a
    * status blob or write a retry artifact beside flow.json.
    */
-  failCurrentAttempt({ specId = null, failure, result, commandResult = undefined, admission = undefined } = {}) {
+  failCurrentAttempt({ specId = null, failure, result, commandResult = undefined, taskReviewUnsealedCheckpoint = null, admission = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
@@ -3393,6 +3401,10 @@ export class CanonicalFlowManagerStore {
       confirmedAt: now,
       artifactRefs: [],
     };
+    if (taskReviewUnsealedCheckpoint !== null && !(taskReviewUnsealedCheckpoint instanceof TaskReviewUnsealedCheckpoint)) {
+      throw new CurrentFlowStateInvariantError("Task Review failure checkpoint must be typed");
+    }
+    if (taskReviewUnsealedCheckpoint !== null) taskReviewUnsealedCheckpoint.assertActiveState(state);
     const artifactWrites = commandResult === undefined
       ? []
       : [
@@ -3404,6 +3416,7 @@ export class CanonicalFlowManagerStore {
           }),
           ...this.#commandPublicationWrites(commandResult),
         ];
+    if (taskReviewUnsealedCheckpoint !== null) artifactWrites.push(taskReviewCheckpointArtifact(taskReviewUnsealedCheckpoint));
     return this.runtime.failAttempt({
       specId: resolved,
       activityId: activityId("attempt-failed"),
