@@ -69,6 +69,11 @@ import {
 } from "./review-recurrence.js";
 import { TaskReviewExecutionIdentity } from "./task-review-execution-identity.js";
 import { currentTaskReviewAttemptCount } from "./task-review-attempt-accounting.js";
+import {
+  readRetryRecoveryReceiptChain,
+  retryReceiptArtifact,
+  retryEvidenceRouteForNode,
+} from "./retry-recovery.js";
 
 const IMPL_REVIEW_PHASE = "impl";
 const REVIEW_VERDICT_VALUES = Object.freeze(["PASS", "ADVISORY", "REJECTED"]);
@@ -825,6 +830,16 @@ class TaskReviewUnsealedSourceCheckpoint {
     const manifest = SourceMutationManifest.capture({ baseline: this.baseline });
     return manifest.mutations.length > 0;
   }
+
+  changedRepositoryPaths() {
+    const snapshot = WorkerArtifactRepositoryMutationSnapshot.capture({
+      root: this.baseline.snapshot.root,
+      authorities: this.baseline.snapshot.authorities,
+      ignoredDirectories: this.baseline.snapshot.ignoredDirectories,
+      runtimeLocks: this.baseline.snapshot.runtimeLocks,
+    });
+    return this.baseline.snapshot.allChangedPaths(snapshot);
+  }
 }
 
 /** Safe diagnostic facts from a retained, partially-effected Task Review unit. */
@@ -929,6 +944,19 @@ function reconcileUnsealedTaskReviewSources({ workUnit, state, flowManager, task
       cause,
     });
   }
+  const recoveryRoute = retryEvidenceRouteForNode(state, expectedNodeId);
+  const recoveryReceipts = recoveryRoute === null
+    ? []
+    : readRetryRecoveryReceiptChain(flowManager, state, recoveryRoute);
+  const recoveryReceiptPaths = new Set(recoveryReceipts.map((receipt) => path.relative(
+    executionRoot,
+    path.join(flowManager.specLocation(state.specId).directory, retryReceiptArtifact(receipt).artifact.relativePath),
+  ).split(path.sep).join("/")));
+  const currentWorkUnitDirectory = path.relative(
+    executionRoot,
+    workUnit.workUnit.directory,
+  ).split(path.sep).join("/");
+  const workUnitNamespace = path.posix.dirname(currentWorkUnitDirectory);
   for (const recovered of retained.workUnits) {
     let checkpoint;
     let current;
@@ -961,6 +989,24 @@ function reconcileUnsealedTaskReviewSources({ workUnit, state, flowManager, task
       }
     } catch (cause) {
       if (cause?.code === "TASK_REVIEW_PARTIAL_EFFECT") throw cause;
+      const authorizedRecovery = recoveryReceipts.some((receipt) => (
+        receipt.previous.attemptId === checkpoint.baseline.attempt.id
+        && receipt.previous.attempt === checkpoint.baseline.attempt.sequence
+      ));
+      const changedPaths = authorizedRecovery ? checkpoint.changedRepositoryPaths() : [];
+      const authorizedCommittedAdvance = cause?.code === "FLOW_SOURCE_HANDOFF_FINALIZE_AUTHORITY_VIOLATION"
+        && changedPaths.length > 0
+        && changedPaths.every((entry) => (
+          entry === "<HEAD>"
+          || entry === "<index>"
+          || recoveryReceiptPaths.has(entry)
+          || entry === workUnitNamespace
+          || entry.startsWith(`${workUnitNamespace}/`)
+        ));
+      if (authorizedRecovery && authorizedCommittedAdvance) {
+        recovered.cleanup();
+        continue;
+      }
       throw partialTaskReviewEffectFailure({
         message: `unsealed Task Review source-effect baseline cannot be compared: ${cause.message}`,
         workUnit: recovered,

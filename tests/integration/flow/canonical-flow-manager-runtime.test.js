@@ -83,6 +83,7 @@ import {
   WorkerArtifactHandoffCoordinator,
   WorkerArtifactHandoffRequest,
   WorkerArtifactPublicationJournal,
+  WorkerArtifactRepositoryMutationSnapshot,
   WorkerArtifactMutationAuthoritySnapshot,
   WorkerArtifactSemanticInputRevision,
   SourceMutationBaseline,
@@ -185,6 +186,14 @@ import {
 } from "../../support/infrastructure/flow-setup.js";
 import { validateCanonicalUpgradeEvidence } from "../../../src/flow/lib/test-artifacts.js";
 import { ReviewTargetAuthority } from "../../../src/flow/lib/review-target-authority.js";
+import {
+  readRetryBaseline,
+  readRetryRecoveryReceipt,
+  retryEvidenceRouteForNode,
+  retryReceiptArtifact,
+  RetryRecoveryBaseline,
+  RetryRecoveryReceipt,
+} from "../../../src/flow/lib/retry-recovery.js";
 import {
   CanonicalTestArtifactStore,
   CanonicalTestSourceProvenanceError,
@@ -9247,5 +9256,108 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(fs.existsSync(safe.stale.directory), false);
     assert.equal(result.errors[0].code, "REVIEW_TOOLING_ERROR");
     assert.notEqual(safe.manager.canonicalState(safe.specId).attempt.failure.code, "TASK_REVIEW_PARTIAL_EFFECT");
+
+    const exhausted = safe.manager.canonicalState(safe.specId);
+    const exhaustedWorkUnit = new ReviewWorkUnit({
+      executionRoot: safe.repository,
+      runId: exhausted.runId,
+      specId: safe.specId,
+      phase: "impl",
+      taskId: "T-1",
+      nodeId: "T-1-review",
+      attemptId: exhausted.attempt.id,
+      target: { treeSha: "a".repeat(40), targetStateDigest: "b".repeat(64) },
+      output: ReviewWorkUnitOutput.forReview({ phase: "impl", taskId: "T-1" }),
+    });
+    assert.equal(fs.existsSync(exhaustedWorkUnit.directory), true);
+    const route = retryEvidenceRouteForNode(exhausted, exhausted.attempt.nodeId);
+    const previousBaseline = readRetryBaseline(safe.manager, exhausted, route);
+    assert.notEqual(previousBaseline, null);
+    fs.writeFileSync(path.join(safe.repository, "parent-runtime-repair.js"), "export const repaired = true;\n");
+    execFileSync("git", ["add", "parent-runtime-repair.js"], { cwd: safe.repository });
+    execFileSync("git", ["commit", "-m", "parent runtime repair"], { cwd: safe.repository });
+    const nextRuntimeDigest = previousBaseline.runtimeDigest === "f".repeat(64) ? "e".repeat(64) : "f".repeat(64);
+    const currentBaseline = new RetryRecoveryBaseline({
+      ...previousBaseline.toJSON(),
+      attemptId: crypto.randomUUID(),
+      attempt: previousBaseline.attempt + 1,
+      runtimeDigest: nextRuntimeDigest,
+    });
+    safe.manager.retryExhaustedAttempt({
+      specId: safe.specId,
+      receipt: new RetryRecoveryReceipt({
+        previous: previousBaseline,
+        current: currentBaseline,
+        reason: "The parent committed the audited Review runtime repair before retrying.",
+        reevaluationCount: 1,
+      }),
+    });
+    const recoveredState = safe.manager.canonicalState(safe.specId);
+    const recoveryReceipt = readRetryRecoveryReceipt(safe.manager, recoveredState, route);
+    assert.notEqual(recoveryReceipt, null);
+    assert.equal(recoveryReceipt.previous.attemptId, exhausted.attempt.id);
+    assert.equal(recoveryReceipt.previous.attempt, exhausted.attempt.sequence);
+    const recoveredExhaustedWorkUnit = ReviewWorkUnit.fromEnvironment({
+      [REVIEW_WORK_UNIT_MANIFEST_ENV]: exhaustedWorkUnit.manifestPath,
+    }, { expectedDirectory: exhaustedWorkUnit.directory });
+    const sourceEffectInput = recoveredExhaustedWorkUnit.manifestDocument.inputs
+      .find((entry) => entry.logicalKey === "task.source-effect-baseline");
+    const sourceEffectBaseline = SourceMutationBaseline.fromStored(
+      JSON.parse(sourceEffectInput.assertSnapshot(recoveredExhaustedWorkUnit.root).bytes.toString("utf8")),
+      { root: safe.repository },
+    );
+    assert.equal(sourceEffectBaseline.attempt.id, recoveryReceipt.previous.attemptId);
+    assert.equal(sourceEffectBaseline.attempt.sequence, recoveryReceipt.previous.attempt);
+    const currentRepository = WorkerArtifactRepositoryMutationSnapshot.capture({
+      root: sourceEffectBaseline.snapshot.root,
+      authorities: sourceEffectBaseline.snapshot.authorities,
+      ignoredDirectories: sourceEffectBaseline.snapshot.ignoredDirectories,
+      runtimeLocks: sourceEffectBaseline.snapshot.runtimeLocks,
+    });
+    const changedPaths = sourceEffectBaseline.snapshot.allChangedPaths(currentRepository);
+    assert.equal(changedPaths.includes("<HEAD>"), true);
+    assert.equal(changedPaths.includes("<index>"), true);
+    assert.equal(changedPaths.includes("parent-runtime-repair.js"), false, "the committed repair must not remain as a worker-side dirty path");
+    const currentWorkUnit = new ReviewWorkUnit({
+      executionRoot: safe.repository,
+      runId: recoveredState.runId,
+      specId: safe.specId,
+      phase: "impl",
+      taskId: "T-1",
+      nodeId: "T-1-review",
+      attemptId: recoveredState.attempt.id,
+      target: { treeSha: "a".repeat(40), targetStateDigest: "b".repeat(64) },
+      output: ReviewWorkUnitOutput.forReview({ phase: "impl", taskId: "T-1" }),
+    });
+    const currentWorkUnitDirectory = path.relative(safe.repository, currentWorkUnit.directory).split(path.sep).join("/");
+    const receiptPath = path.relative(
+      safe.repository,
+      path.join(safe.manager.specLocation(safe.specId).directory, retryReceiptArtifact(recoveryReceipt).artifact.relativePath),
+    ).split(path.sep).join("/");
+    const workUnitNamespace = path.posix.dirname(currentWorkUnitDirectory);
+    assert.deepEqual(changedPaths.filter((entry) => (
+      entry !== "<HEAD>"
+      && entry !== "<index>"
+      && entry !== receiptPath
+      && entry !== workUnitNamespace
+      && !entry.startsWith(`${workUnitNamespace}/`)
+    )), []);
+
+    let recoveredProviderCalls = 0;
+    const recoveredReview = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() {
+        recoveredProviderCalls += 1;
+        return { ok: false, status: 1, stdout: "", stderr: "fixture provider stop", signal: null, killed: false };
+      },
+    });
+    const recoveredResult = await recoveredReview.execute({
+      ...safe.ctx,
+      flowState: safe.manager.load(safe.specId),
+    });
+    assert.equal(recoveredProviderCalls, 1, JSON.stringify(recoveredResult));
+    assert.equal(fs.existsSync(exhaustedWorkUnit.directory), false, "direct recovery must clean the prior committed baseline");
+    assert.equal(recoveredResult.errors[0].code, "REVIEW_TOOLING_ERROR");
   });
 });

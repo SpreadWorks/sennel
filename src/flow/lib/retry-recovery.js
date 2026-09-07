@@ -387,12 +387,13 @@ function routeId(route) {
 function assertActiveRetryBaseline(baseline, state, route) {
   if (
     !baseline.route.equals(route)
-    || baseline.attemptId !== state.attempt.id
-    || baseline.attempt !== state.attempt.sequence
     || baseline.runId !== state.runId
     || baseline.specId !== state.specId
     || baseline.issue !== (state.issue ?? null)
   ) throw new Error("retry baseline identity does not match the active Attempt and Flow");
+  if (baseline.attemptId !== state.attempt.id || baseline.attempt !== state.attempt.sequence) {
+    throw new Error("retry baseline identity does not match the active Attempt and Flow");
+  }
   return baseline;
 }
 
@@ -411,17 +412,45 @@ export function readRetryBaseline(flowManager, state, route) {
     return assertActiveRetryBaseline(baseline, state, route);
   }
 
-  const receiptSource = flowManager.readArtifact({
-    specId: state.specId,
-    logicalKey: "retry.recovery.receipt",
-    parameters,
-    consumerNodeId: state.attempt.nodeId,
-    optional: true,
-  });
-  if (receiptSource === null) return null;
-  let receipt;
-  try { receipt = new RetryRecoveryReceipt(JSON.parse(receiptSource.bytes.toString("utf8"))); } catch (error) { throw new Error(`retry receipt is invalid: ${error.message}`); }
-  return assertActiveRetryBaseline(receipt.current, state, route);
+  const receipt = readRetryRecoveryReceipt(flowManager, state, route);
+  return receipt === null ? null : receipt.current;
+}
+
+export function readRetryRecoveryReceipt(flowManager, state, route) {
+  return readRetryRecoveryReceiptChain(flowManager, state, route)[0] ?? null;
+}
+
+export function readRetryRecoveryReceiptChain(flowManager, state, route) {
+  const receipts = [];
+  const seen = new Set();
+  let expectedAttemptId = state.attempt.id;
+  let expectedAttempt = state.attempt.sequence;
+  for (let index = 0; index < state.attempt.sequence; index += 1) {
+    if (seen.has(expectedAttemptId)) throw new Error("retry receipt chain contains an Attempt cycle");
+    seen.add(expectedAttemptId);
+    const receiptSource = flowManager.readArtifact({
+      specId: state.specId,
+      logicalKey: "retry.recovery.receipt",
+      parameters: { routeId: routeId(route), attemptId: expectedAttemptId },
+      consumerNodeId: state.attempt.nodeId,
+      optional: true,
+    });
+    if (receiptSource === null) break;
+    let receipt;
+    try { receipt = new RetryRecoveryReceipt(JSON.parse(receiptSource.bytes.toString("utf8"))); } catch (error) { throw new Error(`retry receipt is invalid: ${error.message}`); }
+    if (
+      !receipt.current.route.equals(route)
+      || receipt.current.attemptId !== expectedAttemptId
+      || receipt.current.attempt !== expectedAttempt
+      || receipt.current.runId !== state.runId
+      || receipt.current.specId !== state.specId
+      || receipt.current.issue !== (state.issue ?? null)
+    ) throw new Error("retry receipt chain identity does not match the active Attempt and Flow");
+    receipts.push(receipt);
+    expectedAttemptId = receipt.previous.attemptId;
+    expectedAttempt = receipt.previous.attempt;
+  }
+  return Object.freeze(receipts);
 }
 
 function canonicalState(state) {
