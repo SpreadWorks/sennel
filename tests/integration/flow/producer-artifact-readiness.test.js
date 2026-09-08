@@ -144,6 +144,11 @@ describe("ProducerArtifactReadiness", () => {
 
     const reviewToGate = typedTaskStageSnapshot({ producerRole: "review", consumerRole: "gate" });
     reviewToGate.readiness.assert(reviewToGate.snapshot);
+
+    const ordinaryReviewToGate = typedTaskStageSnapshot({ producerRole: "review", consumerRole: "gate" });
+    ordinaryReviewToGate.snapshot.activities[1].transition = { operation: "confirm_attempt" };
+    ordinaryReviewToGate.readiness.assert(ordinaryReviewToGate.snapshot);
+
     reviewToGate.snapshot.activities[1].transition.taskReviewStagePlan.facts.binding.stage = "triage";
     assert.throws(
       () => reviewToGate.readiness.assert(reviewToGate.snapshot),
