@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-1",
+  "treeSha": "657e8daeb8674a9072e6cfffe53fd9a398408c5f",
+  "targetStateDigest": "deef9da1ababb74ebab7b0d07348739b9a17e86af8bbb8f0a680731f67ae0acf",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "d53fca05d5fd12847282b94b3b12ca6ef1a1956484936d83d670b81e6bbf0fbe",
+    "capturedAt": "2026-09-02T08:21:04.116Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "ead269bd947fe52f57bf9d7a07bb3f14581ade6447b397656af7e6925377cdbf",
+      "summary": "Query ignores Activity ledger entries beyond the confirmed prefix",
+      "fingerprint": "ead269bd947fe52f57bf9d7a07bb3f14581ade6447b397656af7e6925377cdbf",
+      "evidenceRefs": [
+        "impl-review.json#ead269bd947fe52f57bf9d7a07bb3f14581ade6447b397656af7e6925377cdbf"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "a04db66b6fcd005349dc09b44b1a5e0501bea0f99b9baa927e8f7709c87a0832",
+      "summary": "Aggregate metrics never process Activity metric observations",
+      "fingerprint": "a04db66b6fcd005349dc09b44b1a5e0501bea0f99b9baa927e8f7709c87a0832",
+      "evidenceRefs": [
+        "impl-review.json#a04db66b6fcd005349dc09b44b1a5e0501bea0f99b9baa927e8f7709c87a0832"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "329c9d790bc91d79455e0f8c9d0abde5e37b65b6d2d7bb5f79f50e0fd0f1c219",
+      "summary": "Worktree re-execution rejects valid request-file queries",
+      "fingerprint": "329c9d790bc91d79455e0f8c9d0abde5e37b65b6d2d7bb5f79f50e0fd0f1c219",
+      "evidenceRefs": [
+        "impl-review.json#329c9d790bc91d79455e0f8c9d0abde5e37b65b6d2d7bb5f79f50e0fd0f1c219"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "6156ef21ad48beb7f519e10a0a24829e18dd8e8148b75b5ece89f2c0bcd0ed41",
+      "summary": "Query uses the invocation directory instead of the shared repository-root resolver",
+      "fingerprint": "6156ef21ad48beb7f519e10a0a24829e18dd8e8148b75b5ece89f2c0bcd0ed41",
+      "evidenceRefs": [
+        "impl-review.json#6156ef21ad48beb7f519e10a0a24829e18dd8e8148b75b5ece89f2c0bcd0ed41"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "0392344b2edf0e448701789a0a927177f548b53b3aef6dd50cbe5e175839338d",
+      "summary": "Query limits and error codes are not shared with fixture and consumer compatibility surfaces",
+      "fingerprint": "0392344b2edf0e448701789a0a927177f548b53b3aef6dd50cbe5e175839338d",
+      "evidenceRefs": [
+        "impl-review.json#0392344b2edf0e448701789a0a927177f548b53b3aef6dd50cbe5e175839338d"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

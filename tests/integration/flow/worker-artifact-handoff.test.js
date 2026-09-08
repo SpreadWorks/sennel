@@ -30,11 +30,14 @@ import SetStepCommand from "../../../src/flow/lib/set-step.js";
 import SetMetricCommand from "../../../src/flow/lib/set-metric.js";
 import { loadSpecJsonSchema } from "../../../src/lib/spec-json.js";
 import { validateSchema } from "../../../src/lib/schema-validate.js";
+import { adaptJsonSchemaForProvider } from "../../../src/lib/provider-schema.js";
 import {
   WorkerArtifactHandoffCoordinator,
   WorkerArtifactHandoffError,
   WorkerArtifactMutationAuthoritySnapshot,
   SourceMutationManifest,
+  SourceRepairEffect,
+  SourceTriageEffect,
   SourceWorkerEffect,
   SourceWorkerEffectReport,
   assertWorkerUpgradeAllowed,
@@ -69,6 +72,7 @@ import {
 } from "../../../src/flow/lib/canonical-command-result.js";
 import { persistAgentInvocationMetric } from "../../../src/lib/agent-invocation-metric.js";
 import { ProcessOwnedLock, RealDirectoryAuthority } from "../../../src/lib/process-owned-lock.js";
+import { ApprovedFindingExceptionSet } from "../../../src/flow/lib/acknowledged-rationale.js";
 import {
   CanonicalFlowFixture,
   canonicalDraftDocument,
@@ -1837,7 +1841,7 @@ describe("worker artifact handoff", () => {
       implement: { ...common, stepId: "implement", overview: null, triage: null, repair: null },
       "impl-triage": {
         ...common, stepId: "impl-triage", overview: null, repair: null,
-        triage: { version: 1, dispositions: [{ findingKey: "F1", disposition: "apply", rationale: "The finding requires a correction." }] },
+        triage: { version: 1, dispositions: [{ findingKey: "F1", disposition: "apply", basis: "repair-required", rationale: "The finding requires a correction." }] },
       },
       "impl-repair": {
         ...common,
@@ -1845,7 +1849,15 @@ describe("worker artifact handoff", () => {
         files: [{ requirementId: "R1", paths: ["product.js"] }],
         overview: null,
         triage: null,
-        repair: { version: 1, appliedFindingKeys: ["F1"], summary: "Applied the reviewed correction." },
+        repair: { version: 1, findings: [{ findingKey: "F1", paths: ["product.js"] }], summary: "Applied the reviewed correction.", recurrenceResolutions: [] },
+      },
+      "task-repair": {
+        ...common,
+        stepId: "task-repair",
+        files: [{ requirementId: "R1", paths: ["product.js"] }],
+        overview: null,
+        triage: null,
+        repair: { version: 1, findings: [{ findingKey: "F1", paths: ["product.js"] }], summary: "Applied the reviewed correction.", recurrenceResolutions: [] },
       },
       "task-impl": {
         ...common, stepId: "task-impl", overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null,
@@ -1857,12 +1869,123 @@ describe("worker artifact handoff", () => {
     }
   });
 
+  it("requires an explicit non-null recurrence resolution array in repair responses", () => {
+    for (const stepId of ["impl-repair", "task-repair"]) {
+      const document = {
+        version: 1,
+        stepId,
+        completionStatus: "done",
+        files: [{ requirementId: "R1", paths: ["product.js"] }],
+        issues: [],
+        overview: null,
+        triage: null,
+        repair: {
+          version: 1,
+          findings: [{ findingKey: "F1", paths: ["product.js"] }],
+          summary: "Applied the reviewed correction.",
+          recurrenceResolutions: [],
+        },
+        noChangeReason: null,
+      };
+      const schema = sourceWorkerEffectJsonSchema(stepId);
+      const providerSchema = adaptJsonSchemaForProvider("codex", schema);
+      assert.ok(schema.properties.repair.required.includes("recurrenceResolutions"), stepId);
+      assert.ok(providerSchema.properties.repair.required.includes("recurrenceResolutions"), stepId);
+      assert.equal(providerSchema.properties.repair.properties.recurrenceResolutions.type, "array", stepId);
+      assert.deepEqual(validateSchema(document, schema), [], stepId);
+      assert.deepEqual(SourceWorkerEffectReport.fromDocument(document, stepId).repair.toJSON(), document.repair, stepId);
+
+      const nullResolutions = structuredClone(document);
+      nullResolutions.repair.recurrenceResolutions = null;
+      assert.notDeepEqual(validateSchema(nullResolutions, schema), [], `${stepId} rejects null`);
+      assert.throws(
+        () => SourceWorkerEffectReport.fromDocument(nullResolutions, stepId),
+        /recurrence resolutions are invalid/,
+      );
+    }
+  });
+
+  it("applies the shared semantic triage contract to every canonical finding", () => {
+    const findings = [
+      { findingKey: "F1", disposition: "must-fix" },
+      { findingKey: "F2", disposition: "informational" },
+      { findingKey: "F3", disposition: "deferred" },
+    ];
+    const decision = (findingKey, disposition, basis) => ({
+      findingKey,
+      disposition,
+      basis,
+      rationale: "Canonical evidence supports this exact triage decision.",
+    });
+    const valid = new SourceTriageEffect({
+      version: 1,
+      dispositions: [
+        decision("F1", "reject", "already-satisfied"),
+        decision("F2", "reject", "not-applicable"),
+        decision("F3", "reject", "not-applicable"),
+      ],
+    });
+    assert.strictEqual(valid.assertCanonicalFindings(findings), valid);
+    assert.throws(
+      () => new SourceTriageEffect({ version: 1, dispositions: valid.toJSON().dispositions.slice(0, 2) })
+        .assertCanonicalFindings(findings),
+      /exactly once/,
+    );
+    assert.throws(
+      () => new SourceTriageEffect({
+        version: 1,
+        dispositions: [
+          decision("F1", "apply", "repair-required"),
+          decision("F2", "apply", "repair-required"),
+          decision("F3", "reject", "not-applicable"),
+        ],
+      }).assertCanonicalFindings(findings),
+      /must be rejected as not-applicable/,
+    );
+    assert.throws(
+      () => new SourceTriageEffect({
+        version: 1,
+        dispositions: [
+          decision("F1", "reject", "approved-exception"),
+          decision("F2", "reject", "not-applicable"),
+          decision("F3", "reject", "not-applicable"),
+        ],
+      }).assertCanonicalFindings(findings),
+      /lacks approved exception authority/,
+    );
+    const guardrailId = "guardrail-with-exception";
+    const approvedExceptions = ApprovedFindingExceptionSet.fromCanonical({
+      spec: {
+        constraints: [`${guardrailId}: This intentionally accepted tradeoff is documented in canonical spec authority.`],
+      },
+      guardrails: [{
+        id: guardrailId,
+        body: "Acknowledged-exception handling: canonical spec rationale may authorize this exception.",
+      }],
+    });
+    const approvedDecision = new SourceTriageEffect({
+      version: 1,
+      dispositions: [decision("F4", "reject", "approved-exception")],
+    });
+    assert.throws(
+      () => approvedDecision.assertCanonicalFindings(
+        [{ findingKey: "F4", guardrailId, disposition: "must-fix" }],
+        { approvedExceptions: { allows: () => true } },
+      ),
+      /typed canonical authority/,
+    );
+    assert.strictEqual(approvedDecision.assertCanonicalFindings(
+      [{ findingKey: "F4", guardrailId, disposition: "must-fix" }],
+      { approvedExceptions },
+    ), approvedDecision);
+  });
+
   it("preserves a recurring implementation repair rationale and distinct strategy", () => {
     const document = {
       version: 1, stepId: "impl-repair", completionStatus: "done",
       files: [{ requirementId: "R1", paths: ["product.js"] }], issues: [], overview: null, triage: null, noChangeReason: null,
       repair: {
-        version: 1, appliedFindingKeys: ["F1"], summary: "Applied the reviewed correction with an additional boundary check.",
+        version: 1, findings: [{ findingKey: "F1", paths: ["product.js"] }], summary: "Applied the reviewed correction with an additional boundary check.",
         recurrenceResolutions: [{
           findingKey: "F1",
           fingerprint: "a".repeat(64),
@@ -1884,8 +2007,9 @@ describe("worker artifact handoff", () => {
       ...document,
       repair: {
         version: 1,
-        appliedFindingKeys: ["F1"],
+        findings: [{ findingKey: "F1", paths: ["product.js"] }],
         summary: "Applied a first-occurrence implementation repair.",
+        recurrenceResolutions: [],
       },
     }, "impl-repair").repair;
     assert.throws(
@@ -1896,7 +2020,7 @@ describe("worker artifact handoff", () => {
       ...document,
       repair: {
         ...document.repair,
-        appliedFindingKeys: ["F1"],
+        findings: [{ findingKey: "F1", paths: ["product.js"] }],
         recurrenceResolutions: [{
           ...document.repair.recurrenceResolutions[0],
           findingKey: "F2",
@@ -1913,6 +2037,122 @@ describe("worker artifact handoff", () => {
       }),
       /must exactly match canonical recurrence context/,
       "a triage-rejected recurring finding is neither a repair obligation nor a valid resolution",
+    );
+  });
+
+  it("binds finding repairs to parent-observed mutations across many-to-many path claims", () => {
+    const attempt = { id: "impl-repair-attempt", nodeId: "impl-repair", sequence: 1 };
+    const manifest = new SourceMutationManifest({
+      attempt,
+      baselineDigest: "b".repeat(64),
+      mutations: ["one.js", "two.js"].map((relativePath, index) => ({
+        mutationId: SourceMutationManifest.mutationId(attempt, relativePath),
+        path: relativePath,
+        changeKind: "content",
+        beforeDigest: String(index + 1).repeat(64),
+        afterDigest: String(index + 3).repeat(64),
+      })),
+    });
+    const report = (findings) => SourceWorkerEffectReport.fromDocument({
+      version: 1,
+      stepId: "impl-repair",
+      completionStatus: "done",
+      files: [{ requirementId: "R1", paths: ["one.js", "two.js"] }],
+      issues: [],
+      overview: null,
+      triage: null,
+      repair: { version: 1, findings, summary: "Applied every selected repair finding.", recurrenceResolutions: [] },
+      noChangeReason: null,
+    }, "impl-repair").bind(manifest).repair;
+
+    const sharedMutation = report([
+      { findingKey: "F1", paths: ["one.js"] },
+      { findingKey: "F2", paths: ["one.js", "two.js"] },
+    ]);
+    assert.deepEqual(sharedMutation.appliedFindingKeys, ["F1", "F2"]);
+    assert.deepEqual(sharedMutation.findingMutations.toJSON(), [
+      { findingKey: "F1", mutationIds: [SourceMutationManifest.mutationId(attempt, "one.js")] },
+      {
+        findingKey: "F2",
+        mutationIds: [
+          SourceMutationManifest.mutationId(attempt, "one.js"),
+          SourceMutationManifest.mutationId(attempt, "two.js"),
+        ],
+      },
+    ]);
+    assert.strictEqual(sharedMutation.assertManifest(manifest), sharedMutation);
+
+    const oneFindingManyFiles = report([{ findingKey: "F1", paths: ["one.js", "two.js"] }]);
+    assert.deepEqual(oneFindingManyFiles.appliedFindingKeys, ["F1"]);
+    assert.strictEqual(oneFindingManyFiles.assertManifest(manifest), oneFindingManyFiles);
+
+    assert.throws(
+      () => report([{ findingKey: "F1", paths: ["one.js"] }]),
+      (error) => error instanceof WorkerArtifactHandoffError
+        && error.code === "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID"
+        && JSON.stringify(error.data.missing) === JSON.stringify(["two.js"]),
+      "the parent rejects an observed mutation omitted from finding repair claims",
+    );
+  });
+
+  it("rejects incomplete, unknown, and finding-mismatched repair mutation claims", () => {
+    const attempt = { id: "impl-repair-attempt", nodeId: "impl-repair", sequence: 1 };
+    const mutationId = SourceMutationManifest.mutationId(attempt, "one.js");
+    const manifest = new SourceMutationManifest({
+      attempt,
+      baselineDigest: "b".repeat(64),
+      mutations: [{
+        mutationId,
+        path: "one.js",
+        changeKind: "content",
+        beforeDigest: "1".repeat(64),
+        afterDigest: "2".repeat(64),
+      }],
+    });
+    const effect = new SourceRepairEffect({
+      version: 1,
+      appliedFindingKeys: ["F1"],
+      findingMutations: [{ findingKey: "F1", mutationIds: [mutationId] }],
+      summary: "Applied the selected repair finding.",
+    });
+    assert.throws(
+      () => effect.assertAppliedFindingKeys(["F1", "F2"]),
+      (error) => error.code === "FLOW_REPAIR_FINDING_COVERAGE_INVALID"
+        && JSON.stringify(error.data.missingFindingKeys) === JSON.stringify(["F2"]),
+    );
+    assert.throws(
+      () => effect.assertAppliedFindingKeys([]),
+      (error) => error.code === "FLOW_REPAIR_FINDING_COVERAGE_INVALID"
+        && JSON.stringify(error.data.unknownFindingKeys) === JSON.stringify(["F1"]),
+    );
+
+    const unknownMutation = new SourceRepairEffect({
+      version: 1,
+      appliedFindingKeys: ["F1"],
+      findingMutations: [{ findingKey: "F1", mutationIds: ["f".repeat(64)] }],
+      summary: "Claims a mutation outside the observed manifest.",
+    });
+    assert.throws(
+      () => unknownMutation.assertManifest(manifest),
+      (error) => error.code === "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID"
+        && error.data.unknownMutationIds.length === 1
+        && error.data.missingMutationIds[0] === mutationId,
+    );
+
+    assert.throws(
+      () => SourceWorkerEffectReport.fromDocument({
+        version: 1,
+        stepId: "impl-repair",
+        completionStatus: "done",
+        files: [],
+        issues: [],
+        overview: null,
+        triage: null,
+        repair: { version: 1, findings: [], summary: "No source changes were made for repair." },
+        noChangeReason: null,
+      }, "impl-repair"),
+      /bounded non-empty array/,
+      "a repair cannot complete without a finding-bound mutation claim",
     );
   });
 
@@ -1958,7 +2198,12 @@ describe("worker artifact handoff", () => {
         ...(stepId === "impl-repair"
           ? {
             files: [{ requirementId: "R1", mutationIds: ["a".repeat(64)] }],
-            repair: { version: 1, appliedFindingKeys: ["F1"], summary: "Applied the reviewed correction." },
+            repair: {
+              version: 1,
+              appliedFindingKeys: ["F1"],
+              findingMutations: [{ findingKey: "F1", mutationIds: ["a".repeat(64)] }],
+              summary: "Applied the reviewed correction.",
+            },
           }
           : {}),
       };
@@ -1987,7 +2232,12 @@ describe("worker artifact handoff", () => {
     const repairWithoutFiles = {
       ...base,
       stepId: "impl-repair",
-      repair: { version: 1, appliedFindingKeys: ["F1"], summary: "Applied the reviewed correction." },
+      repair: {
+        version: 1,
+        appliedFindingKeys: ["F1"],
+        findingMutations: [{ findingKey: "F1", mutationIds: ["a".repeat(64)] }],
+        summary: "Applied the reviewed correction.",
+      },
     };
     assert.notDeepEqual(validateSchema(repairWithoutFiles, sourceWorkerEffectJsonSchema("impl-repair")), []);
     assert.doesNotThrow(() => SourceWorkerEffect.fromDocument(repairWithoutFiles, "impl-repair"));
@@ -2191,11 +2441,11 @@ describe("worker artifact handoff", () => {
     }, "implement"), /invalid schema/);
   });
 
-  it("defines one complete authority record for all 36 Flow leaves and 3 task leaves", () => {
+  it("defines one complete authority record for all 36 Flow leaves and 5 task leaves", () => {
     const flowLeaves = flattenSteps(buildInitialNestedSteps()).map((step) => step.id);
     const taskLeaves = buildInitialTaskSteps().map((step) => step.id);
     assert.equal(flowLeaves.length, 36);
-    assert.equal(taskLeaves.length, 3);
+    assert.equal(taskLeaves.length, 5);
     assert.deepEqual(
       FLOW_ARTIFACT_AUTHORITY_MATRIX.map((entry) => entry.stepId).sort(),
       [...flowLeaves, ...taskLeaves].sort(),
@@ -2222,6 +2472,8 @@ describe("worker artifact handoff", () => {
         ["impl-triage", "forbidden"],
         ["impl-repair", "required"],
         ["task-impl", "optional"],
+        ["task-triage", "forbidden"],
+        ["task-repair", "required"],
       ],
     );
     for (const entry of FLOW_ARTIFACT_AUTHORITY_MATRIX.filter((candidate) => candidate.sourceHandoff)) {
@@ -3547,6 +3799,30 @@ describe("worker artifact handoff", () => {
 
       try {
         assert.doesNotThrow(() => authority.assertUnchanged());
+
+        const foreignReviewWorkUnit = path.join(
+          value.mainRoot,
+          ".sennel",
+          "review-work-units",
+          "foreign-run",
+          "foreign-attempt",
+          "impl-review.json",
+        );
+        fs.mkdirSync(path.dirname(foreignReviewWorkUnit), { recursive: true });
+        fs.writeFileSync(foreignReviewWorkUnit, "{}\n");
+        try {
+          assert.throws(
+            () => authority.assertUnchanged(),
+            (error) => error instanceof WorkerArtifactHandoffError
+              && error.code === "FLOW_ARTIFACT_HANDOFF_AUTHORITY_VIOLATION"
+              && error.data.changedPaths.includes(path.relative(
+                value.mainRoot,
+                foreignReviewWorkUnit,
+              ).split(path.sep).join("/")),
+          );
+        } finally {
+          fs.rmSync(path.join(value.mainRoot, ".sennel", "review-work-units"), { recursive: true, force: true });
+        }
 
         const unexpectedCurrentVersionRuntimePath = path.join(
           currentLocks[0].runtimeLock.directory,

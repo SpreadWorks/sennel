@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-3",
+  "treeSha": "7291b57aabdefe36bb658ad7ec5cf83ba6747aa9",
+  "targetStateDigest": "fa160451a245cbc06ea2fe0f00c558026b69f2cd97b89be4829ea453a7cf9f63",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "f6099f1f3429c93605811cf7c50fb267435bb7417457826e8f67748f6e160f9d",
+    "capturedAt": "2026-09-02T10:51:57.084Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+      "summary": "Version 2 state envelopes are rejected",
+      "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+      "evidenceRefs": [
+        "impl-review.json#4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+      "summary": "Version discovery rejects valid versions and accepts Version 000",
+      "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+      "evidenceRefs": [
+        "impl-review.json#1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

@@ -1,0 +1,819 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "T-2-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "8ebb2f8847af9ece25465b61711ebf4d1cc3706e0cc87cc12b39c6753ecdae5c",
+          "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+          "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "blockingCount": 3,
+          "nonBlockingCount": 0,
+          "taskId": "T-2"
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-02T10:05:47.736Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 3,
+            "nonBlocking": 0,
+            "total": 3
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "query-performs-worktree-discovery-after-boundary",
+              "title": "Query dispatch still invokes generic worktree discovery",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/sennel.js",
+              "requirementId": "R1",
+              "issue": "After validating the request, the query branch calls executeWorktreeLocalCli(), which runs git worktree discovery and may re-execute another checkout. R1 requires query execution to use existing bindings or cwd without additional worktree exploration.",
+              "suggestion": "Route validated queries through a query-specific handoff that preserves existing SENNEL_WORK_ROOT/SENNEL_SOURCE_ROOT bindings and does not call executeWorktreeLocalCli or spawn Git discovery.",
+              "disposition": "must-fix",
+              "rationale": "This violates the mandatory query bootstrap and execution-root contract and can make the same request read a different checkout.",
+              "findingId": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+              "fingerprint": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "query-handoff-failure-emits-no-response-json",
+              "title": "Worktree handoff failures bypass the query error response",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/lib/worktree-cli-execution.js",
+              "requirementId": "R1",
+              "issue": "When the query path's worktree handoff fails closed or spawnSync fails, the helper writes diagnostics only to stderr and returns an exit code. src/sennel.js then exits without emitting the required single query-specific JSON error response on stdout.",
+              "suggestion": "Keep query handoff failures inside the query error projector, or make the query-specific handoff return a structured error that runFlowQueryCli serializes before exiting non-zero.",
+              "disposition": "must-fix",
+              "rationale": "R1 requires failed query paths to produce one Schema Revision 1 response JSON while keeping diagnostics on stderr.",
+              "findingId": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+              "fingerprint": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "leading-hyphen-request-file-is-rejected",
+              "title": "Valid relative request-file paths beginning with a hyphen are rejected",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "readInput rejects any request-file argument whose value starts with '-' before path validation. A non-empty normalized relative path such as '-request.json' satisfies the stated path contract but is rejected as if the option value were missing.",
+              "suggestion": "Treat the next token as the path whenever it is present and non-empty; validate it as a path, using an explicit option form or separate argument disambiguation only for actual missing values.",
+              "disposition": "must-fix",
+              "rationale": "The mandatory acceptance criteria require accepting a string absolute or normalized-relative regular-file path; leading '-' is not an invalid path condition.",
+              "findingId": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+              "fingerprint": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+              "repeatCount": 1
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "reviewedTree": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "reviewedHead": "e18f4d6c98ef3ac4fa24eb964dbe0168383d284f",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-2",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-2.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/f4250fe71f34bb44688c4d783aa7de73/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 3,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "5fb722c2d8097d35283331735b925d009ea70795a6d252466b5e3298bf631338"
+          },
+          "workerOutput": {
+            "digest": "9cf98ef6415909639619e7e11dcb405fe29066f8c261c8e754e1853154228399",
+            "byteLength": 4628,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-2",
+            "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+            "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "f014d8ce6e7edab55e0cbfe965f39083b230dacfc1cf0d91a700af0e2f8c6ae7",
+              "capturedAt": "2026-09-02T10:05:47.736Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+                "summary": "Query dispatch still invokes generic worktree discovery",
+                "fingerprint": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+                "evidenceRefs": [
+                  "impl-review.json#8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+                "summary": "Worktree handoff failures bypass the query error response",
+                "fingerprint": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+                "evidenceRefs": [
+                  "impl-review.json#243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+                "summary": "Valid relative request-file paths beginning with a hyphen are rejected",
+                "fingerprint": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+                "evidenceRefs": [
+                  "impl-review.json#caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-2",
+              "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "f014d8ce6e7edab55e0cbfe965f39083b230dacfc1cf0d91a700af0e2f8c6ae7",
+                "capturedAt": "2026-09-02T10:05:47.736Z"
+              },
+              "evidenceDigest": "8ebb2f8847af9ece25465b61711ebf4d1cc3706e0cc87cc12b39c6753ecdae5c"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+            "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "T-2-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "23bdb31dc6c8fa70aae06e5d7d8129c34ebfec1dc8242cd7d0d5c426516f70ee",
+          "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+          "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "blockingCount": 3,
+          "nonBlockingCount": 0,
+          "taskId": "T-2"
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-02T10:08:14.155Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 3,
+            "nonBlocking": 0,
+            "total": 3
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "query-performs-worktree-discovery-after-boundary",
+              "title": "Query dispatch still invokes generic worktree discovery",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/sennel.js",
+              "requirementId": "R1",
+              "issue": "After validating the request, the query branch calls executeWorktreeLocalCli(), which performs generic worktree discovery and may re-execute another checkout.",
+              "suggestion": "Use a query-specific dispatch path that preserves existing worktree bindings without invoking generic worktree discovery.",
+              "disposition": "must-fix",
+              "rationale": "This mandatory R1 execution-root contradiction remains present from the prior review.",
+              "findingId": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+              "fingerprint": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+              "repeatCount": 2
+            },
+            {
+              "findingKey": "query-handoff-failure-emits-no-response-json",
+              "title": "Worktree handoff failures bypass the query error response",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/lib/worktree-cli-execution.js",
+              "requirementId": "R1",
+              "issue": "Handoff failures write only diagnostics to stderr and return an exit code, so src/sennel.js exits without emitting the required query response JSON on stdout.",
+              "suggestion": "Return a structured handoff failure to runFlowQueryCli or serialize the failure as the query error envelope before exiting.",
+              "disposition": "must-fix",
+              "rationale": "This mandatory R1 output-channel contradiction remains present from the prior review.",
+              "findingId": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+              "fingerprint": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+              "repeatCount": 2
+            },
+            {
+              "findingKey": "leading-hyphen-request-file-is-rejected",
+              "title": "Valid relative request-file paths beginning with a hyphen are rejected",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "readInput rejects any present --request-file value starting with '-'. A non-empty normalized-relative path such as '-request.json' is otherwise valid under the acceptance criteria.",
+              "suggestion": "Treat any present, non-empty next token as the path and apply the normal path validation rules.",
+              "disposition": "must-fix",
+              "rationale": "This mandatory R1 input-boundary contradiction remains present from the prior review.",
+              "findingId": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+              "fingerprint": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+              "repeatCount": 2
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "reviewedTree": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "reviewedHead": "e18f4d6c98ef3ac4fa24eb964dbe0168383d284f",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-2",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-2.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/3bcee2e44915ee5cb55803f323203aab/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 3,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "b3746ec4f3acbcde30e4e990c673b52ff0bd9f1fd34b08b5139a940636103ca2"
+          },
+          "workerOutput": {
+            "digest": "cbe8ce0255fb2f6a4141b406c17b9ec2c83571125fbff216c6c78e57dbf52116",
+            "byteLength": 4013,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-2",
+            "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+            "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "05a11d3c1ee1026ded4e1e6dc4ca7bbefa7cd44ccd8b80ac435f8e3e439ac24a",
+              "capturedAt": "2026-09-02T10:08:14.155Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+                "summary": "Query dispatch still invokes generic worktree discovery",
+                "fingerprint": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+                "evidenceRefs": [
+                  "impl-review.json#8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+                "summary": "Worktree handoff failures bypass the query error response",
+                "fingerprint": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+                "evidenceRefs": [
+                  "impl-review.json#243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+                "summary": "Valid relative request-file paths beginning with a hyphen are rejected",
+                "fingerprint": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+                "evidenceRefs": [
+                  "impl-review.json#caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-2",
+              "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "05a11d3c1ee1026ded4e1e6dc4ca7bbefa7cd44ccd8b80ac435f8e3e439ac24a",
+                "capturedAt": "2026-09-02T10:08:14.155Z"
+              },
+              "evidenceDigest": "23bdb31dc6c8fa70aae06e5d7d8129c34ebfec1dc8242cd7d0d5c426516f70ee"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+            "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "T-2-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "f37132f1973d9368221f2a7d04a011ecc6af149a14f75fac23ae1e39322c08bf",
+          "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+          "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "blockingCount": 3,
+          "nonBlockingCount": 0,
+          "taskId": "T-2"
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-02T10:09:12.524Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 3,
+            "nonBlocking": 0,
+            "total": 3
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "query-performs-worktree-discovery-after-boundary",
+              "title": "Query dispatch still invokes generic worktree discovery",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/sennel.js",
+              "requirementId": "R1",
+              "issue": "After validating the request, the query branch calls executeWorktreeLocalCli(), which performs generic worktree discovery and may re-execute another checkout.",
+              "suggestion": "Use a query-specific dispatch path that preserves the established execution root without invoking generic worktree discovery.",
+              "disposition": "must-fix",
+              "rationale": "This contradicts mandatory R1 query-boundary execution behavior and remains unresolved.",
+              "findingId": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+              "fingerprint": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+              "repeatCount": 3
+            },
+            {
+              "findingKey": "query-handoff-failure-emits-no-response-json",
+              "title": "Worktree handoff failures bypass the query error response",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/lib/worktree-cli-execution.js",
+              "requirementId": "R1",
+              "issue": "Handoff failures write only diagnostics to stderr and return an exit code, so src/sennel.js exits without emitting the required query response JSON on stdout.",
+              "suggestion": "Return a structured handoff failure to runFlowQueryCli or serialize the failure as the query error envelope before exiting.",
+              "disposition": "must-fix",
+              "rationale": "The mandatory R1 output-channel contract requires stdout to contain the query response JSON, including failure responses.",
+              "findingId": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+              "fingerprint": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+              "repeatCount": 3
+            },
+            {
+              "findingKey": "leading-hyphen-request-file-is-rejected",
+              "title": "Valid relative request-file paths beginning with a hyphen are rejected",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "readInput rejects any present --request-file value starting with '-'. A non-empty normalized-relative path such as '-request.json' is otherwise valid under the request-file path acceptance criteria.",
+              "suggestion": "Treat any present, non-empty next token as the path and apply the normal NUL, normalization, regular-file, readability, and size checks.",
+              "disposition": "must-fix",
+              "rationale": "This unnecessarily rejects a valid request-file path at the mandatory R1 input boundary.",
+              "findingId": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+              "fingerprint": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+              "repeatCount": 3
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "reviewedTree": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "reviewedHead": "e18f4d6c98ef3ac4fa24eb964dbe0168383d284f",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-2",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-2.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/6af2553c8aad57f8a2ca4a75c363eebe/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 3,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "f60330811b328ce7bd889ef0975dadeff0b27ff83d21379f98b909cd41ea0cad"
+          },
+          "workerOutput": {
+            "digest": "29171e4a6d5f05a3387e6e13c96a2f0ca2ad79bbe480c2e2a7d6b3be344bdfc6",
+            "byteLength": 4117,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-2",
+            "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+            "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "7c2856efabe4818b8d650cae8a4d17f855296598dc687ea2a9d0321e7a80ade7",
+              "capturedAt": "2026-09-02T10:09:12.524Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+                "summary": "Query dispatch still invokes generic worktree discovery",
+                "fingerprint": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+                "evidenceRefs": [
+                  "impl-review.json#8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+                "summary": "Worktree handoff failures bypass the query error response",
+                "fingerprint": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+                "evidenceRefs": [
+                  "impl-review.json#243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+                "summary": "Valid relative request-file paths beginning with a hyphen are rejected",
+                "fingerprint": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+                "evidenceRefs": [
+                  "impl-review.json#caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-2",
+              "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "7c2856efabe4818b8d650cae8a4d17f855296598dc687ea2a9d0321e7a80ade7",
+                "capturedAt": "2026-09-02T10:09:12.524Z"
+              },
+              "evidenceDigest": "f37132f1973d9368221f2a7d04a011ecc6af149a14f75fac23ae1e39322c08bf"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+            "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 4,
+      "nodeId": "T-2-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "c163159b1da1d8975ccccf124814ff341c0a78a6304516e73d8857cfbd18274a",
+          "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+          "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "blockingCount": 3,
+          "nonBlockingCount": 0,
+          "taskId": "T-2"
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-02T10:10:11.803Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 3,
+            "nonBlocking": 0,
+            "total": 3
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "query-performs-worktree-discovery-after-boundary",
+              "title": "Query dispatch still invokes generic worktree discovery",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/sennel.js",
+              "requirementId": "R1",
+              "issue": "After validating the request, the query branch calls executeWorktreeLocalCli(), which performs generic worktree discovery and may re-execute another checkout.",
+              "suggestion": "Use a query-specific dispatch path that preserves the established execution root without invoking generic worktree discovery.",
+              "disposition": "must-fix",
+              "rationale": "This contradicts mandatory R1 query-boundary execution behavior and remains unresolved.",
+              "findingId": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+              "fingerprint": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+              "repeatCount": 4
+            },
+            {
+              "findingKey": "query-handoff-failure-emits-no-response-json",
+              "title": "Worktree handoff failures bypass the query error response",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/lib/worktree-cli-execution.js",
+              "requirementId": "R1",
+              "issue": "Handoff failures write only diagnostics to stderr and return an exit code, so src/sennel.js exits without emitting the required query response JSON on stdout.",
+              "suggestion": "Return a structured handoff failure to runFlowQueryCli or serialize the failure as the query error envelope before exiting.",
+              "disposition": "must-fix",
+              "rationale": "The mandatory R1 output-channel contract requires stdout to contain the query response JSON, including failure responses.",
+              "findingId": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+              "fingerprint": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+              "repeatCount": 4
+            },
+            {
+              "findingKey": "leading-hyphen-request-file-is-rejected",
+              "title": "Valid relative request-file paths beginning with a hyphen are rejected",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "readInput rejects any present --request-file value starting with '-'. A non-empty normalized-relative path such as '-request.json' is otherwise valid under the request-file path acceptance criteria.",
+              "suggestion": "Treat any present, non-empty next token as the path and apply the normal NUL, normalization, regular-file, readability, and size checks.",
+              "disposition": "must-fix",
+              "rationale": "This unnecessarily rejects a valid request-file path at the mandatory R1 input boundary.",
+              "findingId": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+              "fingerprint": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+              "repeatCount": 4
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "reviewedTree": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+          "reviewedHead": "e18f4d6c98ef3ac4fa24eb964dbe0168383d284f",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-2",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-2.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/e86014e4146f58abc5a2fe2688c9c6ad/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 3,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "646dd5e9c7f7f854b55873cf8f957e9ccbd9ebe11ca8df97a4289b4496ed9db1"
+          },
+          "workerOutput": {
+            "digest": "719737b47aebfb7360240272b3eff59f2c100e9aa9e465389744c094ce99c212",
+            "byteLength": 4117,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-2",
+            "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+            "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "8f6d1e22fb4127e9e28196a4b267e69acf4a601469ffd8d156e501e0ac6f9de4",
+              "capturedAt": "2026-09-02T10:10:11.803Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+                "summary": "Query dispatch still invokes generic worktree discovery",
+                "fingerprint": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+                "evidenceRefs": [
+                  "impl-review.json#8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+                "summary": "Worktree handoff failures bypass the query error response",
+                "fingerprint": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+                "evidenceRefs": [
+                  "impl-review.json#243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+                "summary": "Valid relative request-file paths beginning with a hyphen are rejected",
+                "fingerprint": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+                "evidenceRefs": [
+                  "impl-review.json#caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-2",
+              "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "8f6d1e22fb4127e9e28196a4b267e69acf4a601469ffd8d156e501e0ac6f9de4",
+                "capturedAt": "2026-09-02T10:10:11.803Z"
+              },
+              "evidenceDigest": "c163159b1da1d8975ccccf124814ff341c0a78a6304516e73d8857cfbd18274a"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+            "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 6,
+      "nodeId": "T-2-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "4bca447171323956735b3b016380d5489666bc8457cf221a03154086b19c6372",
+          "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+          "targetStateDigest": "088bcad1ec001aa9f1345587b6420061ffba49088b24f70fab0bcc68f7bf0bfb",
+          "blockingCount": 3,
+          "nonBlockingCount": 0,
+          "taskId": "T-2"
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-02T10:18:02.148Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 3,
+            "nonBlocking": 0,
+            "total": 3
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "query-performs-worktree-discovery-after-boundary",
+              "title": "Query dispatch still invokes generic worktree discovery",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/sennel.js",
+              "requirementId": "R1",
+              "issue": "After validating the request, the query branch calls executeWorktreeLocalCli(), which performs generic worktree discovery and may re-execute another checkout.",
+              "suggestion": "Use a query-specific dispatch path that preserves the established execution root without invoking generic worktree discovery.",
+              "disposition": "must-fix",
+              "rationale": "This contradicts mandatory R1 query-boundary execution behavior.",
+              "findingId": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+              "fingerprint": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+              "repeatCount": 5
+            },
+            {
+              "findingKey": "query-handoff-failure-emits-no-response-json",
+              "title": "Worktree handoff failures bypass the query error response",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/lib/worktree-cli-execution.js",
+              "requirementId": "R1",
+              "issue": "Handoff failures write diagnostics only to stderr and return an exit code, so src/sennel.js exits without emitting the required query response JSON on stdout.",
+              "suggestion": "Return a structured handoff failure to runFlowQueryCli or serialize the failure as the query error envelope before exiting.",
+              "disposition": "must-fix",
+              "rationale": "The mandatory R1 output-channel contract requires stdout to contain the query response JSON, including failure responses.",
+              "findingId": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+              "fingerprint": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+              "repeatCount": 5
+            },
+            {
+              "findingKey": "leading-hyphen-request-file-is-rejected",
+              "title": "Valid relative request-file paths beginning with a hyphen are rejected",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "readInput rejects any --request-file value starting with '-'. A non-empty normalized-relative path such as '-request.json' is otherwise valid under the request-file path acceptance criteria.",
+              "suggestion": "Treat any present, non-empty next token as the path and apply the normal NUL, normalization, regular-file, readability, and size checks.",
+              "disposition": "must-fix",
+              "rationale": "This unnecessarily rejects a valid request-file path at the mandatory R1 input boundary.",
+              "findingId": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+              "fingerprint": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+              "repeatCount": 5
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "088bcad1ec001aa9f1345587b6420061ffba49088b24f70fab0bcc68f7bf0bfb",
+          "reviewedTree": "088bcad1ec001aa9f1345587b6420061ffba49088b24f70fab0bcc68f7bf0bfb",
+          "reviewedHead": "e18f4d6c98ef3ac4fa24eb964dbe0168383d284f",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-2",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-2.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/6e455d723565f764bf8cdfc83b679a20/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 3,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "a900bda32a760bd1e8742c4b6c26a861b5ba3f2850e3c57f1857488f9fced2f9"
+          },
+          "workerOutput": {
+            "digest": "827dc54564d231bbeb0d01db772fb166c0ae05468ed13e18d5151048e4f6868a",
+            "byteLength": 4086,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-2",
+            "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+            "targetStateDigest": "088bcad1ec001aa9f1345587b6420061ffba49088b24f70fab0bcc68f7bf0bfb",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "55b9f7036b4d125d4ea2a3f4ee57d4ad7b81daedaa94658a094e5ef9529a2c52",
+              "capturedAt": "2026-09-02T10:18:02.148Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+                "summary": "Query dispatch still invokes generic worktree discovery",
+                "fingerprint": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+                "evidenceRefs": [
+                  "impl-review.json#8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+                "summary": "Worktree handoff failures bypass the query error response",
+                "fingerprint": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+                "evidenceRefs": [
+                  "impl-review.json#243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+                "summary": "Valid relative request-file paths beginning with a hyphen are rejected",
+                "fingerprint": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+                "evidenceRefs": [
+                  "impl-review.json#caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-2",
+              "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "55b9f7036b4d125d4ea2a3f4ee57d4ad7b81daedaa94658a094e5ef9529a2c52",
+                "capturedAt": "2026-09-02T10:18:02.148Z"
+              },
+              "evidenceDigest": "4bca447171323956735b3b016380d5489666bc8457cf221a03154086b19c6372"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+            "targetStateDigest": "088bcad1ec001aa9f1345587b6420061ffba49088b24f70fab0bcc68f7bf0bfb"
+          }
+        }
+      }
+    }
+  ]
+}

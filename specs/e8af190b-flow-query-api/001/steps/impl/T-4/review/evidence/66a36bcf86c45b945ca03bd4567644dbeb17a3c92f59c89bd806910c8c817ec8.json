@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-4",
+  "treeSha": "068a8cf699eb993b6c02597dcee36eac99e142b1",
+  "targetStateDigest": "782139456640b31d230f813b1a21ea9dcc23762c739d984078ac57bf55904c69",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "ec9d4a8ba3507001e301ec47186e9fc91b3bb6de8b0843164ad719c7a9a3cdcc",
+    "capturedAt": "2026-09-03T11:32:30.915Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "736d646b2c31b71782d28fa5007c867ddd6e72b3bd00827feeacb25dc8062c3b",
+      "summary": "Metadata nextAction identifies the current cursor instead of the selected target",
+      "fingerprint": "736d646b2c31b71782d28fa5007c867ddd6e72b3bd00827feeacb25dc8062c3b",
+      "evidenceRefs": [
+        "impl-review.json#736d646b2c31b71782d28fa5007c867ddd6e72b3bd00827feeacb25dc8062c3b"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "4d0a4dfe63560d2a181ed9c8ebaa76428ef66b24400c6c91d9779e8e2d79fd32",
+      "summary": "Metadata projection rejects valid migration artifacts with null logicalKey",
+      "fingerprint": "4d0a4dfe63560d2a181ed9c8ebaa76428ef66b24400c6c91d9779e8e2d79fd32",
+      "evidenceRefs": [
+        "impl-review.json#4d0a4dfe63560d2a181ed9c8ebaa76428ef66b24400c6c91d9779e8e2d79fd32"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "04e3e7bb5fbf7b2a8e5acf54e60580b21453ec38b1b0fa4898150c1bf9be0d1b",
+      "summary": "Version discovery admits directory 000 as an available version",
+      "fingerprint": "04e3e7bb5fbf7b2a8e5acf54e60580b21453ec38b1b0fa4898150c1bf9be0d1b",
+      "evidenceRefs": [
+        "impl-review.json#04e3e7bb5fbf7b2a8e5acf54e60580b21453ec38b1b0fa4898150c1bf9be0d1b"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

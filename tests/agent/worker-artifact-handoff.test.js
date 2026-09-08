@@ -4,20 +4,29 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import GetNextActionCommand from "../../src/flow/lib/get-next-action.js";
 import RunClaimNextActionCommand from "../../src/flow/lib/run-claim-next-action.js";
 import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
 import RunRepairTestReviewCommand from "../../src/flow/lib/run-repair-test-review.js";
+import RunReviewCommand from "../../src/flow/lib/run-review.js";
 import { CanonicalTestArtifactStore } from "../../src/flow/lib/canonical-test-artifacts.js";
 import { sourceWorkerEffectJsonSchema } from "../../src/flow/lib/source-worker-effect-schema.js";
+import { TaskStageArtifact } from "../../src/flow/lib/task-review-stage-artifacts.js";
 import { findStepById } from "../../src/flow/lib/step-tree.js";
-import { WorkerArtifactHandoffCoordinator } from "../../src/flow/lib/worker-artifact-handoff.js";
+import {
+  SourceMutationBaseline,
+  SourceMutationManifest,
+  SourceWorkerEffect,
+  WorkerArtifactHandoffCoordinator,
+} from "../../src/flow/lib/worker-artifact-handoff.js";
 import { Agent } from "../../src/lib/agent.js";
+import { Container } from "../../src/lib/container.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
 import { Logger } from "../../src/lib/log.js";
 import { ProviderRegistry } from "../../src/lib/provider.js";
+import { FLOW_COMMANDS } from "../../src/flow/registry.js";
 import {
   FlowArtifactAttemptHistory,
   FlowArtifactAttemptRecord,
@@ -127,6 +136,75 @@ function realCodexAgent({ mainRoot, executionRoot, flowManager, profileKey = "co
     logger: new Logger({ logDir: path.join(executionRoot, ".tmp", "logs"), enabled: false }),
     flowManager,
   });
+}
+
+function realAgentTestConfig() {
+  return {
+    lang: "en",
+    type: "base",
+    docs: { languages: ["en"], defaultLanguage: "en" },
+    agent: {
+      // Keep agent selection in normal project configuration. Test runners can
+      // select any installed profile without this scenario naming a provider
+      // or model at the invocation boundary.
+      useProfile: process.env.SENNEL_AGENT_TEST_PROFILE || "codex-only",
+      timeout: 240,
+      retryCount: 1,
+    },
+  };
+}
+
+function configuredRealAgent({ executionRoot, flowManager, config }) {
+  return new Agent({
+    config,
+    paths: { root: executionRoot, agentWorkDir: path.join(executionRoot, ".tmp") },
+    registry: new ProviderRegistry(config.agent?.providers),
+    logger: new Logger({ logDir: path.join(executionRoot, ".tmp", "logs"), enabled: false }),
+    flowManager,
+  });
+}
+
+function flowCommandContainer({ root, flowManager, config, agent }) {
+  const value = new Container();
+  value.register("paths", { root, agentWorkDir: path.join(root, ".tmp") });
+  value.register("mainRoot", root);
+  value.register("config", config);
+  value.register("inWorktree", false);
+  value.register("flowManager", flowManager);
+  value.register("agent", agent);
+  return value;
+}
+
+function taskStageOnly(nextStep) {
+  const nextAction = new GetNextActionCommand();
+  return {
+    async run(container, input) {
+      const action = await nextAction.run(container, input);
+      const boundAction = { ...action, binding: input.expectBinding };
+      return action.step === nextStep
+        ? boundAction
+        : {
+            ...boundAction,
+            taskId: null,
+            step: null,
+            action: "completed",
+            instructions: null,
+            context: null,
+            output_schema: null,
+            requires_approval: false,
+            directive: { kind: "completed", terminal: true, requiresUserAction: false },
+          };
+    },
+  };
+}
+
+async function runTaskReview({ container, context }) {
+  const command = new RunReviewCommand();
+  command.container = container;
+  const result = await command.execute(context);
+  assert.notEqual(result.ok, false, JSON.stringify(result, null, 2));
+  await FLOW_COMMANDS.run.review.post(context, result);
+  return result;
 }
 
 function specWorkerAction() {
@@ -520,6 +598,266 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
     } finally {
       process.env.PATH = originalPath;
       removeTmpDir(mainRoot);
+    }
+  });
+
+  it("keeps Task review and triage read-only before a real repair and re-review", async () => {
+    const root = createTmpDir("task-review-triage-repair-agent-");
+    const originalPath = process.env.PATH;
+    try {
+      const config = realAgentTestConfig();
+      const specId = "508-task-review-triage-repair-agent";
+      const taskId = "T-1";
+      const sourcePath = path.join(root, "status.js");
+      fs.mkdirSync(path.join(root, ".sennel"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".sennel", "config.json"), `${JSON.stringify(config, null, 2)}\n`);
+      fs.writeFileSync(path.join(root, ".gitignore"), ".sennel/output/\n.tmp/\n.test-bin/\n");
+      fs.writeFileSync(path.join(root, "package.json"), `${JSON.stringify({ type: "module" }, null, 2)}\n`);
+      fs.writeFileSync(sourcePath, [
+        "export function statusLabel(input) {",
+        "  return input === \"ready\" ? \"ready\" : \"not-ready\";",
+        "}",
+        "",
+      ].join("\n"));
+      initGitRepo(root);
+      commitAll(root, "Task review fixture baseline");
+      process.env.PATH = `${installSennelWrapper(root)}${path.delimiter}${originalPath}`;
+
+      const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      const fixture = new CanonicalFlowFixture({
+        flowManager,
+        specId,
+        runId: "run-task-review-triage-repair-agent",
+        request: "Repair the Task-owned status label behavior.",
+        execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+        specRecord: {
+          goal: "Keep status labels precise for the Task's mapped requirement.",
+          requirements: [{
+            id: "R-1",
+            desc: "statusLabel must return ready for ready input and not-ready for every other input.",
+            task_ids: [taskId],
+          }],
+        },
+      }).create().addTask({
+        id: taskId,
+        title: "Correct status labels",
+        goal: "Return the required status label for every input.",
+        parent: null,
+        origin: "plan",
+        added_round: 0,
+        status: "pending",
+      }).registerActive().prepareTaskFrontier();
+      flowManager.startTask(taskId, { specId });
+
+      // Establish the real Task source lineage that Review, triage, and repair
+      // consume. The deliberately incomplete implementation is the only seed;
+      // no Review, triage, or repair artifact is preconstructed.
+      const implementationBaseline = SourceMutationBaseline.capture({
+        root,
+        attempt: flowManager.canonicalState(specId).attempt,
+      });
+      fs.writeFileSync(sourcePath, [
+        "export function statusLabel(input) {",
+        "  return input === \"ready\" ? \"ready\" : \"unknown\";",
+        "}",
+        "",
+      ].join("\n"));
+      const implementationManifest = SourceMutationManifest.capture({ baseline: implementationBaseline });
+      flowManager.confirmSourceWorkerHandoff({
+        specId,
+        mutationManifest: implementationManifest,
+        handoffDigest: "a".repeat(64),
+        effect: new SourceWorkerEffect({
+          version: 1,
+          stepId: "task-impl",
+          completionStatus: "done",
+          files: [{ requirementId: "R-1", mutationIds: implementationManifest.mutations.map((entry) => entry.mutationId) }],
+          issues: [],
+          overview: { modules: [], data_flow: [], decisions: [] },
+          triage: null,
+          repair: null,
+          noChangeReason: null,
+        }),
+        result: {
+          outcome: "passed",
+          summary: "Task fixture implementation published through the source-handoff boundary.",
+          confirmedAt: "2026-09-08T00:00:00.000Z",
+          artifactRefs: [],
+        },
+      });
+      flowManager.updateStepStatus({ stepId: `${taskId}-review`, requestedStatus: "in_progress" }, { specId });
+
+      const agent = configuredRealAgent({ executionRoot: root, flowManager, config });
+      const container = flowCommandContainer({ root, flowManager, config, agent });
+      const context = () => ({
+        root,
+        mainRoot: root,
+        executionRoot: root,
+        specId,
+        flowManager,
+        flowState: flowManager.loadReadOnly(specId),
+        config,
+        skipConfirm: true,
+      });
+
+      const incompleteSource = fs.readFileSync(sourcePath, "utf8");
+      const firstReview = await runTaskReview({ container, context: context() });
+      assert.equal(firstReview.artifacts.verdict, "REJECTED");
+      assert.equal(fs.readFileSync(sourcePath, "utf8"), incompleteSource, "Task Review must not edit Task source");
+      const afterFirstReview = flowManager.canonicalState(specId);
+      assert.equal(afterFirstReview.current.at(-1), `${taskId}-triage`);
+      const firstReviewArtifact = new TaskStageArtifact({
+        flowManager,
+        state: flowManager.loadReadOnly(specId),
+        taskId,
+        role: "review",
+      }).document;
+      assert.equal(firstReviewArtifact.verdict, "REJECTED");
+      assert.ok(firstReviewArtifact.blockingFindings.length > 0, JSON.stringify(firstReviewArtifact, null, 2));
+
+      const triageDispatcher = new RunDispatchCommand({
+        nextAction: taskStageOnly("task-triage"),
+        agent,
+      });
+      triageDispatcher.container = container;
+      const triageResult = await triageDispatcher.execute({
+        ...context(),
+        expectRunId: flowManager.loadReadOnly(specId).runId,
+        expectSpec: specId,
+        _envelopeType: "run",
+        _envelopeKey: "dispatch",
+        flowCommandBoundary: true,
+      });
+      assert.equal(triageResult.dispatch?.boundary, "completed", JSON.stringify(triageResult, null, 2));
+      assert.equal(triageResult.dispatch.dispatchCount, 1);
+      assert.equal(fs.readFileSync(sourcePath, "utf8"), incompleteSource, "Task triage must not edit Task source");
+      const afterTriage = flowManager.canonicalState(specId);
+      assert.equal(afterTriage.current.at(-1), `${taskId}-repair`);
+      const triageArtifact = new TaskStageArtifact({
+        flowManager,
+        state: flowManager.loadReadOnly(specId),
+        taskId,
+        role: "triage",
+      }).document;
+      const reviewedFindings = [
+        ...firstReviewArtifact.blockingFindings,
+        ...firstReviewArtifact.nonBlockingImprovements,
+      ];
+      const mustFixFindingKeys = reviewedFindings
+        .filter((finding) => finding.disposition === "must-fix")
+        .map((finding) => finding.findingKey)
+        .sort();
+      assert.equal(triageArtifact.dispositions.length, reviewedFindings.length);
+      assert.deepEqual(
+        triageArtifact.dispositions
+          .filter((entry) => entry.disposition === "apply")
+          .map((entry) => entry.findingKey)
+          .sort(),
+        mustFixFindingKeys,
+      );
+      assert.equal(
+        triageArtifact.dispositions
+          .filter((entry) => !mustFixFindingKeys.includes(entry.findingKey))
+          .every((entry) => entry.disposition === "reject"),
+        true,
+        JSON.stringify(triageArtifact, null, 2),
+      );
+
+      const repairDispatcher = new RunDispatchCommand({
+        nextAction: taskStageOnly("task-repair"),
+        agent,
+      });
+      repairDispatcher.container = container;
+      const repairResult = await repairDispatcher.execute({
+        ...context(),
+        expectRunId: flowManager.loadReadOnly(specId).runId,
+        expectSpec: specId,
+        _envelopeType: "run",
+        _envelopeKey: "dispatch",
+        flowCommandBoundary: true,
+      });
+      assert.equal(repairResult.dispatch?.boundary, "completed", JSON.stringify(repairResult, null, 2));
+      assert.equal(repairResult.dispatch.dispatchCount, 1);
+      const repairedSource = fs.readFileSync(sourcePath, "utf8");
+      assert.notEqual(repairedSource, incompleteSource, "only Task repair is permitted to change the source");
+      const repairedModule = await import(`${pathToFileURL(sourcePath).href}?repair=${Date.now()}`);
+      assert.equal(repairedModule.statusLabel("ready"), "ready");
+      for (const input of ["waiting", "", null, undefined]) {
+        assert.equal(repairedModule.statusLabel(input), "not-ready");
+      }
+      const afterRepair = flowManager.canonicalState(specId);
+      assert.equal(afterRepair.current.at(-1), `${taskId}-review`);
+      const repairArtifact = new TaskStageArtifact({
+        flowManager,
+        state: flowManager.loadReadOnly(specId),
+        taskId,
+        role: "repair",
+      }).document;
+      assert.deepEqual(
+        repairArtifact.repair.findingMutations.map((entry) => entry.findingKey).sort(),
+        mustFixFindingKeys,
+      );
+      assert.deepEqual(
+        repairArtifact.reviewFindings.map((finding) => finding.findingKey).sort(),
+        reviewedFindings.map((finding) => finding.findingKey).sort(),
+      );
+
+      const secondReview = await runTaskReview({ container, context: context() });
+      assert.equal(["PASS", "ADVISORY"].includes(secondReview.artifacts.verdict), true, JSON.stringify(secondReview, null, 2));
+      assert.equal(fs.readFileSync(sourcePath, "utf8"), repairedSource, "re-review must stay read-only after repair");
+      const reloadedManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      const reloadedState = reloadedManager.loadReadOnly(specId);
+      assert.equal(reloadedManager.canonicalState(specId).current.at(-1), `${taskId}-gate`);
+      const reviewHistory = new TaskStageArtifact({
+        flowManager: reloadedManager,
+        state: reloadedState,
+        taskId,
+        role: "review",
+      }).history;
+      const reloadedTriage = new TaskStageArtifact({
+        flowManager: reloadedManager,
+        state: reloadedState,
+        taskId,
+        role: "triage",
+      }).document;
+      const reloadedRepair = new TaskStageArtifact({
+        flowManager: reloadedManager,
+        state: reloadedState,
+        taskId,
+        role: "repair",
+      }).document;
+      assert.equal(reviewHistory.attempts.length, 2, "both canonical Task Review episodes must remain in the persisted trace");
+      assert.equal(reviewHistory.attempts[0].payload.verdict, "REJECTED");
+      assert.deepEqual(reviewHistory.attempts[0].payload, firstReviewArtifact);
+      assert.equal(reviewHistory.attempts[1].payload.verdict, secondReview.artifacts.verdict);
+      assert.deepEqual(reloadedTriage, triageArtifact);
+      assert.deepEqual(reloadedRepair, repairArtifact);
+      const reviewCompletions = reloadedManager.activityLedger(specId).filter((activity) => (
+        activity.nodeId === `${taskId}-review`
+        && activity.transition?.operation === "advance_task_review_stage"
+        && activity.transition.taskReviewStagePlan?.facts?.binding?.stage === "review"
+      ));
+      assert.equal(reviewCompletions.length, 2);
+      for (const entry of reviewHistory.attempts) {
+        const completion = reviewCompletions.find((activity) => (
+          activity.transition.taskReviewStagePlan.facts.reviewResultCount === entry.attempt
+        ));
+        assert.ok(completion, `review history attempt ${entry.attempt} lacks its completion Activity`);
+        assert.equal(completion.sequence, completion.transition.taskReviewStagePlan.facts.binding.attemptSequence);
+        assert.equal(completion.attemptId, completion.transition.taskReviewStagePlan.facts.binding.attemptId);
+      }
+      assert.equal(new Set(reviewCompletions.map((activity) => activity.attemptId)).size, 2);
+      assert.equal(
+        reviewHistory.attempts[1].payload.blockingFindings.some((finding) => finding.disposition === "must-fix"),
+        false,
+      );
+      assert.deepEqual(
+        reloadedManager.taskMutationLineages({ specId, taskId }).map((lineage) => lineage.role),
+        ["implementation", "repair"],
+      );
+    } finally {
+      process.env.PATH = originalPath;
+      removeTmpDir(root);
     }
   });
 

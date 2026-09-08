@@ -1,0 +1,844 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "T-3-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "9731e417e4c5160e591ba3b4066864a24585c857bff690d143e2444a9b87790c",
+          "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+          "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "blockingCount": 2,
+          "nonBlockingCount": 0,
+          "taskId": "T-3"
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-02T10:38:54.104Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 2,
+            "nonBlocking": 0,
+            "total": 2
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "versioned-state-inner-envelope-mismatch",
+              "title": "Version 2 state envelopes are rejected",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "open() unwraps the outer VersionedCanonicalFlowRecords envelope, then unwrapInnerState() incorrectly requires another flowVersion field inside the inner CurrentFlowState. The required inner state contains structural schemaRevision and result version fields, but no inner flowVersion, so the mandated Version 2 fixture cannot be queried.",
+              "suggestion": "Make unwrapInnerState validate the already-unwrapped inner state directly with CurrentFlowStateValidator; retain flowVersion validation only on the outer envelope.",
+              "disposition": "must-fix",
+              "rationale": "This directly prevents the required explicit Version 2 selection and contradicts the task’s envelope/inner-state separation.",
+              "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "version-directory-identity-range",
+              "title": "Version discovery rejects valid versions and accepts Version 000",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "readVersionDirectoryEntries() only recognizes exactly three-digit directory names, while FlowVersion.pathSegment supports values greater than 999 and FLOW_QUERY_LIMITS allows up to 10,000 available versions. It also constructs CanonicalVersionDirectoryEntry(\"000\") as version 0 even though FlowVersion identities must be positive.",
+              "suggestion": "Recognize canonical numeric directory names according to FlowVersion.pathSegment, construct a FlowVersion for validation, reject zero, and preserve the canonical name/value correspondence.",
+              "disposition": "must-fix",
+              "rationale": "The implementation cannot enumerate all valid canonical Versions or exercise the stated availability limit, and it can report an invalid Version 0.",
+              "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "repeatCount": 1
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "reviewedTree": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "reviewedHead": "e18f4d6c98ef3ac4fa24eb964dbe0168383d284f",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-3",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/7dc53d5c5a3084e8425ecb63b401a66c/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 2,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "2b97c016fbc35d360730d5634981a5bd7092a9cb32c68dc2f9f26373f6a98828"
+          },
+          "workerOutput": {
+            "digest": "0033044f65f9d5c3ee2ba14fa556b84ba78c40d88fc4ed9f4e79b74bac9631a2",
+            "byteLength": 3593,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-3",
+            "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+            "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "53796fbb305b52e9c6c449e05cedf0ba91b255b1a1adeabc9fe469e0530193f2",
+              "capturedAt": "2026-09-02T10:38:54.104Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "summary": "Version 2 state envelopes are rejected",
+                "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "evidenceRefs": [
+                  "impl-review.json#4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "summary": "Version discovery rejects valid versions and accepts Version 000",
+                "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "evidenceRefs": [
+                  "impl-review.json#1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-3",
+              "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "53796fbb305b52e9c6c449e05cedf0ba91b255b1a1adeabc9fe469e0530193f2",
+                "capturedAt": "2026-09-02T10:38:54.104Z"
+              },
+              "evidenceDigest": "9731e417e4c5160e591ba3b4066864a24585c857bff690d143e2444a9b87790c"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+            "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "T-3-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "b34869fb801dadb0eeaac41c520a75cfbf612e19c9ced361d8be816e3e7bd0e8",
+          "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+          "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "blockingCount": 2,
+          "nonBlockingCount": 0,
+          "taskId": "T-3"
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-02T10:39:37.542Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 2,
+            "nonBlocking": 0,
+            "total": 2
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "versioned-state-inner-envelope-mismatch",
+              "title": "Version 2 state envelopes are rejected",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "open() unwraps the outer VersionedCanonicalFlowRecords envelope and then calls unwrapInnerState(), which requires a second flowVersion field inside the inner state. The task requires flowVersion validation on the outer envelope while the inner CurrentFlowState is validated separately; a valid Version 2 fixture therefore cannot be opened.",
+              "suggestion": "Remove the inner flowVersion requirement and validate the already-unwrapped inner state directly with CurrentFlowStateValidator; keep directory/version identity checks on the outer envelope.",
+              "disposition": "must-fix",
+              "rationale": "This directly contradicts the required Version 2 envelope structure and blocks explicit Version 2 discovery and selection.",
+              "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "repeatCount": 2
+            },
+            {
+              "findingKey": "version-directory-identity-range",
+              "title": "Version discovery rejects valid versions and accepts Version 000",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "readVersionDirectoryEntries() recognizes only exactly three-digit directory names, while valid FlowVersion path segments and the configured availability limit are not inherently restricted to 001–999. It also accepts 000 and reports it as Version 0, although FlowVersion identities are positive.",
+              "suggestion": "Recognize directory names using the canonical FlowVersion path-segment rules, construct a FlowVersion for validation, reject zero, and preserve the validated directory identity/value correspondence.",
+              "disposition": "must-fix",
+              "rationale": "Version discovery must return the complete valid canonical Version set in ascending order and cannot expose an invalid Version 0.",
+              "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "repeatCount": 2
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "reviewedTree": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "reviewedHead": "e18f4d6c98ef3ac4fa24eb964dbe0168383d284f",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-3",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/8ff06e4d25f422294556ca4f73da835f/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 2,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "eba3b38e4317abfac2698b0114231e3bf283e3cbf0aab138c7163647922549e9"
+          },
+          "workerOutput": {
+            "digest": "ea074017051867ca1a9d78dc3575bf7dbfc354c117b69e5bf1dd049fac93384f",
+            "byteLength": 3576,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-3",
+            "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+            "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "4fba889374d3ab8b0343ae68b18d176dbba407e072cc4436b2e27422328a4098",
+              "capturedAt": "2026-09-02T10:39:37.542Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "summary": "Version 2 state envelopes are rejected",
+                "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "evidenceRefs": [
+                  "impl-review.json#4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "summary": "Version discovery rejects valid versions and accepts Version 000",
+                "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "evidenceRefs": [
+                  "impl-review.json#1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-3",
+              "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "4fba889374d3ab8b0343ae68b18d176dbba407e072cc4436b2e27422328a4098",
+                "capturedAt": "2026-09-02T10:39:37.542Z"
+              },
+              "evidenceDigest": "b34869fb801dadb0eeaac41c520a75cfbf612e19c9ced361d8be816e3e7bd0e8"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+            "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "T-3-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "5ba46e0dc401439f7af906be5a73ab4a76dee155e2032c81532e78bf765ad101",
+          "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+          "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "blockingCount": 2,
+          "nonBlockingCount": 0,
+          "taskId": "T-3"
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-02T10:40:58.358Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 2,
+            "nonBlocking": 0,
+            "total": 2
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "versioned-state-inner-envelope-mismatch",
+              "title": "Version 2 state envelopes are rejected",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "open() unwraps the outer VersionedCanonicalFlowRecords envelope and then calls unwrapInnerState(), which requires a second flowVersion field inside the inner state. A valid Version 2 fixture with flowVersion only on the outer envelope therefore cannot be opened.",
+              "suggestion": "Remove the inner flowVersion requirement and validate the already-unwrapped inner state directly with CurrentFlowStateValidator; keep directory/version identity checks on the outer envelope.",
+              "disposition": "must-fix",
+              "rationale": "This directly contradicts the required Version 2 envelope structure and blocks explicit Version 2 discovery and selection.",
+              "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "repeatCount": 3
+            },
+            {
+              "findingKey": "version-directory-identity-range",
+              "title": "Version discovery rejects valid versions and accepts Version 000",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "readVersionDirectoryEntries() recognizes only exactly three-digit directory names, so valid FlowVersion directories such as 1000 are omitted despite the 10,000-version limit. It also accepts 000 and reports it as Version 0, although FlowVersion identities are positive.",
+              "suggestion": "Recognize directory names using the canonical FlowVersion path-segment rules, construct a FlowVersion for validation, reject zero, and preserve the validated directory identity/value correspondence.",
+              "disposition": "must-fix",
+              "rationale": "Version discovery must return the complete valid canonical Version set in ascending order and cannot expose an invalid Version 0.",
+              "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "repeatCount": 3
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "reviewedTree": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "reviewedHead": "e18f4d6c98ef3ac4fa24eb964dbe0168383d284f",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-3",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/b3a286ed6a1cab0d9edc4cca4ce30d33/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 2,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "2f5ade50fc75c0ccc71434cb5b1f476466d2bc5932eed6ad0e3a26f22db45a54"
+          },
+          "workerOutput": {
+            "digest": "c3925cfe53a01119eabe52e79b4284de397a81dcc3e95c4a7016f6b60e03c264",
+            "byteLength": 3471,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-3",
+            "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+            "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "1260174e68d1636df0f534a32cbd72b22909cc50da2dd7a3dd0d7d688582d92b",
+              "capturedAt": "2026-09-02T10:40:58.358Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "summary": "Version 2 state envelopes are rejected",
+                "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "evidenceRefs": [
+                  "impl-review.json#4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "summary": "Version discovery rejects valid versions and accepts Version 000",
+                "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "evidenceRefs": [
+                  "impl-review.json#1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-3",
+              "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "1260174e68d1636df0f534a32cbd72b22909cc50da2dd7a3dd0d7d688582d92b",
+                "capturedAt": "2026-09-02T10:40:58.358Z"
+              },
+              "evidenceDigest": "5ba46e0dc401439f7af906be5a73ab4a76dee155e2032c81532e78bf765ad101"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+            "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 4,
+      "nodeId": "T-3-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "379d528a4a6cb75bce39b2644b784f5cb2cbaeb1520efa0fc535e738f4689332",
+          "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+          "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "blockingCount": 2,
+          "nonBlockingCount": 0,
+          "taskId": "T-3"
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-02T10:42:57.711Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 2,
+            "nonBlocking": 0,
+            "total": 2
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "versioned-state-inner-envelope-mismatch",
+              "title": "Version 2 state envelopes are rejected",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "open() unwraps the outer VersionedCanonicalFlowRecords envelope and then calls unwrapInnerState(), which requires a second flowVersion field inside the inner state. A valid Version 2 fixture with flowVersion only on the outer envelope cannot be opened.",
+              "suggestion": "Remove the inner flowVersion requirement and validate the already-unwrapped inner state directly with CurrentFlowStateValidator; keep directory/version identity checks on the outer envelope.",
+              "disposition": "must-fix",
+              "rationale": "This directly contradicts the required Version 2 envelope structure and blocks explicit Version 2 discovery and selection.",
+              "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "repeatCount": 4
+            },
+            {
+              "findingKey": "version-directory-identity-range",
+              "title": "Version discovery rejects valid versions and accepts Version 000",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "readVersionDirectoryEntries() recognizes only exactly three-digit directory names, so valid FlowVersion directories such as 1000 are omitted despite the 10,000-version limit. It also accepts 000 and reports it as Version 0, although FlowVersion identities are positive.",
+              "suggestion": "Recognize numeric directory names using the canonical FlowVersion path-segment rules, construct a FlowVersion for validation, reject zero, and preserve the validated directory identity/value correspondence.",
+              "disposition": "must-fix",
+              "rationale": "Version discovery must return the complete valid canonical Version set in ascending order and cannot expose an invalid Version 0.",
+              "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "repeatCount": 4
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "reviewedTree": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+          "reviewedHead": "e18f4d6c98ef3ac4fa24eb964dbe0168383d284f",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-3",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/0d7259ac2a317cff1de201b9451ddc8d/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 2,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "ce66bd9683e8a5b9b3235b615b68fbdef3b03edf0fbf484f421952ca62b271d0"
+          },
+          "workerOutput": {
+            "digest": "9598d4b9480a1b77d4c4a5b065f2729d4886e65d0b2005e87a3cc0e8d0b64160",
+            "byteLength": 3469,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-3",
+            "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+            "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "a79987b9f7d5a6b406105d5d6750863982c92cbbb8fa0de250cc7475e8e4c30e",
+              "capturedAt": "2026-09-02T10:42:57.711Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "summary": "Version 2 state envelopes are rejected",
+                "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "evidenceRefs": [
+                  "impl-review.json#4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "summary": "Version discovery rejects valid versions and accepts Version 000",
+                "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "evidenceRefs": [
+                  "impl-review.json#1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-3",
+              "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "a79987b9f7d5a6b406105d5d6750863982c92cbbb8fa0de250cc7475e8e4c30e",
+                "capturedAt": "2026-09-02T10:42:57.711Z"
+              },
+              "evidenceDigest": "379d528a4a6cb75bce39b2644b784f5cb2cbaeb1520efa0fc535e738f4689332"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "6e4d55c72bc4ed8b20c8d23e8273a796314d697c",
+            "targetStateDigest": "f142a337c6b231974d44dab24a5a1a4cc5323b04db2b46c9ba0bfb84cb01ef0a"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 6,
+      "nodeId": "T-3-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "f6358da6230063fd82b3972395aa9c392fbfe6cdbb2f102eb2f56c801cc5154c",
+          "treeSha": "7291b57aabdefe36bb658ad7ec5cf83ba6747aa9",
+          "targetStateDigest": "fa160451a245cbc06ea2fe0f00c558026b69f2cd97b89be4829ea453a7cf9f63",
+          "blockingCount": 2,
+          "nonBlockingCount": 0,
+          "taskId": "T-3"
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-02T10:51:57.084Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 2,
+            "nonBlocking": 0,
+            "total": 2
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "versioned-state-inner-envelope-mismatch",
+              "title": "Version 2 state envelopes are rejected",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "open() unwraps the outer VersionedCanonicalFlowRecords envelope and then calls unwrapInnerState(), which requires a second flowVersion field inside the inner state. A valid Version 2 fixture with flowVersion only on the outer envelope cannot be opened.",
+              "suggestion": "Remove the inner flowVersion requirement and validate the already-unwrapped inner state directly with CurrentFlowStateValidator; keep directory/version identity checks on the outer envelope.",
+              "disposition": "must-fix",
+              "rationale": "This directly contradicts the required Version 2 envelope structure and blocks explicit Version 2 discovery and selection.",
+              "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "repeatCount": 5
+            },
+            {
+              "findingKey": "version-directory-identity-range",
+              "title": "Version discovery rejects valid versions and accepts Version 000",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "readVersionDirectoryEntries() recognizes only exactly three-digit directory names, so valid FlowVersion directories such as 1000 are omitted despite the 10,000-version limit. It also accepts 000 and reports it as Version 0, although FlowVersion identities are positive.",
+              "suggestion": "Recognize numeric directory names using the canonical FlowVersion path-segment rules, construct a FlowVersion for validation, reject zero, and preserve the validated directory identity/value correspondence.",
+              "disposition": "must-fix",
+              "rationale": "Version discovery must return the complete valid canonical Version set in ascending order and cannot expose an invalid Version 0.",
+              "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "repeatCount": 5
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "fa160451a245cbc06ea2fe0f00c558026b69f2cd97b89be4829ea453a7cf9f63",
+          "reviewedTree": "fa160451a245cbc06ea2fe0f00c558026b69f2cd97b89be4829ea453a7cf9f63",
+          "reviewedHead": "e18f4d6c98ef3ac4fa24eb964dbe0168383d284f",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-3",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/c248460acc4823edbe9e70824374f955/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 2,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "afd595b0b4ee268422cb99e9d59abc03de678145373a598fe30e76660d991e92"
+          },
+          "workerOutput": {
+            "digest": "b4125582f376170a7439d83bfb77484fc78db5a2f1ac82761fb954b88954db92",
+            "byteLength": 3469,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-3",
+            "treeSha": "7291b57aabdefe36bb658ad7ec5cf83ba6747aa9",
+            "targetStateDigest": "fa160451a245cbc06ea2fe0f00c558026b69f2cd97b89be4829ea453a7cf9f63",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "f6099f1f3429c93605811cf7c50fb267435bb7417457826e8f67748f6e160f9d",
+              "capturedAt": "2026-09-02T10:51:57.084Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "summary": "Version 2 state envelopes are rejected",
+                "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "evidenceRefs": [
+                  "impl-review.json#4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "summary": "Version discovery rejects valid versions and accepts Version 000",
+                "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "evidenceRefs": [
+                  "impl-review.json#1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-3",
+              "treeSha": "7291b57aabdefe36bb658ad7ec5cf83ba6747aa9",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "f6099f1f3429c93605811cf7c50fb267435bb7417457826e8f67748f6e160f9d",
+                "capturedAt": "2026-09-02T10:51:57.084Z"
+              },
+              "evidenceDigest": "f6358da6230063fd82b3972395aa9c392fbfe6cdbb2f102eb2f56c801cc5154c"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "7291b57aabdefe36bb658ad7ec5cf83ba6747aa9",
+            "targetStateDigest": "fa160451a245cbc06ea2fe0f00c558026b69f2cd97b89be4829ea453a7cf9f63"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 8,
+      "nodeId": "T-3-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "e29f7edd0ba71dd2781eaaf97bf96ce4564f09a65e300c29e8ab38d2507796fe",
+          "treeSha": "7291b57aabdefe36bb658ad7ec5cf83ba6747aa9",
+          "targetStateDigest": "1938e1f3c4791014865159a5d565bbd3f11cb02ee7cc7886a48c0a54f7e1e9ca",
+          "blockingCount": 2,
+          "nonBlockingCount": 0,
+          "taskId": "T-3"
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-02T10:59:17.399Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 2,
+            "nonBlocking": 0,
+            "total": 2
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "versioned-state-inner-envelope-mismatch",
+              "title": "Version 2 state envelopes are rejected",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "open() unwraps the outer VersionedCanonicalFlowRecords state envelope and then calls unwrapInnerState(), which requires a second flowVersion field inside the inner state. A valid Version 2 fixture with flowVersion only on the outer envelope cannot be opened.",
+              "suggestion": "Remove the inner flowVersion requirement and validate the already-unwrapped inner state directly with CurrentFlowStateValidator; keep directory/version identity checks on the outer envelope.",
+              "disposition": "must-fix",
+              "rationale": "This directly contradicts the required Version 2 envelope structure and blocks explicit Version 2 discovery and selection.",
+              "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+              "repeatCount": 6
+            },
+            {
+              "findingKey": "version-directory-identity-range",
+              "title": "Version discovery rejects valid versions and accepts Version 000",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R1",
+              "issue": "readVersionDirectoryEntries() recognizes only exactly three-digit directory names, so valid FlowVersion directories such as 1000 are omitted despite the 10,000-version limit. It also accepts 000 and reports it as Version 0, although FlowVersion identities are positive.",
+              "suggestion": "Recognize numeric directory names using the canonical FlowVersion path-segment rules, construct a FlowVersion for validation, reject zero, and preserve the validated directory identity/value correspondence.",
+              "disposition": "must-fix",
+              "rationale": "Version discovery must return the complete valid canonical Version set in ascending order and cannot expose an invalid Version 0.",
+              "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+              "repeatCount": 6
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "1938e1f3c4791014865159a5d565bbd3f11cb02ee7cc7886a48c0a54f7e1e9ca",
+          "reviewedTree": "1938e1f3c4791014865159a5d565bbd3f11cb02ee7cc7886a48c0a54f7e1e9ca",
+          "reviewedHead": "e18f4d6c98ef3ac4fa24eb964dbe0168383d284f",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-3",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-3.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/e15ccfc091ce12c86e71023d044889aa/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 2,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "3a7b2fdd3865881b094ec3485abd5b699f17cef0eb443584d1403f17c9c39df7"
+          },
+          "workerOutput": {
+            "digest": "3f9bde701b8d5f5d54660d78afae6ae6479e9ce0ab58a1493a929b2132f3902d",
+            "byteLength": 3475,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-3",
+            "treeSha": "7291b57aabdefe36bb658ad7ec5cf83ba6747aa9",
+            "targetStateDigest": "1938e1f3c4791014865159a5d565bbd3f11cb02ee7cc7886a48c0a54f7e1e9ca",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "69353feda4839a19a4389d0d1934edcccab25cad249a4e622595f9fda225b7d4",
+              "capturedAt": "2026-09-02T10:59:17.399Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "summary": "Version 2 state envelopes are rejected",
+                "fingerprint": "4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11",
+                "evidenceRefs": [
+                  "impl-review.json#4acd0f1df92339d9bf5e5fa4c0c98c1e2f17d09e5da9ba666832d1829b1f0c11"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "summary": "Version discovery rejects valid versions and accepts Version 000",
+                "fingerprint": "1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db",
+                "evidenceRefs": [
+                  "impl-review.json#1a511b22a6d117b5e0b04de005d6068ab9753825817540c7326ed8db387fb2db"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-3",
+              "treeSha": "7291b57aabdefe36bb658ad7ec5cf83ba6747aa9",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "69353feda4839a19a4389d0d1934edcccab25cad249a4e622595f9fda225b7d4",
+                "capturedAt": "2026-09-02T10:59:17.399Z"
+              },
+              "evidenceDigest": "e29f7edd0ba71dd2781eaaf97bf96ce4564f09a65e300c29e8ab38d2507796fe"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "7291b57aabdefe36bb658ad7ec5cf83ba6747aa9",
+            "targetStateDigest": "1938e1f3c4791014865159a5d565bbd3f11cb02ee7cc7886a48c0a54f7e1e9ca"
+          }
+        }
+      }
+    }
+  ]
+}

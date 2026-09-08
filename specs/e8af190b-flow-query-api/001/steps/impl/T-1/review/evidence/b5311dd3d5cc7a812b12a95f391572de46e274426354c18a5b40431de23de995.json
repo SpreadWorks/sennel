@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-1",
+  "treeSha": "dead7e9343f5b9d2804acd4b443c3efc1b329eae",
+  "targetStateDigest": "d037fe9b52bb9c9b133816d49e819b444c0051951ffa4248eac03587cecea389",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "a9d533ac383129610c3bfcccc010036af3350516a1fbdd9d4c76881634d1be99",
+    "capturedAt": "2026-09-02T02:39:44.453Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "2eabd2e241ca3e95b837f4ceffbf0ae466193fbc835fd44386e3a71546147056",
+      "summary": "Reader accepts invalid Activity order and rejects partial unconfirmed tails",
+      "fingerprint": "2eabd2e241ca3e95b837f4ceffbf0ae466193fbc835fd44386e3a71546147056",
+      "evidenceRefs": [
+        "impl-review.json#2eabd2e241ca3e95b837f4ceffbf0ae466193fbc835fd44386e3a71546147056"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b",
+      "summary": "Artifact catalog validation omits canonical association and coverage checks",
+      "fingerprint": "85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b",
+      "evidenceRefs": [
+        "impl-review.json#85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "024fc0e62ec2a3463e8c36466326a9725d833737a00ea4ca7f65a02d3c425bb3",
+      "summary": "AggregateMetrics is emitted as an object literal",
+      "fingerprint": "024fc0e62ec2a3463e8c36466326a9725d833737a00ea4ca7f65a02d3c425bb3",
+      "evidenceRefs": [
+        "impl-review.json#024fc0e62ec2a3463e8c36466326a9725d833737a00ea4ca7f65a02d3c425bb3"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "431d0af08a99f0eb98c0fdd95ecca674549bd72749b0c3a00eb33b446d23729f",
+      "summary": "Aggregate metrics ignore record_metric reset and delta semantics",
+      "fingerprint": "431d0af08a99f0eb98c0fdd95ecca674549bd72749b0c3a00eb33b446d23729f",
+      "evidenceRefs": [
+        "impl-review.json#431d0af08a99f0eb98c0fdd95ecca674549bd72749b0c3a00eb33b446d23729f"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "a667044489316b76276bcfb6ee44779744a94b1ea75247885c6b6569591299fb",
+      "summary": "Page and recordedAt objects bypass the exact whitelist",
+      "fingerprint": "a667044489316b76276bcfb6ee44779744a94b1ea75247885c6b6569591299fb",
+      "evidenceRefs": [
+        "impl-review.json#a667044489316b76276bcfb6ee44779744a94b1ea75247885c6b6569591299fb"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "6dbe3214b0154c40212b45c2540b15445b54212056d3af7874d02d93297dbf16",
+      "summary": "Known-resource request errors lose the resource-specific response shape",
+      "fingerprint": "6dbe3214b0154c40212b45c2540b15445b54212056d3af7874d02d93297dbf16",
+      "evidenceRefs": [
+        "impl-review.json#6dbe3214b0154c40212b45c2540b15445b54212056d3af7874d02d93297dbf16"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "9109a77f62411ee6b3f175b7e5fdf4a34d192a26a483c00ddf753a4dfaff798b",
+      "summary": "Several projected collections are not bounded by the public collection limit",
+      "fingerprint": "9109a77f62411ee6b3f175b7e5fdf4a34d192a26a483c00ddf753a4dfaff798b",
+      "evidenceRefs": [
+        "impl-review.json#9109a77f62411ee6b3f175b7e5fdf4a34d192a26a483c00ddf753a4dfaff798b"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "b612ca7e3858458b685b2ff0103fdc96bed31d28d472ad545692c5a638da3145",
+      "summary": "Metadata, Activity, artifact, and response contracts are not typed objects",
+      "fingerprint": "b612ca7e3858458b685b2ff0103fdc96bed31d28d472ad545692c5a638da3145",
+      "evidenceRefs": [
+        "impl-review.json#b612ca7e3858458b685b2ff0103fdc96bed31d28d472ad545692c5a638da3145"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

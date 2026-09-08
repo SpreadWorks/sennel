@@ -40,9 +40,12 @@ import {
 } from "./spec-review-artifacts.js";
 import { CanonicalTaskContext } from "./task-canonical-context.js";
 import { CurrentTaskSourceSnapshot, captureCurrentTaskSource } from "./task-mutation-lineage.js";
+import { ReviewFindingCycle } from "./finding-disposition-policy.js";
+import { TaskReviewPublicationBinding } from "./task-review-stage-artifacts.js";
 
 const PHASES = new Set(["draft-questions", "draft-coverage", "spec", "test", "impl"]);
 const ATTACHED_REVIEW_WORK_UNIT = Symbol("canonical-review-work-unit");
+const ATTACHED_TASK_REVIEW_PUBLICATION_BINDING = Symbol("task-review-publication-binding");
 
 function isIsoTimestamp(value) {
   return typeof value === "string" && value.trim() !== "" && Number.isFinite(Date.parse(value));
@@ -775,7 +778,7 @@ export class CanonicalReviewWorkUnit {
 
 /** Turn a child worker's transient JSON artifact into one V1 command result. */
 export class CanonicalReviewPromotion {
-  constructor({ workUnit, phase: reviewPhase, taskId = null, treeSha, targetStateDigest, specReviewSource = null, taskSource = null, taskMutationLineage = null, reviewRepairComplete = false } = {}) {
+  constructor({ workUnit, phase: reviewPhase, taskId = null, treeSha, targetStateDigest, specReviewSource = null, taskSource = null, taskContext = null, taskSpecDigest = null, taskReviewCycle = null, taskReviewPublicationBinding = null } = {}) {
     if (!(workUnit instanceof ReviewWorkUnit)) throw new Error("canonical review promotion requires a sealed execution work unit");
     this.workUnit = workUnit;
     this.phase = phase(reviewPhase);
@@ -783,9 +786,15 @@ export class CanonicalReviewPromotion {
     this.treeSha = requiredText(treeSha, "canonical review treeSha").toLowerCase();
     this.targetStateDigest = requiredText(targetStateDigest, "canonical review targetStateDigest").toLowerCase();
     this.taskSource = taskSource;
-    this.taskMutationLineage = taskMutationLineage;
-    if (typeof reviewRepairComplete !== "boolean") throw new Error("canonical review repair completion must be boolean");
-    this.reviewRepairComplete = reviewRepairComplete;
+    this.taskContext = taskContext;
+    this.taskSpecDigest = taskSpecDigest;
+    this.taskReviewCycle = taskReviewCycle;
+    this.taskReviewPublicationBinding = taskReviewPublicationBinding;
+    if (this.taskId !== null && (!(taskReviewCycle instanceof ReviewFindingCycle) || !(taskContext instanceof CanonicalTaskContext)
+      || taskContext.sourceFingerprint !== taskSource?.fingerprint
+      || !/^[a-f0-9]{64}$/.test(taskSpecDigest || ""))) {
+      throw new Error("canonical Task Review promotion requires its immutable spec, context, and source binding");
+    }
     if (reviewPhase === "spec") {
       if (!specReviewSource || !(specReviewSource.review instanceof CanonicalSpecReview)) {
         throw new Error("canonical spec review promotion requires its revision-scoped review input");
@@ -880,8 +889,6 @@ export class CanonicalReviewPromotion {
           sourceFingerprint: this.taskSource?.fingerprint,
           noChange: this.taskSource?.entries.length === 0 && this.taskSource?.noChangeReasons.length > 0,
           noChangeReasons: [...(this.taskSource?.noChangeReasons ?? [])],
-          repairMutationCount: this.taskMutationLineage?.paths?.length ?? 0,
-          reviewRepairComplete: this.reviewRepairComplete,
         }),
       },
     };
@@ -929,11 +936,12 @@ export class CanonicalReviewPromotion {
     };
     if (this.taskId !== null) {
       normalizedArtifact.taskId = this.taskId;
+      Object.assign(normalizedArtifact, this.taskReviewCycle.toJSON());
       normalizedArtifact.canonicalTaskSource = {
         fingerprint: this.taskSource.fingerprint,
         lineageFingerprints: [...this.taskSource.lineageFingerprints],
-        reviewRepairLineageFingerprint: this.taskMutationLineage?.fingerprint ?? null,
-        reviewRepairComplete: this.reviewRepairComplete,
+        specDigest: this.taskSpecDigest,
+        contextFingerprint: this.taskContext.fingerprint,
       };
       normalizedArtifact.noChange = this.taskSource.entries.length === 0
         && this.taskSource.noChangeReasons.length > 0;
@@ -951,14 +959,6 @@ export class CanonicalReviewPromotion {
       mediaType: "application/json",
       payload: evidence.toCanonicalJSON(),
     })];
-    if (this.taskMutationLineage !== null) {
-      publications.push(new CanonicalCommandResultPublication({
-        logicalKey: "task.mutation.lineage",
-        parameters: { taskId: this.taskId, attemptId: this.taskMutationLineage.attempt.id },
-        mediaType: "application/json",
-        payload: this.taskMutationLineage.toJSON(),
-      }));
-    }
     result.artifacts ||= {};
     result.artifacts.phase = this.phase;
     result.artifacts.verdict = normalizedVerdict(artifact.verdict);
@@ -975,6 +975,20 @@ export class CanonicalReviewPromotion {
       configurable: false,
       writable: false,
     });
+    if (this.taskId !== null && this.taskReviewPublicationBinding !== null) {
+      if (!(this.taskReviewPublicationBinding instanceof TaskReviewPublicationBinding)
+        || this.taskReviewPublicationBinding.source !== this.taskSource
+        || this.taskReviewPublicationBinding.context !== this.taskContext
+        || this.taskReviewPublicationBinding.specDigest !== this.taskSpecDigest) {
+        throw new Error("canonical Task Review promotion has an inconsistent publication binding");
+      }
+      Object.defineProperty(result, ATTACHED_TASK_REVIEW_PUBLICATION_BINDING, {
+        value: this.taskReviewPublicationBinding,
+        enumerable: false,
+        configurable: false,
+        writable: false,
+      });
+    }
     return result;
   }
 }
@@ -983,6 +997,12 @@ export class CanonicalReviewPromotion {
 export function attachedCanonicalReviewWorkUnit(result) {
   const value = result?.[ATTACHED_REVIEW_WORK_UNIT] ?? null;
   return value instanceof ReviewWorkUnit ? value : null;
+}
+
+/** The Store consumes this parent-issued binding under its catalog lock. */
+export function attachedTaskReviewPublicationBinding(result) {
+  const value = result?.[ATTACHED_TASK_REVIEW_PUBLICATION_BINDING] ?? null;
+  return value instanceof TaskReviewPublicationBinding ? value : null;
 }
 
 export function canonicalReviewArtifactFilename(value) {

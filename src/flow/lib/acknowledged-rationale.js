@@ -1,8 +1,12 @@
+import { guardrailAllowsAcknowledgedException } from "../../lib/guardrail.js";
+
 const MAX_ENTRIES_PER_GUARDRAIL = 3;
 const MAX_ENTRY_TEXT_CHARS = 600;
 const MAX_SECTION_CHARS = 4000;
 const DEFAULT_HEADING = "Matched Spec Acknowledgment Rationale";
 const UNAVAILABLE_WARNING = "parent spec context unavailable";
+
+const APPROVED_EXCEPTION_MINT = Symbol("approved-finding-exception");
 
 function normalizeText(value) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -174,6 +178,44 @@ class AcknowledgedRationaleSet {
       }
     }
   }
+}
+
+/** Canonical spec acknowledgment paired with a guardrail that permits it. */
+export class ApprovedFindingException {
+  constructor({ guardrailId, sources }, mint = null) {
+    if (mint !== APPROVED_EXCEPTION_MINT) throw new Error("approved finding exceptions require canonical authority");
+    this.guardrailId = String(guardrailId);
+    this.sources = Object.freeze(sources.map((entry) => entry.sourcePath));
+    Object.freeze(this);
+  }
+
+  toJSON() { return { guardrailId: this.guardrailId, sources: [...this.sources] }; }
+}
+
+/** Parent-derived exception authority; workers can inspect but cannot mint it. */
+export class ApprovedFindingExceptionSet {
+  constructor(entries = [], mint = null) {
+    if (mint !== APPROVED_EXCEPTION_MINT) throw new Error("approved finding exception sets require canonical authority");
+    this.entries = Object.freeze([...entries]);
+    Object.freeze(this);
+  }
+
+  static fromCanonical({ spec, guardrails = [] } = {}) {
+    const rationale = AcknowledgedRationaleSet.fromSpec(spec, guardrails);
+    const entries = guardrails
+      .filter((guardrail) => guardrailAllowsAcknowledgedException(guardrail))
+      .map((guardrail) => ({ guardrailId: guardrail.id, sources: rationale.entriesFor(guardrail.id) }))
+      .filter((entry) => entry.sources.length > 0)
+      .map((entry) => new ApprovedFindingException(entry, APPROVED_EXCEPTION_MINT));
+    return new ApprovedFindingExceptionSet(entries, APPROVED_EXCEPTION_MINT);
+  }
+
+  allows(finding) {
+    return typeof finding?.guardrailId === "string"
+      && this.entries.some((entry) => entry.guardrailId === finding.guardrailId);
+  }
+
+  toJSON() { return { version: 1, exceptions: this.entries.map((entry) => entry.toJSON()) }; }
 }
 
 function buildAcknowledgedRationaleSection({ spec, guardrails, heading = DEFAULT_HEADING }) {

@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-2",
+  "treeSha": "88c7d1beda8c46c75fce04e1ceaea16327070fe2",
+  "targetStateDigest": "c84e60a9916835918eec39a015405671cda44388e6cc0d38374301df1acc2305",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "8f6d1e22fb4127e9e28196a4b267e69acf4a601469ffd8d156e501e0ac6f9de4",
+    "capturedAt": "2026-09-02T10:10:11.803Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+      "summary": "Query dispatch still invokes generic worktree discovery",
+      "fingerprint": "8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2",
+      "evidenceRefs": [
+        "impl-review.json#8ef66a2dd41607c8370d8dd16eec7f922febcd5829ee105d48a80ab224da5eb2"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+      "summary": "Worktree handoff failures bypass the query error response",
+      "fingerprint": "243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f",
+      "evidenceRefs": [
+        "impl-review.json#243de6869c1978e7186d22a7e3b0e3ba59ca1a9306568c89a8fb557813c1c93f"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+      "summary": "Valid relative request-file paths beginning with a hyphen are rejected",
+      "fingerprint": "caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d",
+      "evidenceRefs": [
+        "impl-review.json#caa6f1f4fe9836e315cc110defb19b6760546aaf0e627742e57de60fddb6e96d"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

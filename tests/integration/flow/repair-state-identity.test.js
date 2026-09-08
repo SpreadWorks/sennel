@@ -101,6 +101,28 @@ describe("canonical repair state identity", () => {
     assert.notEqual(fingerprint().hash, before.hash, "ordinary source changes remain execution input");
   });
 
+  it("excludes transient Review work units while retaining ordinary source changes", () => {
+    initializeRepository();
+    const before = fingerprint();
+    write(
+      ".sennel/review-work-units/run/spec/attempt/inputs/task-context.json",
+      '{"source":"parent-owned transient review input"}\n',
+    );
+    write(
+      ".sennel/review-work-units/run/spec/attempt/impl-review.json",
+      '{"blockingFindings":[]}\n',
+    );
+    const afterTransient = fingerprint();
+    assert.equal(afterTransient.hash, before.hash, "Review work-unit creation is not source drift");
+    assert.equal(
+      afterTransient.entries.some((entry) => entry.path.startsWith(".sennel/review-work-units/")),
+      false,
+      "the manifest has no transient Review work-unit entry",
+    );
+    write("app/value.js", "export const value = 2;\n");
+    assert.notEqual(fingerprint().hash, before.hash, "ordinary source changes remain execution input");
+  });
+
   it("excludes Version-owned evidence from the implementation identity", () => {
     initializeRepository();
     const before = fingerprint();

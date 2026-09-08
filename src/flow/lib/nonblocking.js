@@ -1,3 +1,4 @@
+import { projectAdvisorySummary } from "./advisory-summary.js";
 /** Canonical Version-1 advisory handling. */
 
 import crypto from "node:crypto";
@@ -387,9 +388,5 @@ export function advisorySummary(state, flowManager = null) {
   if (state?.schemaRevision !== 3 || typeof state?.specId !== "string") return [];
   if (Array.isArray(state.advisorySummary)) return state.advisorySummary;
   if (typeof flowManager?.activityLedger !== "function") return [];
-  return flowManager.activityLedger(state.specId)
-    .map((activity) => activity.transition?.nonblocking)
-    .filter((record) => record?.kind === "decision" && record.action === "continue")
-    .map((record) => ({ stepId: record.sourceStep, evidenceRef: record.evidenceRef,
-      rationale: record.rationale, remainingRisk: record.remainingRisk }));
+  return projectAdvisorySummary(flowManager.activityLedger(state.specId));
 }

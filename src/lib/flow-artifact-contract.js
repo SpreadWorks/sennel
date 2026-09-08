@@ -76,7 +76,7 @@ export class FlowArtifactUpdater {
     // the only root-authority actor permitted to update flow.json itself.
     if (nodeId === "flow" || nodeId === "impl") return new FlowArtifactUpdater("system");
     if (AUTHORITY_ACTORS.has(nodeId)) return new FlowArtifactUpdater(nodeId);
-    const taskStep = nodeId.match(/^.+-(impl|review|gate)$/)?.[1] ?? null;
+    const taskStep = nodeId.match(/^.+-(impl|review|triage|repair|gate)$/)?.[1] ?? null;
     if (taskStep !== null) return new FlowArtifactUpdater(`task-${taskStep}`);
     throw new Error(`Flow Activity nodeId has no artifact updater actor: ${nodeId}`);
   }
@@ -640,7 +640,7 @@ export class FlowArtifactStepOwner {
   }
   static taskCollection(segment) {
     const ownerSegment = identifier(segment, "task artifact owner segment");
-    if (!new Set(["impl", "review", "gate"]).has(ownerSegment)) throw new Error("task artifact owner segment is invalid");
+    if (!new Set(["impl", "review", "triage", "repair", "gate"]).has(ownerSegment)) throw new Error("task artifact owner segment is invalid");
     return new FlowArtifactStepOwner({
       publicationStep: `task-${ownerSegment}`,
       directoryPath: path.posix.join("impl", ":{taskId}", ownerSegment),
@@ -682,7 +682,7 @@ export class FlowArtifactTaskOwner {
   constructor(taskId, segment) {
     this.taskId = identifier(taskId, "taskId");
     this.segment = identifier(segment, "task artifact owner segment");
-    if (!new Set(["impl", "review", "gate"]).has(this.segment)) throw new Error("task artifact owner segment is invalid");
+    if (!new Set(["impl", "review", "triage", "repair", "gate"]).has(this.segment)) throw new Error("task artifact owner segment is invalid");
     Object.freeze(this);
   }
   toString() { return path.posix.join("steps", "impl", this.taskId, this.segment); }
@@ -1044,7 +1044,7 @@ export class FlowArtifactActivityEvidenceOwner {
     if (historicalMatch !== null) {
       return FlowArtifactActivityEvidenceOwner.forHistoricalNodeId(historicalMatch[1]);
     }
-    const taskMatch = ownerPath.match(/^impl\/([A-Za-z0-9][A-Za-z0-9._-]*)\/(impl|review|gate)$/);
+    const taskMatch = ownerPath.match(/^impl\/([A-Za-z0-9][A-Za-z0-9._-]*)\/(impl|review|triage|repair|gate)$/);
     if (taskMatch !== null) {
       return FlowArtifactActivityEvidenceOwner.forTaskNode({ taskId: taskMatch[1], segment: taskMatch[2] });
     }
@@ -1469,7 +1469,7 @@ const FLOW_ARTIFACT_PLACEMENTS = new Map([
     "test.review", "test.review.repair.progress", "test.bootstrap.observation", "test.execute", "test.result.review", "impl.review", "impl.triage", "impl.repair",
     "impl.gate.source", "impl.gate", "retro", "acceptance.review", "acceptance.review.evidence", "acceptance.decision", "final.regression",
     "file.map", "placeholder.permission", "gate.memory", "repair.fingerprint", "repair.delta", "repair.migration",
-    "task.review", "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.gate.source", "task.gate", "task.mutation.lineage", "review.evidence", "activity.evidence",
+    "task.triage", "task.repair", "task.review", "task.triage.source.handoff.baseline", "task.repair.source.handoff.baseline", "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.gate.source", "task.gate", "task.mutation.lineage", "review.evidence", "activity.evidence",
     "finalize.cleanup.agent-metrics", "finalize.cleanup.notes", "finalize.cleanup.plugin-artifacts",
   ].map((key) => [key, new FlowArtifactPlacement("step-owner")]),
 ]);
@@ -1483,7 +1483,7 @@ const FLOW_ARTIFACT_MUTATION_POLICIES = new Map([
 
 const FLOW_ARTIFACT_ATTEMPT_HISTORY_KEYS = new Set([
   "draft.questions.review", "draft.coverage.review", "scenario.validity",
-  "test.review", "test.execute", "test.result.review", "impl.review", "task.review",
+  "test.review", "test.execute", "test.result.review", "impl.review", "task.review", "task.triage", "task.repair",
   // Gates are ordinary producer Steps, not a mutable side file.  Retaining
   // each completed gate evaluation here gives retry/recovery the same
   // ordered Attempt history as reviews and test execution.
@@ -1545,6 +1545,10 @@ const FLOW_ARTIFACT_OWNER_STEP_BY_KEY = new Map([
 function stepOwnerFor(logicalKey) {
   if (placementFor(logicalKey).toString() !== "step-owner") return null;
   if (["task.review", "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation"].includes(logicalKey)) return FlowArtifactStepOwner.taskCollection("review");
+  if (logicalKey === "task.triage") return FlowArtifactStepOwner.taskCollection("triage");
+  if (logicalKey === "task.repair") return FlowArtifactStepOwner.taskCollection("repair");
+  if (logicalKey === "task.triage.source.handoff.baseline") return FlowArtifactStepOwner.taskCollection("triage");
+  if (logicalKey === "task.repair.source.handoff.baseline") return FlowArtifactStepOwner.taskCollection("repair");
   if (logicalKey === "task.gate.source" || logicalKey === "task.gate") return FlowArtifactStepOwner.taskCollection("gate");
   if (logicalKey === "task.mutation.lineage") return FlowArtifactStepOwner.taskCollection("impl");
   if (logicalKey === "review.evidence") return FlowArtifactStepOwner.reviewCollection();
@@ -1599,7 +1603,7 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
     "system", "draft", "draft-questions-review", "draft-coverage-review", "draft-gate", "spec", "spec-review", "spec-triage",
     "spec-repair", "spec-gate", "approval", "test", "scenario-validity", "test-review", "test-execute",
     "test-result-review", "implement", "impl-review", "impl-triage", "impl-repair", "impl-gate", "retro", "acceptance-review", "acceptance-decision",
-    "final-regression", "report", "finalize-merge", "task-impl", "task-review", "task-gate",
+    "final-regression", "report", "finalize-merge", "task-impl", "task-review", "task-triage", "task-repair", "task-gate",
   ])),
   // A Spec record is the current authority. Each byte-changing publication
   // creates one immutable revision snapshot; the optional canonical review is
@@ -1676,7 +1680,7 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   // namespace.  Workflow ideas retain their own contract and are excluded
   // from this broader source-era pattern below.
   contract("plugin.lifecycle.artifact", "artifacts/plugin-artifacts/:{pluginArtifactPath}", "plugin-lifecycle-artifact", "canonical-flow-artifacts", "system", own("system", ["system"], ["system"]), "permanent", "collection"),
-  contract("file.map", "steps/impl/file-map.json", "file-map", "execution-checkout", "implement", own(["implement", "task-impl"], ["implement", "impl-repair", "task-impl"], ["system", "implement", "impl-repair", "task-impl", "test-execute", "test-result-review", "impl-review", "impl-gate", "report"])),
+  contract("file.map", "steps/impl/file-map.json", "file-map", "execution-checkout", "implement", own(["implement", "task-impl"], ["implement", "impl-repair", "task-impl", "task-repair"], ["system", "implement", "impl-repair", "task-impl", "task-repair", "test-execute", "test-result-review", "impl-review", "impl-gate", "report"])),
   // upgrade.js is the actual writer; this shared progress evidence is consumed by gates and reporting.
   contract("upgrade.result", "steps/upgrade-result.json", "upgrade-result", "canonical-flow-artifacts", "system", own("system", ["system", "impl-gate"], ["impl-gate", "acceptance-review", "final-regression", "report"])),
   contract("placeholder.permission", "steps/test/permission.json", "placeholder-permission", "canonical-flow-artifacts", "system", own("test", ["system", "test"], ["scenario-validity", "test-review", "impl-gate"])),
@@ -1691,10 +1695,14 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("repair.fingerprint", "steps/impl/repair/fingerprint.json", "repair-fingerprint", "canonical-flow-artifacts", "impl-repair", own("impl-repair", ["impl-repair"], ["test-execute", "impl-gate"])),
   contract("repair.delta", "steps/impl/repair/deltas/:{deltaId}.json", "repair-delta", "canonical-flow-artifacts", "impl-repair", own("impl-repair", ["impl-repair"], ["test-execute", "impl-gate"]), "permanent", "collection"),
   contract("repair.migration", "steps/impl/repair/migration.json", "repair-migration", "canonical-flow-artifacts", "impl-repair", own("impl-repair", ["impl-repair"], ["test-execute", "impl-gate"])),
-  contract("task.review", "steps/impl/:{taskId}/review/result.json", "task-review", "canonical-flow-artifacts", "task-review", own("task-review", ["task-review"], ["system", "task-gate"]), "permanent", "collection"),
+  contract("task.triage", "steps/impl/:{taskId}/triage/result.json", "task-triage", "execution-checkout", "task-triage", own("task-triage", ["task-triage"], ["system", "task-repair", "task-gate", "acceptance-review"]), "permanent", "collection"),
+  contract("task.repair", "steps/impl/:{taskId}/repair/result.json", "task-repair", "execution-checkout", "task-repair", own("task-repair", ["task-repair"], ["system", "task-review", "task-triage", "task-repair", "task-gate", "acceptance-review"]), "permanent", "collection"),
+  contract("task.triage.source.handoff.baseline", "steps/impl/:{taskId}/triage/recovery/source-baselines/:{attemptId}.json", "task-triage-source-handoff-baseline", "canonical-flow-artifacts", "task-triage", own("task-triage", ["task-triage"], ["task-triage"]), "permanent", "collection"),
+  contract("task.repair.source.handoff.baseline", "steps/impl/:{taskId}/repair/recovery/source-baselines/:{attemptId}.json", "task-repair-source-handoff-baseline", "canonical-flow-artifacts", "task-repair", own("task-repair", ["task-repair"], ["task-repair"]), "permanent", "collection"),
+  contract("task.review", "steps/impl/:{taskId}/review/result.json", "task-review", "canonical-flow-artifacts", "task-review", own("task-review", ["task-review"], ["system", "task-triage", "task-repair", "task-gate", "acceptance-review"]), "permanent", "collection"),
   contract("task.gate.source", "steps/impl/:{taskId}/gate/source.json", "task-gate-source", "canonical-flow-artifacts", "task-gate", own("task-gate", ["task-gate"], ["task-gate"]), "permanent", "collection"),
   contract("task.gate", "steps/impl/:{taskId}/gate/result.json", "task-gate", "canonical-flow-artifacts", "task-gate", own("task-gate", ["task-gate"], ["task-impl", "implement"]), "permanent", "collection"),
-  contract("task.mutation.lineage", "steps/impl/:{taskId}/impl/mutation-lineage/:{attemptId}.json", "task-mutation-lineage", "canonical-flow-artifacts", "task-impl", own(["task-impl", "task-review"], ["task-impl", "task-review"], ["task-review", "task-gate"]), "permanent", "collection"),
+  contract("task.mutation.lineage", "steps/impl/:{taskId}/impl/mutation-lineage/:{attemptId}.json", "task-mutation-lineage", "canonical-flow-artifacts", "task-impl", own(["task-impl", "task-repair"], ["task-impl", "task-repair"], ["task-review", "task-triage", "task-repair", "task-gate"]), "permanent", "collection"),
   contract("review.evidence", "steps/:{ownerPath}/evidence/:{digest}.json", "review-evidence", "canonical-flow-artifacts", "impl-review", own(
     ["draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review"],
     ["draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review"],
@@ -1832,6 +1840,10 @@ export const FLOW_ARTIFACT_SWITCH_TARGETS = Object.freeze([
   target("repair.fingerprint", ["repair-fingerprint.json"], "steps/impl/repair/fingerprint.json", "impl-repair", "test-execute"),
   patternTarget("repair.delta", ["repair-deltas/:{deltaId}.json"], "steps/impl/repair/deltas/:{deltaId}.json", "impl-repair", "test-execute"),
   target("repair.migration", ["repair-state-migration.json"], "steps/impl/repair/migration.json", "impl-repair", "impl-gate"),
+  newTarget("task.triage", "steps/impl/:{taskId}/triage/result.json", "task-triage", "task-repair"),
+  newTarget("task.repair", "steps/impl/:{taskId}/repair/result.json", "task-repair", "task-review"),
+  newTarget("task.triage.source.handoff.baseline", "steps/impl/:{taskId}/triage/recovery/source-baselines/:{attemptId}.json", "task-triage", "task-triage"),
+  newTarget("task.repair.source.handoff.baseline", "steps/impl/:{taskId}/repair/recovery/source-baselines/:{attemptId}.json", "task-repair", "task-repair"),
   newTarget("task.review", "steps/impl/:{taskId}/review/result.json", "task-review", "task-gate"),
   target("task.gate.source", ["task-impl-gate-source.json"], "steps/impl/:{taskId}/gate/source.json", "task-gate", "task-gate"),
   target("task.gate", ["task-impl-gate-result.json"], "steps/impl/:{taskId}/gate/result.json", "task-gate", "task-impl"),
@@ -1893,7 +1905,7 @@ export const FLOW_ARTIFACT_NORMAL_FLOW_FILES = Object.freeze([
   known("impl.review", "switch", "impl-review.json"), known("impl.triage", "switch", "impl-triage.json"), known("impl.repair", "switch", "impl-repair.json"), known("impl.gate.source", "switch", "impl-gate-source.json"), known("impl.gate", "switch", "impl-gate-result.json"), known("retro", "switch", "retro.json"),
   known("acceptance.review", "switch", "acceptance-review.json"), known("acceptance.review.evidence", "switch", "acceptance-review-evidence.json"), knownNew("acceptance.decision", "steps/acceptance-decision/result.json"), known("final.regression", "switch", "final-regression-result.json"), known("report", "switch", "report.json"), known("ideas", "switch", "ideas.json"), known("ideas", "switch", "plugin-artifacts/workflow/ideas.json"), knownPattern("plugin.lifecycle.artifact", "switch", new FlowArtifactLegacyPattern("plugin-artifacts/:{pluginArtifactPath}", { excludedPrefixes: ["plugin-artifacts/workflow/ideas.json"] })), known("file.map", "switch", "file-map.json"),
   known("upgrade.result", "switch", "upgrade-result.json"), known("placeholder.permission", "switch", "placeholder-permission.json"), known("completion.overrides", "switch", "completion-overrides.json"), known("retry.recovery", "switch", "retry-recovery.json"), knownNew("retry.recovery.baseline", "artifacts/retry-recovery/baselines/:{routeId}/:{attemptId}.json"), knownNew("retry.recovery.receipt", "artifacts/retry-recovery/receipts/:{routeId}/:{attemptId}.json"), knownNew("task.review.unsealed.checkpoint", "steps/impl/:{taskId}/review/recovery/unsealed/:{attemptId}.json"), knownNew("task.review.recovery.authorization", "steps/impl/:{taskId}/review/recovery/authorizations/:{attemptId}.json"), known("gate.memory", "switch", "gate-impl-memory.json"),
-  known("repair.fingerprint", "switch", "repair-fingerprint.json"), knownPattern("repair.delta", "switch", "repair-deltas/:{deltaId}.json"), known("repair.migration", "switch", "repair-state-migration.json"), known("impl.repair.transaction", "switch", "impl-repair-transaction.json"), knownNew("task.review", "steps/impl/:{taskId}/review/result.json"),
+  known("repair.fingerprint", "switch", "repair-fingerprint.json"), knownPattern("repair.delta", "switch", "repair-deltas/:{deltaId}.json"), known("repair.migration", "switch", "repair-state-migration.json"), known("impl.repair.transaction", "switch", "impl-repair-transaction.json"), knownNew("task.review", "steps/impl/:{taskId}/review/result.json"), knownNew("task.triage", "steps/impl/:{taskId}/triage/result.json"), knownNew("task.repair", "steps/impl/:{taskId}/repair/result.json"), knownNew("task.triage.source.handoff.baseline", "steps/impl/:{taskId}/triage/recovery/source-baselines/:{attemptId}.json"), knownNew("task.repair.source.handoff.baseline", "steps/impl/:{taskId}/repair/recovery/source-baselines/:{attemptId}.json"),
   known("task.gate.source", "switch", "task-impl-gate-source.json"), known("task.gate", "switch", "task-impl-gate-result.json"), knownNew("task.mutation.lineage", "steps/impl/:{taskId}/impl/mutation-lineage/:{attemptId}.json"), knownPattern("review.evidence", "switch", "review-evidence/:{digest}.json"), knownPattern("tests.source", "switch", new FlowArtifactLegacyPattern("tests/:{testPath}", { excludedPrefixes: ["tests/.raw/"] })),
   knownNew("activity.evidence", "steps/:{ownerPath}/activity-evidence/:{digest}.json"),
   knownNew("task.review.reconciliation", "steps/impl/:{taskId}/review/recovery/reconciliations/:{attemptId}.json"),

@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-1",
+  "treeSha": "f59fdf044a316a4c47dac47125be9e7872568af3",
+  "targetStateDigest": "1890ac3b1a9ebc4ea75b9d4649333206ffb3e1e87f1bc55f310d3e8f05e709c0",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "c1902d3b0412076abe8d14615fe50fe73caef944c8df7c2fe8b540a504216697",
+    "capturedAt": "2026-09-02T01:27:13.521Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "2eabd2e241ca3e95b837f4ceffbf0ae466193fbc835fd44386e3a71546147056",
+      "summary": "Reader accepts invalid Activity order and parses the unconfirmed ledger tail",
+      "fingerprint": "2eabd2e241ca3e95b837f4ceffbf0ae466193fbc835fd44386e3a71546147056",
+      "evidenceRefs": [
+        "impl-review.json#2eabd2e241ca3e95b837f4ceffbf0ae466193fbc835fd44386e3a71546147056"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b",
+      "summary": "Artifact catalog validation omits canonical association and coverage checks",
+      "fingerprint": "85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b",
+      "evidenceRefs": [
+        "impl-review.json#85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "024fc0e62ec2a3463e8c36466326a9725d833737a00ea4ca7f65a02d3c425bb3",
+      "summary": "AggregateMetrics is emitted as an object literal",
+      "fingerprint": "024fc0e62ec2a3463e8c36466326a9725d833737a00ea4ca7f65a02d3c425bb3",
+      "evidenceRefs": [
+        "impl-review.json#024fc0e62ec2a3463e8c36466326a9725d833737a00ea4ca7f65a02d3c425bb3"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "17df9dfe50f5600b4bc3b8a01add482b247a7533bdc948e3f710923dba24833a",
+      "summary": "Metric sums can become unsafe integers or JSON null",
+      "fingerprint": "17df9dfe50f5600b4bc3b8a01add482b247a7533bdc948e3f710923dba24833a",
+      "evidenceRefs": [
+        "impl-review.json#17df9dfe50f5600b4bc3b8a01add482b247a7533bdc948e3f710923dba24833a"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "38e98ae79711cef9d1672c90d6c14606e797656ea8800157998ae973c8a9de44",
+      "summary": "Several public collections and strings bypass bounded limits",
+      "fingerprint": "38e98ae79711cef9d1672c90d6c14606e797656ea8800157998ae973c8a9de44",
+      "evidenceRefs": [
+        "impl-review.json#38e98ae79711cef9d1672c90d6c14606e797656ea8800157998ae973c8a9de44"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "52d191b0a2c9c030a373c553ac2fb8c2810d06218a0a9ae48280177021e90840",
+      "summary": "CanonicalFlowVersionReader does not validate specRoot",
+      "fingerprint": "52d191b0a2c9c030a373c553ac2fb8c2810d06218a0a9ae48280177021e90840",
+      "evidenceRefs": [
+        "impl-review.json#52d191b0a2c9c030a373c553ac2fb8c2810d06218a0a9ae48280177021e90840"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "90d0037e6e97e99274b302c27f52aca1296d3ed6b0256792adece20ffde78145",
+      "summary": "sennel flow query bypasses worktree-local CLI resolution",
+      "fingerprint": "90d0037e6e97e99274b302c27f52aca1296d3ed6b0256792adece20ffde78145",
+      "evidenceRefs": [
+        "impl-review.json#90d0037e6e97e99274b302c27f52aca1296d3ed6b0256792adece20ffde78145"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "f5e4cd6e26987469c7a84cb6a21f7ce8f28783d450e29a53b92c6267814c8bd3",
+      "summary": "Contract limits and error codes are not shared with fixture and consumer compatibility artifacts",
+      "fingerprint": "f5e4cd6e26987469c7a84cb6a21f7ce8f28783d450e29a53b92c6267814c8bd3",
+      "evidenceRefs": [
+        "impl-review.json#f5e4cd6e26987469c7a84cb6a21f7ce8f28783d450e29a53b92c6267814c8bd3"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

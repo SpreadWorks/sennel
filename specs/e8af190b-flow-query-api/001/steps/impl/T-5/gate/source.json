@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "phase": "task-impl",
+  "taskId": "T-5",
+  "generatedAt": "2026-09-05T01:18:54.852Z",
+  "result": "fail",
+  "evaluations": [
+    {
+      "guardrail_id": "validate-user-input-at-entry-point",
+      "result": "fail",
+      "reason": "The user-facing `--request-file` argument is named, but the specification does not explicitly list its required type and path-format validation rules. The implementation applies such validation in `src/flow/query.js` (`readInput`), so the spec must state those requirements at the entry-point contract.",
+      "category": "requirements",
+      "title": "Validate User Input at Entry Point",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "validate-user-input-at-entry-point",
+          "where": {
+            "file": "spec.json",
+            "locator": "Query command adapter / data-flow requirements"
+          },
+          "observed": "The user-facing `--request-file` argument is named, but the specification does not explicitly list its required type and path-format validation rules. The implementation applies such validation in `src/flow/query.js` (`readInput`), so the spec must state those requirements at the entry-point contract.",
+          "severity": "blocking",
+          "refs": [
+            "validate-user-input-at-entry-point"
+          ]
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "validate-user-input-at-entry-point",
+      "where": {
+        "file": "spec.json",
+        "locator": "Query command adapter / data-flow requirements"
+      },
+      "observed": "The user-facing `--request-file` argument is named, but the specification does not explicitly list its required type and path-format validation rules. The implementation applies such validation in `src/flow/query.js` (`readInput`), so the spec must state those requirements at the entry-point contract.",
+      "severity": "blocking",
+      "refs": [
+        "validate-user-input-at-entry-point"
+      ]
+    }
+  ],
+  "issues": [],
+  "reasons": [
+    {
+      "verdict": "FAIL",
+      "detail": "Validate User Input at Entry Point — The user-facing `--request-file` argument is named, but the specification does not explicitly list its required type and path-format validation rules. The implementation applies such validation in `src/flow/query.js` (`readInput`), so the spec must state those requirements at the entry-point contract.",
+      "guardrail_id": "validate-user-input-at-entry-point",
+      "category": "requirements"
+    }
+  ],
+  "failureKind": "ai_semantic_fail",
+  "failureCategory": {
+    "category": "semantic",
+    "code": "ai_semantic_fail"
+  },
+  "lineage": "0c83694bfcb0690e2661153e7ef37ee8a334954bab70a16f13dd7b59e9599178",
+  "sourceFingerprint": "2748eadd792b404a30e2cca8a366d54d12d2a9939bb46706f005e112c08936e3"
+}

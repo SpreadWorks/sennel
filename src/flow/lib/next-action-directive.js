@@ -359,29 +359,6 @@ export class NextActionDirectiveResolver {
         resumeInstruction: "Produce a canonical REJECTED test-review result with typed blocking findings and a current test revision; do not rerun or repair stale evidence directly.",
       });
     }
-    if (reviewDisposition?.operation === "repair-no-change-task-impl") {
-      return new ExecuteCommandDirective({
-        actionId: "REPAIR_NO_CHANGE_TASK_IMPLEMENTATION",
-        nextAction: guardedCommand("sennel flow run settle-review-transition", this.state, this.binding),
-        instruction: "Apply the definition-selected no-change correction transition. It re-admits the rejected Task Review evidence and starts the bounded Task implementation round; do not edit source or retry Review directly.",
-        reason: "The canonical Task Review rejected an empty source declaration for a mapped Requirement.",
-      });
-    }
-    if (reviewDisposition?.operation === "task-rounds-exhausted") {
-      return new BlockedDirective({
-        code: "TASK_IMPLEMENTATION_ROUNDS_EXHAUSTED",
-        reason: `The no-change Task correction exhausted its bounded implementation rounds (${reviewDisposition.attempts}/${reviewDisposition.maxAttempts}).`,
-        resumeInstruction: "Revise the canonical Task or mapped Requirement evidence before starting another Flow; do not create a third Task implementation round.",
-      });
-    }
-    if (reviewDisposition?.operation === "task-review-gate-handoff") {
-      return new ExecuteCommandDirective({
-        actionId: "SETTLE_TASK_REVIEW_GATE_HANDOFF",
-        nextAction: guardedCommand("sennel flow run settle-review-transition", this.state, this.binding),
-        instruction: "Settle the already-published fourth Task Review repair into Task Gate. This records no new review and is safe to repeat after an interrupted post lifecycle.",
-        reason: "The definition selected the fourth Task Review Gate handoff from canonical review and mutation-lineage evidence.",
-      });
-    }
     if (reviewDisposition?.operation === "blocked") {
       const reason = `The definition exhausted ${reviewDisposition.phase} review retries (${reviewDisposition.attempts}/${reviewDisposition.maxAttempts}) for the current canonical evidence.`;
       return new BlockedDirective({

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "phase": "test",
+  "taskId": null,
+  "treeSha": "b54ca71e64c2c8ce0de80b1f63ce32d0be965942",
+  "targetStateDigest": "77805929cb612e622988388ceebdfe35f55c6e629ffec040f2bfd46ecb5d06c7",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "394832a4c7d076916d7e0ffa17dac57adb970b28da23e47ca8e734f860b5d6b4",
+    "capturedAt": "2026-09-01T12:48:59.608Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "a990ef8e6957b833f27c0e6b48c733baceeb2fb18a7d822104eaa87bbad06cc0",
+      "summary": "Request-file content validation is untested",
+      "fingerprint": "a990ef8e6957b833f27c0e6b48c733baceeb2fb18a7d822104eaa87bbad06cc0",
+      "evidenceRefs": [
+        "test-review.json#a990ef8e6957b833f27c0e6b48c733baceeb2fb18a7d822104eaa87bbad06cc0"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "05e83237f1ec5094e5d74b7401123ff860d9f260994b4a6176578000a207789f",
+      "summary": "R6 test expects the wrong updatedAt behavior",
+      "fingerprint": "05e83237f1ec5094e5d74b7401123ff860d9f260994b4a6176578000a207789f",
+      "evidenceRefs": [
+        "test-review.json#05e83237f1ec5094e5d74b7401123ff860d9f260994b4a6176578000a207789f"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "260f970ea7cff308ca031bd6d586ee71b5ce215c3ba228029300dde2b441baa0",
+      "summary": "Cursor replay assertion contradicts R10",
+      "fingerprint": "260f970ea7cff308ca031bd6d586ee71b5ce215c3ba228029300dde2b441baa0",
+      "evidenceRefs": [
+        "test-review.json#260f970ea7cff308ca031bd6d586ee71b5ce215c3ba228029300dde2b441baa0"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "d7abe1d44c44ec7f93847a4033a4146106a391d8356e81888cadb8a3b34268cf",
+      "summary": "Cursor canonical digest is not verified",
+      "fingerprint": "d7abe1d44c44ec7f93847a4033a4146106a391d8356e81888cadb8a3b34268cf",
+      "evidenceRefs": [
+        "test-review.json#d7abe1d44c44ec7f93847a4033a4146106a391d8356e81888cadb8a3b34268cf"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "5e17a5ca9c5a809d2ed7d04526cf6953a50f30ecd187b3f9aee2537bc8504dd5",
+      "summary": "Shared reader boundary is asserted only by output equivalence",
+      "fingerprint": "5e17a5ca9c5a809d2ed7d04526cf6953a50f30ecd187b3f9aee2537bc8504dd5",
+      "evidenceRefs": [
+        "test-review.json#5e17a5ca9c5a809d2ed7d04526cf6953a50f30ecd187b3f9aee2537bc8504dd5"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

@@ -309,6 +309,8 @@ export function makeLifecycleStepTransition(
 const FIXTURE_TASK_STEP_SUFFIXES = new Map([
   ["task-impl", "impl"],
   ["task-review", "review"],
+  ["task-triage", "triage"],
+  ["task-repair", "repair"],
   ["task-gate", "gate"],
 ]);
 
@@ -761,22 +763,28 @@ export class TaskLifecycleFixture {
   create() {
     this.flow.create().addTasks(this.taskDocuments).registerActive();
     const suffix = this.targetStep.replace(/^task-/, "");
-    if (!new Set(["impl", "review", "gate"]).has(suffix)) {
+    if (!new Set(["impl", "review", "triage", "repair", "gate"]).has(suffix)) {
       throw new TypeError(`TaskLifecycleFixture targetStep is unsupported: ${this.targetStep}`);
     }
     const nodeId = `${this.taskId}-${suffix}`;
     this.flow.flow.settleBefore(`${this.taskId}-impl`);
     this.flow.flow.activateTask(this.taskId, { settlePredecessors: false });
-    for (const predecessor of ["impl", "review"]) {
-      if (predecessor === suffix) break;
-      this.flow.flow.settle(`${this.taskId}-${predecessor}`);
-    }
+    settleTaskPredecessors(this.flow.flow, this.taskId, suffix);
     if (suffix !== "impl") this.flow.flow.activate(nodeId, { settlePredecessors: false });
     return this;
   }
 
   state() { return this.flow.state(); }
   location() { return this.flow.location(); }
+}
+
+function settleTaskPredecessors(flow, taskId, targetRole) {
+  for (const predecessor of ["impl", "review", "triage", "repair"]) {
+    if (predecessor === targetRole) break;
+    const skippedByPassingReview = targetRole === "gate"
+      && ["triage", "repair"].includes(predecessor);
+    flow.settle(`${taskId}-${predecessor}`, skippedByPassingReview ? "skipped" : "done");
+  }
 }
 
 /**
@@ -956,10 +964,7 @@ export class CanonicalNextActionScenario {
     const nodeId = `${taskId}-${suffix}`;
     this.flow.settleBefore(`${taskId}-impl`);
     this.flow.activateTask(taskId, { settlePredecessors: false });
-    for (const predecessor of ["impl", "review"]) {
-      if (predecessor === suffix) break;
-      this.flow.settle(`${taskId}-${predecessor}`);
-    }
+    settleTaskPredecessors(this.flow, taskId, suffix);
     if (suffix !== "impl") this.flow.activate(nodeId, { settlePredecessors: false });
     return this;
   }
@@ -984,7 +989,7 @@ export class CanonicalNextActionScenario {
 
   #taskSuffix(stepId) {
     const value = String(stepId);
-    if (["impl", "review", "gate"].includes(value)) return value;
+    if (["impl", "review", "triage", "repair", "gate"].includes(value)) return value;
     const suffix = FIXTURE_TASK_STEP_SUFFIXES.get(value);
     if (suffix === undefined) throw new Error(`canonical next-action Task Step is unknown: ${value}`);
     return suffix;

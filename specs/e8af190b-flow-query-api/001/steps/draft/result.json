@@ -1,0 +1,87 @@
+{
+  "devType": "feature",
+  "goal": "Expose a read-only public `sennel flow query` capability so Workspace and Connector can retrieve validated canonical Flow Version metadata or confirmed Activities without depending on the internal filesystem layout.",
+  "analysis": {
+    "problem": "Workspace and Connector consumers need canonical Flow Version information, but a snapshot-oriented interface would couple them to internal storage or force them to retrieve unrelated resources together. The existing canonical runtime already establishes typed Version identity, validated state, confirmed Activity history, and catalog authority; the missing capability is a stable public query boundary over those authorities.",
+    "proposedApproach": "Add a query boundary over the canonical Version Store that validates one resource-specific request, selects one Spec and Flow Version, and projects only the public metadata or Activity resource contract. Keep selection, ordering, timestamps, errors, and cursor behavior governed by Issue #517, and use the same validated reader path for fresh and migrated Flows.",
+    "validation": "Validate the request boundary and the Schema Revision 1 response contract with fresh, migrated, active, parked, derived-blocked, and finalized fixtures, with and without Git. Assert that metadata success has exactly one `item`, activities success has `items` plus `pageInfo`, `selectedFlowVersion` is the requested or default Version, and `availableFlowVersions` is ascending. Assert the complete public field groups, authority-backed timestamp availability, deterministic Artifact IDs, measured-only cost, confirmed Activity ordering/filtering, cursor query binding, and the listed stable error shapes/codes. Run a consumer compatibility fixture against the same centrally managed response schema, and compare canonical-file digests plus Git status before and after successful and failed queries."
+  },
+  "decisionMap": {
+    "knownFacts": [
+      "must: Issue #517 is the sole scope authority for this single Workspace / Connector query concern.",
+      "must: The public contract exposes two separately retrievable resources, `metadata` and `activities`, for one selected Flow Version.",
+      "must: Production inputs are limited to the canonical Version Store, `flow.json`, `spec.json`, the Activity ledger, and the Artifact catalog; old layout data, migration reports, raw logs, and temporary files are excluded.",
+      "must: The canonical source defines typed Version identity and location values in `src/lib/flow-version.js`.",
+      "must: `CurrentFlowStateSnapshot` limits its Activity view to the confirmed prefix identified by the current state confirmation order.",
+      "must: `CurrentFlowLifecycle` validates the public lifecycle states `active`, `parked`, and `finalized`; `blocked` is represented by current Attempt failure and next-action behavior instead of lifecycle state.",
+      "must: `CurrentFlowCreationAuthority` distinguishes available creation evidence from unavailable historical evidence, and `FlowActivity` validates `flow_created` and Activity timing.",
+      "must: `FlowArtifactCatalog` provides canonical descriptor validation and Activity association checks without making Artifact bodies public.",
+      "must: The query scope excludes Flow Version creation or increment, Version 2 creation, Workspace-specific view models, and any query-side mutation of Flow, Activity, Artifact, cache, or Git state."
+    ],
+    "decisionPoints": [
+      "must: Schema Revision 1 uses a query-specific top-level response. Every success has `schemaRevision: 1`, `ok: true`, `selectedFlowVersion` as the selected positive safe integer, and `availableFlowVersions` as a unique ascending array of positive safe integers. A metadata success has an `item` object and no `items` field; an activities success has an `items` array and `pageInfo` exactly shaped as `{ limit: integer, endCursor: string|null, hasNext: boolean }` and no `item` field. The request does not provide `cardinality`, `order`, or a schema revision.",
+      "must: Version selection requires one non-empty `condition.specId`; an omitted `condition.flowVersion` selects Version 1, while an explicit positive safe integer selects that exact Version. `availableFlowVersions` is discovered from the canonical Store for that Spec, and a missing requested Version never falls back to another Version.",
+      "must: Activities are projected only from the confirmed Activity prefix, ordered by contiguous `confirmationOrder` ascending. `page.limit` is an integer from 1 through 100, initial `page.after` is null, `recordedAt.gte` and `recordedAt.lt` compare against authority-backed `timing.finishedAt` values with timezone-bearing ISO 8601 datetimes, and a cursor binds resource, `specId`, selected Version, both datetime bounds, and the last returned `confirmationOrder`.",
+      "must: Metadata `item` has the following required public groups and no internal storage fields: identity `{ flowId, flowVersionId, runId, specId, flowVersion }`; lifecycle `{ lifecycle, blocked, blocker, nextAction }` where lifecycle is only `active|parked|finalized`, blocked is derived from current Attempt failure and `nextAction.operation === \"blocked\"`, and blocker/nextAction are null or public recovery objects; `location` with canonical phase/step/task coordinates; `structure` with phase, Step, and Task identifiers; `relationships` with Step-to-Task, Task-to-node, and Issue references; `timestamps` containing `createdAt`, `updatedAt`, and `finalizedAt`, each represented as `{ value: ISO8601 string|null, availability: \"available\"|\"unavailable\", provenance: string }`; `capabilities` as the validated canonical capability map; `artifacts` as public descriptors; and `metrics` containing non-negative confirmed Activity, Artifact, Step, and Task counts, recorded usage totals, and `cost` only when an actual provider-measured amount and currency are present. Fresh creation time must use the first `flow_created` Activity; missing migrated creation evidence is unavailable with non-empty reason/provenance. Public Artifact descriptors contain deterministic `artifactId`, schema-defined metadata, and Activity/node/Task relation IDs, never `relativePath`, internal filenames, catalog data, or bodies.",
+      "must: Each Activity item has the required public fields `{ activityId, type, operation, nodeId, taskId, attemptId, sequence, confirmationOrder, timing, usage, outcome, failure, blocker, incomplete, metric, note, evaluation, finding, repair, artifacts }`. Identity values and sequence/order are canonical; `timing.finishedAt` is the recorded-time authority; nullable failure/blocker/evaluation/finding/repair/metric/note/artifact-reference fields preserve their public schema; and raw logs, prompt bodies, checkpoints, transactions, locks, temporary data, and Artifact bodies are never included.",
+      "must: Known-resource errors use `schemaRevision: 1`, `ok: false`, `resource`, `selectedFlowVersion` (the valid requested/default value or null), ascending `availableFlowVersions`, and a non-empty `{ code, path, message }` error. Metadata errors always include `item: null`; activities errors always include `items: []` and `pageInfo: { limit: integer|null, endCursor: null, hasNext: false }`. The centrally managed codes cover `INVALID_JSON`, `INVALID_REQUEST`, `SPEC_NOT_FOUND`, `FLOW_VERSION_NOT_FOUND`, `CANONICAL_RECORD_UNREADABLE`, `CANONICAL_RECORD_INCONSISTENT`, `INVALID_CURSOR`, and `CURSOR_QUERY_MISMATCH`; Version-not-found errors include the discovered available Versions. Errors whose resource cannot be determined omit resource-specific payloads, and every `ok: false` response exits non-zero.",
+      "must: Query execution is read-only: the same validated reader is used for fresh and migrated Flows, and successful or failed reads of active, parked, derived-blocked, or finalized Versions leave canonical file digests and Git working-tree status unchanged. Finalized results remain identical for repeated reads with identical conditions; appending to an active ledger does not change already-returned Activity order or invalidate its bound cursor."
+    ],
+    "resolvedByProjectRules": [
+      "must: Implementation uses only Node.js built-in modules because the project forbids external dependencies.",
+      "must: Meaningful query values, request/response values, and renderable results are represented by dedicated classes whose constructors enforce the stated invariants and whose behavior belongs to the value type. Required dedicated values include the request, resource/Version selector, datetime range, cursor, response, error, timestamp availability, public Artifact descriptor, and aggregate metrics.",
+      "must: The implementation remains independent of Codex, Claude Code, IDE, and agent-host lifecycle features.",
+      "must: Draft content fixes the public behavior and reviewable acceptance boundaries here; the Spec may decompose modules and express the same contract as formal schemas without weakening or deferring these requirements."
+    ],
+    "requiresUserJudgment": [],
+    "deferredToSpec": [
+      {
+        "boundary": "must: Spec renders the field groups, nullability, enumerations, and error codes fixed in this draft as the centrally managed JSON Schema Revision 1 and maps each field to its canonical reader/projection owner.",
+        "relevance": "The public field names, response shapes, error taxonomy, and compatibility assertions are fixed by Issue #517 and this repaired draft; only the formal schema representation and bounded module decomposition remain specification work.",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: Spec defines the internal cursor encoding and signing/serialization mechanism while preserving the binding fields and mismatch errors required here.",
+        "relevance": "Issue #517 requires opaque query-bound cursors and contiguous pagination but does not require their internal representation.",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: Spec organizes the fixture matrix and consumer compatibility assertions listed in analysis.validation and scopeVerification, without adding resources or alternate response shapes.",
+        "relevance": "The accepted fresh, migrated, lifecycle, Git, filtering, pagination, error, and read-only behaviors are fixed; Spec writing may assign them to concrete fixtures and tests.",
+        "owner": "spec"
+      }
+    ]
+  },
+  "scopeVerification": {
+    "in": [
+      "must: Add the `sennel flow query` entry point with stdin and `--request-file` input, exactly one JSON request object, and JSON-only stdout. Reject simultaneous stdin and `--request-file`, reject trailing or multiple JSON values, and keep diagnostics off stdout.",
+      "must: Support the `metadata` and `activities` resources for one selected canonical Flow Version, with the exact success fields, public metadata/Activity groups, selected Version, and ascending available Version list defined in the decision map.",
+      "must: Validate requests and cursors, discover and select Versions without fallback, project public data, return the enumerated stable resource-specific errors, filter Activity timestamps using `timing.finishedAt`, and paginate Activities with opaque query-bound cursors.",
+      "must: Contract fixtures cover fresh and migrated Flows, active / parked / derived-blocked / finalized lifecycle cases, repositories with and without Git, missing migrated creation evidence, Version 2 or later discovery, invalid/nonexistent requests, canonical read failures, datetime bounds, zero matches, cursor mismatch, and append stability.",
+      "must: A consumer compatibility fixture validates every Schema Revision 1 success and known-resource error against the centrally managed schema: metadata consumers can read exactly one `item`, activities consumers can read `items` and `pageInfo`, both consume `selectedFlowVersion` and `availableFlowVersions`, unsupported revisions are rejected, and no consumer depends on internal paths, raw catalogs, or generic Flow Envelope fields.",
+      "must: Verify query execution preserves canonical files and the Git working tree by recording canonical-file digests and Git status before and after both successful and failed queries."
+    ],
+    "out": [
+      "must not: Include Workspace-specific view models or recomposition of metadata and Activities.",
+      "must not: Include Artifact bodies, raw logs, prompt bodies, internal paths, internal file names, raw catalogs, checkpoints, transactions, locks, or temporary data in public responses.",
+      "must not: Add cross-Spec search, full-text search, arbitrary sorting, offset pagination, total counts, or Activity aggregate queries.",
+      "must not: Add Flow Version creation or increment, or creation of Version 2 or later.",
+      "must not: Add old-layout parsing, migration-classifier or migration-report dependencies, or backward-compatible fallback behavior.",
+      "must not: Update Flow state, the Activity ledger, Artifact storage, cache, or Git working tree during query execution."
+    ]
+  },
+  "impactOnExisting": [
+    "must: Extend top-level Flow command routing with `query` while preserving existing Flow commands and their established behavior; verify at least one existing Flow command behavior before and after routing changes.",
+    "must: Reuse the existing canonical Version, state, Activity, timing, and Artifact authority concepts so Workspace / Connector consumers do not depend on filesystem layout; verify fresh and migrated fixtures through the same reader and compare the public projections to authority-backed records.",
+    "must: Introduce one centrally managed query response schema and error taxonomy shared by the CLI, fixtures, consumer compatibility test, and tests; verify every listed success/error shape and CLI exit status through behavior-level assertions.",
+    "must: Add contract fixtures and consumer-level verification around existing canonical runtime and migration behavior: assert lifecycle eligibility, derived blocked representation, creation-timestamp provenance, confirmed Activity prefix/order, public Artifact relations, aggregate metrics, Version discovery, filter/cursor behavior, and append stability.",
+    "must: Keep existing source, canonical files, and Git working-tree contents unchanged before and after successful or failed query execution; verify this with content digests and Git status rather than command registration or help-output checks alone."
+  ],
+  "questionLedger": {
+    "revision": 0,
+    "publication": "draft-worker-publication",
+    "evidenceDigest": "53d341051f4d9c61f4c3dcf56c106c18d69eecca4e26c35287182a34a098d098",
+    "questions": []
+  },
+  "openQuestions": []
+}

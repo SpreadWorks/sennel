@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "sourceArtifactDigest": "1b604c54447615be5f01aa171f30fd8a6df4cce2b4252185f8b0cf0dc14c6d41",
+  "sourceEvidenceId": "8f681a887ec2249749b3a7b7a823aa8654c953d89becbf94144388c045430d2d",
+  "sourceTestRevision": {
+    "version": 1,
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "stepId": "test",
+    "digest": "897e6f840509e0eb5f0a29c000beae67bca83d11cd9bc5a08a4d8b82a95204af",
+    "byteLength": 202229,
+    "finalizedAt": "2026-09-01T13:02:23.766Z"
+  },
+  "entries": [
+    {
+      "findingId": "f34e719aecce69834052144fcb7a7c8c5effbef4207b7b35d183298bf50f0deb",
+      "fingerprint": "f34e719aecce69834052144fcb7a7c8c5effbef4207b7b35d183298bf50f0deb",
+      "status": "done",
+      "handoff": {
+        "handoffDigest": "ca19fc7661629f88e1b33e24cbc10612091479b6f70ccee1a58f23a72211ab41",
+        "requestDigest": "3cceb87947752ea5833540324a2254b2e5a9eae2d075fcda4890e417ece5d3ee",
+        "payloadDigest": "beba32b30166f03c9473120f96cae1575b80caae35715c4664a2c1052a2ed22f"
+      }
+    },
+    {
+      "findingId": "cc5e360baa1fb6ebe6b4761067e6b0aa5468439ba391abcfdd1f709764e26a96",
+      "fingerprint": "cc5e360baa1fb6ebe6b4761067e6b0aa5468439ba391abcfdd1f709764e26a96",
+      "status": "done",
+      "handoff": {
+        "handoffDigest": "0a3cebffc424a9c716bf9af3d65576b8c47cb3da2a655d399c1c912368dfd887",
+        "requestDigest": "85947a9f97ebc44345d78b688f3b9f3cc27f5147b068b29d9fd78f37e74e760e",
+        "payloadDigest": "794f2a32bb12d9f9973166944635a058f51e53fd8893eaecf52c48ed77cf7096"
+      }
+    },
+    {
+      "findingId": "b7cdffdd66f3c86d35ce5d52251ee8f95288ace118f6cae7814e6c54b987197e",
+      "fingerprint": "b7cdffdd66f3c86d35ce5d52251ee8f95288ace118f6cae7814e6c54b987197e",
+      "status": "done",
+      "handoff": {
+        "handoffDigest": "fd4e5f99fb0b3c0bb5515e4e9e7d18214f9a16bed8f346a3e5ca0de0681b48a9",
+        "requestDigest": "21f8c731c8ca8f6b514b679091e0c68ffb8aecec18cbad50c8a9b605b4085ff3",
+        "payloadDigest": "5759224b4975290570991ac7bc69190610888a00071dd4cb4ea0ecbb7bc7091b"
+      }
+    },
+    {
+      "findingId": "0a699ae5fc559e0719a92e4e2a7c5bdbcf4f443d98ea9943a68bf8d005331c55",
+      "fingerprint": "0a699ae5fc559e0719a92e4e2a7c5bdbcf4f443d98ea9943a68bf8d005331c55",
+      "status": "done",
+      "handoff": {
+        "handoffDigest": "b9d7abe70bedde8ca8133761e06422b882547c1d2aed559b2f1567816322efcf",
+        "requestDigest": "ffc24b881cf8f8f55cc51339058b40b0bef301feb2b359fbb4b793ced93df94f",
+        "payloadDigest": "f3db65bb60e8af7e738d70eb4f34c8d420d2175e83b51488dd085eb633510435"
+      }
+    },
+    {
+      "findingId": "ce6bb87771296e4c74c2829e741ef383a7945397be1780ea0b24bebb29eade14",
+      "fingerprint": "ce6bb87771296e4c74c2829e741ef383a7945397be1780ea0b24bebb29eade14",
+      "status": "done",
+      "handoff": {
+        "handoffDigest": "35176f931acacf425c570fd2f8a925bbd5ff73aeac2d9765fe703e6eb58f8f2d",
+        "requestDigest": "3579c3506888c585aa2ad957700e7d8c3884fb618e95690ca4f98aa75519fe21",
+        "payloadDigest": "f07bf3eefe6e1fa29a8ea35c0a281fda588c81a6a89e83357adddeeb3721f7e7"
+      }
+    },
+    {
+      "findingId": "19cf46cd1800b19d23dcd330834e7ccc3922ac823b36a93f083446a08fe958c8",
+      "fingerprint": "19cf46cd1800b19d23dcd330834e7ccc3922ac823b36a93f083446a08fe958c8",
+      "status": "done",
+      "handoff": {
+        "handoffDigest": "520f5a048247137d47d2dafa6c6942bba928394cf2b2c443ffec2e262797102e",
+        "requestDigest": "30ae2d913a4828486e635de1c7f81740cbdf96d248637cd5bafdcbb6cf734625",
+        "payloadDigest": "8f51581b0d9e64e786b684582ef369f808c593160ab75d49a6af9c26296772f2"
+      }
+    },
+    {
+      "findingId": "f38f4eae934466c8c9ccb2831457809bfa3d3ef9fdf4065396d332e641e2db93",
+      "fingerprint": "f38f4eae934466c8c9ccb2831457809bfa3d3ef9fdf4065396d332e641e2db93",
+      "status": "done",
+      "handoff": {
+        "handoffDigest": "efc0188acf7aa6d720561a37c095737b9cc00cf754c49beaaa1d928f6cf6ba82",
+        "requestDigest": "8fb6f99488ca0405130e41ef6bec7677aa91df20af964ce8b05a6f774888cd2d",
+        "payloadDigest": "3fc16a55fbd876b9a4d102035993406fdf135fcf5143996d3b883df15e024c3c"
+      }
+    },
+    {
+      "findingId": "ed21472cfbd67223508dabc558726071da73f68c62ec8d59bb033a971db33ef2",
+      "fingerprint": "ed21472cfbd67223508dabc558726071da73f68c62ec8d59bb033a971db33ef2",
+      "status": "done",
+      "handoff": {
+        "handoffDigest": "735f05a6fcb8b6b8e07655b4a172d154beb12a63218a156a01515e5f04398a58",
+        "requestDigest": "a65b169fae1f02dfe435c3c27fcfad2c5f2d4c66213a39ef921a662e87887c33",
+        "payloadDigest": "4dfe898a5e3d44e310fb0ab649aba53b4206cb003f94ba62fed8d7530790ea6f"
+      }
+    }
+  ]
+}

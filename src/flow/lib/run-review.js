@@ -1,3 +1,4 @@
+import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 /**
  * src/flow/lib/run-review.js
  *
@@ -54,7 +55,6 @@ import { resolveCurrentReviewTransition } from "./review-transition-persistence.
 import {
   CurrentTaskSourceSnapshot,
   TaskMutationLineageSet,
-  TaskReviewRepairManifest,
   TaskReviewSourceEffectRejection,
 } from "./task-mutation-lineage.js";
 import {
@@ -64,13 +64,9 @@ import {
   WorkerArtifactRepositoryMutationSnapshot,
 } from "./worker-artifact-handoff.js";
 import { CanonicalTaskContext } from "./task-canonical-context.js";
-import { ReviewFindingCycle } from "./finding-disposition-policy.js";
-import {
-  TaskReviewConvergenceEvidence,
-  TaskReviewRecurrenceContract,
-} from "./review-recurrence.js";
 import { TaskReviewExecutionIdentity } from "./task-review-execution-identity.js";
 import { TaskReviewAccounting } from "./task-review-accounting.js";
+import { TaskReviewPublicationBinding } from "./task-review-stage-artifacts.js";
 import {
   TaskReviewUnsealedCheckpoint,
   readTaskReviewRecoveryAuthorization,
@@ -99,20 +95,6 @@ const REVIEW_NODE_ID_BY_PHASE = Object.freeze(Object.fromEntries(
 ));
 
 const REVIEW_PHASE_KEYS = Object.freeze(Object.keys(REVIEW_NODE_ID_BY_PHASE));
-
-/** Validate recurrence claims against only canonical prior Task Review history. */
-function assertTaskReviewRecurrenceExplanation({ artifact, flowManager, state, taskId }) {
-  const cycle = ReviewFindingCycle.fromActivityLedger({
-    runId: state.runId,
-    activities: flowManager.activityLedger(state.specId),
-  });
-  const recurrence = new TaskReviewConvergenceEvidence({ flowManager, state, cycle })
-    .recurrenceHistory(taskId);
-  new TaskReviewRecurrenceContract({ history: recurrence }).validate([
-    ...(artifact.blockingFindings || []),
-    ...(artifact.nonBlockingImprovements || []),
-  ]);
-}
 
 function persistedPhaseKey(ctxPhase) {
   return ctxPhase == null ? IMPL_REVIEW_PHASE : ctxPhase;
@@ -158,7 +140,7 @@ function reviewPhaseKeyForCtx(ctx, phase) {
   return resolveDraftReviewPhaseKey(ctx?.flowState || {});
 }
 
-export { REVIEW_PHASE_KEYS, assertTaskReviewRecurrenceExplanation };
+export { REVIEW_PHASE_KEYS };
 
 const PHASE_REVIEW_PARSERS = {
   test:  { countPattern: /blocking=(\d+)/,   countKey: "blockingCount",   countWord: "blocking finding(s)",   label: "Test review", commandId: "flow.test.review" },
@@ -595,9 +577,14 @@ function reviewExecutionAdmission(ctx, { persistedPhase, executionRoot }) {
   );
 }
 
-function currentTaskReviewAttemptCount(flowManager, state, taskId) {
-  return TaskReviewAccounting.fromCanonicalState({ flowManager, state, taskId })
-    .requireInflightReviewOrdinal();
+function taskReviewSpecDigest(flowManager, state, taskId) {
+  if (taskId === null) return null;
+  const source = flowManager.readArtifact({
+    specId: state.specId,
+    logicalKey: "spec.record",
+    consumerNodeId: `${taskId}-review`,
+  });
+  return crypto.createHash("sha256").update(source.bytes).digest("hex");
 }
 
 function taskReviewTransientDirectories(executionRoot, workUnit) {
@@ -648,6 +635,15 @@ function taskReviewValidatedMetricMetadataPaths(executionRoot, workUnit) {
       FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey).relativePath,
     )
   ));
+}
+
+function taskReviewPublicationRuntimeLocks(flowManager, specId, root = null) {
+  const location = flowManager.specLocation(specId);
+  if (root !== null && fs.realpathSync(root) !== location.repositoryRoot) return [];
+  return [
+    location.runtimeLock("runtime.lock.artifact-catalog"),
+    location.runtimeLock("runtime.lock.current-flow-state"),
+  ];
 }
 
 /**
@@ -708,7 +704,7 @@ export class TaskReviewCanonicalObservationBoundary {
 }
 
 /** Parent-side source surface for a Task Review provider invocation. */
-export function taskReviewRepairIgnoredDirectories(executionRoot, workUnit, agent = null) {
+export function taskReviewSourceObservationIgnoredDirectories(executionRoot, workUnit, agent = null) {
   return [...new Set([
     ...taskReviewTransientDirectories(executionRoot, workUnit),
     path.posix.join(PRODUCT.managedDirName, "agent-cache"),
@@ -727,14 +723,14 @@ export function taskReviewRepairIgnoredDirectories(executionRoot, workUnit, agen
  */
 export function taskReviewRecoveryIgnoredDirectories(executionRoot, workUnit, agent = null) {
   const directories = [
-    ...taskReviewRepairIgnoredDirectories(executionRoot, workUnit, agent),
+    ...taskReviewSourceObservationIgnoredDirectories(executionRoot, workUnit, agent),
   ];
   return [...new Set(directories)];
 }
 
 /** Restored parent-owned source checkpoint from a sealed or unsealed unit. */
 class TaskReviewPersistedSourceBaseline {
-  constructor({ workUnit, executionRoot, logicalKey } = {}) {
+  constructor({ workUnit, executionRoot, logicalKey, runtimeLocks = [] } = {}) {
     if (!(workUnit instanceof ReviewWorkUnit)) throw new Error("Task Review persisted baseline requires a work unit");
     if (!path.isAbsolute(executionRoot)) throw new Error("Task Review persisted baseline requires an absolute execution root");
     const key = typeof logicalKey === "string" && logicalKey !== "" ? logicalKey : null;
@@ -746,7 +742,7 @@ class TaskReviewPersistedSourceBaseline {
       bytes = input.assertSnapshot(workUnit.root).bytes;
       this.baseline = SourceMutationBaseline.fromStored(
         JSON.parse(bytes.toString("utf8")),
-        { root: executionRoot },
+        { root: executionRoot, runtimeLocks },
       );
     } catch (cause) {
       throw new Error(`Task Review ${key} baseline is unreadable: ${cause.message}`);
@@ -780,6 +776,42 @@ function newTaskReviewBaselineInput({ logicalKey, logicalPath, baseline }) {
     logicalKey,
     logicalPath,
     bytes: Buffer.from(`${JSON.stringify(baseline.toJSON(), null, 2)}\n`, "utf8"),
+    mediaType: "application/json",
+  };
+}
+
+/** Restored parent-owned canonical observation for a sealed Task Review. */
+class TaskReviewPersistedCanonicalObservation {
+  constructor({ workUnit, flowManager, specId } = {}) {
+    if (!(workUnit instanceof ReviewWorkUnit)) throw new Error("Task Review canonical observation requires a work unit");
+    const input = workUnit.manifestDocument.inputs.find((entry) => entry.logicalKey === "task.canonical-observation") ?? null;
+    if (input === null) throw new Error("Task Review work unit is missing its canonical observation");
+    let document;
+    try { document = JSON.parse(input.assertSnapshot(workUnit.root).bytes.toString("utf8")); }
+    catch (cause) { throw new Error(`Task Review canonical observation is unreadable: ${cause.message}`); }
+    try {
+      this.observation = SourceWorkerCanonicalObservationAdvance.fromStored(document, { flowManager, specId });
+    } catch (cause) {
+      throw new Error(`Task Review canonical observation is invalid: ${cause.message}`);
+    }
+    this.input = {
+      logicalKey: input.logicalKey,
+      logicalPath: input.logicalPath,
+      bytes: input.assertSnapshot(workUnit.root).bytes,
+      mediaType: "application/json",
+    };
+    Object.freeze(this);
+  }
+}
+
+function newTaskReviewCanonicalObservationInput(observation) {
+  if (!(observation instanceof SourceWorkerCanonicalObservationAdvance)) {
+    throw new Error("Task Review canonical observation input requires a parent observation");
+  }
+  return {
+    logicalKey: "task.canonical-observation",
+    logicalPath: "task-canonical-observation.json",
+    bytes: Buffer.from(`${JSON.stringify(observation.storedJSON(), null, 2)}\n`, "utf8"),
     mediaType: "application/json",
   };
 }
@@ -1273,13 +1305,14 @@ export class RunReviewCommand extends FlowCommand {
       treeSha,
       targetStateDigest,
     });
-    let taskRepairBaseline = null;
     let taskRecoveryBaseline = null;
+    let taskCanonicalObservation = null;
+    let taskCanonicalObservationBoundary = null;
     const taskReviewAgent = taskId === null || !this.container?.has?.("agent")
       ? null
       : this.container.get("agent");
-    let taskRepairBaselineInput = null;
     let taskRecoveryBaselineInput = null;
+    let taskCanonicalObservationInput = null;
     let sealedWorkUnit;
     try {
       // Reconstruct the parent-owned input contract before inspecting any
@@ -1302,20 +1335,21 @@ export class RunReviewCommand extends FlowCommand {
           }),
         });
         workUnit.restoreTaskWorkerProjection(persistedSource.snapshot);
-        const repairCheckpoint = new TaskReviewPersistedSourceBaseline({
-          workUnit: existing,
-          executionRoot,
-          logicalKey: "task.source-repair-baseline",
-        });
         const recoveryCheckpoint = new TaskReviewPersistedSourceBaseline({
           workUnit: existing,
           executionRoot,
           logicalKey: "task.source-effect-baseline",
+          runtimeLocks: taskReviewPublicationRuntimeLocks(ctx.flowManager, state.specId, executionRoot),
         });
-        taskRepairBaseline = repairCheckpoint.baseline;
         taskRecoveryBaseline = recoveryCheckpoint.baseline;
-        taskRepairBaselineInput = taskReviewBaselineInput(repairCheckpoint);
         taskRecoveryBaselineInput = taskReviewBaselineInput(recoveryCheckpoint);
+        const persistedObservation = new TaskReviewPersistedCanonicalObservation({
+          workUnit: existing,
+          flowManager: ctx.flowManager,
+          specId: state.specId,
+        });
+        taskCanonicalObservation = persistedObservation.observation;
+        taskCanonicalObservationInput = persistedObservation.input;
       }
       workUnit.declareCanonicalInputs();
       if (taskId !== null) {
@@ -1331,29 +1365,26 @@ export class RunReviewCommand extends FlowCommand {
           expectedNodeId,
         });
         if (existing === null) {
-          taskRepairBaseline = SourceMutationBaseline.capture({
-            root: executionRoot,
-            attempt: taskReviewExecution.attempt,
-            ignoredDirectories: taskReviewRepairIgnoredDirectories(executionRoot, workUnit, taskReviewAgent),
-          });
           taskRecoveryBaseline = SourceMutationBaseline.capture({
             root: executionRoot,
             attempt: taskReviewExecution.attempt,
             ignoredDirectories: taskReviewRecoveryIgnoredDirectories(executionRoot, workUnit, taskReviewAgent),
-          });
-          taskRepairBaselineInput = newTaskReviewBaselineInput({
-            logicalKey: "task.source-repair-baseline",
-            logicalPath: "task-source-repair-baseline.json",
-            baseline: taskRepairBaseline,
+            runtimeLocks: taskReviewPublicationRuntimeLocks(ctx.flowManager, state.specId, executionRoot),
           });
           taskRecoveryBaselineInput = newTaskReviewBaselineInput({
             logicalKey: "task.source-effect-baseline",
             logicalPath: "task-source-effect-baseline.json",
             baseline: taskRecoveryBaseline,
           });
+          taskCanonicalObservationBoundary = TaskReviewCanonicalObservationBoundary.capture({
+            flowManager: ctx.flowManager,
+            specId: state.specId,
+          });
+          taskCanonicalObservation = taskCanonicalObservationBoundary.observationAdvance;
+          taskCanonicalObservationInput = newTaskReviewCanonicalObservationInput(taskCanonicalObservation);
         }
-        workUnit.workUnit.declareInput(taskRepairBaselineInput);
         workUnit.workUnit.declareInput(taskRecoveryBaselineInput);
+        workUnit.workUnit.declareInput(taskCanonicalObservationInput);
       }
       sealedWorkUnit = workUnit.workUnit.recoverSealed();
     } catch (error) {
@@ -1362,8 +1393,8 @@ export class RunReviewCommand extends FlowCommand {
     if (sealedWorkUnit === null) {
       const prepared = workUnit.prepare();
       if (taskId !== null) {
-        workUnit.workUnit.writeInput(taskRepairBaselineInput);
         workUnit.workUnit.writeInput(taskRecoveryBaselineInput);
+        workUnit.workUnit.writeInput(taskCanonicalObservationInput);
       }
       const specSource = workUnit.materializeSpecRecord();
       const specReviewInput = workUnit.materializeSpecReview();
@@ -1412,12 +1443,6 @@ export class RunReviewCommand extends FlowCommand {
         }),
       };
 
-      const canonicalObservationBoundary = taskId === null
-        ? null
-        : TaskReviewCanonicalObservationBoundary.capture({
-            flowManager: ctx.flowManager,
-            specId: state.specId,
-          });
       let res;
       try {
         res = await runCmdWithRetry(
@@ -1432,7 +1457,7 @@ export class RunReviewCommand extends FlowCommand {
         );
       } catch (error) {
         try {
-          canonicalObservationBoundary?.assertMetricSettlementOnly();
+          taskCanonicalObservationBoundary?.assertMetricSettlementOnly();
         } catch (observationError) {
           return this.#canonicalFailure(ctx, persistedPhase, observationError);
         }
@@ -1440,7 +1465,7 @@ export class RunReviewCommand extends FlowCommand {
         return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, { taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint });
       }
       try {
-        canonicalObservationBoundary?.assertMetricSettlementOnly();
+        taskCanonicalObservationBoundary?.assertMetricSettlementOnly();
       } catch (error) {
         return this.#canonicalFailure(ctx, persistedPhase, error);
       }
@@ -1462,18 +1487,10 @@ export class RunReviewCommand extends FlowCommand {
         return this.#canonicalFailure(ctx, persistedPhase, error);
       }
     }
-    if (taskId !== null && taskRepairBaseline === null) {
-      taskRepairBaseline = SourceMutationBaseline.capture({
-        root: executionRoot,
-        attempt: taskReviewExecution.attempt,
-        ignoredDirectories: taskReviewRepairIgnoredDirectories(executionRoot, workUnit, taskReviewAgent),
-      });
-    }
     let promotion;
-    let taskRepair = null;
-    let taskMutationLineage = null;
-    let resultingTaskLineageSet = null;
-    let resultingTaskSource = workUnit.taskSource;
+    let taskSourceManifest = null;
+    const taskSpecDigest = taskReviewSpecDigest(ctx.flowManager, state, taskId);
+    const taskReviewCycle = taskId === null ? null : ReviewFindingCycle.fromActivityLedger({ runId: state.runId, activities: ctx.flowManager.activityLedger(state.specId) });
     try {
       promotion = new CanonicalReviewPromotion({
         workUnit: sealedWorkUnit,
@@ -1483,54 +1500,29 @@ export class RunReviewCommand extends FlowCommand {
         targetStateDigest,
         specReviewSource: workUnit.specReviewSource,
         taskSource: workUnit.taskSource,
+        taskContext: workUnit.taskContext,
+        taskSpecDigest,
+        taskReviewCycle,
       });
       if (taskId !== null) {
-        assertTaskReviewRecurrenceExplanation({
-          artifact: promotion.sealedArtifact().artifact,
-          flowManager: ctx.flowManager,
-          state,
-          taskId,
-        });
-        const lineageSet = new TaskMutationLineageSet({
-          runId: state.runId,
-          specId: state.specId,
-          taskId,
-          lineages: ctx.flowManager.taskMutationLineages({ specId: state.specId, taskId }),
-        });
-        const manifest = SourceMutationManifest.capture({ baseline: taskRepairBaseline });
-        taskRepair = new TaskReviewRepairManifest({
-          lineageSet,
-          baseline: taskRepairBaseline,
-          manifest,
-          artifact: promotion.sealedArtifact().artifact,
-          attemptCount: currentTaskReviewAttemptCount(ctx.flowManager, state, taskId),
-        });
-        taskMutationLineage = taskRepair.lineage({ attempt: state.attempt });
-        resultingTaskLineageSet = new TaskMutationLineageSet({
-          runId: state.runId,
-          specId: state.specId,
-          taskId,
-          lineages: [...lineageSet.lineages, taskMutationLineage],
-        });
-        resultingTaskSource = CurrentTaskSourceSnapshot.capture({
-          root: executionRoot,
-          lineageSet: resultingTaskLineageSet,
-        });
+        taskSourceManifest = SourceMutationManifest.capture({ baseline: taskRecoveryBaseline });
+        if (taskSourceManifest.mutations.length > 0) {
+          throw new TaskReviewSourceEffectRejection(
+            `Task Review must not modify source: ${taskSourceManifest.paths().join(", ")}`,
+          );
+        }
       }
     } catch (error) {
       return this.#canonicalFailure(ctx, persistedPhase, error);
     }
     const currentTreeSha = this.resolveTreeSha(ctx);
     const currentTargetStateDigest = this.resolveTargetStateDigest(ctx, persistedPhase);
-    const currentTaskSource = resultingTaskLineageSet === null
-      ? workUnit.captureCurrentTaskSource()
-      : CurrentTaskSourceSnapshot.capture({ root: executionRoot, lineageSet: resultingTaskLineageSet });
-    const acceptedTaskRepair = taskRepair !== null && taskRepair.mutationCount > 0;
-    const expectedTaskSource = taskId === null ? workUnit.taskSource : resultingTaskSource;
+    const currentTaskSource = workUnit.captureCurrentTaskSource();
+    const expectedTaskSource = workUnit.taskSource;
     const staleTaskSource = currentTaskSource !== null
       && currentTaskSource.fingerprint !== expectedTaskSource?.fingerprint;
-    if ((!acceptedTaskRepair && currentTreeSha !== treeSha)
-      || (!acceptedTaskRepair && currentTargetStateDigest !== targetStateDigest)
+    if ((currentTreeSha !== treeSha)
+      || (currentTargetStateDigest !== targetStateDigest)
       || staleTaskSource) {
       return Envelope.fail(
         "run",
@@ -1549,6 +1541,15 @@ export class RunReviewCommand extends FlowCommand {
     }
 
     try {
+      const taskReviewPublicationBinding = taskId === null ? null : new TaskReviewPublicationBinding({
+        executionIdentity: taskReviewExecution,
+        source: workUnit.taskSource,
+        context: workUnit.taskContext,
+        specDigest: taskSpecDigest,
+        baseline: taskRecoveryBaseline,
+        manifest: taskSourceManifest,
+        canonicalObservation: taskCanonicalObservation,
+      });
       promotion = new CanonicalReviewPromotion({
         workUnit: sealedWorkUnit,
         phase: persistedPhase,
@@ -1556,9 +1557,11 @@ export class RunReviewCommand extends FlowCommand {
         treeSha,
         targetStateDigest,
         specReviewSource: workUnit.specReviewSource,
-        taskSource: resultingTaskSource,
-        taskMutationLineage,
-        reviewRepairComplete: taskRepair?.complete ?? false,
+        taskSource: workUnit.taskSource,
+        taskContext: workUnit.taskContext,
+        taskSpecDigest,
+        taskReviewCycle,
+        taskReviewPublicationBinding,
       });
       const result = promotion.resultFromSealedArtifact();
       promotion.promote(result);

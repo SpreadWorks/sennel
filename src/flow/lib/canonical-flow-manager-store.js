@@ -1,3 +1,4 @@
+import { projectAdvisorySummary } from "./advisory-summary.js";
 /**
  * Canonical persistence boundary used by FlowManager.
  *
@@ -31,6 +32,8 @@ import {
   testResultReviewTransitionDefinition,
   DraftCoverageRepairCompletionDecision,
   sourceQualityIssueRecoveryForStep,
+  TaskReviewStageBinding, TaskReviewStageFacts, resolveTaskReviewStageTransition,
+  TaskNoChangeContinuationFacts, selectTaskNoChangeContinuation,
 } from "../definition.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { normalizeAgentMetricDimension } from "../../lib/agent-metrics.js";
@@ -69,9 +72,14 @@ import {
 import { CanonicalFlowRuntime } from "./canonical-flow-runtime.js";
 import {
   attachedCanonicalCommandResultArtifact,
+  attachCanonicalCommandResultArtifact, CanonicalCommandResultArtifact,
   attachedCanonicalCommandResultPublications,
 } from "./canonical-command-result.js";
+import { attachedTaskReviewPublicationBinding } from "./canonical-review-artifacts.js";
 import { PlanGateRepairRecord } from "./plan-gate-repair.js";
+import { TaskReviewEpisodeBinding, TaskReviewStageInputs, TaskReviewStageResult, TaskReviewSourcePublicationAdmission } from "./task-review-stage-artifacts.js";
+import { TaskReviewAccounting } from "./task-review-accounting.js";
+import { CanonicalTaskContext } from "./task-canonical-context.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { TaskReviewReconciliationRecord } from "./task-review-reconciliation-record.js";
 import { TaskReviewReconciliationAdmission } from "./task-review-reconciliation.js";
@@ -112,7 +120,8 @@ import {
 import { ExternalBlockedOutcome, StepAttempt } from "./step-outcome.js";
 import { CanonicalSpecReview } from "./spec-review-artifacts.js";
 import { TaskCollection } from "../../spec/lib/render-contract.js";
-import { SourceMutationManifest, SourceWorkerEffect } from "./worker-artifact-handoff.js";
+import { SourceMutationPublicationAdmission } from "./source-mutation-publication-admission.js";
+import { SourceMutationManifest, SourceWorkerEffect, SourceWorkerCanonicalObservationAdvance } from "./worker-artifact-handoff.js";
 import { captureCurrentTaskSource, TaskExecutionBudget, TaskMutationLineage, TaskMutationLineageSet, readTaskMutationLineagesFromCatalog } from "./task-mutation-lineage.js";
 import { DefinitionLifecycleTransition } from "./step-transition-policy.js";
 import {
@@ -149,7 +158,7 @@ import {
 
 const EXECUTION_MODES = new Set(["direct", "branch", "worktree"]);
 const TERMINAL_STATUSES = new Set(["done", "skipped"]);
-const TASK_RUNTIME_STEP_ALIASES = new Set(["task-impl", "task-review", "task-gate"]);
+const TASK_RUNTIME_STEP_ALIASES = new Set(["task-impl", "task-review", "task-triage", "task-repair", "task-gate"]);
 const RAW_ACTIVITY_MUTATION_OPTION_FIELDS = Object.freeze([
   "taskSpec",
   "specRecord",
@@ -650,15 +659,7 @@ function projectedState(state, specRecord, activities = []) {
   const mode = state.execution.mode;
   const observations = projectObservations(state, activities);
   const flowDispatchApprovals = projectDispatchApprovals(activities);
-  const advisorySummary = activities
-    .map((activity) => activity.transition.nonblocking)
-    .filter((record) => record?.kind === "decision" && record.action === "continue")
-    .map((record) => Object.freeze({
-      stepId: record.sourceStep,
-      evidenceRef: record.evidenceRef,
-      rationale: record.rationale,
-      remainingRisk: record.remainingRisk,
-    }));
+  const advisorySummary = projectAdvisorySummary(activities);
   return {
     schemaRevision: state.schemaRevision,
     flowId: state.flowId,
@@ -2327,6 +2328,32 @@ export class CanonicalFlowManagerStore {
     });
   }
 
+  /** Persist the pre-worker Task source observation as catalog authority. */
+  publishTaskSourceHandoffBaseline({ specId = null, taskId, stage, attempt, baseline, canonicalObservation } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    const state = this.runtime.load(resolved);
+    const nodeId = `${requiredText(taskId, "Task source baseline taskId")}-${requiredText(stage, "Task source baseline stage")}`;
+    const logicalKey = `task.${stage}.source.handoff.baseline`;
+    if (!new Set(["triage", "repair"]).has(stage) || state.current?.at(-1) !== nodeId
+      || state.attempt?.id !== attempt?.id || state.attempt?.sequence !== attempt?.sequence) {
+      throw new CurrentFlowStateInvariantError("Task source baseline must bind the active Task source Attempt");
+    }
+    const existing = this.readArtifact({ specId: resolved, logicalKey, parameters: { taskId, attemptId: attempt.id }, consumerNodeId: nodeId, optional: true });
+    if (!(canonicalObservation instanceof SourceWorkerCanonicalObservationAdvance)) throw new CurrentFlowStateInvariantError("Task source baseline requires its canonical observation");
+    const bytes = Buffer.from(`${JSON.stringify({ baseline: baseline.toJSON(), canonicalObservation: canonicalObservation.storedJSON() }, null, 2)}\n`);
+    if (existing !== null) {
+      if (!existing.bytes.equals(bytes)) throw new CurrentFlowStateInvariantError("Task source baseline conflicts with the existing canonical observation");
+      return existing;
+    }
+    this.publishArtifacts({
+      specId: resolved,
+      nodeId,
+      expectedAttempt: attempt,
+      artifactWrites: [{ logicalKey, parameters: { taskId, attemptId: attempt.id }, mediaType: "application/json", bytes }],
+    });
+    return this.readArtifact({ specId: resolved, logicalKey, parameters: { taskId, attemptId: attempt.id }, consumerNodeId: nodeId });
+  }
+
   promoteDraftQuestionAndKeepRefineActive({
     specId = null,
     questionId,
@@ -3195,7 +3222,7 @@ export class CanonicalFlowManagerStore {
    * Commit a sealed source-worker effect and its Attempt confirmation in one
    * Version Store transaction. Workers never receive this surface.
    */
-  confirmSourceWorkerHandoff({ specId = null, effect, mutationManifest, handoffDigest, result, upgradeResult = null } = {}) {
+  confirmSourceWorkerHandoff({ specId = null, effect, mutationManifest, handoffDigest, result, upgradeResult = null, taskStageBinding = null, sourceMutationBaseline = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(effect instanceof SourceWorkerEffect)) {
@@ -3213,7 +3240,7 @@ export class CanonicalFlowManagerStore {
     }
     const nodeId = state.current?.at(-1) ?? null;
     const effectTargetsActiveNode = nodeId === effect.stepId
-      || (effect.stepId === "task-impl" && taskIdForNode(state, nodeId) !== null && nodeId.endsWith("-impl"));
+      || (effect.stepId.startsWith("task-") && taskIdForNode(state, nodeId) !== null && nodeId === `${taskIdForNode(state, nodeId)}-${effect.stepId.slice(5)}`);
     if (!effectTargetsActiveNode) throw new CurrentFlowStateInvariantError("source worker effect does not target the active Attempt");
     const specSource = this.readArtifact({ specId: resolved, logicalKey: "spec.record", consumerNodeId: nodeId });
     let spec = JSON.parse(specSource.bytes.toString("utf8"));
@@ -3258,7 +3285,7 @@ export class CanonicalFlowManagerStore {
       ? null
       : new CanonicalSourceWorkerUpgradeResult({ bytes: upgradeResult });
     if (sourceWorkerUpgrade !== null) artifactWrites.push(sourceWorkerUpgrade);
-    if (effect.triage !== null) {
+    if (effect.triage !== null && effect.stepId === "impl-triage") {
       artifactWrites.push({
         logicalKey: "impl.triage",
         mediaType: "application/json",
@@ -3304,6 +3331,9 @@ export class CanonicalFlowManagerStore {
         }, `source-handoff:${handoffDigest}:${index}`);
       });
       artifactWrites.push({ logicalKey: "issue.log", mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(issues.toJSON(), null, 2)}\n`, "utf8") });
+    }
+    if (["task-triage", "task-repair"].includes(effect.stepId)) {
+      return this.#confirmTaskReviewSourceStage({ state, spec, effect, mutationManifest, handoffDigest, result, artifactWrites, taskStageBinding, sourceMutationBaseline });
     }
     if (effect.repair !== null) {
       const repairRecord = CanonicalImplementationRepairRecord.capture({
@@ -3373,6 +3403,50 @@ export class CanonicalFlowManagerStore {
       ...(effect.completionStatus === "done" && { admission: this.#producerCompletionAdmission(nodeId, artifactWrites) }),
       ...(sourceWorkerUpgrade === null ? {} : { sourceWorkerUpgrade: true }),
     });
+  }
+
+  #confirmTaskReviewSourceStage({ state, spec, effect, mutationManifest, handoffDigest, result, artifactWrites, taskStageBinding, sourceMutationBaseline }) {
+    state.assertAttemptConfirmable();
+    if (!(taskStageBinding instanceof TaskReviewEpisodeBinding)) throw new CurrentFlowStateInvariantError("Task source stage requires its parent-owned immutable episode binding");
+    const taskId = taskIdForNode(state, state.current.at(-1));
+    const context = new CanonicalTaskContext({ state: { runId: state.runId, specId: state.specId, currentTaskId: taskId }, spec, sourceFingerprint: taskStageBinding.sourceFingerprint });
+    const inputs = new TaskReviewStageInputs({ flowManager: this, state, taskId, context, stage: effect.stepId });
+    if (!inputs.binding.matches(taskStageBinding)) throw new CurrentFlowStateInvariantError("Task source stage binding changed before publication");
+    if (effect.triage !== null) {
+      inputs.assertTriage(effect.triage);
+      if (mutationManifest.paths().length !== 0) throw new CurrentFlowStateInvariantError("Task triage cannot publish source edits");
+    } else {
+      inputs.assertRepair(effect.repair, mutationManifest);
+      const lineage = new TaskMutationLineage({ runId: state.runId, specId: state.specId, taskId, role: "repair", attempt: mutationManifest.attempt, budget: inputs.lineageSet.currentBudget, sourceFingerprint: mutationManifest.digest, manifest: mutationManifest.toJSON() });
+      artifactWrites.push({ logicalKey: "task.mutation.lineage", parameters: { taskId, attemptId: mutationManifest.attempt.id }, mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(lineage.toJSON(), null, 2)}\n`) });
+    }
+    const stageResult = new TaskReviewStageResult({ inputs, effect, manifest: mutationManifest, attempt: state.attempt, handoffDigest });
+    const payload = stageResult.toJSON();
+    const commandResult = attachCanonicalCommandResultArtifact({ ...result }, new CanonicalCommandResultArtifact({ logicalKey: `task.${effect.stepId.slice(5)}`, payload }));
+    const stageWrites = this.#attemptHistoryWrites({ specId: state.specId, state, nodeId: state.current.at(-1), commandResult });
+    artifactWrites.push(...stageWrites);
+    const artifactDigest = crypto.createHash("sha256").update(stageWrites.find((write) => write.logicalKey === `task.${effect.stepId.slice(5)}`).bytes).digest("hex");
+    const noChangeContinuation = effect.triage !== null && inputs.lineageSet.paths.length === 0 && effect.triage.dispositions.every((entry) => entry.disposition === "reject")
+      ? selectTaskNoChangeContinuation(new TaskNoChangeContinuationFacts({
+          source: { fingerprint: inputs.binding.sourceFingerprint, allowList: inputs.lineageSet.paths, reasons: inputs.lineageSet.noChangeReasons() },
+          review: { verdict: inputs.review.document.verdict, canonical: true, artifactDigest: inputs.review.reference.digest, sourceFingerprint: inputs.review.document.canonicalTaskSource.fingerprint },
+          triage: { disposition: "all-reject", artifactDigest, reviewArtifactDigest: inputs.review.reference.digest, sourceFingerprint: inputs.binding.sourceFingerprint },
+          acceptance: { handoffId: `task-no-change:${state.attempt.id}`, reviewArtifactDigest: inputs.review.reference.digest, sourceFingerprint: inputs.binding.sourceFingerprint },
+        }))
+      : null;
+    const dispositions = effect.triage?.dispositions ?? inputs.triage.document.dispositions;
+    const facts = new TaskReviewStageFacts({
+      binding: new TaskReviewStageBinding({ runId: state.runId, specId: state.specId, taskId, stage: effect.stepId.slice(5), attemptId: state.attempt.id, attemptSequence: state.attempt.sequence, sourceFingerprint: taskStageBinding.sourceFingerprint, artifactDigest, catalogFingerprint: this.catalog(state.specId).hash }),
+      taskRound: inputs.binding.taskRound, reviewResultCount: inputs.binding.reviewOrdinal,
+      verdict: inputs.review.document.verdict, mustFixCount: inputs.review.document.blockingFindings.length,
+      sourceNoChange: inputs.lineageSet.paths.length === 0,
+      triageDisposition: dispositions.some((entry) => entry.disposition === "apply") ? "apply" : "all-reject",
+      repairChanged: effect.repair === null ? null : mutationManifest.paths().length > 0,
+      sameReviewBinding: true, noChangeContinuation, acceptanceCarryForwardReady: stageResult.unreviewedAfterRepair,
+      reason: effect.triage === null ? effect.repair.summary : dispositions.map((entry) => entry.rationale).join("\n"),
+    });
+    const plan = resolveTaskReviewStageTransition(facts);
+    return this.runtime.completeTaskReviewStage({ specId: state.specId, activityId: activityId("task-review-stage-confirmed"), result, artifactWrites, admission: new SourceMutationPublicationAdmission({ baseline: sourceMutationBaseline, manifest: mutationManifest, producerAdmission: this.#producerCompletionAdmission(state.current.at(-1), artifactWrites) }), plan, ...(plan.targetStepId === null ? {} : { targetAttempt: commandContextAttempt(state, plan.targetStepId) }) });
   }
 
   /** Read only the immutable source lineages belonging to one canonical Task. */
@@ -3683,67 +3757,6 @@ export class CanonicalFlowManagerStore {
   }
 
   /**
-   * Definition-selected correction for a rejected no-change Task Review.
-   * The immutable Review artifact and Task source snapshot prove that Review
-   * evaluated an empty allow-list; only then may a second bounded Task
-   * implementation round replace the failed Review Attempt.
-   */
-  repairNoChangeTaskReview({ specId = null } = {}) {
-    const resolved = this.#resolveSpecId(specId);
-    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const state = this.runtime.load(resolved);
-    const reviewId = state.current?.at(-1) ?? null;
-    const taskIdentity = TaskStepIdentity.fromStateNode(this.loadReadOnly(resolved), reviewId);
-    if (taskIdentity?.definitionId !== "task-review" || state.attempt?.failure === null) {
-      throw new CurrentFlowStateInvariantError("no-change Task Review correction requires its failed active Task Review Attempt");
-    }
-    const taskId = taskIdentity.taskId;
-    const review = this.readProducerArtifact({
-      specId: resolved,
-      nodeId: reviewId,
-      logicalKey: "task.review",
-      parameters: { taskId },
-    });
-    const artifact = CanonicalCommandAttemptArtifactHistory.fromBytes({
-      logicalKey: "task.review",
-      bytes: review.bytes,
-    }).current.payload;
-    const lineages = this.taskMutationLineages({ specId: resolved, taskId });
-    const lineageSet = new TaskMutationLineageSet({
-      runId: state.runId,
-      specId: resolved,
-      taskId,
-      lineages,
-    });
-    const source = captureCurrentTaskSource({
-      root: this.executionRoot(),
-      flowManager: this,
-      state: this.loadReadOnly(resolved),
-      taskId,
-    });
-    if (artifact?.verdict !== "REJECTED"
-      || artifact?.taskId !== taskId
-      || artifact?.noChange !== true
-      || !Array.isArray(artifact?.noChangeReasons)
-      || artifact.noChangeReasons.length === 0
-      || source.entries.length !== 0
-      || source.noChangeReasons.length === 0
-      || JSON.stringify(artifact.noChangeReasons) !== JSON.stringify(source.noChangeReasons)
-      || artifact?.canonicalTaskSource?.fingerprint !== source.fingerprint
-      || lineageSet.currentBudget?.round !== 1) {
-      throw new CurrentFlowStateInvariantError("no-change Task Review correction rejected stale or non-canonical Review evidence");
-    }
-    const targetId = `${taskId}-impl`;
-    return this.runtime.repairNoChangeTaskReview({
-      specId: resolved,
-      activityId: activityId("task-no-change-review-repaired"),
-      nodeId: targetId,
-      attempt: commandContextAttempt(state, targetId),
-      references: { evaluations: [], findings: [], repairs: [], artifacts: [] },
-    });
-  }
-
-  /**
    * Persist a current Attempt's typed result before a non-terminal command
    * outcome (for example a rejected review) returns control to the planner.
    * The same history writer is reused by confirmation, so a later retry or
@@ -3771,6 +3784,120 @@ export class CanonicalFlowManagerStore {
       nodeId,
       artifactWrites,
       expectedAttempt: CurrentAttemptIdentity.from(state.attempt),
+    });
+  }
+
+  /**
+   * Publish one canonical Task Review result and apply the Definition-selected
+   * review-funnel connector in the same journal transaction.
+   */
+  confirmTaskReviewResult({ specId = null, commandResult } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const state = this.runtime.load(resolved);
+    state.assertAttemptConfirmable();
+    const nodeId = state.current?.at(-1) ?? null;
+    const identity = TaskStepIdentity.fromStateNode(this.loadReadOnly(resolved), nodeId);
+    if (identity?.definitionId !== "task-review" || state.attempt === null) {
+      throw new CurrentFlowStateInvariantError("Task Review confirmation requires its active canonical Attempt");
+    }
+    const artifact = attachedCanonicalCommandResultArtifact(commandResult);
+    if (artifact?.logicalKey !== "task.review") {
+      throw new CurrentFlowStateInvariantError("Task Review confirmation requires its canonical result artifact");
+    }
+    const payload = artifact.payload;
+    if (payload.taskId !== identity.taskId || !["PASS", "ADVISORY", "REJECTED"].includes(payload.verdict)) {
+      throw new CurrentFlowStateInvariantError("Task Review result does not belong to the active Task");
+    }
+    const source = captureCurrentTaskSource({
+      root: this.executionRoot(),
+      flowManager: this,
+      state: this.loadReadOnly(resolved),
+      taskId: identity.taskId,
+    });
+    if (payload.canonicalTaskSource?.fingerprint !== source.fingerprint) {
+      throw new CurrentFlowStateInvariantError("Task Review result source binding is stale");
+    }
+    const publicationBinding = attachedTaskReviewPublicationBinding(commandResult);
+    if (publicationBinding === null) {
+      throw new CurrentFlowStateInvariantError("Task Review confirmation requires its parent-owned execution publication binding");
+    }
+    const lineageSet = new TaskMutationLineageSet({
+      runId: state.runId,
+      specId: resolved,
+      taskId: identity.taskId,
+      lineages: this.taskMutationLineages({ specId: resolved, taskId: identity.taskId }),
+    });
+    const accounting = TaskReviewAccounting.fromCanonicalState({
+      flowManager: this,
+      state,
+      taskId: identity.taskId,
+    });
+    const reviewResultCount = accounting.requireInflightReviewOrdinal();
+    const artifactWrites = [
+      ...this.#attemptHistoryWrites({ specId: resolved, state, nodeId, commandResult }),
+      ...this.#commandPublicationWrites(commandResult),
+    ];
+    const reviewWrite = artifactWrites.find((write) => write.logicalKey === "task.review") ?? null;
+    if (reviewWrite === null) {
+      throw new CurrentFlowStateInvariantError("Task Review confirmation requires a new semantic result publication");
+    }
+    const artifactDigest = crypto.createHash("sha256").update(reviewWrite.bytes).digest("hex");
+    const sourceNoChange = payload.noChange === true
+      && source.entries.length === 0
+      && lineageSet.paths.length === 0
+      && JSON.stringify(payload.noChangeReasons) === JSON.stringify(source.noChangeReasons);
+    let noChangeContinuation = null;
+    if (sourceNoChange && ["PASS", "ADVISORY"].includes(payload.verdict)) {
+      noChangeContinuation = selectTaskNoChangeContinuation(new TaskNoChangeContinuationFacts({
+        source: {
+          fingerprint: source.fingerprint,
+          allowList: lineageSet.paths,
+          reasons: source.noChangeReasons,
+        },
+        review: {
+          verdict: payload.verdict,
+          canonical: true,
+          artifactDigest,
+          sourceFingerprint: payload.canonicalTaskSource.fingerprint,
+        },
+        acceptance: {
+          handoffId: `task-no-change:${state.attempt.id}`,
+          reviewArtifactDigest: artifactDigest,
+          sourceFingerprint: source.fingerprint,
+        },
+      }));
+    }
+    const mustFixCount = (payload.blockingFindings ?? [])
+      .filter((finding) => finding?.disposition === "must-fix").length;
+    const facts = new TaskReviewStageFacts({
+      binding: new TaskReviewStageBinding({
+        runId: state.runId,
+        specId: resolved,
+        taskId: identity.taskId,
+        stage: "review",
+        attemptId: state.attempt.id,
+        attemptSequence: state.attempt.sequence,
+        sourceFingerprint: source.fingerprint,
+        artifactDigest,
+        catalogFingerprint: this.catalog(resolved).hash,
+      }),
+      taskRound: lineageSet.currentBudget.round,
+      reviewResultCount,
+      verdict: payload.verdict,
+      mustFixCount,
+      sourceNoChange,
+      noChangeContinuation,
+    });
+    const plan = resolveTaskReviewStageTransition(facts);
+    return this.runtime.completeTaskReviewStage({
+      specId: resolved,
+      activityId: activityId("task-review-stage-confirmed"),
+      result: resultFor("done", nodeId),
+      artifactWrites,
+      admission: new TaskReviewSourcePublicationAdmission({ root: this.executionRoot(), lineageSet, sourceFingerprint: source.fingerprint, producerAdmission: this.#producerCompletionAdmission(nodeId, artifactWrites), publicationBinding }),
+      plan,
+      ...(plan.targetStepId === null ? {} : { targetAttempt: commandContextAttempt(state, plan.targetStepId) }),
     });
   }
 

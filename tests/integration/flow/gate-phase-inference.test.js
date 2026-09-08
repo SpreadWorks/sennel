@@ -241,7 +241,12 @@ describe("resolveGatePhaseFromState: task-level takes precedence (AC4/R3)", () =
         origin: "plan", added_round: 0, status: "pending",
       }).registerActive();
       fixture.settleBefore("T1-impl").activateTask("T1", { settlePredecessors: false });
-      fixture.settle("T1-impl").settle("T1-review").activate("T1-gate", { settlePredecessors: false });
+      fixture
+        .settle("T1-impl")
+        .settle("T1-review")
+        .settle("T1-triage", "skipped")
+        .settle("T1-repair", "skipped")
+        .activate("T1-gate", { settlePredecessors: false });
       const flowState = flowManager.loadReadOnly("001-test");
 
       assert.equal(FLOW_COMMANDS.run.gate.runtimeLog.stepId({ phase: "task-impl", flowState }), "T1-gate");
@@ -255,7 +260,7 @@ describe("resolveGatePhaseFromState: task-level takes precedence (AC4/R3)", () =
       });
 
       const updated = flowManager.loadReadOnly("001-test");
-      assert.equal(updated.tasks[0].steps[2].status, "in_progress");
+      assert.equal(updated.tasks[0].steps.find((step) => step.id === "T1-gate")?.status, "in_progress");
       assert.equal(updated.currentTaskId, "T1");
       assert.equal(updated.steps.find((step) => step.id === "impl-gate")?.status ?? "pending", "pending");
     } finally {

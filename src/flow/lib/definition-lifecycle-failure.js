@@ -132,7 +132,7 @@ export class DefinitionLifecycleAttemptBinding {
       action.nodeId,
     );
     const contract = state.definition.contractFor(this.attempt.nodeId, state.root);
-    const retryable = action.action.failurePolicy.value === "retry"
+    const retryable = ["retry", "retry-block"].includes(action.action.failurePolicy.value)
       && contract.remainingRetries(state.attempt.consumption, "tooling") > 0;
     return this.flowManager.failCurrentAttemptIfCurrent({
       specId: this.specId,

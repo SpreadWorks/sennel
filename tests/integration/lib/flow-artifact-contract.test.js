@@ -77,6 +77,7 @@ describe("Flow artifact contract registry", () => {
         "flow.activities", "spec.snapshot", "spec.review", "artifact.catalog", "test.review.repair.progress", "test.bootstrap.observation", "acceptance.decision",
         "retry.recovery.baseline", "retry.recovery.receipt",
         "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation",
+        "task.triage", "task.repair", "task.triage.source.handoff.baseline", "task.repair.source.handoff.baseline",
         "task.review", "task.mutation.lineage", "activity.evidence", "runtime.step-metadata",
       ],
     );
@@ -150,7 +151,7 @@ describe("Flow artifact contract registry", () => {
     }
     assert.equal(FLOW_ARTIFACT_CONTRACTS.require("draft.questions.triage").ownership.consumers.includes("draft-gate"), true);
     assert.deepEqual(FLOW_ARTIFACT_CONTRACTS.require("file.map").ownership.consumers, [
-      "system", "implement", "impl-repair", "task-impl", "test-execute", "test-result-review", "impl-review", "impl-gate", "report",
+      "system", "implement", "impl-repair", "task-impl", "task-repair", "test-execute", "test-result-review", "impl-review", "impl-gate", "report",
     ]);
     assert.deepEqual(FLOW_ARTIFACT_CONTRACTS.require("completion.overrides").ownership.consumers, [
       "test-review", "test-result-review", "impl-review", "impl-gate", "acceptance-review", "final-regression",

@@ -1,0 +1,34 @@
+{
+  "previous": {
+    "route": {
+      "kind": "review",
+      "phase": "test",
+      "taskId": null
+    },
+    "attemptId": "attempt-test-review-1dbefb38-2ba6-4f6c-a749-55f896b40af5",
+    "attempt": 2,
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "projectDigest": "c8a979c08157294f8c5b64f6709066c9b2984d37cd6f928692f65d1de1d5f296",
+    "runtimeDigest": "316425a2e4f2c7a0bbdb0e741cece4a7fbe733903cb7da71b079f9547cdfd51c",
+    "targetDigest": "c8a979c08157294f8c5b64f6709066c9b2984d37cd6f928692f65d1de1d5f296"
+  },
+  "current": {
+    "route": {
+      "kind": "review",
+      "phase": "test",
+      "taskId": null
+    },
+    "attemptId": "1ae7fc61-5ffe-440d-b10f-4101f0c7e780",
+    "attempt": 3,
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "projectDigest": "b528d3bc3806e0408b60735a3f1c244eaa0d57c613116f6dee75df0af8bf0346",
+    "runtimeDigest": "18710be6fb012f9d1ffc331f4ef08e72ab4c33e46336adef1252ba51a643027c",
+    "targetDigest": "b528d3bc3806e0408b60735a3f1c244eaa0d57c613116f6dee75df0af8bf0346"
+  },
+  "reason": "Fixed the canonical test topology repository authority mismatch in review work-unit construction.",
+  "reevaluationCount": 1
+}

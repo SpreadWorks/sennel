@@ -16,6 +16,48 @@ function state({ sequence, current = null, attempt = null } = {}) {
   };
 }
 
+function typedTaskStageSnapshot({ producerRole, consumerRole }) {
+  const taskId = "task-17";
+  const producerNodeId = `${taskId}-${producerRole}`;
+  const attemptId = `${producerRole}-attempt-1`;
+  const readiness = producerArtifactReadiness({ producerNodeId, consumerNodeId: `${taskId}-${consumerRole}` });
+  return {
+    readiness,
+    snapshot: {
+      state: {
+        current: null,
+        attempt: null,
+        tasks: [{ id: taskId, steps: [
+          { id: `${taskId}-review` }, { id: `${taskId}-triage` }, { id: `${taskId}-repair` }, { id: `${taskId}-gate` },
+        ] }],
+        findNode: (nodeId) => nodeId === producerNodeId ? { id: nodeId, attemptSequence: 1 } : null,
+      },
+      catalog: { artifacts: [{
+        logicalKey: `task.${producerRole}`,
+        relativePath: `steps/impl/${taskId}/${producerRole}/result.json`,
+        hash: "a".repeat(64),
+        activityId: `${producerRole}-stage-completed`,
+      }] },
+      activities: [
+        {
+          id: `${producerRole}-started`, nodeId: producerNodeId, attemptId, sequence: 1,
+          transition: { operation: "start_attempt", attempt: { id: attemptId, nodeId: producerNodeId, sequence: 1 } },
+        },
+        {
+          id: `${producerRole}-stage-completed`, nodeId: producerNodeId, attemptId, sequence: 1,
+          transition: {
+            operation: "advance_task_review_stage",
+            taskReviewStagePlan: { facts: { binding: {
+              taskId, stage: producerRole, attemptId, attemptSequence: 1, artifactDigest: "a".repeat(64),
+            } } },
+          },
+          result: { outcome: "passed" },
+        },
+      ],
+    },
+  };
+}
+
 describe("ProducerArtifactReadiness", () => {
   it("uses primary attempt results rather than optional catalog readers", () => {
     assert.equal(
@@ -57,6 +99,67 @@ describe("ProducerArtifactReadiness", () => {
       producerArtifactReadinessesForProducer({ producerNodeId: "spec-review" })
         .map((readiness) => `${readiness.producerNodeId}->${readiness.consumerNodeId}`),
       ["spec-review->spec-triage"],
+    );
+  });
+
+  it("uses Task stage confirmations only for typed Task review stages", () => {
+    const draftReadiness = producerArtifactReadiness({
+      producerNodeId: "draft-questions-review",
+      consumerNodeId: "draft-questions-triage",
+    });
+    const draftHandoff = draftReadiness.handoffs[0];
+    const draftAttempt = "draft-review-attempt-1";
+    draftReadiness.assert({
+      state: {
+        current: null,
+        attempt: null,
+        tasks: [],
+        findNode: (nodeId) => nodeId === "draft-questions-review"
+          ? { id: nodeId, attemptSequence: 1 }
+          : null,
+      },
+      catalog: { artifacts: [{
+        logicalKey: draftHandoff.logicalKey,
+        relativePath: draftHandoff.relativePath,
+        activityId: "draft-review-confirmed",
+      }] },
+      activities: [
+        {
+          id: "draft-review-started",
+          nodeId: "draft-questions-review",
+          attemptId: draftAttempt,
+          sequence: 1,
+          transition: { operation: "start_attempt", attempt: { id: draftAttempt, nodeId: "draft-questions-review", sequence: 1 } },
+        },
+        {
+          id: "draft-review-confirmed",
+          nodeId: "draft-questions-review",
+          attemptId: draftAttempt,
+          sequence: 1,
+          transition: { operation: "confirm_attempt" },
+          result: { outcome: "passed" },
+        },
+      ],
+    });
+
+    const reviewToGate = typedTaskStageSnapshot({ producerRole: "review", consumerRole: "gate" });
+    reviewToGate.readiness.assert(reviewToGate.snapshot);
+    reviewToGate.snapshot.activities[1].transition.taskReviewStagePlan.facts.binding.stage = "triage";
+    assert.throws(
+      () => reviewToGate.readiness.assert(reviewToGate.snapshot),
+      (error) => error?.code === "CANONICAL_PRODUCER_ARTIFACT_NOT_READY",
+    );
+    reviewToGate.snapshot.activities[1].transition.taskReviewStagePlan.facts.binding.stage = "review";
+    reviewToGate.snapshot.activities[1].attemptId = "foreign-attempt";
+    assert.throws(
+      () => reviewToGate.readiness.assert(reviewToGate.snapshot),
+      (error) => error?.code === "CANONICAL_PRODUCER_ARTIFACT_NOT_READY",
+    );
+    reviewToGate.snapshot.activities[1].attemptId = "review-attempt-1";
+    reviewToGate.snapshot.activities[1].result.outcome = "failed";
+    assert.throws(
+      () => reviewToGate.readiness.assert(reviewToGate.snapshot),
+      (error) => error?.code === "CANONICAL_PRODUCER_ARTIFACT_NOT_READY",
     );
   });
 

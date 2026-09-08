@@ -252,6 +252,7 @@ export class RepairArtifactRegistry {
   constructor(specPath) {
     this.specPath = normalizeRepairPath(specPath);
     this.specDir = path.posix.dirname(this.specPath);
+    this.reviewWorkUnitRoot = `${PRODUCT.managedPath("review-work-units")}/`;
     this.#runtimeArtifacts = new FlowRepositoryRuntimeArtifactRegistry();
     Object.freeze(this);
   }
@@ -259,6 +260,7 @@ export class RepairArtifactRegistry {
   owns(value) {
     const relPath = normalizeRepairPath(value);
     if (this.#runtimeArtifacts.owns(relPath)) return true;
+    if (relPath.startsWith(this.reviewWorkUnitRoot)) return true;
     if (!relPath.startsWith(`${this.specDir}/`)) return false;
     const versionRelativePath = relPath.slice(this.specDir.length + 1);
     let contract;
@@ -273,6 +275,7 @@ export class RepairArtifactRegistry {
   gitPathspecExcludes() {
     return Object.freeze([
       ...this.#runtimeArtifacts.gitPathspecExcludes(),
+      `:(exclude,top,glob)${this.reviewWorkUnitRoot}**`,
       `:(exclude,top,glob)${this.specDir}/**`,
     ]);
   }

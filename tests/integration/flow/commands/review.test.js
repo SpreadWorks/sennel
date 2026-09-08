@@ -2517,35 +2517,6 @@ describe("impl review structured artifact helpers", () => {
     assert.doesNotMatch(prompt.userPrompt, /testlog|test log/i);
   });
 
-  it("hands an exact recurring Task finding and its prior repair paths to the next repair worker", () => {
-    const prompt = buildImplReviewPrompt({
-      requirementFileMap: { R1: ["src/task.js"] },
-      requirementIds: new Set(["R1"]),
-      diff: "export const task = true;",
-      touchedFiles: ["src/task.js"],
-      taskSpec: { relPath: "tasks/T-1.md", content: "Implement the current Task." },
-      taskContext: { task: { id: "T-1" }, requirements: [{ id: "R1" }] },
-      taskReviewAttempt: 2,
-      taskReviewRecurrenceHistory: [{
-        fingerprint: "c".repeat(64),
-        findingId: "c".repeat(64),
-        findingKey: "missing-task-branch",
-        recurrenceCount: 1,
-        previous: [{
-          attempt: 1,
-          finding: { findingId: "c".repeat(64), findingKey: "missing-task-branch", fingerprint: "c".repeat(64), file: "src/task.js", requirementId: "R1", issue: "Missing branch.", suggestion: "Add branch.", rationale: "R1 requires it." },
-          repair: { mutations: [{ path: "src/task.js", beforeDigest: "a".repeat(64), afterDigest: "b".repeat(64) }] },
-        }],
-      }],
-    });
-
-    assert.match(prompt.userPrompt, /## Task Review Recurrence History/);
-    assert.match(prompt.userPrompt, /missing-task-branch/);
-    assert.match(prompt.userPrompt, /src\/task\.js/);
-    assert.match(prompt.userPrompt, /why the prior repair was insufficient/);
-    assert.match(prompt.userPrompt, /distinct strategy/);
-  });
-
   it("requires no-change Task Review to validate its declared reason against mapped requirements", () => {
     const prompt = buildImplReviewPrompt({
       requirementFileMap: { R1: [] },

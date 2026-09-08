@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-1",
+  "treeSha": "f59fdf044a316a4c47dac47125be9e7872568af3",
+  "targetStateDigest": "1890ac3b1a9ebc4ea75b9d4649333206ffb3e1e87f1bc55f310d3e8f05e709c0",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "b9b847cc9373f01833bbc9b4ab2aa42dbd6e6e6a9fb25d552c8587b94b2cb838",
+    "capturedAt": "2026-09-02T01:44:41.419Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "2eabd2e241ca3e95b837f4ceffbf0ae466193fbc835fd44386e3a71546147056",
+      "summary": "Reader accepts invalid Activity order and rejects partial unconfirmed tails",
+      "fingerprint": "2eabd2e241ca3e95b837f4ceffbf0ae466193fbc835fd44386e3a71546147056",
+      "evidenceRefs": [
+        "impl-review.json#2eabd2e241ca3e95b837f4ceffbf0ae466193fbc835fd44386e3a71546147056"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b",
+      "summary": "Artifact catalog validation omits canonical association and coverage checks",
+      "fingerprint": "85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b",
+      "evidenceRefs": [
+        "impl-review.json#85d030dee8cfe6eac7d85f505b1121c1c0f0cd2968bfe6fe827212473f65733b"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "024fc0e62ec2a3463e8c36466326a9725d833737a00ea4ca7f65a02d3c425bb3",
+      "summary": "AggregateMetrics is emitted as an object literal",
+      "fingerprint": "024fc0e62ec2a3463e8c36466326a9725d833737a00ea4ca7f65a02d3c425bb3",
+      "evidenceRefs": [
+        "impl-review.json#024fc0e62ec2a3463e8c36466326a9725d833737a00ea4ca7f65a02d3c425bb3"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "e01266ccb6ecabcb20e4c0fb89178986c92a7f1f47157c3267e51908e11d5cda",
+      "summary": "Aggregate metrics reads the wrong canonical usage source",
+      "fingerprint": "e01266ccb6ecabcb20e4c0fb89178986c92a7f1f47157c3267e51908e11d5cda",
+      "evidenceRefs": [
+        "impl-review.json#e01266ccb6ecabcb20e4c0fb89178986c92a7f1f47157c3267e51908e11d5cda"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

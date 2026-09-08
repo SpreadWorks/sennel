@@ -1,0 +1,359 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "21bb351ad34df7ceee5c77ce7db81cd4dc7b619b2d3b4feace6f0b80fc3e05c5",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "e5499959e754f022d51f79fbc2f001ec4dcc4e0cbc92b16e4aa5667da5038115",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "expectedDigest": "ee061569fa2d30141dda0eb06720ccd36da67ce79787774dfbc4229440b5db4f",
+          "findingIds": [
+            "spec-review-1db87a58bb1e870354e8fb2aa866ce74"
+          ],
+          "kind": "replace-array-element",
+          "reason": "Align the cost decision with the numeric measured-cost response field.",
+          "replacement": {
+            "consideredAlternatives": "token 数、model list price、経過時間からの推計値、または canonical に存在しない currency を公開する案は authority-backed measurement ではないため採用しない。",
+            "evidence": "Issue #517 と draft は measured-only cost を明示し、現行 ActivityUsage は nullable cost を受理する。Schema Revision 1 は ActivityUsage.cost の non-negative number|null を canonical source とする。",
+            "text": "Cost は provider が実測した non-negative amount を持つ場合だけ公開し、currency は Schema Revision 1 の公開値に含めず、token count から推計しない。"
+          },
+          "target": {
+            "collection": "overview.decisions",
+            "position": 9
+          }
+        },
+        {
+          "expectedDigest": "a5f4577a11c4a5e4e262f6f815366e0c7579999105f7f462b483d2b3f9604709",
+          "findingIds": [
+            "spec-review-3de832b990b62b054e48ffec758382ef",
+            "spec-review-b21893351dd59c318eb5b706536a3660"
+          ],
+          "kind": "replace-entity-field",
+          "reason": "Define canonical Git availability and deterministic blocker precedence.",
+          "replacement": "metadata の item は exact public whitelist { identity, lifecycle, location, structure, relationships, timestamps, capabilities, artifacts, metrics } のみを持つ。identity は { flowId: string, flowVersionId: string, runId: string, specId: string, flowVersion: positive safe integer }。lifecycle は { lifecycle: active|parked|finalized, blocked: boolean, blocker: Blocker|null, nextAction: NextAction|null } で、blocker は { code: string, message: string }、nextAction は { operation: string, phase: string|null, stepId: string|null, taskId: string|null } のみとし、blocked は current Attempt failure と nextAction.operation === blocked から導出する。location は { phase: string|null, stepId: string|null, taskId: string|null, git: { available: boolean, commit: string|null } } とする。location.git.available と location.git.commit は、canonical state、Spec record、または validated canonical Version metadata に保存された authority-backed Git snapshot からのみ作る。snapshot が存在しない場合は available:false / commit:null とし、live Git、resolve-context-envelope、filesystem timestamp、query 実行時の discovery を fallback にしない。structure は { phaseId: string, stepIds: string[], taskIds: string[] }、relationships は { stepTasks: { stepId: string, taskId: string }[], taskNodes: { taskId: string, nodeId: string }[], issues: { number: positive integer, relationship: string }[] } とする。timestamps は createdAt / updatedAt / finalizedAt の Timestamp、capabilities は canonical string-to-boolean capability map、artifacts は ArtifactDescriptor[]、metrics は AggregateMetrics とする。structure、relationships、artifacts と全 nested ID collection は MAX_PUBLIC_COLLECTION_ITEMS 以下、internal path、catalog、body、raw state は field whitelist の外に置く。lifecycle.blocked が true の場合、lifecycle.blocker は current Attempt に persisted された blocker の code/message を第一優先とし、それがない場合は current Attempt failure の code/message、さらにそれもない場合は failure-disposition reason を message とし code を FLOW_BLOCKED として使う。nextAction.operation が blocked なのにこれらの source に non-empty values が一つもない場合は CANONICAL_RECORD_INCONSISTENT とする。blocked でない場合 blocker は null とする。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R5"
+          }
+        },
+        {
+          "expectedDigest": "60cd53693107ab735c4e8e1c0d264034f08f0112332f6b7e86c989a09efa6f3f",
+          "findingIds": [
+            "spec-review-5a9fc087b9e3be6ca7a60c070807d5dc"
+          ],
+          "kind": "replace-entity-field",
+          "reason": "Classify continue_nonblocking according to its confirmed state mutation.",
+          "replacement": "timestamps.createdAt は confirmed prefix の最初の transition.operation === create_flow かつ type === flow_created Activity の timing.finishedAt、timestamps.updatedAt は次の state-changing operation 集合に属する confirmed Activity のうち最新の timing.finishedAt、timestamps.finalizedAt は最新の transition.operation === finalize_flow Activity の timing.finishedAt から作る。state-changing operation 集合は create_flow、complete_draft_completion、add_task、add_approval_task、start_attempt、retry_attempt、retry_gate_attempt、retry_recovery_attempt、update_attempt、fail_attempt、record_failure、confirm_attempt、complete_acceptance_decision_noop、rewind、rewind_test_evidence、repair_test_review、repair_scenario_validity、repair_implementation、triage_implementation_for_repair、triage_implementation_no_repair、repair_acceptance_review、preimplementation_bootstrap、recover_existing_implementation、reopen_draft_preimplementation、reopen_draft_task_addition、reopen_draft_spec_correction、plan_gate_repair、recover_attempt、recover_missing_producer_artifact、accept_final_regression_failure、defer_failed_review、defer_failed_gate、recover_interrupted_finalize_sync、park_flow、resume_flow、finalize_flow、set_policy、publish_artifacts、publish_plugin_artifacts、publish_upgrade_result、update_spec_record、begin_outbox、reopen_outbox、complete_outbox、fail_outbox、record_dispatch_approval、skip_finalize_downstream、reset_finalize_downstream、continue_nonblocking と明示する。record_metric、record_note、record_nonblocking は observation であり集合外とする。各値は { value: ISO8601 string|null, availability: available|unavailable, reason: string|null, provenance: string|null } とし、available は value と non-empty provenance、unavailable は null value と non-empty reason / provenance を要求する。証拠がなければ filesystem timestamp/query time を使わず unavailable にする。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R6"
+          }
+        },
+        {
+          "expectedDigest": "53aec54c04f4e346bc32d98da598f27df707a894722a1226c091297e80c73be0",
+          "findingIds": [
+            "spec-review-80ad99de757673a95da195fb0d9311a8"
+          ],
+          "kind": "replace-entity-field",
+          "reason": "Define the Version-aware state identity binding and format-revision invariant.",
+          "replacement": "canonical Store から対象 Spec に属する canonical directory/version identity FlowVersionLocation を列挙する non-migration、read-only CanonicalFlowVersionReader.listAvailableVersions(specId) を用い、unique ascending な最大 MAX_AVAILABLE_FLOW_VERSIONS 個の availableFlowVersions を作る。列挙入力とシリアライズ前配列の両方を上限内に保ち、超過時は truncation せず canonical error とする。condition.flowVersion は directory identity を選び、指定がなければ 1、明示指定が存在しなければ fallback なしで FLOW_VERSION_NOT_FOUND とする。選択した FlowVersionLocation の specId と directory version は、同じ Version 内の canonical state record の specId と version に exact match しなければならず、Version-aware state validator はこの binding を検証する。state の schemaRevision は state record format revision として独立に検証し、directory version の代替や選択 Version として扱わない。identity の欠落・型不正・不一致、または対応する state schema の検証失敗は CANONICAL_RECORD_INCONSISTENT とする。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R3"
+          }
+        },
+        {
+          "expectedDigest": "529af11a43f1a84f4410c64289e264315fdaf172a71076114401874d08066408",
+          "findingIds": [
+            "spec-review-80ad99de757673a95da195fb0d9311a8"
+          ],
+          "kind": "replace-entity-field",
+          "reason": "Apply the same explicit Version binding and independent state schema validation to every source layout.",
+          "replacement": "fresh / migrated Flow を同じ non-migration CanonicalFlowVersionReader に渡し、Version 1 専用 facade を経由せず、Version 2 以降を含む FlowVersionLocation の discovery と selected Version の open / validation を行う。state、Spec record、confirmed Activity prefix、Artifact catalog は全 Version で同一の validated reader boundary を通し、query code / schema に Version 1 hardcode、old layout parser、migration report 依存を持たせない。selected FlowVersionLocation の specId / directory version と canonical state record の specId / version は exact-match binding とし、Version-aware state validator は positive safe integer の state.version と独立した supported state.schemaRevision を検証する。state.schemaRevision は directory version を表さず、identity binding または schema validation の欠落・不一致は CANONICAL_RECORD_INCONSISTENT とする。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R15"
+          }
+        },
+        {
+          "expectedDigest": "1ffabd7dfd4dbe56abb02e201b2f9d77c03e18dad364e29743f2714f4d8da20c",
+          "findingIds": [
+            "spec-review-1db87a58bb1e870354e8fb2aa866ce74",
+            "spec-review-b21893351dd59c318eb5b706536a3660"
+          ],
+          "kind": "replace-entity-field",
+          "reason": "Specify measured-only numeric cost and blocker source precedence for public activities.",
+          "replacement": "各 ActivityItem は exact public keys { activity: { id: string, type: string }, node: { id: string, key: string }, task: { id: string, key: string }|null, attempt: { id: string, sequence: positive integer }|null, sequence: positive integer|null, confirmationOrder: positive integer, transition: { operation: string, status: string|null }, timing: Timing|null, usage: Usage|null, outcome: Outcome|null, failure: Failure|null, blocker: Blocker|null, incomplete: Incomplete|null, metric: Metric|null, note: string|null, evaluationIds: string[], findingIds: string[], repairIds: string[], artifactIds: string[] } を持つ。Timing は { startedAt: ISO8601 string, finishedAt: ISO8601 string, durationMs: non-negative integer|null }、Usage は { inputTokens: non-negative integer, outputTokens: non-negative integer, cacheReadTokens: non-negative integer, cost: non-negative number|null } とする。cost は canonical ActivityUsage.cost に記録された provider-measured amount をそのまま写像する場合だけ公開し、currency は Schema Revision 1 の public Usage に含めず、token count、model list price、経過時間その他から推計しない。Outcome は { outcome: passed|failed|skipped|incomplete, summary: string, confirmedAt: ISO8601 string, artifactRefs: { kind: string, id: string }[] }、Failure は { category: string, code: string, message: string, retryable: boolean, retryKind: semantic|tooling|null }、Blocker は { code: string, message: string }、Incomplete は { code: string, message: string, operation: string|null, resources: string[] }、Metric は { phase: string, counter: string|null, delta: non-negative integer|null, reset: boolean, kind: string|null, provider: string|null, profileKey: string|null, callCount: non-negative integer|null, responseChars: non-negative integer|null, durationMs: non-negative integer|null, model: string|null, tokens: { input: non-negative integer, output: non-negative integer, cacheRead: non-negative integer, cacheCreation: non-negative integer }|null, cost: non-negative number|null, cachedResponse: boolean, costIncomplete: boolean } とする。ActivityItem.blocker はその Activity の validated canonical blocker code/message をそのまま写像し、metadata lifecycle.blocker だけが current Attempt blocker → current Attempt failure → failure-disposition reason (code は FLOW_BLOCKED) の precedence を使う。nextAction.operation === blocked で fallback reason もない場合は CANONICAL_RECORD_INCONSISTENT とする。evaluationIds、findingIds、repairIds、artifactIds、artifactRefs、resources は MAX_PUBLIC_COLLECTION_ITEMS 以下で、raw logs、prompt、checkpoint、transaction、lock、temporary data、Artifact body、その他の transition payload、provider/model/effort の未許可 field は返さない。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R11"
+          }
+        },
+        {
+          "expectedDigest": "e1f2c0ba1fad0a2e4a3915b36317267e073aae18aa32cc961fb079c44c31e417",
+          "findingIds": [
+            "spec-review-b7ce34b935717a4914767c0acadfe39c"
+          ],
+          "kind": "replace-entity-field",
+          "reason": "Make artifact identity, schema metadata, and canonical relation mapping deterministic.",
+          "replacement": "public ArtifactDescriptor は exact keys { artifactId: string, metadata: { logicalKey: string|null, schemaRevision: positive integer|null, mediaType: string|null }, activityIds: string[], nodeIds: string[], taskIds: string[] } を持つ。artifactId は validated FlowArtifactDescriptor の canonical descriptor identity fields { logicalKey, kind, relativePath, hash, size, mediaType, authority, cardinality, memberId, publicationStep, retention, activityId, migrationMaterialization } を recursively key-sorted、whitespace-free に JSON serialize した canonicalJson の lowercase hex SHA-256 とする。relativePath は artifactId の入力にだけ使い、response に返さない。metadata.schemaRevision は associated logical artifact contract が content schemaRevision を明示する場合だけその positive integer を返し、それ以外は null とし、catalog.schemaRevision で代用しない。catalog の validated Activity association がある descriptor は、その association の activityId と、対応する confirmed Activity の node.id / task.id (non-null の場合) をそれぞれ activityIds / nodeIds / taskIds に写像し、各配列を unique にする。association がない descriptor は三配列すべて空とする。migrationMaterialization の descriptor も canonical catalog に登録され同じ descriptor、content、Activity relation validation を通る場合だけ同じ規則で含め、path や body から relation を推測しない。各 relation array は MAX_IDS_PER_ARTIFACT 以下、全 descriptor は MAX_ARTIFACTS 以下、serialized public descriptor は MAX_PUBLIC_STRING_BYTES と MAX_RESPONSE_BYTES の範囲内とする。relativePath、internal filename、raw catalog、Artifact body、未検証 descriptor field は公開しない。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R7"
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-1db87a58bb1e870354e8fb2aa866ce74",
+        "spec-review-3de832b990b62b054e48ffec758382ef",
+        "spec-review-5a9fc087b9e3be6ca7a60c070807d5dc",
+        "spec-review-80ad99de757673a95da195fb0d9311a8",
+        "spec-review-b21893351dd59c318eb5b706536a3660",
+        "spec-review-b7ce34b935717a4914767c0acadfe39c"
+      ],
+      "discardedOperations": [],
+      "inputDigest": "f9ade5496b3dd7efc343e8e4ecf9b59a46580bb5522ebeddb5f6f029223292ae",
+      "operationDigest": "9aea5a8e6b7d6ab653b8fcc50c8c6ce319e67cefaa6deeb212607bad360793ca",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "replace-entity-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R3"
+          }
+        },
+        {
+          "operationKinds": [
+            "replace-entity-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R15"
+          }
+        }
+      ],
+      "body": "**Target:** R3/R15\n**Issue:** CanonicalFlowRuntime and CurrentFlowVersionStore are Version-1-only, while CurrentFlowState and CurrentFlowIdentity also enforce Version 1. The migration-only historical validator is explicitly out of scope, and the spec does not define how a Version 2+ directory identity is paired with and validated against its state record.\n**Required change:** Define the non-migration Version-aware state binding and validator invariant, including how state format revision remains distinct from directory Version without using the Version-1 facade.\n**Why blocking:** Using the existing reader rejects Version 2+, while bypassing it leaves state identity and semantic validation undefined; Version 2+ selection and tests therefore cannot be implemented safely.",
+      "disposition": "apply",
+      "evidence": "The immutable requirements R3 and R15 require Version 2+ discovery and validation but do not define the Version-aware state identity binding or validator invariant needed beyond the Version-1-only runtime facade.",
+      "findingId": "spec-review-80ad99de757673a95da195fb0d9311a8",
+      "issue": "CanonicalFlowRuntime and CurrentFlowVersionStore are Version-1-only, while CurrentFlowState and CurrentFlowIdentity also enforce Version 1. The migration-only historical validator is explicitly out of scope, and the spec does not define how a Version 2+ directory identity is paired with and validated against its state record.",
+      "kind": "blocking",
+      "requiredChange": "Define the non-migration Version-aware state binding and validator invariant, including how state format revision remains distinct from directory Version without using the Version-1 facade.",
+      "target": "R3/R15",
+      "title": "Version 2+ lacks a production-compatible validated state binding",
+      "whyBlocking": "Using the existing reader rejects Version 2+, while bypassing it leaves state identity and semantic validation undefined; Version 2+ selection and tests therefore cannot be implemented safely."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "replace-entity-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R5"
+          }
+        },
+        {
+          "operationKinds": [
+            "replace-array-element",
+            "add-array-element"
+          ],
+          "target": {
+            "collection": "constraints"
+          }
+        }
+      ],
+      "body": "**Target:** R5 / Constraints\n**Issue:** The required location.git.commit is not stored in canonical flow state. Existing commit discovery reads live Git through resolve-context-envelope, but production inputs are restricted to canonical files and the canonical authority is the sole state source.\n**Required change:** Specify whether live Git is an allowed query input with exact availability semantics, or define commit as unavailable when absent from canonical state and adjust the Git-backed contract fixtures.\n**Why blocking:** The required commit value cannot be produced from the permitted inputs, while reading live Git as currently implemented violates the canonical-only constraint.",
+      "disposition": "apply",
+      "evidence": "The immutable R5 location contract requires git.commit while the stated canonical-only inputs do not provide that value and the existing live-Git source conflicts with the constraint; the authority and unavailable policy must be specified.",
+      "findingId": "spec-review-3de832b990b62b054e48ffec758382ef",
+      "issue": "The required location.git.commit is not stored in canonical flow state. Existing commit discovery reads live Git through resolve-context-envelope, but production inputs are restricted to canonical files and the canonical authority is the sole state source.",
+      "kind": "blocking",
+      "requiredChange": "Specify whether live Git is an allowed query input with exact availability semantics, or define commit as unavailable when absent from canonical state and adjust the Git-backed contract fixtures.",
+      "target": "R5 / Constraints",
+      "title": "Git commit projection has no permitted authority",
+      "whyBlocking": "The required commit value cannot be produced from the permitted inputs, while reading live Git as currently implemented violates the canonical-only constraint."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "replace-entity-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R6"
+          }
+        }
+      ],
+      "body": "**Target:** R6\n**Issue:** The spec classifies continue_nonblocking as an observation, but the existing state transition calls continueNonblockingAttempt, confirms the attempt, skips route leaves, and reconciles parent state.\n**Required change:** Add continue_nonblocking to the state-changing operation set, or explicitly change the required behavior to match the existing state mutation semantics.\n**Why blocking:** The same confirmed Activity would produce different updatedAt results depending on whether the implementation follows the spec or the existing state model, making timestamp correctness and regression tests indeterminate.",
+      "disposition": "apply",
+      "evidence": "The immutable R6 operation set explicitly treats continue_nonblocking as an observation, while the cited existing transition confirms the attempt and reconciles state, so updatedAt semantics are ambiguous.",
+      "findingId": "spec-review-5a9fc087b9e3be6ca7a60c070807d5dc",
+      "issue": "The spec classifies continue_nonblocking as an observation, but the existing state transition calls continueNonblockingAttempt, confirms the attempt, skips route leaves, and reconciles parent state.",
+      "kind": "blocking",
+      "requiredChange": "Add continue_nonblocking to the state-changing operation set, or explicitly change the required behavior to match the existing state mutation semantics.",
+      "target": "R6",
+      "title": "updatedAt omits the state-changing continue_nonblocking operation",
+      "whyBlocking": "The same confirmed Activity would produce different updatedAt results depending on whether the implementation follows the spec or the existing state model, making timestamp correctness and regression tests indeterminate."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "replace-entity-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R11"
+          }
+        },
+        {
+          "operationKinds": [
+            "replace-array-element",
+            "add-array-element"
+          ],
+          "target": {
+            "collection": "overview.decisions"
+          }
+        }
+      ],
+      "body": "**Target:** Cost decision / R11\n**Issue:** The cost decision requires a measured amount and currency, while R11 Usage exposes only cost: non-negative number|null. Existing ActivityUsage also has no currency field.\n**Required change:** Choose one consistent public cost shape and define its canonical source, either removing currency from the decision or adding and specifying the currency field.\n**Why blocking:** The response schema, source mapping, and consumer fixtures cannot agree on the required cost representation, and existing canonical data cannot supply the stated currency.",
+      "disposition": "apply",
+      "evidence": "The immutable cost decision requires measured amount and currency, but R11 exposes only a numeric nullable cost and the cited ActivityUsage source has no currency field, leaving the public shape and source contract inconsistent.",
+      "findingId": "spec-review-1db87a58bb1e870354e8fb2aa866ce74",
+      "issue": "The cost decision requires a measured amount and currency, while R11 Usage exposes only cost: non-negative number|null. Existing ActivityUsage also has no currency field.",
+      "kind": "blocking",
+      "requiredChange": "Choose one consistent public cost shape and define its canonical source, either removing currency from the decision or adding and specifying the currency field.",
+      "target": "Cost decision / R11",
+      "title": "Cost currency conflicts with the public Usage contract",
+      "whyBlocking": "The response schema, source mapping, and consumer fixtures cannot agree on the required cost representation, and existing canonical data cannot supply the stated currency."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "replace-entity-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R7"
+          }
+        }
+      ],
+      "body": "**Target:** R7\n**Issue:** Existing FlowArtifactDescriptor has no artifactId, schemaRevision, nodeIds, or taskIds; it exposes one activityId and internal descriptor fields. The catalog activity index provides associations, but the spec does not define which associations populate the public arrays or how unassociated and migration-materialized descriptors are handled.\n**Required change:** Define the deterministic artifactId input and algorithm, the schemaRevision source/null policy, and the exact mapping and treatment of activity, node, and task relations.\n**Why blocking:** Multiple incompatible projections satisfy the current wording, so artifact identity stability, relation correctness, and consumer compatibility cannot be tested deterministically.",
+      "disposition": "apply",
+      "evidence": "The immutable R7 public ArtifactDescriptor shape introduces artifactId, schemaRevision, and relation arrays without defining their canonical identity input, source mapping, or treatment of unassociated descriptors.",
+      "findingId": "spec-review-b7ce34b935717a4914767c0acadfe39c",
+      "issue": "Existing FlowArtifactDescriptor has no artifactId, schemaRevision, nodeIds, or taskIds; it exposes one activityId and internal descriptor fields. The catalog activity index provides associations, but the spec does not define which associations populate the public arrays or how unassociated and migration-materialized descriptors are handled.",
+      "kind": "blocking",
+      "requiredChange": "Define the deterministic artifactId input and algorithm, the schemaRevision source/null policy, and the exact mapping and treatment of activity, node, and task relations.",
+      "target": "R7",
+      "title": "Artifact identity and relationships have no canonical mapping",
+      "whyBlocking": "Multiple incompatible projections satisfy the current wording, so artifact identity stability, relation correctness, and consumer compatibility cannot be tested deterministically."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "replace-entity-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R5"
+          }
+        },
+        {
+          "operationKinds": [
+            "replace-entity-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R11"
+          }
+        }
+      ],
+      "body": "**Target:** R5/R11\n**Issue:** The existing model has distinct failure code/message, Attempt blocker code/message, and failure-disposition reason values. The spec defines when blocked is true but does not specify which source supplies the public Blocker or what happens when nextAction.operation is blocked without an Attempt blocker.\n**Required change:** Specify the exact Blocker source and precedence, including the fallback behavior for a blocked next action without a persisted blocker.\n**Why blocking:** A canonical state can yield multiple plausible public blocker payloads, so metadata fixtures and consumers cannot determine the required code and message.",
+      "disposition": "apply",
+      "evidence": "The immutable R5 and R11 contracts derive a public blocker but do not establish precedence among Attempt blocker, failure, and failure-disposition reason sources or the fallback when a blocked next action has no persisted blocker.",
+      "findingId": "spec-review-b21893351dd59c318eb5b706536a3660",
+      "issue": "The existing model has distinct failure code/message, Attempt blocker code/message, and failure-disposition reason values. The spec defines when blocked is true but does not specify which source supplies the public Blocker or what happens when nextAction.operation is blocked without an Attempt blocker.",
+      "kind": "blocking",
+      "requiredChange": "Specify the exact Blocker source and precedence, including the fallback behavior for a blocked next action without a persisted blocker.",
+      "target": "R5/R11",
+      "title": "Derived blocker payload has no source precedence",
+      "whyBlocking": "A canonical state can yield multiple plausible public blocker payloads, so metadata fixtures and consumers cannot determine the required code and message."
+    },
+    {
+      "body": "**Target:** Canonical Version discovery / reader; R8/R16\n**Improvement:** State explicitly that the new reader must not call CurrentFlowVersionStore, FlowArtifactCatalogStore.read, or FlowActivityJournal.readSnapshot directly, because those paths create locks or read the full ledger.\n**Why non-blocking:** The spec already names a dedicated reader and requires bounded, side-effect-free behavior; this clarification improves implementation guidance without changing the required outcome.",
+      "disposition": "downgraded_to_non_blocking",
+      "evidence": "The immutable spec already assigns a dedicated canonical Version reader and requires bounded side-effect-free reads; naming specific legacy paths is implementation guidance that does not block spec writing.",
+      "findingId": "spec-review-d3b6d9cf3b552c70e619c6408626303d",
+      "improvement": "State explicitly that the new reader must not call CurrentFlowVersionStore, FlowArtifactCatalogStore.read, or FlowActivityJournal.readSnapshot directly, because those paths create locks or read the full ledger.",
+      "kind": "improvement",
+      "target": "Canonical Version discovery / reader; R8/R16",
+      "title": "Document the reader’s required bypass of side-effecting legacy read paths",
+      "whyNonBlocking": "The spec already names a dedicated reader and requires bounded, side-effect-free behavior; this clarification improves implementation guidance without changing the required outcome."
+    },
+    {
+      "body": "**Target:** R5 / T4\n**Improvement:** Identify the canonical fields or empty/unavailable policy for capabilities and AggregateMetrics.\n**Why non-blocking:** Both fields can be represented with an empty or defined default projection, so this does not prevent implementing the query boundary or its tests.",
+      "disposition": "downgraded_to_non_blocking",
+      "evidence": "The immutable spec already requires capabilities and AggregateMetrics in the public metadata projection and bounds their public payloads; further source-detail wording is useful guidance but non-blocking.",
+      "findingId": "spec-review-3f6fb67f4866fdb0f82f5022c527fd29",
+      "improvement": "Identify the canonical fields or empty/unavailable policy for capabilities and AggregateMetrics.",
+      "kind": "improvement",
+      "target": "R5 / T4",
+      "title": "Define capability and aggregate-metric source semantics",
+      "whyNonBlocking": "Both fields can be represented with an empty or defined default projection, so this does not prevent implementing the query boundary or its tests."
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 60533,
+    "digest": "f418c90e7489bfc5d3ff59ddbec9d84402380bd03fda273afea24c1c56ff65aa",
+    "revision": 5,
+    "specId": "e8af190b-flow-query-api"
+  },
+  "version": 2
+}

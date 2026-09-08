@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import { describe, it } from "node:test";
 
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
@@ -15,7 +16,6 @@ import {
   TaskMutationLineage,
 } from "../../../src/flow/lib/task-mutation-lineage.js";
 import { SourceMutationManifest } from "../../../src/flow/lib/worker-artifact-handoff.js";
-import { assertTaskReviewRecurrenceExplanation } from "../../../src/flow/lib/run-review.js";
 
 const RUN_ID = "run-review-recurrence";
 const SPEC_ID = "spec-review-recurrence";
@@ -28,17 +28,18 @@ const FINGERPRINT_THREE = "3".repeat(64);
 const FINGERPRINT_FOUR = "4".repeat(64);
 
 function implementationRepairRecord() {
+  const attempt = { id: "impl-repair-attempt-1", nodeId: "impl-repair", sequence: 1 };
+  const mutationId = SourceMutationManifest.mutationId(attempt, "src/one.js");
   return new CanonicalImplementationRepairRecord({
     version: 1,
     appliedFindingKeys: ["flow-finding"],
+    findingMutations: [{ findingKey: "flow-finding", mutationIds: [mutationId] }],
     summary: "The preceding implementation repair changed the shared branch.",
     sourceMutationManifest: new SourceMutationManifest({
-      attempt: { id: "impl-repair-attempt-1", nodeId: "impl-repair", sequence: 1 },
+      attempt,
       baselineDigest: DIGEST_A,
       mutations: [{
-        mutationId: SourceMutationManifest.mutationId({
-          id: "impl-repair-attempt-1", nodeId: "impl-repair", sequence: 1,
-        }, "src/one.js"),
+        mutationId,
         path: "src/one.js",
         changeKind: "content",
         beforeDigest: DIGEST_B,
@@ -68,7 +69,6 @@ function review({
   taskId,
   findings = [],
   runId = RUN_ID,
-  lineageFingerprint = null,
   verdict = findings.length > 0 ? "REJECTED" : "PASS",
 }) {
   return {
@@ -80,10 +80,6 @@ function review({
     verdict,
     blockingFindings: findings,
     nonBlockingImprovements: [],
-    canonicalTaskSource: lineageFingerprint === null ? null : {
-      reviewRepairComplete: true,
-      reviewRepairLineageFingerprint: lineageFingerprint,
-    },
   };
 }
 
@@ -96,10 +92,10 @@ function historyBytes(logicalKey, attempts) {
   }));
 }
 
-function taskLineage({ taskId, sequence, round, reviewStart = 0, role = "review-repair", path = "src/one.js" }) {
+function taskLineage({ taskId, sequence, round, reviewStart = 0, role = "implementation", path = "src/one.js" }) {
   const attempt = {
     id: `${taskId}-${role}-${sequence}`,
-    nodeId: `${taskId}-${role === "implementation" ? "impl" : "review"}`,
+    nodeId: `${taskId}-${role === "implementation" ? "impl" : "repair"}`,
     sequence,
   };
   const manifest = new SourceMutationManifest({
@@ -129,27 +125,10 @@ function taskLineage({ taskId, sequence, round, reviewStart = 0, role = "review-
   });
 }
 
-function bindTaskReviews(attempts, lineages) {
-  return attempts.map((entry) => {
-    const lineage = lineages.find((candidate) => (
-      candidate.role === "review-repair" && candidate.attempt.sequence === entry.attempt
-    ));
-    return {
-      ...entry,
-      payload: lineage === undefined
-        ? entry.payload
-        : review({
-          ...entry.payload,
-          findings: entry.payload.blockingFindings,
-          lineageFingerprint: lineage.fingerprint,
-        }),
-    };
-  });
-}
 
 class ReviewRecurrenceFlowManagerFixture {
-  constructor({ taskHistories = new Map(), taskLineages = new Map(), implHistory = null, implRepair = null, implTriage = null, activities = [] } = {}) {
-    this.taskHistories = taskHistories;
+  constructor({ taskStages = new Map(), taskLineages = new Map(), implHistory = null, implRepair = null, implTriage = null, activities = [] } = {}) {
+    this.taskStages = taskStages;
     this.taskLineagesById = taskLineages;
     this.implHistory = implHistory;
     this.implRepair = implRepair;
@@ -159,10 +138,14 @@ class ReviewRecurrenceFlowManagerFixture {
 
   artifactCatalog() {
     return {
-      artifacts: [...this.taskHistories.keys()].map((taskId) => ({
-        logicalKey: "task.review",
-        relativePath: `steps/impl/${taskId}/review/result.json`,
-      })),
+      artifacts: [...this.taskStages.entries()].flatMap(([taskId, stages]) => (
+        ["review", "triage", "repair"].flatMap((role) => stages[role] === undefined ? [] : [{
+          logicalKey: `task.${role}`,
+          relativePath: `steps/impl/${taskId}/${role}/result.json`,
+          activityId: `${taskId}-${role}-activity`,
+          hash: "f".repeat(64),
+        }])
+      )),
     };
   }
 
@@ -179,8 +162,13 @@ class ReviewRecurrenceFlowManagerFixture {
   }
 
   readArtifact({ logicalKey, parameters, optional = false }) {
-    if (logicalKey === "task.review") {
-      return { bytes: this.taskHistories.get(parameters.taskId) };
+    if (logicalKey.startsWith("task.")) {
+      const role = logicalKey.slice(5);
+      const stage = this.taskStages.get(parameters?.taskId)?.[role] ?? null;
+      if (stage !== null) {
+        return { bytes: stage, descriptor: { activityId: `${parameters.taskId}-${role}-activity` } };
+      }
+      if (optional) return null;
     }
     if (logicalKey === "impl.repair" && this.implRepair !== null) {
       return { bytes: Buffer.from(JSON.stringify(this.implRepair)), descriptor: { activityId: "repair-1" } };
@@ -201,188 +189,57 @@ class ReviewRecurrenceFlowManagerFixture {
 }
 
 describe("review recurrence projections", () => {
-  it("separates Task, target, cycle, and execution round while retaining a fourth-review Acceptance handoff", () => {
-    const t1RoundOne = [1, 2, 4].map((sequence) => taskLineage({
-      taskId: "T-1",
-      sequence,
-      round: 1,
-    }));
-    const t1RoundTwo = taskLineage({
-      taskId: "T-1",
-      sequence: 5,
-      round: 2,
-      reviewStart: 4,
-      role: "implementation",
+  it("derives recurrence and the fourth-review Acceptance handoff from triage and repair publications", () => {
+    const taskId = "T-1";
+    const stable = (value) => Array.isArray(value)
+      ? `[${value.map(stable).join(",")}]`
+      : value !== null && typeof value === "object"
+        ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}`
+        : JSON.stringify(value);
+    const digest = (value) => crypto.createHash("sha256").update(stable(value)).digest("hex");
+    const reference = (logicalKey, payload, sequence = 1) => ({
+      logicalKey, digest: "e".repeat(64), payloadDigest: digest(payload), activityId: `${taskId}-${logicalKey.slice(5)}-activity`, attemptId: `${logicalKey}-attempt-${sequence}`, sequence,
     });
-    const t1Attempts = bindTaskReviews([
-      { attempt: 1, payload: review({ taskId: "T-1", findings: [finding({ fingerprint: FINGERPRINT_ONE })] }) },
-      { attempt: 2, payload: review({ taskId: "T-1", findings: [finding({ fingerprint: FINGERPRINT_ONE })] }) },
-      { attempt: 3, payload: review({ taskId: "T-1", runId: "old-run", findings: [finding({ fingerprint: FINGERPRINT_ONE })] }) },
-      { attempt: 4, payload: review({ taskId: "T-1", findings: [finding({ fingerprint: FINGERPRINT_ONE })] }) },
-    ], t1RoundOne);
-    t1Attempts.push({ attempt: 5, payload: review({ taskId: "T-1" }) });
-
-    const t2Implementation = taskLineage({
-      taskId: "T-2",
-      sequence: 1,
-      round: 1,
-      role: "implementation",
-      path: "src/two.js",
-    });
-    const t2ReviewRepairs = [1, 2, 4, 5].map((sequence) => taskLineage({
-      taskId: "T-2",
-      sequence,
-      round: 1,
-      path: "src/two.js",
-    }));
-    const t2Lineages = [t2Implementation, ...t2ReviewRepairs];
-    const t2Attempts = bindTaskReviews([
-      { attempt: 1, payload: review({ taskId: "T-2", findings: [
-        finding({ fingerprint: FINGERPRINT_TWO, file: "src/two.js" }),
-        finding({ fingerprint: FINGERPRINT_THREE, file: "src/other.js" }),
-      ] }) },
-      { attempt: 2, payload: review({ taskId: "T-2", findings: [finding({
-        fingerprint: FINGERPRINT_TWO,
-        file: "src/two.js",
-        priorRepairInsufficiency: "The direct branch was repaired but its shared caller remained uncovered.",
-        repairStrategy: "Repair the shared caller and verify both branch paths.",
-      })] }) },
-      { attempt: 4, payload: review({ taskId: "T-2", findings: [finding({ fingerprint: FINGERPRINT_TWO, file: "src/two.js" })] }) },
-      // Attempt 3 is a tooling lifecycle gap.  Attempt 5 is the actual
-      // fourth published Review result and owns the fourth-review handoff.
-      { attempt: 5, payload: review({ taskId: "T-2", findings: [finding({ fingerprint: FINGERPRINT_FOUR, file: "src/two.js" })] }) },
-    ], t2Lineages);
-
-    const manager = new ReviewRecurrenceFlowManagerFixture({
-      taskHistories: new Map([
-        ["T-1", historyBytes("task.review", t1Attempts)],
-        ["T-2", historyBytes("task.review", t2Attempts)],
-      ]),
-      taskLineages: new Map([
-        ["T-1", [...t1RoundOne, t1RoundTwo]],
-        ["T-2", t2Lineages],
-      ]),
-    });
-    const convergence = new TaskReviewConvergenceEvidence({
-      flowManager: manager,
-      state: { runId: RUN_ID, specId: SPEC_ID },
-      cycle: ReviewFindingCycle.fromActivityLedger({ runId: RUN_ID }),
-    });
-
-    assert.deepEqual(convergence.recurrenceHistory("T-1").toJSON(), []);
-    const taskHistory = convergence.recurrenceHistory("T-2");
-    const t2History = taskHistory.toJSON();
-    assert.equal(t2History.length, 3, "the fourth Review's distinct repaired target remains in canonical history");
-    assert.equal(t2History.find((entry) => entry.fingerprint === FINGERPRINT_TWO).recurrenceCount, 3);
-    assert.equal(t2History.find((entry) => entry.fingerprint === FINGERPRINT_THREE).recurrenceCount, 1);
-    assert.equal(t2History.find((entry) => entry.fingerprint === FINGERPRINT_FOUR).recurrenceCount, 1);
-    assert.equal(
-      t2History.find((entry) => entry.fingerprint === FINGERPRINT_TWO).previous[1].finding.repairStrategy,
-      "Repair the shared caller and verify both branch paths.",
-      "the next Task Review receives the persisted prior strategy from canonical review history",
-    );
-    const workerRecurrence = new TaskReviewRecurrenceContract({ history: taskHistory });
-    assert.doesNotThrow(() => workerRecurrence.validate([finding({
-      fingerprint: FINGERPRINT_TWO,
-      file: "src/two.js",
-      priorRepairInsufficiency: "The direct branch was repaired but its shared caller remained uncovered.",
-      repairStrategy: "Repair the shared caller and verify both branch paths.",
-    })]));
-    assert.throws(
-      () => workerRecurrence.validate([finding({
-        fingerprint: FINGERPRINT_TWO,
-        findingKey: "wrong-key",
-        file: "src/two.js",
-        priorRepairInsufficiency: "The direct branch was repaired but its shared caller remained uncovered.",
-        repairStrategy: "Repair the shared caller and verify both branch paths.",
-      })]),
-      /findingKey does not match its exact canonical fingerprint/,
-      "the worker-side contract rejects recurrence claims before cache acceptance",
-    );
-    assert.throws(
-      () => workerRecurrence.validate([finding({
-        fingerprint: FINGERPRINT_THREE,
-        file: "src/other.js",
-      })]),
-      /requires an exact prior insufficiency and repair strategy/,
-      "history known to the Task Review requires both recurrence explanations",
-    );
-    assert.throws(
-      () => workerRecurrence.validate([{
-        ...finding({ fingerprint: FINGERPRINT_THREE, file: "src/other.js" }),
-        priorRepairInsufficiency: 1,
-        repairStrategy: 2,
-      }]),
-      /priorRepairInsufficiency must be a non-empty string/,
-      "the typed recurrence value rejects non-string declarations instead of treating them as absent",
-    );
-
-    const handoffs = convergence.handoffs().map((handoff) => handoff.toJSON());
-    assert.equal(handoffs.filter((handoff) => handoff.taskId === "T-1").length, 1);
-    assert.equal(handoffs.find((handoff) => handoff.taskId === "T-1").unreviewedAfterRepair, true);
-    assert.equal(handoffs.find((handoff) => handoff.taskId === "T-1").reviewAttempt, 4);
-    const acceptanceStore = new CanonicalAcceptanceArtifactStore({
-      state: {
-        schemaRevision: 3,
-        runId: RUN_ID,
-        specId: SPEC_ID,
-        flowId: "flow-review-recurrence",
-        flowVersionId: "version-review-recurrence",
-        request: "Retain fourth Task Review evidence for Acceptance.",
-      },
-      flowManager: manager,
-    });
-    assert.deepEqual(
-      acceptanceStore.taskReviewHandoffs().map((handoff) => handoff.toJSON()),
-      handoffs,
-      "Acceptance reads the same all-round fourth-review handoff projection",
-    );
-
-    const status = convergence.status();
-    assert.deepEqual(status.find((entry) => entry.taskId === "T-1"), {
-      taskId: "T-1",
-      reviewAttempts: 1,
-      recurringFindings: [],
-      fourthRepairUnreviewed: true,
-      finalVerdict: "PASS",
-    });
-    assert.deepEqual(status.find((entry) => entry.taskId === "T-2"), {
-      taskId: "T-2",
-      reviewAttempts: 4,
-      recurringFindings: [{
-        findingId: FINGERPRINT_TWO,
-        fingerprint: FINGERPRINT_TWO,
-        recurrenceCount: 2,
-      }],
-      fourthRepairUnreviewed: true,
-      finalVerdict: "REJECTED",
-    });
-    const recurringArtifact = {
-      blockingFindings: [{ fingerprint: FINGERPRINT_TWO, findingKey: "same-key" }],
-      nonBlockingImprovements: [],
+    const reviewPayload = review({ taskId, findings: [finding({ fingerprint: FINGERPRINT_ONE })] });
+    const reviewReference = reference("task.review", reviewPayload, 1);
+    const binding = {
+      runId: RUN_ID, specId: SPEC_ID, flowVersion: 1, taskId, taskRound: 1, reviewOrdinal: 4,
+      specDigest: DIGEST_A, contextDigest: DIGEST_B, sourceFingerprint: DIGEST_C, review: reviewReference, triage: null,
     };
-    assert.throws(
-      () => assertTaskReviewRecurrenceExplanation({
-        artifact: recurringArtifact,
-        flowManager: manager,
-        state: { runId: RUN_ID, specId: SPEC_ID },
-        taskId: "T-2",
-      }),
-      /requires an exact prior insufficiency and repair strategy/,
-    );
-    assert.doesNotThrow(() => assertTaskReviewRecurrenceExplanation({
-      artifact: {
-        ...recurringArtifact,
-        blockingFindings: [{
-          ...recurringArtifact.blockingFindings[0],
-          priorRepairInsufficiency: "The prior mutation repaired only one branch.",
-          repairStrategy: "Cover the shared branch and its caller together.",
-        }],
-      },
-      flowManager: manager,
-      state: { runId: RUN_ID, specId: SPEC_ID },
-      taskId: "T-2",
-    }));
+    const triagePayload = {
+      version: 1, taskId, binding, attempt: { id: "triage-attempt", nodeId: "T-1-triage", sequence: 1 },
+      handoffDigest: DIGEST_A, reviewFindings: reviewPayload.blockingFindings,
+      dispositions: [{ findingKey: "same-key", disposition: "apply", basis: "repair-required", rationale: "The finding requires a source correction." }],
+      unreviewedAfterRepair: false,
+    };
+    const triageReference = reference("task.triage", triagePayload, 1);
+    const repairPayload = {
+      version: 1, taskId, binding: { ...binding, triage: triageReference },
+      attempt: { id: "repair-attempt", nodeId: "T-1-repair", sequence: 1 }, handoffDigest: DIGEST_B,
+      reviewFindings: reviewPayload.blockingFindings,
+      repair: { version: 1, appliedFindingKeys: ["same-key"], summary: "Repair the required source behavior.", findingMutations: [{ findingKey: "same-key", mutationIds: [DIGEST_C] }] },
+      sourceMutationManifest: { digest: DIGEST_C, mutations: [{ path: "src/one.js", beforeDigest: DIGEST_A, afterDigest: DIGEST_B, changeKind: "content" }] },
+      unreviewedAfterRepair: true,
+    };
+    const manager = new ReviewRecurrenceFlowManagerFixture({
+      taskStages: new Map([[taskId, {
+        review: historyBytes("task.review", [{ attempt: 1, payload: reviewPayload }]),
+        triage: historyBytes("task.triage", [{ attempt: 1, payload: triagePayload }]),
+        repair: historyBytes("task.repair", [{ attempt: 1, payload: repairPayload }]),
+      }]]),
+      taskLineages: new Map([[taskId, [taskLineage({ taskId, sequence: 1, round: 1, role: "implementation" })]]]),
+      activities: ["review", "triage", "repair"].map((role) => ({ id: `${taskId}-${role}-activity`, attemptId: `${role}-attempt`, nodeId: `${taskId}-${role}`, sequence: 1, transition: { taskReviewStagePlan: null } })),
+    });
+    const convergence = new TaskReviewConvergenceEvidence({ flowManager: manager, state: { runId: RUN_ID, specId: SPEC_ID }, cycle: ReviewFindingCycle.fromActivityLedger({ runId: RUN_ID }) });
+    const recurrence = convergence.recurrenceHistory(taskId);
+    assert.equal(recurrence.entries.length, 1);
+    assert.equal(recurrence.entries[0].previous[0].repair.summary, "Repair the required source behavior.");
+    assert.doesNotThrow(() => new TaskReviewRecurrenceContract({ history: recurrence }).validate([finding({ fingerprint: FINGERPRINT_ONE })]));
+    const handoff = convergence.handoffs().map((entry) => entry.toJSON());
+    assert.equal(handoff.length, 1);
+    assert.deepEqual(handoff[0].dispositions, triagePayload.dispositions);
+    assert.deepEqual(handoff[0].findings, reviewPayload.blockingFindings);
+    assert.deepEqual(handoff[0].sourceMutationManifest, repairPayload.sourceMutationManifest);
   });
 
   it("derives flow-level worker context and status only from the exact current-cycle fingerprint", () => {
@@ -407,8 +264,8 @@ describe("review recurrence projections", () => {
       implTriage: {
         version: 1,
         dispositions: [
-          { findingKey: "flow-finding", disposition: "apply", rationale: "This recurring finding remains mandatory." },
-          { findingKey: "not-repaired", disposition: "apply", rationale: "This finding is now selected for repair." },
+          { findingKey: "flow-finding", disposition: "apply", basis: "repair-required", rationale: "This recurring finding remains mandatory." },
+          { findingKey: "not-repaired", disposition: "apply", basis: "repair-required", rationale: "This finding is now selected for repair." },
         ],
       },
       activities: [

@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
+import { RepairFindingMutations } from "./repair-mutation-contract.js";
 
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskReviewAccounting } from "./task-review-accounting.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
-import { TaskReviewAcceptanceHandoff } from "./task-mutation-lineage.js";
+import { TaskStageArtifact } from "./task-review-stage-artifacts.js";
+import { taskReviewStagePlanFromJSON } from "./task-review-stage-transition.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 
@@ -60,7 +62,7 @@ function reviewFindingEvidence(finding) {
 export class CanonicalImplementationRepairRecord {
   constructor(value = {}) {
     exactKeys(value, new Set([
-      "version", "appliedFindingKeys", "summary", "recurrenceResolutions", "sourceMutationManifest",
+      "version", "appliedFindingKeys", "findingMutations", "summary", "recurrenceResolutions", "sourceMutationManifest",
     ]), "canonical implementation repair");
     if (value.version !== 1) throw new Error("canonical implementation repair version must be 1");
     if (!Array.isArray(value.appliedFindingKeys) || value.appliedFindingKeys.length === 0
@@ -68,7 +70,12 @@ export class CanonicalImplementationRepairRecord {
       || new Set(value.appliedFindingKeys).size !== value.appliedFindingKeys.length) {
       throw new Error("canonical implementation repair appliedFindingKeys are invalid");
     }
-    this.appliedFindingKeys = Object.freeze([...value.appliedFindingKeys]);
+    this.findingMutations = new RepairFindingMutations(value.findingMutations);
+    this.appliedFindingKeys = this.findingMutations.appliedFindingKeys;
+    if (value.appliedFindingKeys.length !== this.appliedFindingKeys.length
+      || value.appliedFindingKeys.some((findingKey) => !this.appliedFindingKeys.includes(findingKey))) {
+      throw new Error("canonical implementation repair appliedFindingKeys must match findingMutations");
+    }
     this.summary = requiredText(value.summary, "canonical implementation repair summary");
     const recurrenceResolutions = value.recurrenceResolutions ?? [];
     if (!Array.isArray(recurrenceResolutions)) {
@@ -102,6 +109,7 @@ export class CanonicalImplementationRepairRecord {
     };
     const expectedDigest = crypto.createHash("sha256").update(stableStringify(unsignedManifest)).digest("hex");
     if (expectedDigest !== manifest.digest) throw new Error("implementation repair mutation manifest digest is invalid");
+    this.findingMutations.assertManifest(manifest);
     this.sourceMutationManifest = deepFreeze(structuredClone(manifest));
     Object.freeze(this);
   }
@@ -137,6 +145,7 @@ export class CanonicalImplementationRepairRecord {
     return {
       version: 1,
       appliedFindingKeys: [...this.appliedFindingKeys],
+      findingMutations: this.findingMutations.toJSON(),
       summary: this.summary,
       ...(this.recurrenceResolutions.length === 0 ? {} : {
         recurrenceResolutions: structuredClone(this.recurrenceResolutions),
@@ -257,7 +266,7 @@ export class ReviewRecurrenceHistory {
   }
 }
 
-/** One candidate finding bound to the recurrence fields that its phase owns. */
+/** One Task Review candidate identified against immutable repair evidence. */
 export class TaskReviewRecurrenceCandidate {
   constructor(finding = {}) {
     if (finding === null || typeof finding !== "object" || Array.isArray(finding)) {
@@ -268,24 +277,7 @@ export class TaskReviewRecurrenceCandidate {
     }
     this.fingerprint = finding.fingerprint;
     this.findingKey = requiredText(finding.findingKey, "Task Review recurrence candidate findingKey");
-    this.priorRepairInsufficiency = this.#optionalExplanation(
-      finding.priorRepairInsufficiency,
-      "priorRepairInsufficiency",
-    );
-    this.repairStrategy = this.#optionalExplanation(finding.repairStrategy, "repairStrategy");
-    if ((this.priorRepairInsufficiency === null) !== (this.repairStrategy === null)) {
-      throw new Error("Task Review recurrence explanation and repair strategy must be supplied together");
-    }
     Object.freeze(this);
-  }
-
-  explanation() {
-    return this.priorRepairInsufficiency !== null;
-  }
-
-  #optionalExplanation(value, name) {
-    if (value == null) return null;
-    return requiredText(value, `Task Review recurrence candidate ${name}`);
   }
 }
 
@@ -325,18 +317,9 @@ export class TaskReviewRecurrenceContract {
     const candidates = findings.map((finding) => new TaskReviewRecurrenceCandidate(finding));
     for (const candidate of candidates) {
       const prior = this.#entriesByFingerprint.get(candidate.fingerprint) ?? null;
-      const hasExplanation = candidate.explanation();
-      if (prior === null) {
-        if (hasExplanation) {
-          throw new Error("Task Review recurrence explanation has no exact canonical prior finding");
-        }
-        continue;
-      }
+      if (prior === null) continue;
       if (candidate.findingKey !== prior.findingKey) {
         throw new Error("Task Review recurring findingKey does not match its exact canonical fingerprint");
-      }
-      if (!hasExplanation) {
-        throw new Error("recurring Task Review finding requires an exact prior insufficiency and repair strategy");
       }
     }
     return new TaskReviewRecurrenceValidation({ history: this.history, candidates });
@@ -344,25 +327,38 @@ export class TaskReviewRecurrenceContract {
 }
 
 class TaskReviewEvidenceRecord {
-  constructor({ taskId, history, lineages }) {
+  constructor({ taskId, review, triage, repair, lineages }) {
     this.taskId = requiredText(taskId, "Task Review evidence taskId");
-    if (!(history instanceof CanonicalCommandAttemptArtifactHistory)) {
+    if (!(review instanceof TaskStageArtifact) || !(review.history instanceof CanonicalCommandAttemptArtifactHistory)) {
       throw new Error("Task Review evidence requires canonical Attempt history");
     }
+    if (triage !== null && !(triage instanceof TaskStageArtifact)) throw new Error("Task Review evidence triage is invalid");
+    if (repair !== null && !(repair instanceof TaskStageArtifact)) throw new Error("Task Review evidence repair is invalid");
     if (!Array.isArray(lineages)) throw new Error("Task Review evidence lineages must be an array");
-    this.history = history;
+    this.history = review.history;
+    this.review = review;
+    this.triageHistory = triage?.history ?? null;
+    this.triage = triage;
+    this.repairHistory = repair?.history ?? null;
     this.lineages = Object.freeze([...lineages]);
     this.currentBudget = this.lineages.at(-1)?.budget ?? null;
     Object.freeze(this);
   }
 
-  repairFor(review) {
-    const fingerprint = review.payload?.canonicalTaskSource?.reviewRepairLineageFingerprint;
-    return this.lineages.find((lineage) => lineage.fingerprint === fingerprint) ?? null;
+  reviewFor(binding) {
+    if (binding?.review?.logicalKey !== "task.review") return null;
+    return this.history.attempts.find((review) => (
+      review.attempt === binding.review.sequence
+      && taskStagePayloadDigest(review.payload) === binding.review.payloadDigest
+    )) ?? null;
   }
 
-  localAttempt(review, repair) {
-    return this.accountingFor(repair.budget).completedOrdinalForSequence(review.attempt);
+  triageFor(binding) {
+    if (this.triageHistory === null || binding?.triage?.logicalKey !== "task.triage") return null;
+    return this.triageHistory.attempts.find((triage) => (
+      triage.attempt === binding.triage.sequence
+      && taskStagePayloadDigest(triage.payload) === binding.triage.payloadDigest
+    )) ?? null;
   }
 
   accountingFor(budget) {
@@ -389,35 +385,191 @@ function taskReviewRecords({ flowManager, state }) {
     .filter((entry) => entry.logicalKey === "task.review")
     .map((entry) => {
       const taskId = taskIdFromCatalogEntry(entry);
-      const resolved = flowManager.readArtifact({
-        specId: state.specId,
-        logicalKey: "task.review",
-        parameters: { taskId },
-        consumerNodeId: "system",
-      });
       return new TaskReviewEvidenceRecord({
         taskId,
-        history: CanonicalCommandAttemptArtifactHistory.fromBytes({
-          logicalKey: "task.review",
-          bytes: resolved.bytes,
-        }),
+        review: new TaskStageArtifact({ flowManager, state, taskId, role: "review" }),
+        triage: new TaskStageArtifact({ flowManager, state, taskId, role: "triage", optional: true }),
+        repair: new TaskStageArtifact({ flowManager, state, taskId, role: "repair", optional: true }),
         lineages: flowManager.taskMutationLineages({ specId: state.specId, taskId }),
       });
     });
 }
 
-function taskRepairEvidence(lineage, finding) {
+function taskStagePayloadDigest(payload) {
+  return crypto.createHash("sha256").update(stableStringify(payload)).digest("hex");
+}
+
+function taskRepairEvidence(stage, triage) {
   return {
-    // Task Review itself performs the repair.  Its prior suggestion is the
-    // canonical repair instruction; keep it with the observed mutation rather
-    // than creating a recurrence-only history record.
-    priorRepairContent: finding.suggestion,
-    mutations: lineage.manifest.mutations.map(({ path, beforeDigest, afterDigest }) => ({
+    summary: stage.repair.summary,
+    dispositions: structuredClone(triage.dispositions),
+    appliedFindingKeys: [...stage.repair.appliedFindingKeys],
+    recurrenceResolutions: structuredClone(stage.repair.recurrenceResolutions ?? []),
+    sourceFingerprint: stage.sourceMutationManifest.digest,
+    mutations: stage.sourceMutationManifest.mutations.map(({ path, beforeDigest, afterDigest, changeKind }) => ({
       path,
       beforeDigest,
       afterDigest,
+      changeKind,
     })),
   };
+}
+
+/** Acceptance receives only the parent-published triage and repair evidence. */
+class TaskReviewAcceptanceEvidence {
+  constructor({ stage, triage }) {
+    if (stage?.binding?.reviewOrdinal !== 4 || stage?.unreviewedAfterRepair !== true
+      || stage?.repair === null || typeof stage?.repair !== "object"
+      || stage?.sourceMutationManifest === null || typeof stage?.sourceMutationManifest !== "object"
+      || !Array.isArray(triage?.dispositions)) {
+      throw new Error("Task Review Acceptance evidence requires the fourth canonical Task repair");
+    }
+    this.stage = deepFreeze(structuredClone(stage));
+    this.triage = deepFreeze(structuredClone(triage));
+    this.taskId = stage.taskId;
+    this.unreviewedAfterRepair = true;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      taskId: this.stage.taskId,
+      reviewAttempt: this.stage.binding.reviewOrdinal,
+      unreviewedAfterRepair: true,
+      findings: structuredClone(this.stage.reviewFindings),
+      dispositions: structuredClone(this.triage.dispositions),
+      repair: structuredClone(this.stage.repair),
+      sourceMutationManifest: structuredClone(this.stage.sourceMutationManifest),
+      binding: structuredClone(this.stage.binding),
+      handoffDigest: this.stage.handoffDigest,
+    };
+  }
+}
+
+/** A normal-source rejection remains review evidence after triage declines every finding. */
+class TaskAllRejectAcceptanceEvidence {
+  constructor({ activity, plan, review, triage }) {
+    if (plan.operation !== "triage-all-reject-to-gate"
+      || plan.facts.sourceNoChange
+      || plan.facts.triageDisposition !== "all-reject"
+      || plan.facts.verdict !== "REJECTED"
+      || review?.taskId !== plan.facts.binding.taskId
+      || review?.verdict !== "REJECTED"
+      || review?.canonicalTaskSource?.fingerprint !== plan.facts.binding.sourceFingerprint
+      || triage?.taskId !== review.taskId
+      || triage?.binding?.taskRound !== plan.facts.taskRound
+      || triage?.binding?.sourceFingerprint !== plan.facts.binding.sourceFingerprint
+      || triage?.binding?.review?.payloadDigest !== taskStagePayloadDigest(review)
+      || !Array.isArray(triage?.reviewFindings)
+      || !Array.isArray(triage?.dispositions)
+      || triage.dispositions.length === 0
+      || triage.dispositions.some((entry) => entry?.disposition !== "reject")) {
+      throw new Error("Task all-reject Acceptance evidence requires the exact normal-source triage route");
+    }
+    const reviewFindingKeys = [...(review.blockingFindings ?? []), ...(review.nonBlockingImprovements ?? [])]
+      .map((finding) => finding?.findingKey);
+    const triageFindingKeys = triage.reviewFindings.map((finding) => finding?.findingKey);
+    const dispositionFindingKeys = triage.dispositions.map((disposition) => disposition?.findingKey);
+    if (new Set(reviewFindingKeys).size !== reviewFindingKeys.length
+      || new Set(triageFindingKeys).size !== triageFindingKeys.length
+      || new Set(dispositionFindingKeys).size !== dispositionFindingKeys.length
+      || !sameStringMembers(reviewFindingKeys, triageFindingKeys)
+      || !sameStringMembers(reviewFindingKeys, dispositionFindingKeys)) {
+      throw new Error("Task all-reject Acceptance evidence does not retain every canonical finding");
+    }
+    this.taskId = review.taskId;
+    this.taskRound = plan.facts.taskRound;
+    this.activityId = activity.id;
+    this.review = deepFreeze(structuredClone(review));
+    this.triage = deepFreeze(structuredClone(triage));
+    this.plan = deepFreeze(structuredClone(plan.toJSON()));
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      taskId: this.taskId,
+      taskRound: this.taskRound,
+      allRejected: true,
+      activityId: this.activityId,
+      reviewVerdict: this.review.verdict,
+      findings: [...this.review.blockingFindings, ...this.review.nonBlockingImprovements],
+      dispositions: structuredClone(this.triage.dispositions),
+      sourceFingerprint: this.triage.binding.sourceFingerprint,
+      binding: structuredClone(this.triage.binding),
+      review: {
+        attempt: this.triage.binding.review.sequence,
+        artifact: structuredClone(this.triage.binding.review),
+      },
+      triage: {
+        attempt: structuredClone(this.triage.attempt),
+        artifactDigest: this.plan.facts.binding.artifactDigest,
+        payloadDigest: taskStagePayloadDigest(this.triage),
+        handoffDigest: this.triage.handoffDigest,
+      },
+    };
+  }
+}
+
+function isExactTriageStageCompletion({ activity, plan, stage }) {
+  const binding = plan.facts.binding;
+  return activity.transition?.operation === "advance_task_review_stage"
+    && binding.stage === "triage"
+    && binding.attemptId === stage.attempt?.id
+    && binding.attemptSequence === stage.attempt?.sequence
+    && binding.sourceFingerprint === stage.binding?.sourceFingerprint
+    && plan.facts.taskRound === stage.binding?.taskRound
+    && plan.facts.reviewResultCount === stage.binding?.reviewOrdinal
+    && plan.facts.sameReviewBinding === true;
+}
+
+/** A no-change continuation is authoritative only after its stage transaction commits. */
+class TaskNoChangeAcceptanceEvidence {
+  constructor({ activity, plan, review, triage = null }) {
+    const selection = plan.facts.noChangeContinuation;
+    if (selection?.decision !== "continue"
+      || !["review-no-change-complete", "triage-no-change-complete"].includes(plan.operation)
+      || review?.canonicalTaskSource?.fingerprint !== selection.facts.source.fingerprint
+      || review.taskId !== plan.facts.binding.taskId) {
+      throw new Error("Task no-change Acceptance evidence requires a committed continuation and matching Review");
+    }
+    const selectedTriage = selection.facts.triage;
+    if (selectedTriage === null) {
+      if (triage !== null) throw new Error("Task no-change Acceptance evidence must not invent triage dispositions");
+    } else {
+      if (!(triage instanceof TaskStageArtifact)
+        || triage.reference?.logicalKey !== "task.triage"
+        || triage.reference.digest !== selectedTriage.artifactDigest
+        || triage.reference.sequence !== plan.facts.binding.attemptSequence
+        || triage.document?.taskId !== review.taskId
+        || triage.document?.binding?.sourceFingerprint !== selection.facts.source.fingerprint
+        || triage.document?.binding?.review?.digest !== selectedTriage.reviewArtifactDigest
+        || !Array.isArray(triage.document?.dispositions)
+        || triage.document.dispositions.length === 0
+        || triage.document.dispositions.some((entry) => entry?.disposition !== "reject")) {
+        throw new Error("Task no-change Acceptance evidence requires its exact all-reject triage producer payload");
+      }
+    }
+    this.taskId = review.taskId;
+    this.noChange = true;
+    this.activityId = activity.id;
+    this.continuation = deepFreeze(structuredClone(selection.toJSON()));
+    this.review = deepFreeze(structuredClone(review));
+    this.triage = selectedTriage === null ? null : deepFreeze(structuredClone(triage.document));
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      taskId: this.taskId,
+      noChange: true,
+      activityId: this.activityId,
+      continuation: structuredClone(this.continuation),
+      findings: [...this.review.blockingFindings, ...this.review.nonBlockingImprovements],
+      ...(this.triage === null ? {} : { dispositions: structuredClone(this.triage.dispositions) }),
+      canonicalTaskSource: structuredClone(this.review.canonicalTaskSource),
+    };
+  }
 }
 
 /** Shared canonical reader used by Task worker prompt, Acceptance, and status. */
@@ -443,22 +595,22 @@ export class TaskReviewConvergenceEvidence {
       return new ReviewRecurrenceHistory({ scope: "task" });
     }
     const grouped = new Map();
-    for (const review of record.history.attempts) {
-      const repair = record.repairFor(review);
-      if (
-        !this.cycle.matchesArtifact(review.payload)
-        || repair?.role !== "review-repair"
-        || repair.budget.round !== record.currentBudget.round
-      ) {
-        continue;
-      }
-      for (const finding of review.payload?.blockingFindings || []) {
+    for (const repair of record.repairHistory?.attempts ?? []) {
+      const stage = repair.payload;
+      const review = record.reviewFor(stage.binding);
+      const triage = record.triageFor(stage.binding);
+      if (review === null || triage === null || !this.cycle.matchesArtifact(review.payload)
+        || stage.binding?.taskRound !== record.currentBudget.round
+        || stage.binding?.triage?.payloadDigest !== taskStagePayloadDigest(triage.payload)
+        || !Array.isArray(stage.repair?.appliedFindingKeys)) continue;
+      for (const finding of stage.reviewFindings || []) {
+        if (!stage.repair.appliedFindingKeys.includes(finding?.findingKey)) continue;
         if (!isFingerprint(finding?.fingerprint)) continue;
         const previous = grouped.get(finding.fingerprint) || [];
         previous.push(new ReviewRecurrenceOccurrence({
           attempt: review.attempt,
           finding: reviewFindingEvidence(finding),
-          repair: taskRepairEvidence(repair, finding),
+          repair: taskRepairEvidence(stage, triage.payload),
         }));
         grouped.set(finding.fingerprint, previous);
       }
@@ -476,37 +628,52 @@ export class TaskReviewConvergenceEvidence {
 
   handoffs() {
     const handoffs = [];
+    const activities = Object.freeze(this.flowManager.activityLedger(this.state.specId));
     for (const record of this.records) {
-      for (const review of record.history.attempts) {
-        if (
-          !this.cycle.matchesArtifact(review.payload)
-          || review.payload?.verdict !== "REJECTED"
-          || review.payload?.canonicalTaskSource?.reviewRepairComplete !== true
-          || !isFingerprint(review.payload.canonicalTaskSource.reviewRepairLineageFingerprint)
-        ) {
-          continue;
-        }
-        const repair = record.repairFor(review);
-        if (repair === null) {
-          throw new Error("fourth Task Review handoff has no matching mutation lineage");
-        }
-        const reviewAttempt = record.localAttempt(review, repair);
-        if (reviewAttempt !== 4) continue;
-        const laterReviewExists = record.history.attempts.some((candidate) => (
-          candidate.attempt > review.attempt
-          && this.cycle.matchesArtifact(candidate.payload)
-          && record.localAttempt(candidate, repair) >= 1
-          && record.localAttempt(candidate, repair) <= 4
-        ));
-        handoffs.push(new TaskReviewAcceptanceHandoff({
-          taskId: record.taskId,
-          review: review.payload,
-          lineage: repair,
-          reviewAttempt,
-          cumulativeAttempt: review.attempt,
-          unreviewedAfterRepair: !laterReviewExists,
-        }));
+      for (const repair of record.repairHistory?.attempts ?? []) {
+        const stage = repair.payload;
+        const review = record.reviewFor(stage.binding);
+        const triage = record.triageFor(stage.binding);
+        if (review === null || triage === null || !this.cycle.matchesArtifact(review.payload)
+          || stage.binding?.taskRound !== record.currentBudget?.round
+          || stage.binding?.triage?.payloadDigest !== taskStagePayloadDigest(triage.payload)
+          || stage.unreviewedAfterRepair !== true) continue;
+        handoffs.push(new TaskReviewAcceptanceEvidence({ stage, triage: triage.payload }));
       }
+      for (const triage of record.triageHistory?.attempts ?? []) {
+        const stage = triage.payload;
+        const review = record.reviewFor(stage.binding);
+        const activity = activities.find((entry) => (
+          entry.nodeId === `${record.taskId}-triage`
+          && entry.attemptId === stage.attempt?.id
+          && entry.sequence === stage.attempt?.sequence
+          && entry.transition?.operation === "advance_task_review_stage"
+          && entry.transition?.taskReviewStagePlan !== null
+        )) ?? null;
+        if (review === null || activity === null || !this.cycle.matchesArtifact(review.payload)
+          || stage.binding?.taskRound !== record.currentBudget?.round) continue;
+        const storedPlan = activity.transition?.taskReviewStagePlan;
+        if (storedPlan === null || storedPlan === undefined) continue;
+        const plan = taskReviewStagePlanFromJSON(storedPlan);
+        if (plan.operation !== "triage-all-reject-to-gate"
+          || !isExactTriageStageCompletion({ activity, plan, stage })) continue;
+        handoffs.push(new TaskAllRejectAcceptanceEvidence({ activity, plan, review: review.payload, triage: stage }));
+      }
+    }
+    for (const activity of activities) {
+      const storedPlan = activity.transition?.taskReviewStagePlan;
+      if (storedPlan?.facts.noChangeContinuation === null || storedPlan?.facts.noChangeContinuation === undefined) continue;
+      const plan = taskReviewStagePlanFromJSON(storedPlan);
+      const record = this.record(plan.facts.binding.taskId);
+      if (record === null) continue;
+      const stage = plan.facts.binding.stage;
+      const producer = (stage === "review" ? record.history : record.triageHistory)?.attempts
+        .find((entry) => entry.attempt === plan.facts.binding.attemptSequence);
+      const triage = stage === "triage" ? record.triage : null;
+      const review = stage === "review" ? producer : record.reviewFor(producer?.payload.binding);
+      if (review === null || review === undefined || !this.cycle.matchesArtifact(review.payload)
+        || plan.facts.taskRound !== record.currentBudget?.round) continue;
+      handoffs.push(new TaskNoChangeAcceptanceEvidence({ activity, plan, review: review.payload, triage }));
     }
     return Object.freeze(handoffs);
   }
@@ -537,6 +704,7 @@ export class TaskReviewConvergenceEvidence {
             recurrenceCount: entry.recurrenceCount - 1,
           })),
         fourthRepairUnreviewed,
+        ...(fourthHandoffs.some((handoff) => handoff.taskId === record.taskId && handoff.noChange) && { assurance: "advisory" }),
         finalVerdict: currentReview ? review.payload.verdict : null,
       };
     });
@@ -785,4 +953,23 @@ export class ImplementationReviewRecurrenceStatus {
       finalVerdict: current.verdict,
     };
   }
+}
+
+/** Exact current apply findings joined to prior repairs in this Task review cycle. */
+export class TaskRepairRecurrence {
+  constructor({ flowManager, state, taskId, findings, dispositions }) {
+    const cycle = ReviewFindingCycle.fromActivityLedger({
+      runId: state.runId, activities: flowManager.activityLedger(state.specId),
+    });
+    const history = new TaskReviewConvergenceEvidence({ flowManager, state, cycle }).recurrenceHistory(taskId);
+    const applied = new Set(dispositions.filter((entry) => entry.disposition === "apply").map((entry) => entry.findingKey));
+    const prior = new Map(history.entries.map((entry) => [entry.fingerprint, entry]));
+    this.entries = Object.freeze(findings.filter((finding) => applied.has(finding.findingKey) && prior.has(finding.fingerprint))
+      .map((finding) => new ReviewRecurrenceEntry({
+        ...prior.get(finding.fingerprint).toJSON(), findingId: finding.findingId, findingKey: finding.findingKey, stillPresent: true,
+      })));
+    Object.freeze(this);
+  }
+
+  toJSON() { return { version: 1, scope: "task", entries: this.entries.map((entry) => entry.toJSON()) }; }
 }

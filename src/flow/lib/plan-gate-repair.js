@@ -146,7 +146,7 @@ function taskRoute(taskId) {
     phase: "task-impl",
     gateStepId: `${taskId}-gate`,
     targetStepId: `${taskId}-impl`,
-    resetStepIds: [`${taskId}-impl`, `${taskId}-review`, `${taskId}-gate`],
+    resetStepIds: [`${taskId}-impl`, `${taskId}-review`, `${taskId}-triage`, `${taskId}-repair`, `${taskId}-gate`],
   });
 }
 

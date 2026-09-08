@@ -9,9 +9,11 @@ import {
   FLOW_ARTIFACT_CONTRACTS,
   FLOW_ARTIFACT_SWITCH_TARGETS,
 } from "../../lib/flow-artifact-contract.js";
+import { flowArtifactAuthorityForStep } from "./flow-artifact-authority.js";
 import { FlowSpecRevision } from "../../lib/flow-version.js";
 import { CurrentFlowStateInvariantError } from "./current-flow-state.js";
 import { validateAcceptanceReviewArtifact } from "./acceptance-review-artifacts.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -39,6 +41,12 @@ const ATTEMPT_HISTORY_ARTIFACTS = new Map([
   ["acceptance-decision", "acceptance.decision"],
   ["final-regression", "final.regression"],
 ]);
+const FLOW_TRIAGE_REPAIR_NODES = new Set([
+  "draft-questions-triage", "draft-questions-repair",
+  "draft-coverage-triage", "draft-coverage-repair",
+  "spec-triage", "spec-repair", "impl-triage", "impl-repair",
+]);
+const TASK_REVIEW_STAGE_ROLES = new Set(["review", "triage", "repair"]);
 
 export function attemptHistoryTargetForNode(nodeId) {
   const normalized = requiredText(nodeId, "canonical attempt history nodeId");
@@ -47,10 +55,12 @@ export function attemptHistoryTargetForNode(nodeId) {
   if (normalized === "spec-review") return null;
   const logicalKey = ATTEMPT_HISTORY_ARTIFACTS.get(normalized);
   if (logicalKey !== undefined) return Object.freeze({ logicalKey, parameters: Object.freeze({}) });
-  const task = normalized.match(/^(.+)-(review|gate)$/);
+  if (FLOW_TRIAGE_REPAIR_NODES.has(normalized)) return null;
+  if (flowArtifactAuthorityForStep(normalized) !== null) return null;
+  const task = normalized.match(/^(.+)-(review|triage|repair|gate)$/);
   if (task === null) return null;
   return Object.freeze({
-    logicalKey: task[2] === "review" ? "task.review" : "task.gate",
+    logicalKey: `task.${task[2]}`,
     parameters: Object.freeze({ taskId: task[1] }),
   });
 }
@@ -96,12 +106,12 @@ class RevisionScopedSpecReviewReadinessTarget {
 }
 
 function taskNode(nodeId, role) {
-  const match = nodeId.match(/^(.+)-(impl|review|gate)$/);
+  const match = nodeId.match(/^(.+)-(impl|review|triage|repair|gate)$/);
   return match?.[2] === role ? match[1] : null;
 }
 
 function taskTargetRole(nodeId) {
-  const match = nodeId.match(/^task-(impl|review|gate)$/);
+  const match = nodeId.match(/^task-(impl|review|triage|repair|gate)$/);
   return match?.[1] ?? null;
 }
 
@@ -126,6 +136,32 @@ function consumerNodeForTarget(target, producerNodeId) {
   const role = target.producer === "task-review" ? "review" : "gate";
   const taskId = taskNode(producerNodeId, role);
   return taskId === null ? null : `${taskId}-${consumerRole}`;
+}
+
+function taskReviewStageRoute({ state, producerNodeId, consumerNodeId, logicalKey }) {
+  const producer = TaskStepIdentity.fromStateNode(state, producerNodeId);
+  const consumer = TaskStepIdentity.fromStateNode(state, consumerNodeId);
+  if (producer === null || consumer === null || producer.taskId !== consumer.taskId) return null;
+  if (!TASK_REVIEW_STAGE_ROLES.has(producer.role)) return null;
+  if (logicalKey !== `task.${producer.role}`) return null;
+  return Object.freeze({ producer, consumer });
+}
+
+function taskStageCompletionMatches({ route, expectedAttemptId, producer, descriptor, activity }) {
+  if (route === null
+    || activity.transition?.operation !== "advance_task_review_stage"
+    || activity.id !== descriptor.activityId
+    || activity.attemptId !== expectedAttemptId
+    || activity.sequence !== producer.attemptSequence
+    || activity.result?.outcome !== "passed") return false;
+  const plan = activity.transition.taskReviewStagePlan;
+  const binding = plan?.facts?.binding;
+  return descriptor.logicalKey === `task.${route.producer.role}`
+    && binding?.taskId === route.producer.taskId
+    && binding?.stage === route.producer.role
+    && binding.attemptId === expectedAttemptId
+    && binding.attemptSequence === producer.attemptSequence
+    && binding.artifactDigest === descriptor.hash;
 }
 
 /** The coverage completion connector consumes its review evidence directly. */
@@ -275,6 +311,12 @@ export class ProducerArtifactReadiness {
         throw this.#missing(`catalog lacks ${handoff.logicalKey}`);
       }
       expectedAttemptId ??= producerAttemptId(state, activities, producer);
+      const taskStageRoute = taskReviewStageRoute({
+        state,
+        producerNodeId: this.producerNodeId,
+        consumerNodeId: this.consumerNodeId,
+        logicalKey: handoff.logicalKey,
+      });
       const deferredIntegrationSettlement = producer.id === "impl-gate"
         && producer.status === "done"
         && (activities.find((activity) => (
@@ -291,7 +333,15 @@ export class ProducerArtifactReadiness {
       const confirmation = activities.find((activity) => (
         activity.id === descriptor.activityId
         && activity.nodeId === this.producerNodeId
-        && (
+        && (taskStageRoute !== null
+          ? taskStageCompletionMatches({
+            route: taskStageRoute,
+            expectedAttemptId,
+            producer,
+            descriptor,
+            activity,
+          })
+          : (
           (activity.sequence === producer.attemptSequence
             && activity.attemptId === expectedAttemptId
             && (
@@ -317,7 +367,7 @@ export class ProducerArtifactReadiness {
             && activity.sequence === deferredIntegrationSettlement.sequence
             && activity.attemptId === deferredIntegrationSettlement.attemptId
           )
-        )
+          ))
       )) ?? null;
       if (confirmation === null) {
         throw this.#missing(`${handoff.logicalKey} has no matching confirmed producer Activity`);

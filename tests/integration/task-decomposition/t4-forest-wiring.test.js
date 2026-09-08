@@ -209,10 +209,10 @@ describe("T-4: forest wiring (sync parent transcription + traversal + propagatio
     const fixture = new CanonicalFlowFixture({ flowManager: fm, specId: "226-propagation", specRecord: mappedSpec("P", "C1", "C2") })
       .create().addTasks([taskDocument("P"), taskDocument("C1", "P"), taskDocument("C2", "P")]).registerActive();
     fixture.activateTask("C1");
-    for (const step of ["C1-impl", "C1-review", "C1-gate"]) fixture.settle(step);
+    for (const step of ["C1-impl", "C1-review", "C1-triage", "C1-repair", "C1-gate"]) fixture.settle(step);
     fm.completeTask("C1", { specId: "226-propagation" });
     fixture.activateTask("C2", { settlePredecessors: false });
-    for (const step of ["C2-impl", "C2-review", "C2-gate"]) fixture.settle(step);
+    for (const step of ["C2-impl", "C2-review", "C2-triage", "C2-repair", "C2-gate"]) fixture.settle(step);
     fm.completeTask("C2");
 
     const state = fm.load("226-propagation");
@@ -226,7 +226,7 @@ describe("T-4: forest wiring (sync parent transcription + traversal + propagatio
     const fixture = new CanonicalFlowFixture({ flowManager: fm, specId: "226-recursive", specRecord: mappedSpec("Root", "Mid", "Leaf") })
       .create().addTasks([taskDocument("Root"), taskDocument("Mid", "Root"), taskDocument("Leaf", "Mid")]).registerActive();
     fixture.activateTask("Leaf");
-    for (const step of ["Leaf-impl", "Leaf-review", "Leaf-gate"]) fixture.settle(step);
+    for (const step of ["Leaf-impl", "Leaf-review", "Leaf-triage", "Leaf-repair", "Leaf-gate"]) fixture.settle(step);
     fm.completeTask("Leaf");
 
     const state = fm.load("226-recursive");
@@ -241,7 +241,7 @@ describe("T-4: forest wiring (sync parent transcription + traversal + propagatio
     const fixture = new CanonicalFlowFixture({ flowManager: fm, specId: "226-no-promote", specRecord: mappedSpec("T-1", "T-2") })
       .create().addTasks([taskDocument("T-1"), taskDocument("T-2")]).registerActive();
     fixture.activateTask("T-1");
-    for (const step of ["T-1-impl", "T-1-review", "T-1-gate"]) fixture.settle(step);
+    for (const step of ["T-1-impl", "T-1-review", "T-1-triage", "T-1-repair", "T-1-gate"]) fixture.settle(step);
     fm.completeTask("T-1");
 
     const state = fm.load("226-no-promote");
@@ -257,10 +257,10 @@ describe("T-4: forest wiring (sync parent transcription + traversal + propagatio
     const fixture = new CanonicalFlowFixture({ flowManager: fm, specId: "226-flat-complete", specRecord: mappedSpec("A", "B", "C") })
       .create().addTasks([taskDocument("A"), taskDocument("B"), taskDocument("C")]).registerActive();
     fixture.activateTask("A");
-    for (const step of ["A-impl", "A-review", "A-gate"]) fixture.settle(step);
+    for (const step of ["A-impl", "A-review", "A-triage", "A-repair", "A-gate"]) fixture.settle(step);
     fm.completeTask("A");
     fixture.activateTask("B", { settlePredecessors: false });
-    for (const step of ["B-impl", "B-review", "B-gate"]) fixture.settle(step);
+    for (const step of ["B-impl", "B-review", "B-triage", "B-repair", "B-gate"]) fixture.settle(step);
     fm.completeTask("B");
 
     const state = fm.load("226-flat-complete");

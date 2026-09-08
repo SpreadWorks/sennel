@@ -27,9 +27,11 @@ const MIGRATION_ARTIFACT_ROLES = new Set([
   "review-evidence", "artifact", "runtime",
 ]);
 const VERSION_AUTHORITY_SCOPES = new Set(["canonical", "execution"]);
-const TASK_ARTIFACT_SEGMENTS = new Set(["impl", "review", "gate"]);
+const TASK_ARTIFACT_SEGMENTS = new Set(["impl", "review", "triage", "repair", "gate"]);
 const TASK_ARTIFACT_SEGMENT_BY_LOGICAL_KEY = new Map([
   ["task.review", "review"],
+  ["task.triage", "triage"],
+  ["task.repair", "repair"],
   ["task.gate.source", "gate"],
   ["task.gate", "gate"],
 ]);
@@ -739,7 +741,7 @@ export class FlowVersionRuntimeLockLocation {
  *
  * Task identifiers are never interpolated by callers into a Version path.
  * This value owns the sole Version-layer mapping from a stable Task id to
- * `steps/impl/<taskId>/{impl,review,gate}` and verifies that every task
+ * `steps/impl/<taskId>/{impl,review,triage,repair,gate}` and verifies that every task
  * artifact it resolves is the artifact-contract member for that same id.
  */
 export class FlowTaskArtifactLocation {
@@ -770,6 +772,8 @@ export class FlowTaskArtifactLocation {
 
   get implDirectory() { return this.directoryFor("impl"); }
   get reviewDirectory() { return this.directoryFor("review"); }
+  get triageDirectory() { return this.directoryFor("triage"); }
+  get repairDirectory() { return this.directoryFor("repair"); }
   get gateDirectory() { return this.directoryFor("gate"); }
 
   relativeArtifact(logicalKey) {
@@ -781,6 +785,8 @@ export class FlowTaskArtifactLocation {
   }
 
   get reviewResultFile() { return this.artifact("task.review"); }
+  get triageResultFile() { return this.artifact("task.triage"); }
+  get repairResultFile() { return this.artifact("task.repair"); }
   get gateSourceFile() { return this.artifact("task.gate.source"); }
   get gateResultFile() { return this.artifact("task.gate"); }
 
@@ -952,7 +958,7 @@ export class FlowArtifactActivityAssociation {
       return this;
     }
     if (updaterStep.startsWith("task-") && !FLOW_WIDE_TASK_ACTIVITY_ARTIFACTS.has(artifact.logicalKey)) {
-      const taskPath = artifact.relativePath.match(/^steps\/impl\/([^/]+)\/(?:impl|review|gate)(?:\/|$)/);
+      const taskPath = artifact.relativePath.match(/^steps\/impl\/([^/]+)\/(?:impl|review|triage|repair|gate)(?:\/|$)/);
       if (taskPath === null) throw new Error(`task-scoped updater Activity is not bound to a task artifact: ${artifact.relativePath}`);
       const taskId = taskPath[1];
       const taskLeaf = updaterStep.slice("task-".length);

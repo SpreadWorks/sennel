@@ -14,6 +14,10 @@ const DRAFT_REOPEN_ACTIVITY_OPERATIONS = new Set([
   "reopen_draft_task_addition",
   "reopen_draft_spec_correction",
 ]);
+export function opensReviewFindingCycle(activity) {
+  return DRAFT_REOPEN_ACTIVITY_OPERATIONS.has(activity.transition.operation);
+}
+
 export const REVIEW_FINDING_CANONICAL_FIELD_MAX_CHARS = 1200;
 
 function requireRecord(value, field) {
@@ -208,9 +212,7 @@ export class ReviewFindingCycle {
         throw new Error(`review finding cycle.activities[${index}] must be a canonical Activity: ${error.message}`);
       }
     });
-    const latestReopen = activities.findLast((activity) => (
-      DRAFT_REOPEN_ACTIVITY_OPERATIONS.has(activity.transition.operation)
-    ));
+    const latestReopen = activities.findLast(opensReviewFindingCycle);
     if (latestReopen !== undefined && latestReopen.timing === null) {
       throw new Error("draft reopen Activity requires timing facts");
     }

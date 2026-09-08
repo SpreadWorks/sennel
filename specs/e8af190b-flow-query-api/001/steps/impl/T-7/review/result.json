@@ -1,0 +1,112 @@
+{
+  "attempts": [
+    {
+      "attempt": 2,
+      "nodeId": "T-7-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "a6e35236c14b26b28bcc108275a27f376b35cc997e87412615751239684150d0",
+          "treeSha": "965fac54354e64d29e9479118024e37ba0d20de6",
+          "targetStateDigest": "61d0efa77f5e1d5159bd10996903ef1b45bc3d5d7d31299de63b69fab83aee7c",
+          "blockingCount": 0,
+          "nonBlockingCount": 0,
+          "taskId": "T-7",
+          "sourceFingerprint": "af22e13b039fdff266e57f5823e6da6f8d57c33cf22d711c1d210dc727913ec5",
+          "noChange": false,
+          "noChangeReasons": [],
+          "repairMutationCount": 0,
+          "reviewRepairComplete": true
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-07T20:10:20.905Z",
+          "verdict": "PASS",
+          "summary": {
+            "blocking": 0,
+            "nonBlocking": 0,
+            "total": 0
+          },
+          "blockingFindings": [],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "61d0efa77f5e1d5159bd10996903ef1b45bc3d5d7d31299de63b69fab83aee7c",
+          "reviewedTree": "61d0efa77f5e1d5159bd10996903ef1b45bc3d5d7d31299de63b69fab83aee7c",
+          "reviewedHead": "5cf1d97e0dc157ae419b855801197e89d1f31974",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-7",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-7.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/61a5ea336a67496d2c91697001aae736/impl-review.json",
+            "verdict": "PASS",
+            "result": "PASS",
+            "blockingCount": 0,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "4e0e123799ccd2a261e1546b95ec564e9de4b16e251dbc72939058759b92b7e6"
+          },
+          "workerOutput": {
+            "digest": "becf5914a0cb2f39296982761139ba8f688c179c01e39926026a0234d03a7385",
+            "byteLength": 1174,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-7",
+            "treeSha": "965fac54354e64d29e9479118024e37ba0d20de6",
+            "targetStateDigest": "61d0efa77f5e1d5159bd10996903ef1b45bc3d5d7d31299de63b69fab83aee7c",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "00c74285f560d5cee2b12743cfc390d6997ccf4b07abb1bb357ca37fa2e64492",
+              "capturedAt": "2026-09-07T20:10:20.905Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-7",
+              "treeSha": "965fac54354e64d29e9479118024e37ba0d20de6",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "00c74285f560d5cee2b12743cfc390d6997ccf4b07abb1bb357ca37fa2e64492",
+                "capturedAt": "2026-09-07T20:10:20.905Z"
+              },
+              "evidenceDigest": "a6e35236c14b26b28bcc108275a27f376b35cc997e87412615751239684150d0"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "965fac54354e64d29e9479118024e37ba0d20de6",
+            "targetStateDigest": "61d0efa77f5e1d5159bd10996903ef1b45bc3d5d7d31299de63b69fab83aee7c"
+          },
+          "canonicalTaskSource": {
+            "fingerprint": "af22e13b039fdff266e57f5823e6da6f8d57c33cf22d711c1d210dc727913ec5",
+            "lineageFingerprints": [
+              "9a9a92fec906f11be9d0a2929d1115008b96bf1e4d23657aba2e7461b5bfe90c",
+              "a3396284f4114bc4255009255bab5fcaa0c52ccc6c6dd536a07732d9a91edeb1"
+            ],
+            "reviewRepairLineageFingerprint": "a3396284f4114bc4255009255bab5fcaa0c52ccc6c6dd536a07732d9a91edeb1",
+            "reviewRepairComplete": true
+          },
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      }
+    }
+  ]
+}

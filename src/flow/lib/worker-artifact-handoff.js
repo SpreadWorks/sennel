@@ -70,6 +70,7 @@ import {
 import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
 import { DraftWorkerContextSnapshot, TaskWorkerContextSnapshot } from "./worker-context-snapshot.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
+import { TaskReviewEpisodeBinding, TaskReviewStageInputs } from "./task-review-stage-artifacts.js";
 import {
   CanonicalWorkerArtifactAddress,
   CanonicalSpecTestTopology,
@@ -87,6 +88,15 @@ import { validateUpgradeResultArtifact } from "./upgrade-result-artifact.js";
 import { sourceWorkerEffectJsonSchema } from "./source-worker-effect-schema.js";
 import { ImplementationReviewRepairRecurrence } from "./review-recurrence.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
+import { TaskSourceFailureObservation } from "./task-source-failure.js";
+import {
+  RepairFindingMutations,
+  RepairFindingPathClaims,
+} from "./repair-mutation-contract.js";
+import { SourceTriageEffect } from "./source-triage-contract.js";
+export { SourceTriageEffect } from "./source-triage-contract.js";
+import { ApprovedFindingExceptionSet } from "./acknowledged-rationale.js";
+import { loadMergedGuardrails } from "../../lib/guardrail.js";
 
 export const WORKER_ARTIFACT_HANDOFF_REQUEST_ENV = PRODUCT.env("FLOW_HANDOFF_REQUEST");
 // Structured source responses change fresh-dispatch producer ownership only.
@@ -517,6 +527,8 @@ export class WorkerArtifactHandoffPolicy {
     this.revisionKind = revisionKind;
     Object.freeze(this);
   }
+
+  get preservesRejectedSource() { return ["task-triage", "task-repair"].includes(this.stepId); }
 }
 
 const POLICIES = Object.freeze([
@@ -598,6 +610,7 @@ const POLICIES = Object.freeze([
     stepId: "impl-triage",
     inputs: ["spec.json", "impl-review.json"],
     acceptanceRepairInputs: ["spec.json", "acceptance-review.json"],
+    virtualInputs: ["approved-finding-exceptions.json"],
     payloads: [
       { logicalName: "effects.json", targetRelativePath: "effects.json" },
       { logicalName: "upgrade.result", targetRelativePath: "upgrade-result.json", required: false },
@@ -614,6 +627,13 @@ const POLICIES = Object.freeze([
     ],
     kind: "source",
   }),
+  ...["triage", "repair"].map((role) => new WorkerArtifactHandoffPolicy({
+    stepId: `task-${role}`,
+    inputs: [],
+    virtualInputs: ["task-review.json", ...(role === "repair" ? ["task-triage.json", "task-review-recurrence.json"] : []), "task-review-binding.json", "task-source-authority.json", "task-approved-finding-exceptions.json"],
+    payloads: [{ logicalName: "effects.json", targetRelativePath: "effects.json" }],
+    kind: "source",
+  })),
   new WorkerArtifactHandoffPolicy({
     stepId: "task-impl",
     inputs: [],
@@ -744,36 +764,6 @@ export class SourceOverviewEffect {
   toJSON() { return { ...this.additions, modules: [...this.additions.modules], data_flow: [...this.additions.data_flow], decisions: [...this.additions.decisions] }; }
 }
 
-export class SourceTriageDisposition {
-  constructor({ findingKey, disposition, rationale } = {}) {
-    this.findingKey = requiredString(findingKey, "source triage findingKey");
-    this.disposition = requiredString(disposition, "source triage disposition");
-    if (!new Set(["apply", "reject"]).has(this.disposition)) throw new Error("source triage disposition is invalid");
-    this.rationale = requiredString(rationale, "source triage rationale");
-    if (this.rationale.length < 10) throw new Error("source triage rationale must be at least 10 characters");
-    Object.freeze(this);
-  }
-  toJSON() { return { findingKey: this.findingKey, disposition: this.disposition, rationale: this.rationale }; }
-}
-
-export class SourceTriageEffect {
-  constructor(value = {}) {
-    exactObjectKeys(value, ["version", "dispositions"], "source triage effect");
-    const { version, dispositions } = value;
-    if (version !== 1) throw new Error("source triage effect version must be 1");
-    if (!Array.isArray(dispositions) || dispositions.length > MAX_PAYLOAD_FILES) throw new Error("source triage dispositions are invalid");
-    this.dispositions = Object.freeze(dispositions.map((entry) => {
-      exactObjectKeys(entry, ["findingKey", "disposition", "rationale"], "source triage disposition");
-      return new SourceTriageDisposition(entry);
-    }));
-    if (new Set(this.dispositions.map((entry) => entry.findingKey)).size !== this.dispositions.length) {
-      throw new Error("source triage dispositions must not duplicate findingKey");
-    }
-    Object.freeze(this);
-  }
-  toJSON() { return { version: 1, dispositions: this.dispositions.map((entry) => entry.toJSON()) }; }
-}
-
 export class SourceRepairRecurrenceResolution {
   constructor({ findingKey, fingerprint, priorRepairInsufficiency, repairStrategy } = {}) {
     this.findingKey = requiredString(findingKey, "source repair recurrence findingKey");
@@ -799,11 +789,43 @@ export class SourceRepairRecurrenceResolution {
   }
 }
 
+function assertRepairRecurrenceResolutions(appliedFindingKeys, resolutions, recurrence) {
+  const recurring = Array.isArray(recurrence?.entries) ? recurrence.entries : [];
+  const recurrenceByFingerprint = new Map(recurring.map((entry) => (
+    [entry.fingerprint, entry.findingKey]
+  )));
+  const recurrenceFindingKeys = [...recurrenceByFingerprint.values()];
+  if (
+    recurrenceByFingerprint.size !== recurring.length
+    || recurrenceFindingKeys.some((findingKey) => !appliedFindingKeys.includes(findingKey))
+    || recurrenceByFingerprint.size !== resolutions.length
+    || resolutions.some((entry) => (
+      recurrenceByFingerprint.get(entry.fingerprint) !== entry.findingKey
+      || !appliedFindingKeys.includes(entry.findingKey)
+    ))
+  ) {
+    throw new Error("implementation repair recurrence resolutions must exactly match canonical recurrence context");
+  }
+}
+
+function rethrowRepairContractViolation(cause) {
+  if (typeof cause?.code === "string" && cause.code.startsWith("FLOW_REPAIR_")) {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      cause.code,
+      cause.message,
+      { cause, retryable: false, data: cause.data ?? {} },
+    );
+  }
+  throw cause;
+}
+
 export class SourceRepairEffect {
   constructor(value = {}) {
     const allowedKeys = new Set([
       "version",
       "appliedFindingKeys",
+      "findingMutations",
       "summary",
       "recurrenceResolutions",
     ]);
@@ -811,16 +833,14 @@ export class SourceRepairEffect {
       || Object.keys(value).some((key) => !allowedKeys.has(key))) {
       throw new Error("source repair effect has an invalid schema");
     }
-    const { version, appliedFindingKeys, summary, recurrenceResolutions = [] } = value;
+    const { version, appliedFindingKeys, findingMutations, summary, recurrenceResolutions = [] } = value;
     if (version !== 1) throw new Error("source repair effect version must be 1");
-    if (!Array.isArray(appliedFindingKeys) || appliedFindingKeys.length === 0 || appliedFindingKeys.length > MAX_PAYLOAD_FILES) {
-      throw new Error("source repair appliedFindingKeys are invalid");
-    }
-    this.appliedFindingKeys = Object.freeze(appliedFindingKeys.map((entry) => (
-      requiredString(entry, "source repair findingKey")
-    )));
-    if (new Set(this.appliedFindingKeys).size !== this.appliedFindingKeys.length) {
-      throw new Error("source repair findings must not duplicate");
+    this.findingMutations = new RepairFindingMutations(findingMutations);
+    this.appliedFindingKeys = this.findingMutations.appliedFindingKeys;
+    if (!Array.isArray(appliedFindingKeys)
+      || appliedFindingKeys.length !== this.appliedFindingKeys.length
+      || appliedFindingKeys.some((findingKey) => !this.appliedFindingKeys.includes(findingKey))) {
+      throw new Error("source repair appliedFindingKeys must match findingMutations");
     }
     this.summary = requiredString(summary, "source repair summary");
     if (this.summary.length < 10) throw new Error("source repair summary must be at least 10 characters");
@@ -843,30 +863,90 @@ export class SourceRepairEffect {
   toJSON() {
     return {
       version: 1, appliedFindingKeys: [...this.appliedFindingKeys], summary: this.summary,
+      findingMutations: this.findingMutations.toJSON(),
       ...(this.recurrenceResolutions.length === 0 ? {} : {
         recurrenceResolutions: this.recurrenceResolutions.map((entry) => entry.toJSON()),
       }),
     };
   }
 
-  assertRecurrenceResolutions(recurrence) {
-    const recurring = Array.isArray(recurrence?.entries) ? recurrence.entries : [];
-    const recurrenceByFingerprint = new Map(recurring.map((entry) => (
-      [entry.fingerprint, entry.findingKey]
-    )));
-    const recurrenceFindingKeys = [...recurrenceByFingerprint.values()];
-    if (
-      recurrenceByFingerprint.size !== recurring.length
-      || recurrenceFindingKeys.some((findingKey) => !this.appliedFindingKeys.includes(findingKey))
-      || recurrenceByFingerprint.size !== this.recurrenceResolutions.length
-      || this.recurrenceResolutions.some((entry) => (
-        recurrenceByFingerprint.get(entry.fingerprint) !== entry.findingKey
-        || !this.appliedFindingKeys.includes(entry.findingKey)
-      ))
-    ) {
-      throw new Error("implementation repair recurrence resolutions must exactly match canonical recurrence context");
-    }
+  assertManifest(manifest) {
+    try { this.findingMutations.assertManifest(manifest); }
+    catch (cause) { rethrowRepairContractViolation(cause); }
     return this;
+  }
+
+  assertAppliedFindingKeys(findingKeys) {
+    try { this.findingMutations.assertFindingKeys(findingKeys); }
+    catch (cause) { rethrowRepairContractViolation(cause); }
+    return this;
+  }
+
+  assertRecurrenceResolutions(recurrence) {
+    assertRepairRecurrenceResolutions(this.appliedFindingKeys, this.recurrenceResolutions, recurrence);
+    return this;
+  }
+
+}
+
+/** Worker repair report. Finding paths acquire mutation identity only in the parent. */
+export class SourceRepairReport {
+  constructor(value = {}) {
+    const allowedKeys = new Set(["version", "findings", "summary", "recurrenceResolutions"]);
+    if (value === null || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).some((key) => !allowedKeys.has(key))) {
+      throw new Error("source repair report has an invalid schema");
+    }
+    const { version, findings, summary, recurrenceResolutions } = value;
+    if (version !== 1) throw new Error("source repair report version must be 1");
+    this.findings = new RepairFindingPathClaims(findings);
+    this.summary = requiredString(summary, "source repair summary");
+    if (this.summary.length < 10) throw new Error("source repair summary must be at least 10 characters");
+    if (!Array.isArray(recurrenceResolutions) || recurrenceResolutions.length > MAX_PAYLOAD_FILES) {
+      throw new Error("source repair recurrence resolutions are invalid");
+    }
+    this.recurrenceResolutions = Object.freeze(recurrenceResolutions.map((entry) => (
+      entry instanceof SourceRepairRecurrenceResolution ? entry : new SourceRepairRecurrenceResolution(entry)
+    )));
+    if (new Set(this.recurrenceResolutions.map((entry) => entry.fingerprint)).size !== this.recurrenceResolutions.length) {
+      throw new Error("source repair recurrence resolutions must not duplicate fingerprints");
+    }
+    Object.freeze(this);
+  }
+
+  bind(manifest) {
+    let findingMutations;
+    try { findingMutations = this.findings.bind(manifest); }
+    catch (cause) { rethrowRepairContractViolation(cause); }
+    return new SourceRepairEffect({
+      version: 1,
+      appliedFindingKeys: findingMutations.appliedFindingKeys,
+      findingMutations: findingMutations.toJSON(),
+      summary: this.summary,
+      ...(this.recurrenceResolutions.length === 0 ? {} : {
+        recurrenceResolutions: this.recurrenceResolutions.map((entry) => entry.toJSON()),
+      }),
+    });
+  }
+
+  assertRecurrenceResolutions(recurrence) {
+    assertRepairRecurrenceResolutions(this.findings.appliedFindingKeys, this.recurrenceResolutions, recurrence);
+    return this;
+  }
+
+  assertAppliedFindingKeys(findingKeys) {
+    try { this.findings.assertFindingKeys(findingKeys); }
+    catch (cause) { rethrowRepairContractViolation(cause); }
+    return this;
+  }
+
+  toJSON() {
+    return {
+      version: 1,
+      findings: this.findings.toJSON(),
+      summary: this.summary,
+      recurrenceResolutions: this.recurrenceResolutions.map((entry) => entry.toJSON()),
+    };
   }
 }
 
@@ -905,18 +985,18 @@ export class SourceWorkerEffect {
     if (this.stepId === "task-impl" && overview === null) throw new Error("task-impl source effect requires overview additions");
     if (this.stepId !== "task-impl" && overview !== null) throw new Error("only task-impl may submit overview additions");
     this.overview = overview === null ? null : new SourceOverviewEffect(overview);
-    if ((this.stepId === "impl-triage") !== (triage !== null)) throw new Error("source triage effect is required only for impl-triage");
-    if ((this.stepId === "impl-repair") !== (repair !== null)) throw new Error("source repair effect is required only for impl-repair");
+    if ((new Set(["impl-triage", "task-triage"]).has(this.stepId)) !== (triage !== null)) throw new Error("source triage effect is required only for impl-triage");
+    if ((new Set(["impl-repair", "task-repair"]).has(this.stepId)) !== (repair !== null)) throw new Error("source repair effect is required only for impl-repair");
     this.triage = triage === null ? null : new SourceTriageEffect(triage);
     this.repair = repair === null ? null : new SourceRepairEffect(repair);
     this.noChangeReason = noChangeReason === null ? null : new SourceNoChangeReason(noChangeReason);
     if (this.stepId !== "task-impl" && this.noChangeReason !== null) {
       throw new Error("only task-impl may submit a source no-change reason");
     }
-    if (this.stepId === "impl-triage" && (this.files.length > 0 || this.issues.length > 0 || this.overview !== null || this.repair !== null)) {
+    if (new Set(["impl-triage", "task-triage"]).has(this.stepId) && (this.files.length > 0 || this.issues.length > 0 || this.overview !== null || this.repair !== null)) {
       throw new Error("impl-triage source effect may contain only typed triage dispositions");
     }
-    if (this.stepId === "impl-repair" && (this.overview !== null || this.triage !== null)) {
+    if (new Set(["impl-repair", "task-repair"]).has(this.stepId) && (this.overview !== null || this.triage !== null)) {
       throw new Error("impl-repair source effect may contain source files, issues, and one typed repair only");
     }
     Object.freeze(this);
@@ -965,7 +1045,7 @@ export class SourceWorkerEffectReport {
     }));
     this.overview = overview === null ? null : new SourceOverviewEffect(overview);
     this.triage = triage === null ? null : new SourceTriageEffect(triage);
-    this.repair = repair === null ? null : new SourceRepairEffect(repair);
+    this.repair = repair === null ? null : new SourceRepairReport(repair);
     this.noChangeReason = noChangeReason === null ? null : new SourceNoChangeReason(noChangeReason);
     Object.freeze(this);
   }
@@ -985,7 +1065,7 @@ export class SourceWorkerEffectReport {
     if (missing.length > 0 || unknown.length > 0) {
       throw new WorkerArtifactHandoffError(
         "invalid", "FLOW_SOURCE_HANDOFF_EFFECT_PATH_COVERAGE_INVALID",
-        "source worker file claim paths must exactly cover the parent-observed mutation paths as a set",
+        `source worker file claim paths must exactly cover the parent-observed mutation paths as a set (missing: ${missing.join(", ") || "none"}; unknown: ${unknown.join(", ") || "none"})`,
         { retryable: false, data: { missing: missing.slice(0, 20), unknown: unknown.slice(0, 20) } },
       );
     }
@@ -994,7 +1074,7 @@ export class SourceWorkerEffectReport {
       files: this.files.map((entry) => entry.bind(manifest).toJSON()),
       issues: this.issues.map((entry) => entry.toJSON()),
       overview: this.overview?.toJSON() ?? null, triage: this.triage?.toJSON() ?? null,
-      repair: this.repair?.toJSON() ?? null, noChangeReason: this.noChangeReason?.toJSON() ?? null,
+      repair: this.repair?.bind(manifest).toJSON() ?? null, noChangeReason: this.noChangeReason?.toJSON() ?? null,
     });
   }
   toJSON() {
@@ -1046,7 +1126,7 @@ function sourceEffectDocumentFromResponse(responseText, request, manifest) {
       "invalid",
       "FLOW_SOURCE_HANDOFF_RESPONSE_INVALID",
       `source worker response violates its canonical effect contract: ${cause.message}`,
-      { cause, retryable: false, data: { stepId: request.stepId, ...diagnostic } },
+      { cause, retryable: false, data: { stepId: request.stepId, failureKind: "semantic", ...diagnostic } },
     );
   }
 }
@@ -1390,8 +1470,11 @@ function authorityRuntimeLocks(runtimeLocks = []) {
   return Object.freeze([...new Set(runtimeLocks)]);
 }
 
-function isIgnoredAuthorityPath(relativePath, ignoredDirectories, runtimeLocks = []) {
-  if (isWorkerRuntimePath(relativePath, runtimeLocks)) return true;
+function isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks = []) {
+  if (isWorkerRuntimePath(relativePath)) return true;
+  const repositoryPath = path.relative(runtimeLocks[0]?.repositoryRoot ?? root, path.resolve(root, relativePath))
+    .split(path.sep).join("/");
+  if (FLOW_REPOSITORY_RUNTIME_ARTIFACTS.owns(repositoryPath, { runtimeLocks })) return true;
   return ignoredDirectories.some((directory) => (
     relativePath === directory || relativePath.startsWith(`${directory}/`)
   ));
@@ -1578,7 +1661,7 @@ function gitIndexComparableEntry(entry) {
   });
 }
 
-function filteredIndexDigest(bytes, ignoredDirectories, runtimeLocks) {
+function filteredIndexDigest(root, bytes, ignoredDirectories, runtimeLocks) {
   const hash = crypto.createHash("sha256");
   for (const record of bytes.toString("utf8").split("\u0000").filter(Boolean)) {
     const separator = record.indexOf("\t");
@@ -1586,7 +1669,7 @@ function filteredIndexDigest(bytes, ignoredDirectories, runtimeLocks) {
       throw authoritySnapshotError("worker artifact authority received malformed Git index data");
     }
     const relativePath = record.slice(separator + 1);
-    if (!isIgnoredAuthorityPath(relativePath, ignoredDirectories, runtimeLocks)) hash.update(record).update("\u0000");
+    if (!isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks)) hash.update(record).update("\u0000");
   }
   return hash.digest("hex");
 }
@@ -1594,6 +1677,7 @@ function filteredIndexDigest(bytes, ignoredDirectories, runtimeLocks) {
 function gitAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = [] } = {}) {
   const head = boundedGitOutput(root, ["rev-parse", "HEAD"], "Git HEAD").toString("utf8").trim();
   const indexDigest = filteredIndexDigest(
+    root,
     boundedGitOutput(root, ["ls-files", "--stage", "-z"], "Git index"),
     ignoredDirectories,
     runtimeLocks,
@@ -1615,7 +1699,7 @@ function gitAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = []
     "untracked path set",
   );
   const paths = [...new Set([...tracked, ...untracked])]
-    .filter((relativePath) => !isIgnoredAuthorityPath(relativePath, ignoredDirectories, runtimeLocks))
+    .filter((relativePath) => !isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks))
     .sort((left, right) => left.localeCompare(right));
   if (paths.length > MAX_AUTHORITY_DIRTY_PATHS) {
     throw authoritySnapshotError(
@@ -1642,7 +1726,7 @@ function filesystemAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLoc
       while ((entry = handle.readSync()) != null) {
         const absolutePath = path.join(directoryPath, entry.name);
         const relativePath = path.relative(root, absolutePath).split(path.sep).join("/");
-        if (isIgnoredAuthorityPath(relativePath, ignoredDirectories, runtimeLocks)) continue;
+        if (isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks)) continue;
         relativePaths.push(relativePath);
         if (relativePaths.length > MAX_AUTHORITY_DIRTY_PATHS) {
           throw authoritySnapshotError(
@@ -1719,13 +1803,14 @@ export class WorkerArtifactRepositoryMutationSnapshot {
     }
   }
 
-  static fromStored(value, { root, authorities = ["execution"] } = {}) {
+  static fromStored(value, { root, authorities = ["execution"], runtimeLocks = [] } = {}) {
     exactObjectKeys(value, ["mode", "head", "indexDigest", "entries", "ignoredDirectories"], "source mutation baseline snapshot");
     if (!Array.isArray(value.entries)) throw new Error("source mutation baseline snapshot entries must be an array");
     return new WorkerArtifactRepositoryMutationSnapshot({
       root,
       authorities,
       ignoredDirectories: value.ignoredDirectories,
+      runtimeLocks,
       mode: value.mode,
       head: value.head,
       indexDigest: value.indexDigest,
@@ -1783,22 +1868,23 @@ export class SourceMutationBaseline {
     Object.freeze(this);
   }
 
-  static capture({ root, attempt, ignoredDirectories = [] } = {}) {
+  static capture({ root, attempt, ignoredDirectories = [], runtimeLocks = [] } = {}) {
     return new SourceMutationBaseline({
       attempt,
       snapshot: WorkerArtifactRepositoryMutationSnapshot.capture({
         root,
         authorities: ["execution"],
         ignoredDirectories,
+        runtimeLocks,
       }),
     });
   }
 
-  static fromStored(value, { root } = {}) {
+  static fromStored(value, { root, runtimeLocks = [] } = {}) {
     exactObjectKeys(value, ["attempt", "snapshot", "digest"], "source mutation baseline");
     const baseline = new SourceMutationBaseline({
       attempt: value.attempt,
-      snapshot: WorkerArtifactRepositoryMutationSnapshot.fromStored(value.snapshot, { root }),
+      snapshot: WorkerArtifactRepositoryMutationSnapshot.fromStored(value.snapshot, { root, runtimeLocks }),
     });
     if (baseline.digest !== requiredDigest(value.digest, "source mutation baseline digest")) {
       throw new Error("source mutation baseline digest does not match its content");
@@ -1980,12 +2066,15 @@ function indexedSourceMutationCurrentEntry(root, relativePath, budget) {
  * that the later Version is exactly that prefix plus metric observations.
  */
 export class SourceWorkerCanonicalObservationAdvance {
-  constructor({ activityPrefix, activityBytes, mutablePaths, addedActivities = [] }) {
-    if (!Array.isArray(activityPrefix) || !Array.isArray(mutablePaths) || !Array.isArray(addedActivities)) {
+  constructor({ activityPrefix, activityBytes, mutablePaths, canonicalSnapshot, addedActivities = [], allowedPublications = [], allowedActivityIds = [] }) {
+    if (!Array.isArray(activityPrefix) || !Array.isArray(mutablePaths) || !Array.isArray(addedActivities) || !Array.isArray(allowedPublications) || !Array.isArray(allowedActivityIds)) {
       throw new Error("source worker canonical observation advance requires Activity arrays");
     }
     if (!Buffer.isBuffer(activityBytes)) {
       throw new Error("source worker canonical observation advance requires Activity journal bytes");
+    }
+    if (!(canonicalSnapshot instanceof WorkerArtifactRepositoryMutationSnapshot)) {
+      throw new Error("source worker canonical observation advance requires a canonical repository snapshot");
     }
     this.activityPrefix = Object.freeze(activityPrefix.map((activity) => stableStringify(activity)));
     this.activityBytes = Buffer.from(activityBytes);
@@ -1994,6 +2083,18 @@ export class SourceWorkerCanonicalObservationAdvance {
       "source worker canonical observation path",
     )));
     this.addedActivities = Object.freeze(addedActivities.map((activity) => Object.freeze(structuredClone(activity))));
+    this.canonicalSnapshot = canonicalSnapshot;
+    this.allowedPublications = Object.freeze(allowedPublications.map((publication) => {
+      if (publication === null || typeof publication !== "object") {
+        throw new Error("source worker allowed canonical publication is invalid");
+      }
+      return Object.freeze({
+        activityId: requiredString(publication.activityId, "source worker baseline Activity id"),
+        relativePath: normalizedRelativePath(publication.relativePath, "source worker baseline artifact path"),
+        digest: requiredDigest(publication.digest, "source worker baseline artifact digest"),
+      });
+    }));
+    this.allowedActivityIds = Object.freeze(allowedActivityIds.map((id) => requiredString(id, "source worker allowed Activity id")));
     Object.freeze(this);
   }
 
@@ -2002,6 +2103,10 @@ export class SourceWorkerCanonicalObservationAdvance {
       const location = flowManager.specLocation(specId);
       const activityPrefix = flowManager.activityLedger(specId);
       const activityBytes = fs.readFileSync(location.activitiesFile);
+      const runtimeLocks = [
+        location.runtimeLock("runtime.lock.artifact-catalog"),
+        location.runtimeLock("runtime.lock.current-flow-state"),
+      ];
       return new SourceWorkerCanonicalObservationAdvance({
         activityPrefix,
         activityBytes,
@@ -2010,6 +2115,11 @@ export class SourceWorkerCanonicalObservationAdvance {
           path.relative(location.directory, location.activitiesFile),
           path.relative(location.directory, location.catalogFile),
         ].map((entry) => entry.split(path.sep).join("/")),
+        canonicalSnapshot: WorkerArtifactRepositoryMutationSnapshot.capture({
+          root: location.directory,
+          authorities: ["canonical"],
+          runtimeLocks,
+        }),
       });
     } catch (cause) {
       throw new WorkerArtifactHandoffError(
@@ -2019,6 +2129,68 @@ export class SourceWorkerCanonicalObservationAdvance {
         { cause, retryable: false },
       );
     }
+  }
+
+  static fromStored(value, { flowManager, specId } = {}) {
+    if (value === null || typeof value !== "object" || !Array.isArray(value.activityPrefix)
+      || typeof value.activityBytes !== "string" || !Array.isArray(value.mutablePaths)
+      || value.canonicalSnapshot === null || typeof value.canonicalSnapshot !== "object"
+      || flowManager === null || typeof flowManager?.specLocation !== "function") {
+      throw new Error("stored source worker canonical observation is invalid");
+    }
+    const location = flowManager.specLocation(specId);
+    const runtimeLocks = [
+      location.runtimeLock("runtime.lock.artifact-catalog"),
+      location.runtimeLock("runtime.lock.current-flow-state"),
+    ];
+    return new SourceWorkerCanonicalObservationAdvance({
+      activityPrefix: value.activityPrefix.map((entry) => JSON.parse(entry)),
+      activityBytes: Buffer.from(value.activityBytes, "base64"),
+      mutablePaths: value.mutablePaths,
+      canonicalSnapshot: WorkerArtifactRepositoryMutationSnapshot.fromStored(value.canonicalSnapshot, {
+        root: location.directory,
+        authorities: ["canonical"],
+        runtimeLocks,
+      }),
+      addedActivities: [],
+    });
+  }
+
+  storedJSON() {
+    return {
+      activityPrefix: [...this.activityPrefix],
+      activityBytes: this.activityBytes.toString("base64"),
+      mutablePaths: [...this.mutablePaths],
+      canonicalSnapshot: this.canonicalSnapshot.toJSON(),
+    };
+  }
+
+  withAllowedPublication({ activityId, relativePath, digest: publicationDigest }) {
+    return new SourceWorkerCanonicalObservationAdvance({
+      activityPrefix: this.activityPrefix.map((entry) => JSON.parse(entry)),
+      activityBytes: this.activityBytes,
+      mutablePaths: this.mutablePaths,
+      canonicalSnapshot: this.canonicalSnapshot,
+      addedActivities: this.addedActivities,
+      allowedPublications: [...this.allowedPublications, {
+        activityId,
+        relativePath,
+        digest: publicationDigest,
+      }],
+      allowedActivityIds: this.allowedActivityIds,
+    });
+  }
+
+  withAllowedActivity(activityId) {
+    return new SourceWorkerCanonicalObservationAdvance({
+      activityPrefix: this.activityPrefix.map((entry) => JSON.parse(entry)),
+      activityBytes: this.activityBytes,
+      mutablePaths: this.mutablePaths,
+      canonicalSnapshot: this.canonicalSnapshot,
+      addedActivities: this.addedActivities,
+      allowedPublications: this.allowedPublications,
+      allowedActivityIds: [...this.allowedActivityIds, activityId],
+    });
   }
 
   assertAllowed({ flowManager, specId, canonicalSnapshot }) {
@@ -2044,34 +2216,6 @@ export class SourceWorkerCanonicalObservationAdvance {
         { cause, retryable: false },
       );
     }
-    if (current.length < this.activityPrefix.length) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-        "canonical Activity ledger no longer contains the worker-start prefix",
-        { retryable: false },
-      );
-    }
-    const prefixChanged = this.activityPrefix.some((activity, index) => (
-      stableStringify(current[index]) !== activity
-    ));
-    if (prefixChanged) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-        "canonical Activity ledger changed before the worker-start prefix completed",
-        { retryable: false },
-      );
-    }
-    const addedActivities = current.slice(this.activityPrefix.length);
-    if (addedActivities.some((activity) => activity.transition?.operation !== "record_metric")) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-        "canonical source handoff permits only appended record_metric Activities",
-        { retryable: false },
-      );
-    }
     let currentSnapshot;
     let activityBytes;
     try {
@@ -2090,30 +2234,53 @@ export class SourceWorkerCanonicalObservationAdvance {
         { cause, retryable: false },
       );
     }
-    const changedPaths = canonicalSnapshot.allChangedPaths(currentSnapshot);
-    const unexpectedPaths = changedPaths.filter((entry) => !this.mutablePaths.includes(entry));
-    const activityTail = Buffer.from(addedActivities.map((activity) => `${JSON.stringify(activity)}\n`).join(""), "utf8");
-    const exactJournalAppend = activityBytes.length >= this.activityBytes.length
-      && activityBytes.subarray(0, this.activityBytes.length).equals(this.activityBytes)
-      && activityBytes.subarray(this.activityBytes.length).equals(activityTail);
-    const unexplainedCanonicalChange = addedActivities.length === 0 && changedPaths.length > 0;
-    if (unexpectedPaths.length > 0 || !exactJournalAppend || unexplainedCanonicalChange) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-        "canonical source handoff contains a direct Version mutation outside record_metric publication",
-        {
-          retryable: false,
-          data: { changedPaths: changedPaths.slice(0, 20) },
-        },
-      );
-    }
+    const addedActivities = assertCanonicalObservationAdvance({
+      observation: this,
+      current,
+      activityBytes,
+      currentSnapshot,
+      allowedPublications: this.allowedPublications,
+      allowedActivityIds: this.allowedActivityIds,
+    });
     return new SourceWorkerCanonicalObservationAdvance({
       activityPrefix: current,
       activityBytes,
       mutablePaths: this.mutablePaths,
+      canonicalSnapshot: currentSnapshot,
       addedActivities,
     });
+  }
+
+  /**
+   * Revalidate the same parent-owned canonical observation from the
+   * publication lock's coherent read view.  This deliberately avoids
+   * reentering FlowManager while a transition owns the catalog lock.
+   */
+  assertTransitionView(view) {
+    if (view === null || typeof view !== "object" || !Array.isArray(view.activities)
+      || view.location === null || typeof view.location.activitiesFile !== "string") {
+      throw new Error("source worker canonical observation requires a transition view");
+    }
+    const current = view.activities.map((activity) => {
+      if (typeof activity?.toJSON !== "function") {
+        throw new Error("source worker canonical observation requires typed Activities");
+      }
+      return activity.toJSON();
+    });
+    const currentSnapshot = WorkerArtifactRepositoryMutationSnapshot.capture({
+      root: this.canonicalSnapshot.root,
+      authorities: this.canonicalSnapshot.authorities,
+      ignoredDirectories: this.canonicalSnapshot.ignoredDirectories,
+      runtimeLocks: this.canonicalSnapshot.runtimeLocks,
+    });
+    const activityBytes = fs.readFileSync(view.location.activitiesFile);
+    assertCanonicalObservationAdvance({
+      observation: this,
+      current,
+      activityBytes,
+      currentSnapshot,
+    });
+    return this;
   }
 
   toJSON() {
@@ -2122,6 +2289,85 @@ export class SourceWorkerCanonicalObservationAdvance {
       addedActivityIds: this.addedActivities.map((activity) => activity.id),
     };
   }
+}
+
+function assertCanonicalObservationAdvance({
+  observation,
+  current,
+  activityBytes,
+  currentSnapshot,
+  allowedPublications = [],
+  allowedActivityIds = [],
+}) {
+  if (current.length < observation.activityPrefix.length) {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
+      "canonical Activity ledger no longer contains the worker-start prefix",
+      { retryable: false },
+    );
+  }
+  const prefixChanged = observation.activityPrefix.some((activity, index) => (
+    stableStringify(current[index]) !== activity
+  ));
+  if (prefixChanged) {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
+      "canonical Activity ledger changed before the worker-start prefix completed",
+      { retryable: false },
+    );
+  }
+  const addedActivities = current.slice(observation.activityPrefix.length);
+  if (addedActivities.some((activity) => (
+    activity.transition?.operation !== "record_metric"
+      && !allowedPublications.some((publication) => publication.activityId === activity.id)
+      && !allowedActivityIds.includes(activity.id)
+  ))) {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
+      "canonical source handoff permits only appended record_metric Activities",
+      { retryable: false },
+    );
+  }
+  const changedPaths = observation.canonicalSnapshot.allChangedPaths(currentSnapshot);
+  const currentEntries = new Map(currentSnapshot.entries.map((entry) => [entry.path, entry]));
+  const invalidPublication = allowedPublications.some((publication) => {
+    const entry = currentEntries.get(publication.relativePath);
+    return entry?.kind !== "file" || entry.digest !== publication.digest;
+  });
+  const allowedPaths = new Set();
+  for (const publication of allowedPublications) {
+    const segments = publication.relativePath.split("/");
+    for (let length = 1; length <= segments.length; length += 1) {
+      allowedPaths.add(segments.slice(0, length).join("/"));
+    }
+  }
+  const unexpectedPaths = changedPaths.filter((entry) => (
+    !observation.mutablePaths.includes(entry) && !allowedPaths.has(entry)
+  ));
+  const activityTail = Buffer.from(addedActivities.map((activity) => `${JSON.stringify(activity)}\n`).join(""), "utf8");
+  const exactJournalAppend = activityBytes.length >= observation.activityBytes.length
+    && activityBytes.subarray(0, observation.activityBytes.length).equals(observation.activityBytes)
+    && activityBytes.subarray(observation.activityBytes.length).equals(activityTail);
+  const unexplainedCanonicalChange = addedActivities.length === 0 && changedPaths.length > 0;
+  if (invalidPublication || unexpectedPaths.length > 0 || !exactJournalAppend || unexplainedCanonicalChange) {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
+      "canonical source handoff contains a direct Version mutation outside record_metric publication",
+      {
+        retryable: false,
+        data: {
+          changedPaths: changedPaths.slice(0, 20), invalidPublication,
+          unexpectedPaths: unexpectedPaths.slice(0, 20), exactJournalAppend,
+          unexplainedCanonicalChange,
+        },
+      },
+    );
+  }
+  return addedActivities;
 }
 
 export class WorkerArtifactMutationAuthoritySnapshot {
@@ -2206,6 +2452,22 @@ export class WorkerArtifactMutationAuthoritySnapshot {
         cause,
       );
     }
+  }
+
+  static rehydrate(request, canonicalObservationAdvance) {
+    if (!(canonicalObservationAdvance instanceof SourceWorkerCanonicalObservationAdvance)) {
+      throw new Error("source worker recovery requires its persisted canonical observation");
+    }
+    return new WorkerArtifactMutationAuthoritySnapshot({
+      specId: request.specId,
+      // Do not recapture the canonical checkout after restart: doing so would
+      // bless mutations made while the parent was unavailable. The stored
+      // snapshot predates both the worker and its one baseline publication.
+      repositories: [canonicalObservationAdvance.canonicalSnapshot],
+      sourceMode: request.policy.kind === "source",
+      sourceMutationBaseline: request.sourceMutationBaseline,
+      canonicalObservationAdvance,
+    });
   }
 
   assertUnchanged() {
@@ -2893,9 +3155,40 @@ function currentAcceptanceImplementationRepair({ flowManager, state, stepId }) {
 }
 
 function workerContextKind(policy) {
-  if (policy.stepId === "task-impl") return "task";
+  if (policy.stepId.startsWith("task-")) return "task";
   const kinds = getFlowNode(policy.stepId)?.contextKinds || [];
   return ["issue", "guardrail", "project_overview"].every((kind) => kinds.includes(kind)) ? "draft" : null;
+}
+
+function taskReviewStageHandoffInputs({ flowManager, state, policy, contextSnapshot }) {
+  if (!["task-triage", "task-repair"].includes(policy.stepId)) return [];
+  const canonical = flowManager.canonicalState(state.specId);
+  const stage = new TaskReviewStageInputs({ flowManager, state: canonical, taskId: contextSnapshot.context.taskId, context: contextSnapshot.context, stage: policy.stepId });
+  return stage.workerDocuments().map(({ name, document }) => {
+    const bytes = Buffer.from(stableStringify(document));
+    return new WorkerArtifactInputSnapshot({ name, targetRelativePath: name, snapshot: { digest: digest(bytes), byteLength: bytes.length }, document });
+  });
+}
+
+function approvedFindingExceptionHandoffInputs({ flowManager, state, policy, executionRoot }) {
+  if (policy.stepId !== "impl-triage") return [];
+  const spec = flowManager.readArtifact({
+    specId: state.specId,
+    logicalKey: "spec.record",
+    consumerNodeId: policy.stepId,
+  });
+  const authority = ApprovedFindingExceptionSet.fromCanonical({
+    spec: JSON.parse(spec.bytes.toString("utf8")),
+    guardrails: loadMergedGuardrails(executionRoot),
+  });
+  const document = authority.toJSON();
+  const bytes = Buffer.from(stableStringify(document));
+  return [new WorkerArtifactInputSnapshot({
+    name: "approved-finding-exceptions.json",
+    targetRelativePath: "approved-finding-exceptions.json",
+    snapshot: { digest: digest(bytes), byteLength: bytes.length },
+    document,
+  })];
 }
 
 function handoffInputDigest(inputs, contextSnapshot) {
@@ -2946,7 +3239,7 @@ export class WorkerArtifactHandoffRequest {
     this.issue = state.issue ?? null;
     this.stepId = policy.stepId;
     this.taskId = invocation.action.nextAction?.taskId ?? null;
-    if ((this.stepId === "task-impl") !== (typeof this.taskId === "string" && this.taskId.trim() !== "")) {
+    if ((this.stepId.startsWith("task-")) !== (typeof this.taskId === "string" && this.taskId.trim() !== "")) {
       throw new Error("task-impl worker handoff requires exactly one taskId");
     }
     this.actionDigest = requiredDigest(invocation.action.digest, "handoff actionDigest");
@@ -3089,6 +3382,8 @@ export class WorkerArtifactHandoffRequest {
         );
       }
     }
+    inputs.push(...taskReviewStageHandoffInputs({ flowManager, state, policy, contextSnapshot }));
+    inputs.push(...approvedFindingExceptionHandoffInputs({ flowManager, state, policy, executionRoot }));
     const inputDigestValue = handoffInputDigest(inputs, contextSnapshot);
     const payloads = policy.payloads.map((rule) => {
       const baseline = canonicalPayloadBaseline({ flowManager, state, rule });
@@ -3110,11 +3405,34 @@ export class WorkerArtifactHandoffRequest {
       invocation.id,
       invocation.action.digest,
     );
+    const sourceIgnoredDirectories = [path.relative(executionRoot, actionDirectory).split(path.sep).join("/")];
+    // Canonical Version artifacts are governed by the persisted canonical
+    // observation below. They are not source edits, including the baseline
+    // artifact that records this Attempt before the worker starts.
+    const relativeCanonicalDirectory = path.relative(
+      executionRoot,
+      flowManager.specLocation(state.specId).directory,
+    ).split(path.sep).join("/");
+    if (relativeCanonicalDirectory !== "" && relativeCanonicalDirectory !== "."
+      && !relativeCanonicalDirectory.startsWith("../") && !path.posix.isAbsolute(relativeCanonicalDirectory)) {
+      sourceIgnoredDirectories.push(relativeCanonicalDirectory);
+    }
     const sourceMutationBaseline = policy.kind !== "source" ? null : SourceMutationBaseline.capture({
       root: executionRoot,
       attempt: semanticIdentity.attempt,
-      ignoredDirectories: [path.relative(executionRoot, actionDirectory).split(path.sep).join("/")],
+      ignoredDirectories: sourceIgnoredDirectories,
     });
+    if (sourceMutationBaseline !== null && ["task-triage", "task-repair"].includes(policy.stepId)) {
+      const canonicalObservation = SourceWorkerCanonicalObservationAdvance.capture({ flowManager, specId: state.specId });
+      flowManager.publishTaskSourceHandoffBaseline({
+        specId: state.specId,
+        taskId: invocation.action.nextAction.taskId,
+        stage: policy.stepId.slice(5),
+        attempt: semanticIdentity.attempt,
+        baseline: sourceMutationBaseline,
+        canonicalObservation,
+      });
+    }
     return new WorkerArtifactHandoffRequest({
       mainRoot,
       executionRoot,
@@ -3417,11 +3735,16 @@ export class WorkerArtifactHandoffRequest {
         "worker artifact handoff input contract changed before publication",
       );
     }
-    const virtualInputs = new Map(reviewRecurrenceHandoffInput({
+    const virtualInputs = new Map([...taskReviewStageHandoffInputs({ flowManager: this.flowManager, state, policy: this.policy, contextSnapshot: this.contextSnapshot }), ...approvedFindingExceptionHandoffInputs({
       flowManager: this.flowManager,
       state,
       policy: this.policy,
-    }).map((input) => [input.targetRelativePath, input]));
+      executionRoot: this.executionRoot,
+    }), ...reviewRecurrenceHandoffInput({
+      flowManager: this.flowManager,
+      state,
+      policy: this.policy,
+    })].map((input) => [input.targetRelativePath, input]));
     const current = this.inputs.map(({ targetRelativePath: relativePath }) => {
       const virtual = virtualInputs.get(relativePath) ?? null;
       if (virtual !== null) return {
@@ -3820,7 +4143,7 @@ function requestFromStored(filePath) {
   const actionDigest = requiredDigest(document.actionDigest, "handoff request actionDigest");
   const specId = requiredString(document.specId, "handoff request specId");
   const taskId = document.taskId == null ? null : requiredString(document.taskId, "handoff request taskId");
-  if ((document.stepId === "task-impl") !== (taskId !== null)) {
+  if ((document.stepId.startsWith("task-")) !== (taskId !== null)) {
     throw new Error("handoff request task identity does not match its step");
   }
   if (path.basename(handoffRoot) !== digest(specId).slice(0, 24)) {
@@ -4641,13 +4964,43 @@ function validatePayload(request, submission, state, { bootstrapObservationAutho
         payloadDocument(request, submission, "effects.json"),
         request.stepId,
       );
+      if (request.taskId !== null && ["task-triage", "task-repair"].includes(request.stepId)) {
+        try {
+          const stage = new TaskReviewStageInputs({ flowManager: request.flowManager, state: request.flowManager.canonicalState(request.specId), taskId: request.taskId, context: request.contextSnapshot.context, stage: request.stepId });
+          if (effect.triage !== null) stage.assertTriage(effect.triage);
+          if (effect.repair !== null) stage.assertRepair(effect.repair, submission.sourceMutationManifest);
+        } catch (cause) {
+          throw new WorkerArtifactHandoffError(
+            "invalid",
+            "FLOW_TASK_SOURCE_STAGE_SEMANTIC_INVALID",
+            `Task source stage effect contradicts its immutable review inputs: ${cause.message}`,
+            { cause, retryable: false, data: { stepId: request.stepId, failureKind: "semantic" } },
+          );
+        }
+        return;
+      }
       if (effect.triage !== null) {
         const acceptance = request.inputs.find((input) => input.name === "acceptance-review.json")?.document ?? null;
-        const keys = acceptance === null
+        const reviewedFindings = acceptance === null
           ? [
               ...((request.inputs.find((input) => input.name === "impl-review.json")?.document?.blockingFindings) ?? []),
               ...((request.inputs.find((input) => input.name === "impl-review.json")?.document?.nonBlockingImprovements) ?? []),
-            ].map((finding) => finding?.findingKey)
+            ]
+          : null;
+        if (reviewedFindings !== null) {
+          const spec = request.inputs.find((input) => input.name === "spec.json")?.document ?? null;
+          const approvedExceptions = ApprovedFindingExceptionSet.fromCanonical({
+            spec,
+            guardrails: loadMergedGuardrails(request.executionRoot),
+          });
+          const authoritySnapshot = request.inputs.find((input) => input.name === "approved-finding-exceptions.json")?.document;
+          if (stableStringify(authoritySnapshot) !== stableStringify(approvedExceptions.toJSON())) {
+            throw new Error("source triage approved exception authority is stale");
+          }
+          effect.triage.assertCanonicalFindings(reviewedFindings, { approvedExceptions });
+        }
+        const keys = acceptance === null
+          ? reviewedFindings.map((finding) => finding?.findingKey)
           : new AcceptanceRepairFindingSet(acceptance).keys;
         if (keys.some((key) => typeof key !== "string" || key === "")
           || new Set(keys).size !== keys.length
@@ -4658,15 +5011,12 @@ function validatePayload(request, submission, state, { bootstrapObservationAutho
         }
       }
       if (effect.repair !== null) {
+        effect.repair.assertManifest(submission.sourceMutationManifest);
         const triage = request.inputs.find((input) => input.name === "impl-triage.json")?.document;
         const applied = Array.isArray(triage?.dispositions)
           ? triage.dispositions.filter((entry) => entry?.disposition === "apply").map((entry) => entry.findingKey)
           : null;
-        if (applied === null
-          || applied.length !== effect.repair.appliedFindingKeys.length
-          || applied.some((key) => !effect.repair.appliedFindingKeys.includes(key))) {
-          throw new Error("source repair must apply exactly the canonical impl-triage apply findings");
-        }
+        effect.repair.assertAppliedFindingKeys(applied);
         const recurrence = request.inputs.find((input) => input.name === "impl-review-recurrence.json")?.document;
         effect.repair.assertRecurrenceResolutions(recurrence);
       }
@@ -5442,7 +5792,7 @@ function canonicalHandoffReceiptForRequest(state, request, flowManager = null) {
   }
   const step = request.taskId === null
     ? findStepById(state?.steps || [], request.stepId)
-    : findStepById(state?.tasks?.find((task) => task.id === request.taskId)?.steps || [], `${request.taskId}-impl`);
+    : findStepById(state?.tasks?.find((task) => task.id === request.taskId)?.steps || [], `${request.taskId}-${request.stepId.slice("task-".length)}`);
   const resultReferences = step && new Set(["done", "skipped"]).has(step.status) && Array.isArray(step.result?.artifactRefs)
     ? [step.result.artifactRefs]
     : flowManager?.activityLedger?.(request.specId)
@@ -5622,6 +5972,7 @@ export class WorkerArtifactHandoffCoordinator {
     if (!(request instanceof WorkerArtifactHandoffRequest) || request.policy.kind !== "source") {
       throw new Error("source rollback requires a typed source handoff request");
     }
+    if (request.policy.preservesRejectedSource) return false;
     if (!(mutationAuthority instanceof WorkerArtifactMutationAuthoritySnapshot)) {
       throw new Error("source rollback requires a parent-owned mutation authority snapshot");
     }
@@ -5689,6 +6040,68 @@ export class WorkerArtifactHandoffCoordinator {
       } catch (cause) {
         if (cause instanceof WorkerArtifactHandoffError && cause.classification === "missing") {
           if (workerArtifactHandoffPolicy(stored.stepId)?.kind === "source") {
+            if (["task-triage", "task-repair"].includes(stored.stepId)) {
+              try {
+                const request = restoreExecutionHandoffRequest({ mainRoot, executionRoot, state, stored, canonicalLocation, flowManager: ctx.flowManager });
+                const failed = state.attempt?.failure;
+                const failedActivity = ctx.flowManager.activityLedger(request.specId).find((activity) => (
+                  activity?.transition?.operation === "fail_attempt"
+                  && activity.nodeId === `${request.taskId}-${request.stepId.slice(5)}`
+                  && activity?.result?.artifactRefs?.some((entry) => (
+                    entry?.kind === "worker-handoff-request" && entry.id === request.requestDigest
+                  ))
+                )) ?? null;
+                const failedFacts = failedActivity?.failure ?? failed?.toJSON?.() ?? failed;
+                const source = ctx.flowManager.readArtifact({
+                  specId: request.specId,
+                  logicalKey: `task.${request.stepId.slice(5)}.source.handoff.baseline`,
+                  parameters: { taskId: request.taskId, attemptId: request.sourceMutationBaseline.attempt.id },
+                  consumerNodeId: request.stepId,
+                });
+                const storedBaseline = JSON.parse(source.bytes.toString("utf8"));
+                const baseline = SourceMutationBaseline.fromStored(storedBaseline.baseline, { root: executionRoot });
+                // A missing or forged baseline publication must keep the
+                // transient handoff sealed for forensics; semantic retry is
+                // available only after the canonical producer is proven.
+                const descriptor = source.descriptor;
+                const publication = ctx.flowManager.activityLedger(request.specId)
+                  .find((activity) => activity.id === descriptor.activityId) ?? null;
+                const canonicalObservation = SourceWorkerCanonicalObservationAdvance.fromStored(
+                  storedBaseline.canonicalObservation,
+                  { flowManager: ctx.flowManager, specId: request.specId },
+                ).withAllowedPublication({
+                  activityId: descriptor.activityId,
+                  relativePath: descriptor.relativePath,
+                  digest: descriptor.hash,
+                }).withAllowedActivity(failedActivity?.id ?? "missing-failure-activity");
+                if (new Set(["semantic", "tooling"]).has(failedFacts?.category)
+                  && failedFacts.retryKind === failedFacts.category && failedActivity !== null
+                  && baseline.digest === request.sourceMutationBaseline.digest
+                  && descriptor.logicalKey === `task.${request.stepId.slice(5)}.source.handoff.baseline`
+                  && descriptor.hash === digest(source.bytes)
+                  && descriptor.size === source.bytes.length
+                  && publication?.nodeId === `${request.taskId}-${request.stepId.slice(5)}`
+                  && publication?.attemptId === baseline.attempt.id
+                  && publication?.sequence === baseline.attempt.sequence
+                  && publication?.transition?.operation === "publish_artifacts"
+                  && SourceMutationManifest.capture({ baseline }).mutations.length === 0) {
+                  canonicalObservation.assertAllowed({
+                    flowManager: ctx.flowManager,
+                    specId: request.specId,
+                    canonicalSnapshot: canonicalObservation.canonicalSnapshot,
+                  });
+                  if (cleanupTransientExecutionHandoffDirectory(handoffRoot, request.directory)) cleaned += 1;
+                  continue;
+                }
+              } catch (cause) {
+                throw new WorkerArtifactHandoffError(
+                  "recovery-required",
+                  "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+                  `unsealed Task source handoff cannot prove its retry authority: ${cause.message}`,
+                  { cause, retryable: false },
+                );
+              }
+            }
             throw new WorkerArtifactHandoffError(
               "recovery-required",
               "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
@@ -5735,12 +6148,77 @@ export class WorkerArtifactHandoffCoordinator {
         continue;
       }
       if (request.policy.kind === "source") {
-        throw new WorkerArtifactHandoffError(
-          "recovery-required",
-          "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
-          "sealed source worker handoff cannot be recovered without its parent-held immutable baseline",
-          { data: { stepId: request.stepId, handoffDirectory: request.directory } },
-        );
+        if (!["task-triage", "task-repair"].includes(request.stepId)) {
+          throw new WorkerArtifactHandoffError(
+            "recovery-required",
+            "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+            "sealed source worker handoff cannot be recovered without its parent-held immutable baseline",
+            { data: { stepId: request.stepId, handoffDirectory: request.directory } },
+          );
+        }
+        let catalogBaseline;
+        let canonicalObservation;
+        try {
+          const catalogBaselineSource = ctx.flowManager.readArtifact({
+            specId: request.specId,
+            logicalKey: `task.${request.stepId.slice(5)}.source.handoff.baseline`,
+            parameters: { taskId: request.taskId, attemptId: request.sourceMutationBaseline.attempt.id },
+            consumerNodeId: request.stepId,
+          });
+          const storedBaseline = JSON.parse(catalogBaselineSource.bytes.toString("utf8"));
+          catalogBaseline = SourceMutationBaseline.fromStored(storedBaseline.baseline, { root: request.executionRoot });
+          if (catalogBaseline.attempt.id !== request.sourceMutationBaseline.attempt.id
+            || catalogBaseline.attempt.sequence !== request.sourceMutationBaseline.attempt.sequence
+            || catalogBaseline.attempt.nodeId !== request.sourceMutationBaseline.attempt.nodeId
+            || typeof catalogBaselineSource?.descriptor?.activityId !== "string") {
+            throw new Error("canonical Task source baseline does not bind its producer Activity");
+          }
+          const descriptor = catalogBaselineSource.descriptor;
+          const publication = ctx.flowManager.activityLedger(request.specId)
+            .find((activity) => activity.id === descriptor.activityId) ?? null;
+          if (descriptor.logicalKey !== `task.${request.stepId.slice(5)}.source.handoff.baseline`
+            || descriptor.hash !== digest(catalogBaselineSource.bytes)
+            || descriptor.size !== catalogBaselineSource.bytes.length
+            || publication === null
+            || publication.nodeId !== `${request.taskId}-${request.stepId.slice(5)}`
+            || publication.attemptId !== catalogBaseline.attempt.id
+            || publication.sequence !== catalogBaseline.attempt.sequence
+            || publication.transition?.operation !== "publish_artifacts") {
+            throw new Error("canonical Task source baseline publication is not the exact producer Activity");
+          }
+          canonicalObservation = SourceWorkerCanonicalObservationAdvance.fromStored(
+            storedBaseline.canonicalObservation,
+            { flowManager: ctx.flowManager, specId: request.specId },
+          ).withAllowedPublication({
+            activityId: descriptor.activityId,
+            relativePath: descriptor.relativePath,
+            digest: descriptor.hash,
+          });
+        } catch (cause) {
+          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", `sealed Task source handoff lacks its canonical baseline: ${cause.message}`, { cause, retryable: false });
+        }
+        if (catalogBaseline.digest !== request.sourceMutationBaseline.digest) {
+          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "sealed Task source handoff baseline does not match its canonical publication", { retryable: false });
+        }
+        const authority = WorkerArtifactMutationAuthoritySnapshot.rehydrate(request, canonicalObservation);
+        let recovered;
+        try {
+          recovered = this.#reconcileCanonical({ ctx, request, state, submission, mutationAuthority: authority });
+        } catch (cause) {
+          const observation = new TaskSourceFailureObservation({
+            request,
+            error: cause,
+            mutationAuthority: authority,
+          });
+          if (!observation.record(ctx.flowManager)) throw cause;
+          if (observation.manifest !== null && observation.manifest.mutations.length === 0) {
+            if (cleanupTransientExecutionHandoffDirectory(handoffRoot, request.directory)) cleaned += 1;
+            continue;
+          }
+          throw cause;
+        }
+        if (recovered?.completed) cleaned += 1;
+        continue;
       }
       // A parent restart has lost the in-memory validation authority. Never
       // replay an artifact payload; discard it so a fresh dispatcher attempt
@@ -6052,10 +6530,14 @@ export class WorkerArtifactHandoffCoordinator {
     });
     try {
       ctx.flowManager.confirmSourceWorkerHandoff({
+        sourceMutationBaseline: request.sourceMutationBaseline,
         specId: request.specId,
         effect,
         mutationManifest: manifest,
         handoffDigest: submission.handoffDigest,
+        taskStageBinding: request.inputs.some((input) => input.name === "task-review-binding.json")
+          ? new TaskReviewEpisodeBinding(request.inputs.find((input) => input.name === "task-review-binding.json").document)
+          : null,
         result: canonicalHandoffResult(request, submission, this.now, {
           status: effect.completionStatus,
           noChangeReason: effect.noChangeReason?.text ?? null,

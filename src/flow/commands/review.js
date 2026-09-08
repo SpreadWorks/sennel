@@ -77,11 +77,6 @@ import {
 } from "../lib/flow-judgment-contract.js";
 import { CanonicalCommandAttemptArtifactHistory } from "../lib/canonical-command-result.js";
 import {
-  ReviewRecurrenceHistory,
-  TaskReviewConvergenceEvidence,
-  TaskReviewRecurrenceContract,
-} from "../lib/review-recurrence.js";
-import {
   FindingDispositionPolicy,
   MustFixDisposition,
   REVIEW_FINDING_CANONICAL_FIELD_MAX_CHARS,
@@ -1023,11 +1018,11 @@ function normalizeImplReviewRequirementIds(requirementIds) {
   return new Set([...requirementIds].map((id) => String(id).trim()).filter(Boolean));
 }
 
-function buildImplReviewResponseSchema(requirementIds) {
+function buildImplReviewResponseSchema(requirementIds, { taskReview = false } = {}) {
   const allowedRequirementIds = [...normalizeImplReviewRequirementIds(requirementIds)].sort();
   const findingSchema = {
     type: "object",
-    required: ["findingKey", "title", "failureMode", "file", "requirementId", "issue", "suggestion", "disposition", "rationale", "priorRepairInsufficiency", "repairStrategy"],
+    required: ["findingKey", "title", "failureMode", "file", "requirementId", "issue", "suggestion", "disposition", "rationale", ...(!taskReview ? ["priorRepairInsufficiency", "repairStrategy"] : [])],
     additionalProperties: false,
     properties: {
       findingKey: { type: "string", minLength: 1, maxLength: 100 },
@@ -1042,24 +1037,22 @@ function buildImplReviewResponseSchema(requirementIds) {
       suggestion: { type: "string", minLength: 1 },
       disposition: { type: "string", enum: [...IMPL_REVIEW_DISPOSITIONS] },
       rationale: { type: "string", minLength: 1 },
-      priorRepairInsufficiency: { type: ["string", "null"] },
-      repairStrategy: { type: ["string", "null"] },
+      ...(!taskReview ? {
+        priorRepairInsufficiency: { type: ["string", "null"] },
+        repairStrategy: { type: ["string", "null"] },
+      } : {}),
     },
-    oneOf: [{
-      type: "object",
-      required: ["priorRepairInsufficiency", "repairStrategy"],
-      properties: {
-        priorRepairInsufficiency: { type: "null" },
-        repairStrategy: { type: "null" },
-      },
-    }, {
-      type: "object",
-      required: ["priorRepairInsufficiency", "repairStrategy"],
-      properties: {
-        priorRepairInsufficiency: { type: "string", minLength: 1 },
-        repairStrategy: { type: "string", minLength: 1 },
-      },
-    }],
+    ...(!taskReview ? {
+      oneOf: [{
+        type: "object",
+        required: ["priorRepairInsufficiency", "repairStrategy"],
+        properties: { priorRepairInsufficiency: { type: "null" }, repairStrategy: { type: "null" } },
+      }, {
+        type: "object",
+        required: ["priorRepairInsufficiency", "repairStrategy"],
+        properties: { priorRepairInsufficiency: { type: "string", minLength: 1 }, repairStrategy: { type: "string", minLength: 1 } },
+      }],
+    } : {}),
   };
   return {
     type: "object",
@@ -1107,9 +1100,7 @@ class ImplReviewFinding {
     this.suggestion = String(item.suggestion || "").trim();
     this.disposition = String(item.disposition || "").trim();
     this.rationale = String(item.rationale || "").trim();
-    this.priorRepairInsufficiency = item.priorRepairInsufficiency == null
-      ? null
-      : String(item.priorRepairInsufficiency).trim();
+    this.priorRepairInsufficiency = item.priorRepairInsufficiency == null ? null : String(item.priorRepairInsufficiency).trim();
     this.repairStrategy = item.repairStrategy == null ? null : String(item.repairStrategy).trim();
     this.repeatCount = Number.isSafeInteger(item.repeatCount) && item.repeatCount > 0
       ? item.repeatCount
@@ -1264,7 +1255,7 @@ class ImplReviewArtifact {
   }
 }
 
-function parseImplReviewJsonOutput(raw, requirementIds) {
+function parseImplReviewJsonOutput(raw, requirementIds, { taskReview = false } = {}) {
   const candidate = extractJsonObjectCandidate(raw);
   let parsed;
   try {
@@ -1282,24 +1273,20 @@ function parseImplReviewJsonOutput(raw, requirementIds) {
       if (finding && typeof finding === "object" && !Object.hasOwn(finding, "file")) {
         finding.file = null;
       }
-      if (finding && typeof finding === "object" && !Object.hasOwn(finding, "priorRepairInsufficiency")) {
-        finding.priorRepairInsufficiency = null;
-      }
-      if (finding && typeof finding === "object" && !Object.hasOwn(finding, "repairStrategy")) {
-        finding.repairStrategy = null;
-      }
+      if (!taskReview && finding && typeof finding === "object" && !Object.hasOwn(finding, "priorRepairInsufficiency")) finding.priorRepairInsufficiency = null;
+      if (!taskReview && finding && typeof finding === "object" && !Object.hasOwn(finding, "repairStrategy")) finding.repairStrategy = null;
     }
   }
-  const errors = validateSchema(parsed, buildImplReviewResponseSchema(requirementIds));
+  const errors = validateSchema(parsed, buildImplReviewResponseSchema(requirementIds, { taskReview }));
   if (errors.length > 0) {
     throw new Error(`impl review output failed schema validation: ${errors.join("; ")}`);
   }
   return parsed;
 }
 
-function parseImplReviewFindings(text, { requirementIds } = {}) {
+function parseImplReviewFindings(text, { requirementIds, taskReview = false } = {}) {
   const allowedRequirementIds = normalizeImplReviewRequirementIds(requirementIds);
-  const parsed = parseImplReviewJsonOutput(text, allowedRequirementIds);
+  const parsed = parseImplReviewJsonOutput(text, allowedRequirementIds, { taskReview });
   try {
     return {
       blockingFindings: parsed.blockingFindings.map((item) => new ImplReviewFinding("blocking", item, allowedRequirementIds)),
@@ -1443,16 +1430,9 @@ function loadPreviousImplReviewMemory({ flowManager, flow, taskId = null } = {})
   }).toPromptMemory();
 }
 
-/** Exact Task Review recurrence candidates derived from canonical history. */
-function taskReviewRecurrenceHistory({ flowManager, flow, taskId, cycle }) {
-  return new TaskReviewConvergenceEvidence({ flowManager, state: flow, cycle })
-    .recurrenceHistory(taskId)
-    .toJSON();
-}
-
-function buildImplReviewPrompt({ requirementFileMap = {}, requirementIds, diff = "", touchedFiles = [], previousReview = null, taskSpec = null, taskContext = null, taskReviewAttempt = null, taskNoChangeReasons = [], taskReviewRecurrenceHistory = [] } = {}) {
+function buildImplReviewPrompt({ requirementFileMap = {}, requirementIds, diff = "", touchedFiles = [], previousReview = null, taskSpec = null, taskContext = null, taskReviewAttempt = null, taskNoChangeReasons = [] } = {}) {
   const allowedRequirementIds = normalizeImplReviewRequirementIds(requirementIds);
-  const responseSchema = buildImplReviewResponseSchema(allowedRequirementIds);
+  const responseSchema = buildImplReviewResponseSchema(allowedRequirementIds, { taskReview: taskSpec !== null });
   const touched = Array.from(touchedFiles instanceof Set ? touchedFiles : new Set(touchedFiles)).sort();
   const modeList = IMPL_REVIEW_BLOCKING_FAILURE_MODES.map((mode) => `- ${mode}`).join("\n");
   const pb = new PromptBuilder()
@@ -1475,12 +1455,16 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementIds, diff =
       "requirementId is always required and must use one of the allowed target requirement IDs.",
       "A missing_acceptance_requirement blocker may omit file only when its requirementId identifies the missing target requirement.",
       "Put must-fix findings in blockingFindings[]. Put informational findings in nonBlockingImprovements[].",
-      "Outside Task Review, set priorRepairInsufficiency and repairStrategy to null; they are reserved for exact Task recurrence evidence.",
+      ...(taskSpec === null ? ["Outside Task Review, set priorRepairInsufficiency and repairStrategy to null; they are reserved for exact Task recurrence evidence."] : []),
       "",
       "Return an object with:",
-      "- blockingFindings[] with findingKey, title, failureMode, file, requirementId, issue, suggestion, disposition, rationale, priorRepairInsufficiency, repairStrategy",
-      "- nonBlockingImprovements[] with findingKey, title, failureMode, file, requirementId, issue, suggestion, disposition, rationale, priorRepairInsufficiency, repairStrategy",
-      "- Set priorRepairInsufficiency and repairStrategy to non-empty strings for an exact Task Review recurrence; set both to null for a first occurrence.",
+      taskSpec === null
+        ? "- blockingFindings[] with findingKey, title, failureMode, file, requirementId, issue, suggestion, disposition, rationale, priorRepairInsufficiency, repairStrategy"
+        : "- blockingFindings[] with findingKey, title, failureMode, file, requirementId, issue, suggestion, disposition, rationale",
+      taskSpec === null
+        ? "- nonBlockingImprovements[] with findingKey, title, failureMode, file, requirementId, issue, suggestion, disposition, rationale, priorRepairInsufficiency, repairStrategy"
+        : "- nonBlockingImprovements[] with findingKey, title, failureMode, file, requirementId, issue, suggestion, disposition, rationale",
+      ...(taskSpec === null ? ["- Set priorRepairInsufficiency and repairStrategy to null outside Task Review."] : []),
       "- file may be null only when the missing_acceptance_requirement rule applies.",
       "- requirementId must never be null; every finding must use an allowed target requirement ID.",
       "- Use empty arrays when there are no findings in a category.",
@@ -1503,7 +1487,7 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementIds, diff =
       taskSpec.content || "",
     ].join("\n"));
     const noChange = Array.isArray(taskNoChangeReasons) && taskNoChangeReasons.length > 0 && touched.length === 0;
-    pb.addUserPrompt("## Task Review Repair Contract", noChange
+    pb.addUserPrompt("## Task Review Detection Contract", noChange
       ? [
         "This Task implementation declared no source mutation. Verify that declaration against the canonical Task context, mapped Requirements, stated reasons, and the empty current Task source.",
         "If the declaration is valid, return no findings. Do not invent a source edit.",
@@ -1512,22 +1496,13 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementIds, diff =
         "Do not run tests.",
       ].join("\n")
       : [
-        "Review the supplied current Task source, then repair every must-fix finding you report before returning JSON.",
-        "Edit only files in Touched Files. Do not add unrelated paths and do not edit for informational findings.",
-        "Do not run tests. Re-read each edited file before returning.",
-        "Keep repaired findings in blockingFindings so the parent can bind every mutation to the finding that owned it.",
-        "When the exact stable identity (findingKey and target fields) appears in Task Review Recurrence History, include non-empty priorRepairInsufficiency and repairStrategy fields. They are durable evidence of why the prior repair was insufficient and this repair's distinct strategy. Do not infer a recurrence from a matching findingKey or similar prose alone.",
-        taskReviewAttempt === 4
-          ? "This is the fourth Review: finish all must-fix repairs now; the parent proceeds directly to Task Gate after validating their mutation manifest."
-          : "The parent will run another Task Review after validating this repair manifest.",
+        "Review the supplied current Task source and report findings without modifying any source, test, spec, or artifact.",
+        "Do not run tests. Task triage owns finding disposition and task repair owns all source changes and repair evidence.",
       ].join("\n"));
     if (noChange) {
       pb.addUserPrompt("## Declared No-Change Reasons", taskNoChangeReasons.join("\n"));
     }
     pb.addUserPrompt("## Canonical Task Context", JSON.stringify(taskContext, null, 2));
-    if (taskReviewRecurrenceHistory.length > 0) {
-      pb.addUserPrompt("## Task Review Recurrence History", JSON.stringify(taskReviewRecurrenceHistory, null, 2));
-    }
   }
   if (previousReview) {
     pb.addUserPrompt("## Previous Impl Review Memory", JSON.stringify(previousReview, null, 2));
@@ -2380,21 +2355,13 @@ async function runTaskReviewProtocol({
   executionIdentity,
   flowManager,
   requirementIds,
-  recurrenceHistory,
   agent,
   prompt,
   systemPrompt,
 }) {
-  const recurrenceContract = new TaskReviewRecurrenceContract({
-    history: new ReviewRecurrenceHistory({ scope: "task", entries: recurrenceHistory }),
-  });
   const contract = new ReviewProtocolContract({
     phase: "task-review",
-    parse: (rawResponse) => {
-      const parsed = parseImplReviewFindings(rawResponse, { requirementIds });
-      recurrenceContract.validate([...parsed.blockingFindings, ...parsed.nonBlockingImprovements]);
-      return parsed;
-    },
+    parse: (rawResponse) => parseImplReviewFindings(rawResponse, { requirementIds, taskReview: true }),
   });
   const transportRetryPolicy = taskReviewTransportRetryPolicy(agent);
   const controller = new ReviewProtocolController({
@@ -4778,9 +4745,6 @@ async function runReview(rawArgs) {
     taskId: taskSpec?.task?.id ?? null,
   });
   const taskReviewAttempt = taskSpec ? taskReviewExecution.reviewAttempt : null;
-  const taskReviewRecurrences = taskSpec
-    ? taskReviewRecurrenceHistory({ flowManager, flow, taskId: taskSpec.task.id, cycle })
-    : [];
   const requirementIds = taskSpec
     ? new Set(taskSpec.context.requirements.map((requirement) => requirement.id))
     : resolveRequirementIds(spec);
@@ -4811,7 +4775,6 @@ async function runReview(rawArgs) {
         taskContext: taskSpec?.context ?? null,
         taskReviewAttempt,
         taskNoChangeReasons: taskSpec?.source?.noChangeReasons ?? [],
-        taskReviewRecurrenceHistory: taskReviewRecurrences,
       });
       const reviewAgent = ensureAgent("flow.impl.review.propose");
       const systemPrompt = buildDraftSystemPrompt(
@@ -4824,7 +4787,6 @@ async function runReview(rawArgs) {
           executionIdentity: taskReviewExecution,
           flowManager,
           requirementIds,
-          recurrenceHistory: taskReviewRecurrences,
           agent: reviewAgent,
           prompt: reviewPrompt,
           systemPrompt,
@@ -4928,7 +4890,7 @@ export {
   extractGoalAndScope, buildSpecSummaryMarkdown, buildSpecReviewPrompt,
   formatSpecReviewMd, formatSpecReviewDelta, parseSpecReviewFindings,
   buildImplReviewPrompt, parseImplReviewFindings, filterImplReviewFindingsByScope,
-  formatImplReviewMd, formatImplReviewJson, loadPreviousImplReviewMemory, priorImplReviewFingerprintCounts, taskReviewRecurrenceHistory,
+  formatImplReviewMd, formatImplReviewJson, loadPreviousImplReviewMemory, priorImplReviewFingerprintCounts,
   runImplReview,
   isValidSpecOutput, stripPreamble, buildGapAnalysisPrompt, buildTestFixPrompt,
   buildDraftReviewPrompt,

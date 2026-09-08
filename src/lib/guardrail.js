@@ -17,7 +17,7 @@ import {
 const GUARDRAIL_FILENAME = "guardrail.json";
 
 const DEFAULT_PHASE = Object.freeze(["spec"]);
-const ACKNOWLEDGED_EXCEPTION_MARKER = "acknowledged-exception";
+export const ACKNOWLEDGED_EXCEPTION_MARKER = "acknowledged-exception";
 const ACKNOWLEDGED_EXCEPTION_TARGET_IDS = Object.freeze([
   "backward-compatible-cli-interface",
   "exit-code-contract",
@@ -201,7 +201,7 @@ function loadPresetGuardrails(presetKey, projectRoot) {
 function preserveAcknowledgedExceptionClauses(guardrails) {
   return guardrails.map((guardrail) => {
     if (!ACKNOWLEDGED_EXCEPTION_TARGET_IDS.includes(guardrail.id)) return guardrail;
-    if (String(guardrail.body || "").toLowerCase().includes(ACKNOWLEDGED_EXCEPTION_MARKER)) {
+    if (guardrailAllowsAcknowledgedException(guardrail)) {
       return guardrail;
     }
     return {
@@ -209,6 +209,11 @@ function preserveAcknowledgedExceptionClauses(guardrails) {
       body: `${String(guardrail.body || "").trim()}\n\n${ACKNOWLEDGED_EXCEPTION_CLAUSE}`,
     };
   });
+}
+
+/** Whether canonical guardrail policy permits a spec-acknowledged exception. */
+export function guardrailAllowsAcknowledgedException(guardrail) {
+  return String(guardrail?.body || "").toLowerCase().includes(ACKNOWLEDGED_EXCEPTION_MARKER);
 }
 
 /**

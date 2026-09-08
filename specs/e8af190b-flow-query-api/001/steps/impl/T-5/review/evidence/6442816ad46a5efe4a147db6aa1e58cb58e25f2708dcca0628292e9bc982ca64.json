@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-5",
+  "treeSha": "4398bb2c2868110cd46eebff88412102e0850920",
+  "targetStateDigest": "0a191fd5a24a399ccdf091ec1d35d4b9e05eb3b7799f128d9fd806a21bd0acdb",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "a49a9a7fbe4cf5d7f8b8430e8ee41d2ff57124480651603972575117623736d2",
+    "capturedAt": "2026-09-04T02:54:02.703Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "43a6be87bb8e7d55b2ccd1417b697ed0a0dda6695618d2284b35d17266fca6c8",
+      "summary": "ReferenceResolver rejects valid digest-bound canonical references",
+      "fingerprint": "43a6be87bb8e7d55b2ccd1417b697ed0a0dda6695618d2284b35d17266fca6c8",
+      "evidenceRefs": [
+        "impl-review.json#43a6be87bb8e7d55b2ccd1417b697ed0a0dda6695618d2284b35d17266fca6c8"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

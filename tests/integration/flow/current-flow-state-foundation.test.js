@@ -362,7 +362,9 @@ describe("Current Flow state foundation", () => {
       ["implement", "task-1", "task-2", "test-execute", "test-result-review", "impl-review", "impl-triage", "impl-repair", "impl-gate", "retro", "acceptance-review", "acceptance-decision", "final-regression", "report", "finalize"],
     );
     assert.ok(withBoth.findNode("task-1") instanceof TaskNode);
-    assert.deepEqual(withBoth.findNode("task-1").steps.map((step) => step.id), ["task-1-impl", "task-1-review", "task-1-gate"]);
+    assert.deepEqual(withBoth.findNode("task-1").steps.map((step) => step.id), [
+      "task-1-impl", "task-1-review", "task-1-triage", "task-1-repair", "task-1-gate",
+    ]);
     const action = withBoth.definition.actionFor("task-1-review", withBoth.root);
     assert.ok(action.failurePolicy instanceof DefinitionFailurePolicy);
     assert.equal(action.failurePolicy.value, "retry");
@@ -426,9 +428,24 @@ describe("Current Flow state foundation", () => {
     );
 
     const production = definition();
-    const forged = CurrentFlowState.create({ definition: production })
+    const canonical = CurrentFlowState.create({ definition: production })
       .addTask({ id: "task-forged", key: "forged" })
       .toJSON();
+    const canonicalTask = canonical.steps.find((node) => node.id === "impl")
+      .steps.find((node) => node.id === "task-forged");
+    assert.deepEqual(canonicalTask.steps.map((step) => step.id), [
+      "task-forged-impl", "task-forged-review", "task-forged-triage",
+      "task-forged-repair", "task-forged-gate",
+    ]);
+    const legacy = structuredClone(canonical);
+    legacy.steps.find((node) => node.id === "impl")
+      .steps.find((node) => node.id === "task-forged").steps.splice(2, 2);
+    assert.throws(
+      () => new CurrentFlowState(legacy, { definition: production }),
+      /Task.steps does not match task template/,
+    );
+
+    const forged = structuredClone(canonical);
     const taskImpl = forged.steps.find((node) => node.id === "impl")
       .steps.find((node) => node.id === "task-forged")
       .steps.find((node) => node.id === "task-forged-impl");
@@ -555,10 +572,14 @@ describe("Current Flow state foundation", () => {
     state = completeNext(state, "task-1-impl");
     assert.equal(state.nextAction().nodeId, "task-1-review");
     state = completeNext(state, "task-1-review");
+    state = completeNext(state, "task-1-triage");
+    state = completeNext(state, "task-1-repair");
     state = completeNext(state, "task-1-gate");
     assert.equal(state.nextAction().nodeId, "task-2-impl");
     state = completeNext(state, "task-2-impl");
     state = completeNext(state, "task-2-review");
+    state = completeNext(state, "task-2-triage");
+    state = completeNext(state, "task-2-repair");
     state = completeNext(state, "task-2-gate");
     assert.equal(state.nextAction().nodeId, "test-execute");
   });
@@ -782,7 +803,7 @@ describe("Current Flow state foundation", () => {
     assert.equal(recordedExhaustion.findNode("task-1-review").status, "failed");
     assert.equal(recordedExhaustion.findNode("task-1-review").result.outcome, "failed");
     assert.equal(recordedExhaustion.current, null);
-    assert.equal(recordedExhaustion.nextAction().nodeId, "task-1-gate");
+    assert.equal(recordedExhaustion.nextAction().nodeId, "task-1-triage");
 
     const toolingAttempt = attemptFor(activeReview, pathToReview, "review-tooling-2", 2, { tooling: 1 });
     const toolingFailed = activeReview.failCurrentAttempt({ result: failedResult("Provider failed."), failure: {
@@ -1130,6 +1151,8 @@ describe("Current Flow state foundation", () => {
     state = advanceUntil(state, "task-a-impl", "scope-prelude");
     state = completeNext(state, "task-a-impl", { artifactRefs: taskArtifacts("task-a") });
     state = completeNext(state, "task-a-review", { artifactRefs: taskArtifacts("task-a") });
+    state = completeNext(state, "task-a-triage", { artifactRefs: taskArtifacts("task-a") });
+    state = completeNext(state, "task-a-repair", { artifactRefs: taskArtifacts("task-a") });
     state = completeNext(state, "task-a-gate", { artifactRefs: taskArtifacts("task-a") });
     state = completeNext(state, "task-b-impl", { artifactRefs: taskArtifacts("task-b") });
     assert.equal(state.nextAction().nodeId, "task-b-review");

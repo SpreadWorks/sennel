@@ -342,21 +342,23 @@ describe("Task Review protocol", () => {
     assert.equal(calls, 1);
   });
 
-  it("accepts one complete response after a legitimate source mutation", async () => {
+  it("rejects a complete response after an observed source mutation", async () => {
     const observer = new SourceObserver();
     let calls = 0;
-    const result = await new ReviewProtocolController({ contract: contract() }).execute({
-      observer,
-      callAgent: async () => {
-        calls += 1;
-        observer.effect();
-        return JSON.stringify({ priorRepairInsufficiency: null, repairStrategy: null });
-      },
-    });
+    await assert.rejects(
+      new ReviewProtocolController({ contract: contract() }).execute({
+        observer,
+        callAgent: async () => {
+          calls += 1;
+          observer.effect();
+          return JSON.stringify({ priorRepairInsufficiency: null, repairStrategy: null });
+        },
+      }),
+      (error) => error instanceof ReviewProtocolFailure
+        && error.kind === "effect_observed"
+        && error.effectEvidence.observer === "test-source",
+    );
     assert.equal(calls, 1);
-    assert.equal(result.attempt.number, 1);
-    assert.equal(result.before.generation, 0);
-    assert.equal(result.after.generation, 1);
   });
 
   it("captures source effects after a provider failure and does not retry it", async () => {

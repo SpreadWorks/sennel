@@ -310,6 +310,8 @@ function setupFixture(tmp, {
   });
   fixture.activate(`${gateTask.id}-review`, { settlePredecessors: false });
   fixture.settle(`${gateTask.id}-review`);
+  fixture.settle(`${gateTask.id}-triage`, "skipped");
+  fixture.settle(`${gateTask.id}-repair`, "skipped");
   fixture.activate(`${gateTask.id}-gate`, { settlePredecessors: false });
 
   if (!integrationTrustRequirementIds) {

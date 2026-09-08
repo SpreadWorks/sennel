@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-6",
+  "treeSha": "650018af65f88a8cfacd76b03b6b2cb9343ae408",
+  "targetStateDigest": "fd650015a609143d635bb5c29a0eed46892eec6482dd7191fed65548e26d0a6a",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "f5d5332f5d8c907ce58ba1f652ecfc5ad576c785660d8ea3d7810e9b9dd9c4d8",
+    "capturedAt": "2026-09-05T01:50:45.589Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "550bb59b5ebbd0907c8c25b2d973948fb255c75cdee47fbde36738cf1b662303",
+      "summary": "Cursor continuation rejects an appended active-ledger suffix",
+      "fingerprint": "550bb59b5ebbd0907c8c25b2d973948fb255c75cdee47fbde36738cf1b662303",
+      "evidenceRefs": [
+        "impl-review.json#550bb59b5ebbd0907c8c25b2d973948fb255c75cdee47fbde36738cf1b662303"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

@@ -45,7 +45,7 @@ function activeTask(tmp, { taskId = "001", taskDocuments = [taskDocument({ id: t
 }
 
 function settleTask(fixture, taskId) {
-  for (const suffix of ["impl", "review", "gate"]) fixture.flow.flow.settle(`${taskId}-${suffix}`);
+  for (const suffix of ["impl", "review", "triage", "repair", "gate"]) fixture.flow.flow.settle(`${taskId}-${suffix}`);
 }
 
 describe("FlowManager canonical Task API", () => {

@@ -176,7 +176,7 @@ describe("provider JSON schema adaptation", () => {
   });
 
   it("keeps every source worker response schema artifact aligned with the registry", () => {
-    const steps = ["implement", "impl-triage", "impl-repair", "task-impl"];
+    const steps = ["implement", "impl-triage", "impl-repair", "task-impl", "task-triage", "task-repair"];
     const rootKeys = ["completionStatus", "files", "issues", "noChangeReason", "overview", "repair", "stepId", "triage", "version"];
     for (const stepId of steps) {
       const ref = sourceWorkerEffectSchemaRef(stepId);
@@ -190,9 +190,9 @@ describe("provider JSON schema adaptation", () => {
 
   it("uses one source step set for authority, definition, and response schemas", () => {
     const sourceSteps = [...WORKER_SOURCE_HANDOFF_STEPS].sort();
-    assert.deepEqual(sourceSteps, ["impl-repair", "impl-triage", "implement", "task-impl"]);
+    assert.deepEqual(sourceSteps, ["impl-repair", "impl-triage", "implement", "task-impl", "task-repair", "task-triage"]);
     for (const stepId of sourceSteps) {
-      const scope = stepId === "task-impl" ? "task" : "flow";
+      const scope = stepId.startsWith("task-") ? "task" : "flow";
       assert.equal(
         deriveNextAction({ scope, stepId }).outputSchemaRef,
         sourceWorkerEffectSchemaRef(stepId),

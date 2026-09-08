@@ -226,26 +226,22 @@ function canonicalResultProducerStep(provenance, result) {
  * Persist non-terminal review results before their sealed work unit is
  * cleaned up.  A flow-scoped rejected test review remains active so the
  * definition-owned repair transition can consume its cataloged evidence.
- * Task-scoped implementation reviews instead retain their existing retryable
- * failure semantics.
+ * Task-scoped implementation reviews use the dedicated review-funnel
+ * publication connector before this helper is reached.
  */
 async function persistNonTerminalReviewResult(ctx, result) {
   const artifacts = result?.artifacts;
   const rejectedTestReview = artifacts?.phase === "test"
     && artifacts?.taskId == null
     && artifacts?.verdict === "REJECTED";
-  const rejectedTaskReview = artifacts?.phase === "impl"
-    && artifacts?.taskId != null
-    && !["PASS", "ADVISORY"].includes(artifacts?.verdict);
-  const completedTaskRepair = rejectedTaskReview && artifacts?.reviewRepairComplete === true;
   const toolingReview = artifacts?.toolingOutcome != null;
-  if (!rejectedTestReview && !rejectedTaskReview && !toolingReview) return;
+  if (!rejectedTestReview && !toolingReview) return;
 
   const { attachedCanonicalCommandResultArtifact } = await import("./lib/canonical-command-result.js");
   if (attachedCanonicalCommandResultArtifact(result) === null) return;
 
   const specId = ctx.specId ?? ctx.flowState.specId;
-  if (rejectedTestReview || completedTaskRepair || toolingReview || ctx.flowState?.policy?.nonblocking?.enabled === true) {
+  if (rejectedTestReview || toolingReview || ctx.flowState?.policy?.nonblocking?.enabled === true) {
     ctx.flowManager.publishCurrentAttemptResult({ specId, commandResult: result });
   } else {
     ctx.flowManager.failCurrentAttempt({
@@ -274,10 +270,8 @@ function assertCurrentTaskReviewSource(ctx, result) {
   const artifacts = result?.artifacts;
   if (artifacts?.phase !== "impl" || artifacts?.taskId == null) return;
   const expected = artifacts.sourceFingerprint;
-  const lineagePublication = attachedCanonicalCommandResultPublications(result)
-    .find((publication) => publication.logicalKey === "task.mutation.lineage") ?? null;
-  if (typeof expected !== "string" || lineagePublication === null) {
-    throw new Error("Task Review publication requires its source fingerprint and mutation lineage");
+  if (typeof expected !== "string") {
+    throw new Error("Task Review publication requires its source fingerprint");
   }
   const specId = ctx.specId ?? ctx.flowState.specId;
   const state = ctx.flowManager.loadReadOnly(specId);
@@ -288,10 +282,7 @@ function assertCurrentTaskReviewSource(ctx, result) {
     runId: state.runId,
     specId,
     taskId: artifacts.taskId,
-    lineages: [
-      ...ctx.flowManager.taskMutationLineages({ specId, taskId: artifacts.taskId }),
-      lineagePublication.payload,
-    ],
+    lineages: ctx.flowManager.taskMutationLineages({ specId, taskId: artifacts.taskId }),
   });
   const current = CurrentTaskSourceSnapshot.capture({
     root: ctx.executionRoot || ctx.root,
@@ -1756,6 +1747,16 @@ export const FLOW_COMMANDS = {
           && result?.artifacts?.evidenceRefresh?.recovered === true
         ) return;
         assertCurrentTaskReviewSource(ctx, result);
+        if (result?.artifacts?.phase === "impl"
+          && result?.artifacts?.taskId != null
+          && result?.artifacts?.toolingOutcome == null) {
+          const specId = ctx.specId ?? ctx.flowState.specId;
+          ctx.flowManager.confirmTaskReviewResult({ specId, commandResult: result });
+          ctx.flowState = ctx.flowManager.loadReadOnly(specId);
+          const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
+          attachedCanonicalReviewWorkUnit(result)?.cleanup();
+          return;
+        }
         await persistNonTerminalReviewResult(ctx, result);
         try {
           await applyLifecycleActionsFromRegistry(ctx, {
