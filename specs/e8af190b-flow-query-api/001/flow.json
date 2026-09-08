@@ -1007,8 +1007,13 @@
           "kind": "task",
           "id": "T-8",
           "key": "T-8",
-          "status": "in_progress",
-          "result": null,
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for T-8-gate",
+            "confirmedAt": "2026-09-08T13:41:15.390Z",
+            "artifactRefs": []
+          },
           "attemptSequence": 0,
           "steps": [
             {
@@ -1038,36 +1043,56 @@
               "kind": "step",
               "id": "T-8-review",
               "key": "task.task-review",
-              "status": "in_progress",
-              "result": null,
-              "attemptSequence": 4,
+              "status": "done",
+              "result": {
+                "outcome": "passed",
+                "summary": "canonical runtime transition for T-8-review",
+                "confirmedAt": "2026-09-08T13:40:11.909Z",
+                "artifactRefs": []
+              },
+              "attemptSequence": 7,
               "steps": []
             },
             {
               "kind": "step",
               "id": "T-8-triage",
               "key": "task.task-triage",
-              "status": "invalidated",
-              "result": null,
-              "attemptSequence": 0,
+              "status": "skipped",
+              "result": {
+                "outcome": "skipped",
+                "summary": "Task Review has no must-fix findings.",
+                "confirmedAt": "2026-09-08T13:40:11.909Z",
+                "artifactRefs": []
+              },
+              "attemptSequence": 4,
               "steps": []
             },
             {
               "kind": "step",
               "id": "T-8-repair",
               "key": "task.task-repair",
-              "status": "invalidated",
-              "result": null,
-              "attemptSequence": 0,
+              "status": "skipped",
+              "result": {
+                "outcome": "skipped",
+                "summary": "Task Review has no must-fix findings.",
+                "confirmedAt": "2026-09-08T13:40:11.909Z",
+                "artifactRefs": []
+              },
+              "attemptSequence": 4,
               "steps": []
             },
             {
               "kind": "step",
               "id": "T-8-gate",
               "key": "impl.impl-gate",
-              "status": "invalidated",
-              "result": null,
-              "attemptSequence": 0,
+              "status": "done",
+              "result": {
+                "outcome": "passed",
+                "summary": "canonical runtime transition for T-8-gate",
+                "confirmedAt": "2026-09-08T13:41:15.390Z",
+                "artifactRefs": []
+              },
+              "attemptSequence": 1,
               "steps": []
             }
           ]
@@ -1076,7 +1101,7 @@
           "kind": "task",
           "id": "T-9",
           "key": "T-9",
-          "status": "invalidated",
+          "status": "in_progress",
           "result": null,
           "attemptSequence": 0,
           "steps": [
@@ -1084,9 +1109,9 @@
               "kind": "step",
               "id": "T-9-impl",
               "key": "task.task-impl",
-              "status": "invalidated",
+              "status": "in_progress",
               "result": null,
-              "attemptSequence": 0,
+              "attemptSequence": 1,
               "steps": []
             },
             {
@@ -1330,15 +1355,15 @@
       ]
     }
   ],
-  "current": "T-8-review",
+  "current": "T-9-impl",
   "attempt": {
-    "id": "e2746098-5f9a-4f45-98c6-790a7a752ff9",
-    "nodeId": "T-8-review",
-    "sequence": 4,
-    "startedAt": "2026-09-08T11:15:33.827Z",
+    "id": "attempt-T-9-impl-4ea7ddae-46a4-4209-9230-4e3179257975",
+    "nodeId": "T-9-impl",
+    "sequence": 1,
+    "startedAt": "2026-09-08T13:41:26.309Z",
     "consumption": {
       "semantic": 0,
-      "tooling": 1
+      "tooling": 0
     },
     "failure": null,
     "blocker": null,
@@ -1349,12 +1374,12 @@
         "resources": [
           "task_spec",
           "requirements",
-          "source"
+          "overview"
         ]
       }
     ]
   },
-  "confirmationOrder": 842,
+  "confirmationOrder": 876,
   "artifacts": [],
   "outbox": [],
   "context": null,

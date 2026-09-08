@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-8",
+  "treeSha": "ca5ba76515692cb1d07276f1fec062cfc808b027",
+  "targetStateDigest": "6d08fb751250dc617fb9c43aae67114690c4e094067e89f13cade5a349be8463",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "c64356cc11eb02f573984809955cfb9cfe73cd52a55eab8eb35642663c3e2a37",
+    "capturedAt": "2026-09-08T13:30:57.686Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "a58cc81fc7a82870e4b2858a666c71b382abf21bf7161ac6c571fc46877306d9",
+      "summary": "Artifact relation projection is not contract-tested",
+      "fingerprint": "a58cc81fc7a82870e4b2858a666c71b382abf21bf7161ac6c571fc46877306d9",
+      "evidenceRefs": [
+        "impl-review.json#a58cc81fc7a82870e4b2858a666c71b382abf21bf7161ac6c571fc46877306d9"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

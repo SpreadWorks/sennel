@@ -11032,6 +11032,59 @@
       "taskId": "T-8",
       "timestamp": "2026-09-07T20:25:44.791Z",
       "issueLogId": "source-handoff:ae93f2291357d6f2262bca7553cc7d56419b24e0272676be181beb6489bb25a9:1"
+    },
+    {
+      "step": "T-8-gate",
+      "level": "task",
+      "phase": "task-impl",
+      "reason": "No Hardcoded Secrets — no observations emitted; No Silent Error Swallowing — no observations emitted; No Sensitive Data in Logs — no observations emitted; No Disabling Existing Tests — no observations emitted; Escalate Pre-Existing Test Failures — no observations emitted; Project Test Integrity — no observations emitted; Code Placement — no observations emitted; Avoid Overengineering — no observations emitted; Exit Code Contract — no observations emitted; No Synchronous I/O in Hot Paths — no observations emitted; Validate User Input at Entry Point — no observations emitted",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-08T13:41:08.796Z",
+      "passedGuardrails": [
+        "no-hardcoded-secrets",
+        "no-silent-error-swallowing",
+        "no-sensitive-data-in-logs",
+        "no-disabling-existing-tests",
+        "pre-existing-test-failure-escalation",
+        "project-test-integrity",
+        "code-placement",
+        "no-overengineering",
+        "exit-code-contract",
+        "no-synchronous-io-in-hot-paths",
+        "validate-user-input-at-entry-point"
+      ],
+      "taskId": "T-8",
+      "gateReceipt": {
+        "attempt": {
+          "id": "attempt-T-8-gate-4b4b9366-b159-4487-b54f-78fea6be9ff9",
+          "sequence": 1
+        },
+        "catalogFingerprint": "b7f6d5a7b9adddef080e7d0ca81dc7f8c0296533eec8f6bc567362c2147947b2",
+        "lineage": {
+          "sourceAttempt": {
+            "id": "attempt-T-8-gate-4b4b9366-b159-4487-b54f-78fea6be9ff9",
+            "sequence": 1
+          },
+          "canonicalAttempt": {
+            "id": "attempt-T-8-gate-4b4b9366-b159-4487-b54f-78fea6be9ff9",
+            "sequence": 1
+          },
+          "sourceFingerprint": "b7f6d5a7b9adddef080e7d0ca81dc7f8c0296533eec8f6bc567362c2147947b2",
+          "canonicalFingerprint": "b7f6d5a7b9adddef080e7d0ca81dc7f8c0296533eec8f6bc567362c2147947b2",
+          "sourceRevisionFingerprint": null,
+          "canonicalRevisionFingerprint": null
+        }
+      },
+      "issueLogId": "task-gate-124063acc2ac922d7d0ea3a2a0e2cc6266ef345f3fa851fca1169cb84a5e90ca"
+    },
+    {
+      "step": "task-impl",
+      "reason": "Worker artifact handoff invalid: source worker response violates its canonical effect contract: source worker file claim paths must exactly cover the parent-observed mutation paths as a set (missing: none; unknown: tests/support/builders/flow-query-fixture.js)",
+      "trigger": "Parent dispatcher rejected or could not complete a worker artifact handoff.",
+      "resolution": "Correct the worker artifact payload and dispatch the current action again.",
+      "taskId": null,
+      "timestamp": "2026-09-08T13:43:56.684Z",
+      "issueLogId": "worker-handoff-2d0e48ab89fd294fb71603e0676ca66d436c1c584ae0f069d16b45a3f3fbb34b-invalid"
     }
   ]
 }
