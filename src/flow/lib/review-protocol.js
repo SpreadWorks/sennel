@@ -218,7 +218,8 @@ export class ReviewProtocolResult {
 /**
  * Calls a provider and validates its complete phase contract. A contract
  * rejection is retried only under the supplied bounded policy and only if an
- * observer proves the provider call had no observed effect.
+ * observer proves the provider call had no observed effect. An observer also
+ * rejects a contract-valid response when its protected source surface moved.
  */
 export class ReviewProtocolController {
   constructor({
@@ -294,10 +295,17 @@ export class ReviewProtocolController {
             retryContract = true;
             break;
           }
-          // A complete, contract-valid response is admissible even if the
-          // provider made a legitimate source change. Effect evidence limits
-          // retries after failure/rejection; it is not a success veto.
           const after = this.#capture(observer, attempt, transportAttempt);
+          const effectEvidence = this.#effectEvidence(observer, before, after, attempt);
+          if (effectEvidence !== null) {
+            outcome = new ReviewProtocolAttemptOutcome({ kind: "effect_observed" });
+            throw new ReviewProtocolFailure({
+              kind: "effect_observed",
+              attempt,
+              maxAttempts: this.retryPolicy.maxAttempts,
+              effectEvidence,
+            });
+          }
           outcome = new ReviewProtocolAttemptOutcome({ kind: "accepted" });
           return new ReviewProtocolResult({ attempt, rawResponse, value, before, after });
         } catch (cause) {

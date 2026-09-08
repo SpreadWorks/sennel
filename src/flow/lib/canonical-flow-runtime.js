@@ -37,12 +37,13 @@ const TYPE_FOR_OPERATION = Object.freeze({
   record_failure: "failure_recorded",
   confirm_attempt: "result_confirmed",
   complete_draft_completion: "result_confirmed",
+  complete_task_review_stage: "result_confirmed",
+  advance_task_review_stage: "result_confirmed",
   complete_acceptance_decision_noop: "result_confirmed",
   rewind: "recovery",
   rewind_test_evidence: "recovery",
   repair_test_review: "recovery",
   settle_test_review_repair_timeout: "result_confirmed",
-  repair_task_no_change_review: "recovery",
   repair_scenario_validity: "recovery",
   repair_implementation: "recovery",
   triage_implementation_for_repair: "recovery",
@@ -443,6 +444,28 @@ export class CanonicalFlowRuntime {
     });
   }
 
+  /** Publish one Task review-funnel result and apply its sealed connector atomically. */
+  completeTaskReviewStage({ specId, activityId, result, plan, targetAttempt = null, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites, artifactBaselines, admission = undefined } = {}) {
+    const state = this.#state(specId);
+    return this.#applyAttemptTransition(specId, state, {
+      id: activityId,
+      nodeId: this.#currentNodeId(state),
+      operation: plan?.targetStepId == null ? "complete_task_review_stage" : "advance_task_review_stage",
+      attempt: targetAttempt,
+      result,
+      timing,
+      provider,
+      model,
+      effort,
+      usage,
+      references,
+      artifactWrites,
+      artifactBaselines,
+      admission,
+      taskReviewStagePlan: plan,
+    });
+  }
+
   /** One journal entry: publish connector output, confirm source, and expose the target. */
   completeDraftCompletion({ specId, activityId, result, receipt, references, artifactWrites, artifactRemovals, artifactBaselines, admission } = {}) {
     const state = this.#state(specId);
@@ -543,21 +566,6 @@ export class CanonicalFlowRuntime {
       result,
       timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 },
       references,
-    });
-  }
-
-  /** Reopen one Task implementation after its empty-source Review rejects the no-change declaration. */
-  repairNoChangeTaskReview({ specId, activityId, nodeId, attempt, timing = null, references, admission = undefined } = {}) {
-    const state = this.#state(specId);
-    const now = new Date().toISOString();
-    return this.#applyAttemptTransition(specId, state, {
-      id: activityId,
-      nodeId: requiredText(nodeId, "no-change Task Review repair nodeId"),
-      operation: "repair_task_no_change_review",
-      attempt: requiredAttempt(attempt, "repairNoChangeTaskReview"),
-      timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 },
-      references,
-      admission,
     });
   }
 
@@ -1202,16 +1210,17 @@ export class CanonicalFlowRuntime {
     retryRecoveryPublication = undefined,
     gateTaskLifecycle = null,
     stepConnectionReceipt = null,
+    taskReviewStagePlan = null,
   }) {
     const target = requiredText(nodeId, "transition nodeId");
     const node = state.findNode(target);
     if (node === null) throw new CurrentFlowStateInvariantError(`transition node is not part of this Flow: ${target}`);
-    const transitionAttempt = ["start_attempt", "rewind", "rewind_test_evidence", "repair_test_review", "settle_test_review_repair_timeout", "repair_task_no_change_review", "repair_scenario_validity", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "preimplementation_bootstrap", "recover_existing_implementation", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate"].includes(operation)
+    const transitionAttempt = ["start_attempt", "rewind", "rewind_test_evidence", "repair_test_review", "settle_test_review_repair_timeout", "repair_scenario_validity", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "preimplementation_bootstrap", "recover_existing_implementation", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage"].includes(operation)
       ? attempt
       : null;
     const activityAttempt = operation === "complete_draft_completion"
       ? stepConnectionReceipt?.sourceAttempt ?? null
-      : new Set(["repair_task_no_change_review", "repair_scenario_validity", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "recover_missing_producer_artifact", "recover_task_execution_overrun", "defer_failed_review", "defer_failed_gate"]).has(operation)
+      : new Set(["repair_scenario_validity", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "recover_missing_producer_artifact", "recover_task_execution_overrun", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage"]).has(operation)
       ? state.attempt ?? attempt
       : ["start_attempt", "rewind", "rewind_test_evidence", "repair_test_review", "settle_test_review_repair_timeout", "preimplementation_bootstrap", "recover_existing_implementation", "reopen_draft_preimplementation", "recover_existing_implementation", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "retry_recovery_attempt", "accept_final_regression_failure"].includes(operation)
       ? attempt
@@ -1241,6 +1250,7 @@ export class CanonicalFlowRuntime {
         nonblocking,
         gateTaskLifecycle,
         stepConnectionReceipt,
+        taskReviewStagePlan,
       },
     });
     const resolvedArtifactWrites = retryRecoveryPublication == null

@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import {
   flowArtifactAuthorityForStep,
   WORKER_ARTIFACT_HANDOFF_STEPS,
@@ -15,6 +16,8 @@ import {
   sealWorkerArtifactHandoff,
   WorkerArtifactHandoffCoordinator,
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { sourceWorkerEffectJsonSchema } from "../../../src/flow/lib/source-worker-effect-schema.js";
 import {
   DraftCompletionCatalogBinding,
@@ -42,6 +45,7 @@ import { validWorkerHandoffSpec, workerArtifactJson } from "../../support/infras
 const TASK_IDS = Object.freeze(["T1", "T2"]);
 const PREPARATION_LEAVES = new Set(["branch", "prepare-spec"]);
 const USER_DECISION_LEAF = "acceptance-decision";
+const TASK_REVIEW_FINDING_KEY = "task-repair-f1";
 
 function plannedTask(taskId) {
   return {
@@ -79,14 +83,19 @@ function sourceEffect(stepId, paths) {
   if (stepId === "impl-triage") {
     return {
       ...base,
-      triage: { version: 1, dispositions: [{ findingKey: "F1", disposition: "apply", rationale: "The reviewed source change must be applied." }] },
+      triage: { version: 1, dispositions: [{ findingKey: "F1", disposition: "apply", basis: "repair-required", rationale: "The reviewed source change must be applied." }] },
     };
   }
   if (stepId === "impl-repair") {
     return {
       ...base,
       files: [{ requirementId: "R1", paths }],
-      repair: { version: 1, appliedFindingKeys: ["F1"], summary: "Applied the reviewed implementation correction." },
+      repair: {
+        version: 1,
+        findings: [{ findingKey: "F1", paths: ["src/repair.js"] }],
+        summary: "Applied the reviewed implementation correction.",
+        recurrenceResolutions: [],
+      },
     };
   }
   if (stepId === "task-impl") {
@@ -94,6 +103,32 @@ function sourceEffect(stepId, paths) {
       ...base,
       files: [{ requirementId: "R1", paths }],
       overview: { modules: ["Task implementation module."], data_flow: [], decisions: [] },
+    };
+  }
+  if (stepId === "task-triage") {
+    return {
+      ...base,
+      triage: {
+        version: 1,
+        dispositions: [{
+          findingKey: TASK_REVIEW_FINDING_KEY,
+          disposition: "apply",
+          basis: "repair-required",
+          rationale: "The deterministic Task Review finding requires repair.",
+        }],
+      },
+    };
+  }
+  if (stepId === "task-repair") {
+    return {
+      ...base,
+      files: [{ requirementId: "R1", paths }],
+      repair: {
+        version: 1,
+        findings: [{ findingKey: TASK_REVIEW_FINDING_KEY, paths }],
+        summary: "Applied the deterministic Task repair.",
+        recurrenceResolutions: [],
+      },
     };
   }
   throw new Error(`unexpected source step: ${stepId}`);
@@ -203,6 +238,7 @@ function writeSourcePayload(stepId, request, executionRoot) {
     implement: "src/implementation.js",
     "impl-repair": "src/repair.js",
     "task-impl": "src/task.js",
+    "task-repair": "src/task.js",
   }[stepId];
   if (changed) {
     fs.mkdirSync(path.dirname(path.join(executionRoot, changed)), { recursive: true });
@@ -240,7 +276,54 @@ function publishAttemptArtifact(flowManager, specId, nodeId, logicalKey, payload
   flowManager.publishArtifacts({ specId, nodeId, artifactWrites: [{ logicalKey, mediaType: "application/json", bytes }] });
 }
 
-function commandArtifacts(stepId, flowManager, specId, implReviewRuns, histories) {
+async function commandArtifacts(stepId, flowManager, specId, implReviewRuns, histories, { executionRoot, taskReviewRuns }) {
+  if (stepId === "task-review") {
+    const taskId = flowManager.canonicalState(specId).current.at(-2);
+    const reviewRun = (taskReviewRuns.get(taskId) ?? 0) + 1;
+    taskReviewRuns.set(taskId, reviewRun);
+    const blockingFindings = reviewRun === 1 ? [{
+      findingKey: TASK_REVIEW_FINDING_KEY,
+      title: "Repair the Task implementation",
+      failureMode: "missing_requirement_behavior",
+      file: "src/task.js",
+      requirementId: "R1",
+      issue: "The deterministic Task implementation needs its bounded repair.",
+      suggestion: "Apply the Task repair before re-review.",
+      disposition: "must-fix",
+      rationale: "R1 requires the repaired Task behavior.",
+    }] : [];
+    const review = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand(_command, _args, options) {
+        fs.writeFileSync(path.join(options.env.SENNEL_REVIEW_OUTPUT_DIR, "impl-review.json"), `${JSON.stringify({
+          version: 1,
+          phase: "impl",
+          generatedAt: "2026-09-08T00:00:00.000Z",
+          verdict: blockingFindings.length === 0 ? "PASS" : "REJECTED",
+          summary: { blocking: blockingFindings.length, nonBlocking: 0, total: blockingFindings.length },
+          blockingFindings,
+          nonBlockingImprovements: [],
+          excluded: { missingFile: 0, outOfScope: 0 },
+        })}\n`);
+        ReviewWorkUnit.fromEnvironment(options.env).seal();
+        return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+      },
+    });
+    const ctx = {
+      root: executionRoot,
+      mainRoot: executionRoot,
+      executionRoot,
+      specId,
+      flowManager,
+      flowState: flowManager.load(specId),
+      config: {},
+    };
+    const result = await review.execute(ctx);
+    assert.notEqual(result.ok, false, JSON.stringify(result));
+    await FLOW_COMMANDS.run.review.post(ctx, result);
+    return result;
+  }
   if (["draft-questions-review", "draft-coverage-review"].includes(stepId)) {
     const draft = flowManager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: stepId });
     const revision = {
@@ -372,7 +455,7 @@ describe("deterministic full Flow worker handoff", () => {
 
       const staticRoute = fixture.leaves().map((step) => step.id).filter((id) => !PREPARATION_LEAVES.has(id));
       const taskRoute = TASK_IDS.flatMap((taskId) => (
-        ["task-impl", "task-review", "task-gate"].map((stepId) => ({ stepId, taskId }))
+        ["task-impl", "task-review", "task-triage", "task-repair", "task-review", "task-gate"].map((stepId) => ({ stepId, taskId }))
       ));
       const implementationIndex = staticRoute.indexOf("implement");
       const initialImplementation = staticRoute.slice(implementationIndex);
@@ -392,6 +475,7 @@ describe("deterministic full Flow worker handoff", () => {
       let specRepairCalls = 0;
       let rejectedRepairSnapshot = null;
       let implReviewRuns = 0;
+      const taskReviewRuns = new Map();
       const taskMutationPaths = [];
       const commandArtifactHistories = new Map();
       const coordinator = new WorkerArtifactHandoffCoordinator();
@@ -511,7 +595,10 @@ describe("deterministic full Flow worker handoff", () => {
           assert.equal(entry.stepId, command.commandName === "review" ? entry.stepId : entry.stepId);
           parentCommands.push(entry.stepId);
           if (entry.stepId === "impl-review") implReviewRuns += 1;
-          const commandResult = commandArtifacts(entry.stepId, flowManager, specId, implReviewRuns, commandArtifactHistories);
+          const commandResult = await commandArtifacts(entry.stepId, flowManager, specId, implReviewRuns, commandArtifactHistories, {
+            executionRoot,
+            taskReviewRuns,
+          });
           advance(entry, commandResult);
           return command.commandName === "finalize-cleanup"
             ? { ok: true, data: { status: "done", assurance: { completed: true } }, errors: [] }

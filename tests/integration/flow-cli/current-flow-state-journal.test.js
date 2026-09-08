@@ -129,7 +129,7 @@ describe("Current Flow state filesystem lifecycle", () => {
       state = new CurrentFlowStateStore({ directory, definition }).load();
       order += 1;
     };
-    const completeDescriptor = (label, { status = "done", activityResult = result(label), gateTaskLifecycle = null } = {}) => {
+    const completeDescriptor = (label, { status = "done", activityResult = null, gateTaskLifecycle = null } = {}) => {
       const descriptor = state.nextAction();
       assert.equal(descriptor.operation, "start", `expected normal start for ${descriptor.nodeId}`);
       const currentPath = descriptor.path;
@@ -148,8 +148,30 @@ describe("Current Flow state filesystem lifecycle", () => {
         order,
         operation: "confirm_attempt",
         status,
-        activityResult,
+        activityResult: activityResult ?? (status === "skipped" ? skippedResult(label) : result(label)),
         gateTaskLifecycle,
+      }));
+    };
+    const recoverDescriptor = (label, { status = "skipped" } = {}) => {
+      const descriptor = state.nextAction();
+      assert.equal(descriptor.operation, "recover", `expected recovery for ${descriptor.nodeId}`);
+      const currentPath = descriptor.path;
+      apply(activity({
+        id: `${label}-recover`,
+        state,
+        currentPath,
+        activityAttempt: attemptFor(state, currentPath, `${label}-attempt`),
+        order,
+        operation: "recover_attempt",
+      }));
+      apply(activity({
+        id: `${label}-confirm`,
+        state,
+        currentPath,
+        order,
+        operation: "confirm_attempt",
+        status,
+        activityResult: status === "skipped" ? skippedResult(label) : result(label),
       }));
     };
     const advanceUntil = (nodeId, label) => {
@@ -281,6 +303,9 @@ describe("Current Flow state filesystem lifecycle", () => {
       status: "done",
       activityResult: result("task-a-review"),
     }));
+    assert.equal(state.nextAction().nodeId, "task-a-triage");
+    completeDescriptor("task-a-triage", { status: "skipped" });
+    completeDescriptor("task-a-repair", { status: "skipped" });
     assert.equal(state.nextAction().nodeId, "task-a-gate");
     const gatePath = state.nextAction().path;
     completeDescriptor("task-a-gate", { gateTaskLifecycle: {
@@ -315,7 +340,7 @@ describe("Current Flow state filesystem lifecycle", () => {
       activityResult: result("task-a-review-reconfirmed"),
     }));
     assert.equal(state.nextAction().operation, "recover");
-    assert.equal(state.nextAction().nodeId, "task-a-gate");
+    assert.equal(state.nextAction().nodeId, "task-a-triage");
     assert.throws(
       () => new CurrentFlowStateStore({ directory, definition }).apply({ activity: activity({
         id: "illegal-gate-start",
@@ -327,6 +352,9 @@ describe("Current Flow state filesystem lifecycle", () => {
       }) }),
       (error) => error instanceof CurrentFlowStateInvariantError && /next executable leaf/.test(error.message),
     );
+    recoverDescriptor("task-a-triage-recovery");
+    recoverDescriptor("task-a-repair-recovery");
+    assert.equal(state.nextAction().nodeId, "task-a-gate");
     apply(activity({
       id: "task-a-gate-recover",
       state,
@@ -464,6 +492,10 @@ describe("Current Flow state filesystem lifecycle", () => {
       activityResult: exhaustedResult,
     }));
     assert.equal(state.findNode("task-b-review").status, "failed");
+    assert.equal(state.nextAction().nodeId, "task-b-triage");
+    recoverDescriptor("task-b-triage");
+    recoverDescriptor("task-b-repair");
+    assert.equal(state.nextAction().nodeId, "task-b-gate");
     const taskBGateAuthority = state.artifactAuthority();
     assert.equal(
       taskBGateAuthority.resolutions.find((resolution) => resolution.resourceKind === "guardrail").missing,

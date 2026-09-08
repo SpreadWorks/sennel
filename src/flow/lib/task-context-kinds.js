@@ -1,6 +1,8 @@
 const TASK_CONTEXT_KINDS = Object.freeze({
   "task-impl": Object.freeze(["task_spec", "requirements", "overview"]),
   "task-review": Object.freeze(["task_spec", "requirements", "source"]),
+  "task-triage": Object.freeze(["task_spec", "requirements", "source"]),
+  "task-repair": Object.freeze(["task_spec", "requirements", "source"]),
   "task-gate": Object.freeze(["task_spec", "requirements", "overview", "source", "guardrail"]),
 });
 

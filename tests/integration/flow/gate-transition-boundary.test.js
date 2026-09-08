@@ -420,7 +420,7 @@ describe("definition-owned Gate transition boundary", () => {
     }));
     assert.deepEqual(repair.plan.taskLifecycle.toJSON(), {
       operation: "repair-task-impl", taskId: "T-1", successorStepId: "T-1-impl",
-      resetStepIds: ["T-1-impl", "T-1-review", "T-1-gate"],
+      resetStepIds: ["T-1-impl", "T-1-review", "T-1-triage", "T-1-repair", "T-1-gate"],
     });
     const firstRoundExhausted = resolveGateTransition(facts({
       ...task.toJSON(), result: "fail", failure: { category: "semantic", code: "GATE_REJECTED" },
@@ -429,7 +429,7 @@ describe("definition-owned Gate transition boundary", () => {
     }));
     assert.deepEqual(firstRoundExhausted.plan.taskLifecycle.toJSON(), {
       operation: "repair-task-impl", taskId: "T-1", successorStepId: "T-1-impl",
-      resetStepIds: ["T-1-impl", "T-1-review", "T-1-gate"],
+      resetStepIds: ["T-1-impl", "T-1-review", "T-1-triage", "T-1-repair", "T-1-gate"],
     });
     const finalTask = resolveGateTransition(facts({
       ...task.toJSON(), result: "fail", failure: { category: "semantic", code: "GATE_REJECTED" },
@@ -448,7 +448,9 @@ describe("definition-owned Gate transition boundary", () => {
     assert.equal(decision.advance.operation, "advance");
     assert.equal(Object.hasOwn(decision.plan.phaseDefinition, "nextStepId"), false);
     const definition = buildCurrentFlowDefinition();
-    assert.deepEqual(definition.taskTemplate.steps.map((step) => step.id), ["task-impl", "task-review", "task-gate"]);
+    assert.deepEqual(definition.taskTemplate.steps.map((step) => step.id), [
+      "task-impl", "task-review", "task-triage", "task-repair", "task-gate",
+    ]);
   });
 
   it("represents recovery separately from pass and advance", () => {
@@ -621,9 +623,9 @@ describe("definition-owned Gate transition boundary", () => {
     assert.equal(actions[1] instanceof IncrementMetric, true);
   });
 
-  it("skips Task Gate only for a current reviewed no-change result", () => {
+  it("leaves every Task Review route to the typed review-funnel connector", () => {
     const flowState = {
-      tasks: [{ id: "T-1", steps: [{ id: "T-1-impl" }, { id: "T-1-review" }, { id: "T-1-gate" }] }],
+      tasks: [{ id: "T-1", steps: ["impl", "review", "triage", "repair", "gate"].map((role) => ({ id: `T-1-${role}` })) }],
     };
     const actions = resolveLifecycle({
       event: "review:post",
@@ -642,8 +644,7 @@ describe("definition-owned Gate transition boundary", () => {
         },
       },
     });
-    assert.equal(actions.some((action) => action instanceof SetStepStatus && action.step === "T-1-review" && action.status === "done"), true);
-    assert.equal(actions.some((action) => action instanceof SetStepStatus && action.step === "T-1-gate" && action.status === "skipped"), true);
+    assert.deepEqual(actions, []);
     const rejected = resolveLifecycle({
       event: "review:post",
       currentStepId: "T-1-review",
@@ -651,16 +652,7 @@ describe("definition-owned Gate transition boundary", () => {
       flowState,
       result: { result: "ok", artifacts: { phase: "impl", taskId: "T-1", verdict: "REJECTED", noChange: true, noChangeReasons: ["present"], sourceFingerprint: "a".repeat(64) } },
     });
-    assert.equal(rejected.some((action) => action instanceof SetStepStatus && action.step === "T-1-gate"), false);
-    const repairedFourth = resolveLifecycle({
-      event: "review:post",
-      currentStepId: "T-1-review",
-      phase: "impl",
-      flowState,
-      result: { result: "ok", artifacts: { phase: "impl", taskId: "T-1", verdict: "REJECTED", reviewRepairComplete: true, repairMutationCount: 1 } },
-    });
-    assert.equal(repairedFourth.some((action) => action instanceof SetStepStatus && action.step === "T-1-review" && action.status === "done"), true);
-    assert.equal(repairedFourth.some((action) => action instanceof SetStepStatus && action.step === "T-1-gate" && action.status === "skipped"), false);
+    assert.deepEqual(rejected, []);
   });
 
   it("keeps decision construction and policy branches out of consumers", () => {

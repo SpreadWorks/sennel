@@ -192,42 +192,6 @@ describe("flow get next-action", () => {
     });
   });
 
-  it("resolves task-review exhaustion from task Attempt accounting, not flow metrics", () => {
-    const flowState = { metrics: [], policy: { nonblocking: null } };
-    const retry = resolveReviewTransition({
-      stepId: "task-review",
-      flowState,
-      facts: new ReviewTransitionFacts({
-        scope: "task",
-        phase: "impl",
-        verdict: "REJECTED",
-        attemptCount: 3,
-      }),
-    });
-    const exhausted = resolveReviewTransition({
-      stepId: "task-review",
-      flowState,
-      facts: new ReviewTransitionFacts({
-        scope: "task",
-        phase: "impl",
-        verdict: "REJECTED",
-        attemptCount: 4,
-        artifact: {
-          canonicalTaskSource: { reviewRepairComplete: true },
-        },
-        deferralEvidence: new ReviewDeferralEvidence({
-          status: "available",
-          sourceFingerprints: ["d".repeat(64)],
-        }),
-      }),
-    });
-
-    assert.equal(retry.operation, "retry");
-    assert.deepEqual(exhausted.toJSON(), {
-      operation: "task-review-gate-handoff", phase: "impl", attempts: 4, maxAttempts: 4,
-    });
-  });
-
   it("keeps exhausted flow Reviews active before draft/impl rejection routes leave Review", () => {
     const metric = (phase) => ({ phase, counter: "reviewRetry", delta: 1 });
     const cases = [
@@ -524,6 +488,8 @@ describe("flow get next-action", () => {
     assert.deepEqual(state.tasks[0].steps.map((step) => step.id), [
       "T-1-impl",
       "T-1-review",
+      "T-1-triage",
+      "T-1-repair",
       "T-1-gate",
     ]);
   });

@@ -31,10 +31,10 @@ describe("flow-helpers task-aware APIs", () => {
       assert.throws(() => buildInitialTaskSteps("addition"), /origin|unknown/i);
     });
 
-    it("TASK_STEPS_PLAN is defined (spec 235: 3-step redesign)", () => {
+    it("TASK_STEPS_PLAN is defined by the canonical Task lifecycle", () => {
       assert.ok(Array.isArray(TASK_STEPS_PLAN));
       assert.deepEqual(TASK_STEPS_PLAN, [
-        "task-impl", "task-review", "task-gate",
+        "task-impl", "task-review", "task-triage", "task-repair", "task-gate",
       ]);
       // Removed in spec 226: approval, gate (task-spec), update-overview
       assert.ok(!TASK_STEPS_PLAN.includes("approval"));

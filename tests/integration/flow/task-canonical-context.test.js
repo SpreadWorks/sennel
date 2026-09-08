@@ -18,8 +18,6 @@ import {
   TaskExecutionBudget,
   TaskMutationLineage,
   TaskMutationLineageSet,
-  TaskReviewRepairManifest,
-  TaskReviewAcceptanceHandoff,
   captureCurrentTaskSource,
 } from "../../../src/flow/lib/task-mutation-lineage.js";
 import {
@@ -470,6 +468,8 @@ describe("canonical Task context", () => {
       });
       manager.updateStepStatus({ stepId: "T-1-review", requestedStatus: "in_progress" }, { specId });
       confirmCanonicalFixtureStep(manager, specId, "T-1-review");
+      confirmCanonicalFixtureStep(manager, specId, "T-1-triage", "skipped");
+      confirmCanonicalFixtureStep(manager, specId, "T-1-repair", "skipped");
       manager.updateStepStatus({ stepId: "T-1-gate", requestedStatus: "in_progress" }, { specId });
 
       const observation = {
@@ -595,6 +595,8 @@ describe("canonical Task context", () => {
       assert.equal(manager.canonicalState(specId).current, null);
       manager.updateStepStatus({ stepId: "T-1-review", requestedStatus: "in_progress" }, { specId });
       confirmCanonicalFixtureStep(manager, specId, "T-1-review");
+      confirmCanonicalFixtureStep(manager, specId, "T-1-triage", "skipped");
+      confirmCanonicalFixtureStep(manager, specId, "T-1-repair", "skipped");
       manager.updateStepStatus({ stepId: "T-1-gate", requestedStatus: "in_progress" }, { specId });
       const pass = new CanonicalGatePromotion({
         state: manager.canonicalState(specId), phase: "task-impl", nodeId: "T-1-gate", activeTaskId: "T-1",
@@ -760,6 +762,8 @@ describe("canonical Task context", () => {
     ]);
     manager.updateStepStatus({ stepId: "T-A-review", requestedStatus: "in_progress" }, { specId });
     confirmCanonicalFixtureStep(manager, specId, "T-A-review");
+    confirmCanonicalFixtureStep(manager, specId, "T-A-triage", "skipped");
+    confirmCanonicalFixtureStep(manager, specId, "T-A-repair", "skipped");
     manager.updateStepStatus({ stepId: "T-A-gate", requestedStatus: "in_progress" }, { specId });
     const taskAGate = new CanonicalGatePromotion({
       state: manager.canonicalState(specId),
@@ -868,84 +872,4 @@ describe("canonical Task context", () => {
     assert.equal(effect.noChangeReason.text, "The requested behavior is already present.");
   });
 
-  it("binds Task Review repairs to must-fix findings and the current Task allow-list", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-task-review-repair-"));
-    fs.mkdirSync(path.join(root, "src"));
-    fs.writeFileSync(path.join(root, "src/one.js"), "export const one = 1;\n");
-    fs.writeFileSync(path.join(root, "src/two.js"), "export const two = 2;\n");
-    const implementationAttempt = { id: "impl-attempt", nodeId: "T-1-impl", sequence: 1 };
-    const implementationManifest = new SourceMutationManifest({
-      attempt: implementationAttempt,
-      baselineDigest: digest,
-      mutations: [{ mutationId: "d".repeat(64), path: "src/one.js", changeKind: "content", beforeDigest: digest, afterDigest: "e".repeat(64) }],
-    });
-    const lineageSet = new TaskMutationLineageSet({
-      runId: "run-1",
-      specId: "spec-1",
-      taskId: "T-1",
-      lineages: [new TaskMutationLineage({
-        runId: "run-1",
-        specId: "spec-1",
-        taskId: "T-1",
-        role: "implementation",
-        attempt: implementationAttempt,
-        budget: new TaskExecutionBudget({ round: 1, reviewAttemptSequenceAtStart: 0, gateAttemptSequenceAtStart: 0 }),
-        sourceFingerprint: implementationManifest.digest,
-        manifest: implementationManifest.toJSON(),
-      })],
-    });
-    const reviewAttempt = { id: "review-attempt", nodeId: "T-1-review", sequence: 4 };
-    const baseline = SourceMutationBaseline.capture({ root, attempt: reviewAttempt });
-    fs.writeFileSync(path.join(root, "src/one.js"), "export const one = 3;\n");
-    const manifest = SourceMutationManifest.capture({ baseline });
-    const artifact = {
-      verdict: "REJECTED",
-      blockingFindings: [{ file: "src/one.js", disposition: "must-fix" }],
-    };
-    const fourth = new TaskReviewRepairManifest({ lineageSet, baseline, manifest, artifact, attemptCount: 4 });
-    assert.equal(fourth.complete, true);
-    const reviewLineage = fourth.lineage({ attempt: reviewAttempt });
-    assert.equal(reviewLineage.role, "review-repair");
-    const handoffReview = {
-      taskId: "T-1", verdict: "REJECTED", blockingFindings: [],
-      canonicalTaskSource: { reviewRepairComplete: true, reviewRepairLineageFingerprint: reviewLineage.fingerprint },
-    };
-    assert.equal(new TaskReviewAcceptanceHandoff({
-      taskId: "T-1", review: handoffReview, lineage: reviewLineage, reviewAttempt: 4, cumulativeAttempt: 4,
-    }).unreviewedAfterRepair, true);
-    assert.throws(() => new TaskReviewAcceptanceHandoff({
-      taskId: "T-1", review: { ...handoffReview, canonicalTaskSource: { ...handoffReview.canonicalTaskSource, reviewRepairLineageFingerprint: "f".repeat(64) } },
-      lineage: reviewLineage, reviewAttempt: 4, cumulativeAttempt: 4,
-    }), /does not bind its repair lineage/);
-    assert.equal(new TaskReviewRepairManifest({ lineageSet, baseline, manifest, artifact, attemptCount: 1 }).complete, false);
-
-    const unchangedBaseline = SourceMutationBaseline.capture({
-      root,
-      attempt: { id: "unchanged-review", nodeId: "T-1-review", sequence: 2 },
-    });
-    assert.throws(() => new TaskReviewRepairManifest({
-      lineageSet,
-      baseline: unchangedBaseline,
-      manifest: SourceMutationManifest.capture({ baseline: unchangedBaseline }),
-      artifact,
-      attemptCount: 2,
-    }), /must repair every must-fix finding/);
-    assert.throws(() => new TaskReviewRepairManifest({
-      lineageSet,
-      baseline: unchangedBaseline,
-      manifest: SourceMutationManifest.capture({ baseline: unchangedBaseline }),
-      artifact: { verdict: "REJECTED", blockingFindings: [{ file: null, disposition: "must-fix" }] },
-      attemptCount: 2,
-    }), /file-backed repair evidence/);
-
-    const foreignBaseline = SourceMutationBaseline.capture({ root, attempt: { id: "foreign", nodeId: "T-1-review", sequence: 5 } });
-    fs.writeFileSync(path.join(root, "src/two.js"), "export const two = 4;\n");
-    assert.throws(() => new TaskReviewRepairManifest({
-      lineageSet,
-      baseline: foreignBaseline,
-      manifest: SourceMutationManifest.capture({ baseline: foreignBaseline }),
-      artifact: { verdict: "REJECTED", blockingFindings: [{ file: "src/two.js", disposition: "must-fix" }] },
-      attemptCount: 4,
-    }), /outside the current Task allow-list/);
-  });
 });

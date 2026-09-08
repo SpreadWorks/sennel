@@ -10,6 +10,10 @@ import {
   SourceMutationBaseline,
   SourceMutationManifest,
   SourceWorkerEffect,
+  WorkerArtifactHandoffCoordinator,
+  WorkerArtifactMutationAuthoritySnapshot,
+  materializeSourceWorkerEffect,
+  sealParentMaterializedSourceWorkerEffect,
 } from "../../src/flow/lib/worker-artifact-handoff.js";
 
 const CMD = path.resolve("src/sennel.js");
@@ -68,7 +72,7 @@ function writeLifecycleStubAgentScript(tmp) {
     "",
   ].join("\n");
   const routes = [
-    { includes: "if (!left || !right) return 0;", response: FAIL_REVIEW, repair: true },
+    { includes: "if (!left || !right) return 0;", response: FAIL_REVIEW },
     { includes: "one-shot static test reviewer", response: PASS_TEST_REVIEW },
     { includes: "guardrail_id MUST be one of the requirement ids", response: PASS_GATE },
     { includes: "## Guardrail Articles", response: JSON.stringify({ observations: [] }) },
@@ -143,6 +147,41 @@ function git(tmp, args) {
     `git ${args.join(" ")} failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
   return result;
+}
+
+function completeTaskStage(tmp, role, effect, edit = null) {
+  const manager = makeFlowManager(tmp);
+  const state = manager.canonicalState(SPEC_ID);
+  assert.equal(state.current.at(-1), `T-1-${role}`);
+  const coordinator = new WorkerArtifactHandoffCoordinator({
+    now: () => new Date("2026-09-03T00:00:00.000Z"),
+  });
+  const ctx = {
+    root: tmp,
+    mainRoot: tmp,
+    executionRoot: tmp,
+    specId: SPEC_ID,
+    flowManager: manager,
+    flowState: manager.loadReadOnly(SPEC_ID),
+    config: {},
+  };
+  const request = coordinator.createRequest({
+    ctx,
+    state: ctx.flowState,
+    invocation: {
+      id: `dispatch-${state.attempt.id}`,
+      target: { digest: "c".repeat(64) },
+      action: {
+        digest: "b".repeat(64),
+        nextAction: { step: `task-${role}`, taskId: "T-1" },
+      },
+    },
+  });
+  const authority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
+  edit?.();
+  materializeSourceWorkerEffect({ request, responseText: JSON.stringify(effect) });
+  sealParentMaterializedSourceWorkerEffect({ request });
+  return coordinator.reconcile({ ctx, request, mutationAuthority: authority });
 }
 
 function setupFixture(tmp) {
@@ -247,7 +286,7 @@ function setupFixture(tmp) {
     }],
   });
   fixture.settle("test").activate("scenario-validity", { settlePredecessors: false }).registerActive();
-  for (const segment of ["impl", "review", "gate"]) {
+  for (const segment of ["impl", "review", "triage", "repair", "gate"]) {
     assert.equal(
       fixture.location().taskArtifactLocation("T-1")[`${segment}Directory`],
       path.join(fixture.location().directory, "steps", "impl", "T-1", segment),
@@ -327,38 +366,50 @@ describe("231: full lifecycle through CLI and the typed source handoff boundary"
     const failedReview = runEnvelope(tmp, ["flow", "run", "review"]);
     assert.equal(failedReview.data.artifacts.verdict, "REJECTED");
     assert.equal(failedReview.data.artifacts.taskId, "T-1");
-    assertNext(tmp, "task-review", "T-1");
-    const retryState = makeFlowManager(tmp).canonicalState(SPEC_ID);
-    const retryActivities = makeFlowManager(tmp).activityLedger(SPEC_ID).slice(-8);
-    assert.equal(
-      retryState.attempt.sequence,
-      2,
-      JSON.stringify({ next: retryState.nextAction().toJSON(), activities: retryActivities }, null, 2),
-    );
-
-    // The Review worker already applied its bounded repair before returning
-    // REJECTED. Rewriting the same bytes proves the retry consumes that source.
-    writeFile(tmp, "src/value.js", [
+    assertNext(tmp, "task-triage", "T-1");
+    const failedFinding = JSON.parse(FAIL_REVIEW).blockingFindings[0];
+    assert.equal(completeTaskStage(tmp, "triage", {
+      version: 1,
+      stepId: "task-triage",
+      completionStatus: "done",
+      files: [],
+      issues: [],
+      overview: null,
+      triage: {
+        version: 1,
+        dispositions: [{
+          findingKey: failedFinding.findingKey,
+          disposition: "apply",
+          basis: "repair-required",
+          rationale: "R1 confirms that the zero-value branch must be removed.",
+        }],
+      },
+      repair: null,
+      noChangeReason: null,
+    }).completed, true);
+    assertNext(tmp, "task-repair", "T-1");
+    assert.equal(completeTaskStage(tmp, "repair", {
+      version: 1,
+      stepId: "task-repair",
+      completionStatus: "done",
+      files: [{ requirementId: "R1", paths: ["src/value.js"] }],
+      issues: [],
+      overview: null,
+      triage: null,
+      repair: {
+        version: 1,
+        findings: [{ findingKey: failedFinding.findingKey, paths: ["src/value.js"] }],
+        summary: "Removed the invalid zero-value branch.",
+        recurrenceResolutions: [],
+      },
+      noChangeReason: null,
+    }, () => writeFile(tmp, "src/value.js", [
       "export function add(left, right) {",
       "  return left + right;",
       "}",
       "",
-    ].join("\n"));
-    const failedTaskReview = JSON.parse(makeFlowManager(tmp).readProducerArtifact({
-      specId: "001-cli-lifecycle",
-      nodeId: "T-1-review",
-      logicalKey: "task.review",
-      parameters: { taskId: "T-1" },
-    }).bytes.toString("utf8"));
-    const failedFinding = failedTaskReview.attempts.at(-1).artifact.payload.blockingFindings[0];
-    runEnvelope(tmp, [
-      "flow", "set", "issue-log",
-      "--step", "task-review",
-      "--reason", "Removed the invalid zero-value branch reported by task review.",
-      "--normalized-finding-id", failedFinding.findingId,
-      "--repair-ref-file", "src/value.js",
-      "--task-id", "T-1",
-    ]);
+    ].join("\n"))).completed, true);
+    assertNext(tmp, "task-review", "T-1");
     const passedTaskReview = runEnvelope(tmp, ["flow", "run", "review"]);
     assert.equal(passedTaskReview.data.artifacts.verdict, "PASS");
     assertNext(tmp, "task-gate", "T-1");
@@ -386,7 +437,7 @@ describe("231: full lifecycle through CLI and the typed source handoff boundary"
     const matchingHistory = taskReviewHistory.attempts
       .map((attempt) => attempt.artifact.payload)
       .filter((artifact) => artifact.blockingFindings?.some(
-        (finding) => finding.findingId === failedFinding.findingId,
+        (finding) => finding.findingKey === failedFinding.findingKey,
       ));
     assert.ok(matchingHistory.length > 0);
     assert.deepEqual(matchingHistory.map((artifact) => artifact.taskId ?? null), ["T-1"]);

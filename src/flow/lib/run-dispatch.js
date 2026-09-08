@@ -55,6 +55,7 @@ import {
   sealParentMaterializedSourceWorkerEffect,
   workerArtifactHandoffPolicy,
 } from "./worker-artifact-handoff.js";
+import { TaskSourceFailureObservation } from "./task-source-failure.js";
 import { sourceWorkerEffectJsonSchema } from "./source-worker-effect-schema.js";
 import {
   AutoApprovedFlowDispatchAuthorization,
@@ -765,7 +766,11 @@ export class FlowDispatchWork {
           "",
           "This action uses the source-worker handoff contract below.",
           "Treat its input snapshots as the immutable source for this action.",
-          "Edit only project source and formal project tests that this action requires.",
+          this.handoffRequest.policy.sourceMutation.mode === "forbidden"
+            ? "Read the supplied source without editing any project files."
+            : this.handoffRequest.policy.preservesRejectedSource
+              ? "Edit only paths in this Task action's supplied source allow-list and only for its confirmed apply findings."
+              : "Edit only project source and formal project tests that this action requires.",
           "Follow the guarded action's source-worker requirement-to-path claim contract exactly.",
           "Do not write effects.json, do not write a handoff submission, and do not run a seal command.",
           "Return only the structured source effect required by the guarded action output_schema.",
@@ -879,7 +884,7 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
   // diagnostic issue-log append is itself a Flow Activity/catalog mutation;
   // defer it until a non-recoverable boundary instead of partially publishing
   // alongside the interrupted handoff.
-  if (state?.specId && error.recoveryPossible !== true) {
+  if (state?.specId && error.recoveryPossible !== true && !request?.policy.preservesRejectedSource) {
     try {
       const entry = {
         step: stepId,
@@ -1306,7 +1311,7 @@ export default class RunDispatchCommand extends FlowCommand {
         );
         const { promptGuidance, ...agentOptions } = workerOptions;
         const responseText = await agent.call(work.prompt(promptGuidance), {
-          commandId: "flow.dispatch",
+          commandId: handoffRequest?.policy.preservesRejectedSource ? `flow.dispatch.${handoffRequest.stepId}` : "flow.dispatch",
           executionWorkDir: ctx.executionRoot || ctx.root,
           cacheMode: "bypass",
           retryCount: 0,
@@ -1404,6 +1409,7 @@ export default class RunDispatchCommand extends FlowCommand {
         const rejectedSource = error instanceof WorkerArtifactHandoffError
           && handoffRequest !== null
           && handoffRequest.policy.kind === "source"
+          && !handoffRequest.policy.preservesRejectedSource
           && workerArtifactAuthority !== null
           && !NON_REPLAYABLE_HANDOFF_ERROR_CODES.has(error.code);
         if (rejectedSource) {
@@ -1434,6 +1440,9 @@ export default class RunDispatchCommand extends FlowCommand {
               agentError,
             };
           }
+        }
+        if (handoffRequest.policy.preservesRejectedSource && error instanceof WorkerArtifactHandoffError && error.recoveryPossible !== true) {
+          new TaskSourceFailureObservation({ request: handoffRequest, error, mutationAuthority: workerArtifactAuthority, agentError }).record(ctx.flowManager);
         }
         if (!holdsSpecRepairMetric) await deferredMetric.flush();
         if (!(error instanceof WorkerArtifactHandoffError)) throw error;

@@ -112,7 +112,9 @@ export function buildAcceptancePrompt(context) {
       "Classify each deferred finding as fixed, not_needed, false_positive, pre_existing, still_open, or blocking.",
       "Every deferred disposition must cite its exact sourceRef from deferredFindingEvidence; additional refs must come from the current diff, repair evidence, or test evidence.",
       "A still_open or blocking deferred disposition is an unresolved acceptance risk and routes to explicit acceptance-decision; it is not a mechanical evidence blocker.",
-      "For each taskReviewHandoff, assess the fourth-review findings against its exact repair lineage and the current evidence. The repair was not re-reviewed by Task Review; do not treat that absence as a mechanical blocker, but account for it in the requirement judgment.",
+      "For each taskReviewHandoff with unreviewedAfterRepair=true, assess the fourth-review findings against its exact repair lineage and the current evidence. The repair was not re-reviewed by Task Review; do not treat that absence as a mechanical blocker, but account for it in the requirement judgment.",
+      "For each taskReviewHandoff with noChange=true, assess the unchanged source against its bound Review, continuation reason, and any all-reject triage decision. Task Gate was skipped with advisory assurance; verify that the existing behavior satisfies the requirement without assuming a repair occurred.",
+      "For each taskReviewHandoff with allRejected=true, assess the original REJECTED Task Review findings and every bound reject disposition with its rationale against the current evidence. Those triage decisions skipped Task repair; do not rewrite the Review verdict or treat the rejection as an unreviewed repair.",
     ].join("\n"))
     .setJsonSchema(ACCEPTANCE_RESPONSE_SCHEMA)
     .setFmtFallback(`Return only JSON matching this schema:\n${JSON.stringify(ACCEPTANCE_RESPONSE_SCHEMA)}`)

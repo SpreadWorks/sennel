@@ -1,3 +1,4 @@
+import { ReviewFindingCycle } from "../../../src/flow/lib/finding-disposition-policy.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -22,7 +23,7 @@ import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js
 import {
   parseImplReviewOutput,
   parseProposalReviewOutput,
-  taskReviewRepairIgnoredDirectories,
+  taskReviewSourceObservationIgnoredDirectories,
   parseSpecReviewOutput,
   parseTestReviewOutput,
   taskReviewRecoveryIgnoredDirectories,
@@ -40,6 +41,7 @@ import {
   CanonicalSpecReview,
   SpecReviewDelta,
 } from "../../../src/flow/lib/spec-review-artifacts.js";
+import { CanonicalTaskContext } from "../../../src/flow/lib/task-canonical-context.js";
 
 const roots = [];
 
@@ -347,10 +349,10 @@ describe("ReviewWorkUnit", () => {
       flowManager: { specLocation: () => ({ directory: versionDirectory }) },
       state: { specId: "001-review-work-unit" },
     });
-    const repairBaseline = SourceMutationBaseline.capture({
+    const sourceObservationBaseline = SourceMutationBaseline.capture({
       root: executionRoot,
       attempt: { id: "task-review-attempt", nodeId: "task-1-review", sequence: 1 },
-      ignoredDirectories: taskReviewRepairIgnoredDirectories(executionRoot, {
+      ignoredDirectories: taskReviewSourceObservationIgnoredDirectories(executionRoot, {
         workUnit: { directory: reviewDirectory },
         flowManager: { specLocation: () => ({ directory: versionDirectory }) },
         state: { specId: "001-review-work-unit" },
@@ -365,11 +367,11 @@ describe("ReviewWorkUnit", () => {
     fs.writeFileSync(path.join(versionDirectory, "flow.json"), "{\"failure\":true}\n");
     fs.writeFileSync(path.join(versionDirectory, "activities.jsonl"), "{\"failure\":true}\n");
     fs.writeFileSync(path.join(versionDirectory, "artifact-catalog.json"), "{\"failure\":true}\n");
-    assert.equal(SourceMutationManifest.capture({ baseline: repairBaseline }).mutations.length, 0);
+    assert.equal(SourceMutationManifest.capture({ baseline: sourceObservationBaseline }).mutations.length, 0);
     assert.equal(SourceMutationManifest.capture({ baseline }).mutations.length, 0);
     fs.writeFileSync(path.join(versionDirectory, "provider-edited-evidence.json"), "{\"changed\":true}\n");
     assert.deepEqual(
-      SourceMutationManifest.capture({ baseline: repairBaseline }).mutations.map((entry) => entry.path),
+      SourceMutationManifest.capture({ baseline: sourceObservationBaseline }).mutations.map((entry) => entry.path),
       ["specs/001-review-work-unit/001/provider-edited-evidence.json"],
     );
     assert.deepEqual(
@@ -413,6 +415,18 @@ describe("ReviewWorkUnit", () => {
 
   it("reconstructs phase lifecycle results from sealed artifacts equivalently to the subprocess parser", () => {
     const executionRoot = root();
+    const taskSource = Object.freeze({
+      fingerprint: "d".repeat(64), lineageFingerprints: [], entries: [], noChangeReasons: [],
+    });
+    const taskContext = new CanonicalTaskContext({
+      state: { runId: "review-run", specId: "001-review-work-unit", currentTaskId: "task-1" },
+      spec: {
+        overview: { goal: "Verify sealed Task review outputs." },
+        tasks: [{ id: "task-1", title: "Task review", goal: "Review the Task." }],
+        requirements: [{ id: "R1", description: "The review result is durable.", task_ids: ["task-1"] }],
+      },
+      sourceFingerprint: taskSource.fingerprint,
+    });
     const outcomes = ["PASS", "ADVISORY", "REJECTED"];
     const phases = [
       ["draft-questions", null],
@@ -467,6 +481,12 @@ describe("ReviewWorkUnit", () => {
           treeSha: "a".repeat(40),
           targetStateDigest: "b".repeat(64),
           ...(specReview === null ? {} : { specReviewSource: { revision: 1, review: specReview } }),
+          ...(taskId === null ? {} : {
+            taskSource,
+            taskContext,
+            taskSpecDigest: "c".repeat(64),
+            taskReviewCycle: ReviewFindingCycle.fromActivityLedger({ runId: taskSource.runId, activities: [] }),
+          }),
         });
         const recovered = promotion.resultFromSealedArtifact();
         const count = verdict === "PASS" ? 0 : 1;

@@ -10,6 +10,7 @@ import {
   TaskMutationLineageSet,
   readTaskMutationLineagesFromCatalog,
 } from "./task-mutation-lineage.js";
+import { FlowActivity } from "./current-flow-state.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { PlanGateRepairRecord } from "./plan-gate-repair.js";
@@ -58,12 +59,13 @@ export function readTaskExecutionOverrunFactsFromView({ view, root }) {
   );
   if (active === null || active.role !== "impl" || state.attempt.nodeId !== active.nodeId) return null;
   const task = state.findNode(active.taskId);
-  const expected = ["impl", "review", "gate"].map((role) => `${active.taskId}-${role}`);
+  const expected = ["impl", "review", "triage", "repair", "gate"].map((role) => `${active.taskId}-${role}`);
   if (!Array.isArray(task?.steps) || task.steps.length !== expected.length
     || task.steps.some((step, index) => step.id !== expected[index])
-    || task.steps[0].status !== "in_progress" || task.steps[1].status !== "invalidated" || task.steps[2].status !== "invalidated") return null;
+    || task.steps[0].status !== "in_progress"
+    || task.steps.slice(1).some((step) => step.status !== "invalidated")) return null;
   const leaves = state.definition.orderedLeaves(state.root);
-  const gateIndex = leaves.findIndex((leaf) => leaf.id === expected[2]);
+  const gateIndex = leaves.findIndex((leaf) => leaf.id === expected[4]);
   // The stale runtime left untouched successors either pending (never run)
   // or invalidated (cleared by an earlier repair).  Completed or active
   // successor state would make recovery cross real downstream work.
@@ -145,9 +147,7 @@ export function readTaskExecutionOverrunFactsFromView({ view, root }) {
   if (gateFailures.length !== 1) return null;
   const gateFailure = gateFailures[0];
   const gateStarts = view.activities.filter((entry) => (
-    entry.nodeId === gateNodeId
-    && entry.transition?.attempt?.id === gateAttemptId
-    && entry.transition?.attempt?.sequence === gateAttemptSequence
+    FlowActivity.canonical(entry).startsAttempt({ nodeId: gateNodeId, id: gateAttemptId, sequence: gateAttemptSequence })
     && entry.confirmationOrder < gatePublicationActivity.confirmationOrder
   ));
   if (gateStarts.length !== 1) return null;

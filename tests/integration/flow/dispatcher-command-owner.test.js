@@ -510,7 +510,11 @@ test("dispatcher executes materialized task review and gate commands through the
           parent: null, origin: "plan", added_round: 0, status: "pending",
         }).registerActive();
         flow.settleBefore("T-1-impl").activate("T-1-impl", { settlePredecessors: false }).settle("T-1-impl");
-        if (scenario.command === "gate") flow.settle("T-1-review");
+        if (scenario.command === "gate") {
+          flow.settle("T-1-review");
+          flow.settle("T-1-triage", "skipped");
+          flow.settle("T-1-repair", "skipped");
+        }
         flow.activate(`T-1-${scenario.command === "review" ? "review" : "gate"}`, { settlePredecessors: false });
         class TaskCommandStub extends FlowCommand {
           async execute() { return { result: "ok" }; }

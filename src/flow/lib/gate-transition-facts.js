@@ -57,7 +57,7 @@ function taskLifecycleFor(state, taskId) {
   const index = tasks.findIndex((task) => task.id === taskId);
   const task = index < 0 ? null : tasks[index];
   if (task === null) throw new Error("canonical Task Gate lifecycle Task is absent");
-  const expected = ["impl", "review", "gate"].map((role) => `${taskId}-${role}`);
+  const expected = ["impl", "review", "triage", "repair", "gate"].map((role) => `${taskId}-${role}`);
   if (!Array.isArray(task.steps) || task.steps.length !== expected.length
     || task.steps.some((step, position) => step.id !== expected[position])) {
     throw new Error("canonical Task Gate lifecycle materialized Task Step identity is invalid");
@@ -66,7 +66,7 @@ function taskLifecycleFor(state, taskId) {
     candidate.status === "pending" || candidate.status === "invalidated"
   )) ?? null;
   const leaves = state.definition.orderedLeaves(state.root);
-  const gateIndex = leaves.findIndex((leaf) => leaf.id === expected[2]);
+  const gateIndex = leaves.findIndex((leaf) => leaf.id === expected[4]);
   const successor = gateIndex < 0 ? null : leaves.slice(gateIndex + 1)
     .find((leaf) => leaf.status === "pending" || leaf.status === "invalidated") ?? null;
   if (successor === null) throw new Error("canonical Task Gate lifecycle has no executable successor");
@@ -85,7 +85,9 @@ function taskLifecycleFor(state, taskId) {
     taskId,
     implStepId: expected[0],
     reviewStepId: expected[1],
-    gateStepId: expected[2],
+    triageStepId: expected[2],
+    repairStepId: expected[3],
+    gateStepId: expected[4],
     nextTaskId: nextTask?.id ?? null,
     integrationStepId: integration.id,
   });

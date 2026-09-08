@@ -1,4 +1,4 @@
-const TASK_STEP_ROLES = Object.freeze(["impl", "review", "gate"]);
+const TASK_STEP_ROLES = Object.freeze(["impl", "review", "triage", "repair", "gate"]);
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {

@@ -87,6 +87,8 @@ function taskScenario(step = "review") {
   fixture.settle("T-1-impl");
   if (step === "gate") {
     fixture.settle("T-1-review");
+    fixture.settle("T-1-triage", "skipped");
+    fixture.settle("T-1-repair", "skipped");
   }
   manager.updateStepStatus({ stepId: `T-1-${step}`, requestedStatus: "in_progress" }, { specId: fixture.specId });
   const logicalKey = step === "review" ? "task.review" : "task.gate";

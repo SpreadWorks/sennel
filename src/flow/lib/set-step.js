@@ -21,10 +21,11 @@ import {
   StepTransitionError,
 } from "./step-transition-policy.js";
 import { requiresWorkerArtifactHandoff } from "./flow-artifact-authority.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 
 function canonicalTargetId(activeNode, requestedId) {
   if (activeNode?.scope !== "task") return requestedId;
-  if (["task-impl", "task-review", "task-gate"].includes(requestedId)) {
+  if (["task-impl", "task-review", "task-triage", "task-repair", "task-gate"].includes(requestedId)) {
     return activeNode.stepId;
   }
   return requestedId;
@@ -77,6 +78,7 @@ export default class SetStepCommand extends FlowCommand {
       ? state.tasks?.find((task) => task.id === activeNode.taskId)
       : state;
     const targetId = canonicalTargetId(activeNode, id);
+    const taskIdentity = TaskStepIdentity.fromStateNode(state, targetId);
     const storedStep = activeScope
       ? findStepById(activeScope.steps || [], targetId)
       : null;
@@ -90,7 +92,7 @@ export default class SetStepCommand extends FlowCommand {
         lifecycleOwned: isDefinitionLifecycleOwnedStep({
           scope: activeNode?.scope || "flow",
           stepId: id,
-        }),
+        }) || ["review", "triage", "repair", "gate"].includes(taskIdentity?.role),
       });
     } catch (error) {
       const transitionError = error instanceof StepTransitionError

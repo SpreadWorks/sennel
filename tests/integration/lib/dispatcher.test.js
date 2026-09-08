@@ -495,7 +495,7 @@ describe("dispatcher (unified runner)", () => {
         }
         const activeTask = (activeStepId = null) => ({
           id: "T-1",
-          steps: ["task-impl", "task-review", "task-gate"].map((id) => ({
+          steps: ["task-impl", "task-review", "task-triage", "task-repair", "task-gate"].map((id) => ({
             id,
             status: id === activeStepId ? "in_progress" : "pending",
           })),
@@ -510,7 +510,7 @@ describe("dispatcher (unified runner)", () => {
               tasks: [activeTask()],
             },
           },
-          ...["task-impl", "task-review", "task-gate"].map((stepId) => ({
+          ...["task-impl", "task-review", "task-triage", "task-repair", "task-gate"].map((stepId) => ({
             stepId,
             taskId: "T-1",
             flowState: {

@@ -5,8 +5,9 @@
  */
 
 import { describe, it, afterEach } from "node:test";
-import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { CanonicalFlowFixture, TaskLifecycleFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { execFileSync } from "child_process";
 import { join } from "path";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -111,5 +112,37 @@ describe("flow set step", () => {
     assert.equal(result.ok, false);
     assert.equal(result.errors[0].code, "FLOW_STEP_TRANSITION_INVALID");
     assert.equal(findStepById(flowManager.loadReadOnly("demo").steps, "scenario-validity").status, "in_progress");
+  });
+
+  it("rejects direct completion or skip of Task review-funnel stages without changing state or Activities", async () => {
+    tmp = createTmpDir();
+    for (const role of ["review", "triage", "repair"]) {
+      const root = join(tmp, role);
+      fs.mkdirSync(root, { recursive: true });
+      const flowManager = makeFlowManager(root);
+      new TaskLifecycleFixture({
+        flowManager,
+        specId: `task-${role}`,
+        runId: `run-task-${role}`,
+        taskId: "T-1",
+        targetStep: `task-${role}`,
+        taskDocuments: [{ id: "T-1", title: "task", goal: "task", parent: null, origin: "plan", added_round: 0, status: "pending" }],
+      }).create();
+      for (const status of ["done", "skipped"]) {
+        const beforeState = JSON.stringify(flowManager.canonicalState(`task-${role}`).toJSON());
+        const beforeActivities = JSON.stringify(flowManager.activityLedger(`task-${role}`));
+        const result = await new SetStepCommand().execute({
+          id: `task-${role}`,
+          status,
+          root,
+          specId: `task-${role}`,
+          flowManager,
+        });
+        assert.equal(result.ok, false);
+        assert.equal(result.errors[0].code, "FLOW_STEP_TRANSITION_INVALID");
+        assert.equal(JSON.stringify(flowManager.canonicalState(`task-${role}`).toJSON()), beforeState);
+        assert.equal(JSON.stringify(flowManager.activityLedger(`task-${role}`)), beforeActivities);
+      }
+    }
   });
 });

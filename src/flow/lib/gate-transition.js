@@ -322,13 +322,17 @@ export class GateTargetBinding {
  * observation and seals that selection into the action plan.
  */
 export class GateTaskLifecycle {
-  constructor({ taskId, implStepId = null, reviewStepId = null, gateStepId = null, nextTaskId = null, integrationStepId } = {}) {
+  constructor({ taskId, implStepId = null, reviewStepId = null, triageStepId = null, repairStepId = null, gateStepId = null, nextTaskId = null, integrationStepId } = {}) {
     this.taskId = requiredText(taskId, "gate Task lifecycle taskId");
     this.implStepId = implStepId === null ? taskGateStepId(this.taskId, "impl") : requiredText(implStepId, "gate Task lifecycle implStepId");
     this.reviewStepId = reviewStepId === null ? taskGateStepId(this.taskId, "review") : requiredText(reviewStepId, "gate Task lifecycle reviewStepId");
+    this.triageStepId = triageStepId === null ? taskGateStepId(this.taskId, "triage") : requiredText(triageStepId, "gate Task lifecycle triageStepId");
+    this.repairStepId = repairStepId === null ? taskGateStepId(this.taskId, "repair") : requiredText(repairStepId, "gate Task lifecycle repairStepId");
     this.gateStepId = gateStepId === null ? taskGateStepId(this.taskId, "gate") : requiredText(gateStepId, "gate Task lifecycle gateStepId");
     if (this.implStepId !== taskGateStepId(this.taskId, "impl")
       || this.reviewStepId !== taskGateStepId(this.taskId, "review")
+      || this.triageStepId !== taskGateStepId(this.taskId, "triage")
+      || this.repairStepId !== taskGateStepId(this.taskId, "repair")
       || this.gateStepId !== taskGateStepId(this.taskId, "gate")) {
       throw new Error("gate Task lifecycle Step identities must bind one Task");
     }
@@ -346,6 +350,8 @@ export class GateTaskLifecycle {
       taskId: this.taskId,
       implStepId: this.implStepId,
       reviewStepId: this.reviewStepId,
+      triageStepId: this.triageStepId,
+      repairStepId: this.repairStepId,
       gateStepId: this.gateStepId,
       nextTaskId: this.nextTaskId,
       integrationStepId: this.integrationStepId,

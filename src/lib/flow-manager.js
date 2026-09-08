@@ -518,6 +518,12 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  confirmTaskReviewResult(input = {}) {
+    return this._store.confirmTaskReviewResult({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   /** Atomically apply one Definition-owned test-chain transition plan. */
   applyTestChainTransitionDecision(input = {}) {
     return this._store.applyTestChainTransitionDecision({
@@ -527,6 +533,12 @@ export class FlowManager {
   }
   publishArtifacts(input = {}) {
     return this._store.publishArtifacts({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  publishTaskSourceHandoffBaseline(input = {}) {
+    return this._store.publishTaskSourceHandoffBaseline({
       ...input,
       specId: input.specId ?? this._boundSpecId,
     });
@@ -779,12 +791,6 @@ export class FlowManager {
   }
   deferFailedReview(input = {}) {
     return this._store.deferFailedReview({
-      ...input,
-      specId: input.specId ?? this._boundSpecId,
-    });
-  }
-  repairNoChangeTaskReview(input = {}) {
-    return this._store.repairNoChangeTaskReview({
       ...input,
       specId: input.specId ?? this._boundSpecId,
     });

@@ -49,6 +49,16 @@ import {
   TaskExecutionRoundPolicy,
   resolveTaskExecutionOverrun,
 } from "./lib/task-execution-policy.js";
+import {
+  TaskNoChangeContinuationFacts,
+  TaskNoChangeContinuationSelection,
+  TaskReviewStageBinding,
+  TaskReviewStageFacts,
+  TaskReviewStageStepEffect,
+  TaskReviewStageTransitionPlan,
+  createTaskReviewStageTransitionPlan,
+  taskReviewStageEffects,
+} from "./lib/task-review-stage-transition.js";
 
 import {
   GateAttemptIdentity,
@@ -131,8 +141,89 @@ export {
   TaskExecutionOverrunDecision,
   TaskExecutionOverrunFacts,
   TaskExecutionRoundPolicy,
+  TaskNoChangeContinuationFacts,
+  TaskNoChangeContinuationSelection,
+  TaskReviewStageBinding,
+  TaskReviewStageFacts,
+  TaskReviewStageStepEffect,
+  TaskReviewStageTransitionPlan,
 };
+export { selectTaskNoChangeContinuation } from "./lib/task-review-stage-transition.js";
 export { resolveTaskExecutionOverrun } from "./lib/task-execution-policy.js";
+
+/** Resolve the Task-local review funnel from canonical, binding-checked facts. */
+export function resolveTaskReviewStageTransition(facts) {
+  if (!(facts instanceof TaskReviewStageFacts)) {
+    throw new Error("resolveTaskReviewStageTransition requires TaskReviewStageFacts");
+  }
+  const taskId = facts.binding.taskId;
+  const reviewBudgetConsumed = facts.binding.stage === "review" ? 1 : 0;
+  const plan = (operation, entries, targetRole = null, options = {}) => createTaskReviewStageTransitionPlan(facts, {
+    operation,
+    effects: taskReviewStageEffects(taskId, entries),
+    targetStepId: targetRole === null ? null : `${taskId}-${targetRole}`,
+    reviewBudgetConsumed,
+    ...options,
+  });
+  if (facts.binding.stage === "review") {
+    if (facts.verdict === "REJECTED") {
+      return plan("review-to-triage", [["review", "done"]], "triage");
+    }
+    if (facts.sourceNoChange) {
+      if (!facts.noChangeContinuation?.eligible) {
+        throw new Error("Task no-change completion requires canonical continuation evidence");
+      }
+      const reason = facts.noChangeContinuation.reason;
+      return plan("review-no-change-complete", [
+        ["review", "done"], ["triage", "skipped", reason], ["repair", "skipped", reason], ["gate", "skipped", reason],
+      ]);
+    }
+    return plan("review-to-gate", [
+      ["review", "done"],
+      ["triage", "skipped", "Task Review has no must-fix findings."],
+      ["repair", "skipped", "Task Review has no must-fix findings."],
+    ], "gate");
+  }
+  if (facts.binding.stage === "triage") {
+    if (facts.triageDisposition === "all-reject") {
+      if (facts.sourceNoChange) {
+        if (!facts.noChangeContinuation?.eligible) {
+          throw new Error("Task no-change completion requires canonical continuation evidence");
+        }
+        const reason = facts.noChangeContinuation.reason;
+        return plan("triage-no-change-complete", [
+          ["triage", "done"], ["repair", "skipped", reason], ["gate", "skipped", reason],
+        ]);
+      }
+      return plan("triage-all-reject-to-gate", [
+        ["triage", "done"], ["repair", "skipped", facts.reason],
+      ], "gate");
+    }
+    if (facts.sourceNoChange) {
+      if (facts.taskRound === 2) {
+        return plan("task-rounds-exhausted", [], null, {
+          terminalReason: "Task no-change correction exhausted the two-round execution budget.",
+        });
+      }
+      return plan("triage-no-change-correction", [
+        ["impl", "invalidated"], ["review", "invalidated"], ["triage", "invalidated"],
+        ["repair", "invalidated"], ["gate", "invalidated"],
+      ], "impl");
+    }
+    return plan("triage-to-repair", [["triage", "done"]], "repair");
+  }
+  if (facts.reviewResultCount < 4) {
+    return plan("repair-to-review", [
+      ["review", "invalidated"], ["triage", "invalidated"], ["repair", "invalidated"], ["gate", "invalidated"],
+    ], "review");
+  }
+  if (!facts.acceptanceCarryForwardReady) {
+    throw new Error("fourth Task repair requires the unreviewed Acceptance handoff");
+  }
+  return plan("repair-unreviewed-to-gate", [["repair", "done"]], "gate", {
+    acceptanceUnreviewed: true,
+  });
+}
 
 const MAX_DEPTH = 3;
 
@@ -353,7 +444,7 @@ export class GateTaskLifecycleEffect {
     }
     this.resetStepIds = Object.freeze([...resetStepIds]);
     if (this.operation === "repair-task-impl" && JSON.stringify(this.resetStepIds) !== JSON.stringify([
-      `${this.taskId}-impl`, `${this.taskId}-review`, `${this.taskId}-gate`,
+      `${this.taskId}-impl`, `${this.taskId}-review`, `${this.taskId}-triage`, `${this.taskId}-repair`, `${this.taskId}-gate`,
     ])) throw new Error("gate Task repair lifecycle must reset only its materialized Task Steps");
     if (this.operation !== "repair-task-impl" && this.resetStepIds.length !== 0) {
       throw new Error("non-repair Task lifecycle must not reset Task Steps");
@@ -388,7 +479,7 @@ const GATE_PHASE_DEFINITIONS = new Map([
   ["spec", new GatePhaseDefinition({ phase: "spec", passPrescription: "Continue with the Definition-selected Gate action.", failurePrescription: "Repair the specification evidence selected by Definition." })],
   // task-spec is a flow-level validation command. It cannot materialize or
   // enter a Task lifecycle; only the existing spec approval route may admit
-  // Task impl/review/gate leaves.
+  // Task impl/review/triage/repair/gate leaves.
   ["task-spec", new GatePhaseDefinition({ phase: "task-spec", passPrescription: "Continue with the Definition-selected Gate action.", failurePrescription: "Return to the flow-level specification approval path." })],
   ["task-impl", new GatePhaseDefinition({ phase: "task-impl", passPrescription: "Continue with the Definition-selected Gate action.", failurePrescription: "Repair the Task implementation selected by Definition." })],
   ["integration", new GatePhaseDefinition({ phase: "integration", passPrescription: "Continue with the Definition-selected Gate action.", failurePrescription: "Repair the integration evidence selected by Definition." })],
@@ -618,7 +709,13 @@ function taskLifecycleEffect(facts, disposition) {
   });
   if (disposition.operation === "repair") return new GateTaskLifecycleEffect({
     operation: "repair-task-impl", taskId: lifecycle.taskId, successorStepId: lifecycle.implStepId,
-    resetStepIds: [lifecycle.implStepId, lifecycle.reviewStepId, lifecycle.gateStepId],
+    resetStepIds: [
+      lifecycle.implStepId,
+      lifecycle.reviewStepId,
+      lifecycle.triageStepId,
+      lifecycle.repairStepId,
+      lifecycle.gateStepId,
+    ],
   });
   return null;
 }
@@ -2302,16 +2399,10 @@ export function resolveReviewTransition({
   if (facts.verdict !== "REJECTED") {
     return null;
   }
-  // An empty Task mutation allow-list cannot carry a file-backed Review
-  // repair. A typed REJECTED no-change Review therefore restarts the Task's
-  // implementation leaf as its second bounded execution round. The Store
-  // re-admits the exact Review artifact and source fingerprint atomically.
-  if (facts.scope === "task" && facts.artifact?.noChange === true) {
-    if (facts.taskRound === 1) {
-      return new DefinitionReviewDisposition({ operation: "repair-no-change-task-impl", phase });
-    }
-    return new DefinitionReviewDisposition({ operation: "task-rounds-exhausted", phase, attempts: facts.taskRound, maxAttempts: 2 });
-  }
+  // Task-local REJECTED results are consumed only by the five-stage Task
+  // review connector. The flow-scoped review recovery policy has no Task
+  // compatibility route.
+  if (facts.scope === "task") return null;
   const maxAttempts = resolveMaxAttempts({ scope: facts.scope, stepId, context: flowState }) ?? 1;
   const attempts = facts.scope === "task"
     ? facts.attemptCount
@@ -2327,17 +2418,6 @@ export function resolveReviewTransition({
       });
     }
     return new DefinitionReviewDisposition({ operation: "retry", phase });
-  }
-  // The fourth Task Review is deliberately not re-run after its in-invocation
-  // repair.  Gate receives that repair, while Acceptance receives the same
-  // canonical review/lineage evidence as an explicitly unreviewed handoff.
-  // This is not a generic deferred finding: the Task Review remains scoped to
-  // its Task and its repair is still validated by Task Gate.
-  if (facts.scope === "task") {
-    if (attempts === maxAttempts && facts.artifact?.canonicalTaskSource?.reviewRepairComplete === true) {
-      return new DefinitionReviewDisposition({ operation: "task-review-gate-handoff", phase, attempts, maxAttempts });
-    }
-    return new DefinitionReviewDisposition({ operation: "blocked", phase, attempts, maxAttempts });
   }
   if (facts.deferralEvidence.available) {
     return new DefinitionReviewDisposition({
@@ -2591,28 +2671,9 @@ function resolveImplReviewLifecycle(input) {
       actions.push(new IncrementMetric({ phase: "impl", counter: "reviewRetry" }));
       return actions;
     }
-    if (!flowScoped) {
-      if (verdict === "PASS" || verdict === "ADVISORY") {
-        actions.push(new SetStepStatus({ step: input.currentStepId || "impl-review", status: "done" }));
-        if (input.result?.artifacts?.noChange === true
-          && typeof input.result?.artifacts?.sourceFingerprint === "string"
-          && Array.isArray(input.result?.artifacts?.noChangeReasons)
-          && input.result.artifacts.noChangeReasons.length > 0) {
-          actions.push(new SetStepStatus({
-            step: String(input.currentStepId || "").replace(/-review$/, "-gate"),
-            status: "skipped",
-            taskSourceFingerprint: input.result.artifacts.sourceFingerprint,
-          }));
-        }
-      } else if (verdict === "REJECTED" && input.result?.artifacts?.reviewRepairComplete === true) {
-        // The fourth Task Review owns and validates its repairs. Its mutation
-        // lineage is Gate input, so a fifth Review would exceed the bounded
-        // episode without adding an independent correctness boundary.
-        actions.push(new SetStepStatus({ step: input.currentStepId || "impl-review", status: "done" }));
-      }
-      actions.unshift(new IncrementMetric({ phase: "impl", counter: "reviewRetry" }));
-      return actions;
-    }
+    // Task-local review publication is settled by the typed review-funnel
+    // connector. The generic lifecycle hook must not invent a parallel route.
+    if (!flowScoped) return actions;
     if (flowScoped && rejectedFlowReviewReachesExhaustion(
       input,
       "impl",
@@ -2870,7 +2931,7 @@ export function resolveLifecycle(input = {}) {
   });
   if (taskStep === null) return actions;
   return actions.map((action) => (
-    action instanceof SetStepStatus && new Set(["task-impl", "task-review", "task-gate"]).has(action.step)
+    action instanceof SetStepStatus && new Set(["task-impl", "task-review", "task-triage", "task-repair", "task-gate"]).has(action.step)
       ? action.forStep(`${taskStep.taskId}-${action.step.slice("task-".length)}`)
       : action
   ));
@@ -3502,6 +3563,28 @@ const TASK_DEFINITION = Object.freeze([
     failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
   }),
   new FlowNode({
+    id: "task-triage",
+    label: "Task triage",
+    action: "write-task-triage",
+    instructionsKey: "task.task-triage",
+    contextKinds: canonicalTaskContextKinds("task-triage"),
+    outputSchemaRef: sourceWorkerEffectSchemaRef("task-triage"),
+    skippable: true,
+    maxAttempts: 1,
+  }),
+  new FlowNode({
+    id: "task-repair",
+    label: "Task repair",
+    action: "run-task-repair",
+    instructionsKey: "task.task-repair",
+    contextKinds: canonicalTaskContextKinds("task-repair"),
+    outputSchemaRef: sourceWorkerEffectSchemaRef("task-repair"),
+    skippable: true,
+    maxAttempts: 3,
+    toolingMaxAttempts: 1,
+    failurePolicy: "retry-block",
+  }),
+  new FlowNode({
     id: "task-gate",
     label: "Task gate",
     action: "run-gate",
@@ -3611,8 +3694,9 @@ export function buildCurrentFlowDefinition() {
   const preimplementationBootstrapSkippable = new Set(["scenario-validity", "test-review"]);
   const existingImplementationCompletion = new Set(["implement"]);
   const finalizationRouteLeaves = new Set(["finalize-sync", "finalize-cleanup"]);
-  const taskOverrunRecoveryLeaves = new Set(["task-review"]);
-  const transitionsFor = ({ skippable = false, triageNoRepair = false, preimplementationBootstrap = false, existingImplementation = false, finalizationRoute = false, taskOverrunRecovery = false, failurePolicy = null } = {}) => [
+  const taskOverrunRecoveryLeaves = new Set(["task-review", "task-triage", "task-repair"]);
+  const taskStageBypassLeaves = new Set(["task-triage", "task-repair", "task-gate"]);
+  const transitionsFor = ({ skippable = false, triageNoRepair = false, taskStageBypass = false, preimplementationBootstrap = false, existingImplementation = false, finalizationRoute = false, taskOverrunRecovery = false, failurePolicy = null } = {}) => [
     "pending:in_progress",
     "in_progress:done",
     ...(skippable ? ["in_progress:skipped"] : []),
@@ -3620,6 +3704,7 @@ export function buildCurrentFlowDefinition() {
     // implementation-triage Activity. It can be pending on the normal
     // review route or invalidated on the acceptance-repair route.
     ...(triageNoRepair ? ["pending:skipped", "invalidated:skipped"] : []),
+    ...(taskStageBypass ? ["pending:skipped", "invalidated:skipped"] : []),
     ...(preimplementationBootstrap ? ["pending:skipped", "in_progress:skipped"] : []),
     // This is consumed only by the Definition-selected stale Task-overrun
     // recovery Activity, which closes an accidentally opened extra round.
@@ -3655,6 +3740,7 @@ export function buildCurrentFlowDefinition() {
       existingImplementation: existingImplementationCompletion.has(node.id),
       finalizationRoute: finalizationRouteLeaves.has(node.id),
       taskOverrunRecovery: scope === "task" && taskOverrunRecoveryLeaves.has(node.id),
+      taskStageBypass: scope === "task" && taskStageBypassLeaves.has(node.id),
     }),
     // Context requirements stay definition-owned. Current Attempt claims may
     // cover them as completed operations or typed incomplete operations, but

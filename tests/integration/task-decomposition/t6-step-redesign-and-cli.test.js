@@ -36,11 +36,11 @@ describe("T-6: task-scope step redesign and manual control CLI", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
 
-  it("TASK_STEPS_PLAN is [task-impl, task-review, task-gate]", () => {
-    assert.deepEqual(TASK_STEPS_PLAN, ["task-impl", "task-review", "task-gate"]);
+  it("TASK_STEPS_PLAN declares the complete Task review funnel", () => {
+    assert.deepEqual(TASK_STEPS_PLAN, ["task-impl", "task-review", "task-triage", "task-repair", "task-gate"]);
   });
 
-  it("buildInitialTaskSteps returns 3 pending steps matching TASK_STEPS_PLAN", () => {
+  it("buildInitialTaskSteps returns 5 pending steps matching TASK_STEPS_PLAN", () => {
     const steps = buildInitialTaskSteps("plan");
     assert.deepEqual(steps.map((step) => step.id), TASK_STEPS_PLAN);
     assert.ok(steps.every((step) => step.status === "pending"));
@@ -159,7 +159,7 @@ describe("T-6: task-scope step redesign and manual control CLI", () => {
     const { fm, fixture } = completedTaskFixture(tmp, tasks, "T-child-1");
     fm.completeTask("T-child-1");
     fixture.flow.flow.activateTask("T-child-2", { settlePredecessors: false });
-    for (const step of ["T-child-2-impl", "T-child-2-review", "T-child-2-gate"]) fixture.flow.flow.settle(step);
+    for (const step of ["T-child-2-impl", "T-child-2-review", "T-child-2-triage", "T-child-2-repair", "T-child-2-gate"]) fixture.flow.flow.settle(step);
     const { RunCompleteTaskCommand } = await import("../../../src/flow/lib/run-complete-task.js");
     const env = await new RunCompleteTaskCommand().execute({ root: tmp, flowManager: fm, flowState: fm.loadReadOnly(), taskId: "T-child-2" });
     assert.equal(env.ok, true);

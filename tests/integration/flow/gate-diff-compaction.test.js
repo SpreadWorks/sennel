@@ -334,6 +334,8 @@ function advanceToTaskGate(flowManager, fixture, padding = "", mutateImplementat
   }
   fixture.activate("T-1-review", { settlePredecessors: false });
   fixture.settle("T-1-review");
+  fixture.settle("T-1-triage", "skipped");
+  fixture.settle("T-1-repair", "skipped");
   fixture.activate("T-1-gate", { settlePredecessors: false });
 }
 
