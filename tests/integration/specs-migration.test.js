@@ -206,6 +206,19 @@ function versionStore(root, id, version = 1) {
   });
 }
 
+function assertDormantHistoricalContinuationRefused(store, state, activity) {
+  const before = JSON.stringify(store.load().toJSON());
+  const activityCount = store.activities().length;
+  assert.equal(state.history.execution, "dormant");
+  assert.equal(state.nextAction(), null);
+  assert.throws(
+    () => store.apply({ activity }),
+    /state (node|children) do(?:es)? not match definition|historical continuation/,
+  );
+  assert.equal(JSON.stringify(store.load().toJSON()), before);
+  assert.equal(store.activities().length, activityCount);
+}
+
 function legacyFlow(root, id) {
   return JSON.parse(fs.readFileSync(path.join(root, "specs", id, "flow.json"), "utf8"));
 }
@@ -877,7 +890,7 @@ describe("migrate specs --to 2", () => {
     assert.equal(state.history.kind, "historical");
     assert.equal(state.history.execution, "dormant");
     assert.equal(state.current.at(-1), "T-1");
-    assert.throws(() => state.nextAction(), /no production-resumable leaf handler/);
+    assert.equal(state.nextAction(), null);
 
     const rerun = run(root);
     assert.equal(rerun.status, 0, rerun.stderr);
@@ -954,7 +967,7 @@ describe("migrate specs --to 2", () => {
     assert.equal(fs.existsSync(path.join(root, "specs", id, "001", "flow.json")), true);
   });
 
-  it("keeps a production-owned historical cursor mutable through the normal Activity store", () => {
+  it("keeps an imported historical cursor readable but refuses unsupported continuation before an Activity write", () => {
     const root = project();
     const id = seedContinuableLegacy(root);
     const applied = run(root);
@@ -970,10 +983,7 @@ describe("migrate specs --to 2", () => {
       definition: buildCurrentFlowDefinition(),
     });
     const state = store.load();
-    assert.equal(state.nextAction().operation, "start");
-    const next = store.apply({ activity: startActivity(state) });
-    assert.equal(next.attempt.id, "migration-attempt-1");
-    assert.equal(store.load().attempt.id, "migration-attempt-1");
+    assertDormantHistoricalContinuationRefused(store, state, startActivity(state));
   });
 
   it("preserves active blocked, parked, finalized, and archived historical lifecycle semantics", () => {
@@ -1560,8 +1570,7 @@ describe("migrate specs --to 2", () => {
 
     const store = versionStore(root, id);
     const state = store.load();
-    const next = store.apply({ activity: startActivity(state, { id: "runtime-residue-next" }) });
-    assert.equal(next.attempt.id, "migration-attempt-1");
+    assertDormantHistoricalContinuationRefused(store, state, startActivity(state, { id: "runtime-residue-next" }));
     // A subsequent valid production write may use its own runtime lock.  It
     // must never revive the source-era lock as live runtime control input.
     assert.equal(fs.existsSync(path.join(version, ".runtime", "locks", "issue-log.lock")), false);
@@ -1757,11 +1766,10 @@ describe("migrate specs --to 2", () => {
     const state = store.load();
     assert.equal(state.confirmationOrder, 8);
     assert.equal(state.attempt, null);
-    const next = store.apply({ activity: startActivity(state, { id: "migration-detailed-evidence-next" }) });
-    assert.equal(next.attempt.id, "migration-attempt-1");
+    assertDormantHistoricalContinuationRefused(store, state, startActivity(state, { id: "migration-detailed-evidence-next" }));
   });
 
-  it("uses direct per-node attempt evidence for historical cursors without fabricating Attempts", () => {
+  it("preserves direct per-node attempt evidence without fabricating Attempts or admitting unsupported historical continuation", () => {
     const root = project();
     const id = seedContinuableLegacy(root, "515-direct-attempt-sequences");
     const flow = legacyFlow(root, id);
@@ -1853,16 +1861,11 @@ describe("migrate specs --to 2", () => {
     assert.equal(report.preserved.some((entry) => entry.pointer === "/stepAttempts/0/runId"), true);
     assert.equal(report.preserved.some((entry) => entry.pointer === "/reviewCount/impl"), true);
 
-    assert.throws(
-      () => store.apply({ activity: startActivity(state, { id: "migration-attempt-sequence-too-low", sequence: 4 }) }),
-      /sequence/,
+    assertDormantHistoricalContinuationRefused(
+      store,
+      state,
+      startActivity(state, { id: "migration-attempt-sequence-next", sequence: 5 }),
     );
-    const next = store.apply({
-      activity: startActivity(state, { id: "migration-attempt-sequence-next", sequence: 5 }),
-    });
-    assert.equal(next.attempt.sequence, 5);
-    assert.equal(next.findNode("branch").attemptSequence, 5);
-    assert.equal(store.load().attempt.sequence, 5);
   });
 
   it("consolidates review history and current result variants into one append-only artifact", () => {

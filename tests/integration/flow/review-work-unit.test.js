@@ -301,6 +301,9 @@ describe("ReviewWorkUnit", () => {
         return [{ nodeId: "task-1-review", attemptId: "task-review-prior-attempt" }];
       },
       artifactCatalog() { return { artifacts: [] }; },
+      readCanonicalTransitionView({ read }) {
+        return read({ state: this.canonicalState(), activities: this.activityLedger(), catalog: this.artifactCatalog() });
+      },
     };
     assert.equal(reconcileCompletedReviewWorkUnits({
       flowManager,
@@ -326,6 +329,9 @@ describe("ReviewWorkUnit", () => {
       canonicalState() { return { runId: "review-run", currentNodeId: "draft-questions-review", attempt: null }; },
       activityLedger() { return []; },
       artifactCatalog() { return { artifacts: [] }; },
+      readCanonicalTransitionView({ read }) {
+        return read({ state: this.canonicalState(), activities: this.activityLedger(), catalog: this.artifactCatalog() });
+      },
     };
     assert.equal(reconcileCompletedReviewWorkUnits({
       flowManager,

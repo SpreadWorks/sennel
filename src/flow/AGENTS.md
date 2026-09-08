@@ -24,6 +24,12 @@
 - Action identity と fingerprint には永続化済みの安定値だけを使う。`now()` のように読取りごとに変わる fallback を含めてはならない。必要な値がない場合は、安定した unavailable 状態として扱うか、安全側で拒否する。
 - transition plan の適用層は、definition layer が選んだ方針だけを適用する。適用時に別の遷移を再判断してはならない。
 
+### Historical Flow continuation
+
+- historical import は `history.execution: "dormant"` として未承認の worker 実行・後続選択の継続権限を持たない。読取り、metric、note、dispatcher はその権限を与えてはならない。Definition が認可した新しい Attempt だけが、永続化された continuation boundary を伴う `"resumed"` にする。
+- resumed Flow は boundary より後を通常の lifecycle、frontier、Attempt、outbox、finalization 不変条件で検証する。boundary 前の明示的な imported prefix に限り、`skipped`、Attempt sequence `0`、result なしの未実行 migration skip を保持できる。artifact 本文、Attempt、PASS 結果を補作してはならない。
+- boundary や prefix が削除、再配置、変更され、または未認可の cursor が boundary 前へ戻る場合は fail closed とする。allowlist に記録した prefix leaf を正規 Attempt で再実行した後は通常の lifecycle 証拠で検証する。部分 journal は provenance として保存し、継続 authority の代替にしてはならない。
+
 ## `get-next-action` の責務
 
 `get-next-action` は次の順序だけを担う。

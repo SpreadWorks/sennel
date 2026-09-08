@@ -1504,26 +1504,73 @@ export class CurrentFlowCreationAuthority {
   }
 }
 
+/** Immutable boundary between imported provenance and native continuation. */
+export class CurrentFlowHistoricalContinuation {
+  constructor(value) {
+    if (!isPlainObject(value)) throw new CurrentFlowStateInvariantError("history.continuation must be an object or null");
+    requireExactFields(value, new Set(["nodeId", "attemptId", "attemptSequence", "confirmationOrder", "unexecutedSkipLeafIds"]), "history.continuation");
+    this.nodeId = requireString(value.nodeId, "history.continuation.nodeId");
+    this.attemptId = requireString(value.attemptId, "history.continuation.attemptId");
+    this.attemptSequence = requirePositiveInteger(value.attemptSequence, "history.continuation.attemptSequence");
+    this.confirmationOrder = requirePositiveInteger(value.confirmationOrder, "history.continuation.confirmationOrder");
+    this.unexecutedSkipLeafIds = Object.freeze(requireStringList(
+      value.unexecutedSkipLeafIds,
+      "history.continuation.unexecutedSkipLeafIds",
+    ));
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      nodeId: this.nodeId,
+      attemptId: this.attemptId,
+      attemptSequence: this.attemptSequence,
+      confirmationOrder: this.confirmationOrder,
+      unexecutedSkipLeafIds: [...this.unexecutedSkipLeafIds],
+    };
+  }
+}
+
 /**
- * A production provenance capability for a faithfully imported historical
- * Flow. It records the limits of prior evidence without introducing a
- * separate lifecycle: subsequent definition-owned transitions use the same
- * state machine as a freshly created Flow.
+ * Production provenance for a faithfully imported historical Flow. Dormant
+ * imports retain partial evidence without becoming executable by readback.
+ * A Definition-authorized Attempt records the exact frontier where native
+ * continuation begins; the imported prefix remains provenance, not replay.
  */
 export class CurrentFlowHistory {
   constructor(value) {
     if (!isPlainObject(value)) throw new CurrentFlowStateInvariantError("history must be an object or null");
-    requireExactFields(value, new Set(["kind", "execution", "ledger", "creation"]), "history");
+    requireExactFields(value, new Set(["kind", "execution", "ledger", "creation", "continuation"]), "history");
     if (value.kind !== "historical") throw new CurrentFlowStateInvariantError("history.kind must be historical");
-    if (value.execution !== "dormant") throw new CurrentFlowStateInvariantError("history.execution must be dormant");
+    if (!["dormant", "resumed"].includes(value.execution)) {
+      throw new CurrentFlowStateInvariantError("history.execution must be dormant or resumed");
+    }
     if (value.ledger !== "partial") throw new CurrentFlowStateInvariantError("history.ledger must be partial");
     this.kind = "historical";
-    this.execution = "dormant";
+    this.execution = value.execution;
     this.ledger = "partial";
     this.creation = value.creation instanceof CurrentFlowCreationAuthority
       ? value.creation
       : new CurrentFlowCreationAuthority(value.creation);
+    this.continuation = value.continuation === null
+      ? null
+      : value.continuation instanceof CurrentFlowHistoricalContinuation
+        ? value.continuation
+        : new CurrentFlowHistoricalContinuation(value.continuation);
+    if (this.execution === "dormant" && this.continuation !== null) {
+      throw new CurrentFlowStateInvariantError("dormant historical Flow must not retain a continuation boundary");
+    }
+    if (this.execution === "resumed" && this.continuation === null) {
+      throw new CurrentFlowStateInvariantError("resumed historical Flow requires a continuation boundary");
+    }
     Object.freeze(this);
+  }
+
+  get resumed() { return this.execution === "resumed"; }
+
+  resume(continuation) {
+    if (this.resumed) return this;
+    return new CurrentFlowHistory({ ...this.toJSON(), execution: "resumed", continuation });
   }
 
   toJSON() {
@@ -1532,6 +1579,7 @@ export class CurrentFlowHistory {
       execution: this.execution,
       ledger: this.ledger,
       creation: this.creation.toJSON(),
+      continuation: this.continuation?.toJSON() ?? null,
     };
   }
 }
@@ -3361,11 +3409,17 @@ export class CurrentArtifactAuthority {
   }
 }
 
-function assertLeafLifecycle(node) {
+function assertLeafLifecycle(node, { allowsUnexecutedHistoricalSkip = () => false } = {}) {
   if (node.status === "pending" && node.attemptSequence !== 0) {
     throw new CurrentFlowStateInvariantError(`pending leaf must have a zero Attempt sequence cursor: ${node.id}`);
   }
-  if (TERMINAL_NODE_STATUSES.has(node.status) && node.attemptSequence === 0) {
+  const unexecutedHistoricalSkip = allowsUnexecutedHistoricalSkip(node);
+  if (unexecutedHistoricalSkip
+    && (node.status !== "skipped" || node.attemptSequence !== 0 || node.result !== null)) {
+    throw new CurrentFlowStateInvariantError(`historical unexecuted skip must be skipped with no Attempt or result: ${node.id}`);
+  }
+  if (unexecutedHistoricalSkip) return;
+  if (TERMINAL_NODE_STATUSES.has(node.status) && node.attemptSequence === 0 && !unexecutedHistoricalSkip) {
     throw new CurrentFlowStateInvariantError(`terminal leaf requires an Attempt sequence cursor: ${node.id}`);
   }
   if (node.status === "done" && node.result?.outcome !== "passed") {
@@ -3382,11 +3436,11 @@ function assertLeafLifecycle(node) {
   }
 }
 
-function assertBranchLifecycle(node) {
+function assertBranchLifecycle(node, options) {
   if (node.attemptSequence !== 0) {
     throw new CurrentFlowStateInvariantError(`branch node must not carry an Attempt sequence cursor: ${node.id}`);
   }
-  for (const child of node.steps) assertNodeLifecycle(child);
+  for (const child of node.steps) assertNodeLifecycle(child, options);
   const childStatuses = node.steps.map((child) => child.status);
   const allTerminal = childStatuses.every((status) => TERMINAL_NODE_STATUSES.has(status));
   const allSkipped = childStatuses.every((status) => status === "skipped");
@@ -3426,11 +3480,11 @@ function assertBranchLifecycle(node) {
   }
 }
 
-function assertNodeLifecycle(node) {
+function assertNodeLifecycle(node, options = {}) {
   if (node.steps.length === 0) {
-    assertLeafLifecycle(node);
+    assertLeafLifecycle(node, options);
   } else {
-    assertBranchLifecycle(node);
+    assertBranchLifecycle(node, options);
   }
 }
 
@@ -3548,7 +3602,6 @@ export class CurrentFlowState {
     this.history = value.history === null
       ? null
       : value.history instanceof CurrentFlowHistory ? value.history : new CurrentFlowHistory(value.history);
-    if (this.history === null) definition.assertStateShape(this.root);
     this.#nodes = Object.freeze(collectNodes(this.root));
     this.#leaves = Object.freeze(this.#nodes.filter((node) => node.steps.length === 0));
     if (value.current !== null && typeof value.current !== "string") {
@@ -3631,6 +3684,18 @@ export class CurrentFlowState {
       this.#assertHistorical();
       return;
     }
+    this.#assertDefinitionCurrent();
+  }
+
+  /** Shared current-state invariants for fresh and resumed historical Flows. */
+  #assertDefinitionCurrent() {
+    this.#assertDefinitionStateShapeAndStatuses();
+    assertNodeLifecycle(this.root);
+    this.#assertDefinitionExecutionCurrent();
+  }
+
+  #assertDefinitionStateShapeAndStatuses() {
+    this.definition.assertStateShape(this.root);
     const all = this.#nodes;
     const ids = new Set();
     for (const node of all) {
@@ -3642,7 +3707,10 @@ export class CurrentFlowState {
         );
       }
     }
-    assertNodeLifecycle(this.root);
+  }
+
+  #assertDefinitionExecutionCurrent() {
+    const all = this.#nodes;
     assertExecutionFrontier(this.#leaves, this.current, this.#nodes);
     if (this.lifecycle.state === "finalized") {
       if (this.current !== null || this.attempt !== null) {
@@ -3689,6 +3757,10 @@ export class CurrentFlowState {
       if (ids.has(node.id)) throw new CurrentFlowStateInvariantError(`historical state duplicates stable id: ${node.id}`);
       ids.add(node.id);
     }
+    if (this.history.resumed) {
+      this.#assertHistoricalContinuation();
+      return;
+    }
     if (this.current === null && this.attempt !== null) {
       throw new CurrentFlowStateInvariantError("historical Attempt requires a saved current path");
     }
@@ -3703,10 +3775,69 @@ export class CurrentFlowState {
       this.assertTransitionHandler(leaf.id);
       this.#assertAttemptContractForLeaf(leaf, this.attempt);
     }
-    if (this.history.creation.status === "available") {
-      if (this.confirmationOrder < 1) {
-        throw new CurrentFlowStateInvariantError("historical Flow with creation authority requires its first confirmed Activity order");
-      }
+    this.#assertHistoricalCreationAuthority();
+  }
+
+  #assertHistoricalContinuation() {
+    this.#assertDefinitionStateShapeAndStatuses();
+    const continuation = this.history.continuation;
+    const boundaryIndex = this.#leaves.findIndex((leaf) => leaf.id === continuation.nodeId);
+    if (boundaryIndex < 0 || this.#leaves[boundaryIndex].attemptSequence < continuation.attemptSequence) {
+      throw new CurrentFlowStateInvariantError("historical continuation boundary is absent or predates its admitted Attempt");
+    }
+    if (this.confirmationOrder + 1 < continuation.confirmationOrder) {
+      throw new CurrentFlowStateInvariantError("historical continuation boundary is ahead of its admitted Activity order");
+    }
+    const prefix = this.#leaves.slice(0, boundaryIndex);
+    const actualUnexecutedSkips = prefix
+      .filter((leaf) => leaf.status === "skipped" && leaf.attemptSequence === 0 && leaf.result === null)
+      .map((leaf) => leaf.id);
+    const admitted = new Set(continuation.unexecutedSkipLeafIds);
+    if (continuation.unexecutedSkipLeafIds.some((id) => !prefix.some((leaf) => leaf.id === id))) {
+      throw new CurrentFlowStateInvariantError("historical continuation prefix no longer contains an admitted unexecuted skip");
+    }
+    if (actualUnexecutedSkips.some((id) => !admitted.has(id))) {
+      throw new CurrentFlowStateInvariantError("historical continuation has an unadmitted unexecuted skip");
+    }
+    assertNodeLifecycle(this.root, {
+      allowsUnexecutedHistoricalSkip: (leaf) => admitted.has(leaf.id)
+        && leaf.status === "skipped"
+        && leaf.attemptSequence === 0
+        && leaf.result === null,
+    });
+    this.#assertDefinitionExecutionCurrent();
+    this.#assertHistoricalCreationAuthority();
+  }
+
+  #assertHistoricalCreationAuthority() {
+    if (this.history.creation.status === "available" && this.confirmationOrder < 1) {
+      throw new CurrentFlowStateInvariantError("historical Flow with creation authority requires its first confirmed Activity order");
+    }
+  }
+
+  /** Preconditions for admitting a saved dormant cursor into a new Attempt. */
+  #assertHistoricalContinuationPrefix() {
+    this.#assertDefinitionStateShapeAndStatuses();
+    const boundaryIndex = this.current === null
+      ? -1
+      : this.#leaves.findIndex((leaf) => leaf.id === this.current.at(-1));
+    if (boundaryIndex < 0) {
+      throw new CurrentFlowStateInvariantError("historical continuation requires a production leaf cursor");
+    }
+    const allowed = new Set(this.#leaves.slice(0, boundaryIndex)
+      .filter((leaf) => leaf.status === "skipped" && leaf.attemptSequence === 0 && leaf.result === null)
+      .map((leaf) => leaf.id));
+    assertNodeLifecycle(this.root, { allowsUnexecutedHistoricalSkip: (leaf) => allowed.has(leaf.id) });
+    assertExecutionFrontier(this.#leaves, this.current, this.#nodes);
+  }
+
+  #canResumeHistoricalContinuation() {
+    try {
+      this.#assertHistoricalContinuationPrefix();
+      return true;
+    } catch (error) {
+      if (error instanceof CurrentFlowStateInvariantError) return false;
+      throw error;
     }
   }
 
@@ -3987,7 +4118,7 @@ export class CurrentFlowState {
     }
     this.#assertAttemptForLeaf(leaf, next, { previous: this.attempt, kind });
     const root = replaceNode(this.root, leaf.id, leaf.with({ attemptSequence: next.sequence }));
-    return this.#replaceRoot(root, this.current, next);
+    return this.#resumeHistoricalContinuation({ root, current: this.current, attempt: next });
   }
 
   failCurrentAttempt({ failure, result }) {
@@ -4099,7 +4230,7 @@ export class CurrentFlowState {
     if (activityId !== identity.activityId) {
       throw new CurrentFlowStateInvariantError("Task Gate classification recovery Activity identity is invalid");
     }
-    return this.#replaceRoot(this.root, this.current, replacement);
+    return this.#resumeHistoricalContinuation({ root: this.root, current: this.current, attempt: replacement });
   }
 
   /** Start the single audited reevaluation granted by a durable receipt. */
@@ -4121,7 +4252,11 @@ export class CurrentFlowState {
       throw new CurrentFlowStateInvariantError("exhausted retry recovery requires a fully consumed tooling budget");
     }
     this.#assertAttemptContractForLeaf(leaf, next);
-    return this.#replaceRoot(replaceNode(this.root, leaf.id, leaf.with({ attemptSequence: next.sequence })), this.current, next);
+    return this.#resumeHistoricalContinuation({
+      root: replaceNode(this.root, leaf.id, leaf.with({ attemptSequence: next.sequence })),
+      current: this.current,
+      attempt: next,
+    });
   }
 
   /**
@@ -4167,7 +4302,7 @@ export class CurrentFlowState {
           root = replaceNode(root, id, transitionNode(node, "in_progress", this.definition, { result: null }));
         }
       }
-      return this.#replaceRoot(root, producerPath, restored);
+      return this.#resumeHistoricalContinuation({ root, current: producerPath, attempt: restored });
     }
     const consumerIndex = leaves.findIndex((node) => node.id === consumer);
     if (consumerIndex <= producerIndex) {
@@ -4187,7 +4322,7 @@ export class CurrentFlowState {
         root = replaceNode(root, id, transitionNode(node, "in_progress", this.definition, { result: null }));
       }
     }
-    return this.#replaceRoot(root, producerPath, restored);
+    return this.#resumeHistoricalContinuation({ root, current: producerPath, attempt: restored });
   }
 
   #assertTaskGateLifecycle({ leafId, gateTaskLifecycle, operation }) {
@@ -4614,7 +4749,7 @@ export class CurrentFlowState {
     const restoredAttempt = prior.attempt;
     const path = this.definition.pathFor(root, gateId);
     if (path === null) throw new CurrentFlowStateInvariantError("Task execution overrun recovery Gate path is absent");
-    return this.#replaceRoot(root, path, restoredAttempt);
+    return this.#resumeHistoricalContinuation({ root, current: path, attempt: restoredAttempt });
   }
 
   /** Apply the route-specific skips authorized by an immutable advisory decision. */
@@ -5216,7 +5351,11 @@ export class CurrentFlowState {
     if (this.current !== null) {
       const currentNode = nodeAtPath(this.root, this.current);
       this.assertTransitionHandler(currentNode.id);
+      if (this.history !== null && !this.history.resumed && this.attempt !== null && this.attempt.failure === null) {
+        return null;
+      }
       if (this.history !== null && this.attempt === null) {
+        if (!this.history.resumed && !this.#canResumeHistoricalContinuation()) return null;
         if (currentNode.steps.length !== 0 || currentNode.status !== "in_progress") {
           throw new CurrentFlowStateInvariantError("historical current cursor has no production-resumable leaf handler");
         }
@@ -5238,9 +5377,10 @@ export class CurrentFlowState {
         failureDisposition,
       });
     }
-    if (this.history !== null) return null;
+    if (this.history !== null && !this.history.resumed) return null;
     const node = this.definition.nextExecutableLeaf(this.root);
     if (node === null) return null;
+    this.assertTransitionHandler(node.id);
     return new CurrentNextActionDescriptor({
       path: this.definition.pathFor(this.root, node.id),
       node,
@@ -5418,7 +5558,7 @@ export class CurrentFlowState {
         }));
       }
     }
-    return this.#replaceRoot(root, currentPath, parsedAttempt);
+    return this.#resumeHistoricalContinuation({ root, current: currentPath, attempt: parsedAttempt });
   }
 
   /** Activate a replacement Attempt without persisting an invalidated intermediate frontier. */
@@ -5440,7 +5580,7 @@ export class CurrentFlowState {
         }));
       }
     }
-    return this.#replaceRoot(activated, currentPath, parsedAttempt);
+    return this.#resumeHistoricalContinuation({ root: activated, current: currentPath, attempt: parsedAttempt });
   }
 
   #assertAttemptForLeaf(leaf, next, { initial = false, previous = null, kind = null } = {}) {
@@ -5497,12 +5637,33 @@ export class CurrentFlowState {
     contract.resourceContract.assertClaims(next.operationClaims, next.incomplete, leaf.id);
   }
 
-  #replaceRoot(root, current = this.current, attempt = this.attempt) {
+  /** Persist the one capability that admits Definition-owned continuation. */
+  #resumeHistoricalContinuation({ root, current, attempt }) {
+    if (this.history === null || this.history.resumed) {
+      return this.#replaceRoot(root, current, attempt, this.history);
+    }
+    const leaves = collectNodes(root).filter((node) => node.steps.length === 0);
+    const boundaryIndex = leaves.findIndex((leaf) => leaf.id === attempt.nodeId);
+    if (boundaryIndex < 0) throw new CurrentFlowStateInvariantError("historical continuation Attempt must target a Flow leaf");
+    const continuation = new CurrentFlowHistoricalContinuation({
+      nodeId: attempt.nodeId,
+      attemptId: attempt.id,
+      attemptSequence: attempt.sequence,
+      confirmationOrder: this.confirmationOrder + 1,
+      unexecutedSkipLeafIds: leaves.slice(0, boundaryIndex)
+        .filter((leaf) => leaf.status === "skipped" && leaf.attemptSequence === 0 && leaf.result === null)
+        .map((leaf) => leaf.id),
+    });
+    return this.#replaceRoot(root, current, attempt, this.history.resume(continuation.toJSON()));
+  }
+
+  #replaceRoot(root, current = this.current, attempt = this.attempt, history = this.history) {
     return new CurrentFlowState({
       ...this.toJSON(),
       ...root.toJSON(),
       current: current == null ? null : current.at(-1),
       attempt: attempt?.toJSON?.() ?? attempt,
+      history: history?.toJSON() ?? null,
     }, { definition: this.definition });
   }
 
@@ -7529,7 +7690,7 @@ export class CurrentFlowStateStore {
     if (state.history !== null) {
       const orders = entries.map((entry) => entry.confirmationOrder);
       const expected = Array.from({ length: entries.length }, (_, index) => index + 1);
-      if (JSON.stringify(orders) !== JSON.stringify(expected) || state.confirmationOrder !== entries.length) {
+      if (JSON.stringify(orders) !== JSON.stringify(expected)) {
         throw new CurrentFlowStateConflictError("historical Flow Activity ledger must be a complete contiguous confirmed prefix");
       }
       if (state.history.creation.status === "available") {
@@ -7541,6 +7702,57 @@ export class CurrentFlowStateStore {
         }
       } else if (entries.some((entry) => entry.transition.operation === FLOW_CREATION_TRANSITION_OPERATION)) {
         throw new CurrentFlowStateConflictError("historical Flow without creation authority cannot claim a flow_created Activity");
+      }
+      const journalOrder = entries.at(-1)?.confirmationOrder ?? 0;
+      if (!state.history.resumed) {
+        if (state.confirmationOrder === journalOrder) {
+          this.#rememberValidatedState(state, entries, stateBytes, journalSnapshot);
+          return;
+        }
+        if (journalOrder !== state.confirmationOrder + 1) {
+          throw new CurrentFlowStateConflictError("historical Flow Activity ledger must be a complete contiguous confirmed prefix");
+        }
+        let pending;
+        try {
+          pending = this.#applyActivity(state, entries.at(-1), entries.slice(0, state.confirmationOrder));
+        } catch (error) {
+          throw new CurrentFlowStateConflictError(`pending Activity cannot admit historical continuation: ${error.message}`);
+        }
+        if (!pending.history?.resumed
+          || pending.history.continuation.confirmationOrder !== entries.at(-1).confirmationOrder
+          || !entries.at(-1).startsAttempt({
+            nodeId: pending.history.continuation.nodeId,
+            id: pending.history.continuation.attemptId,
+            sequence: pending.history.continuation.attemptSequence,
+          })) {
+          throw new CurrentFlowStateConflictError("pending Activity does not durably admit historical continuation");
+        }
+        return;
+      }
+      const boundaryOrder = state.history.continuation.confirmationOrder;
+      if (state.confirmationOrder < boundaryOrder || entries.length < boundaryOrder) {
+        throw new CurrentFlowStateConflictError("resumed historical Flow lacks its admitted continuation Activity");
+      }
+      const boundary = entries[boundaryOrder - 1] ?? null;
+      if (!boundary?.startsAttempt({
+        nodeId: state.history.continuation.nodeId,
+        id: state.history.continuation.attemptId,
+        sequence: state.history.continuation.attemptSequence,
+      })) {
+        throw new CurrentFlowStateConflictError("resumed historical Flow continuation boundary does not match its admitted Attempt");
+      }
+      if (journalOrder < state.confirmationOrder) {
+        throw new CurrentFlowStateConflictError("historical Flow state confirmation order is ahead of its Activity journal");
+      }
+      if (journalOrder > state.confirmationOrder + 1) {
+        throw new CurrentFlowStateConflictError("historical Flow Activity journal is more than one transition ahead of flow state");
+      }
+      if (journalOrder === state.confirmationOrder + 1) {
+        try {
+          this.#applyActivity(state, entries.at(-1), entries.slice(0, state.confirmationOrder));
+        } catch (error) {
+          throw new CurrentFlowStateConflictError(`pending Activity cannot advance resumed historical Flow: ${error.message}`);
+        }
       }
       this.#rememberValidatedState(state, entries, stateBytes, journalSnapshot);
       return;

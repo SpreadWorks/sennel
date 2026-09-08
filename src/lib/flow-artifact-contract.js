@@ -1469,7 +1469,7 @@ const FLOW_ARTIFACT_PLACEMENTS = new Map([
     "test.review", "test.review.repair.progress", "test.bootstrap.observation", "test.execute", "test.result.review", "impl.review", "impl.triage", "impl.repair",
     "impl.gate.source", "impl.gate", "retro", "acceptance.review", "acceptance.review.evidence", "acceptance.decision", "final.regression",
     "file.map", "placeholder.permission", "gate.memory", "repair.fingerprint", "repair.delta", "repair.migration",
-    "task.triage", "task.repair", "task.review", "task.triage.source.handoff.baseline", "task.repair.source.handoff.baseline", "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.gate.source", "task.gate", "task.mutation.lineage", "review.evidence", "activity.evidence",
+    "task.triage", "task.repair", "task.review", "task.triage.source.handoff.baseline", "task.repair.source.handoff.baseline", "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.review.aborted.work-unit", "task.gate.source", "task.gate", "task.mutation.lineage", "review.evidence", "activity.evidence",
     "finalize.cleanup.agent-metrics", "finalize.cleanup.notes", "finalize.cleanup.plugin-artifacts",
   ].map((key) => [key, new FlowArtifactPlacement("step-owner")]),
 ]);
@@ -1544,7 +1544,7 @@ const FLOW_ARTIFACT_OWNER_STEP_BY_KEY = new Map([
 
 function stepOwnerFor(logicalKey) {
   if (placementFor(logicalKey).toString() !== "step-owner") return null;
-  if (["task.review", "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation"].includes(logicalKey)) return FlowArtifactStepOwner.taskCollection("review");
+  if (["task.review", "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.review.aborted.work-unit"].includes(logicalKey)) return FlowArtifactStepOwner.taskCollection("review");
   if (logicalKey === "task.triage") return FlowArtifactStepOwner.taskCollection("triage");
   if (logicalKey === "task.repair") return FlowArtifactStepOwner.taskCollection("repair");
   if (logicalKey === "task.triage.source.handoff.baseline") return FlowArtifactStepOwner.taskCollection("triage");
@@ -1691,6 +1691,7 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("task.review.unsealed.checkpoint", "steps/impl/:{taskId}/review/recovery/unsealed/:{attemptId}.json", "task-review-unsealed-checkpoint", "canonical-flow-artifacts", "task-review", own("task-review", ["task-review"], ["task-review"]), "permanent", "collection"),
   contract("task.review.recovery.authorization", "steps/impl/:{taskId}/review/recovery/authorizations/:{attemptId}.json", "task-review-recovery-authorization", "canonical-flow-artifacts", "task-review", own("task-review", ["task-review"], ["task-review"]), "permanent", "collection"),
   contract("task.review.reconciliation", "steps/impl/:{taskId}/review/recovery/reconciliations/:{attemptId}.json", "task-review-reconciliation", "canonical-flow-artifacts", "task-review", own("task-review", ["task-review"], ["task-review"]), "permanent", "collection"),
+  contract("task.review.aborted.work-unit", "steps/impl/:{taskId}/review/recovery/aborted/:{attemptId}.json", "task-review-aborted-work-unit", "canonical-flow-artifacts", "task-review", own("task-review", ["task-review"], ["task-review"]), "permanent", "collection"),
   contract("gate.memory", "steps/impl/gate/memory.json", "gate-memory", "canonical-flow-artifacts", "impl-gate", own("impl-gate", ["impl-gate"], ["impl-gate", "final-regression"])),
   contract("repair.fingerprint", "steps/impl/repair/fingerprint.json", "repair-fingerprint", "canonical-flow-artifacts", "impl-repair", own("impl-repair", ["impl-repair"], ["test-execute", "impl-gate"])),
   contract("repair.delta", "steps/impl/repair/deltas/:{deltaId}.json", "repair-delta", "canonical-flow-artifacts", "impl-repair", own("impl-repair", ["impl-repair"], ["test-execute", "impl-gate"]), "permanent", "collection"),
@@ -1836,6 +1837,7 @@ export const FLOW_ARTIFACT_SWITCH_TARGETS = Object.freeze([
   newTarget("task.review.unsealed.checkpoint", "steps/impl/:{taskId}/review/recovery/unsealed/:{attemptId}.json", "task-review", "task-review"),
   newTarget("task.review.recovery.authorization", "steps/impl/:{taskId}/review/recovery/authorizations/:{attemptId}.json", "task-review", "task-review"),
   newTarget("task.review.reconciliation", "steps/impl/:{taskId}/review/recovery/reconciliations/:{attemptId}.json", "task-review", "task-review"),
+  newTarget("task.review.aborted.work-unit", "steps/impl/:{taskId}/review/recovery/aborted/:{attemptId}.json", "task-review", "task-review"),
   target("gate.memory", ["gate-impl-memory.json"], "steps/impl/gate/memory.json", "impl-gate", "impl-gate"),
   target("repair.fingerprint", ["repair-fingerprint.json"], "steps/impl/repair/fingerprint.json", "impl-repair", "test-execute"),
   patternTarget("repair.delta", ["repair-deltas/:{deltaId}.json"], "steps/impl/repair/deltas/:{deltaId}.json", "impl-repair", "test-execute"),
@@ -1908,7 +1910,7 @@ export const FLOW_ARTIFACT_NORMAL_FLOW_FILES = Object.freeze([
   known("repair.fingerprint", "switch", "repair-fingerprint.json"), knownPattern("repair.delta", "switch", "repair-deltas/:{deltaId}.json"), known("repair.migration", "switch", "repair-state-migration.json"), known("impl.repair.transaction", "switch", "impl-repair-transaction.json"), knownNew("task.review", "steps/impl/:{taskId}/review/result.json"), knownNew("task.triage", "steps/impl/:{taskId}/triage/result.json"), knownNew("task.repair", "steps/impl/:{taskId}/repair/result.json"), knownNew("task.triage.source.handoff.baseline", "steps/impl/:{taskId}/triage/recovery/source-baselines/:{attemptId}.json"), knownNew("task.repair.source.handoff.baseline", "steps/impl/:{taskId}/repair/recovery/source-baselines/:{attemptId}.json"),
   known("task.gate.source", "switch", "task-impl-gate-source.json"), known("task.gate", "switch", "task-impl-gate-result.json"), knownNew("task.mutation.lineage", "steps/impl/:{taskId}/impl/mutation-lineage/:{attemptId}.json"), knownPattern("review.evidence", "switch", "review-evidence/:{digest}.json"), knownPattern("tests.source", "switch", new FlowArtifactLegacyPattern("tests/:{testPath}", { excludedPrefixes: ["tests/.raw/"] })),
   knownNew("activity.evidence", "steps/:{ownerPath}/activity-evidence/:{digest}.json"),
-  knownNew("task.review.reconciliation", "steps/impl/:{taskId}/review/recovery/reconciliations/:{attemptId}.json"),
+  knownNew("task.review.reconciliation", "steps/impl/:{taskId}/review/recovery/reconciliations/:{attemptId}.json"), knownNew("task.review.aborted.work-unit", "steps/impl/:{taskId}/review/recovery/aborted/:{attemptId}.json"),
   known("flow.findings", "switch", "flow-findings.json"), known("nonblocking.handoffs", "switch", "nonblocking-handoffs.json"), known("scenario.validity.raw-log", "switch", "tests/.raw/scenario-validity.log"), known("test.execute.raw-log", "switch", "tests/.raw/test-execution.log"), knownPattern("final.regression.raw-log", "switch", "tests/.raw/final-regression-attempt-:{attempt}.log"), known("retry.recovery.transaction", "switch", ".retry-recovery.transaction.json"), known("test.requirement.summary", "switch", "tests/.raw/requirement-summary.json"), knownPattern("review.work.unit", "switch", "review-history/work-units/:{workUnitPath}"), knownNew("runtime.step-metadata", ".runtime/step-metadata/:{stepId}.json"),
   known("finalize.cleanup.agent-metrics", "switch", "agent-metrics.json"), known("finalize.cleanup.notes", "switch", "notes.json"), known("finalize.cleanup.plugin-artifacts", "switch", "plugin-artifacts.json"), known("finalize.cleanup.runtime-log", "switch", "runtime-log.json"), known("finalize.cleanup.journal", "switch", "finalize-cleanup.json"),
   known("runtime.lock.issue-log", "switch", ".issue-log.lock"), known("runtime.lock.current-flow-state", "switch", ".current-flow-state.lock"), known("runtime.lock.artifact-catalog", "switch", ".artifact-catalog.lock"), known("runtime.lock.retry-recovery", "switch", ".retry-recovery.lock"), known("runtime.lock.flow-state-writer", "switch", ".flow.json.writer.lock"), knownPattern("runtime.lock.flow-state-writer-owner", "switch", ".flow.json.writer.:{ownerToken}.owner.tmp"), knownPattern("runtime.lock.impl-repair", "switch", ".impl-repair.lock/:{lockPath}"),

@@ -411,6 +411,23 @@ function abortedNextAction(binding = null) {
   }, binding);
 }
 
+function dormantHistoricalNextAction(binding = null) {
+  return nextActionWithBinding({
+    taskId: null,
+    step: null,
+    action: null,
+    instructions: null,
+    context: null,
+    output_schema: null,
+    requires_approval: false,
+    directive: new BlockedDirective({
+      code: "HISTORICAL_CONTINUATION_NOT_ADMITTED",
+      reason: "This historical Flow is readable, but its imported partial execution has not been admitted for Definition-owned continuation.",
+      resumeInstruction: "Use an explicit Definition-authorized recovery or retry that creates the next Attempt; do not dispatch an imported worker directly.",
+    }).toJSON(),
+  }, binding);
+}
+
 export class NextActionPlanError extends Error {
   constructor(code, message) {
     super(message);
@@ -914,6 +931,7 @@ export default class GetNextActionCommand extends FlowCommand {
     const descriptor = typedState.nextAction();
 
     if (descriptor === null) {
+      if (typedState.history?.execution === "dormant") return dormantHistoricalNextAction(binding);
       return completedNextAction(binding);
     }
     const taskExecutionOverrun = resolveTaskExecutionOverrun(readTaskExecutionOverrunFacts({

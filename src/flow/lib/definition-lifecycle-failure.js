@@ -13,6 +13,8 @@ import { CurrentAttemptIdentity } from "./current-flow-state.js";
 import { DefinitionFailureOwnership } from "./definition-failure-ownership.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
+import { attachedCanonicalReviewWorkUnit } from "./canonical-review-artifacts.js";
+import { TaskReviewAbortedWorkUnit } from "./task-review-aborted-work-unit.js";
 
 function nonEmptyText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -117,7 +119,7 @@ export class DefinitionLifecycleAttemptBinding {
     });
   }
 
-  toolingFailure(error, fallbackCode) {
+  toolingFailure(error, fallbackCode, commandResult = null) {
     const facts = failureFacts(error, fallbackCode);
     const state = this.flowManager.canonicalState(this.specId);
     if (state === null || state.runId !== this.runId || !this.attempt.matches(state)) return false;
@@ -134,6 +136,11 @@ export class DefinitionLifecycleAttemptBinding {
     const contract = state.definition.contractFor(this.attempt.nodeId, state.root);
     const retryable = ["retry", "retry-block"].includes(action.action.failurePolicy.value)
       && contract.remainingRetries(state.attempt.consumption, "tooling") > 0;
+    let taskReviewAbortedWorkUnit = null;
+    if (taskStep?.definitionId === "task-review") {
+      const worker = attachedCanonicalReviewWorkUnit(commandResult);
+      if (worker !== null) taskReviewAbortedWorkUnit = TaskReviewAbortedWorkUnit.forAttempt(worker, state.attempt);
+    }
     return this.flowManager.failCurrentAttemptIfCurrent({
       specId: this.specId,
       expectedRunId: this.runId,
@@ -151,6 +158,7 @@ export class DefinitionLifecycleAttemptBinding {
         confirmedAt: new Date().toISOString(),
         artifactRefs: [],
       },
+      ...(taskReviewAbortedWorkUnit === null ? {} : { taskReviewAbortedWorkUnit }),
       ...(taskStep?.definitionId === "task-gate" ? {
           taskGateFallback: {
             nodeId: action.nodeId,

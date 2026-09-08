@@ -4,8 +4,9 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 
+import { confirmCanonicalFixtureStep } from "../../support/infrastructure/flow-setup.js";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
-import { readRetryBaseline, retryEvidenceRouteForNode } from "../../../src/flow/lib/retry-recovery.js";
+import { readRetryBaseline, RetryRecoveryReceipt, retryEvidenceRouteForNode } from "../../../src/flow/lib/retry-recovery.js";
 import { ReviewTransitionFacts } from "../../../src/flow/lib/review-transition-facts.js";
 import { TaskReviewExecutionIdentity } from "../../../src/flow/lib/task-review-execution-identity.js";
 import { runTaskReviewProtocol, classifyReviewCommandError, parseImplReviewFindings, formatImplReviewJson } from "../../../src/flow/commands/review.js";
@@ -18,6 +19,19 @@ import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 function baseline(scenario) {
   const state = scenario.state();
   return readRetryBaseline(scenario.manager, state, retryEvidenceRouteForNode(state, state.attempt.nodeId));
+}
+
+function recoveryReceipt(scenario) {
+  const state = scenario.state();
+  const route = retryEvidenceRouteForNode(state, state.attempt.nodeId);
+  const receipt = scenario.manager.readArtifact({
+    specId: scenario.specId,
+    logicalKey: "retry.recovery.receipt",
+    parameters: { routeId: `${route.kind}-${route.phase}${route.taskId ? `-${route.taskId}` : ""}`, attemptId: state.attempt.id },
+    consumerNodeId: state.attempt.nodeId,
+    optional: true,
+  });
+  return receipt === null ? null : new RetryRecoveryReceipt(JSON.parse(receipt.bytes.toString("utf8")));
 }
 
 async function withOutputDirectory(directory, callback) {
@@ -87,6 +101,17 @@ async function publishPassingTaskReview(scenario) {
   return result;
 }
 
+// A published PASS now prepares Gate atomically. Complete that active Gate
+// before exercising rewind from a terminal Task, preserving the recovery scenario.
+async function completePassingTask(scenario) {
+  await publishPassingTaskReview(scenario);
+  scenario.reload();
+  assert.equal(scenario.state().attempt.nodeId, "T-1-gate");
+  confirmCanonicalFixtureStep(scenario.manager, scenario.specId, "T-1-gate");
+  scenario.reload();
+  assert.equal(scenario.state().current, null);
+}
+
 // Exercise the real Task Review protocol and parent failure persistence; only
 // the provider response and child-process boundary are deterministic fakes.
 function invalidProtocolWorker(scenario, invalid, onCall) {
@@ -107,6 +132,34 @@ function invalidProtocolWorker(scenario, invalid, onCall) {
     }
     assert.fail("invalid responses must not return a successful worker result");
   };
+}
+
+async function recoverFromNonRetryableProtocolFailure(scenario) {
+  const previousAttempt = scenario.state().attempt;
+  const previousBaseline = baseline(scenario);
+  assert.notEqual(previousBaseline, null, "the failed Review Attempt must retain its recovery baseline");
+  let calls = 0;
+  const failed = await scenario.review(invalidProtocolWorker(scenario, "[]", () => { calls += 1; })).execute(scenario.context());
+  assert.equal(failed.ok, false, JSON.stringify(failed));
+  assert.equal(calls, 2, "the protocol's bounded provider attempts must complete before parent persistence");
+  scenario.reload();
+  assert.equal(scenario.state().attempt.failure.code, "TASK_REVIEW_PROTOCOL_INVALID_RESPONSE");
+  assert.equal(scenario.state().attempt.failure.retryable, false);
+  assert.equal(scenario.state().attempt.consumption.semantic, 0);
+  scenario.changeEvidence(1).reload();
+  const recovered = scenario.recover();
+  assert.equal(recovered.reset, true, JSON.stringify(recovered));
+  assert.equal(recovered.grants[0].operation, "retry_recovery_attempt");
+  scenario.reload();
+  const receipt = recoveryReceipt(scenario);
+  const currentAttempt = scenario.state().attempt;
+  assert.equal(receipt.previous.equals(previousBaseline), true, "receipt must bind the persisted baseline of the failed Attempt");
+  assert.equal(receipt.current.attemptId, currentAttempt.id);
+  assert.equal(receipt.current.attempt, currentAttempt.sequence);
+  assert.notEqual(currentAttempt.id, previousAttempt.id);
+  assert.equal(currentAttempt.sequence, previousAttempt.sequence + 1);
+  assert.equal(currentAttempt.consumption.semantic, previousAttempt.consumption.semantic);
+  assert.equal(currentAttempt.failure, null);
 }
 
 test("review recovery retains a usable baseline through two failures and fresh Store instances", (t) => {
@@ -360,8 +413,76 @@ test("published PASS is admitted by Gate after all parent objects are discarded"
   assert.equal(scenario.state().nextAction().nodeId, "T-1-gate");
   const next = await new GetNextActionCommand().execute(scenario.context());
   assert.equal(next.directive.kind, "execute_step");
-  assert.equal(next.directive.action, "run-gate");
   assert.equal(next.step, "task-gate");
   assert.equal(next.action, "run-gate");
+  scenario.reload();
   assert.equal(scenario.state().attempt.nodeId, "T-1-gate");
+});
+
+test("invalidated Review recovery preserves the baseline required by a later tooling failure", async (t) => {
+  const scenario = new TaskReviewScenario(t);
+  useScenarioContainer(t, scenario);
+  await completePassingTask(scenario);
+  // Terminal-node rewind is an existing Store production API. It invalidates
+  // downstream leaves; completing implementation then claims Review via recover.
+  scenario.reload();
+  assert.equal(scenario.state().current, null);
+  scenario.manager.rewindTo("T-1-impl", { specId: scenario.specId });
+  scenario.confirmImplementation("revised implementation\n").reload();
+  const introduced = scenario.manager.activityLedger(scenario.specId).findLast((entry) => entry.attemptId === scenario.state().attempt.id);
+  assert.equal(introduced.transition.operation, "recover_attempt");
+  const durable = baseline(scenario);
+  assert.notEqual(durable, null, "recover_attempt must not omit the baseline required after a tooling failure");
+  assert.equal(durable.attemptId, scenario.state().attempt.id);
+  await recoverFromNonRetryableProtocolFailure(scenario);
+});
+
+test("rewindTo directly recovers an invalidated Review with its baseline", async (t) => {
+  const scenario = new TaskReviewScenario(t);
+  useScenarioContainer(t, scenario);
+  await completePassingTask(scenario);
+  scenario.reload();
+  scenario.manager.rewindTo("T-1-impl", { specId: scenario.specId });
+  scenario.confirmImplementation("revised implementation without claim\n", { claimReview: false }).reload();
+  assert.equal(scenario.state().current, null);
+  assert.equal(scenario.state().findNode("T-1-review").status, "invalidated");
+
+  scenario.manager.rewindTo("T-1-review", { specId: scenario.specId });
+  scenario.reload();
+  assert.equal(scenario.manager.activityLedger(scenario.specId).at(-1).transition.operation, "recover_attempt");
+  const durable = baseline(scenario);
+  assert.notEqual(durable, null, "direct recover must publish the replacement Attempt baseline in the same transaction");
+  assert.equal(durable.attemptId, scenario.state().attempt.id);
+  await recoverFromNonRetryableProtocolFailure(scenario);
+});
+
+test("direct Review rewind atomically starts its replacement baseline", async (t) => {
+  const scenario = new TaskReviewScenario(t);
+  useScenarioContainer(t, scenario);
+  await completePassingTask(scenario);
+  scenario.reload();
+  assert.equal(scenario.state().current, null);
+
+  scenario.manager.rewindTo("T-1-review", { specId: scenario.specId });
+  scenario.reload();
+  assert.equal(scenario.manager.activityLedger(scenario.specId).at(-1).transition.operation, "rewind");
+  const durable = baseline(scenario);
+  assert.notEqual(durable, null, "a direct rewind must publish the replacement Attempt baseline in the same transaction");
+  assert.equal(durable.attemptId, scenario.state().attempt.id);
+  assert.equal(durable.attempt, scenario.state().attempt.sequence);
+  await recoverFromNonRetryableProtocolFailure(scenario);
+});
+
+test("completed Task Gate rewinds without fabricating PASS retry evidence", async (t) => {
+  const scenario = new TaskReviewScenario(t);
+  useScenarioContainer(t, scenario);
+  await completePassingTask(scenario);
+  scenario.reload();
+  assert.equal(scenario.state().current, null);
+
+  scenario.manager.rewindTo("T-1-gate", { specId: scenario.specId });
+  scenario.reload();
+  assert.equal(scenario.manager.activityLedger(scenario.specId).at(-1).transition.operation, "rewind");
+  assert.equal(scenario.state().attempt.nodeId, "T-1-gate");
+  assert.equal(baseline(scenario), null, "a passed Gate has no semantic failure source to turn into retry evidence");
 });
