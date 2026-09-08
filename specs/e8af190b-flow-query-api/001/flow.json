@@ -467,6 +467,24 @@
             },
             {
               "kind": "step",
+              "id": "T-1-triage",
+              "key": "task.task-triage",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-1-repair",
+              "key": "task.task-repair",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
               "id": "T-1-gate",
               "key": "impl.impl-gate",
               "status": "done",
@@ -529,6 +547,24 @@
                 "artifactRefs": []
               },
               "attemptSequence": 7,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-2-triage",
+              "key": "task.task-triage",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-2-repair",
+              "key": "task.task-repair",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
               "steps": []
             },
             {
@@ -599,6 +635,24 @@
             },
             {
               "kind": "step",
+              "id": "T-3-triage",
+              "key": "task.task-triage",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-3-repair",
+              "key": "task.task-repair",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
               "id": "T-3-gate",
               "key": "impl.impl-gate",
               "status": "done",
@@ -661,6 +715,24 @@
                 "artifactRefs": []
               },
               "attemptSequence": 4,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-4-triage",
+              "key": "task.task-triage",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-4-repair",
+              "key": "task.task-repair",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
               "steps": []
             },
             {
@@ -731,6 +803,24 @@
             },
             {
               "kind": "step",
+              "id": "T-5-triage",
+              "key": "task.task-triage",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-5-repair",
+              "key": "task.task-repair",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
               "id": "T-5-gate",
               "key": "impl.impl-gate",
               "status": "done",
@@ -793,6 +883,24 @@
                 "artifactRefs": []
               },
               "attemptSequence": 13,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-6-triage",
+              "key": "task.task-triage",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-6-repair",
+              "key": "task.task-repair",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
               "steps": []
             },
             {
@@ -863,6 +971,24 @@
             },
             {
               "kind": "step",
+              "id": "T-7-triage",
+              "key": "task.task-triage",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-7-repair",
+              "key": "task.task-repair",
+              "status": "skipped",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
               "id": "T-7-gate",
               "key": "impl.impl-gate",
               "status": "done",
@@ -914,7 +1040,25 @@
               "key": "task.task-review",
               "status": "in_progress",
               "result": null,
-              "attemptSequence": 1,
+              "attemptSequence": 4,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-8-triage",
+              "key": "task.task-triage",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-8-repair",
+              "key": "task.task-repair",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
               "steps": []
             },
             {
@@ -956,6 +1100,24 @@
             },
             {
               "kind": "step",
+              "id": "T-9-triage",
+              "key": "task.task-triage",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-9-repair",
+              "key": "task.task-repair",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
               "id": "T-9-gate",
               "key": "impl.impl-gate",
               "status": "invalidated",
@@ -986,6 +1148,24 @@
               "kind": "step",
               "id": "T-10-review",
               "key": "task.task-review",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-10-triage",
+              "key": "task.task-triage",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "T-10-repair",
+              "key": "task.task-repair",
               "status": "invalidated",
               "result": null,
               "attemptSequence": 0,
@@ -1152,21 +1332,15 @@
   ],
   "current": "T-8-review",
   "attempt": {
-    "id": "attempt-T-8-review-b9c88375-86a9-43ff-9754-863a47a878c9",
+    "id": "e2746098-5f9a-4f45-98c6-790a7a752ff9",
     "nodeId": "T-8-review",
-    "sequence": 1,
-    "startedAt": "2026-09-07T20:25:53.812Z",
+    "sequence": 4,
+    "startedAt": "2026-09-08T11:15:33.827Z",
     "consumption": {
       "semantic": 0,
-      "tooling": 0
+      "tooling": 1
     },
-    "failure": {
-      "category": "source-integrity",
-      "code": "TASK_REVIEW_SOURCE_EFFECT_REJECTED",
-      "message": "Task Review repair mutated paths not owned by must-fix Review findings: tests/integration/flow/query.test.js",
-      "retryable": false,
-      "retryKind": null
-    },
+    "failure": null,
     "blocker": null,
     "incomplete": [],
     "operationClaims": [
@@ -1180,9 +1354,44 @@
       }
     ]
   },
-  "confirmationOrder": 833,
+  "confirmationOrder": 842,
   "artifacts": [],
   "outbox": [],
   "context": null,
-  "history": null
+  "history": {
+    "kind": "historical",
+    "execution": "resumed",
+    "ledger": "partial",
+    "creation": {
+      "status": "available",
+      "source": {
+        "path": "artifacts/migration/3182-preparation-original.json",
+        "pointer": "/creationActivity/timing/startedAt",
+        "hash": "6c7274e81ddb19973329b65b5d32d1de105b7f25a544bc7e516ef6c575e905d7",
+        "timestamp": "2026-09-01T05:25:13.008Z"
+      }
+    },
+    "continuation": {
+      "nodeId": "T-8-review",
+      "attemptId": "e2746098-5f9a-4f45-98c6-790a7a752ff9",
+      "attemptSequence": 4,
+      "confirmationOrder": 842,
+      "unexecutedSkipLeafIds": [
+        "T-1-triage",
+        "T-1-repair",
+        "T-2-triage",
+        "T-2-repair",
+        "T-3-triage",
+        "T-3-repair",
+        "T-4-triage",
+        "T-4-repair",
+        "T-5-triage",
+        "T-5-repair",
+        "T-6-triage",
+        "T-6-repair",
+        "T-7-triage",
+        "T-7-repair"
+      ]
+    }
+  }
 }
