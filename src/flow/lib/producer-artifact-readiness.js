@@ -333,7 +333,7 @@ export class ProducerArtifactReadiness {
       const confirmation = activities.find((activity) => (
         activity.id === descriptor.activityId
         && activity.nodeId === this.producerNodeId
-        && (taskStageRoute !== null
+        && (activity.transition.operation === "advance_task_review_stage"
           ? taskStageCompletionMatches({
             route: taskStageRoute,
             expectedAttemptId,
