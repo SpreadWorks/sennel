@@ -15,7 +15,7 @@ import { assertOk, runCmd } from "../../lib/process.js";
 import { iterateAnalysisCategories } from "../../docs/lib/analysis-entry.js";
 import { buildInitialSteps } from "../../lib/flow-helpers.js";
 import { findStepById } from "./step-tree.js";
-import { captureGitSnapshot, getWorktreeStatus, runGit } from "../../lib/git-helpers.js";
+import { GIT_OBJECT_ID, captureGitSnapshot, getWorktreeStatus, runGit } from "../../lib/git-helpers.js";
 import { emptySpecStub } from "../../lib/spec-json.js";
 import { onHook } from "../../lib/hooks.js";
 import { FlowCommand } from "./base-command.js";

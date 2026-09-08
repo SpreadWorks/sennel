@@ -65,7 +65,6 @@ import { CanonicalFlowArtifactWrite } from "./lib/current-flow-state.js";
 import { TaskStepIdentity } from "./lib/task-step-identity.js";
 import { DefinitionFailureOwnership } from "./lib/definition-failure-ownership.js";
 import { RepositoryFlowOperationLock } from "../lib/repository-maintenance-lock.js";
-import { PRODUCT } from "../lib/product.js";
 import { readCurrentNonGateTransitionFacts } from "./lib/non-gate-transition-facts.js";
 import { readCurrentTestChainTransitionFacts } from "./lib/test-chain-transition-facts.js";
 import {
@@ -180,10 +179,6 @@ function resetSkippedDownstreamSteps(stateOwner, stepIds = []) {
 function deriveActivePhase(ctx) {
   const state = ctx.flowManager.load();
   return derivePhase(state);
-}
-
-function managedWorkerHandoffActive(environment = process.env) {
-  return typeof environment[PRODUCT.env("FLOW_HANDOFF_REQUEST")] === "string";
 }
 
 /**
@@ -1251,11 +1246,6 @@ export const FLOW_COMMANDS = {
         "  --search <query>   Search entries by keyword (matches against keywords array)",
       ].join("\n"),
       post(ctx, result) {
-        // A managed worker has payload/source authority only. Recording an
-        // observation here mutates canonical Flow state while the parent is
-        // holding an immutable handoff checkpoint, so the otherwise valid
-        // handoff would be rejected as an authority violation.
-        if (managedWorkerHandoffActive()) return;
         const phase = deriveActivePhase(ctx);
         if (!phase) return;
 
