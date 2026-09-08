@@ -136,6 +136,7 @@ import {
   TaskReviewRecoveryAuthorization,
   taskReviewCheckpointArtifact,
 } from "./task-review-recovery-checkpoint.js";
+import { TaskReviewAbortedWorkUnit, TaskReviewAbortedWorkUnitRetryAdmission } from "./task-review-aborted-work-unit.js";
 import { validateUpgradeResultArtifact } from "./upgrade-result-artifact.js";
 import {
   taskGateSettlementIssueLogActivityId,
@@ -2137,11 +2138,18 @@ export class CanonicalFlowManagerStore {
     if (state.nextAction()?.operation !== "retry") {
       throw new CurrentFlowStateInvariantError("the definition failure policy does not authorize retry");
     }
+    const taskReviewArchiveAdmission = this.#taskReviewAbortedWorkUnitsForRetry(state, opts.taskReviewAbortedWorkUnits ?? []);
     return this.runtime.retryAttempt({
       specId,
       activityId: activityId("attempt-retried"),
       attempt,
-      retryRecoveryPublication: this.#retryBaselinePublication(state, state.current?.at(-1), attempt),
+      retryRecoveryPublication: this.#retryBaselinePublication(
+        state,
+        state.current?.at(-1),
+        attempt,
+        taskReviewArchiveAdmission?.archives ?? [],
+      ),
+      admission: taskReviewArchiveAdmission,
     });
   }
 
@@ -2191,7 +2199,7 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  retryExhaustedAttempt({ specId = null, receipt, taskReviewRecoveryAuthorization = null } = {}) {
+  retryExhaustedAttempt({ specId = null, receipt, taskReviewRecoveryAuthorization = null, taskReviewAbortedWorkUnits = [] } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const typed = receipt instanceof RetryRecoveryReceipt ? receipt : new RetryRecoveryReceipt(receipt);
@@ -2221,12 +2229,14 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("exhausted recovery receipt identity does not match the active Attempt and Flow");
     }
     const nextAttempt = exhaustedRecoveryAttempt(state, typed.current.attemptId);
+    const taskReviewArchiveAdmission = this.#taskReviewAbortedWorkUnitsForRetry(state, taskReviewAbortedWorkUnits);
     return this.runtime.retryRecoveryAttempt({
       specId: resolved,
       activityId: activityId("attempt-recovered-after-exhaustion"),
       attempt: nextAttempt,
-      retryRecoveryPublication: RetryRecoveryArtifactPublication.receipt(typed, taskReviewRecoveryAuthorization),
+      retryRecoveryPublication: RetryRecoveryArtifactPublication.receipt(typed, taskReviewRecoveryAuthorization, taskReviewArchiveAdmission?.archives ?? []),
       references: { evaluations: [], findings: [], repairs: [], artifacts: [] },
+      admission: taskReviewArchiveAdmission,
     });
   }
 
@@ -3477,7 +3487,7 @@ export class CanonicalFlowManagerStore {
    * error counterpart to `confirmCurrentAttempt`; callers never mutate a
    * status blob or write a retry artifact beside flow.json.
    */
-  failCurrentAttempt({ specId = null, failure, result, commandResult = undefined, taskReviewUnsealedCheckpoint = null, admission = undefined } = {}) {
+  failCurrentAttempt({ specId = null, failure, result, commandResult = undefined, taskReviewUnsealedCheckpoint = null, taskReviewAbortedWorkUnit = null, admission = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
@@ -3499,6 +3509,10 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("Task Review failure checkpoint must be typed");
     }
     if (taskReviewUnsealedCheckpoint !== null) taskReviewUnsealedCheckpoint.assertActiveState(state);
+    if (taskReviewAbortedWorkUnit !== null && !(taskReviewAbortedWorkUnit instanceof TaskReviewAbortedWorkUnit)) {
+      throw new CurrentFlowStateInvariantError("Task Review aborted worker archive must be typed");
+    }
+    if (taskReviewAbortedWorkUnit !== null) taskReviewAbortedWorkUnit.assertActiveState(state);
     const artifactWrites = commandResult === undefined
       ? []
       : [
@@ -3511,6 +3525,7 @@ export class CanonicalFlowManagerStore {
           ...this.#commandPublicationWrites(commandResult),
         ];
     if (taskReviewUnsealedCheckpoint !== null) artifactWrites.push(taskReviewCheckpointArtifact(taskReviewUnsealedCheckpoint));
+    if (taskReviewAbortedWorkUnit !== null) artifactWrites.push(taskReviewAbortedWorkUnit.artifactWrite);
     return this.runtime.failAttempt({
       specId: resolved,
       activityId: activityId("attempt-failed"),
@@ -3644,13 +3659,17 @@ export class CanonicalFlowManagerStore {
    * confirmed, failed, retried, or replaced that Attempt while lifecycle
    * hooks were running; in all of those cases this is deliberately a no-op.
    */
-  failCurrentAttemptIfCurrent({ specId = null, expectedRunId, expectedAttempt, failure, result, commandResult = undefined, taskGateFallback = null } = {}) {
+  failCurrentAttemptIfCurrent({ specId = null, expectedRunId, expectedAttempt, failure, result, commandResult = undefined, taskGateFallback = null, taskReviewAbortedWorkUnit = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const expected = CurrentAttemptIdentity.from(expectedAttempt);
     const state = this.runtime.load(resolved);
     if (expectedRunId !== state.identity.runId.toString()) return false;
     if (!expected.matches(state)) return false;
+    if (taskReviewAbortedWorkUnit !== null && !(taskReviewAbortedWorkUnit instanceof TaskReviewAbortedWorkUnit)) {
+      throw new CurrentFlowStateInvariantError("Task Review aborted worker archive must be typed");
+    }
+    if (taskReviewAbortedWorkUnit !== null) taskReviewAbortedWorkUnit.assertActiveState(state);
     const nodeId = state.current.at(-1);
     const now = new Date().toISOString();
     const failureResult = result ?? {
@@ -3670,6 +3689,7 @@ export class CanonicalFlowManagerStore {
           }),
           ...this.#commandPublicationWrites(commandResult),
         ];
+    if (taskReviewAbortedWorkUnit !== null) artifactWrites.push(taskReviewAbortedWorkUnit.artifactWrite);
     const admission = taskGateFallback === null
       ? undefined
       : new TaskGateFallbackFailureAdmission({
@@ -4451,7 +4471,7 @@ export class CanonicalFlowManagerStore {
     return canonicalSpecId(entries[0].specId);
   }
 
-  #retryBaselinePublication(state, nodeId, attempt) {
+  #retryBaselinePublication(state, nodeId, attempt, taskReviewAbortedWorkUnits = []) {
     const baseline = captureRetryRecoveryBaseline({
       flowState: this.load(state.specId),
       flowManager: this,
@@ -4461,8 +4481,26 @@ export class CanonicalFlowManagerStore {
       attempt,
       specPath: this.runtime.location(state.specId).relativeSpecFile,
     });
-    if (baseline === null) return null;
-    return RetryRecoveryArtifactPublication.baseline(baseline);
+    if (baseline === null) {
+      if (taskReviewAbortedWorkUnits.length > 0) {
+        throw new CurrentFlowStateInvariantError("Task Review aborted work units require a retry recovery baseline");
+      }
+      return null;
+    }
+    return RetryRecoveryArtifactPublication.baseline(baseline, taskReviewAbortedWorkUnits);
+  }
+
+  #taskReviewAbortedWorkUnitsForRetry(state, values) {
+    if (!Array.isArray(values) || values.some((value) => !(value instanceof TaskReviewAbortedWorkUnit))) {
+      throw new CurrentFlowStateInvariantError("Task Review retry archive requires typed work units");
+    }
+    if (values.length === 0) return null;
+    const nodeId = state.current?.at(-1) ?? null;
+    const task = TaskStepIdentity.fromStateNode(this.loadReadOnly(state.specId), nodeId);
+    if (task?.definitionId !== "task-review") {
+      throw new CurrentFlowStateInvariantError("Task Review retry archive requires the active Task Review node");
+    }
+    return new TaskReviewAbortedWorkUnitRetryAdmission({ state, archives: values });
   }
 
   #beginExecutableNode(state, specId, nodeId) {

@@ -21,6 +21,10 @@ import {
   TaskReviewRecoveryAuthorization,
   taskReviewAuthorizationArtifact,
 } from "./task-review-recovery-checkpoint.js";
+import {
+  captureTaskReviewAbortedWorkUnits,
+  TaskReviewAbortedWorkUnit,
+} from "./task-review-aborted-work-unit.js";
 
 export const RECOVERY_REASON_MIN_LENGTH = 20;
 export const RECOVERY_REASON_MAX_LENGTH = 500;
@@ -276,7 +280,7 @@ function assertExactPublicationWrite(actualWrites, expectedWrite, field) {
  * its exact route/Attempt/Flow-bound bytes in one catalog transaction.
  */
 export class RetryRecoveryArtifactPublication {
-  constructor({ baseline = null, receipt = null, taskReviewAuthorization = null, reconciliation = null } = {}) {
+  constructor({ baseline = null, receipt = null, taskReviewAuthorization = null, reconciliation = null, taskReviewAbortedWorkUnits = [] } = {}) {
     if ((baseline === null) === (receipt === null)) {
       throw new Error("retry recovery artifact publication requires exactly one typed payload");
     }
@@ -299,18 +303,31 @@ export class RetryRecoveryArtifactPublication {
       throw new Error("Task Review reconciliation requires its typed record and a new baseline only");
     }
     this.reconciliation = reconciliation;
+    if (!Array.isArray(taskReviewAbortedWorkUnits)
+      || taskReviewAbortedWorkUnits.some((archive) => !(archive instanceof TaskReviewAbortedWorkUnit))) {
+      throw new Error("Task Review aborted work unit publication requires typed archives");
+    }
+    const archiveIds = new Set();
+    for (const archive of taskReviewAbortedWorkUnits) {
+      const identity = `${archive.taskId}:${archive.attempt.id}`;
+      if (archiveIds.has(identity)) throw new Error("Task Review aborted work unit publication duplicates an Attempt");
+      archiveIds.add(identity);
+    }
+    this.taskReviewAbortedWorkUnits = Object.freeze([...taskReviewAbortedWorkUnits]);
     Object.freeze(this);
   }
 
-  static baseline(baseline) { return new RetryRecoveryArtifactPublication({ baseline }); }
-  static receipt(receipt, taskReviewAuthorization = null) { return new RetryRecoveryArtifactPublication({ receipt, taskReviewAuthorization }); }
+  static baseline(baseline, taskReviewAbortedWorkUnits = []) { return new RetryRecoveryArtifactPublication({ baseline, taskReviewAbortedWorkUnits }); }
+  static receipt(receipt, taskReviewAuthorization = null, taskReviewAbortedWorkUnits = []) {
+    return new RetryRecoveryArtifactPublication({ receipt, taskReviewAuthorization, taskReviewAbortedWorkUnits });
+  }
 
   get artifactWrites() {
     const primary = this.baseline === null ? retryReceiptArtifact(this.receipt) : retryBaselineArtifact(this.baseline);
-    if (this.reconciliation !== null) return Object.freeze([primary, this.reconciliation.artifactWrite]);
-    return Object.freeze(this.taskReviewAuthorization === null
+    const writes = this.reconciliation !== null ? [primary, this.reconciliation.artifactWrite] : (this.taskReviewAuthorization === null
       ? [primary]
       : [primary, taskReviewAuthorizationArtifact({ taskId: this.taskReviewAuthorization.currentAttempt.nodeId.slice(0, -"-review".length), authorization: this.taskReviewAuthorization })]);
+    return Object.freeze([...writes, ...this.taskReviewAbortedWorkUnits.map((archive) => archive.artifactWrite)]);
   }
 
   assertFor({ state, activity, artifactWrites } = {}) {
@@ -327,6 +344,7 @@ export class RetryRecoveryArtifactPublication {
       }
       assertPublicationAttempt(activity, this.baseline, "retry recovery baseline");
       assertPublicationFlow(this.baseline, state, "retry recovery baseline");
+      this.#assertArchives({ state, activity, route });
       const expected = this.artifactWrites;
       if (!Array.isArray(artifactWrites) || artifactWrites.length !== expected.length) throw new Error("retry recovery publication has unexpected artifact writes");
       expected.forEach((write, index) => assertExactPublicationWrite([artifactWrites[index]], write, "retry recovery baseline"));
@@ -363,9 +381,26 @@ export class RetryRecoveryArtifactPublication {
       }
       expected.push(taskReviewAuthorizationArtifact({ taskId, authorization: this.taskReviewAuthorization }));
     }
+    this.#assertArchives({ state, activity, route });
+    expected.push(...this.taskReviewAbortedWorkUnits.map((archive) => archive.artifactWrite));
     if (!Array.isArray(artifactWrites) || artifactWrites.length !== expected.length) throw new Error("retry recovery publication has unexpected artifact writes");
     expected.forEach((write, index) => assertExactPublicationWrite([artifactWrites[index]], write, "retry recovery publication"));
     return this;
+  }
+
+  #assertArchives({ state, activity, route }) {
+    if (this.taskReviewAbortedWorkUnits.length === 0) return;
+    if (route.kind !== "review" || route.phase !== "impl" || route.taskId === null
+      || !["retry_attempt", "retry_recovery_attempt"].includes(activity.transition.operation)) {
+      throw new Error("Task Review aborted work unit archive requires a Task Review retry transition");
+    }
+    for (const archive of this.taskReviewAbortedWorkUnits) {
+      if (archive.runId !== state.runId || archive.specId !== state.specId
+        || archive.taskId !== route.taskId || archive.nodeId !== activity.nodeId
+        || archive.attempt.sequence >= activity.transition.attempt.sequence) {
+        throw new Error("Task Review aborted work unit archive does not bind its retry successor");
+      }
+    }
   }
 }
 
@@ -627,8 +662,16 @@ export class CanonicalRetryRecovery {
     if (this.request.target !== null && !this.request.target.equals(target)) {
       throw new Error("retry recovery target does not match the active Flow identity");
     }
+    const activities = this.flowManager.activityLedger(this.state.specId);
+    const taskReviewAbortedWorkUnits = captureTaskReviewAbortedWorkUnits({
+      executionRoot: this.executionRoot,
+      state: before,
+      activities,
+      flowManager: this.flowManager,
+      catalog: this.flowManager.artifactCatalog(this.state.specId),
+    });
     if (disposition.operation === "retry") {
-      this.flowManager.retryCurrentAttempt({ specId: this.state.specId });
+      this.flowManager.retryCurrentAttempt({ specId: this.state.specId, taskReviewAbortedWorkUnits });
     } else {
       const failure = previousAttempt.failure;
       const toolingFailure = failure?.retryKind === "tooling"
@@ -690,7 +733,12 @@ export class CanonicalRetryRecovery {
           });
         }
       }
-      this.flowManager.retryExhaustedAttempt({ specId: this.state.specId, receipt, taskReviewRecoveryAuthorization });
+      this.flowManager.retryExhaustedAttempt({
+        specId: this.state.specId,
+        receipt,
+        taskReviewRecoveryAuthorization,
+        taskReviewAbortedWorkUnits,
+      });
     }
     const after = this.flowManager.canonicalState(this.state.specId);
     const activity = this.flowManager.activityLedger(this.state.specId)[start];

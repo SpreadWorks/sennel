@@ -40,12 +40,26 @@ export class TaskStepIdentity {
   }
 
   static fromStateNode(state, nodeId) {
-    if (!Array.isArray(state?.tasks) || typeof nodeId !== "string") return null;
-    for (const task of state.tasks) {
-      const identity = TaskStepIdentity.fromTaskNode(task, nodeId);
-      if (identity !== null) return identity;
+    if (typeof nodeId !== "string") return null;
+    if (Array.isArray(state?.tasks)) {
+      for (const task of state.tasks) {
+        const identity = TaskStepIdentity.fromTaskNode(task, nodeId);
+        if (identity !== null) return identity;
+      }
+      return null;
     }
-    return null;
+    if (typeof state?.findNode !== "function" || state.root === undefined || state.definition === undefined) return null;
+    const node = state.findNode(nodeId);
+    const definition = node === null ? null : state.definition.definitionNodeFor(node);
+    const role = typeof definition?.id === "string" && definition.id.startsWith("task-")
+      ? definition.id.slice("task-".length)
+      : null;
+    const task = state.definition.pathFor(state.root, nodeId)
+      ?.map((id) => state.findNode(id))
+      .find((candidate) => candidate?.kind === "task") ?? null;
+    return task === null || !TASK_STEP_ROLES.includes(role)
+      ? null
+      : new TaskStepIdentity({ taskId: task.id, role });
   }
 
   static active(state) {

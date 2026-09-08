@@ -296,10 +296,10 @@ function settleTypedStepOutcome(envelope, result) {
   }
 }
 
-function recordDefinitionLifecycleToolingFailure(binding, error, fallbackCode, writeErr) {
+function recordDefinitionLifecycleToolingFailure(binding, error, fallbackCode, writeErr, commandResult = null) {
   if (!(binding instanceof DefinitionLifecycleAttemptBinding)) return false;
   try {
-    return binding.toolingFailure(error, fallbackCode);
+    return binding.toolingFailure(error, fallbackCode, commandResult);
   } catch (recordingError) {
     writeErr(`[definition lifecycle failure] ${recordingError.message || recordingError}\n`);
     return false;
@@ -689,6 +689,7 @@ export async function dispatch({
           postErr,
           "POST_HOOK_FAILED",
           writeErr,
+          result,
         );
         if (mode === "envelope") {
           if (postErr instanceof FatalPostHookError) {

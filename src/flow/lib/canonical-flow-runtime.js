@@ -310,7 +310,7 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  retryAttempt({ specId, activityId, attempt, artifactWrites = undefined, timing = null, provider = null, model = null, effort = null, usage = null, references, retryRecoveryPublication = undefined } = {}) {
+  retryAttempt({ specId, activityId, attempt, artifactWrites = undefined, timing = null, provider = null, model = null, effort = null, usage = null, references, retryRecoveryPublication = undefined, admission = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
@@ -324,7 +324,7 @@ export class CanonicalFlowRuntime {
       usage,
       references,
       artifactWrites,
-      retryRecoveryPublication,
+      retryRecoveryPublication, admission,
     });
   }
 

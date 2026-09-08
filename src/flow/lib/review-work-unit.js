@@ -16,6 +16,7 @@ import { PRODUCT } from "../../lib/product.js";
 import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
 import { FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js";
 import { CanonicalSpecReview, SpecReviewDelta, mergeSpecReviewDelta } from "./spec-review-artifacts.js";
+import { readTaskReviewAbortedWorkUnit } from "./task-review-aborted-work-unit.js";
 
 export const REVIEW_WORK_UNIT_MANIFEST_ENV = PRODUCT.env("REVIEW_WORK_UNIT_MANIFEST");
 const REVIEW_WORK_UNIT_ROOT = PRODUCT.managedPath("review-work-units");
@@ -565,16 +566,15 @@ function descriptorSnapshot(flowManager, specId, descriptor) {
   return snapshot;
 }
 
-function confirmedReviewReceipt(flowManager, specId, workUnit, sealed) {
+function confirmedReviewReceipt(flowManager, specId, workUnit, sealed, { catalog, activities }) {
   const manifest = workUnit.manifestDocument;
   const seal = sealed.seal;
-  const activity = flowManager.activityLedger(specId).find((candidate) => (
+  const activity = activities.find((candidate) => (
     candidate.type === "result_confirmed"
     && candidate.nodeId === manifest.nodeId
     && candidate.attemptId === manifest.attemptId
   )) ?? null;
   if (activity === null) return false;
-  const catalog = flowManager.artifactCatalog(specId);
   if (manifest.phase === "spec") {
     const outputDescriptor = catalog.artifacts.find((entry) => (
       entry.logicalKey === "spec.review" && entry.activityId === activity.id
@@ -645,7 +645,33 @@ function confirmedReviewReceipt(flowManager, specId, workUnit, sealed) {
     }));
 }
 
-function reviewWorkUnitNamespace({ executionRoot, specId, runId }) {
+function hasAuthorizedTaskReviewSuccessor({ activities, archive }) {
+  const failureIndex = activities.findIndex((activity) => (
+    activity.transition?.operation === "fail_attempt"
+    && activity.nodeId === archive.nodeId
+    && activity.attemptId === archive.attempt.id
+    && activity.sequence === archive.attempt.sequence
+    && activity.failure?.category === "tooling"
+  ));
+  if (failureIndex < 0) return false;
+  return activities.some((activity, index) => {
+    if (index <= failureIndex) return false;
+    const replacement = activity.transition?.attempt ?? null;
+    if (!(["retry_attempt", "retry_recovery_attempt"].includes(activity.transition?.operation))
+      || activity.nodeId !== archive.nodeId
+      || replacement?.nodeId !== archive.nodeId
+      || replacement.sequence <= archive.attempt.sequence) return false;
+    if (activity.transition.operation === "retry_attempt") {
+      return activity.attemptId === archive.attempt.id && activity.sequence === archive.attempt.sequence;
+    }
+    const predecessor = [...activities.slice(0, index)].reverse().find((candidate) => (
+      candidate.transition?.operation === "fail_attempt" && candidate.nodeId === archive.nodeId
+    )) ?? null;
+    return predecessor?.attemptId === archive.attempt.id && predecessor.sequence === archive.attempt.sequence;
+  });
+}
+
+export function reviewWorkUnitNamespace({ executionRoot, specId, runId }) {
   return path.join(
     path.resolve(requiredText(executionRoot, "review work unit executionRoot")),
     REVIEW_WORK_UNIT_ROOT,
@@ -738,12 +764,12 @@ export class TaskReviewUnsealedWorkUnitSet {
   }
 }
 
-function canonicalTaskReviewAttemptIds({ flowManager, specId, state, nodeId }) {
+function canonicalTaskReviewAttemptIds({ state, nodeId, activities }) {
   const attemptIds = new Set();
   if (state.attempt?.nodeId === nodeId && typeof state.attempt.id === "string" && state.attempt.id !== "") {
     attemptIds.add(state.attempt.id);
   }
-  for (const activity of flowManager.activityLedger(specId)) {
+  for (const activity of activities) {
     if (activity?.nodeId === nodeId && typeof activity.attemptId === "string" && activity.attemptId !== "") {
       attemptIds.add(activity.attemptId);
     }
@@ -757,65 +783,77 @@ function canonicalTaskReviewAttemptIds({ flowManager, specId, state, nodeId }) {
  * is only a locator which must match a canonical Activity and evidence receipt.
  */
 export function reconcileCompletedReviewWorkUnits({ flowManager, specId, executionRoot } = {}) {
-  if (!flowManager || typeof flowManager.activityLedger !== "function" || typeof flowManager.artifactCatalog !== "function") {
-    throw new Error("review work unit reconciliation requires FlowManager receipts");
+  if (!flowManager || typeof flowManager.readCanonicalTransitionView !== "function") {
+    throw new Error("review work unit reconciliation requires a lock-scoped FlowManager view");
   }
-  const state = flowManager.canonicalState(specId);
-  if (state === null) throw new Error("review work unit reconciliation requires a Version-1 Flow state");
-  const root = reviewWorkUnitNamespace({ executionRoot, specId, runId: state.runId });
-  if (!fs.existsSync(root)) return 0;
-  let cleaned = 0;
-  for (const directory of safeDirectoryEntries(root)) {
-    const manifestPath = path.join(directory, "manifest.json");
-    const sealPath = path.join(directory, "seal.json");
-    if (!fs.existsSync(manifestPath) || !fs.existsSync(sealPath)) {
-      if (fs.existsSync(manifestPath) && !fs.existsSync(sealPath)) {
-        const worker = ReviewWorkUnit.fromEnvironment({ [REVIEW_WORK_UNIT_MANIFEST_ENV]: manifestPath }, { expectedDirectory: directory });
-        const manifest = worker.manifestDocument;
-        if (manifest.phase === "impl" && manifest.taskId !== null) {
-          assertTaskReviewWorkUnitIdentity({
-            worker,
-            directory,
-            runId: state.runId,
-            specId,
-            taskId: manifest.taskId,
-            nodeId: expectedNodeForManifest(manifest),
-            acceptedAttemptIds: canonicalTaskReviewAttemptIds({
-              flowManager,
+  const reconcile = ({ state, catalog, activities }) => {
+    if (state === null) throw new Error("review work unit reconciliation requires a Version-1 Flow state");
+    const root = reviewWorkUnitNamespace({ executionRoot, specId, runId: state.runId });
+    if (!fs.existsSync(root)) return 0;
+    let cleaned = 0;
+    for (const directory of safeDirectoryEntries(root)) {
+      const manifestPath = path.join(directory, "manifest.json");
+      const sealPath = path.join(directory, "seal.json");
+      if (!fs.existsSync(manifestPath) || !fs.existsSync(sealPath)) {
+        if (fs.existsSync(manifestPath) && !fs.existsSync(sealPath)) {
+          const worker = ReviewWorkUnit.fromEnvironment({ [REVIEW_WORK_UNIT_MANIFEST_ENV]: manifestPath }, { expectedDirectory: directory });
+          const manifest = worker.manifestDocument;
+          if (manifest.phase === "impl" && manifest.taskId !== null) {
+            assertTaskReviewWorkUnitIdentity({
+              worker,
+              directory,
+              runId: state.runId,
               specId,
-              state,
+              taskId: manifest.taskId,
               nodeId: expectedNodeForManifest(manifest),
-            }),
-          });
+              acceptedAttemptIds: canonicalTaskReviewAttemptIds({
+                state,
+                nodeId: expectedNodeForManifest(manifest),
+                activities,
+              }),
+            });
+            continue;
+          }
+        }
+        const stat = fs.lstatSync(directory);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) {
+          throw new Error("unsealed review work unit cleanup target is invalid");
+        }
+        fs.rmSync(directory, { recursive: true });
+        cleaned += 1;
+        continue;
+      }
+      const worker = ReviewWorkUnit.fromEnvironment({ [REVIEW_WORK_UNIT_MANIFEST_ENV]: manifestPath }, { expectedDirectory: directory });
+      const manifest = worker.manifestDocument;
+      if (
+        manifest.specId !== specId
+        || manifest.runId !== state.runId
+        || manifest.nodeId !== expectedNodeForManifest(manifest)
+        || path.basename(directory) !== digest(`${manifest.nodeId}:${manifest.attemptId}`).slice(0, 32)
+        || !manifest.output.equals(ReviewWorkUnitOutput.forReview({ phase: manifest.phase, taskId: manifest.taskId }))
+      ) throw new Error("review work unit reconciliation identity does not match its execution namespace");
+      const sealed = worker.readSealedOutput();
+      if (confirmedReviewReceipt(flowManager, specId, worker, sealed, { catalog, activities })) {
+        worker.cleanup();
+        cleaned += 1;
+        continue;
+      }
+      const activeAttempt = state.attempt ?? null;
+      if (state.current?.at(-1) === manifest.nodeId && activeAttempt?.id === manifest.attemptId) continue;
+      if (manifest.phase === "impl" && manifest.taskId !== null) {
+        const archived = readTaskReviewAbortedWorkUnit({ flowManager, state, worker, catalog, activities });
+        if (archived !== null && hasAuthorizedTaskReviewSuccessor({ activities, archive: archived })) {
+          worker.cleanup();
+          cleaned += 1;
           continue;
         }
       }
-      const stat = fs.lstatSync(directory);
-      if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) {
-        throw new Error("unsealed review work unit cleanup target is invalid");
-      }
-      fs.rmSync(directory, { recursive: true });
-      cleaned += 1;
-      continue;
+      throw new Error("sealed review work unit has no canonical confirmation receipt or active Attempt");
     }
-    const worker = ReviewWorkUnit.fromEnvironment({ [REVIEW_WORK_UNIT_MANIFEST_ENV]: manifestPath }, { expectedDirectory: directory });
-    const manifest = worker.manifestDocument;
-    if (
-      manifest.specId !== specId
-      || manifest.runId !== state.runId
-      || manifest.nodeId !== expectedNodeForManifest(manifest)
-      || path.basename(directory) !== digest(`${manifest.nodeId}:${manifest.attemptId}`).slice(0, 32)
-      || !manifest.output.equals(ReviewWorkUnitOutput.forReview({ phase: manifest.phase, taskId: manifest.taskId }))
-    ) throw new Error("review work unit reconciliation identity does not match its execution namespace");
-    const sealed = worker.readSealedOutput();
-    if (confirmedReviewReceipt(flowManager, specId, worker, sealed)) {
-      worker.cleanup();
-      cleaned += 1;
-      continue;
-    }
-    const activeAttempt = flowManager.canonicalState(specId)?.attempt ?? null;
-    if (state.current?.at(-1) === manifest.nodeId && activeAttempt?.id === manifest.attemptId) continue;
-    throw new Error("sealed review work unit has no canonical confirmation receipt or active Attempt");
-  }
-  return cleaned;
+    return cleaned;
+  };
+  return flowManager.readCanonicalTransitionView({
+    specId,
+    read: (view) => reconcile({ state: view.state, catalog: view.catalog, activities: view.activities }),
+  });
 }

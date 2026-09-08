@@ -643,11 +643,12 @@ function canonicalHistoricalState(source, definition, permanentReferences = null
   const flowHash = source.flowHash;
   const created = directTimestamp(flow);
   const history = created === null
-    ? { kind: "historical", execution: "dormant", ledger: "partial", creation: { status: "unavailable", reason: "NO_TRUSTED_CREATION_EVIDENCE" } }
+    ? { kind: "historical", execution: "dormant", ledger: "partial", creation: { status: "unavailable", reason: "NO_TRUSTED_CREATION_EVIDENCE" }, continuation: null }
     : {
       kind: "historical",
       execution: "dormant",
       ledger: "partial",
+      continuation: null,
       creation: {
         status: "available",
         source: { path: "flow.json", pointer: created.pointer, hash: flowHash, timestamp: created.timestamp },
