@@ -49,11 +49,13 @@ import {
 } from "./review-work-unit.js";
 import { isCanonicalFlowState } from "./canonical-test-artifacts.js";
 import { ReviewExecutionLease } from "./review-execution-lease.js";
+import { assertReconciledTaskReviewInput, readTaskReviewReconciliations, isReconciledTaskReviewWorkUnit } from "./task-review-reconciliation.js";
 import { resolveCurrentReviewTransition } from "./review-transition-persistence.js";
 import {
   CurrentTaskSourceSnapshot,
   TaskMutationLineageSet,
   TaskReviewRepairManifest,
+  TaskReviewSourceEffectRejection,
 } from "./task-mutation-lineage.js";
 import {
   SourceMutationBaseline,
@@ -68,12 +70,15 @@ import {
   TaskReviewRecurrenceContract,
 } from "./review-recurrence.js";
 import { TaskReviewExecutionIdentity } from "./task-review-execution-identity.js";
-import { currentTaskReviewAttemptCount } from "./task-review-attempt-accounting.js";
+import { TaskReviewAccounting } from "./task-review-accounting.js";
 import {
-  readRetryRecoveryReceiptChain,
-  retryReceiptArtifact,
-  retryEvidenceRouteForNode,
-} from "./retry-recovery.js";
+  TaskReviewUnsealedCheckpoint,
+  readTaskReviewRecoveryAuthorization,
+  readTaskReviewUnsealedCheckpoint,
+  readTaskReviewRetryBaselinePublication,
+  sameTaskReviewRepositorySnapshot,
+} from "./task-review-recovery-checkpoint.js";
+import { readRetryBaseline, readRetryRecoveryReceipt, retryEvidenceRouteForNode } from "./retry-recovery.js";
 
 const IMPL_REVIEW_PHASE = "impl";
 const REVIEW_VERDICT_VALUES = Object.freeze(["PASS", "ADVISORY", "REJECTED"]);
@@ -590,6 +595,11 @@ function reviewExecutionAdmission(ctx, { persistedPhase, executionRoot }) {
   );
 }
 
+function currentTaskReviewAttemptCount(flowManager, state, taskId) {
+  return TaskReviewAccounting.fromCanonicalState({ flowManager, state, taskId })
+    .requireInflightReviewOrdinal();
+}
+
 function taskReviewTransientDirectories(executionRoot, workUnit) {
   const reviewDirectory = path.relative(executionRoot, workUnit.workUnit.directory).split(path.sep).join("/");
   if (reviewDirectory === "" || reviewDirectory.startsWith("../") || path.posix.isAbsolute(reviewDirectory)) {
@@ -830,16 +840,6 @@ class TaskReviewUnsealedSourceCheckpoint {
     const manifest = SourceMutationManifest.capture({ baseline: this.baseline });
     return manifest.mutations.length > 0;
   }
-
-  changedRepositoryPaths() {
-    const snapshot = WorkerArtifactRepositoryMutationSnapshot.capture({
-      root: this.baseline.snapshot.root,
-      authorities: this.baseline.snapshot.authorities,
-      ignoredDirectories: this.baseline.snapshot.ignoredDirectories,
-      runtimeLocks: this.baseline.snapshot.runtimeLocks,
-    });
-    return this.baseline.snapshot.allChangedPaths(snapshot);
-  }
 }
 
 /** Safe diagnostic facts from a retained, partially-effected Task Review unit. */
@@ -912,6 +912,181 @@ function partialTaskReviewEffectFailure({ message, workUnit = null, checkpoint =
   return error;
 }
 
+/**
+ * The worker directory is not an authority boundary.  After its process has
+ * stopped, only this parent-side observation may turn a zero-effect surface
+ * into a later canonical recovery prerequisite.
+ */
+function captureStoppedTaskReviewCheckpoint({ state, taskId, workUnit, baseline } = {}) {
+  if (!(baseline instanceof SourceMutationBaseline)) return null;
+  let recovered;
+  try {
+    recovered = workUnit.workUnit.recoverUnsealed();
+  } catch (cause) {
+    throw partialTaskReviewEffectFailure({
+      message: `unsealed Task Review worker contract cannot be verified after stop: ${cause.message}`,
+      workUnit: workUnit.workUnit,
+      cause,
+    });
+  }
+  if (recovered === null) return null;
+  try {
+    return TaskReviewUnsealedCheckpoint.capture({
+      runId: state.runId,
+      specId: state.specId,
+      taskId,
+      attempt: state.attempt,
+      manifestDigest: recovered.manifestDocument.digest,
+      taskSourceFingerprint: workUnit.captureCurrentTaskSource().fingerprint,
+      baseline,
+    });
+  } catch (cause) {
+    throw partialTaskReviewEffectFailure({
+      message: `unsealed Task Review worker has source effects after stop: ${cause.message}`,
+      workUnit: recovered,
+      cause,
+    });
+  }
+}
+
+function stoppedTaskReviewFailure({ error, state, taskId, workUnit, baseline } = {}) {
+  if (taskId === null || String(error?.code || "").startsWith("TASK_REVIEW_SOURCE_EFFECT")) {
+    return Object.freeze({ error, checkpoint: null });
+  }
+  try {
+    return Object.freeze({
+      error,
+      checkpoint: captureStoppedTaskReviewCheckpoint({ state, taskId, workUnit, baseline }),
+    });
+  } catch (checkpointError) {
+    return Object.freeze({ error: checkpointError, checkpoint: null });
+  }
+}
+
+function taskReviewCanonicalVersionPrefix({ flowManager, state, executionRoot }) {
+  const version = flowManager.specLocation(state.specId)?.directory;
+  if (typeof version !== "string") throw new Error("Task Review recovery cannot locate its canonical Version");
+  const prefix = path.relative(executionRoot, version).split(path.sep).join("/");
+  if (prefix === "" || prefix.startsWith("../") || path.posix.isAbsolute(prefix)) {
+    // Canonical artifacts can live in main while the worker runs in a
+    // feature checkout. Such publications are not checkout source effects.
+    return null;
+  }
+  return prefix;
+}
+
+function taskReviewRecoveryPublicationPaths({ flowManager, state, taskId, authorization, executionRoot } = {}) {
+  const prefix = taskReviewCanonicalVersionPrefix({ flowManager, state, executionRoot });
+  if (prefix === null) return new Set();
+  const routeId = `review-impl-${taskId}`;
+  return new Set([
+    path.posix.join(prefix, FLOW_ARTIFACT_CONTRACTS.resolve("retry.recovery.receipt", {
+      routeId, attemptId: authorization.currentAttempt.id,
+    }).relativePath),
+    path.posix.join(prefix, FLOW_ARTIFACT_CONTRACTS.resolve("task.review.recovery.authorization", {
+      taskId, attemptId: authorization.currentAttempt.id,
+    }).relativePath),
+  ]);
+}
+
+/**
+ * A new Attempt may remove an old worker surface only after it proves either
+ * that no checkout state moved at all, or that the exact exhausted-recovery
+ * receipt and its same-transaction checkout authorization own that movement.
+ */
+function assertTaskReviewUnsealedCleanupAuthorized({ recovered, state, flowManager, taskId, executionRoot, expectedTargetDigest } = {}) {
+  const checkpoint = readTaskReviewUnsealedCheckpoint({
+    flowManager,
+    state,
+    taskId,
+    root: executionRoot,
+    attemptId: recovered.manifestDocument.attemptId,
+  });
+  if (checkpoint === null) return false;
+  if (checkpoint.manifestDigest !== recovered.manifestDocument.digest) {
+    throw new Error("Task Review checkpoint does not bind the retained worker manifest");
+  }
+  const lineageSet = new TaskMutationLineageSet({
+    runId: state.runId,
+    specId: state.specId,
+    taskId,
+    lineages: flowManager.taskMutationLineages({ specId: state.specId, taskId }),
+  });
+  const taskSourceAtStop = new TaskReviewPersistedSourceSnapshot({
+    workUnit: recovered,
+    lineageSet,
+    executionRoot,
+  }).snapshot;
+  const currentTaskSource = CurrentTaskSourceSnapshot.capture({ root: executionRoot, lineageSet });
+  if (taskSourceAtStop.fingerprint !== currentTaskSource.fingerprint) {
+    throw new Error("Task Review recovery checkout changes a Task-owned source path after worker stop");
+  }
+  const fresh = WorkerArtifactRepositoryMutationSnapshot.capture({
+    root: checkpoint.baseline.snapshot.root,
+    authorities: checkpoint.baseline.snapshot.authorities,
+    ignoredDirectories: checkpoint.baseline.snapshot.ignoredDirectories,
+    runtimeLocks: checkpoint.baseline.snapshot.runtimeLocks,
+  });
+  if (sameTaskReviewRepositorySnapshot(checkpoint.observed, fresh)) return true;
+  const prefix = taskReviewCanonicalVersionPrefix({ flowManager, state, executionRoot });
+  const unchangedPaths = new Set(prefix === null ? [] : [
+    path.posix.join(prefix, FLOW_ARTIFACT_CONTRACTS.resolve("task.review.unsealed.checkpoint", {
+      taskId, attemptId: checkpoint.attempt.id,
+    }).relativePath),
+  ]);
+  const retryBaseline = readTaskReviewRetryBaselinePublication({
+    flowManager, state, taskId, previousAttempt: checkpoint.attempt,
+  });
+  if (retryBaseline !== null) {
+    readRetryBaseline(flowManager, state, retryEvidenceRouteForNode(state, state.attempt.nodeId));
+    if (prefix !== null) unchangedPaths.add(path.posix.join(prefix, retryBaseline.relativePath));
+  }
+  const unchangedSourceChanges = checkpoint.observed.allChangedPaths(fresh);
+  if (unchangedSourceChanges.length > 0 && unchangedSourceChanges.every((entry) => unchangedPaths.has(entry))) {
+    return true;
+  }
+  const route = retryEvidenceRouteForNode(state, state.attempt.nodeId);
+  if (route === null || route.kind !== "review" || route.phase !== "impl" || route.taskId !== taskId) {
+    throw new Error("Task Review changed checkout has no current retry recovery route");
+  }
+  const receipt = readRetryRecoveryReceipt(flowManager, state, route);
+  const authorization = readTaskReviewRecoveryAuthorization({ flowManager, state, taskId, root: executionRoot });
+  const parentPublicationChanges = authorization === null
+    ? []
+    : authorization.snapshot.allChangedPaths(fresh);
+  const parentPublicationPaths = authorization === null
+    ? new Set()
+    : taskReviewRecoveryPublicationPaths({ flowManager, state, taskId, authorization, executionRoot });
+  const onlyVerifiedParentPublications = parentPublicationChanges.length > 0
+    && parentPublicationChanges.every((entry) => parentPublicationPaths.has(entry));
+  const currentTargetDigest = authorization === null ? null : new ReviewTargetAuthority({
+    executionRoot,
+    artifactRoot: flowManager.specLocation(state.specId).repositoryRoot,
+    flowState: state,
+    flowManager,
+    specPath: flowManager.specLocation(state.specId)?.relativeSpecFile ?? null,
+  }).captureTargetStateForPhase("impl").digest;
+  const rejected = [
+    receipt === null && "receipt absent",
+    authorization === null && "authorization absent",
+    receipt?.previous.attemptId !== checkpoint.attempt.id && "receipt previous id",
+    receipt?.previous.attempt !== checkpoint.attempt.sequence && "receipt previous sequence",
+    authorization?.checkpointDigest !== checkpoint.digest && "checkpoint digest",
+    authorization?.previousAttempt.id !== checkpoint.attempt.id && "authorization previous id",
+    authorization?.currentAttempt.id !== state.attempt.id && "authorization current id",
+    authorization?.currentAttempt.sequence !== state.attempt.sequence && "authorization current sequence",
+    authorization?.receiptDigest !== crypto.createHash("sha256").update(JSON.stringify(receipt?.toJSON?.() ?? null)).digest("hex") && "receipt digest",
+    authorization?.targetDigest !== receipt?.current.targetDigest && "receipt target digest",
+    authorization?.targetDigest !== currentTargetDigest && "fresh target digest",
+    authorization?.targetDigest !== expectedTargetDigest && "worker target digest",
+    authorization !== null && !sameTaskReviewRepositorySnapshot(authorization.snapshot, fresh) && !onlyVerifiedParentPublications && "fresh checkout snapshot",
+  ].filter(Boolean);
+  if (rejected.length > 0) {
+    throw new Error(`Task Review changed checkout is not exactly authorized for unsealed cleanup: ${rejected.join(", ")}`);
+  }
+  return true;
+}
+
 function reconcileUnsealedTaskReviewSources({ workUnit, state, flowManager, taskId, executionRoot, expectedNodeId }) {
   const lineageSet = new TaskMutationLineageSet({
     runId: state.runId,
@@ -944,23 +1119,25 @@ function reconcileUnsealedTaskReviewSources({ workUnit, state, flowManager, task
       cause,
     });
   }
-  const recoveryRoute = retryEvidenceRouteForNode(state, expectedNodeId);
-  const recoveryReceipts = recoveryRoute === null
-    ? []
-    : readRetryRecoveryReceiptChain(flowManager, state, recoveryRoute);
-  const recoveryReceiptPaths = new Set(recoveryReceipts.map((receipt) => path.relative(
-    executionRoot,
-    path.join(flowManager.specLocation(state.specId).directory, retryReceiptArtifact(receipt).artifact.relativePath),
-  ).split(path.sep).join("/")));
-  const currentWorkUnitDirectory = path.relative(
-    executionRoot,
-    workUnit.workUnit.directory,
-  ).split(path.sep).join("/");
-  const workUnitNamespace = path.posix.dirname(currentWorkUnitDirectory);
+  const cleanup = [];
+  const reconciliations = readTaskReviewReconciliations({ flowManager, state, taskId });
   for (const recovered of retained.workUnits) {
     let checkpoint;
     let current;
     try {
+      if (isReconciledTaskReviewWorkUnit(recovered, reconciliations)) continue;
+      const authorized = assertTaskReviewUnsealedCleanupAuthorized({
+        recovered,
+        state,
+        flowManager,
+        taskId,
+        executionRoot,
+        expectedTargetDigest: workUnit.workUnit.target.targetStateDigest,
+      });
+      if (authorized) {
+        cleanup.push(recovered);
+        continue;
+      }
       checkpoint = new TaskReviewUnsealedSourceCheckpoint({ workUnit: recovered, lineageSet, executionRoot });
       current = workUnit.captureCurrentTaskSource();
     } catch (cause) {
@@ -989,24 +1166,6 @@ function reconcileUnsealedTaskReviewSources({ workUnit, state, flowManager, task
       }
     } catch (cause) {
       if (cause?.code === "TASK_REVIEW_PARTIAL_EFFECT") throw cause;
-      const authorizedRecovery = recoveryReceipts.some((receipt) => (
-        receipt.previous.attemptId === checkpoint.baseline.attempt.id
-        && receipt.previous.attempt === checkpoint.baseline.attempt.sequence
-      ));
-      const changedPaths = authorizedRecovery ? checkpoint.changedRepositoryPaths() : [];
-      const authorizedCommittedAdvance = cause?.code === "FLOW_SOURCE_HANDOFF_FINALIZE_AUTHORITY_VIOLATION"
-        && changedPaths.length > 0
-        && changedPaths.every((entry) => (
-          entry === "<HEAD>"
-          || entry === "<index>"
-          || recoveryReceiptPaths.has(entry)
-          || entry === workUnitNamespace
-          || entry.startsWith(`${workUnitNamespace}/`)
-        ));
-      if (authorizedRecovery && authorizedCommittedAdvance) {
-        recovered.cleanup();
-        continue;
-      }
       throw partialTaskReviewEffectFailure({
         message: `unsealed Task Review source-effect baseline cannot be compared: ${cause.message}`,
         workUnit: recovered,
@@ -1015,8 +1174,12 @@ function reconcileUnsealedTaskReviewSources({ workUnit, state, flowManager, task
         cause,
       });
     }
-    recovered.cleanup();
+    cleanup.push(recovered);
   }
+  // Never delete one surface before every sibling has passed its own
+  // immutable identity and ownership checks. A later rejection leaves all
+  // retained evidence available for the next recovery read.
+  for (const recovered of cleanup) recovered.cleanup();
 }
 
 export class RunReviewCommand extends FlowCommand {
@@ -1073,7 +1236,15 @@ export class RunReviewCommand extends FlowCommand {
     }
     const taskReviewExecution = taskId === null
       ? null
-      : TaskReviewExecutionIdentity.fromCanonicalState({ state, taskId });
+      : TaskReviewExecutionIdentity.fromCanonicalState({
+        state,
+        taskId,
+        reviewAttempt: TaskReviewAccounting.fromCanonicalState({
+          flowManager: ctx.flowManager,
+          state,
+          taskId,
+        }).requireInflightReviewOrdinal(),
+      });
     if (!admissionChecked) {
       const admissionFailure = reviewExecutionAdmission(ctx, { persistedPhase, executionRoot });
       if (admissionFailure !== null) return admissionFailure;
@@ -1087,6 +1258,10 @@ export class RunReviewCommand extends FlowCommand {
       );
     }
 
+    if (taskId !== null) {
+      try { assertReconciledTaskReviewInput({ flowManager: ctx.flowManager, state, taskId, root: executionRoot }); }
+      catch (error) { return Envelope.fail("run", "review", "TASK_REVIEW_RECONCILIATION_INPUT_CHANGED", error.message); }
+    }
     const treeSha = this.resolveTreeSha(ctx);
     const targetStateDigest = this.resolveTargetStateDigest(ctx, persistedPhase);
     const workUnit = new CanonicalReviewWorkUnit({
@@ -1144,6 +1319,17 @@ export class RunReviewCommand extends FlowCommand {
       }
       workUnit.declareCanonicalInputs();
       if (taskId !== null) {
+        // Reconcile retained prior surfaces before capturing this Attempt's
+        // baseline. Otherwise the parent's own authorized cleanup appears as
+        // a source mutation made by the new worker.
+        reconcileUnsealedTaskReviewSources({
+          workUnit,
+          state,
+          flowManager: ctx.flowManager,
+          taskId,
+          executionRoot,
+          expectedNodeId,
+        });
         if (existing === null) {
           taskRepairBaseline = SourceMutationBaseline.capture({
             root: executionRoot,
@@ -1168,14 +1354,6 @@ export class RunReviewCommand extends FlowCommand {
         }
         workUnit.workUnit.declareInput(taskRepairBaselineInput);
         workUnit.workUnit.declareInput(taskRecoveryBaselineInput);
-        reconcileUnsealedTaskReviewSources({
-          workUnit,
-          state,
-          flowManager: ctx.flowManager,
-          taskId,
-          executionRoot,
-          expectedNodeId,
-        });
       }
       sealedWorkUnit = workUnit.workUnit.recoverSealed();
     } catch (error) {
@@ -1258,7 +1436,8 @@ export class RunReviewCommand extends FlowCommand {
         } catch (observationError) {
           return this.#canonicalFailure(ctx, persistedPhase, observationError);
         }
-        return this.#canonicalFailure(ctx, persistedPhase, error);
+        const stoppedFailure = stoppedTaskReviewFailure({ error, state, taskId, workUnit, baseline: taskRecoveryBaseline });
+        return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, { taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint });
       }
       try {
         canonicalObservationBoundary?.assertMetricSettlementOnly();
@@ -1270,7 +1449,8 @@ export class RunReviewCommand extends FlowCommand {
         const error = new Error(failure.reason || "review subprocess failed");
         error.code = failure.toEnvelopeCode();
         error.retryable = failure.retryable;
-        return this.#canonicalFailure(ctx, persistedPhase, error);
+        const stoppedFailure = stoppedTaskReviewFailure({ error, state, taskId, workUnit, baseline: taskRecoveryBaseline });
+        return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, { taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint });
       }
       try {
         sealedWorkUnit = ReviewWorkUnit.fromEnvironment(
@@ -1323,7 +1503,7 @@ export class RunReviewCommand extends FlowCommand {
           baseline: taskRepairBaseline,
           manifest,
           artifact: promotion.sealedArtifact().artifact,
-          attemptCount: currentTaskReviewAttemptCount({ attempt: state.attempt, includesCurrentResult: true }),
+          attemptCount: currentTaskReviewAttemptCount(ctx.flowManager, state, taskId),
         });
         taskMutationLineage = taskRepair.lineage({ attempt: state.attempt });
         resultingTaskLineageSet = new TaskMutationLineageSet({
@@ -1388,8 +1568,11 @@ export class RunReviewCommand extends FlowCommand {
     }
   }
 
-  #canonicalFailure(ctx, phase, error) {
+  #canonicalFailure(ctx, phase, error, { taskReviewUnsealedCheckpoint = null } = {}) {
     const message = String(error?.message || error);
+    const sourceIntegrityFailure = error instanceof TaskReviewSourceEffectRejection
+      || error?.code === "TASK_REVIEW_SOURCE_EFFECT_OBSERVED"
+      || error?.code === "TASK_REVIEW_PARTIAL_EFFECT";
     const failureData = new ReviewExecutionFailureEnvelopeData({
       error,
       executionRoot: ctx.executionRoot || ctx.root,
@@ -1397,12 +1580,13 @@ export class RunReviewCommand extends FlowCommand {
     try {
       ctx.flowManager.failCurrentAttempt({
         specId: ctx.specId ?? ctx.flowState.specId,
+        taskReviewUnsealedCheckpoint,
         failure: {
-          category: "tooling",
+          category: sourceIntegrityFailure ? "source-integrity" : "tooling",
           code: error?.code || "REVIEW_EXECUTION_FAILED",
           message,
-          retryable: error?.retryable ?? true,
-          retryKind: "tooling",
+          retryable: sourceIntegrityFailure ? false : error?.retryable ?? true,
+          retryKind: sourceIntegrityFailure ? null : "tooling",
         },
         result: {
           outcome: "failed",

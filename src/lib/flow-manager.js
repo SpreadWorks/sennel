@@ -762,6 +762,9 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  reconcileTaskReview(input = {}) {
+    return this._store.reconcileTaskReview({ ...input, specId: input.specId ?? this._boundSpecId });
+  }
   retryExhaustedAttempt(input = {}) {
     return this._store.retryExhaustedAttempt({
       ...input,

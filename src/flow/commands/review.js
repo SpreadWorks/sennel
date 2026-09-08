@@ -96,7 +96,6 @@ import { ReviewToolingOutcome } from "../lib/review-convergence.js";
 import { collectUntrackedDiff } from "../lib/run-gate.js";
 import {
   SourceMutationBaseline,
-  SourceMutationRollbackCheckpoint,
 } from "../lib/worker-artifact-handoff.js";
 import { TaskReviewExecutionIdentity } from "../lib/task-review-execution-identity.js";
 import {
@@ -139,14 +138,10 @@ const callReviewAgent = (agent, prompt, commandId, systemPrompt, protocolOptions
 };
 
 class TaskReviewSourceObservation {
-  constructor({ protocolAttempt, baseline, rollback } = {}) {
+  constructor({ protocolAttempt, baseline } = {}) {
     this.protocolAttempt = protocolAttempt;
     if (!(baseline instanceof SourceMutationBaseline)) throw new Error("Task Review source observation requires a source baseline");
-    if (!(rollback instanceof SourceMutationRollbackCheckpoint)) {
-      throw new Error("Task Review source observation requires a source rollback checkpoint");
-    }
     this.baseline = baseline;
-    this.rollback = rollback;
     Object.freeze(this);
   }
 }
@@ -164,40 +159,6 @@ class TaskReviewSourceEffectDetail {
   }
 }
 
-class TaskReviewProtocolAcceptance {
-  constructor({ sourcePaths } = {}) {
-    if (!(sourcePaths instanceof Set)) {
-      throw new Error("Task Review protocol acceptance requires its current source paths");
-    }
-    this.sourcePaths = new Set([...sourcePaths].map((entry) => String(entry).split(path.sep).join("/")));
-    Object.freeze(this);
-  }
-
-  validate({ value, before, after } = {}) {
-    if (!(before instanceof TaskReviewSourceObservation) || !(after instanceof TaskReviewSourceObservation)) {
-      throw new Error("Task Review protocol acceptance requires source observations");
-    }
-    const changed = before.baseline.snapshot.allChangedPaths(after.baseline.snapshot);
-    const blocking = Array.isArray(value?.blockingFindings) ? value.blockingFindings : [];
-    const mustFixPaths = new Set(blocking
-      .filter((finding) => finding?.disposition === "must-fix")
-      .map((finding) => typeof finding?.file === "string" ? finding.file.trim().split(path.sep).join("/") : "")
-      .filter(Boolean));
-    const outsideSource = changed.filter((relativePath) => !this.sourcePaths.has(relativePath));
-    if (outsideSource.length > 0) {
-      throw new Error(`Task Review response changed paths outside its current source: ${outsideSource.join(", ")}`);
-    }
-    const unowned = changed.filter((relativePath) => !mustFixPaths.has(relativePath));
-    if (unowned.length > 0) {
-      throw new Error(`Task Review response must report a repaired must-fix finding for every changed path: ${unowned.join(", ")}`);
-    }
-    const unrepaired = [...mustFixPaths].filter((relativePath) => !changed.includes(relativePath));
-    if (unrepaired.length > 0) {
-      throw new Error(`Task Review response must repair every file-backed must-fix finding: ${unrepaired.join(", ")}`);
-    }
-  }
-}
-
 export class TaskReviewSourceEffectObserver {
   constructor({ root, executionIdentity, agent = null } = {}) {
     this.root = path.resolve(root);
@@ -210,15 +171,13 @@ export class TaskReviewSourceEffectObserver {
   }
 
   capture(protocolAttempt) {
-    const baseline = SourceMutationBaseline.capture({
-      root: this.root,
-      attempt: this.executionIdentity.attempt,
-      ignoredDirectories: this.ignoredDirectories,
-    });
     return new TaskReviewSourceObservation({
       protocolAttempt,
-      baseline,
-      rollback: new SourceMutationRollbackCheckpoint({ baseline }),
+      baseline: SourceMutationBaseline.capture({
+        root: this.root,
+        attempt: this.executionIdentity.attempt,
+        ignoredDirectories: this.ignoredDirectories,
+      }),
     });
   }
 
@@ -231,13 +190,6 @@ export class TaskReviewSourceEffectObserver {
       observer: "task-review-source",
       detail: new TaskReviewSourceEffectDetail({ before, after }),
     });
-  }
-
-  restore(before, after) {
-    if (!(before instanceof TaskReviewSourceObservation) || !(after instanceof TaskReviewSourceObservation)) {
-      throw new Error("Task Review source restore requires source observations");
-    }
-    before.rollback.restore();
   }
 }
 
@@ -1583,16 +1535,6 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementIds, diff =
   return pb.build();
 }
 
-function canonicalTaskReviewAttempt({ flowManager, flow, taskId, executionIdentity }) {
-  const lineage = flowManager.taskMutationLineages({ specId: flow.specId, taskId }).at(-1) ?? null;
-  if (lineage === null) throw new Error("Task Review requires a current Task execution budget");
-  if (!(executionIdentity instanceof TaskReviewExecutionIdentity)) {
-    throw new Error("Task Review requires its parent-issued execution identity");
-  }
-  executionIdentity.assertTask(taskId);
-  return executionIdentity.reviewAttempt;
-}
-
 function resolveRequirementIds(spec) {
   return new Set((Array.isArray(spec.requirements) ? spec.requirements : []).map((req) => req.id).filter(Boolean));
 }
@@ -2439,30 +2381,19 @@ async function runTaskReviewProtocol({
   flowManager,
   requirementIds,
   recurrenceHistory,
-  sourcePaths,
   agent,
   prompt,
   systemPrompt,
 }) {
-  const acceptance = new TaskReviewProtocolAcceptance({ sourcePaths });
   const recurrenceContract = new TaskReviewRecurrenceContract({
     history: new ReviewRecurrenceHistory({ scope: "task", entries: recurrenceHistory }),
   });
-  let retryCorrection = null;
   const contract = new ReviewProtocolContract({
     phase: "task-review",
     parse: (rawResponse) => {
       const parsed = parseImplReviewFindings(rawResponse, { requirementIds });
       recurrenceContract.validate([...parsed.blockingFindings, ...parsed.nonBlockingImprovements]);
       return parsed;
-    },
-    validateAcceptance: (context) => {
-      try {
-        acceptance.validate(context);
-      } catch (error) {
-        retryCorrection = error.message;
-        throw error;
-      }
     },
   });
   const transportRetryPolicy = taskReviewTransportRetryPolicy(agent);
@@ -2494,12 +2425,9 @@ async function runTaskReviewProtocol({
       callAgent: (attempt) => {
         const deferredMetric = new DeferredAgentInvocationMetric({ flowManager });
         deferredMetrics.set(attempt, deferredMetric);
-        const attemptPrompt = retryCorrection === null
-          ? prompt
-          : `${prompt}\n\n## Protocol Retry Correction\nThe previous response was rejected: ${retryCorrection}\nReturn a complete corrected response. Any source repair must be reported as its repaired must-fix finding.`;
         return callReviewAgent(
           agent,
-          attemptPrompt,
+          prompt,
           "flow.impl.review.propose",
           systemPrompt,
           {
@@ -2508,7 +2436,7 @@ async function runTaskReviewProtocol({
             retryCount: 0,
             deferredMetric,
             validateResponseForCache: (rawResponse) => {
-              contract.parseResponse(rawResponse);
+              contract.accept(rawResponse);
               return true;
             },
           },
@@ -4849,14 +4777,7 @@ async function runReview(rawArgs) {
     flow,
     taskId: taskSpec?.task?.id ?? null,
   });
-  const taskReviewAttempt = taskSpec
-    ? canonicalTaskReviewAttempt({
-      flowManager,
-      flow,
-      taskId: taskSpec.task.id,
-      executionIdentity: taskReviewExecution,
-    })
-    : null;
+  const taskReviewAttempt = taskSpec ? taskReviewExecution.reviewAttempt : null;
   const taskReviewRecurrences = taskSpec
     ? taskReviewRecurrenceHistory({ flowManager, flow, taskId: taskSpec.task.id, cycle })
     : [];
@@ -4904,7 +4825,6 @@ async function runReview(rawArgs) {
           flowManager,
           requirementIds,
           recurrenceHistory: taskReviewRecurrences,
-          sourcePaths: touchedFiles,
           agent: reviewAgent,
           prompt: reviewPrompt,
           systemPrompt,

@@ -2,10 +2,6 @@ import {
   CurrentAttemptIdentity,
   CurrentFlowState,
 } from "./current-flow-state.js";
-import {
-  currentTaskReviewAttemptCount,
-  MAX_TASK_REVIEW_ATTEMPTS,
-} from "./task-review-attempt-accounting.js";
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -40,22 +36,18 @@ export class TaskReviewExecutionIdentity {
     if (this.attempt.nodeId !== `${this.taskId}-review`) {
       throw new Error("Task Review execution Attempt does not match its Task");
     }
-    if (!Number.isSafeInteger(reviewAttempt) || reviewAttempt < 1 || reviewAttempt > MAX_TASK_REVIEW_ATTEMPTS) {
-      throw new Error("Task Review execution reviewAttempt is invalid");
+    if (!Number.isSafeInteger(reviewAttempt) || reviewAttempt < 1 || reviewAttempt > 4) {
+      throw new Error("Task Review execution reviewAttempt must be between 1 and 4");
     }
     this.reviewAttempt = reviewAttempt;
     Object.freeze(this);
   }
 
-  static fromCanonicalState({ state, taskId } = {}) {
+  static fromCanonicalState({ state, taskId, reviewAttempt } = {}) {
     if (!(state instanceof CurrentFlowState)) {
       throw new Error("Task Review execution requires a canonical Flow state");
     }
-    const identity = new TaskReviewExecutionIdentity({
-      taskId,
-      attempt: state.attempt,
-      reviewAttempt: currentTaskReviewAttemptCount({ attempt: state.attempt, includesCurrentResult: true }),
-    });
+    const identity = new TaskReviewExecutionIdentity({ taskId, attempt: state.attempt, reviewAttempt });
     if (!identity.attempt.matches(state)) {
       throw new Error("Task Review execution requires its active canonical Attempt");
     }
@@ -75,10 +67,6 @@ export class TaskReviewExecutionIdentity {
   }
 
   toJSON() {
-    return Object.freeze({
-      taskId: this.taskId,
-      attempt: this.attempt.toJSON(),
-      reviewAttempt: this.reviewAttempt,
-    });
+    return Object.freeze({ taskId: this.taskId, attempt: this.attempt.toJSON(), reviewAttempt: this.reviewAttempt });
   }
 }

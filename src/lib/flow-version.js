@@ -1085,8 +1085,10 @@ export class FlowArtifactCatalog {
   }
   verify(location, activityIndexFile = null) {
     if (!(location instanceof FlowVersionLocation)) throw new Error("FlowVersionLocation is required to verify an artifact catalog");
-    if (activityIndexFile !== null && !(activityIndexFile instanceof FlowArtifactActivityIndexFile)) {
-      throw new Error("FlowArtifactActivityIndexFile is required to verify an artifact catalog");
+    if (activityIndexFile !== null
+      && !(activityIndexFile instanceof FlowArtifactActivityIndexFile)
+      && !(activityIndexFile instanceof FlowArtifactActivityIndex)) {
+      throw new Error("FlowArtifactActivityIndexFile or FlowArtifactActivityIndex is required to verify an artifact catalog");
     }
     location.requireScope("canonical");
     const actual = new Set(managedFiles(location));
@@ -1097,7 +1099,9 @@ export class FlowArtifactCatalog {
     const associated = this.artifacts.filter((artifact) => artifact.activityId !== null);
     if (ledger || associated.length > 0) {
       if (!ledger) throw new Error(`cataloged Activity associations require ${FLOW_ACTIVITIES_RELATIVE_PATH}`);
-      const activityIndex = activityIndexFile?.read() ?? FlowArtifactActivityIndex.fromFile(location.activitiesFile);
+      const activityIndex = activityIndexFile instanceof FlowArtifactActivityIndex
+        ? activityIndexFile
+        : activityIndexFile?.read() ?? FlowArtifactActivityIndex.fromFile(location.activitiesFile);
       for (const artifact of associated) {
         const activity = activityIndex.require(artifact.activityId).assertRelatedArtifact(artifact);
         if (artifact.logicalKey !== null) {

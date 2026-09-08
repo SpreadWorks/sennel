@@ -12,24 +12,14 @@ function requiredText(value, name) {
 }
 
 export class ReviewProtocolContract {
-  constructor({ phase, parse, validateAcceptance = null } = {}) {
+  constructor({ phase, parse } = {}) {
     this.phase = requiredText(phase, "review protocol phase");
     if (typeof parse !== "function") throw new Error("review protocol parse must be a function");
-    if (validateAcceptance !== null && typeof validateAcceptance !== "function") {
-      throw new Error("review protocol acceptance validator must be a function or null");
-    }
     this.parse = parse;
-    this.validateAcceptance = validateAcceptance;
     Object.freeze(this);
   }
 
-  accept(rawResponse, context = {}) {
-    const value = this.parseResponse(rawResponse);
-    this.validateAcceptance?.({ ...context, value });
-    return value;
-  }
-
-  parseResponse(rawResponse) {
+  accept(rawResponse) {
     return this.parse(rawResponse);
   }
 }
@@ -286,22 +276,15 @@ export class ReviewProtocolController {
             outcome = new ReviewProtocolAttemptOutcome({ kind: "transport_failed", cause });
             throw cause;
           }
-          const after = this.#capture(observer, attempt, transportAttempt);
           let value;
           try {
-            value = this.contract.accept(rawResponse, {
-              attempt: transportAttempt,
-              observer,
-              before,
-              after,
-            });
+            value = this.contract.accept(rawResponse);
           } catch (cause) {
+            const after = this.#capture(observer, attempt, transportAttempt);
             const effectEvidence = this.#effectEvidence(observer, before, after, attempt);
             if (effectEvidence !== null) {
-              if (!this.#restoreEffect(observer, before, after, attempt, transportAttempt)) {
-                outcome = new ReviewProtocolAttemptOutcome({ kind: "effect_observed", cause });
-                throw new ReviewProtocolFailure({ kind: "effect_observed", attempt, maxAttempts: this.retryPolicy.maxAttempts, cause, effectEvidence });
-              }
+              outcome = new ReviewProtocolAttemptOutcome({ kind: "effect_observed", cause });
+              throw new ReviewProtocolFailure({ kind: "effect_observed", attempt, maxAttempts: this.retryPolicy.maxAttempts, cause, effectEvidence });
             }
             if (!this.retryPolicy.canRetryContract(attempt)) {
               outcome = new ReviewProtocolAttemptOutcome({ kind: "contract_rejected", cause });
@@ -312,8 +295,9 @@ export class ReviewProtocolController {
             break;
           }
           // A complete, contract-valid response is admissible even if the
-          // provider made a legitimate source change. Phase adapters may
-          // reject an invalid response/effect pairing before this boundary.
+          // provider made a legitimate source change. Effect evidence limits
+          // retries after failure/rejection; it is not a success veto.
+          const after = this.#capture(observer, attempt, transportAttempt);
           outcome = new ReviewProtocolAttemptOutcome({ kind: "accepted" });
           return new ReviewProtocolResult({ attempt, rawResponse, value, before, after });
         } catch (cause) {
@@ -362,27 +346,6 @@ export class ReviewProtocolController {
         maxAttempts: this.retryPolicy.maxAttempts,
         cause,
         effectEvidence: new ReviewProtocolEffectEvidence({ observer: "capture", detail: cause.message }),
-      });
-    }
-  }
-
-  #restoreEffect(observer, before, after, attempt, transportAttempt) {
-    if (typeof observer?.restore !== "function") return false;
-    try {
-      observer.restore(before, after);
-      const restored = this.#capture(observer, attempt, transportAttempt);
-      if (this.#effectEvidence(observer, before, restored, attempt) !== null) {
-        throw new Error("review protocol source restore did not reproduce its pre-invocation observation");
-      }
-      return true;
-    } catch (cause) {
-      if (cause instanceof ReviewProtocolFailure) throw cause;
-      throw new ReviewProtocolFailure({
-        kind: "observation_unavailable",
-        attempt,
-        maxAttempts: this.retryPolicy.maxAttempts,
-        cause,
-        effectEvidence: new ReviewProtocolEffectEvidence({ observer: "restore", detail: cause.message }),
       });
     }
   }

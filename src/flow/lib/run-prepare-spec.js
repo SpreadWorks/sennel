@@ -15,7 +15,7 @@ import { assertOk, runCmd } from "../../lib/process.js";
 import { iterateAnalysisCategories } from "../../docs/lib/analysis-entry.js";
 import { buildInitialSteps } from "../../lib/flow-helpers.js";
 import { findStepById } from "./step-tree.js";
-import { getWorktreeStatus, runGit } from "../../lib/git-helpers.js";
+import { captureGitSnapshot, getWorktreeStatus, runGit } from "../../lib/git-helpers.js";
 import { emptySpecStub } from "../../lib/spec-json.js";
 import { onHook } from "../../lib/hooks.js";
 import { FlowCommand } from "./base-command.js";
@@ -49,7 +49,6 @@ const WORKTREE_FLOW_INTERNAL_IGNORES = Object.freeze([
   ".flow-identity.publication.receipt.tmp",
   ".flow-identity.publication.binding.tmp",
 ].map((file) => `/${PRODUCT.managedPath(file)}`));
-const GIT_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const WORKTREE_PREPARE_ATTEMPT_FILE = ".worktree-prepare-attempt.json";
 const WORKTREE_PREPARE_ATTEMPT_VERSION = 2;
 const WORKTREE_PREPARE_ATTEMPT_KEYS = Object.freeze([
@@ -1067,6 +1066,7 @@ export class RunPrepareSpecCommand extends FlowCommand {
               issue: issue ? Number(issue) : null,
               flowId: `flow-${flowRunId}`,
               flowVersionId: `flow-v1-${flowRunId}`,
+              context: { gitSnapshot: captureGitSnapshot(executionRoot) },
               specRecord: freshSpecRecord(),
               issueSnapshot: resolvedIssueSnapshot?.body ?? null,
             }));

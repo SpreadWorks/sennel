@@ -55,6 +55,7 @@ export default class SetRetryCommand extends FlowCommand {
         flowManager: ctx.flowManager,
         state: ctx.flowState,
         request,
+        executionRoot: ctx.executionRoot || ctx.root,
       }).apply();
       return {
         action: request.action,

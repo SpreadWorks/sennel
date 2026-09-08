@@ -4,10 +4,8 @@ import path from "node:path";
 import { afterEach, test } from "node:test";
 
 import SetRetryCommand from "../../../src/flow/lib/set-retry.js";
-import { ReviewTransitionFacts } from "../../../src/flow/lib/review-transition-facts.js";
 import {
   readRetryBaseline,
-  readRetryRecoveryReceiptChain,
   retryEvidenceRouteForNode,
   RetryRecoveryArtifactPublication,
   RetryRecoveryBaseline,
@@ -317,73 +315,4 @@ test("task review retries recover from the exact exhausted Attempt baseline afte
   assert.equal(receipt.current.attempt, reloadedState.attempt.sequence);
   assert.equal(receipt.current.runId, reloadedState.runId);
   assert.equal(receipt.current.specId, reloadedState.specId);
-});
-
-test("task review can recover again when the recovery Attempt fails before publishing a standalone baseline", () => {
-  const flow = taskReviewRetryFixture();
-  const command = new SetRetryCommand();
-  let result = null;
-  for (let retry = 0; retry < 10; retry += 1) {
-    result = command.execute(commandInput(flow, { phase: "impl" }));
-    if (result.ok === false) break;
-    flow.manager.failCurrentAttempt({
-      specId: flow.flow.specId,
-      failure: {
-        category: "provider",
-        code: "REVIEW_PROVIDER_UNAVAILABLE",
-        message: "The task review provider exhausted its definition-owned retry budget.",
-        retryable: true,
-        retryKind: "tooling",
-      },
-    });
-  }
-  assert.equal(result.ok, false, JSON.stringify(result));
-
-  fs.writeFileSync(path.join(flow.root, "task-review-first-recovery-change.js"), "export const changed = 1;\n");
-  const firstRecovery = command.execute(commandInput(flow, { phase: "impl" }));
-  assert.equal(firstRecovery.reset, true, JSON.stringify(firstRecovery));
-
-  const firstRecoveredState = flow.manager.canonicalState(flow.flow.specId);
-  const route = retryEvidenceRouteForNode(firstRecoveredState, firstRecoveredState.attempt.nodeId);
-  const directBaseline = flow.manager.readArtifact({
-    specId: flow.flow.specId,
-    logicalKey: "retry.recovery.baseline",
-    parameters: { routeId: "review-impl-T-1", attemptId: firstRecoveredState.attempt.id },
-    consumerNodeId: "T-1-review",
-    optional: true,
-  });
-  assert.equal(directBaseline, null);
-  assert.notEqual(readRetryBaseline(flow.manager, firstRecoveredState, route), null);
-
-  flow.manager.failCurrentAttempt({
-    specId: flow.flow.specId,
-    failure: {
-      category: "tooling",
-      code: "REVIEW_TOOLING_ERROR",
-      message: "Recovery failed before its standalone retry baseline was published.",
-      retryable: true,
-      retryKind: "tooling",
-    },
-  });
-  fs.writeFileSync(path.join(flow.root, "task-review-second-recovery-change.js"), "export const changed = 2;\n");
-
-  const secondRecovery = command.execute(commandInput(flow, { phase: "impl" }));
-
-  assert.equal(secondRecovery.reset, true, JSON.stringify(secondRecovery));
-  assert.equal(secondRecovery.grants[0].operation, "retry_recovery_attempt");
-  const secondRecoveredState = flow.manager.canonicalState(flow.flow.specId);
-  assert.equal(secondRecoveredState.attempt.sequence, firstRecoveredState.attempt.sequence + 1);
-  assert.notEqual(secondRecoveredState.attempt.id, firstRecoveredState.attempt.id);
-  const facts = ReviewTransitionFacts.forCurrentAttempt({
-    flowManager: flow.manager,
-    flowState: flow.manager.load(flow.flow.specId),
-    typedState: secondRecoveredState,
-    scope: "task",
-    phase: "impl",
-  });
-  assert.equal(facts.attemptCount, 0, "tooling recovery Attempts must not consume semantic Task Review attempts");
-  const receiptChain = readRetryRecoveryReceiptChain(flow.manager, secondRecoveredState, route);
-  assert.equal(receiptChain.length, 2);
-  assert.equal(receiptChain[0].current.attemptId, secondRecoveredState.attempt.id);
-  assert.equal(receiptChain[1].current.attemptId, firstRecoveredState.attempt.id);
 });

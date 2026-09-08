@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { isGitSnapshot } from "../../lib/git-snapshot.js";
 import { ProcessOwnedLock, RealDirectoryAuthority } from "../../lib/process-owned-lock.js";
 import { AuthoritativeSpecRecord, FlowActivityId, FlowArtifactCatalog, FlowArtifactCatalogStore, FlowArtifactDescriptor, FlowId, FlowRunId, FlowSpecIdentity, FlowSpecRevision, FlowVersionId, FlowVersionLocation, FlowVersionMigrationOutput, FlowVersionMigrationOutputBuilder, FlowVersionMigrationOutputSet, FlowVersionRuntimeLockLocation, FlowVersionSemanticValidator } from "../../lib/flow-version.js";
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactActivityEvidence, FlowArtifactUpdater } from "../../lib/flow-artifact-contract.js";
@@ -177,6 +178,31 @@ const OBSERVATION_TRANSITION_OPERATIONS = new Set(["record_metric", "record_note
 // observation/decision history rather than a mutable side-channel.
 const NONBLOCKING_TRANSITION_OPERATIONS = new Set(["record_nonblocking", "continue_nonblocking"]);
 const FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS = new Set(["skip_finalize_downstream", "reset_finalize_downstream"]);
+const STATE_CHANGING_TRANSITION_OPERATIONS = new Set([
+  "create_flow", "complete_draft_completion", "add_task", "add_approval_task", "start_attempt",
+  "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", "fail_attempt",
+  "record_failure", "confirm_attempt", "complete_acceptance_decision_noop", "rewind", "rewind_test_evidence",
+  "repair_test_review", "repair_scenario_validity", "repair_implementation", "triage_implementation_for_repair",
+  "triage_implementation_no_repair", "repair_acceptance_review", "preimplementation_bootstrap",
+  "recover_existing_implementation", "reopen_draft_preimplementation", "reopen_draft_task_addition",
+  "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact",
+  "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "recover_interrupted_finalize_sync",
+  "park_flow", "resume_flow", "finalize_flow", "set_policy", "publish_artifacts", "publish_plugin_artifacts",
+  "publish_upgrade_result", "update_spec_record", "begin_outbox", "reopen_outbox", "complete_outbox",
+  "fail_outbox", "record_dispatch_approval", "skip_finalize_downstream", "reset_finalize_downstream",
+  "continue_nonblocking",
+]);
+export const AGGREGATE_METRIC_PROVENANCE = Object.freeze({
+  activityCount: "confirmed-activity-prefix",
+  artifactCount: "canonical-artifact-catalog",
+  stepCount: "canonical-state",
+  taskCount: "canonical-state",
+  durationMs: "activity-timing-durationMs",
+  inputTokens: "activity-usage-inputTokens",
+  outputTokens: "activity-usage-outputTokens",
+  cacheReadTokens: "activity-usage-cacheReadTokens",
+  cost: "activity-usage-cost",
+});
 
 function resolvedArtifact(logicalKey, parameters = {}) {
   return FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
@@ -1442,11 +1468,29 @@ export class ActivityDispatchApproval {
 export class CurrentFlowContext {
   constructor(value) {
     if (value !== null) {
-      requireExactFields(value, new Set(["operation", "resumeToken"]), "context");
-      requireString(value.operation, "context.operation");
-      requireString(value.resumeToken, "context.resumeToken");
+      const fields = new Set(["operation", "resumeToken", "gitSnapshot"]);
+      if (!isPlainObject(value)) throw new CurrentFlowStateInvariantError("context must be an object");
+      const hasResumeContext = Object.hasOwn(value, "operation") || Object.hasOwn(value, "resumeToken");
+      if (hasResumeContext && (!Object.hasOwn(value, "operation") || !Object.hasOwn(value, "resumeToken"))) {
+        throw new CurrentFlowStateInvariantError("context.operation and context.resumeToken are required together");
+      }
+      for (const field of Object.keys(value)) {
+        if (!fields.has(field)) throw new CurrentFlowStateInvariantError(`context contains unsupported field: ${field}`);
+      }
+      if (hasResumeContext) {
+        requireString(value.operation, "context.operation");
+        requireString(value.resumeToken, "context.resumeToken");
+      }
+      if (Object.hasOwn(value, "gitSnapshot")) {
+        if (!isGitSnapshot(value.gitSnapshot)) {
+          throw new CurrentFlowStateInvariantError("context.gitSnapshot must contain a valid Git availability and object id pair");
+        }
+      }
     }
-    this.value = value === null ? null : Object.freeze({ operation: value.operation, resumeToken: value.resumeToken });
+    this.value = value === null ? null : Object.freeze({
+      ...(Object.hasOwn(value, "operation") ? { operation: value.operation, resumeToken: value.resumeToken } : {}),
+      ...(Object.hasOwn(value, "gitSnapshot") ? { gitSnapshot: Object.freeze({ ...value.gitSnapshot }) } : {}),
+    });
     Object.freeze(this);
   }
 
@@ -2208,6 +2252,15 @@ export class DefinitionFailurePolicy {
     const remaining = failure.retryKind === null
       ? 0
       : Math.max(0, contract.remainingRetries(consumption, failure.retryKind));
+    // An unaccepted source mutation is not evidence of a completed Review or
+    // an exhausted tooling budget. Neither retry nor record-and-advance may
+    // adopt it as the next Attempt's source baseline.
+    if (failure.category === "source-integrity") {
+      return new DefinitionFailureDecision({
+        policy: this, operation: "blocked", retryKind: null, remaining: 0, targetNodeId: null,
+        reason: "unaccepted source effects require explicit reconciliation before execution can continue",
+      });
+    }
     // This marker deliberately selects no lifecycle route.  Some Steps need
     // cataloged artifacts in addition to state before their dedicated
     // Definition can decide; CurrentFlowState therefore exposes only this
@@ -6697,6 +6750,112 @@ export class ActivityUsage {
   toJSON() { return { inputTokens: this.inputTokens, outputTokens: this.outputTokens, cacheReadTokens: this.cacheReadTokens, cost: this.cost }; }
 }
 
+/**
+ * Derived read views owned by the canonical state and Activity model.
+ * Consumers may choose their own public projection, but timestamp and metric
+ * authority must remain defined here beside the records that carry the facts.
+ */
+export class CurrentFlowActivitySummary {
+  constructor(activities) {
+    if (!Array.isArray(activities) || activities.some((entry) => !(entry instanceof FlowActivity))) {
+      throw new CurrentFlowStateInvariantError("Activity summary requires typed Activities");
+    }
+    this.activities = Object.freeze([...activities]);
+    Object.freeze(this);
+  }
+
+  timestamps() {
+    const created = this.activities.find((entry) => (
+      entry.transition.operation === FLOW_CREATION_TRANSITION_OPERATION
+      && entry.type === FLOW_CREATION_ACTIVITY_TYPE
+    )) ?? null;
+    const updated = this.activities
+      .filter((entry) => STATE_CHANGING_TRANSITION_OPERATIONS.has(entry.transition.operation))
+      .at(-1) ?? null;
+    const finalized = this.activities
+      .filter((entry) => entry.transition.operation === "finalize_flow")
+      .at(-1) ?? null;
+    const timestamp = (value, reason) => value === null
+      ? { value: null, availability: "unavailable", reason, provenance: "confirmed-activity-prefix" }
+      : { value, availability: "available", reason: null, provenance: "activity-timing.finishedAt" };
+    return {
+      createdAt: timestamp(created?.timing?.finishedAt ?? null, "creation evidence is unavailable"),
+      updatedAt: timestamp(updated?.timing?.finishedAt ?? null, "state-changing Activity evidence is unavailable"),
+      finalizedAt: timestamp(finalized?.timing?.finishedAt ?? null, "finalize_flow Activity evidence is unavailable"),
+    };
+  }
+
+  metricCounterTotals() {
+    const totals = new Map();
+    for (const activity of this.activities) {
+      const metric = activity.metric;
+      if (metric === null || metric.counter === null) continue;
+      const key = [metric.phase, metric.counter, metric.provider, metric.profileKey].join("\u0000");
+      if (metric.reset) totals.set(key, 0);
+      const previous = totals.get(key) ?? 0;
+      const next = previous + metric.delta;
+      if (!Number.isSafeInteger(next)) {
+        throw new CurrentFlowStateInvariantError("Activity metric counter aggregate exceeds its numeric limit");
+      }
+      totals.set(key, next);
+    }
+    return Object.freeze(Object.fromEntries(totals));
+  }
+
+  metrics({ artifactCount, stepCount, taskCount } = {}) {
+    for (const [field, value] of Object.entries({ artifactCount, stepCount, taskCount })) {
+      requirePositiveInteger(value, `Activity summary.${field}`, { allowZero: true });
+    }
+    const totals = { durationMs: [], inputTokens: [], outputTokens: [], cacheReadTokens: [], cost: [] };
+    const add = (field, value) => {
+      if (value !== null && value !== undefined) totals[field].push(value);
+    };
+    for (const activity of this.activities) {
+      // Aggregate metrics are sourced only from confirmed Activity timing and
+      // ActivityUsage. record_metric observations are a separate ledger view,
+      // not another usage authority.
+      add("durationMs", activity.timing?.durationMs);
+      if (activity.usage !== null && activity.usage !== undefined) {
+        add("inputTokens", activity.usage.inputTokens);
+        add("outputTokens", activity.usage.outputTokens);
+        add("cacheReadTokens", activity.usage.cacheReadTokens);
+        add("cost", activity.usage.cost);
+      }
+    }
+    const sum = (values, field) => {
+      if (values.length === 0) return null;
+      const total = values.reduce((current, value) => {
+        const next = current + value;
+        if (!Number.isFinite(next) || (field !== "cost" && !Number.isSafeInteger(next))) {
+          throw new CurrentFlowStateInvariantError(`Activity summary metric ${field} exceeds its numeric limit`);
+        }
+        return next;
+      }, 0);
+      return total;
+    };
+    const result = {
+      activityCount: this.activities.length,
+      artifactCount,
+      stepCount,
+      taskCount,
+      durationMs: sum(totals.durationMs, "durationMs"),
+      inputTokens: sum(totals.inputTokens, "inputTokens"),
+      outputTokens: sum(totals.outputTokens, "outputTokens"),
+      cacheReadTokens: sum(totals.cacheReadTokens, "cacheReadTokens"),
+      cost: sum(totals.cost, "cost"),
+      provenance: AGGREGATE_METRIC_PROVENANCE,
+    };
+    // Counter observations are a separate reset-aware stream. Keep their
+    // accounting available to canonical consumers without widening the exact
+    // AggregateMetrics response or mixing them into usage totals.
+    Object.defineProperty(result, "metricCounters", {
+      value: this.metricCounterTotals(),
+      enumerable: false,
+    });
+    return result;
+  }
+}
+
 function assertJournalAttemptIdentities(entries) {
   const identities = new Map();
   const lastSequenceByNode = new Map();
@@ -7673,6 +7832,7 @@ export class CurrentFlowVersionStore {
     policy = { autoApprove: false, nonblocking: null },
     specRecord,
     issueSnapshot = null,
+    context = null,
   } = {}) {
     return this.create(CurrentFlowState.create({
       definition: this.definition,
@@ -7685,6 +7845,7 @@ export class CurrentFlowVersionStore {
       execution,
       lifecycle,
       policy,
+      context,
     }), { specRecord, issueSnapshot });
   }
 

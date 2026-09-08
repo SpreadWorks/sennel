@@ -6,7 +6,6 @@ import { WorkerArtifactRevision } from "./worker-artifact-revision.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const MAX_TEXT_LENGTH = 4000;
-
 /** Bounded, deterministic limits for one repair-worker capability. */
 export const TEST_REVIEW_REPAIR_BATCH_LIMITS = Object.freeze({
   findingCount: 8,

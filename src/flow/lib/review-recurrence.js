@@ -1,12 +1,9 @@
 import crypto from "node:crypto";
 
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
+import { TaskReviewAccounting } from "./task-review-accounting.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 import { TaskReviewAcceptanceHandoff } from "./task-mutation-lineage.js";
-import {
-  completedTaskReviewAttemptCount,
-  taskReviewAttemptNumber,
-} from "./task-review-attempt-accounting.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 
@@ -365,10 +362,18 @@ class TaskReviewEvidenceRecord {
   }
 
   localAttempt(review, repair) {
-    return taskReviewAttemptNumber({
+    return this.accountingFor(repair.budget).completedOrdinalForSequence(review.attempt);
+  }
+
+  accountingFor(budget) {
+    const nextBudget = this.lineages
+      .filter((lineage) => lineage.role === "implementation")
+      .find((lineage) => lineage.budget.round === budget.round + 1)?.budget ?? null;
+    return new TaskReviewAccounting({
+      taskId: this.taskId,
+      budget,
       history: this.history,
-      budget: repair.budget,
-      attemptSequence: review.attempt,
+      roundEndAttemptSequence: nextBudget?.reviewAttemptSequenceAtStart ?? null,
     });
   }
 }
@@ -510,12 +515,12 @@ export class TaskReviewConvergenceEvidence {
     const fourthHandoffs = this.handoffs();
     return this.records.map((record) => {
       const review = record.history.current;
-      const reviewAttempts = record.currentBudget === null
+      const accounting = record.currentBudget === null
         ? null
-        : completedTaskReviewAttemptCount({ history: record.history, budget: record.currentBudget });
+        : record.accountingFor(record.currentBudget);
+      const reviewAttempts = accounting?.completedReviewCount ?? null;
       const currentReview = reviewAttempts !== null
         && reviewAttempts > 0
-        && review.attempt > record.currentBudget.reviewAttemptSequenceAtStart
         && this.cycle.matchesArtifact(review.payload);
       const recurrence = this.recurrenceHistory(record.taskId);
       const fourthRepairUnreviewed = fourthHandoffs.some((handoff) => (

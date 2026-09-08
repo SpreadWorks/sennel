@@ -65,6 +65,7 @@ import { CanonicalFlowArtifactWrite } from "./lib/current-flow-state.js";
 import { TaskStepIdentity } from "./lib/task-step-identity.js";
 import { DefinitionFailureOwnership } from "./lib/definition-failure-ownership.js";
 import { RepositoryFlowOperationLock } from "../lib/repository-maintenance-lock.js";
+import { PRODUCT } from "../lib/product.js";
 import { readCurrentNonGateTransitionFacts } from "./lib/non-gate-transition-facts.js";
 import { readCurrentTestChainTransitionFacts } from "./lib/test-chain-transition-facts.js";
 import {
@@ -179,6 +180,10 @@ function resetSkippedDownstreamSteps(stateOwner, stepIds = []) {
 function deriveActivePhase(ctx) {
   const state = ctx.flowManager.load();
   return derivePhase(state);
+}
+
+function managedWorkerHandoffActive(environment = process.env) {
+  return typeof environment[PRODUCT.env("FLOW_HANDOFF_REQUEST")] === "string";
 }
 
 /**
@@ -1040,6 +1045,19 @@ function pluginCommandName(command) {
 
 
 export const FLOW_COMMANDS = {
+  query: {
+    helpKey: "flow.query",
+    requiresFlow: false,
+    targetGuard: false,
+    command: () => import("./query.js"),
+    args: { options: ["--request-file"] },
+    help: [
+      "Usage: sennel flow query [--request-file <path>]",
+      "",
+      "Read canonical Flow Version metadata or confirmed Activities as one JSON response.",
+      "Input is a single JSON request from stdin or --request-file.",
+    ].join("\n"),
+  },
   resume: {
     helpKey: "flow.resume",
     helpPath: "sennel flow resume --help",
@@ -1242,6 +1260,11 @@ export const FLOW_COMMANDS = {
         "  --search <query>   Search entries by keyword (matches against keywords array)",
       ].join("\n"),
       post(ctx, result) {
+        // A managed worker has payload/source authority only. Recording an
+        // observation here mutates canonical Flow state while the parent is
+        // holding an immutable handoff checkpoint, so the otherwise valid
+        // handoff would be rejected as an authority violation.
+        if (managedWorkerHandoffActive()) return;
         const phase = deriveActivePhase(ctx);
         if (!phase) return;
 
@@ -2086,6 +2109,24 @@ export const FLOW_COMMANDS = {
         "Options:",
         ...FLOW_TARGET_GUARD_HELP_LINES,
         "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
+      ].join("\n"),
+    },
+    "reconcile-task-review": {
+      helpKey: "flow.run.reconcile-task-review",
+      runtimeLog: { stepMetadata: false },
+      explicitTargetResolution: true,
+      command: () => import("./lib/run-reconcile-task-review.js"),
+      args: {
+        flags: [...FLOW_TARGET_GUARD_FLAGS, "--dry-run", "--yes"],
+        options: [...FLOW_RUN_OPTIONS, "--expect-digest", "--reason"],
+      },
+      help: [
+        "Usage: sennel flow run reconcile-task-review --expect-run-id <runId> --expect-spec <specId> [--expect-issue <number> | --expect-no-issue] --dry-run",
+        "",
+        "Explicitly adopt current unreviewed input for an orphaned, unpublished recovered Task Review Attempt.",
+        "Preview first, then supply --yes --expect-digest <preview-digest> --reason <20-500 characters>.",
+        "Preserves failed evidence and retained work units, grants one reevaluation, and never executes Review or advances to Gate.",
+        ...FLOW_TARGET_GUARD_HELP_LINES,
       ].join("\n"),
     },
     "recover-finalization": {

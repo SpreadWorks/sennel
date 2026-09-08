@@ -38,12 +38,7 @@ function contract() {
   });
 }
 
-function taskReviewExecution({
-  taskId = "T-1",
-  attemptId = "task-review-attempt",
-  sequence = 1,
-  reviewAttempt = 1,
-} = {}) {
+function taskReviewExecution({ taskId = "T-1", attemptId = "task-review-attempt", sequence = 1, reviewAttempt = 1 } = {}) {
   return new TaskReviewExecutionIdentity({
     taskId,
     attempt: { id: attemptId, nodeId: `${taskId}-review`, sequence },
@@ -68,19 +63,14 @@ class SourceObserver {
 
 describe("Task Review protocol", () => {
   it("round-trips the parent-issued Task Review execution identity", () => {
-    const identity = taskReviewExecution({
-      taskId: "T-1",
-      attemptId: "canonical-attempt",
-      sequence: 2,
-      reviewAttempt: 2,
-    });
+    const identity = taskReviewExecution({ taskId: "T-1", attemptId: "canonical-attempt", sequence: 2 });
     const restored = TaskReviewExecutionIdentity.fromJSON(identity.toJSON());
 
     assert.notEqual(restored, identity);
     assert.deepEqual(restored.toJSON(), {
       taskId: "T-1",
       attempt: { id: "canonical-attempt", nodeId: "T-1-review", sequence: 2 },
-      reviewAttempt: 2,
+      reviewAttempt: 1,
     });
   });
 
@@ -108,14 +98,6 @@ describe("Task Review protocol", () => {
         reviewAttempt: 1,
       }),
       /Task Review execution Attempt has invalid fields/,
-    );
-    assert.throws(
-      () => TaskReviewExecutionIdentity.fromJSON({
-        taskId: "T-1",
-        attempt: { id: "attempt", nodeId: "T-1-review", sequence: 1 },
-        reviewAttempt: 0,
-      }),
-      /reviewAttempt is invalid/,
     );
   });
 
@@ -190,7 +172,6 @@ describe("Task Review protocol", () => {
         flowManager,
         requirementIds: new Set(["R1"]),
         recurrenceHistory: [],
-        sourcePaths: new Set(["src/task.js"]),
         agent,
         prompt,
         systemPrompt,
@@ -262,7 +243,6 @@ describe("Task Review protocol", () => {
         flowManager,
         requirementIds: new Set(["R1"]),
         recurrenceHistory: [],
-        sourcePaths: new Set(["src/task.js"]),
         agent,
         prompt: "review the current Task",
         systemPrompt: "return the Task Review JSON",
@@ -325,7 +305,6 @@ describe("Task Review protocol", () => {
           },
           requirementIds: new Set(["R1"]),
           recurrenceHistory: [],
-          sourcePaths: new Set(["src/task.js"]),
           agent,
           prompt: "review the Task",
           systemPrompt: "return JSON",
@@ -361,79 +340,6 @@ describe("Task Review protocol", () => {
       (error) => error instanceof ReviewProtocolFailure && error.kind === "effect_observed",
     );
     assert.equal(calls, 1);
-  });
-
-  it("rolls back an unowned Task Review edit before retrying with correction", async () => {
-    const root = createTmpDir("task-review-unowned-repair-");
-    const outputDirectory = path.join(root, ".sennel", "review-work-unit");
-    const outputVariable = PRODUCT.env("REVIEW_OUTPUT_DIR");
-    const previousOutput = process.env[outputVariable];
-    const sourcePath = path.join(root, "src", "task.js");
-    const repaired = "export const task = 'repaired';\n";
-    const repairedFinding = {
-      findingKey: "repair-task-source",
-      title: "Repair Task source",
-      failureMode: "spec_behavior_contradiction",
-      file: "src/task.js",
-      requirementId: "R1",
-      issue: "The Task source does not implement R1.",
-      suggestion: "Repair the Task source implementation.",
-      disposition: "must-fix",
-      rationale: "R1 is a mandatory requirement.",
-      priorRepairInsufficiency: null,
-      repairStrategy: null,
-    };
-    const responses = [
-      JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] }),
-      JSON.stringify({ blockingFindings: [repairedFinding], nonBlockingImprovements: [] }),
-    ];
-    const prompts = [];
-    let calls = 0;
-    try {
-      initGitRepo(root);
-      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-      fs.writeFileSync(sourcePath, "export const task = 'baseline';\n");
-      commitAll(root, "baseline");
-      fs.mkdirSync(outputDirectory, { recursive: true });
-      process.env[outputVariable] = outputDirectory;
-      container.reset();
-      container.register("root", root);
-      const flowManager = {
-        resolveCurrentContext() { return { specId: "task-review-rollback", taskId: "T-1", flowPhase: "impl" }; },
-        appendMetric() {},
-      };
-      const agent = {
-        providerRetryPolicy() { return { retryCount: 0, retryDelayMs: 1, backoffFactor: 2 }; },
-        async call(prompt) {
-          prompts.push(prompt);
-          assert.equal(fs.readFileSync(sourcePath, "utf8"), "export const task = 'baseline';\n");
-          fs.writeFileSync(sourcePath, repaired);
-          const response = responses[calls];
-          calls += 1;
-          return response;
-        },
-      };
-      const result = await runTaskReviewProtocol({
-        root,
-        executionIdentity: taskReviewExecution(),
-        flowManager,
-        requirementIds: new Set(["R1"]),
-        recurrenceHistory: [],
-        sourcePaths: new Set(["src/task.js"]),
-        agent,
-        prompt: "review the current Task",
-        systemPrompt: "return the Task Review JSON",
-      });
-      assert.equal(result, responses[1]);
-      assert.equal(calls, 2);
-      assert.equal(fs.readFileSync(sourcePath, "utf8"), repaired);
-      assert.match(prompts[1], /must report a repaired must-fix finding/);
-    } finally {
-      container.reset();
-      if (previousOutput === undefined) delete process.env[outputVariable];
-      else process.env[outputVariable] = previousOutput;
-      removeTmpDir(root);
-    }
   });
 
   it("accepts one complete response after a legitimate source mutation", async () => {

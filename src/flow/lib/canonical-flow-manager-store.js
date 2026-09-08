@@ -73,6 +73,8 @@ import {
 } from "./canonical-command-result.js";
 import { PlanGateRepairRecord } from "./plan-gate-repair.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
+import { TaskReviewReconciliationRecord } from "./task-review-reconciliation-record.js";
+import { TaskReviewReconciliationAdmission } from "./task-review-reconciliation.js";
 import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
 import { readTaskExecutionOverrunFacts, TaskExecutionOverrunAdmission } from "./task-execution-overrun.js";
 import { CanonicalImplementationRepairRecord } from "./review-recurrence.js";
@@ -120,6 +122,11 @@ import {
   RetryRecoveryArtifactPublication,
   RetryRecoveryReceipt,
 } from "./retry-recovery.js";
+import {
+  TaskReviewUnsealedCheckpoint,
+  TaskReviewRecoveryAuthorization,
+  taskReviewCheckpointArtifact,
+} from "./task-review-recovery-checkpoint.js";
 import { validateUpgradeResultArtifact } from "./upgrade-result-artifact.js";
 import {
   taskGateSettlementIssueLogActivityId,
@@ -1051,6 +1058,7 @@ export class CanonicalFlowCreateRequest {
     flowVersionId = null,
     specRecord,
     issueSnapshot = null,
+    context = null,
     tasks = [],
   } = {}) {
     this.specId = canonicalSpecId(specId);
@@ -1098,6 +1106,7 @@ export class CanonicalFlowCreateRequest {
       );
     }
     this.issueSnapshot = issueSnapshot;
+    this.context = context;
     if (!Array.isArray(tasks)) throw new CurrentFlowStateInvariantError("fresh Tasks must be an array");
     const ids = new Set();
     this.tasks = Object.freeze(tasks.map((task, index) => {
@@ -1375,6 +1384,7 @@ export class CanonicalFlowManagerStore {
       policy: input.policy,
       specRecord: input.specRecord,
       issueSnapshot: input.issueSnapshot,
+      context: input.context,
     });
     for (const task of input.tasks) {
       this.runtime.addTask({
@@ -1875,6 +1885,7 @@ export class CanonicalFlowManagerStore {
         attempt,
         expectedAttempt: expected,
         admission: this.#consumerAdmission(state, target),
+        retryRecoveryPublication: this.#retryBaselinePublication(state, target, attempt),
       });
       if (rewound === null) {
         throw new CurrentFlowStateInvariantError("canonical failed Attempt changed before rewind");
@@ -1888,6 +1899,7 @@ export class CanonicalFlowManagerStore {
         nodeId: target,
         attempt,
         admission: this.#consumerAdmission(state, target),
+        retryRecoveryPublication: this.#retryBaselinePublication(state, target, attempt),
       });
     }
     throw new CurrentFlowStateInvariantError(`canonical recovery is unavailable for ${target}`);
@@ -2163,10 +2175,28 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  retryExhaustedAttempt({ specId = null, receipt } = {}) {
+  reconcileTaskReview({ specId = null, record, baseline, admission } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (!(record instanceof TaskReviewReconciliationRecord) || !(admission instanceof TaskReviewReconciliationAdmission)
+      || admission.proposal.digest !== record.proposal.digest || record.proposal.specId !== resolved) {
+      throw new CurrentFlowStateInvariantError("Task Review reconciliation requires its exact typed admission and record");
+    }
+    const state = this.runtime.load(resolved);
+    return this.runtime.retryRecoveryAttempt({
+      specId: resolved, activityId: activityId("task-review-reconciled"),
+      attempt: exhaustedRecoveryAttempt(state, record.currentAttempt.id), admission,
+      retryRecoveryPublication: new RetryRecoveryArtifactPublication({ baseline, reconciliation: record }),
+      references: { evaluations: [], findings: [], repairs: [], artifacts: [] },
+    });
+  }
+
+  retryExhaustedAttempt({ specId = null, receipt, taskReviewRecoveryAuthorization = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const typed = receipt instanceof RetryRecoveryReceipt ? receipt : new RetryRecoveryReceipt(receipt);
+    if (taskReviewRecoveryAuthorization !== null && !(taskReviewRecoveryAuthorization instanceof TaskReviewRecoveryAuthorization)) {
+      throw new CurrentFlowStateInvariantError("Task Review recovery authorization must be typed");
+    }
     const state = this.runtime.load(resolved);
     if (state.current === null || state.attempt?.failure === null) {
       throw new CurrentFlowStateInvariantError("canonical exhausted recovery requires a failed active Attempt");
@@ -2194,7 +2224,7 @@ export class CanonicalFlowManagerStore {
       specId: resolved,
       activityId: activityId("attempt-recovered-after-exhaustion"),
       attempt: nextAttempt,
-      retryRecoveryPublication: RetryRecoveryArtifactPublication.receipt(typed),
+      retryRecoveryPublication: RetryRecoveryArtifactPublication.receipt(typed, taskReviewRecoveryAuthorization),
       references: { evaluations: [], findings: [], repairs: [], artifacts: [] },
     });
   }
@@ -3373,7 +3403,7 @@ export class CanonicalFlowManagerStore {
    * error counterpart to `confirmCurrentAttempt`; callers never mutate a
    * status blob or write a retry artifact beside flow.json.
    */
-  failCurrentAttempt({ specId = null, failure, result, commandResult = undefined, admission = undefined } = {}) {
+  failCurrentAttempt({ specId = null, failure, result, commandResult = undefined, taskReviewUnsealedCheckpoint = null, admission = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
@@ -3391,6 +3421,10 @@ export class CanonicalFlowManagerStore {
       confirmedAt: now,
       artifactRefs: [],
     };
+    if (taskReviewUnsealedCheckpoint !== null && !(taskReviewUnsealedCheckpoint instanceof TaskReviewUnsealedCheckpoint)) {
+      throw new CurrentFlowStateInvariantError("Task Review failure checkpoint must be typed");
+    }
+    if (taskReviewUnsealedCheckpoint !== null) taskReviewUnsealedCheckpoint.assertActiveState(state);
     const artifactWrites = commandResult === undefined
       ? []
       : [
@@ -3402,6 +3436,7 @@ export class CanonicalFlowManagerStore {
           }),
           ...this.#commandPublicationWrites(commandResult),
         ];
+    if (taskReviewUnsealedCheckpoint !== null) artifactWrites.push(taskReviewCheckpointArtifact(taskReviewUnsealedCheckpoint));
     return this.runtime.failAttempt({
       specId: resolved,
       activityId: activityId("attempt-failed"),

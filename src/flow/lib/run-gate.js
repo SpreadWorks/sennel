@@ -23,7 +23,6 @@ import { assertOk } from "../../lib/process.js";
 import { PKG_DIR } from "../../lib/cli.js";
 import { PRODUCT } from "../../lib/product.js";
 import { runGit } from "../../lib/git-helpers.js";
-import { computeGitState } from "../../lib/git-state.js";
 
 const execFileAsync = promisify(execFile);
 import { container } from "../../lib/container.js";
@@ -1666,7 +1665,21 @@ async function evaluateImplRequirementsWithRetry({
  * the porcelain status output, so any modification — tracked content change
  * or untracked file addition — changes the hash.
  */
-export { computeGitState } from "../../lib/git-state.js";
+export function computeGitState(root) {
+  const head = runGit(["rev-parse", "HEAD"], { cwd: root });
+  assertOk(head, "failed to read HEAD sha");
+  const diff = runGit(["diff", "HEAD"], { cwd: root });
+  assertOk(diff, "failed to read git diff HEAD");
+  const status = runGit(["status", "--porcelain=v1", "-z"], { cwd: root });
+  assertOk(status, "failed to read git status");
+  const worktreeHash = crypto
+    .createHash("sha256")
+    .update(diff.stdout)
+    .update("\x00")
+    .update(status.stdout)
+    .digest("hex");
+  return { headSha: head.stdout.trim(), worktreeHash };
+}
 
 const PLAN_GATE_EVIDENCE_LOGICAL_KEYS = Object.freeze({
   draft: Object.freeze([

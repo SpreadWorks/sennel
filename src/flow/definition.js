@@ -4043,3 +4043,34 @@ export function findBranchForLeaf(definition, leafId) {
 }
 
 export { FlowNode };
+
+/** Explicit orphan reconciliation is not an automatic retry or semantic acceptance. */
+export class TaskReviewReconciliationDecision {
+  constructor({ state, catalog, activities }) {
+    const nodeId = state.current?.at(-1);
+    const node = nodeId ? state.findNode(nodeId) : null;
+    const attempt = state.attempt;
+    if (node?.key !== "task.task-review" || node.status !== "in_progress" || !attempt?.failure
+      || !["tooling", "provider"].includes(attempt.failure.category)
+      || state.failureDisposition()?.operation !== "record") {
+      throw new Error("Definition does not authorize orphaned Task Review reconciliation");
+    }
+    const taskId = nodeId.slice(0, -"-review".length);
+    const introduction = activities.find(a => a.nodeId === nodeId && a.transition.attempt?.id === attempt.id);
+    const failure = activities.find(a => a.nodeId === nodeId && a.attemptId === attempt.id && a.transition.operation === "fail_attempt");
+    if (!introduction || !["recover_attempt", "rewind"].includes(introduction.transition.operation) || !failure
+      || catalog.artifacts.some(a => (["retry.recovery.baseline", "retry.recovery.receipt"].includes(a.logicalKey) && a.relativePath.endsWith(`/${attempt.id}.json`))
+        || (a.logicalKey === "task.review" && a.relativePath === `steps/impl/${taskId}/review/result.json`)
+        || (a.logicalKey === "task.review.reconciliation" && a.relativePath.startsWith(`steps/impl/${taskId}/review/recovery/reconciliations/`)))) {
+      throw new Error("Task Review reconciliation requires an unpublished recovered Attempt without a baseline or prior reconciliation");
+    }
+    this.taskId = taskId;
+    this.nodeId = nodeId;
+    this.operation = "reconcile-task-review";
+    Object.freeze(this);
+  }
+}
+
+export function resolveTaskReviewReconciliation(facts) {
+  return new TaskReviewReconciliationDecision(facts);
+}
