@@ -771,7 +771,7 @@ export class FlowDispatchWork {
             : this.handoffRequest.policy.preservesRejectedSource
               ? "Edit only paths in this Task action's supplied source allow-list and only for its confirmed apply findings."
               : "Edit only project source and formal project tests that this action requires.",
-          "Follow the guarded action's source-worker requirement-to-path claim contract exactly.",
+          "Do not classify or report changed files; the parent derives their canonical Requirement bindings from the observed Attempt manifest.",
           "Do not write effects.json, do not write a handoff submission, and do not run a seal command.",
           "Return only the structured source effect required by the guarded action output_schema.",
           "The parent dispatcher validates, materializes, seals, publishes, and completes the step.",

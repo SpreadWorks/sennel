@@ -97,6 +97,7 @@ import { SourceTriageEffect } from "./source-triage-contract.js";
 export { SourceTriageEffect } from "./source-triage-contract.js";
 import { ApprovedFindingExceptionSet } from "./acknowledged-rationale.js";
 import { loadMergedGuardrails } from "../../lib/guardrail.js";
+import { CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
 
 export const WORKER_ARTIFACT_HANDOFF_REQUEST_ENV = PRODUCT.env("FLOW_HANDOFF_REQUEST");
 // Structured source responses change fresh-dispatch producer ownership only.
@@ -132,6 +133,9 @@ const SOURCE_EFFECT_KEYS = Object.freeze([
   "repair",
   "noChangeReason",
 ]);
+const SOURCE_EFFECT_REPORT_KEYS = Object.freeze(
+  SOURCE_EFFECT_KEYS.filter((key) => key !== "files"),
+);
 
 function requiredString(value, field) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
@@ -679,9 +683,7 @@ export class WorkerArtifactInputSnapshot {
 }
 
 /**
- * The only worker-to-parent control surface for a source-producing leaf.
- * Source edits stay in the execution checkout; this sealed document merely
- * declares the catalog effects the parent may commit with completion.
+ * One parent-derived, sealed source effect for a canonical Requirement.
  */
 export class SourceFileEffect {
   constructor({ requirementId, mutationIds } = {}) {
@@ -706,35 +708,6 @@ export class SourceFileEffect {
     return this.mutationIds.map((mutationId) => manifest.pathForMutationId(mutationId));
   }
   toJSON() { return { requirementId: this.requirementId, mutationIds: [...this.mutationIds] }; }
-}
-
-/** A worker claim names intent, never a parent-derived mutation identity. */
-export class SourceWorkerFileClaim {
-  constructor({ requirementId, paths } = {}) {
-    this.requirementId = requiredString(requirementId, "source worker file claim requirementId");
-    if (!Array.isArray(paths) || paths.length === 0 || paths.length > MAX_PAYLOAD_FILES) {
-      throw new Error("source worker file claim paths must be a bounded non-empty array");
-    }
-    this.paths = Object.freeze(paths.map((candidate) => normalizedRelativePath(candidate, "source worker file claim path")));
-    const duplicatePaths = duplicateValues(this.paths);
-    if (duplicatePaths.length > 0) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_SOURCE_HANDOFF_EFFECT_PATH_CLAIM_DUPLICATE",
-        "source worker file claim paths must not duplicate within one requirement claim",
-        { retryable: false, data: { duplicatePaths: duplicatePaths.slice(0, 20) } },
-      );
-    }
-    Object.freeze(this);
-  }
-  bind(manifest) {
-    if (!(manifest instanceof SourceMutationManifest)) throw new Error("source worker file claim requires a SourceMutationManifest");
-    return new SourceFileEffect({
-      requirementId: this.requirementId,
-      mutationIds: this.paths.map((relativePath) => manifest.mutationIdForPath(relativePath)),
-    });
-  }
-  toJSON() { return { requirementId: this.requirementId, paths: [...this.paths] }; }
 }
 
 export class SourceIssueEffect {
@@ -959,6 +932,26 @@ export class SourceNoChangeReason {
   toJSON() { return this.text; }
 }
 
+function assertSourceEffectShape({ stepId, completionStatus, files, issues, overview, triage, repair, noChangeReason }) {
+  if (!new Set(["done", "skipped"]).has(completionStatus)) throw new Error("source worker completionStatus is invalid");
+  if (completionStatus === "skipped" && stepId !== "implement") {
+    throw new Error("only implement may report a skipped source completion");
+  }
+  if (stepId === "task-impl" && overview === null) throw new Error("task-impl source effect requires overview additions");
+  if (stepId !== "task-impl" && overview !== null) throw new Error("only task-impl may submit overview additions");
+  if ((new Set(["impl-triage", "task-triage"]).has(stepId)) !== (triage !== null)) throw new Error("source triage effect is required only for impl-triage");
+  if ((new Set(["impl-repair", "task-repair"]).has(stepId)) !== (repair !== null)) throw new Error("source repair effect is required only for impl-repair");
+  if (stepId !== "task-impl" && noChangeReason !== null) {
+    throw new Error("only task-impl may submit a source no-change reason");
+  }
+  if (new Set(["impl-triage", "task-triage"]).has(stepId) && (files.length > 0 || issues.length > 0 || overview !== null || repair !== null)) {
+    throw new Error("impl-triage source effect may contain only typed triage dispositions");
+  }
+  if (new Set(["impl-repair", "task-repair"]).has(stepId) && (overview !== null || triage !== null)) {
+    throw new Error("impl-repair source effect may contain source files, issues, and one typed repair only");
+  }
+}
+
 export class SourceWorkerEffect {
   constructor({ version, stepId, completionStatus, files = [], issues = [], overview = null, triage = null, repair = null, noChangeReason = null } = {}) {
     if (version !== 1) throw new Error("source worker effect version must be 1");
@@ -966,10 +959,6 @@ export class SourceWorkerEffect {
     this.stepId = requiredString(stepId, "source worker effect stepId");
     if (!requiresWorkerSourceHandoff(this.stepId)) throw new Error(`source worker effect step is not source-owned: ${this.stepId}`);
     this.completionStatus = requiredString(completionStatus, "source worker completionStatus");
-    if (!new Set(["done", "skipped"]).has(this.completionStatus)) throw new Error("source worker completionStatus is invalid");
-    if (this.completionStatus === "skipped" && this.stepId !== "implement") {
-      throw new Error("only implement may report a skipped source completion");
-    }
     if (!Array.isArray(files) || files.length > MAX_PAYLOAD_FILES || !Array.isArray(issues) || issues.length > MAX_PAYLOAD_FILES) {
       throw new Error("source worker effect collections must be bounded arrays");
     }
@@ -982,23 +971,11 @@ export class SourceWorkerEffect {
       exactObjectKeys(entry, ["classification", "reason", "remainingRisk"], "source worker issue effect");
       return new SourceIssueEffect(entry);
     }));
-    if (this.stepId === "task-impl" && overview === null) throw new Error("task-impl source effect requires overview additions");
-    if (this.stepId !== "task-impl" && overview !== null) throw new Error("only task-impl may submit overview additions");
     this.overview = overview === null ? null : new SourceOverviewEffect(overview);
-    if ((new Set(["impl-triage", "task-triage"]).has(this.stepId)) !== (triage !== null)) throw new Error("source triage effect is required only for impl-triage");
-    if ((new Set(["impl-repair", "task-repair"]).has(this.stepId)) !== (repair !== null)) throw new Error("source repair effect is required only for impl-repair");
     this.triage = triage === null ? null : new SourceTriageEffect(triage);
     this.repair = repair === null ? null : new SourceRepairEffect(repair);
     this.noChangeReason = noChangeReason === null ? null : new SourceNoChangeReason(noChangeReason);
-    if (this.stepId !== "task-impl" && this.noChangeReason !== null) {
-      throw new Error("only task-impl may submit a source no-change reason");
-    }
-    if (new Set(["impl-triage", "task-triage"]).has(this.stepId) && (this.files.length > 0 || this.issues.length > 0 || this.overview !== null || this.repair !== null)) {
-      throw new Error("impl-triage source effect may contain only typed triage dispositions");
-    }
-    if (new Set(["impl-repair", "task-repair"]).has(this.stepId) && (this.overview !== null || this.triage !== null)) {
-      throw new Error("impl-repair source effect may contain source files, issues, and one typed repair only");
-    }
+    assertSourceEffectShape(this);
     Object.freeze(this);
   }
 
@@ -1026,19 +1003,14 @@ export class SourceWorkerEffect {
 
 /** Worker-facing report bound to observed source mutations only by the parent. */
 export class SourceWorkerEffectReport {
-  constructor({ version, stepId, completionStatus, files = [], issues = [], overview = null, triage = null, repair = null, noChangeReason = null } = {}) {
+  constructor({ version, stepId, completionStatus, issues = [], overview = null, triage = null, repair = null, noChangeReason = null } = {}) {
     if (version !== 1) throw new Error("source worker effect report version must be 1");
     this.version = 1;
     this.stepId = requiredString(stepId, "source worker effect report stepId");
     this.completionStatus = requiredString(completionStatus, "source worker effect report completionStatus");
-    if (!Array.isArray(files) || files.length > MAX_PAYLOAD_FILES || !Array.isArray(issues) || issues.length > MAX_PAYLOAD_FILES) {
-      throw new Error("source worker effect report collections must be bounded arrays");
+    if (!Array.isArray(issues) || issues.length > MAX_PAYLOAD_FILES) {
+      throw new Error("source worker effect report issues must be a bounded array");
     }
-    this.files = Object.freeze(files.map((entry) => {
-      exactObjectKeys(entry, ["requirementId", "paths"], "source worker file claim");
-      return new SourceWorkerFileClaim(entry);
-    }));
-    assertUniqueSourceRequirementClaims(this.files, "source worker file claims");
     this.issues = Object.freeze(issues.map((entry) => {
       exactObjectKeys(entry, ["classification", "reason", "remainingRisk"], "source worker issue claim");
       return new SourceIssueEffect(entry);
@@ -1047,31 +1019,26 @@ export class SourceWorkerEffectReport {
     this.triage = triage === null ? null : new SourceTriageEffect(triage);
     this.repair = repair === null ? null : new SourceRepairReport(repair);
     this.noChangeReason = noChangeReason === null ? null : new SourceNoChangeReason(noChangeReason);
+    assertSourceEffectShape({ ...this, files: [] });
     Object.freeze(this);
   }
   static fromDocument(value, expectedStepId) {
-    exactObjectKeys(value, SOURCE_EFFECT_KEYS, "source worker effect report");
+    exactObjectKeys(value, SOURCE_EFFECT_REPORT_KEYS, "source worker effect report");
     const report = new SourceWorkerEffectReport(value);
     if (report.stepId !== expectedStepId) throw new Error("source worker effect report step does not match the handoff");
     return report;
   }
-  bind(manifest) {
+  bind(manifest, requirementAuthority) {
     if (!(manifest instanceof SourceMutationManifest)) throw new Error("source worker effect report requires a SourceMutationManifest");
-    const claimed = new Set(this.files.flatMap((entry) => entry.paths));
-    const observed = manifest.paths();
-    const observedPaths = new Set(observed);
-    const missing = observed.filter((relativePath) => !claimed.has(relativePath));
-    const unknown = [...claimed].filter((relativePath) => !observedPaths.has(relativePath));
-    if (missing.length > 0 || unknown.length > 0) {
-      throw new WorkerArtifactHandoffError(
-        "invalid", "FLOW_SOURCE_HANDOFF_EFFECT_PATH_COVERAGE_INVALID",
-        `source worker file claim paths must exactly cover the parent-observed mutation paths as a set (missing: ${missing.join(", ") || "none"}; unknown: ${unknown.join(", ") || "none"})`,
-        { retryable: false, data: { missing: missing.slice(0, 20), unknown: unknown.slice(0, 20) } },
-      );
+    if (!(requirementAuthority instanceof CanonicalSourceRequirementAuthority)) {
+      throw new Error("source worker effect report requires canonical Requirement authority");
     }
+    const files = requirementAuthority.bindMutationIds(
+      manifest.mutations.map((mutation) => mutation.mutationId),
+    );
     return new SourceWorkerEffect({
       version: this.version, stepId: this.stepId, completionStatus: this.completionStatus,
-      files: this.files.map((entry) => entry.bind(manifest).toJSON()),
+      files: files.map((entry) => entry.toJSON()),
       issues: this.issues.map((entry) => entry.toJSON()),
       overview: this.overview?.toJSON() ?? null, triage: this.triage?.toJSON() ?? null,
       repair: this.repair?.bind(manifest).toJSON() ?? null, noChangeReason: this.noChangeReason?.toJSON() ?? null,
@@ -1080,11 +1047,27 @@ export class SourceWorkerEffectReport {
   toJSON() {
     return {
       version: this.version, stepId: this.stepId, completionStatus: this.completionStatus,
-      files: this.files.map((entry) => entry.toJSON()), issues: this.issues.map((entry) => entry.toJSON()),
+      issues: this.issues.map((entry) => entry.toJSON()),
       overview: this.overview?.toJSON() ?? null, triage: this.triage?.toJSON() ?? null,
       repair: this.repair?.toJSON() ?? null, noChangeReason: this.noChangeReason?.toJSON() ?? null,
     };
   }
+}
+
+function sourceRequirementAuthorityForRequest(request) {
+  if (request.stepId.startsWith("task-")) {
+    if (!(request.contextSnapshot instanceof TaskWorkerContextSnapshot)) {
+      throw new Error("Task source handoff lacks its canonical Task context");
+    }
+    return CanonicalSourceRequirementAuthority.fromTaskRequirements(
+      request.contextSnapshot.context.requirements,
+    );
+  }
+  const specInput = request.inputs.find((input) => input.targetRelativePath === "spec.json");
+  if (!(specInput instanceof WorkerArtifactInputSnapshot)) {
+    throw new Error("source handoff lacks its canonical Spec input");
+  }
+  return CanonicalSourceRequirementAuthority.fromSpec(specInput.document);
 }
 
 function sourceEffectDocumentFromResponse(responseText, request, manifest) {
@@ -1117,7 +1100,8 @@ function sourceEffectDocumentFromResponse(responseText, request, manifest) {
     );
   }
   try {
-    return SourceWorkerEffectReport.fromDocument(document, request.stepId).bind(manifest);
+    const requirementAuthority = sourceRequirementAuthorityForRequest(request);
+    return SourceWorkerEffectReport.fromDocument(document, request.stepId).bind(manifest, requirementAuthority);
   } catch (cause) {
     const diagnostic = cause instanceof WorkerArtifactHandoffError
       ? { sourceEffectViolation: cause.code, ...cause.data }
@@ -1154,6 +1138,7 @@ function assertParentOwnsSourceEffectMaterialization(request) {
  */
 export function materializeSourceWorkerEffect({ request, responseText } = {}) {
   const effectPath = assertParentOwnsSourceEffectMaterialization(request);
+  request.assertCurrent(request.flowManager.load(request.specId));
   const manifest = captureSourceMutationManifestForParent({ request });
   const effect = sourceEffectDocumentFromResponse(responseText, request, manifest);
   new AtomicFile(effectPath, { phaseNamespace: "parent-source-effect" })
@@ -1997,7 +1982,7 @@ export class SourceMutationManifest {
   mutationIdForPath(relativePath) {
     const path = normalizedRelativePath(relativePath, "source mutation manifest path");
     const mutationId = this.#mutationIdByPath.get(path);
-    if (!mutationId) throw new Error(`source worker file claim path is absent from the current Attempt manifest: ${path}`);
+    if (!mutationId) throw new Error(`repair finding path is absent from the current Attempt manifest: ${path}`);
     return mutationId;
   }
   pathForMutationId(mutationId) {

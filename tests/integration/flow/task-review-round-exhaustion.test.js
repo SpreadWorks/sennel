@@ -23,7 +23,6 @@ function triageEffect() {
     version: 1,
     stepId: "task-triage",
     completionStatus: "done",
-    files: [],
     issues: [],
     overview: null,
     triage: {

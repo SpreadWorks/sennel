@@ -25,6 +25,7 @@ import {
 } from "../../support/fakes/stub-agent.js";
 import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { CanonicalSourceRequirementAuthority } from "../../../src/flow/lib/canonical-file-map.js";
 import {
   FlowArtifactAttemptHistory,
   FlowArtifactAttemptRecord,
@@ -286,6 +287,9 @@ function setupFixture(tmp, {
   const implementationBaseline = SourceMutationBaseline.capture({ root: tmp, attempt: implementationState.attempt });
   if (modifiedTest !== undefined) writeFile(tmp, "tests/dummy.test.js", modifiedTest);
   const implementationManifest = SourceMutationManifest.capture({ baseline: implementationBaseline });
+  const implementationSpec = JSON.parse(flowManager.readArtifact({
+    specId: SPEC_ID, logicalKey: "spec.record", consumerNodeId: `${gateTask.id}-impl`,
+  }).bytes.toString("utf8"));
   flowManager.confirmSourceWorkerHandoff({
     specId: SPEC_ID,
     mutationManifest: implementationManifest,
@@ -294,10 +298,10 @@ function setupFixture(tmp, {
       version: 1,
       stepId: "task-impl",
       completionStatus: "done",
-      files: implementationManifest.mutations.length === 0 ? [] : [{
-        requirementId: canonicalSpec.requirements[0].id,
-        mutationIds: implementationManifest.mutations.map((mutation) => mutation.mutationId),
-      }],
+      files: implementationManifest.mutations.length === 0 ? [] : CanonicalSourceRequirementAuthority
+        .fromSpec(implementationSpec, { taskId: gateTask.id })
+        .bindMutationIds(implementationManifest.mutations.map((mutation) => mutation.mutationId))
+        .map((entry) => entry.toJSON()),
       issues: [],
       overview: { modules: [], data_flow: [], decisions: [] },
       triage: null,
@@ -563,24 +567,22 @@ describe("gate-impl integration (spec 202)", () => {
     });
   }
 
-  it("R6-312: integration rejects specs with no usable spec.json requirement IDs", () => {
+  it("R6-312: rejects unusable canonical requirement IDs before source handoff can reach integration", () => {
     tmp = createTmpDir();
-    setupFixture(tmp, {
+    // Canonical source attribution now rejects this malformed Spec before
+    // Task completion. Passing it through that boundary to test Gate would
+    // manufacture a state that the normal producer can no longer create.
+    assert.throws(() => setupFixture(tmp, {
       initialTest: BASE_TEST,
       modifiedTest: undefined,
       specJson: { ...minimalSpecJson(), requirements: [{ id: "   ", desc: "no usable id" }] },
       integrationTrustRequirementIds: ["REQ-FALLBACK"],
       stubResponse: buildPassResponseJson("REQ-FALLBACK"),
-    });
-
-    const res = runGate(tmp, [], "integration");
-    assert.equal(res.status, 1, `stdout=${res.stdout}\nstderr=${res.stderr}`);
-    const env = parseEnvelope(res.stdout);
-    assert.equal(env.ok, false);
-    assert.ok(env.errors.some((error) => error.code === "GATE_LOCAL_INPUT_INVALID"));
-    assert.equal(env.data.artifacts.gateTransitionFailureCategory.category, "local");
-    assert.equal(env.data.result, "fail");
-    assert.deepEqual(env.data.artifacts.issues, ["spec.json has no requirements with usable ids"]);
+    }), /canonical requirement\[0\]\.id is required/);
+    const manager = new FlowManager({ root: tmp, mainRoot: tmp, inWorktree: false });
+    assert.equal(manager.loadReadOnly(SPEC_ID).currentNodeId, "T-1-impl");
+    assert.deepEqual(manager.taskMutationLineages({ specId: SPEC_ID, taskId: "T-1" }), []);
+    assert.equal(manager.artifactCatalog(SPEC_ID).artifacts.some((entry) => entry.logicalKey === "file.map"), false);
   });
 
   it("integration requirement prompts receive bounded same-spec contract context", () => {

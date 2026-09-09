@@ -177,13 +177,14 @@ describe("provider JSON schema adaptation", () => {
 
   it("keeps every source worker response schema artifact aligned with the registry", () => {
     const steps = ["implement", "impl-triage", "impl-repair", "task-impl", "task-triage", "task-repair"];
-    const rootKeys = ["completionStatus", "files", "issues", "noChangeReason", "overview", "repair", "stepId", "triage", "version"];
+    const rootKeys = ["completionStatus", "issues", "noChangeReason", "overview", "repair", "stepId", "triage", "version"];
     for (const stepId of steps) {
       const ref = sourceWorkerEffectSchemaRef(stepId);
       const artifact = loadFlowSchema(ref);
       const schema = sourceWorkerEffectJsonSchema(stepId);
       assert.deepEqual(schema, artifact, `${stepId} registry must load its definition artifact`);
       assert.deepEqual([...schema.required].sort(), rootKeys, `${stepId} must preserve the common effect envelope`);
+      assert.equal(Object.hasOwn(schema.properties, "files"), false, `${stepId} must not ask the worker to classify actual changes`);
       assertCodexCompatible(adaptJsonSchemaForProvider("codex", schema));
     }
   });

@@ -207,14 +207,14 @@ test("parent serializes semantic Review ordinal independently of tooling Attempt
   assert.notEqual(first.ok, false, JSON.stringify(first));
   const triage = scenario.stageHandoff("triage");
   assert.equal(scenario.completeHandoff(triage, {
-    version: 1, stepId: "task-triage", completionStatus: "done", files: [], issues: [], overview: null,
+    version: 1, stepId: "task-triage", completionStatus: "done", issues: [], overview: null,
     triage: { version: 1, dispositions: [{ findingKey: "repair-1", disposition: "apply", basis: "repair-required", rationale: "R-1 requires the missing behavior." }] },
     repair: null, noChangeReason: null,
   }).completed, true);
   const repair = scenario.stageHandoff("repair");
   fs.appendFileSync(scenario.sourcePath, "repaired behavior\n");
   assert.equal(scenario.completeHandoff(repair, {
-    version: 1, stepId: "task-repair", completionStatus: "done", files: [{ requirementId: "R-1", paths: ["README.md"] }], issues: [], overview: null,
+    version: 1, stepId: "task-repair", completionStatus: "done", issues: [], overview: null,
     triage: null,
     repair: { version: 1, findings: [{ findingKey: "repair-1", paths: ["README.md"] }], summary: "Implemented the missing behavior.", recurrenceResolutions: [] },
     noChangeReason: null,

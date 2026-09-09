@@ -67,7 +67,6 @@ function sourceEffect(stepId, paths) {
     version: 1,
     stepId,
     completionStatus: "done",
-    files: [],
     issues: [],
     overview: null,
     triage: null,
@@ -77,7 +76,6 @@ function sourceEffect(stepId, paths) {
   if (stepId === "implement") {
     return {
       ...base,
-      files: [{ requirementId: "R1", paths }],
     };
   }
   if (stepId === "impl-triage") {
@@ -89,7 +87,6 @@ function sourceEffect(stepId, paths) {
   if (stepId === "impl-repair") {
     return {
       ...base,
-      files: [{ requirementId: "R1", paths }],
       repair: {
         version: 1,
         findings: [{ findingKey: "F1", paths: ["src/repair.js"] }],
@@ -101,7 +98,6 @@ function sourceEffect(stepId, paths) {
   if (stepId === "task-impl") {
     return {
       ...base,
-      files: [{ requirementId: "R1", paths }],
       overview: { modules: ["Task implementation module."], data_flow: [], decisions: [] },
     };
   }
@@ -122,7 +118,6 @@ function sourceEffect(stepId, paths) {
   if (stepId === "task-repair") {
     return {
       ...base,
-      files: [{ requirementId: "R1", paths }],
       repair: {
         version: 1,
         findings: [{ findingKey: TASK_REVIEW_FINDING_KEY, paths }],

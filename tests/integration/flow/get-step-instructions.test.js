@@ -68,13 +68,18 @@ describe("getStepInstructions (loader contract)", () => {
       }
     });
 
-    it("defines source worker file claims as a many-to-many requirement relation", () => {
-      for (const key of ["impl.implement", "impl.impl-repair", "task.task-impl"]) {
+    it("keeps changed-file authority with the parent for every source worker", () => {
+      for (const key of [
+        "impl.implement",
+        "impl.impl-triage",
+        "impl.impl-repair",
+        "task.task-impl",
+        "task.task-triage",
+        "task.task-repair",
+      ]) {
         const content = getStepInstructions(key);
-        assert.match(content, /at most one claim group for each requirement/, key);
-        assert.match(content, /paths unique within that group/, key);
-        assert.match(content, /include it in every relevant requirement's group rather than choosing a single primary requirement/, key);
-        assert.match(content, /union of all claimed paths must exactly match the parent-observed mutation paths/, key);
+        assert.match(content, /do not generate a mutation manifest, report a changed-file list, or run a seal command/, key);
+        assert.match(content, /parent captures the immutable Attempt manifest and maps every observed mutation to every canonical Requirement/, key);
       }
     });
 

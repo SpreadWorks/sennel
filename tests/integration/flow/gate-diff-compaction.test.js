@@ -1,16 +1,25 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 
 import {
   buildGuardrailTargetTextForPrompt,
+  buildPerRequirementDiffs,
+  buildRequirementGateBatches,
   compactDiffForGuardrailPrompt,
+  collectPerFileDiffsForGate,
   excludeGeneratedSpecArtifactsFromGateDiff,
   excludeGateLifecycleArtifactsFromGateDiff,
   excludeScenarioValidityEvidenceFromTaskGateDiff,
   PlanGateEvidenceTarget,
+  planRequirementGateCalls,
+  RequirementGateBatch,
   default as RunGateCommand,
 } from "../../../src/flow/lib/run-gate.js";
 import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
+import {
+  CanonicalSourceRequirementAuthority,
+} from "../../../src/flow/lib/canonical-file-map.js";
 import {
   SourceMutationBaseline,
   SourceMutationManifest,
@@ -114,6 +123,189 @@ describe("guardrail diff prompt compaction", () => {
   });
 });
 
+describe("requirement diff authority", () => {
+  it("keeps shared and overlapping mapped files once for every related Requirement", () => {
+    const shared = modifiedDiff("src/shared.js");
+    const nested = modifiedDiff("src/nested/value.js");
+    const unmapped = modifiedDiff("README.md");
+    const perFileDiffs = new Map([
+      ["src/shared.js", shared],
+      ["src/nested/value.js", nested],
+      ["README.md", unmapped],
+    ]);
+    const related = buildPerRequirementDiffs({
+      "R-1": ["src", "src/shared.js"],
+      "R-2": ["src/shared.js", "src/nested/value.js"],
+    }, perFileDiffs, ["R-1", "R-2"], shared + nested + unmapped);
+
+    assert.equal(related.get("R-1"), shared + nested + unmapped);
+    assert.equal(related.get("R-2"), shared + nested + unmapped);
+    assert.equal(related.get("R-1").match(/diff --git a\/src\/shared\.js/g)?.length, 1);
+    assert.equal(related.get("R-2").match(/diff --git a\/src\/shared\.js/g)?.length, 1);
+  });
+
+  it("keeps the complete diff when file-level splitting yields no evidence", () => {
+    const fullDiff = "unparsed but authoritative source evidence\n";
+    const related = buildPerRequirementDiffs({
+      "R-1": ["src/one.js"],
+      "R-2": ["src/two.js"],
+    }, new Map(), ["R-1", "R-2"], fullDiff);
+
+    assert.equal(related.get("R-1"), fullDiff);
+    assert.equal(related.get("R-2"), fullDiff);
+  });
+
+  it("retains mixed quoted and unparseable evidence without skipping a Requirement", () => {
+    const ordinary = modifiedDiff("src/ordinary.js");
+    const quoted = [
+      'diff --git "a/src/tab\\tfile.js" "b/src/tab\\tfile.js"',
+      '--- "a/src/tab\\tfile.js"',
+      '+++ "b/src/tab\\tfile.js"',
+      "@@ -1 +1 @@",
+      "-before",
+      "+quotedRequirementEvidence",
+      "",
+    ].join("\n");
+    const unparseable = "diff --git malformed-header\n+unparseableEvidence\n";
+    const diff = ordinary + quoted + unparseable;
+    const perFileDiffs = collectPerFileDiffsForGate(diff, "", "");
+    const related = buildPerRequirementDiffs({
+      "R-1": ["src/ordinary.js"],
+      "R-2": ["src/tab\tfile.js"],
+      "R-3": ["src/not-present.js"],
+    }, perFileDiffs, ["R-1", "R-2", "R-3"], diff);
+    const plan = planRequirementGateCalls({
+      phase: "task-impl",
+      requirements: [
+        { id: "R-1", desc: "ordinary evidence" },
+        { id: "R-2", desc: "quoted evidence" },
+        { id: "R-3", desc: "unparseable evidence" },
+      ],
+      relatedDiffs: related,
+    });
+
+    assert.deepEqual([...perFileDiffs.keys()], ["src/ordinary.js", "src/tab\tfile.js"]);
+    assert.equal(perFileDiffs.unparsedSegments.length, 1);
+    assert.match(related.get("R-2"), /quotedRequirementEvidence/);
+    assert.match(related.get("R-3"), /unparseableEvidence/);
+    assert.deepEqual(plan.evaluations, []);
+  });
+
+  it("maps actual Git output with spaces, tabs, and escaped Unicode paths", () => {
+    const root = createTmpDir("gate-diff-git-paths-");
+    const paths = [
+      "src/ordinary.js",
+      "src/space name.js",
+      "src/tab\tfile.js",
+      "src/証拠-ß.js",
+      "src/a b/nested.js",
+    ];
+    try {
+      for (const file of paths) writeFile(root, file, "before\n");
+      initGitRepo(root);
+      commitAll(root, "initial paths");
+      for (const file of paths) writeFile(root, file, `after ${file}\n`);
+      const diff = execFileSync("git", ["diff", "--no-color", "HEAD"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      const perFileDiffs = collectPerFileDiffsForGate(diff, "", "");
+      const related = buildPerRequirementDiffs({
+        "R-1": paths.slice(0, 3),
+        "R-2": paths.slice(3),
+      }, perFileDiffs, ["R-1", "R-2"], diff);
+      const plan = planRequirementGateCalls({
+        phase: "task-impl",
+        requirements: [
+          { id: "R-1", desc: "first group" },
+          { id: "R-2", desc: "second group" },
+        ],
+        relatedDiffs: related,
+      });
+
+      assert.deepEqual([...perFileDiffs.keys()].sort(), [...paths].sort());
+      assert.equal(perFileDiffs.unparsedSegments.length, 0);
+      assert.match(related.get("R-1"), /after src\/tab\tfile\.js/);
+      assert.match(related.get("R-1"), /after src\/space name\.js/);
+      assert.match(related.get("R-2"), /after src\/証拠-ß\.js/);
+      assert.match(related.get("R-2"), /after src\/a b\/nested\.js/);
+      assert.deepEqual(plan.evaluations, []);
+      assert.equal(plan.calls.length, 2);
+    } finally {
+      removeTmpDir(root);
+    }
+  });
+
+  it("keeps one rename or deletion segment for every Requirement mapped to its path", () => {
+    const root = createTmpDir("gate-diff-git-rename-");
+    try {
+      writeFile(root, "src/old name.js", "stable line\nbefore\n");
+      writeFile(root, "src/deleted.js", "before delete\n");
+      initGitRepo(root);
+      commitAll(root, "initial sources");
+      execFileSync("git", ["mv", "src/old name.js", "src/new name.js"], { cwd: root });
+      execFileSync("git", ["rm", "src/deleted.js"], { cwd: root });
+      const diff = execFileSync("git", ["diff", "--cached", "--no-color", "-M"], {
+        cwd: root,
+        encoding: "utf8",
+      });
+      const perFileDiffs = collectPerFileDiffsForGate(diff, "", "");
+      const related = buildPerRequirementDiffs({
+        "R-1": ["src/old name.js"],
+        "R-2": ["src/new name.js"],
+        "R-3": ["src/deleted.js"],
+      }, perFileDiffs, ["R-1", "R-2", "R-3"], diff);
+      const plan = planRequirementGateCalls({
+        phase: "task-impl",
+        requirements: [
+          { id: "R-1", desc: "rename source" },
+          { id: "R-2", desc: "rename destination" },
+          { id: "R-3", desc: "deletion source" },
+        ],
+        relatedDiffs: related,
+      });
+
+      assert.match(related.get("R-1"), /rename from src\/old name\.js/);
+      assert.match(related.get("R-2"), /rename to src\/new name\.js/);
+      assert.match(related.get("R-3"), /before delete/);
+      assert.equal(related.get("R-1").match(/^diff --git /gm)?.length, 1);
+      assert.equal(related.get("R-2").match(/^diff --git /gm)?.length, 1);
+      assert.deepEqual(plan.evaluations, []);
+    } finally {
+      removeTmpDir(root);
+    }
+  });
+
+  it("identifies retained unparseable source in compacted evidence", () => {
+    const malformed = "diff --git malformed-header\n+unparseableEvidence\n";
+    const compacted = compactDiffForGuardrailPrompt(`${modifiedDiff("src/a.js")}${malformed}${"x".repeat(2_000)}`, 800);
+
+    assert.match(compacted, /unparsed diff segment 1/);
+  });
+
+  it("counts one compact shared source scope when splitting Requirement batches", () => {
+    const requirements = [
+      { id: "R-1", desc: "x".repeat(80) },
+      { id: "R-2", desc: "y".repeat(80) },
+    ];
+    const diff = "+shared evidence\n";
+    const authority = CanonicalSourceRequirementAuthority.fromTaskRequirements(requirements);
+    const sourceScope = authority.bindSourceScope([`src/${"z".repeat(180)}.js`]);
+    const one = new RequirementGateBatch({ requirements: [requirements[0]], diff, sourceScope });
+    const two = new RequirementGateBatch({ requirements, diff, sourceScope });
+    const maxChars = Math.floor((one.promptCharCount + two.promptCharCount) / 2);
+    const batches = buildRequirementGateBatches({
+      requirements,
+      relatedDiffs: new Map(requirements.map((requirement) => [requirement.id, diff])),
+      maxChars,
+      sourceScope,
+    });
+
+    assert.equal(batches.length, 2);
+    assert.ok(batches.every((batch) => batch.promptCharCount <= maxChars));
+  });
+});
+
 describe("task gate scenario-validity evidence", () => {
   it("excludes active Version artifacts while retaining implementation and foreign evidence", () => {
     const specDir = "specs/999-example/001";
@@ -153,7 +345,6 @@ describe("task gate scenario-validity evidence", () => {
     const expected = [
       preamble,
       malformed,
-      quoted,
       otherSpecScenario,
       special,
       implementation,
@@ -171,10 +362,9 @@ describe("task gate scenario-validity evidence", () => {
     assert.match(filtered, /src\/flow\/lib\/review-convergence\.js/);
     assert.ok(filtered.startsWith(preamble));
     assert.match(filtered, /diff --git malformed-header\n\+malformed content remains/);
-    assert.match(filtered, /diff --git "a\/specs\/999-example\/001\/steps\/scenario-validity\/output\.log"/);
-    assert.match(filtered, /\+quoted path remains/);
+    assert.doesNotMatch(filtered, /quoted path remains/);
     assert.match(filtered, /specs\/999-example\/証拠-ß\.json/);
-    assert.ok(filtered.indexOf("malformed-header") < filtered.indexOf("quoted path remains"));
+    assert.ok(filtered.indexOf("malformed-header") >= 0);
   });
 });
 
@@ -252,7 +442,9 @@ describe("gate lifecycle evidence", () => {
 
 const TASK_GATE_SPEC_ID = "001-task-gate-evidence";
 
-function setupTaskGateRepository(root) {
+function setupTaskGateRepository(root, {
+  requirements = [{ id: "R-1", desc: "Task implementation evidence is evaluated.", task_ids: ["T-1"] }],
+} = {}) {
   writeJson(root, ".sennel/config.json", {
     lang: "en",
     type: "base",
@@ -270,7 +462,7 @@ function setupTaskGateRepository(root) {
     execution: { mode: "direct", baseBranch: "main", featureBranch: "main" },
     specRecord: {
       goal: "Validate task gate evidence.",
-      requirements: [{ id: "R-1", desc: "Task implementation evidence is evaluated.", task_ids: ["T-1"] }],
+      requirements,
       acceptance_criteria: ["R-1 task evidence is checked."],
     },
   }).create().addTask({
@@ -311,6 +503,11 @@ function advanceToTaskGate(flowManager, fixture, padding = "", mutateImplementat
     const baseline = SourceMutationBaseline.capture({ root: fixture.location().repositoryRoot, attempt: state.attempt });
     mutateImplementation();
     const manifest = SourceMutationManifest.capture({ baseline });
+    const spec = JSON.parse(flowManager.readArtifact({
+      specId: TASK_GATE_SPEC_ID,
+      logicalKey: "spec.record",
+      consumerNodeId: "T-1-impl",
+    }).bytes.toString("utf8"));
     flowManager.confirmSourceWorkerHandoff({
       specId: TASK_GATE_SPEC_ID,
       mutationManifest: manifest,
@@ -319,10 +516,10 @@ function advanceToTaskGate(flowManager, fixture, padding = "", mutateImplementat
         version: 1,
         stepId: "task-impl",
         completionStatus: "done",
-        files: manifest.mutations.length === 0 ? [] : [{
-          requirementId: "R-1",
-          mutationIds: manifest.mutations.map((mutation) => mutation.mutationId),
-        }],
+        files: CanonicalSourceRequirementAuthority
+          .fromSpec(spec, { taskId: "T-1" })
+          .bindMutationIds(manifest.mutations.map((mutation) => mutation.mutationId))
+          .map((entry) => entry.toJSON()),
         issues: [],
         overview: { modules: [], data_flow: [], decisions: [] },
         triage: null,
@@ -396,8 +593,17 @@ describe("task gate scenario-validity evidence through task scope", () => {
       if (key !== "agent") return originalGet(key);
       return {
         resolve: (commandId) => commandId === "flow.spec.gate",
-        call: async (prompt) => {
+        call: async (prompt, options) => {
           capturedPrompt = prompt;
+          if (Object.hasOwn(options.jsonSchema.properties, "evaluations")) {
+            return JSON.stringify({
+              evaluations: [{
+                guardrail_id: "R-1",
+                result: "pass",
+                reason: "[REQ:R-1] current Task source supplies the required evidence.",
+              }],
+            });
+          }
           return JSON.stringify({ observations: [] });
         },
       };
@@ -415,5 +621,82 @@ describe("task gate scenario-validity evidence through task scope", () => {
     assert.match(capturedPrompt, /tests\/task-evidence\.test\.js/);
     assert.doesNotMatch(capturedPrompt, /steps\/scenario-validity\/result\.json/);
     assert.doesNotMatch(capturedPrompt, /"padding":"x+/);
+  });
+
+  it("evaluates every current Task source file against all mapped Requirements in one call", async () => {
+    tmp = createTmpDir("task-gate-complete-source-scope-");
+    const requirements = [
+      { id: "R-1", desc: "Provide the first Task behavior.", task_ids: ["T-1"] },
+      { id: "R-2", desc: "Provide the second Task behavior.", task_ids: ["T-1"] },
+    ];
+    const { flowManager, fixture } = setupTaskGateRepository(tmp, { requirements });
+    advanceToTaskGate(flowManager, fixture, "", () => {
+      writeFile(tmp, "src/shared.js", "export const sharedScopeEvidence = true;\n");
+      writeFile(tmp, "src/secondary.js", "export const secondaryScopeEvidence = true;");
+    });
+
+    const prompts = [];
+    const originalGet = container.get.bind(container);
+    container.get = (key) => {
+      if (key !== "agent") return originalGet(key);
+      return {
+        resolve: (commandId) => commandId === "flow.spec.gate",
+        call: async (prompt, options) => {
+          prompts.push(prompt);
+          const ids = options.jsonSchema.properties.evaluations.items.properties.guardrail_id.enum;
+          return JSON.stringify({
+            evaluations: ids.map((id) => ({
+              guardrail_id: id,
+              result: "pass",
+              reason: `[REQ:${id}] both current Task source files were evaluated.`,
+            })),
+          });
+        },
+      };
+    };
+
+    let result;
+    try {
+      result = await executeTaskGate(tmp, flowManager, true);
+    } finally {
+      container.get = originalGet;
+    }
+
+    assert.equal(result.result, "pass");
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0], /R-1/);
+    assert.match(prompts[0], /R-2/);
+    assert.equal(prompts[0].match(/sharedScopeEvidence/g)?.length, 1);
+    assert.equal(prompts[0].match(/secondaryScopeEvidence/g)?.length, 1);
+    assert.match(prompts[0], /secondaryScopeEvidence = true;\n\n## src\/shared\.js/);
+    assert.deepEqual(result.artifacts.evaluations.map((entry) => entry.guardrail_id).sort(), ["R-1", "R-2"]);
+  });
+
+  it("rejects oversized current Task source before an agent call", async () => {
+    tmp = createTmpDir("task-gate-oversized-source-");
+    const { flowManager, fixture } = setupTaskGateRepository(tmp);
+    advanceToTaskGate(flowManager, fixture, "", () => {
+      writeFile(tmp, "src/oversized.js", `export const oversized = "${"x".repeat(140_000)}";\n`);
+    });
+
+    let calls = 0;
+    const originalGet = container.get.bind(container);
+    container.get = (key) => {
+      if (key !== "agent") return originalGet(key);
+      return {
+        resolve: () => ({ provider: "fixture" }),
+        call: async () => { calls += 1; return "unreachable"; },
+      };
+    };
+    let result;
+    try {
+      result = await executeTaskGate(tmp, flowManager, true);
+    } finally {
+      container.get = originalGet;
+    }
+
+    assert.equal(result.result, "fail");
+    assert.equal(calls, 0);
+    assert.ok(result.artifacts.issues.some((issue) => /exceeds limit/.test(issue)));
   });
 });

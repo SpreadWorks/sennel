@@ -1,11 +1,10 @@
 {
   "type": "object",
-  "required": ["version", "stepId", "completionStatus", "files", "issues", "overview", "triage", "repair", "noChangeReason"],
+  "required": ["version", "stepId", "completionStatus", "issues", "overview", "triage", "repair", "noChangeReason"],
   "properties": {
     "version": { "type": "integer", "enum": [1] },
     "stepId": { "type": "string", "enum": ["impl-repair"] },
     "completionStatus": { "type": "string", "enum": ["done"] },
-    "files": { "type": "array", "minItems": 1, "maxItems": 256, "description": "Requirement-to-path claims. Emit at most one group per requirement and keep paths unique within each group. A changed path may appear in different requirement groups when it contributes to each; the union across groups must exactly cover observed changed paths.", "items": { "type": "object", "required": ["requirementId", "paths"], "properties": { "requirementId": { "type": "string", "minLength": 1 }, "paths": { "type": "array", "minItems": 1, "maxItems": 256, "description": "Normalized project-relative paths for this requirement. Each path occurs once in this group, but can occur in another requirement group when shared.", "items": { "type": "string", "minLength": 1 } } }, "additionalProperties": false } },
     "issues": { "type": "array", "maxItems": 256, "items": { "type": "object", "required": ["classification", "reason", "remainingRisk"], "properties": { "classification": { "type": "string", "enum": ["quality"] }, "reason": { "type": "string", "minLength": 20 }, "remainingRisk": { "type": "string", "minLength": 20 } }, "additionalProperties": false } },
     "overview": { "type": "null" },
     "triage": { "type": "null" },
