@@ -5,15 +5,15 @@
       "logicalKey": "flow.activities",
       "kind": "activity-ledger",
       "relativePath": "activities.jsonl",
-      "hash": "93d637578e44314c66f17f3fb07c3b597c43730131e76cdb6787de69774cb452",
-      "size": 936321,
+      "hash": "173aaa4a46616bfb2ffdc9734f1d58fad5647776882234cb742c289c645c9168",
+      "size": 938011,
       "mediaType": "application/x-ndjson",
       "authority": "canonical-flow-artifacts",
       "cardinality": "singleton",
       "memberId": null,
-      "publicationStep": "task-impl",
+      "publicationStep": "system",
       "retention": "permanent",
-      "activityId": "artifacts-published-d0ce09b6-9fb0-43d3-9bcc-1b2af53640ac",
+      "activityId": "note-recorded-0a431014-e054-454c-bfd9-06a1cc0430f9",
       "migrationMaterialization": false
     },
     {
@@ -680,15 +680,15 @@
       "logicalKey": "flow.state",
       "kind": "flow-state",
       "relativePath": "flow.json",
-      "hash": "4a8b62b744d24aa51bc370bf6936050bd6a3a3bcf669bf65a4d15a31463587d6",
+      "hash": "122368015b7afc7e57618ed588541c89863eeaeee123f3f16ecbe58beea4ff99",
       "size": 46801,
       "mediaType": "application/json",
       "authority": "repository-metadata",
       "cardinality": "singleton",
       "memberId": null,
-      "publicationStep": "task-impl",
+      "publicationStep": "system",
       "retention": "permanent",
-      "activityId": "artifacts-published-d0ce09b6-9fb0-43d3-9bcc-1b2af53640ac",
+      "activityId": "note-recorded-0a431014-e054-454c-bfd9-06a1cc0430f9",
       "migrationMaterialization": false
     },
     {
@@ -2957,5 +2957,5 @@
       "migrationMaterialization": false
     }
   ],
-  "hash": "70cb4d034f94a2424508a9d60411c71f03f0ae0315ad8a08f7bc72d10a830ac8"
+  "hash": "c6369076335f038fd69873fa04b322e1f10f0b70f910452a0cc7e806d85cbf43"
 }
