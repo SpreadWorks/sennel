@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import { FlowHandoffAuthorityLease } from "../../../src/lib/flow-handoff-authority-lease.js";
+import { FileLockWaitPolicy } from "../../../src/lib/file-lock.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 const LEASE_MODULE_PATH = fileURLToPath(new URL("../../../src/lib/flow-handoff-authority-lease.js", import.meta.url));
@@ -19,10 +20,32 @@ function spawnLeaseOwner(root, afterAcquire) {
       `import { FlowHandoffAuthorityLease } from ${JSON.stringify(LEASE_MODULE_PATH)};`,
       `const lease = new FlowHandoffAuthorityLease({ mainRoot: ${JSON.stringify(root)}, executionRoot: ${JSON.stringify(root)} });`,
       "lease.acquire();",
-      "process.stdout.write('locked\\n');",
+      "process.send('locked');",
       afterAcquire,
     ].join("\n"),
-  ], { stdio: ["ignore", "pipe", "pipe"] });
+  ], { stdio: ["pipe", "ignore", "pipe", "ipc"] });
+}
+
+function spawnLeaseWaiter(root) {
+  return spawn(process.execPath, [
+    "--input-type=module",
+    "--eval",
+    [
+      `import { FlowHandoffAuthorityLease } from ${JSON.stringify(LEASE_MODULE_PATH)};`,
+      `const lease = new FlowHandoffAuthorityLease({ mainRoot: ${JSON.stringify(root)}, executionRoot: ${JSON.stringify(root)} });`,
+      "process.send('waiting');",
+      "lease.acquire();",
+      "process.send('acquired');",
+      "lease.release();",
+      "process.exit(0);",
+    ].join("\n"),
+  ], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
+}
+
+function cleanUpChild(t, child) {
+  t.after(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+  });
 }
 
 describe("FlowHandoffAuthorityLease", () => {
@@ -38,11 +61,8 @@ describe("FlowHandoffAuthorityLease", () => {
       first.acquire();
       assert.throws(
         () => sameFlow.acquire(),
-        (error) => error.code === "FLOW_HANDOFF_AUTHORITY_BUSY",
-      );
-      assert.throws(
-        () => sameFlow.acquire({ wait: true, timeoutMs: 0 }),
-        (error) => error.code === "FLOW_HANDOFF_AUTHORITY_WAIT_TIMEOUT",
+        (error) => error.code === "FLOW_HANDOFF_AUTHORITY_LOCK_REENTRANT"
+          && error.lockStatus === "reentrant",
       );
       otherFlow.acquire();
       otherFlow.release();
@@ -64,7 +84,8 @@ describe("FlowHandoffAuthorityLease", () => {
       first.acquire();
       assert.throws(
         () => second.acquire(),
-        (error) => error.code === "FLOW_HANDOFF_AUTHORITY_BUSY",
+        (error) => error.code === "FLOW_HANDOFF_AUTHORITY_LOCK_REENTRANT"
+          && error.lockStatus === "reentrant",
       );
       first.release();
       second.acquire();
@@ -74,19 +95,52 @@ describe("FlowHandoffAuthorityLease", () => {
     }
   });
 
-  it("waits for an already-held Flow lease and then acquires it without a timeout", async () => {
+  it("waits for an already-held Flow lease and then acquires it without a timeout", async (t) => {
     const root = createTmpDir("flow-handoff-authority-wait-");
     try {
       fs.mkdirSync(`${root}/.sennel`);
-      const child = spawnLeaseOwner(root, "setTimeout(() => { lease.release(); }, 100);");
-      await once(child.stdout, "data");
+      const owner = spawnLeaseOwner(root, "process.stdin.once('data', () => { lease.release(); process.exit(0); });");
+      cleanUpChild(t, owner);
+      const ownerExit = once(owner, "exit");
+      assert.equal((await once(owner, "message"))[0], "locked");
+      const waiting = spawnLeaseWaiter(root);
+      cleanUpChild(t, waiting);
+      const waitingExit = once(waiting, "exit");
+      assert.equal((await once(waiting, "message"))[0], "waiting");
+      const acquired = once(waiting, "message");
+      owner.stdin.write("release\n");
+      assert.equal((await acquired)[0], "acquired");
+      const [ownerCode] = await ownerExit;
+      const [waitingCode] = await waitingExit;
+      assert.equal(ownerCode, 0);
+      assert.equal(waitingCode, 0);
+    } finally {
+      removeTmpDir(root);
+    }
+  });
 
-      const waiting = new FlowHandoffAuthorityLease({ mainRoot: root, executionRoot: root });
-      const startedAt = Date.now();
-      waiting.acquire({ wait: true });
-      assert.ok(Date.now() - startedAt >= 50, "the second holder waits for the first holder to release");
-      waiting.release();
-      const [code] = await once(child, "exit");
+  it("times out with the handoff domain error while another process owns the lease", async (t) => {
+    const root = createTmpDir("flow-handoff-authority-timeout-");
+    try {
+      fs.mkdirSync(`${root}/.sennel`);
+      const child = spawnLeaseOwner(root, "process.stdin.once('data', () => { lease.release(); process.exit(0); });");
+      cleanUpChild(t, child);
+      const childExit = once(child, "exit");
+      assert.equal((await once(child, "message"))[0], "locked");
+
+      const waiting = new FlowHandoffAuthorityLease({
+        mainRoot: root,
+        executionRoot: root,
+        waitPolicy: new FileLockWaitPolicy({ timeoutMs: 0, intervalMs: 50 }),
+      });
+      assert.throws(
+        () => waiting.acquire(),
+        (error) => error.code === "FLOW_HANDOFF_AUTHORITY_WAIT_TIMEOUT"
+          && error.lockStatus === "timeout"
+          && error.retryable === true,
+      );
+      child.stdin.write("release\n");
+      const [code] = await childExit;
       assert.equal(code, 0);
     } finally {
       removeTmpDir(root);
@@ -99,12 +153,12 @@ describe("FlowHandoffAuthorityLease", () => {
       fs.mkdirSync(`${root}/.sennel`);
       const child = spawnLeaseOwner(root, "process.exit(0);");
       const exited = once(child, "exit");
-      await once(child.stdout, "data");
+      assert.equal((await once(child, "message"))[0], "locked");
       const [code] = await exited;
       assert.equal(code, 0);
 
       const lease = new FlowHandoffAuthorityLease({ mainRoot: root, executionRoot: root });
-      lease.acquire({ wait: true });
+      lease.acquire();
       lease.release();
     } finally {
       removeTmpDir(root);

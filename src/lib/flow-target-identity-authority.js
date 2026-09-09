@@ -7,7 +7,8 @@ import { managedDir } from "./config.js";
 import { FlowSpecId } from "./flow-spec-id.js";
 import { FlowVersion, FlowVersionRelativeLocation } from "./flow-version.js";
 import { DEFAULT_FLOW_SPEC_DIR, FlowSpecRoot } from "./flow-workspace.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "./process-owned-lock.js";
+import { FileLock } from "./file-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { RepositoryFlowOperationLock, resolveRepositoryLockRoot } from "./repository-maintenance-lock.js";
 import { PRODUCT } from "./product.js";
 
@@ -415,7 +416,7 @@ export class FlowTargetIdentityAuthority {
       create: true,
       parentAuthority: rootAuthority,
     });
-    this._lock = new ProcessOwnedLock({
+    this._lock = new FileLock({
       directoryAuthority,
       fileName: AUTHORITY_LOCK_FILE,
       kind: "flow-target-identity-authority",
@@ -423,7 +424,7 @@ export class FlowTargetIdentityAuthority {
       ...(processIdentitySource && { processIdentitySource }),
       errorFactory: (status, message, { lockPath, cause } = {}) => {
         const error = new FlowTargetAuthorityError(message, { cause });
-        error.code = status === "live"
+        error.code = status === "live" || status === "timeout"
           ? "FLOW_TARGET_AUTHORITY_BUSY"
           : `FLOW_TARGET_AUTHORITY_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
         error.lockPath = lockPath;
@@ -507,10 +508,9 @@ export class FlowTargetIdentityAuthority {
     let result;
     let primary = null;
     try {
-      this._lock.acquire({ claimStale: true });
-      try {
+      result = this._lock.runExclusive(() => {
         const current = readAuthority(authorityPath(this._mainRoot));
-        result = mutation(current.document);
+        const mutationResult = mutation(current.document);
         const fresh = readAuthority(authorityPath(this._mainRoot));
         if (fresh.revision !== current.revision) {
           const error = new FlowTargetAuthorityError("flow target identity authority changed concurrently");
@@ -519,9 +519,8 @@ export class FlowTargetIdentityAuthority {
         }
         new AtomicJsonFile(authorityPath(this._mainRoot), { faultInjector: this._faultInjector })
           .write(current.document.toJSON());
-      } finally {
-        this._lock.release();
-      }
+        return mutationResult;
+      });
     } catch (error) {
       primary = error;
     }

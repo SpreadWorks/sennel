@@ -1478,7 +1478,6 @@ export class FlowManager {
       mainRoot: this._mainRoot,
       maintenanceOwnerToken: options.maintenanceOwnerToken,
       operationOwnerToken: options.operationOwnerToken,
-      allowProcessOwnerBorrow: false,
       ...(this._processIdentitySource && { processIdentitySource: this._processIdentitySource }),
     });
   }

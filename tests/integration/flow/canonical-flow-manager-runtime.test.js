@@ -935,7 +935,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     try {
       assert.throws(
         () => manager._store.runtime.load(specId),
-        (error) => error?.code === "FLOW_STATE_ATOMIC_BUSY",
+        (error) => error?.code === "CURRENT_FLOW_STATE_LOCK_REENTRANT"
+          && error.lockStatus === "reentrant",
       );
     } finally {
       directStore.lock.release();
@@ -2714,7 +2715,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     raceArmed = true;
     raced.manager.applyTestChainTransitionDecision({ specId: raced.created.specId, decision: racedDecision });
     assert.equal(rawRaceAttempts, 1);
-    assert.equal(rawRaceError?.code, "FLOW_ARTIFACT_CATALOG_BUSY");
+    assert.equal(rawRaceError?.code, "PROCESS_LOCK_REENTRANT");
+    assert.equal(rawRaceError?.lockStatus, "reentrant");
     assert.deepEqual(raced.manager.readRuntimeArtifact({
       specId: raced.created.specId, logicalKey: "scenario.validity.raw-log", consumerNodeId: "scenario-validity",
     }).bytes, stableRaw);

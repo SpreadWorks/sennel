@@ -25,10 +25,8 @@ import { DeferredAgentInvocationMetric } from "../../lib/agent-invocation-metric
 import { flowCommands } from "../../lib/command-registry.js";
 import { dispatch } from "../../lib/dispatcher.js";
 import { FlowHandoffAuthorityLease } from "../../lib/flow-handoff-authority-lease.js";
-import {
-  ProcessOwnedLock,
-  RealDirectoryAuthority,
-} from "../../lib/process-owned-lock.js";
+import { ProcessLock } from "../../lib/process-lock.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import {
   AbortedDirective,
   AwaitDraftQuestionDirective,
@@ -531,13 +529,15 @@ export function dispatchRepositoryFingerprint(ctx) {
   });
 }
 
-function dispatchLockError(status, message, { lockPath, cause } = {}) {
+function dispatchLockError(status, message, { lockPath, owner = null, cause } = {}) {
   const error = new Error(message, { cause });
   error.name = "FlowDispatchLockError";
   error.code = status === "live"
     ? "FLOW_DISPATCH_BUSY"
     : `FLOW_DISPATCH_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
+  error.lockStatus = status;
   error.lockPath = lockPath;
+  error.owner = owner;
   return error;
 }
 
@@ -561,7 +561,7 @@ export class FlowDispatchLease {
       parentAuthority: root,
       errorFactory: dispatchLockError,
     });
-    this.lock = new ProcessOwnedLock({
+    this.lock = new ProcessLock({
       directoryAuthority: directory,
       fileName: `.flow-dispatch-${flowDispatchDigest(runId).slice(0, 24)}.lock`,
       kind: DISPATCH_LOCK_KIND,
@@ -574,10 +574,7 @@ export class FlowDispatchLease {
   }
 
   acquire() {
-    // ProcessOwnedLock only reclaims locks when the recorded dispatcher
-    // identity is conclusively stale. Live and indeterminate owners remain
-    // exclusive, while a crashed dispatcher cannot block the Flow forever.
-    return this.lock.acquire({ claimStale: true });
+    return this.lock.acquire();
   }
 
   release() {
@@ -1248,7 +1245,7 @@ export default class RunDispatchCommand extends FlowCommand {
         // The authority is acquired before parent input capture. External
         // upgrades therefore cannot alter immutable handoff inputs between
         // request construction and its mutation snapshot.
-        handoffAuthority.acquire({ wait: true });
+        handoffAuthority.acquire();
         handoffAuthorityAcquired = true;
       }
       handoffRequest = this.handoffCoordinator.createRequest({

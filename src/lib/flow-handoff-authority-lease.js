@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "./process-owned-lock.js";
+import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { PRODUCT } from "./product.js";
 
 const LOCK_KIND = "flow-handoff-authority";
@@ -20,10 +21,14 @@ function requiredText(value, field) {
 
 function lockError(status, message, { lockPath, cause } = {}) {
   const error = new Error(message, { cause });
-  error.name = "FlowHandoffAuthorityLeaseError";
+  error.name = status === "timeout"
+    ? "FlowHandoffAuthorityLeaseTimeoutError"
+    : "FlowHandoffAuthorityLeaseError";
   error.code = status === "live"
     ? "FLOW_HANDOFF_AUTHORITY_BUSY"
-    : `FLOW_HANDOFF_AUTHORITY_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
+    : status === "timeout"
+      ? "FLOW_HANDOFF_AUTHORITY_WAIT_TIMEOUT"
+      : `FLOW_HANDOFF_AUTHORITY_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
   error.lockPath = lockPath;
   return error;
 }
@@ -35,7 +40,11 @@ function lockError(status, message, { lockPath, cause } = {}) {
  * remains independent even if its Flow run changes.
  */
 export class FlowHandoffAuthorityLease {
-  constructor({ mainRoot, executionRoot } = {}) {
+  constructor({
+    mainRoot,
+    executionRoot,
+    waitPolicy = new FileLockWaitPolicy({ timeoutMs: Infinity, intervalMs: WAIT_INTERVAL_MS }),
+  } = {}) {
     this.mainRoot = fs.realpathSync(path.resolve(requiredText(mainRoot, "Flow handoff authority mainRoot")));
     this.executionRoot = fs.realpathSync(path.resolve(requiredText(executionRoot, "Flow handoff authority executionRoot")));
     if (!fs.statSync(this.mainRoot).isDirectory() || !fs.statSync(this.executionRoot).isDirectory()) {
@@ -49,45 +58,18 @@ export class FlowHandoffAuthorityLease {
       parentAuthority: root,
       errorFactory: lockError,
     });
-    this.lock = new ProcessOwnedLock({
+    this.lock = new FileLock({
       directoryAuthority: directory,
       fileName: `.flow-handoff-${this.scope}-${digest(this.scopeId).slice(0, 24)}.lock`,
       kind: LOCK_KIND,
       authority: { scope: this.scope, scopeId: this.scopeId },
       errorFactory: lockError,
+      waitPolicy,
     });
   }
 
-  acquire({ wait = false, timeoutMs = null } = {}) {
-    if (typeof wait !== "boolean") throw new Error("Flow handoff authority wait must be boolean");
-    if (timeoutMs !== null && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0)) {
-      throw new Error("Flow handoff authority timeout must be null or a non-negative integer");
-    }
-    const deadline = timeoutMs === null ? null : Date.now() + timeoutMs;
-    for (;;) {
-      try {
-        // ProcessOwnedLock only reclaims locks when the recorded owner
-        // identity is conclusively stale. Live and indeterminate owners stay
-        // exclusive, while a crashed owner cannot permanently block recovery.
-        return this.lock.acquire({ claimStale: true });
-      } catch (error) {
-        if (!wait || error?.code !== "FLOW_HANDOFF_AUTHORITY_BUSY") throw error;
-        const remaining = deadline === null ? null : deadline - Date.now();
-        if (remaining !== null && remaining <= 0) {
-          const timeout = new Error("timed out waiting for the active Flow handoff authority", { cause: error });
-          timeout.name = "FlowHandoffAuthorityLeaseTimeoutError";
-          timeout.code = "FLOW_HANDOFF_AUTHORITY_WAIT_TIMEOUT";
-          timeout.lockPath = error.lockPath;
-          throw timeout;
-        }
-        Atomics.wait(
-          new Int32Array(new SharedArrayBuffer(4)),
-          0,
-          0,
-          remaining === null ? WAIT_INTERVAL_MS : Math.min(WAIT_INTERVAL_MS, remaining),
-        );
-      }
-    }
+  acquire() {
+    return this.lock.acquire();
   }
 
   release() {

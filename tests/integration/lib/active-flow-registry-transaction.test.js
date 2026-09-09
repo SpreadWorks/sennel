@@ -227,6 +227,9 @@ describe("active-flow registry transaction", () => {
     }
 
     assert.equal(nestedError?.code, "ACTIVE_FLOW_REGISTRY_BUSY");
+    assert.equal(nestedError?.lockStatus, "live");
+    assert.equal(nestedError?.lockPath, nestedError?.cause?.lockPath);
+    assert.deepEqual(nestedError?.owner, nestedError?.cause?.owner);
     second.add("443-second", "worktree");
     assert.deepEqual(registry.load(), [
       { specId: "442-existing", mode: "direct" },

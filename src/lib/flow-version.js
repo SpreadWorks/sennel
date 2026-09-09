@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { AtomicJsonFile } from "./atomic-json-file.js";
 import { AtomicFile } from "./atomic-file.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "./process-owned-lock.js";
+import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
+import { ProcessLock } from "./process-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { ArtifactAuthority, ArtifactAuthoritySlot, ArtifactCardinality } from "./artifact-authority.js";
 import {
   ArtifactPublicationClaim,
@@ -81,6 +83,19 @@ const FLOW_STATE_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("flow.state").r
 const FLOW_ACTIVITIES_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("flow.activities").relativePath;
 const SPEC_RECORD_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("spec.record").relativePath;
 const ARTIFACT_CATALOG_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("artifact.catalog").relativePath;
+
+function artifactCatalogLockError(status, message, { lockPath, cause } = {}) {
+  const error = new Error(message, { cause });
+  if (status === "live" || status === "timeout") {
+    error.name = "FlowArtifactCatalogBusyError";
+    error.code = "FLOW_ARTIFACT_CATALOG_BUSY";
+  } else {
+    error.name = "ProcessLockError";
+    error.code = `PROCESS_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
+  }
+  error.lockPath = lockPath;
+  return error;
+}
 
 /** Typed path/Task relation for the route-scoped retry artifacts. */
 class TaskRetryRecoveryArtifactOwner {
@@ -732,7 +747,7 @@ export class FlowVersionRuntimeLockLocation {
     const candidate = relativePath(value, "runtime lock repository path");
     if (candidate === this.relativeRepositoryPath) return true;
     return path.posix.dirname(candidate) === path.posix.dirname(this.relativeRepositoryPath)
-      && ProcessOwnedLock.isOwnerTemporaryFileName(this.fileName, path.posix.basename(candidate));
+      && ProcessLock.isOwnerTemporaryFileName(this.fileName, path.posix.basename(candidate));
   }
 }
 
@@ -1442,41 +1457,16 @@ export class FlowArtifactCatalogStore {
     fs.mkdirSync(lockDirectory, { recursive: true, mode: 0o755 });
     const runtimeAuthority = new RealDirectoryAuthority(runtimeDirectory, { parentAuthority: directoryAuthority });
     const lockDirectoryAuthority = new RealDirectoryAuthority(lockDirectory, { parentAuthority: runtimeAuthority });
-    const lock = new ProcessOwnedLock({
+    const lock = new FileLock({
       directoryAuthority: lockDirectoryAuthority, fileName: runtimeLock.fileName, kind: "artifact-catalog-publication",
       authority: { directory: this.location.directory, runtimeDirectory, catalog: this.location.catalogFile },
+      waitPolicy: new FileLockWaitPolicy({
+        timeoutMs: CATALOG_LOCK_WAIT_TIMEOUT_MS,
+        intervalMs: CATALOG_LOCK_RETRY_INTERVAL_MS,
+      }),
+      errorFactory: artifactCatalogLockError,
     });
-    let acquired = false;
-    const deadline = Date.now() + CATALOG_LOCK_WAIT_TIMEOUT_MS;
-    for (;;) {
-      try { lock.acquire({ claimStale: true }); acquired = true; break; } catch (cause) {
-        if (cause?.code !== "PROCESS_OWNED_LOCK_LIVE") throw cause;
-        const remaining = deadline - Date.now();
-        if (remaining > 0) {
-          Atomics.wait(
-            new Int32Array(new SharedArrayBuffer(4)),
-            0,
-            0,
-            Math.min(CATALOG_LOCK_RETRY_INTERVAL_MS, remaining),
-          );
-          continue;
-        }
-        const error = new Error("Flow artifact catalog authority is busy", { cause });
-        error.name = "FlowArtifactCatalogBusyError";
-        error.code = "FLOW_ARTIFACT_CATALOG_BUSY";
-        error.retryable = true;
-        throw error;
-      }
-    }
-    let result;
-    let primaryError = null;
-    try { result = operation(); } catch (error) { primaryError = error; }
-    try { lock.release(); } catch (releaseError) {
-      if (primaryError) throw new AggregateError([primaryError, releaseError], "artifact catalog publication and lock release failed", { cause: primaryError });
-      throw releaseError;
-    }
-    if (primaryError) throw primaryError;
-    return result;
+    return lock.runExclusive(operation);
   }
   #rollback(snapshot, originalError) {
     try { snapshot.restore(); } catch (rollbackError) {

@@ -12,7 +12,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { AtomicFile } from "../../lib/atomic-file.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "../../lib/process-owned-lock.js";
+import { FileLock } from "../../lib/file-lock.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { AuthoritativeSpecRecord, FlowActivityId, FlowArtifactCatalog, FlowArtifactCatalogStore, FlowArtifactDescriptor, FlowId, FlowRunId, FlowSpecIdentity, FlowSpecRevision, FlowVersionId, FlowVersionLocation, FlowVersionMigrationOutput, FlowVersionMigrationOutputBuilder, FlowVersionMigrationOutputSet, FlowVersionRuntimeLockLocation, FlowVersionSemanticValidator } from "../../lib/flow-version.js";
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactActivityEvidence, FlowArtifactUpdater } from "../../lib/flow-artifact-contract.js";
 import { CanonicalSpecReview, initialCanonicalSpecReview } from "./spec-review-artifacts.js";
@@ -7490,7 +7491,7 @@ export class CurrentFlowStateStore {
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o755 });
     const lockErrorFactory = (status, message, { lockPath, cause } = {}) => {
       const error = new CurrentFlowStateConflictError(message);
-      error.code = status === "live"
+      error.code = status === "live" || status === "timeout"
         ? "FLOW_STATE_ATOMIC_BUSY"
         : `CURRENT_FLOW_STATE_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
       error.lockPath = lockPath;
@@ -7522,7 +7523,7 @@ export class CurrentFlowStateStore {
       parentAuthority: this.runtimeAuthority,
       errorFactory: lockErrorFactory,
     });
-    this.lock = new ProcessOwnedLock({
+    this.lock = new FileLock({
       directoryAuthority: this.lockDirectoryAuthority,
       fileName: lockFileName,
       kind: "current-flow-state",
@@ -7601,11 +7602,15 @@ export class CurrentFlowStateStore {
     try {
       this.#withLock(() => undefined);
     } catch (error) {
-      if (error?.code === "CURRENT_FLOW_STATE_LOCK_LIVE") {
+      if (error?.lockStatus === "live" || error?.lockStatus === "timeout") {
         const busy = new Error(error.message, { cause: error });
         busy.name = "FlowStateAtomicSaveError";
         busy.code = "FLOW_STATE_ATOMIC_BUSY";
+        busy.lockStatus = error.lockStatus;
         busy.lockPath = error.lockPath;
+        busy.owner = error.owner;
+        if (error.waitedMs !== undefined) busy.waitedMs = error.waitedMs;
+        if (error.retryable !== undefined) busy.retryable = error.retryable;
         throw busy;
       }
       throw error;
@@ -7845,29 +7850,7 @@ export class CurrentFlowStateStore {
   }
 
   #withLock(operation) {
-    this.lock.acquire({ claimStale: true });
-    let result;
-    let primaryError = null;
-    try {
-      result = operation();
-    } catch (error) {
-      primaryError = error;
-    } finally {
-      try {
-        this.lock.release();
-      } catch (cleanupError) {
-        if (primaryError) {
-          throw new AggregateError(
-            [primaryError, cleanupError],
-            "current flow state update and lock release both failed",
-            { cause: primaryError },
-          );
-        }
-        throw cleanupError;
-      }
-    }
-    if (primaryError) throw primaryError;
-    return result;
+    return this.lock.runExclusive(operation);
   }
 }
 

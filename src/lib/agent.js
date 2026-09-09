@@ -32,7 +32,8 @@ import { AgentTimeout, AgentTimeoutDiagnostic, DEFAULT_AGENT_PROCESS_TREE_GRACE_
 import { LinuxProcessStat } from "./process-identity.js";
 import { PRODUCT } from "./product.js";
 import { AtomicFile } from "./atomic-file.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "./process-owned-lock.js";
+import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { FlowAttributionPolicy } from "./flow-attribution.js";
 import {
   AgentFailure,
@@ -50,8 +51,8 @@ const MAX_RETRY = 5;
 const DEFAULT_RETRY_COUNT = 2;
 const DEFAULT_RETRY_DELAY_MS = 3000;
 const RETRY_BACKOFF_FACTOR = 2;
-const PROMPT_CACHE_LOCK_MAX_ATTEMPTS = 100;
 const PROMPT_CACHE_LOCK_RETRY_MS = 10;
+const PROMPT_CACHE_LOCK_WAIT_TIMEOUT_MS = 1_000;
 const DEFAULT_PROVIDER_FAMILY_ALIASES = Object.freeze({
   codex: "codex/gpt-5.6-terra-medium",
   claude: "claude/sonnet",
@@ -1161,11 +1162,15 @@ class AgentPromptCache {
     });
     const fileName = `${cacheFileName(specId)}.json`;
     this.filePath = path.join(this.directory.directory, fileName);
-    this.lock = new ProcessOwnedLock({
+    this.lock = new FileLock({
       directoryAuthority: this.directory,
       fileName: `.${fileName}.lock`,
       kind: "agent-prompt-cache",
       authority: { specId: this.specId },
+      waitPolicy: new FileLockWaitPolicy({
+        timeoutMs: PROMPT_CACHE_LOCK_WAIT_TIMEOUT_MS,
+        intervalMs: PROMPT_CACHE_LOCK_RETRY_MS,
+      }),
     });
     Object.freeze(this);
   }
@@ -1200,30 +1205,13 @@ class AgentPromptCache {
     if (typeof change !== "function") throw new Error("agent prompt cache mutation requires a function");
     this.managedDirectory.ensure();
     this.directory.ensure();
-    await this.acquireWriteLock();
-    try {
+    await this.lock.runExclusiveAsync(async () => {
       // Read after exclusive admission: two provider processes can complete
       // concurrently without one plain read-modify-write discarding the
       // other's response for the same spec cache.
       const store = this.read();
       if (change(store) === true) this.write(store);
-    } finally {
-      this.lock.release();
-    }
-  }
-
-  async acquireWriteLock() {
-    for (let attempt = 1; attempt <= PROMPT_CACHE_LOCK_MAX_ATTEMPTS; attempt += 1) {
-      try {
-        this.lock.acquire({ claimStale: true });
-        return;
-      } catch (cause) {
-        if (cause?.code !== "PROCESS_OWNED_LOCK_LIVE" || attempt === PROMPT_CACHE_LOCK_MAX_ATTEMPTS) {
-          throw cause;
-        }
-        await new Promise((resolve) => setTimeout(resolve, PROMPT_CACHE_LOCK_RETRY_MS));
-      }
-    }
+    });
   }
 
   read() {

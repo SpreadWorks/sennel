@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
 import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
+import { FileLockReentrancyError } from "../../../src/lib/file-lock.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { FlowDispatchAction } from "../../../src/flow/lib/run-dispatch.js";
 import {
@@ -1901,7 +1902,7 @@ describe("Current Flow state foundation", () => {
     assert.throws(() => store.loadSnapshot(), /ahead of its Activity journal/);
   });
 
-  it("retains the direct Store writer lock boundary for reads", () => {
+  it("rejects same-process Store writer lock reentry for reads", () => {
     tmp = createTmpDir("current-flow-direct-read-lock-");
     const boundary = new CurrentFlowStateAdoptionBoundary({ definition: definition() });
     const store = boundary.openStore({ directory: tmp });
@@ -1910,7 +1911,10 @@ describe("Current Flow state foundation", () => {
     try {
       assert.throws(
         () => store.loadSnapshot(),
-        (error) => error instanceof CurrentFlowStateConflictError && error.code === "FLOW_STATE_ATOMIC_BUSY",
+        (error) => error instanceof FileLockReentrancyError
+          && error.code === "CURRENT_FLOW_STATE_LOCK_REENTRANT"
+          && error.lockStatus === "reentrant"
+          && error.cause instanceof CurrentFlowStateConflictError,
       );
     } finally {
       store.lock.release();

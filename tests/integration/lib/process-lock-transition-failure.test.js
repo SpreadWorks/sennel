@@ -4,10 +4,8 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
-import {
-  ProcessOwnedLock,
-  RealDirectoryAuthority,
-} from "../../../src/lib/process-owned-lock.js";
+import { ProcessLock } from "../../../src/lib/process-lock.js";
+import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
 import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
 
 function identitySource(bootIdentity = "candidate8-boot") {
@@ -20,7 +18,7 @@ function identitySource(bootIdentity = "candidate8-boot") {
 }
 
 function makeLock(root, source = identitySource()) {
-  return new ProcessOwnedLock({
+  return new ProcessLock({
     directoryAuthority: new RealDirectoryAuthority(root),
     fileName: ".candidate8.lock",
     kind: "candidate8-lock",
@@ -40,7 +38,8 @@ function assertTransition(error, {
   tempResidue,
   visibleResidue,
 }) {
-  assert.equal(error.name, "ProcessOwnedLockTransitionError");
+  assert.equal(error.name, "ProcessLockTransitionError");
+  assert.match(error.code, /^PROCESS_LOCK_/);
   assert.equal(error.phase, phase);
   assert.equal(error.publishedToVisibleName, publishedToVisibleName);
   assert.equal(error.durabilityUnknown, durabilityUnknown);
@@ -50,7 +49,7 @@ function assertTransition(error, {
   return true;
 }
 
-describe("ProcessOwnedLock failure semantics", () => {
+describe("ProcessLock transition failure semantics", () => {
   const roots = [];
   afterEach(() => {
     for (const root of roots.splice(0)) removeTmpDir(root);
@@ -192,7 +191,7 @@ describe("ProcessOwnedLock failure semantics", () => {
     };
     try {
       assert.throws(
-        () => lock.acquire({ claimStale: true }),
+        () => lock.acquire(),
         (error) => {
           assertTransition(error, {
             phase: "stale-remove-directory-fsync",
@@ -210,7 +209,7 @@ describe("ProcessOwnedLock failure semantics", () => {
     } finally {
       fs.fsyncSync = originalFsync;
     }
-    const token = lock.acquire({ claimStale: true });
+    const token = lock.acquire();
     assert.notEqual(token, staleOwner.ownerToken);
     lock.release();
   });

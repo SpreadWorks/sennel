@@ -14,7 +14,8 @@ import { FlowAtStepFixture, makeFlowManager } from "../../support/infrastructure
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
 import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "../../../src/lib/process-owned-lock.js";
+import { ProcessLock } from "../../../src/lib/process-lock.js";
+import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { persistPromptCacheHitMetric } from "../../../src/lib/agent-invocation-metric.js";
 import {
@@ -42,7 +43,7 @@ function acquireLiveCurrentFlowStateLock(root, specId) {
   const directoryAuthority = new RealDirectoryAuthority(location.directory);
   const runtimeAuthority = new RealDirectoryAuthority(runtimeDirectory, { parentAuthority: directoryAuthority });
   const lockDirectoryAuthority = new RealDirectoryAuthority(lockDirectory, { parentAuthority: runtimeAuthority });
-  const lock = new ProcessOwnedLock({
+  const lock = new ProcessLock({
     directoryAuthority: lockDirectoryAuthority,
     fileName: "current-flow-state.lock",
     kind: "current-flow-state",
@@ -202,7 +203,7 @@ describe("finalize-cleanup robustness", () => {
     assert.equal(path.resolve(ctx.flowManager._root), path.resolve(mainRoot), "new flowManager should be rooted in main");
   });
 
-  it("finalize stops before every teardown side effect when main metadata sync is busy, then succeeds on retry", async () => {
+  it("finalize stops before every teardown side effect on same-process writer reentry, then succeeds on retry", async () => {
     const { runTeardown } = await import("../../../src/flow/lib/run-finalize-cleanup.js");
     tmp = createTmpDir("sennel-finalize-sync-required-");
     const mainRoot = path.join(tmp, "main");
@@ -260,7 +261,8 @@ describe("finalize-cleanup robustness", () => {
         reportRoot: mainRoot,
         specId,
       }),
-      (error) => error.code === "FLOW_STATE_ATOMIC_BUSY",
+      (error) => error.code === "CURRENT_FLOW_STATE_LOCK_REENTRANT"
+        && error.lockStatus === "reentrant",
     );
     assert.deepEqual(fs.readFileSync(canonicalFlowPath(mainRoot, specId)), before.mainFlow);
     assert.deepEqual(fs.readFileSync(registryPath), before.registry);

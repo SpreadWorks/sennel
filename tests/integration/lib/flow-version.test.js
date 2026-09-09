@@ -32,12 +32,11 @@ import {
   FlowVersionMigrationSourcePolicy,
 } from "../../../src/lib/flow-version.js";
 import { buildCurrentFlowDefinition } from "../../../src/flow/definition.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "../../../src/lib/process-owned-lock.js";
-
 const REVIEW_DIGEST_A = "a".repeat(64);
 const REVIEW_DIGEST_B = "b".repeat(64);
 const REVIEW_DIGEST_C = "c".repeat(64);
-const PROCESS_OWNED_LOCK_MODULE_PATH = fileURLToPath(new URL("../../../src/lib/process-owned-lock.js", import.meta.url));
+const PROCESS_LOCK_MODULE_PATH = fileURLToPath(new URL("../../../src/lib/process-lock.js", import.meta.url));
+const DIRECTORY_AUTHORITY_MODULE_PATH = fileURLToPath(new URL("../../../src/lib/real-directory-authority.js", import.meta.url));
 import {
   ActivityTransition,
   CurrentAttempt,
@@ -141,7 +140,8 @@ function spawnCatalogLockOwner(location, holdMs) {
     "--eval",
     [
       `import fs from "node:fs";`,
-      `import { ProcessOwnedLock, RealDirectoryAuthority } from ${JSON.stringify(PROCESS_OWNED_LOCK_MODULE_PATH)};`,
+      `import { ProcessLock } from ${JSON.stringify(PROCESS_LOCK_MODULE_PATH)};`,
+      `import { RealDirectoryAuthority } from ${JSON.stringify(DIRECTORY_AUTHORITY_MODULE_PATH)};`,
       `const directory = ${JSON.stringify(location.directory)};`,
       `const runtimeDirectory = ${JSON.stringify(runtimeLock.runtimeDirectory)};`,
       `const lockDirectory = ${JSON.stringify(runtimeLock.directory)};`,
@@ -150,13 +150,13 @@ function spawnCatalogLockOwner(location, holdMs) {
       "const directoryAuthority = new RealDirectoryAuthority(directory);",
       "const runtimeAuthority = new RealDirectoryAuthority(runtimeDirectory, { parentAuthority: directoryAuthority });",
       "const lockDirectoryAuthority = new RealDirectoryAuthority(lockDirectory, { parentAuthority: runtimeAuthority });",
-      "const lock = new ProcessOwnedLock({",
+      "const lock = new ProcessLock({",
       "  directoryAuthority: lockDirectoryAuthority,",
       "  fileName: lockFileName,",
       "  kind: \"artifact-catalog-publication\",",
       "  authority: { directory, runtimeDirectory, catalog: `${directory}/artifact-catalog.json` },",
       "});",
-      "lock.acquire({ claimStale: true });",
+      "lock.acquire();",
       "process.stdout.write(\"locked\\n\");",
       `setTimeout(() => { lock.release(); }, ${holdMs});`,
     ].join("\n"),
@@ -678,11 +678,11 @@ describe("Flow artifact catalog authority slots", () => {
     fs.mkdirSync(location.resolve(".runtime/locks"), { recursive: true });
     fs.writeFileSync(location.resolve(".runtime/locks/artifact-catalog.lock"), "corrupt");
     assert.throws(() => new FlowArtifactCatalogStore({ location }).load(), (error) => (
-      error.code === "PROCESS_OWNED_LOCK_CORRUPT" && error.code !== "FLOW_ARTIFACT_CATALOG_BUSY"
+      error.code === "PROCESS_LOCK_CORRUPT" && error.code !== "FLOW_ARTIFACT_CATALOG_BUSY"
     ));
   });
 
-  it("reports concurrent catalog authority as typed retryable BUSY", () => {
+  it("rejects same-process catalog lock reentry without waiting", () => {
     const location = canonicalLocation();
     fs.mkdirSync(path.dirname(location.artifactPath("a.json")), { recursive: true });
     fs.writeFileSync(location.artifactPath("a.json"), "a");
@@ -697,7 +697,9 @@ describe("Flow artifact catalog authority slots", () => {
       mediaType: "application/json", retention: "permanent",
       write: () => {
         assert.throws(() => second.load(), (error) => (
-          error.code === "FLOW_ARTIFACT_CATALOG_BUSY" && error.retryable === true
+          error.code === "PROCESS_LOCK_REENTRANT"
+            && error.lockStatus === "reentrant"
+            && error.retryable === false
         ));
         fs.writeFileSync(location.artifactPath("a.json"), "updated");
       },

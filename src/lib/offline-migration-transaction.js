@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { AtomicJsonFile } from "./atomic-json-file.js";
-import { RealDirectoryAuthority } from "./process-owned-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { PRODUCT } from "./product.js";
 
 const VERSION = 7;

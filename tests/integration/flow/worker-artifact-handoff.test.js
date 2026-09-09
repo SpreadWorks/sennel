@@ -73,7 +73,8 @@ import {
   attachCanonicalCommandResultPublications,
 } from "../../../src/flow/lib/canonical-command-result.js";
 import { persistAgentInvocationMetric } from "../../../src/lib/agent-invocation-metric.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "../../../src/lib/process-owned-lock.js";
+import { ProcessLock } from "../../../src/lib/process-lock.js";
+import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
 import { ApprovedFindingExceptionSet } from "../../../src/flow/lib/acknowledged-rationale.js";
 import { CanonicalTaskContext } from "../../../src/flow/lib/task-canonical-context.js";
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
@@ -333,7 +334,7 @@ function acquireRuntimeLock(location, logicalKey) {
   const lockAuthority = new RealDirectoryAuthority(runtimeLock.directory, {
     parentAuthority: runtimeAuthority,
   });
-  const lock = new ProcessOwnedLock({
+  const lock = new ProcessLock({
     directoryAuthority: lockAuthority,
     fileName: runtimeLock.fileName,
     kind: "worker-authority-runtime-lock",
@@ -3973,7 +3974,7 @@ describe("worker artifact handoff", () => {
       ];
       const ownerTemp = path.join(
         currentLocks[0].runtimeLock.directory,
-        ProcessOwnedLock.ownerTemporaryFileName(currentLocks[0].runtimeLock.fileName, crypto.randomUUID()),
+        ProcessLock.ownerTemporaryFileName(currentLocks[0].runtimeLock.fileName, crypto.randomUUID()),
       );
       fs.writeFileSync(ownerTemp, "transient owner publication\n");
       const runtimeDirectory = path.join(value.mainRoot, ".sennel");
