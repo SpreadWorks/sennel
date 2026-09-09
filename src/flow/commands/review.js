@@ -111,6 +111,11 @@ import {
   ReviewProtocolAttemptSettlement,
   ReviewProtocolTransportRetryPolicy,
 } from "../lib/review-protocol.js";
+import { measureReviewPromptChars } from "../lib/review-prompt-size.js";
+import {
+  TaskReviewPromptChunkContext,
+  TaskReviewPromptPlan,
+} from "../lib/task-review-prompt-plan.js";
 
 /**
  * Local helper for review-phase agent invocations. The Agent service handles
@@ -1453,7 +1458,7 @@ function loadPreviousImplReviewMemory({ flowManager, flow, taskId = null } = {})
   }).toPromptMemory();
 }
 
-function buildImplReviewPrompt({ requirementFileMap = {}, requirementSourceScope = null, requirementIds, diff = "", touchedFiles = [], previousReview = null, taskSpec = null, taskContext = null, taskReviewAttempt = null, taskNoChangeReasons = [] } = {}) {
+function buildImplReviewPrompt({ requirementFileMap = {}, requirementSourceScope = null, requirementIds, diff = "", touchedFiles = [], previousReview = null, taskSpec = null, taskContext = null, taskReviewAttempt = null, taskNoChangeReasons = [], taskReviewChunk = null } = {}) {
   if (requirementSourceScope !== null && !(requirementSourceScope instanceof CanonicalSourceRequirementScope)) {
     throw new Error("requirementSourceScope must be a CanonicalSourceRequirementScope or null");
   }
@@ -1506,6 +1511,9 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementSourceScope
   pb.addUserPrompt(taskSpec ? "## Current Task Source" : "## Diff", diff || "(none)");
 
   if (taskSpec) {
+    if (taskReviewChunk !== null && !(taskReviewChunk instanceof TaskReviewPromptChunkContext)) {
+      throw new Error("Task Review prompt chunk context must be typed");
+    }
     if (!Number.isSafeInteger(taskReviewAttempt) || taskReviewAttempt < 1 || taskReviewAttempt > 4) {
       throw new Error("Task Review prompt requires an Attempt between 1 and 4");
     }
@@ -1527,6 +1535,9 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementSourceScope
         "Review the supplied current Task source and report findings without modifying any source, test, spec, or artifact.",
         "Do not run tests. Task triage owns finding disposition and task repair owns all source changes and repair evidence.",
       ].join("\n"));
+    if (taskReviewChunk !== null) {
+      pb.addUserPrompt("## Task Review Source Chunk Contract", taskReviewChunk.toPromptText());
+    }
     if (noChange) {
       pb.addUserPrompt("## Declared No-Change Reasons", taskNoChangeReasons.join("\n"));
     }
@@ -1542,7 +1553,7 @@ const TASK_REVIEW_PROMPT_TOO_LARGE_CODE = "TASK_REVIEW_PROMPT_TOO_LARGE";
 export const TASK_REVIEW_PROMPT_CHAR_LIMIT = MAX_IMPL_REQUIREMENT_BATCH_CHARS;
 
 function assertTaskReviewPromptWithinLimit(prompt) {
-  const chars = measurePromptChars(prompt);
+  const chars = measureReviewPromptChars(prompt);
   if (chars <= TASK_REVIEW_PROMPT_CHAR_LIMIT) return;
   throw new Error(
     `${TASK_REVIEW_PROMPT_TOO_LARGE_CODE}: Task Review prompt is ${chars} chars; `
@@ -1550,7 +1561,70 @@ function assertTaskReviewPromptWithinLimit(prompt) {
   );
 }
 
-async function runImplReviewAgentWithDependencies({ prompt, taskReview = false, callAgent }) {
+function taskReviewProviderFinding(finding) {
+  return {
+    findingKey: finding.findingKey,
+    title: finding.title,
+    failureMode: finding.failureMode,
+    file: finding.file || null,
+    requirementId: finding.requirementId,
+    issue: finding.issue,
+    suggestion: finding.suggestion,
+    disposition: finding.disposition,
+    rationale: finding.rationale,
+  };
+}
+
+function mergeTaskReviewChunkResponses(rawResponses, requirementIds) {
+  const selected = new Map();
+  const dispositionStrength = new Map([["informational", 1], ["deferred", 2], ["must-fix", 3]]);
+  for (const rawResponse of rawResponses) {
+    const parsed = parseImplReviewFindings(rawResponse, { requirementIds, taskReview: true });
+    for (const [bucket, findings] of [
+      ["blockingFindings", parsed.blockingFindings],
+      ["nonBlockingImprovements", parsed.nonBlockingImprovements],
+    ]) {
+      for (const finding of findings) {
+        const candidate = { bucket, finding };
+        const previous = selected.get(finding.fingerprint) ?? null;
+        const candidateStrength = dispositionStrength.get(finding.disposition) + (bucket === "blockingFindings" ? 10 : 0);
+        const previousStrength = previous === null
+          ? -1
+          : dispositionStrength.get(previous.finding.disposition) + (previous.bucket === "blockingFindings" ? 10 : 0);
+        if (previous === null || candidateStrength > previousStrength) selected.set(finding.fingerprint, candidate);
+      }
+    }
+  }
+  const merged = { blockingFindings: [], nonBlockingImprovements: [] };
+  for (const { bucket, finding } of selected.values()) merged[bucket].push(taskReviewProviderFinding(finding));
+  return JSON.stringify(merged);
+}
+
+async function runTaskReviewPromptPlanWithDependencies({
+  plan,
+  requirementIds,
+  callAgent,
+}) {
+  if (!(plan instanceof TaskReviewPromptPlan)) throw new Error("Task Review prompt execution requires its typed plan");
+  if (!(requirementIds instanceof Set)) throw new Error("Task Review prompt execution requires requirementIds");
+  if (typeof callAgent !== "function") throw new Error("Task Review prompt execution requires callAgent");
+  const rawResponses = [];
+  for (const chunk of plan.chunks) {
+    const rawResponse = await callAgent(chunk.prompt, chunk);
+    parseImplReviewFindings(rawResponse, { requirementIds, taskReview: true });
+    rawResponses.push(rawResponse);
+  }
+  return mergeTaskReviewChunkResponses(rawResponses, requirementIds);
+}
+
+async function runImplReviewAgentWithDependencies({ prompt, taskReview = false, taskReviewPlan = null, requirementIds = null, callAgent }) {
+  if (taskReviewPlan !== null) {
+    if (!(taskReviewPlan instanceof TaskReviewPromptPlan)) throw new Error("Task Review requires its typed prompt plan");
+    if (taskReviewPlan.chunks.length === 1 && taskReviewPlan.chunks[0].singleShot) {
+      return callAgent(taskReviewPlan.chunks[0].prompt, taskReviewPlan.chunks[0]);
+    }
+    return runTaskReviewPromptPlanWithDependencies({ plan: taskReviewPlan, requirementIds, callAgent });
+  }
   if (taskReview) assertTaskReviewPromptWithinLimit(prompt);
   return callAgent(prompt);
 }
@@ -3251,17 +3325,8 @@ function buildHeaderBlockingFindings(headerResult) {
   return findings;
 }
 
-function measurePromptChars(prompt) {
-  if (prompt && typeof prompt === "object" && "userPrompt" in prompt) {
-    return String(prompt.systemPrompt || "").length
-      + String(prompt.userPrompt || "").length
-      + String(prompt.fmtFallback || "").length;
-  }
-  return String(prompt || "").length;
-}
-
 function assertTestReviewPromptWithinLimit(prompt, label) {
-  const chars = measurePromptChars(prompt);
+  const chars = measureReviewPromptChars(prompt);
   if (chars <= TEST_REVIEW_PROMPT_CHAR_LIMIT) return;
   throw new Error(
     `${TEST_REVIEW_PROMPT_TOO_LARGE_CODE}: ${label} prompt is ${chars} chars; `
@@ -4810,11 +4875,11 @@ async function runReview(rawArgs) {
         : loopProposalsToImplReviewJson(proposals, requirementIds);
     },
     runSingleReview: async () => {
-      const reviewPrompt = buildImplReviewPrompt({
+      const buildReviewPrompt = ({ sourceText = diff, chunkContext = null } = {}) => buildImplReviewPrompt({
         requirementFileMap: fileMap,
         requirementSourceScope: taskSpec?.sourceScope ?? null,
         requirementIds,
-        diff,
+        diff: sourceText,
         touchedFiles,
         previousReview,
         taskSpec: taskSpec ? {
@@ -4824,11 +4889,20 @@ async function runReview(rawArgs) {
         taskContext: taskSpec?.context ?? null,
         taskReviewAttempt,
         taskNoChangeReasons: taskSpec?.source?.noChangeReasons ?? [],
+        taskReviewChunk: chunkContext,
       });
+      const taskReviewPlan = taskSpec === null ? null : TaskReviewPromptPlan.create({
+        sourceEntries: taskSpec.source.entries,
+        buildPrompt: buildReviewPrompt,
+        maxChars: TASK_REVIEW_PROMPT_CHAR_LIMIT,
+      });
+      const reviewPrompt = taskReviewPlan?.chunks[0]?.prompt ?? buildReviewPrompt();
       return runImplReviewAgentWithDependencies({
         prompt: reviewPrompt,
         taskReview: taskSpec !== null,
-        callAgent: () => {
+        taskReviewPlan,
+        requirementIds,
+        callAgent: (currentPrompt) => {
           const reviewAgent = ensureAgent("flow.impl.review.propose");
           const systemPrompt = buildDraftSystemPrompt(
             reviewGuardrails,
@@ -4841,13 +4915,13 @@ async function runReview(rawArgs) {
               flowManager,
               requirementIds,
               agent: reviewAgent,
-              prompt: reviewPrompt,
+              prompt: currentPrompt,
               systemPrompt,
             });
           }
           return callReviewAgent(
             reviewAgent,
-            reviewPrompt,
+            currentPrompt,
             "flow.impl.review.propose",
             systemPrompt,
           );
@@ -4957,9 +5031,11 @@ export {
   runActiveImplReviewWithDependencies, runReviewWithDependencies,
   runSingleShotImplReviewWithDependencies, runNonImplReviewWithDependencies,
   runTaskReviewProtocol,
+  runTaskReviewPromptPlanWithDependencies,
   runImplReviewAgentWithDependencies,
   assertTaskReviewPromptWithinLimit,
   canonicalTaskReviewFileMap,
+  mergeTaskReviewChunkResponses,
   loopProposalsToImplReviewJson,
   classifyReviewCommandError,
   LOOP_REVIEW_THRESHOLD, MAX_LOOP_CALLS,

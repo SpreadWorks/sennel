@@ -103,7 +103,7 @@ export function completeTaskStageHandoff(work, effect) {
 
 /** Local canonical fixture; never dispatches a Flow or starts a worker. */
 export class TaskReviewScenario {
-  constructor(t, { noChange = false } = {}) {
+  constructor(t, { noChange = false, implementationContent = "implemented source\n", additionalRequirements = [] } = {}) {
     this.root = createTmpDir("task-review-scenario-");
     t.after(() => removeTmpDir(this.root));
     this.specId = "001-review-scenario";
@@ -119,13 +119,13 @@ export class TaskReviewScenario {
       flowManager: this.manager, specId: this.specId, runId: "review-scenario",
       taskId: this.taskId, targetStep: "task-impl",
       specRecord: {
-        requirements: [{ id: "R-1", desc: "Preserve bounded Review behavior.", task_ids: [this.taskId] }],
+        requirements: [{ id: "R-1", desc: "Preserve bounded Review behavior.", task_ids: [this.taskId] }, ...additionalRequirements],
         overview: { modules: [], data_flow: [], decisions: [] },
       },
       taskDocuments: [{ id: this.taskId, title: "Review behavior", goal: "Preserve Review state.", parent: null, origin: "plan", added_round: 0, status: "pending" }],
     }).create();
     if (noChange) this.confirmNoChangeImplementation();
-    else this.confirmImplementation("implemented source\n");
+    else this.confirmImplementation(implementationContent);
   }
 
   confirmImplementation(content, { claimReview = true } = {}) {
