@@ -34,11 +34,11 @@ function claim(scenario, role) {
 }
 
 function triageEffect(keys, disposition = "apply") {
-  return { version: 1, stepId: "task-triage", completionStatus: "done", files: [], issues: [], overview: null, triage: { version: 1, dispositions: keys.map((findingKey) => ({ findingKey, disposition, basis: disposition === "apply" ? "repair-required" : "already-satisfied", rationale: disposition === "apply" ? "The requirement confirms this missing behavior." : "The referenced behavior is already covered by the current implementation." })) }, repair: null, noChangeReason: null };
+  return { version: 1, stepId: "task-triage", completionStatus: "done", issues: [], overview: null, triage: { version: 1, dispositions: keys.map((findingKey) => ({ findingKey, disposition, basis: disposition === "apply" ? "repair-required" : "already-satisfied", rationale: disposition === "apply" ? "The requirement confirms this missing behavior." : "The referenced behavior is already covered by the current implementation." })) }, repair: null, noChangeReason: null };
 }
 
 function repairEffect(keys, recurrence = { entries: [] }) {
-  return { version: 1, stepId: "task-repair", completionStatus: "done", files: [{ requirementId: "R-1", paths: ["README.md"] }], issues: [], overview: null, triage: null, repair: { version: 1, findings: keys.map((findingKey) => ({ findingKey, paths: ["README.md"] })), summary: "Implemented the missing mapped behavior.", recurrenceResolutions: recurrence.entries.map(({ findingKey, fingerprint }) => ({ findingKey, fingerprint, priorRepairInsufficiency: "The prior change did not cover the required behavior identified by this exact finding.", repairStrategy: "Add the missing requirement branch and preserve the previous correction." })) }, noChangeReason: null };
+  return { version: 1, stepId: "task-repair", completionStatus: "done", issues: [], overview: null, triage: null, repair: { version: 1, findings: keys.map((findingKey) => ({ findingKey, paths: ["README.md"] })), summary: "Implemented the missing mapped behavior.", recurrenceResolutions: recurrence.entries.map(({ findingKey, fingerprint }) => ({ findingKey, fingerprint, priorRepairInsufficiency: "The prior change did not cover the required behavior identified by this exact finding.", repairStrategy: "Add the missing requirement branch and preserve the previous correction." })) }, noChangeReason: null };
 }
 
 function artifact(scenario, role) { return new TaskStageArtifact({ flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId, role }); }
@@ -163,7 +163,6 @@ test("Task repair refuses a mapped finding that changes a path outside its imple
   const before = scenario.snapshot();
   fs.writeFileSync(path.join(scenario.root, "unrelated.js"), "export const unrelated = true;\n");
   const effect = repairEffect(["missing-behavior"]);
-  effect.files[0].paths = ["unrelated.js"];
   effect.repair.findings[0].paths = ["unrelated.js"];
   assert.throws(() => scenario.completeHandoff(work, effect), /authorized Task lineage/);
   assert.equal(scenario.snapshot(), before);

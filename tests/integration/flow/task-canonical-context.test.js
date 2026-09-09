@@ -81,8 +81,13 @@ function assertTaskCanonicalDrift({ label, mutate }) {
   const ctx = () => ({ root: executionRoot, mainRoot, executionRoot, specId, flowManager: manager, flowState: manager.loadReadOnly(specId) });
   let driftedSpec = null;
   const captureView = new Proxy(manager, {
-    get(target, property, receiver) {
-      if (property !== "readArtifact") return Reflect.get(target, property, receiver);
+    get(target, property) {
+      if (property !== "readArtifact") {
+        // Forward real manager methods with their private-field receiver;
+        // only the artifact read below is the injected drift boundary.
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
       return (input) => {
         const artifact = target.readArtifact(input);
         if (driftedSpec !== null && input?.logicalKey === "spec.record") {
@@ -106,7 +111,7 @@ function assertTaskCanonicalDrift({ label, mutate }) {
     fs.writeFileSync(path.join(executionRoot, "drift.js"), "export const drift = true;\n");
     materializeSourceWorkerEffect({ request, responseText: JSON.stringify({
       version: 1, stepId: "task-impl", completionStatus: "done",
-      files: [{ requirementId: "R-T-1", paths: ["drift.js"] }], issues: [],
+      issues: [],
       overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null, noChangeReason: null,
     }) });
     const currentSpec = JSON.parse(manager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "T-1-impl" }).bytes.toString("utf8"));
@@ -580,7 +585,6 @@ describe("canonical Task context", () => {
         version: 1,
         stepId: "task-impl",
         completionStatus: "done",
-        files: [{ requirementId: "R-T-1", paths: ["shared.js"] }],
         issues: [],
         overview: { modules: [], data_flow: [], decisions: [] },
         triage: null,

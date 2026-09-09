@@ -7570,7 +7570,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
           version: 1,
           stepId: "task-triage",
           completionStatus: "done",
-          files: [],
           issues: [],
           overview: null,
           triage: {
@@ -7595,7 +7594,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
           version: 1,
           stepId: "task-repair",
           completionStatus: "done",
-          files: [{ requirementId: "R-T-1", paths: ["README.md"] }],
           issues: [],
           overview: null,
           triage: null,
