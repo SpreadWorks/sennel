@@ -100,7 +100,7 @@ import { sameNonGateTransitionDecision } from "./non-gate-transition-application
 import { readTestChainTransitionFactsFromSnapshot, TestChainTransitionSnapshot } from "./test-chain-transition-facts.js";
 import { CanonicalOverviewUpdate } from "./canonical-overview-update.js";
 import { CanonicalSpecApproval } from "./canonical-spec-approval.js";
-import { CanonicalFileMapUpdate } from "./canonical-file-map.js";
+import { CanonicalFileMapUpdate, CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { CanonicalRequirementDefinitions } from "./canonical-requirement-definitions.js";
 import { nonblockingRouteFor } from "./nonblocking-route.js";
@@ -3256,6 +3256,15 @@ export class CanonicalFlowManagerStore {
     let spec = JSON.parse(specSource.bytes.toString("utf8"));
     const requirementDefinitions = new CanonicalRequirementDefinitions(spec.requirements).applyTo(spec);
     spec = requirementDefinitions.document;
+    const sourceTaskId = effect.stepId.startsWith("task-") ? taskIdForNode(state, nodeId) : null;
+    if (effect.stepId.startsWith("task-") && sourceTaskId === null) {
+      throw new CurrentFlowStateInvariantError("Task source effect requires an active canonical Task");
+    }
+    const requirementAuthority = CanonicalSourceRequirementAuthority.fromSpec(spec, { taskId: sourceTaskId });
+    requirementAuthority.assertBindings(
+      effect.files,
+      mutationManifest.mutations.map((mutation) => mutation.mutationId),
+    );
     if (effect.overview !== null) {
       const taskId = taskIdForNode(state, nodeId);
       if (taskId === null) throw new CurrentFlowStateInvariantError("source overview effect requires an active Task implementation");

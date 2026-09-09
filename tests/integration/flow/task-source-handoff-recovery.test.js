@@ -25,7 +25,7 @@ function finding() {
 
 function triageEffect() {
   return {
-    version: 1, stepId: "task-triage", completionStatus: "done", files: [], issues: [], overview: null,
+    version: 1, stepId: "task-triage", completionStatus: "done", issues: [], overview: null,
     triage: { version: 1, dispositions: [{
       findingKey: "missing-behavior", disposition: "apply", basis: "repair-required",
       rationale: "The requirement confirms this missing behavior.",
@@ -37,7 +37,7 @@ function triageEffect() {
 function repairEffect() {
   return {
     version: 1, stepId: "task-repair", completionStatus: "done",
-    files: [{ requirementId: "R-1", paths: ["README.md"] }], issues: [], overview: null, triage: null,
+    issues: [], overview: null, triage: null,
     repair: { version: 1, findings: [{ findingKey: "missing-behavior", paths: ["README.md"] }],
       summary: "Implemented the mapped behavior.", recurrenceResolutions: [] },
     noChangeReason: null,
@@ -229,7 +229,7 @@ test("three semantic Task repair failures remain blocked without exposing Gate",
   assert.equal(recover(scenario).completed, true);
   const invalidRepair = {
     version: 1, stepId: "task-repair", completionStatus: "done",
-    files: [{ requirementId: "R-1", paths: ["README.md"] }], issues: [], overview: null,
+    issues: [], overview: null,
     triage: null,
     repair: {
       version: 1,

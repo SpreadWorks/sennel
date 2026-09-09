@@ -26,6 +26,7 @@ import {
 import RunDispatchCommand, * as runDispatchModule from "../../../src/flow/lib/run-dispatch.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunRepairTestReviewCommand from "../../../src/flow/lib/run-repair-test-review.js";
+import { canonicalTaskReviewFileMap } from "../../../src/flow/commands/review.js";
 import SetStepCommand from "../../../src/flow/lib/set-step.js";
 import SetMetricCommand from "../../../src/flow/lib/set-metric.js";
 import { loadSpecJsonSchema } from "../../../src/lib/spec-json.js";
@@ -49,6 +50,7 @@ import {
   captureSourceMutationManifestForParent,
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { sourceWorkerEffectJsonSchema } from "../../../src/flow/lib/source-worker-effect-schema.js";
+import { CanonicalSourceRequirementAuthority } from "../../../src/flow/lib/canonical-file-map.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { CanonicalTestArtifactStore } from "../../../src/flow/lib/canonical-test-artifacts.js";
 import {
@@ -73,8 +75,11 @@ import {
 import { persistAgentInvocationMetric } from "../../../src/lib/agent-invocation-metric.js";
 import { ProcessOwnedLock, RealDirectoryAuthority } from "../../../src/lib/process-owned-lock.js";
 import { ApprovedFindingExceptionSet } from "../../../src/flow/lib/acknowledged-rationale.js";
+import { CanonicalTaskContext } from "../../../src/flow/lib/task-canonical-context.js";
+import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
 import {
   CanonicalFlowFixture,
+  TaskLifecycleFixture,
   canonicalDraftDocument,
 } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -350,12 +355,11 @@ function seal(request) {
   });
 }
 
-function sourceWorkerReport(stepId, paths, additions = {}) {
+function sourceWorkerReport(stepId, additions = {}) {
   return {
     version: 1,
     stepId,
     completionStatus: "done",
-    files: paths.length === 0 ? [] : [{ requirementId: "R1", paths }],
     issues: [],
     overview: null,
     triage: null,
@@ -367,36 +371,6 @@ function sourceWorkerReport(stepId, paths, additions = {}) {
 
 function captureManifest(request) {
   return captureSourceMutationManifestForParent({ request });
-}
-
-function assertSourceWorkerResponseFailure(responseText, violationCode, expectedData = {}) {
-  const value = fixture("implement", { specRecord: validSpec() });
-  try {
-    initializeGitRepository(value);
-    const request = value.coordinator.createRequest({
-      ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
-    });
-    fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
-    assert.throws(
-      () => materializeSourceWorkerEffect({ request, responseText: JSON.stringify(responseText) }),
-      (error) => error instanceof WorkerArtifactHandoffError
-        && error.code === "FLOW_SOURCE_HANDOFF_RESPONSE_INVALID"
-        && error.data?.sourceEffectViolation === violationCode
-        && Object.entries(expectedData).every(([key, value]) => (
-          JSON.stringify(error.data?.[key]) === JSON.stringify(value)
-        )),
-    );
-  } finally {
-    removeTmpDir(value.mainRoot);
-  }
-}
-
-function assertSourceWorkerCoverageFailure(responseText, expectedData = {}) {
-  assertSourceWorkerResponseFailure(
-    responseText,
-    "FLOW_SOURCE_HANDOFF_EFFECT_PATH_COVERAGE_INVALID",
-    expectedData,
-  );
 }
 
 function implementationEffect(request, paths) {
@@ -1361,7 +1335,10 @@ describe("worker artifact handoff", () => {
         agent: {
           async call(_prompt, options) {
             fs.writeFileSync(path.join(value.mainRoot, "product.js"), "export const value = 2;\n");
-            return json(sourceWorkerReport("implement", ["product.js", "absent.js"]));
+            return json({
+              ...sourceWorkerReport("implement"),
+              files: [{ requirementId: "R1", paths: ["product.js", "absent.js"] }],
+            });
           },
         },
         repositoryFingerprint: () => "stable-fixture",
@@ -1415,7 +1392,7 @@ describe("worker artifact handoff", () => {
             if (calls === 1) {
               throw new AgentTimeoutFailure({ message: "provider timed out before structured response" });
             }
-            return json(sourceWorkerReport("implement", ["product.js"]));
+            return json(sourceWorkerReport("implement"));
           },
         },
         repositoryFingerprint: () => "stable-fixture",
@@ -1814,7 +1791,6 @@ describe("worker artifact handoff", () => {
       version: 1,
       stepId: "task-impl",
       completionStatus: "done",
-      files: [],
       issues: [],
       overview: { modules: ["Module ownership is explicit."], data_flow: [], decisions: [] },
       triage: null,
@@ -1822,21 +1798,21 @@ describe("worker artifact handoff", () => {
       noChangeReason: "No source mutation was required for this Task.",
     };
     assert.deepEqual(validateSchema(valid, sourceWorkerEffectJsonSchema("task-impl")), []);
-    assert.doesNotThrow(() => SourceWorkerEffect.fromDocument(valid, "task-impl"));
+    assert.doesNotThrow(() => SourceWorkerEffectReport.fromDocument(valid, "task-impl"));
 
     const objectOverview = structuredClone(valid);
     objectOverview.overview.modules = [{ text: "Worker must not choose canonical ownership." }];
     assert.notDeepEqual(validateSchema(objectOverview, sourceWorkerEffectJsonSchema("task-impl")), []);
-    assert.throws(() => SourceWorkerEffect.fromDocument(objectOverview, "task-impl"), /must be a string/);
+    assert.throws(() => SourceWorkerEffectReport.fromDocument(objectOverview, "task-impl"), /must be a string/);
 
     const oversizedOverview = structuredClone(valid);
     oversizedOverview.overview.modules = Array.from({ length: 51 }, () => "Overview item");
     assert.notDeepEqual(validateSchema(oversizedOverview, sourceWorkerEffectJsonSchema("task-impl")), []);
-    assert.throws(() => SourceWorkerEffect.fromDocument(oversizedOverview, "task-impl"), /upper bound/);
+    assert.throws(() => SourceWorkerEffectReport.fromDocument(oversizedOverview, "task-impl"), /upper bound/);
   });
 
   it("round-trips every source effect class through its structured response schema", () => {
-    const common = { version: 1, completionStatus: "done", files: [], issues: [], noChangeReason: null };
+    const common = { version: 1, completionStatus: "done", issues: [], noChangeReason: null };
     const documents = {
       implement: { ...common, stepId: "implement", overview: null, triage: null, repair: null },
       "impl-triage": {
@@ -1846,7 +1822,6 @@ describe("worker artifact handoff", () => {
       "impl-repair": {
         ...common,
         stepId: "impl-repair",
-        files: [{ requirementId: "R1", paths: ["product.js"] }],
         overview: null,
         triage: null,
         repair: { version: 1, findings: [{ findingKey: "F1", paths: ["product.js"] }], summary: "Applied the reviewed correction.", recurrenceResolutions: [] },
@@ -1854,7 +1829,6 @@ describe("worker artifact handoff", () => {
       "task-repair": {
         ...common,
         stepId: "task-repair",
-        files: [{ requirementId: "R1", paths: ["product.js"] }],
         overview: null,
         triage: null,
         repair: { version: 1, findings: [{ findingKey: "F1", paths: ["product.js"] }], summary: "Applied the reviewed correction.", recurrenceResolutions: [] },
@@ -1875,7 +1849,6 @@ describe("worker artifact handoff", () => {
         version: 1,
         stepId,
         completionStatus: "done",
-        files: [{ requirementId: "R1", paths: ["product.js"] }],
         issues: [],
         overview: null,
         triage: null,
@@ -1983,7 +1956,7 @@ describe("worker artifact handoff", () => {
   it("preserves a recurring implementation repair rationale and distinct strategy", () => {
     const document = {
       version: 1, stepId: "impl-repair", completionStatus: "done",
-      files: [{ requirementId: "R1", paths: ["product.js"] }], issues: [], overview: null, triage: null, noChangeReason: null,
+      issues: [], overview: null, triage: null, noChangeReason: null,
       repair: {
         version: 1, findings: [{ findingKey: "F1", paths: ["product.js"] }], summary: "Applied the reviewed correction with an additional boundary check.",
         recurrenceResolutions: [{
@@ -2057,13 +2030,15 @@ describe("worker artifact handoff", () => {
       version: 1,
       stepId: "impl-repair",
       completionStatus: "done",
-      files: [{ requirementId: "R1", paths: ["one.js", "two.js"] }],
       issues: [],
       overview: null,
       triage: null,
       repair: { version: 1, findings, summary: "Applied every selected repair finding.", recurrenceResolutions: [] },
       noChangeReason: null,
-    }, "impl-repair").bind(manifest).repair;
+    }, "impl-repair").bind(
+      manifest,
+      new CanonicalSourceRequirementAuthority(["R1"]),
+    ).repair;
 
     const sharedMutation = report([
       { findingKey: "F1", paths: ["one.js"] },
@@ -2144,7 +2119,6 @@ describe("worker artifact handoff", () => {
         version: 1,
         stepId: "impl-repair",
         completionStatus: "done",
-        files: [],
         issues: [],
         overview: null,
         triage: null,
@@ -2168,12 +2142,11 @@ describe("worker artifact handoff", () => {
     assert.equal(contract.accepts(["spec.json", "impl-review.json", "impl-triage.json"]), false);
   });
 
-  it("describes the many-to-many source requirement-to-path claim contract in every mutating worker schema", () => {
-    for (const stepId of ["implement", "impl-repair", "task-impl"]) {
-      const files = sourceWorkerEffectJsonSchema(stepId).properties.files;
-      assert.match(files.description, /at most one group per requirement/i, stepId);
-      assert.match(files.description, /may appear in different requirement groups/i, stepId);
-      assert.match(files.items.properties.paths.description, /Normalized project-relative paths/i, stepId);
+  it("keeps changed-file classification outside every worker response schema", () => {
+    for (const stepId of ["implement", "impl-triage", "impl-repair", "task-impl", "task-triage", "task-repair"]) {
+      const schema = sourceWorkerEffectJsonSchema(stepId);
+      assert.equal(Object.hasOwn(schema.properties, "files"), false, stepId);
+      assert.equal(schema.required.includes("files"), false, stepId);
     }
   });
 
@@ -2181,7 +2154,6 @@ describe("worker artifact handoff", () => {
     const base = {
       version: 1,
       completionStatus: "done",
-      files: [],
       issues: [],
       overview: null,
       triage: null,
@@ -2197,50 +2169,41 @@ describe("worker artifact handoff", () => {
           : {}),
         ...(stepId === "impl-repair"
           ? {
-            files: [{ requirementId: "R1", mutationIds: ["a".repeat(64)] }],
             repair: {
               version: 1,
-              appliedFindingKeys: ["F1"],
-              findingMutations: [{ findingKey: "F1", mutationIds: ["a".repeat(64)] }],
+              findings: [{ findingKey: "F1", paths: ["product.js"] }],
               summary: "Applied the reviewed correction.",
+              recurrenceResolutions: [],
             },
           }
           : {}),
       };
       const noChange = { ...document, noChangeReason: "Only task implementation may be unchanged." };
       assert.notDeepEqual(validateSchema(noChange, sourceWorkerEffectJsonSchema(stepId)), [], stepId);
-      assert.throws(() => SourceWorkerEffect.fromDocument(noChange, stepId), /only task-impl may submit/);
+      assert.throws(() => SourceWorkerEffectReport.fromDocument(noChange, stepId), /only task-impl may submit/);
     }
 
-    const triageWithEffects = {
+    const triageWithIssues = {
       ...base,
       stepId: "impl-triage",
-      files: [{ requirementId: "R1", mutationIds: ["a".repeat(64)] }],
       triage: { version: 1, dispositions: [] },
-    };
-    assert.notDeepEqual(validateSchema(triageWithEffects, sourceWorkerEffectJsonSchema("impl-triage")), []);
-    assert.throws(() => SourceWorkerEffect.fromDocument(triageWithEffects, "impl-triage"), /may contain only typed triage/);
-
-    const triageWithIssues = {
-      ...triageWithEffects,
-      files: [],
       issues: [{ classification: "quality", reason: "The triage worker must not report source quality issues.", remainingRisk: "This test proves that triage cannot persist a worker quality issue." }],
     };
     assert.notDeepEqual(validateSchema(triageWithIssues, sourceWorkerEffectJsonSchema("impl-triage")), []);
-    assert.throws(() => SourceWorkerEffect.fromDocument(triageWithIssues, "impl-triage"), /may contain only typed triage/);
+    assert.throws(() => SourceWorkerEffectReport.fromDocument(triageWithIssues, "impl-triage"), /may contain only typed triage/);
 
-    const repairWithoutFiles = {
+    const repairWithoutWorkerFiles = {
       ...base,
       stepId: "impl-repair",
       repair: {
         version: 1,
-        appliedFindingKeys: ["F1"],
-        findingMutations: [{ findingKey: "F1", mutationIds: ["a".repeat(64)] }],
+        findings: [{ findingKey: "F1", paths: ["product.js"] }],
         summary: "Applied the reviewed correction.",
+        recurrenceResolutions: [],
       },
     };
-    assert.notDeepEqual(validateSchema(repairWithoutFiles, sourceWorkerEffectJsonSchema("impl-repair")), []);
-    assert.doesNotThrow(() => SourceWorkerEffect.fromDocument(repairWithoutFiles, "impl-repair"));
+    assert.deepEqual(validateSchema(repairWithoutWorkerFiles, sourceWorkerEffectJsonSchema("impl-repair")), []);
+    assert.doesNotThrow(() => SourceWorkerEffectReport.fromDocument(repairWithoutWorkerFiles, "impl-repair"));
   });
 
   it("materializes and seals a source worker structured response only in the parent", () => {
@@ -2254,7 +2217,7 @@ describe("worker artifact handoff", () => {
       });
       const authority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
       fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
-      materializeSourceWorkerEffect({ request, responseText: JSON.stringify(sourceWorkerReport("implement", ["product.js"])) });
+      materializeSourceWorkerEffect({ request, responseText: JSON.stringify(sourceWorkerReport("implement")) });
       assert.equal(fs.existsSync(request.submissionPath), false, "only parent sealing may create the submission");
       sealParentMaterializedSourceWorkerEffect({ request });
       value.coordinator.reconcile({ ctx: value.ctx, request, mutationAuthority: authority });
@@ -2265,22 +2228,26 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("rejects a source worker response that omits an observed mutation path", () => {
-    assertSourceWorkerCoverageFailure(sourceWorkerReport("implement", []), { missing: ["product.js"], unknown: [] });
-  });
-
-  it("reports unknown source worker path claims separately from missing paths", () => {
-    assertSourceWorkerCoverageFailure(
-      sourceWorkerReport("implement", ["product.js", "absent.js"]),
-      { missing: [], unknown: ["absent.js"] },
-    );
-  });
-
-  it("reports missing and unknown source worker path claims together", () => {
-    assertSourceWorkerCoverageFailure(
-      sourceWorkerReport("implement", ["absent.js"]),
-      { missing: ["product.js"], unknown: ["absent.js"] },
-    );
+  it("rejects retired worker-authored file classification before materialization", () => {
+    const response = {
+      ...sourceWorkerReport("implement"),
+      files: [{ requirementId: "R1", paths: ["product.js", "inherited-fixture.js"] }],
+    };
+    const value = fixture("implement", { specRecord: validSpec() });
+    try {
+      initializeGitRepository(value);
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
+      assert.notDeepEqual(validateSchema(response, sourceWorkerEffectJsonSchema("implement")), []);
+      assert.throws(
+        () => materializeSourceWorkerEffect({ request, responseText: JSON.stringify(response) }),
+        (error) => error.code === "FLOW_SOURCE_HANDOFF_RESPONSE_INVALID",
+      );
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
   });
 
   it("allows one observed path to remain mapped to every requirement it satisfies", () => {
@@ -2296,12 +2263,7 @@ describe("worker artifact handoff", () => {
       fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
       const effect = materializeSourceWorkerEffect({
         request,
-        responseText: JSON.stringify(sourceWorkerReport("implement", [], {
-          files: [
-            { requirementId: "R1", paths: ["product.js"] },
-            { requirementId: "R2", paths: ["product.js"] },
-          ],
-        })),
+        responseText: JSON.stringify(sourceWorkerReport("implement")),
       });
       const mutationId = SourceMutationManifest.mutationId(request.sourceMutationBaseline.attempt, "product.js");
       assert.deepEqual(effect.toJSON().files, [
@@ -2321,19 +2283,242 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("rejects duplicate requirement claim groups with a diagnostic", () => {
-    assertSourceWorkerResponseFailure(sourceWorkerReport("implement", [], {
-      files: [
-        { requirementId: "R1", paths: ["product.js"] },
-        { requirementId: "R1", paths: ["product.js"] },
-      ],
-    }), "FLOW_SOURCE_HANDOFF_EFFECT_REQUIREMENT_CLAIM_DUPLICATE", { duplicateRequirementIds: ["R1"] });
+  it("rejects non-canonical Requirement or mutation bindings at the Store boundary without publishing state", () => {
+    const specRecord = validSpec();
+    specRecord.requirements.push({ id: "R2", desc: "Share the implementation file.", task_ids: ["T1"] });
+    const value = fixture("implement", { specRecord });
+    try {
+      initializeGitRepository(value);
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
+      const manifest = captureManifest(request);
+      const mutationId = manifest.mutations[0].mutationId;
+      const stateBefore = value.flowManager.canonicalState(value.specId).toJSON();
+      const sourceEffect = (files) => new SourceWorkerEffect({
+        version: 1,
+        stepId: "implement",
+        completionStatus: "done",
+        files,
+        issues: [],
+        overview: null,
+        triage: null,
+        repair: null,
+        noChangeReason: null,
+      });
+      for (const files of [
+        [{ requirementId: "R1", mutationIds: [mutationId] }],
+        [
+          { requirementId: "R1", mutationIds: [mutationId] },
+          { requirementId: "R2", mutationIds: [mutationId] },
+          { requirementId: "R3", mutationIds: [mutationId] },
+        ],
+        [
+          { requirementId: "R1", mutationIds: [mutationId] },
+          { requirementId: "R2", mutationIds: ["f".repeat(64)] },
+        ],
+      ]) {
+        assert.throws(
+          () => value.flowManager.confirmSourceWorkerHandoff({
+            specId: value.specId,
+            effect: sourceEffect(files),
+            mutationManifest: manifest,
+            handoffDigest: "e".repeat(64),
+            result: {
+              outcome: "passed",
+              summary: "This malformed authority must not be published.",
+              confirmedAt: "2026-09-09T00:00:00.000Z",
+              artifactRefs: [],
+            },
+          }),
+          /must bind every current-scope Requirement to every current Attempt mutation/,
+        );
+        assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), stateBefore);
+        assert.equal(value.flowManager.readArtifact({
+          specId: value.specId,
+          logicalKey: "file.map",
+          consumerNodeId: "impl-review",
+          optional: true,
+        }), null);
+      }
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
   });
 
-  it("rejects duplicate paths within one requirement claim with a diagnostic", () => {
-    assertSourceWorkerResponseFailure(sourceWorkerReport("implement", [], {
-      files: [{ requirementId: "R1", paths: ["product.js", "product.js"] }],
-    }), "FLOW_SOURCE_HANDOFF_EFFECT_PATH_CLAIM_DUPLICATE", { duplicatePaths: ["product.js"] });
+  it("derives durable Task file effects from each Attempt manifest across inherited dirt, shared changes, deletion, and no-change", () => {
+    const root = createTmpDir("source-authority-history-");
+    const specId = "source-authority-history";
+    const tasks = ["T8", "T9", "T10", "T11"].map((id) => ({
+      id,
+      title: `${id} source authority`,
+      goal: `Publish ${id} only from its observed mutations.`,
+      parent: null,
+      origin: "plan",
+      added_round: 0,
+      status: "pending",
+    }));
+    const specRecord = {
+      ...validSpec(),
+      requirements: [
+        { id: "R8", desc: "Create the inherited fixture.", task_ids: ["T8"] },
+        { id: "R9-A", desc: "Modify the shared source.", task_ids: ["T9"] },
+        { id: "R9-B", desc: "Add the new source.", task_ids: ["T9"] },
+        { id: "R10", desc: "Change the shared source and delete the prior addition.", task_ids: ["T10"] },
+        { id: "R11", desc: "Confirm the existing implementation without source changes.", task_ids: ["T11"] },
+      ],
+    };
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const lifecycle = new TaskLifecycleFixture({
+      flowManager: manager,
+      specId,
+      runId: "run-source-authority-history",
+      request: "Preserve parent-owned source authority across Task Attempts.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+      specRecord,
+      taskDocuments: tasks,
+      taskId: "T8",
+      targetStep: "task-impl",
+    }).create();
+    const flow = lifecycle.flow.flow;
+    const coordinator = new WorkerArtifactHandoffCoordinator({
+      now: () => new Date("2026-09-09T00:00:00.000Z"),
+    });
+    const context = () => ({ root, mainRoot: root, executionRoot: root, specId, flowManager: manager });
+    const invocation = (taskId) => ({
+      id: `dispatch-${taskId}`,
+      target: { digest: "b".repeat(64) },
+      action: {
+        digest: crypto.createHash("sha256").update(taskId).digest("hex"),
+        nextAction: { step: "task-impl", taskId },
+      },
+    });
+    const completeTaskImplementation = (taskId, mutate, noChangeReason = null) => {
+      const request = coordinator.createRequest({
+        ctx: context(), state: manager.loadReadOnly(specId), invocation: invocation(taskId),
+      });
+      const authority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
+      mutate();
+      const effect = materializeSourceWorkerEffect({
+        request,
+        responseText: JSON.stringify({
+          version: 1,
+          stepId: "task-impl",
+          completionStatus: "done",
+          issues: [],
+          overview: { modules: [], data_flow: [], decisions: [] },
+          triage: null,
+          repair: null,
+          noChangeReason,
+        }),
+      });
+      const manifest = SourceMutationManifest.fromStored(
+        JSON.parse(fs.readFileSync(request.sourceMutationManifestPath, "utf8")),
+      );
+      sealParentMaterializedSourceWorkerEffect({ request });
+      coordinator.reconcile({ ctx: context(), request, mutationAuthority: authority });
+      return { effect, manifest };
+    };
+    const finishTask = (taskId) => {
+      flow.settle(`${taskId}-review`);
+      flow.settle(`${taskId}-triage`, "skipped");
+      flow.settle(`${taskId}-repair`, "skipped");
+      flow.settle(`${taskId}-gate`);
+    };
+
+    try {
+      initializeGitRepository({ mainRoot: root });
+      fs.mkdirSync(path.join(root, "tests"), { recursive: true });
+      const inherited = completeTaskImplementation("T8", () => {
+        fs.writeFileSync(path.join(root, "tests/inherited.test.js"), "export const inherited = true;\n");
+      });
+      assert.deepEqual(inherited.manifest.paths(), ["tests/inherited.test.js"]);
+      finishTask("T8");
+      flow.activateTask("T9", { settlePredecessors: false });
+
+      fs.mkdirSync(path.join(root, "src"), { recursive: true });
+      const taskNine = completeTaskImplementation("T9", () => {
+        fs.writeFileSync(path.join(root, "product.js"), "export const value = 9;\n");
+        fs.writeFileSync(path.join(root, "src/added.js"), "export const added = true;\n");
+      });
+      assert.deepEqual(taskNine.manifest.paths(), ["product.js", "src/added.js"]);
+      assert.deepEqual(taskNine.effect.toJSON().files.map((entry) => entry.requirementId), ["R9-A", "R9-B"]);
+      assert.ok(taskNine.effect.files.every((entry) => entry.mutationIds.length === 2));
+
+      let restarted = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      assert.deepEqual(JSON.parse(restarted.readArtifact({
+        specId, logicalKey: "file.map", consumerNodeId: "impl-review",
+      }).bytes.toString("utf8")), {
+        R8: ["tests/inherited.test.js"],
+        "R9-A": ["product.js", "src/added.js"],
+        "R9-B": ["product.js", "src/added.js"],
+      });
+      assert.deepEqual(restarted.taskMutationLineages({ specId, taskId: "T9" })[0].manifest.mutations
+        .map((entry) => entry.path), ["product.js", "src/added.js"]);
+      flow.activate("T9-review", { settlePredecessors: false });
+      const reviewState = restarted.loadReadOnly(specId);
+      const reviewSource = captureCurrentTaskSource({
+        root,
+        flowManager: restarted,
+        state: reviewState,
+        taskId: "T9",
+      });
+      const reviewContext = CanonicalTaskContext.capture({
+        root,
+        flowManager: restarted,
+        state: reviewState,
+        taskId: "T9",
+        source: reviewSource,
+      });
+      assert.deepEqual(canonicalTaskReviewFileMap({
+        context: reviewContext.readOnlyInput(),
+        source: reviewSource.toJSON(),
+      }), {
+        "R9-A": ["product.js", "src/added.js"],
+        "R9-B": ["product.js", "src/added.js"],
+      });
+
+      finishTask("T9");
+      flow.activateTask("T10", { settlePredecessors: false });
+      const taskTen = completeTaskImplementation("T10", () => {
+        fs.writeFileSync(path.join(root, "product.js"), "export const value = 10;\n");
+        fs.unlinkSync(path.join(root, "src/added.js"));
+        fs.writeFileSync(path.join(root, "src/later.js"), "export const later = true;\n");
+      });
+      assert.deepEqual(taskTen.manifest.mutations.map((entry) => [entry.path, entry.changeKind]), [
+        ["product.js", "content"],
+        ["src/added.js", "deleted"],
+        ["src/later.js", "added"],
+      ]);
+      finishTask("T10");
+      flow.activateTask("T11", { settlePredecessors: false });
+      const taskEleven = completeTaskImplementation(
+        "T11",
+        () => {},
+        "The canonical source already satisfies this Task without another mutation.",
+      );
+      assert.deepEqual(taskEleven.manifest.mutations, []);
+      assert.deepEqual(taskEleven.effect.files, []);
+
+      restarted = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      const fileMap = JSON.parse(restarted.readArtifact({
+        specId, logicalKey: "file.map", consumerNodeId: "impl-review",
+      }).bytes.toString("utf8"));
+      assert.equal(Object.hasOwn(fileMap, "R11"), false, "no-change must not create an empty file-map entry");
+      assert.deepEqual(fileMap.R8, ["tests/inherited.test.js"]);
+      assert.deepEqual(fileMap["R9-A"], ["product.js", "src/added.js"]);
+      assert.deepEqual(fileMap["R9-B"], ["product.js", "src/added.js"]);
+      assert.deepEqual(fileMap.R10, ["product.js", "src/added.js", "src/later.js"]);
+      assert.equal(
+        restarted.taskMutationLineages({ specId, taskId: "T9" })[0].manifest.digest,
+        taskNine.manifest.digest,
+      );
+      assert.equal(restarted.taskMutationLineages({ specId, taskId: "T11" })[0].noChangeReason,
+        "The canonical source already satisfies this Task without another mutation.");
+    } finally {
+      removeTmpDir(root);
+    }
   });
 
   it("rejects duplicate requirement groups and mutation IDs in canonical source effects", () => {

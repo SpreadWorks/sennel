@@ -46,7 +46,12 @@ import {
   DraftArtifactRevision,
   DraftArtifactSnapshot,
 } from "../lib/draft-artifact-promotion.js";
-import { CanonicalFileMap } from "../lib/canonical-file-map.js";
+import {
+  CanonicalFileMap,
+  CanonicalSourceRequirementAuthority,
+  CanonicalSourceRequirementScope,
+} from "../lib/canonical-file-map.js";
+import { CanonicalTaskContext } from "../lib/task-canonical-context.js";
 import { CanonicalReviewInputDescriptor } from "../lib/review-work-unit-input.js";
 import {
   CanonicalSpecReview,
@@ -88,7 +93,11 @@ import {
 } from "../lib/repair-fingerprint.js";
 import { RepairArtifactRegistry } from "../lib/repair-state-identity.js";
 import { ReviewToolingOutcome } from "../lib/review-convergence.js";
-import { collectUntrackedDiff } from "../lib/run-gate.js";
+import {
+  collectUntrackedDiff,
+  MAX_IMPL_REQUIREMENT_BATCH_CHARS,
+  renderCanonicalTaskSource,
+} from "../lib/run-gate.js";
 import {
   SourceMutationBaseline,
 } from "../lib/worker-artifact-handoff.js";
@@ -472,7 +481,7 @@ function reviewTaskSpecSource(logicalPath) {
 }
 
 function canonicalTaskReviewInputs() {
-  const context = canonicalReviewInput({
+  const contextDocument = canonicalReviewInput({
     variable: REVIEW_TASK_CONTEXT_SOURCE_ENV,
     logicalKey: "task.context",
     logicalPath: "task-context.json",
@@ -482,16 +491,30 @@ function canonicalTaskReviewInputs() {
     logicalKey: "task.source",
     logicalPath: "task-source.json",
   }).readJsonObject();
-  if (context.lineage?.taskId !== source.taskId
-    || context.lineage?.sourceFingerprint !== source.fingerprint
-    || context.fingerprint == null
+  const context = CanonicalTaskContext.fromReadOnlyInput(contextDocument);
+  if (context.taskId !== source.taskId
+    || context.sourceFingerprint !== source.fingerprint
     || source.fingerprint == null) {
     throw new Error("canonical Task Review inputs do not share one Task identity");
   }
-  if (!Array.isArray(context.requirements) || !Array.isArray(source.entries)) {
+  if (!Array.isArray(source.entries)) {
     throw new Error("canonical Task Review context or source is invalid");
   }
-  return Object.freeze({ context, source });
+  return Object.freeze({ context: context.readOnlyInput(), source });
+}
+
+/** Build the worker-visible map only from canonical Task scope and source. */
+function canonicalTaskReviewFileMap({ context, source } = {}) {
+  return CanonicalSourceRequirementAuthority
+    .fromTaskRequirements(context?.requirements)
+    .bindPaths(source?.entries?.map((entry) => entry?.path))
+    .toJSON();
+}
+
+function canonicalTaskReviewSourceScope({ context, source } = {}) {
+  return CanonicalSourceRequirementAuthority
+    .fromTaskRequirements(context?.requirements)
+    .bindSourceScope(source?.entries?.map((entry) => entry?.path));
 }
 
 function taskReviewExecutionIdentity(taskId) {
@@ -1430,7 +1453,10 @@ function loadPreviousImplReviewMemory({ flowManager, flow, taskId = null } = {})
   }).toPromptMemory();
 }
 
-function buildImplReviewPrompt({ requirementFileMap = {}, requirementIds, diff = "", touchedFiles = [], previousReview = null, taskSpec = null, taskContext = null, taskReviewAttempt = null, taskNoChangeReasons = [] } = {}) {
+function buildImplReviewPrompt({ requirementFileMap = {}, requirementSourceScope = null, requirementIds, diff = "", touchedFiles = [], previousReview = null, taskSpec = null, taskContext = null, taskReviewAttempt = null, taskNoChangeReasons = [] } = {}) {
+  if (requirementSourceScope !== null && !(requirementSourceScope instanceof CanonicalSourceRequirementScope)) {
+    throw new Error("requirementSourceScope must be a CanonicalSourceRequirementScope or null");
+  }
   const allowedRequirementIds = normalizeImplReviewRequirementIds(requirementIds);
   const responseSchema = buildImplReviewResponseSchema(allowedRequirementIds, { taskReview: taskSpec !== null });
   const touched = Array.from(touchedFiles instanceof Set ? touchedFiles : new Set(touchedFiles)).sort();
@@ -1472,7 +1498,9 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementIds, diff =
     .setJsonSchema(responseSchema)
     .setFmtFallback(buildImplReviewFmtFallback(responseSchema))
     .addUserPrompt("## Allowed Target Requirement IDs", [...allowedRequirementIds].sort().join("\n") || "(none)")
-    .addUserPrompt("## Requirement-File Mapping", JSON.stringify(requirementFileMap, null, 2))
+    .addUserPrompt("## Requirement-File Mapping", requirementSourceScope === null
+      ? JSON.stringify(requirementFileMap, null, 2)
+      : requirementSourceScope.toPromptText())
     .addUserPrompt("## Touched Files", touched.join("\n") || "(none)");
 
   pb.addUserPrompt(taskSpec ? "## Current Task Source" : "## Diff", diff || "(none)");
@@ -1508,6 +1536,23 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementIds, diff =
     pb.addUserPrompt("## Previous Impl Review Memory", JSON.stringify(previousReview, null, 2));
   }
   return pb.build();
+}
+
+const TASK_REVIEW_PROMPT_TOO_LARGE_CODE = "TASK_REVIEW_PROMPT_TOO_LARGE";
+export const TASK_REVIEW_PROMPT_CHAR_LIMIT = MAX_IMPL_REQUIREMENT_BATCH_CHARS;
+
+function assertTaskReviewPromptWithinLimit(prompt) {
+  const chars = measurePromptChars(prompt);
+  if (chars <= TASK_REVIEW_PROMPT_CHAR_LIMIT) return;
+  throw new Error(
+    `${TASK_REVIEW_PROMPT_TOO_LARGE_CODE}: Task Review prompt is ${chars} chars; `
+    + `limit is ${TASK_REVIEW_PROMPT_CHAR_LIMIT}. Split the Task source scope before calling the agent.`,
+  );
+}
+
+async function runImplReviewAgentWithDependencies({ prompt, taskReview = false, callAgent }) {
+  if (taskReview) assertTaskReviewPromptWithinLimit(prompt);
+  return callAgent(prompt);
 }
 
 function resolveRequirementIds(spec) {
@@ -1993,10 +2038,10 @@ function resolveTaskReviewSpec(taskSpecPath) {
   }
   const content = fs.readFileSync(absPath, "utf8");
   const inputs = canonicalTaskReviewInputs();
+  const sourceScope = canonicalTaskReviewSourceScope(inputs);
+  const fileMap = canonicalTaskReviewFileMap(inputs);
   const entries = inputs.source.entries;
-  const currentSource = entries.map((entry) => entry.status === "deleted"
-    ? `## ${entry.path}\n(deleted)`
-    : `## ${entry.path}\n${entry.content}`).join("\n\n");
+  const currentSource = renderCanonicalTaskSource(entries);
   return {
     relPath,
     task: { id: inputs.context.task.id },
@@ -2004,6 +2049,8 @@ function resolveTaskReviewSpec(taskSpecPath) {
     content,
     context: inputs.context,
     source: inputs.source,
+    fileMap,
+    sourceScope,
     currentSource,
     touchedFiles: new Set(entries.map((entry) => entry.path)),
   };
@@ -4736,6 +4783,7 @@ async function runReview(rawArgs) {
   let fileMap = {};
   if (taskSpec) {
     console.error(`  [task-review] Reviewing ${taskSpec.relPath}...`);
+    fileMap = taskSpec.fileMap;
   } else {
     fileMap = canonicalReviewFileMap(spec, { required: true });
   }
@@ -4764,6 +4812,7 @@ async function runReview(rawArgs) {
     runSingleReview: async () => {
       const reviewPrompt = buildImplReviewPrompt({
         requirementFileMap: fileMap,
+        requirementSourceScope: taskSpec?.sourceScope ?? null,
         requirementIds,
         diff,
         touchedFiles,
@@ -4776,28 +4825,34 @@ async function runReview(rawArgs) {
         taskReviewAttempt,
         taskNoChangeReasons: taskSpec?.source?.noChangeReasons ?? [],
       });
-      const reviewAgent = ensureAgent("flow.impl.review.propose");
-      const systemPrompt = buildDraftSystemPrompt(
-        reviewGuardrails,
-        buildReviewAcknowledgedRationale(spec, reviewGuardrails),
-      );
-      if (taskSpec) {
-        return runTaskReviewProtocol({
-          root,
-          executionIdentity: taskReviewExecution,
-          flowManager,
-          requirementIds,
-          agent: reviewAgent,
-          prompt: reviewPrompt,
-          systemPrompt,
-        });
-      }
-      return callReviewAgent(
-        reviewAgent,
-        reviewPrompt,
-        "flow.impl.review.propose",
-        systemPrompt,
-      );
+      return runImplReviewAgentWithDependencies({
+        prompt: reviewPrompt,
+        taskReview: taskSpec !== null,
+        callAgent: () => {
+          const reviewAgent = ensureAgent("flow.impl.review.propose");
+          const systemPrompt = buildDraftSystemPrompt(
+            reviewGuardrails,
+            buildReviewAcknowledgedRationale(spec, reviewGuardrails),
+          );
+          if (taskSpec) {
+            return runTaskReviewProtocol({
+              root,
+              executionIdentity: taskReviewExecution,
+              flowManager,
+              requirementIds,
+              agent: reviewAgent,
+              prompt: reviewPrompt,
+              systemPrompt,
+            });
+          }
+          return callReviewAgent(
+            reviewAgent,
+            reviewPrompt,
+            "flow.impl.review.propose",
+            systemPrompt,
+          );
+        },
+      });
     },
     persistImplReview: (reviewOutput, persistenceStrategy) => persistenceStrategy.persist({
       root: artifactRoot,
@@ -4902,6 +4957,9 @@ export {
   runActiveImplReviewWithDependencies, runReviewWithDependencies,
   runSingleShotImplReviewWithDependencies, runNonImplReviewWithDependencies,
   runTaskReviewProtocol,
+  runImplReviewAgentWithDependencies,
+  assertTaskReviewPromptWithinLimit,
+  canonicalTaskReviewFileMap,
   loopProposalsToImplReviewJson,
   classifyReviewCommandError,
   LOOP_REVIEW_THRESHOLD, MAX_LOOP_CALLS,

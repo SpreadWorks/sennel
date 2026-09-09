@@ -372,7 +372,6 @@ describe("231: full lifecycle through CLI and the typed source handoff boundary"
       version: 1,
       stepId: "task-triage",
       completionStatus: "done",
-      files: [],
       issues: [],
       overview: null,
       triage: {
@@ -392,7 +391,6 @@ describe("231: full lifecycle through CLI and the typed source handoff boundary"
       version: 1,
       stepId: "task-repair",
       completionStatus: "done",
-      files: [{ requirementId: "R1", paths: ["src/value.js"] }],
       issues: [],
       overview: null,
       triage: null,

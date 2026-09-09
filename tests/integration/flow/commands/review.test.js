@@ -19,6 +19,7 @@ import { flattenSteps } from "../../../../src/flow/lib/step-tree.js";
 import { container } from "../../../../src/lib/container.js";
 import { attachCanonicalCommandResultArtifact } from "../../../../src/flow/lib/canonical-command-result.js";
 import { CanonicalReviewWorkUnit } from "../../../../src/flow/lib/canonical-review-artifacts.js";
+import { CanonicalSourceRequirementAuthority } from "../../../../src/flow/lib/canonical-file-map.js";
 import { CanonicalSpecTestTopology } from "../../../../src/flow/lib/canonical-worker-artifacts.js";
 import { CanonicalSpecReview } from "../../../../src/flow/lib/spec-review-artifacts.js";
 import {
@@ -94,6 +95,9 @@ import FlowReviewCommand, {
   classifyReviewCommandError,
   loadPreviousImplReviewMemory,
   priorImplReviewFingerprintCounts,
+  canonicalTaskReviewFileMap,
+  runImplReviewAgentWithDependencies,
+  TASK_REVIEW_PROMPT_CHAR_LIMIT,
 } from "../../../../src/flow/commands/review.js";
 
 function assertAllMatch(text, patterns) {
@@ -2515,6 +2519,64 @@ describe("impl review structured artifact helpers", () => {
     assert.match(prompt.userPrompt, /export const task = true;/);
     assert.doesNotMatch(prompt.userPrompt, /## Diff/);
     assert.doesNotMatch(prompt.userPrompt, /testlog|test log/i);
+  });
+
+  it("maps every canonical Task source path to every current Task Requirement", () => {
+    const fileMap = canonicalTaskReviewFileMap({
+      context: {
+        requirements: [
+          { id: "R1", desc: "Provide the shared behavior." },
+          { id: "R2", desc: "Preserve the shared behavior." },
+        ],
+      },
+      source: {
+        entries: [
+          { path: "src/shared.js", status: "present", content: "shared" },
+          { path: "src/secondary.js", status: "present", content: "secondary" },
+        ],
+      },
+    });
+
+    assert.deepEqual(fileMap, {
+      R1: ["src/shared.js", "src/secondary.js"],
+      R2: ["src/shared.js", "src/secondary.js"],
+    });
+    const requirementSourceScope = CanonicalSourceRequirementAuthority
+      .fromTaskRequirements([{ id: "R1" }, { id: "R2" }])
+      .bindSourceScope(["src/shared.js", "src/secondary.js"]);
+    const prompt = buildImplReviewPrompt({
+      requirementFileMap: fileMap,
+      requirementSourceScope,
+      requirementIds: new Set(["R1", "R2"]),
+      diff: "shared source",
+      touchedFiles: ["src/shared.js", "src/secondary.js"],
+      taskSpec: { relPath: "tasks/T-1.md", content: "Review both Requirements." },
+      taskContext: { task: { id: "T-1" }, requirements: [{ id: "R1" }, { id: "R2" }] },
+      taskReviewAttempt: 1,
+    });
+    assert.equal(prompt.userPrompt.match(/src\/shared\.js/g)?.length, 2);
+    assert.equal(prompt.userPrompt.match(/src\/secondary\.js/g)?.length, 2);
+    assert.match(prompt.userPrompt, /relation: all-to-all/);
+    assert.throws(
+      () => canonicalTaskReviewFileMap({
+        context: { requirements: [{ id: "R1" }, { id: "R1" }] },
+        source: { entries: [{ path: "src/shared.js" }] },
+      }),
+      /must not duplicate Requirement ids|ids must be unique/,
+    );
+  });
+
+  it("rejects an oversized Task Review prompt before resolving or calling the agent", async () => {
+    let calls = 0;
+    await assert.rejects(
+      () => runImplReviewAgentWithDependencies({
+        prompt: { systemPrompt: "review", userPrompt: "x".repeat(TASK_REVIEW_PROMPT_CHAR_LIMIT) },
+        taskReview: true,
+        callAgent: async () => { calls += 1; return "unreachable"; },
+      }),
+      /TASK_REVIEW_PROMPT_TOO_LARGE/,
+    );
+    assert.equal(calls, 0);
   });
 
   it("requires no-change Task Review to validate its declared reason against mapped requirements", () => {

@@ -2,7 +2,6 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildGuardrailPrompt,
-  findPreviousPassedGuardrails,
   buildPassedGuardrails,
 } from "../../../src/flow/lib/run-gate.js";
 
@@ -37,32 +36,6 @@ describe("pass history prompt injection (spec 229)", () => {
     const promptWithout = buildGuardrailPrompt("content", GUARDRAILS, "draft");
     const promptWithEmpty = buildGuardrailPrompt("content", GUARDRAILS, "draft", null, []);
     assert.equal(promptWithout, promptWithEmpty);
-  });
-});
-
-describe("findPreviousPassedGuardrails", () => {
-  it("returns passedGuardrails from most recent matching phase entry", () => {
-    const issueLog = {
-      entries: [
-        { phase: "draft", passedGuardrails: ["g1"], headSha: "aaa", worktreeHash: "bbb" },
-        { phase: "draft", passedGuardrails: ["g1", "g2"], headSha: "ccc", worktreeHash: "ddd" },
-      ],
-    };
-    const result = findPreviousPassedGuardrails({ issueLog, phase: "draft" });
-    assert.ok(result);
-    assert.deepEqual(result.passedGuardrails, ["g1", "g2"]);
-  });
-
-  it("returns null when no entries exist for phase", () => {
-    const issueLog = { entries: [{ phase: "spec", passedGuardrails: ["g1"] }] };
-    const result = findPreviousPassedGuardrails({ issueLog, phase: "draft" });
-    assert.equal(result, null);
-  });
-
-  it("returns null when issue-log has no passedGuardrails field", () => {
-    const issueLog = { entries: [{ phase: "draft", reason: "some fail" }] };
-    const result = findPreviousPassedGuardrails({ issueLog, phase: "draft" });
-    assert.equal(result, null);
   });
 });
 

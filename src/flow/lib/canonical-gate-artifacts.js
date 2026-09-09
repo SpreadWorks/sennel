@@ -55,7 +55,7 @@ function gateNodeId(phase, activeTaskId = null) {
   return activeTaskId === null ? "impl-gate" : `${activeTaskId}-gate`;
 }
 
-function gateLogicalKeys(phase, activeTaskId) {
+export function canonicalGateLogicalKeys(phase, activeTaskId) {
   if (phase === "draft") return Object.freeze({ result: "draft.gate", source: "draft.gate.source", parameters: {} });
   if (phase === "spec" || phase === "task-spec") return Object.freeze({ result: "spec.gate", source: "spec.gate.source", parameters: {} });
   if (phase === "integration" || activeTaskId === null) {
@@ -247,7 +247,7 @@ export class CanonicalGatePromotion {
     if (this.state.current?.at(-1) !== this.nodeId) {
       throw new Error(`canonical gate requires active Attempt for ${this.nodeId}`);
     }
-    this.keys = gateLogicalKeys(this.phase, this.taskId);
+    this.keys = canonicalGateLogicalKeys(this.phase, this.taskId);
     Object.freeze(this);
   }
 
@@ -255,7 +255,13 @@ export class CanonicalGatePromotion {
     jsonObject(result, "canonical gate result");
     result.artifacts ||= {};
     result.artifacts.phase = this.phase;
-    if (this.taskId !== null) result.artifacts.taskId = this.taskId;
+    if (this.taskId !== null) {
+      if (typeof result.artifacts.sourceFingerprint !== "string"
+        || !/^[a-f0-9]{64}$/.test(result.artifacts.sourceFingerprint)) {
+        throw new Error("canonical Task Gate result requires a current source fingerprint");
+      }
+      result.artifacts.taskId = this.taskId;
+    }
     if (result.result === "fail") {
       result.artifacts.gateTransitionFailureCategory = GateFailureCategory
         .fromObservedGateResult(result)
@@ -323,7 +329,7 @@ export class CanonicalGatePublishedResultRecovery {
       || facts.currentAttempt.sequence !== this.state.attempt.sequence) {
       throw new Error("canonical Gate publication recovery facts do not match the active Attempt");
     }
-    this.keys = gateLogicalKeys(this.phase, this.taskId);
+    this.keys = canonicalGateLogicalKeys(this.phase, this.taskId);
     this.facts = facts;
     Object.freeze(this);
   }

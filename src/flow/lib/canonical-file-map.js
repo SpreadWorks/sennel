@@ -1,5 +1,7 @@
 import path from "node:path";
 
+import { CanonicalTaskRequirementMap } from "../../lib/canonical-task-requirement-map.js";
+
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`${field} must be a non-empty string`);
@@ -29,6 +31,152 @@ function specRequirementIds(spec) {
   return new Set(spec.requirements.map((entry) => (
     entry?.id == null ? null : requiredText(entry.id, "canonical Spec requirement id")
   )).filter(Boolean));
+}
+
+function canonicalRequirementIds(requirements, field) {
+  if (!Array.isArray(requirements)) throw new Error(`${field} must be an array`);
+  const ids = requirements.map((entry, index) => (
+    requiredText(entry?.id, `${field}[${index}].id`)
+  ));
+  if (ids.length === 0) throw new Error(`${field} must not be empty`);
+  if (new Set(ids).size !== ids.length) throw new Error(`${field} ids must be unique`);
+  return ids;
+}
+
+/** One canonical Requirement bound to every mutation in the current Attempt. */
+export class CanonicalRequirementMutationBinding {
+  constructor({ requirementId, mutationIds } = {}) {
+    this.requirementId = requiredText(requirementId, "canonical source requirement id");
+    if (!Array.isArray(mutationIds) || mutationIds.length === 0) {
+      throw new Error("canonical source requirement mutationIds must be a non-empty array");
+    }
+    this.mutationIds = Object.freeze(mutationIds.map((mutationId, index) => (
+      requiredText(mutationId, `canonical source requirement mutationIds[${index}]`)
+    )));
+    if (new Set(this.mutationIds).size !== this.mutationIds.length) {
+      throw new Error("canonical source requirement mutationIds must be unique");
+    }
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return { requirementId: this.requirementId, mutationIds: [...this.mutationIds] };
+  }
+}
+
+/** Compact all-to-all source scope for review and gate consumers. */
+export class CanonicalSourceRequirementScope {
+  constructor({ requirementIds, paths } = {}) {
+    if (!Array.isArray(requirementIds)) {
+      throw new Error("canonical source scope requirementIds must be an array");
+    }
+    this.requirementIds = Object.freeze(requirementIds.map((requirementId, index) => (
+      requiredText(requirementId, `canonical source scope requirementIds[${index}]`)
+    )));
+    if (new Set(this.requirementIds).size !== this.requirementIds.length) {
+      throw new Error("canonical source scope requirementIds must be unique");
+    }
+    if (!Array.isArray(paths)) throw new Error("canonical source scope paths must be an array");
+    this.paths = Object.freeze(paths.map((entry) => repositoryPath(entry, "canonical source scope path")));
+    if (new Set(this.paths).size !== this.paths.length) {
+      throw new Error("canonical source scope paths must be unique");
+    }
+    this.relation = "all-to-all";
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      requirementIds: [...this.requirementIds],
+      paths: [...this.paths],
+      relation: this.relation,
+    };
+  }
+
+  toPromptText() {
+    return [
+      `relation: ${this.relation}`,
+      `requirementIds: ${JSON.stringify(this.requirementIds)}`,
+      `paths: ${JSON.stringify(this.paths)}`,
+    ].join("\n");
+  }
+}
+
+/**
+ * Canonical authority for attributing an observed source Attempt. Every
+ * observed mutation contributes to every Requirement in the current scope.
+ */
+export class CanonicalSourceRequirementAuthority {
+  constructor(requirementIds) {
+    if (!Array.isArray(requirementIds)) {
+      throw new Error("canonical source requirement authority must be an array");
+    }
+    this.requirementIds = Object.freeze(requirementIds.map((requirementId, index) => (
+      requiredText(requirementId, `canonical source requirement authority[${index}]`)
+    )));
+    if (this.requirementIds.length === 0) {
+      throw new Error("canonical source requirement authority must not be empty");
+    }
+    if (new Set(this.requirementIds).size !== this.requirementIds.length) {
+      throw new Error("canonical source requirement authority must not duplicate Requirement ids");
+    }
+    Object.freeze(this);
+  }
+
+  static fromSpec(spec, { taskId = null } = {}) {
+    if (spec === null || typeof spec !== "object" || Array.isArray(spec)) {
+      throw new Error("canonical source requirement Spec must be an object");
+    }
+    const requirements = taskId === null
+      ? spec.requirements
+      : new CanonicalTaskRequirementMap(spec).forTask(taskId);
+    return new CanonicalSourceRequirementAuthority(
+      canonicalRequirementIds(requirements, taskId === null
+        ? "canonical source requirements"
+        : `canonical Task ${taskId} source requirements`),
+    );
+  }
+
+  static fromTaskRequirements(requirements) {
+    return new CanonicalSourceRequirementAuthority(
+      canonicalRequirementIds(requirements, "canonical Task source requirements"),
+    );
+  }
+
+  bindMutationIds(mutationIds) {
+    if (!Array.isArray(mutationIds)) {
+      throw new Error("canonical source mutationIds must be an array");
+    }
+    if (mutationIds.length === 0) return Object.freeze([]);
+    return Object.freeze(this.requirementIds.map((requirementId) => (
+      new CanonicalRequirementMutationBinding({ requirementId, mutationIds })
+    )));
+  }
+
+  bindPaths(paths) {
+    if (!Array.isArray(paths)) throw new Error("canonical source paths must be an array");
+    if (paths.length === 0) return new CanonicalFileMap();
+    return new CanonicalFileMap(Object.fromEntries(
+      this.requirementIds.map((requirementId) => [requirementId, paths]),
+    ));
+  }
+
+  bindSourceScope(paths) {
+    return new CanonicalSourceRequirementScope({ requirementIds: this.requirementIds, paths });
+  }
+
+  assertBindings(bindings, mutationIds) {
+    if (!Array.isArray(bindings)) throw new Error("canonical source effect bindings must be an array");
+    const expected = this.bindMutationIds(mutationIds).map((entry) => entry.toJSON());
+    const actual = bindings.map((entry) => ({
+      requirementId: entry?.requirementId,
+      mutationIds: Array.isArray(entry?.mutationIds) ? [...entry.mutationIds] : entry?.mutationIds,
+    }));
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error("canonical source effect must bind every current-scope Requirement to every current Attempt mutation");
+    }
+    return this;
+  }
 }
 
 /**

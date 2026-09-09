@@ -261,7 +261,7 @@ function sourceWorkerAction() {
         "Then replace product.js with exactly `export const value = 2;` followed by a newline.",
         "Run `npm run lint` and require it to succeed.",
         "Do not modify any other source file.",
-        "The product.js change satisfies both R1 and R2. Return the structured source effect with version 1, stepId implement, completionStatus done, and exactly two file claim groups: requirementId R1 with normalized project-relative product.js in paths, and requirementId R2 with that same product.js path in paths. A shared path belongs to every relevant requirement group. Set issues empty and overview, triage, repair, noChangeReason null.",
+        "The product.js change satisfies both R1 and R2. Return the structured source effect with version 1, stepId implement, completionStatus done, issues empty, and overview, triage, repair, noChangeReason null. Do not classify or report changed files; the parent derives canonical Requirement bindings from the observed mutation manifest.",
       ].join(" "),
     },
     context: { workerArtifactHandoff: { required: true } },

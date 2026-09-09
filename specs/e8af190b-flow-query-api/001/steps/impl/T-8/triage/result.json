@@ -1,0 +1,298 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "T-8-triage",
+      "outcome": "completed",
+      "result": {
+        "outcome": "passed",
+        "summary": "Worker handoff confirmed for task-triage.",
+        "confirmedAt": "2026-09-08T13:26:23.958Z",
+        "artifactRefs": [
+          {
+            "kind": "worker-handoff",
+            "id": "b41dd6636106bff6ec9056ee1fea1ad1c2179e3dc2d4ae60ceacd45db61e599c"
+          },
+          {
+            "kind": "worker-handoff-request",
+            "id": "7fb9a6edcdb6867426f7290822e9429b1a2614e054e40af976998f06ce4bd09d"
+          }
+        ]
+      },
+      "artifact": {
+        "logicalKey": "task.triage",
+        "payload": {
+          "version": 1,
+          "taskId": "T-8",
+          "binding": {
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "flowVersion": 1,
+            "taskId": "T-8",
+            "taskRound": 1,
+            "reviewOrdinal": 1,
+            "specDigest": "fdada3eb4c60c919ef2161b7ce6447357594269935f2eb758fda787eb3489d98",
+            "contextDigest": "2d2efb8800e8a7c1940c44385bafad1210bb21e0c0f3b1933deeb9ada9a9c2d2",
+            "sourceFingerprint": "810cb11aad48381f81ecb05b371ba125c393de21db6eec7d4bb73682c3c68d58",
+            "review": {
+              "logicalKey": "task.review",
+              "digest": "17677abded0e636c8a28c3fab0a2758bff3e311643a867945f7d53123f19c241",
+              "payloadDigest": "ab21dce7e4bbcf69ff72c2e483df72ef8224b988a8ffa7f5e3f9cd20700adf5b",
+              "activityId": "task-review-stage-confirmed-6326533b-8b13-4bd5-81ee-aa1d828a4d49",
+              "attemptId": "e2746098-5f9a-4f45-98c6-790a7a752ff9",
+              "sequence": 4
+            },
+            "triage": null
+          },
+          "attempt": {
+            "id": "attempt-T-8-triage-9cc6829e-9bae-4de8-b14d-ea25b114f62d",
+            "nodeId": "T-8-triage",
+            "sequence": 1
+          },
+          "handoffDigest": "b41dd6636106bff6ec9056ee1fea1ad1c2179e3dc2d4ae60ceacd45db61e599c",
+          "reviewFindings": [
+            {
+              "findingKey": "unsupported-revision-fixture-missing",
+              "title": "Unsupported canonical revisions are not covered",
+              "failureMode": "missing_acceptance_requirement",
+              "file": "tests/integration/flow/query.test.js",
+              "requirementId": "R3",
+              "issue": "The fixtures cover a catalog revision mismatch and oversized records, but do not mutate or assert rejection of unsupported state, result, record-envelope, Spec, ledger, or catalog revisions as CANONICAL_RECORD_INCONSISTENT.",
+              "suggestion": "Add a parameterized corruption case for each supported-revision authority, asserting the canonical error envelope and unchanged fixture snapshot.",
+              "disposition": "must-fix",
+              "rationale": "The task implementation notes require independent validation of all canonical revisions, and R3 makes unsupported revisions a mandatory integrity condition.",
+              "findingId": "6ccd32b71154262f1c7ff62eb5e7c1e3ead2e24988482db023e9dfb6a5707950",
+              "fingerprint": "6ccd32b71154262f1c7ff62eb5e7c1e3ead2e24988482db023e9dfb6a5707950",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "pagination-test-does-not-prove-no-gaps",
+              "title": "Pagination assertion does not verify contiguous confirmation orders",
+              "failureMode": "missing_acceptance_requirement",
+              "file": "tests/integration/flow/query.test.js",
+              "requirementId": "R8",
+              "issue": "The test named “paginates by confirmationOrder without gaps or duplicates” only verifies that orders are sorted and unique. It would pass if an entire confirmed Activity were omitted between pages.",
+              "suggestion": "Assert that the collected orders equal the complete expected sequence from the confirmed prefix, for example [1, 2, ..., confirmationOrder].",
+              "disposition": "must-fix",
+              "rationale": "R8 requires projection of the complete validated confirmed prefix in confirmationOrder order; uniqueness and sorting alone do not establish gap-free pagination.",
+              "findingId": "be1ec62712d5f5a39750d8218ac3bb4ff741c0cdb40ba4f59f1476f8732a8a50",
+              "fingerprint": "be1ec62712d5f5a39750d8218ac3bb4ff741c0cdb40ba4f59f1476f8732a8a50",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "migrated-unavailable-timestamp-contract-underasserted",
+              "title": "Missing creation evidence does not validate the full unavailable timestamp contract",
+              "failureMode": "missing_acceptance_requirement",
+              "file": "tests/integration/flow/query.test.js",
+              "requirementId": "R6",
+              "issue": "The migrated fixture checks only availability, null value, and provenance for createdAt. It does not assert that unavailable timestamps contain a non-empty reason and valid provenance, as required by the timestamp contract.",
+              "suggestion": "In the migrated-flow assertion, verify `createdAt.reason` is non-empty and that the complete unavailable `{ value: null, availability: \"unavailable\", reason, provenance }` shape is preserved.",
+              "disposition": "must-fix",
+              "rationale": "R6 requires both reason and provenance for unavailable timestamps; the current fixture can pass while the missing-creation-evidence contract is incomplete.",
+              "findingId": "286b626a15ccc154a60dc032cf52769c67222f6bd1b76871ff965375545bb850",
+              "fingerprint": "286b626a15ccc154a60dc032cf52769c67222f6bd1b76871ff965375545bb850",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "version-envelope-revisions-underasserted",
+              "title": "Version 2 fixture does not assert the required independent revisions",
+              "failureMode": "missing_acceptance_requirement",
+              "file": "tests/integration/flow/query.test.js",
+              "requirementId": "R3",
+              "issue": "The Version 2 envelope test verifies only `recordRevision`, outer/inner flowVersion, and specId. It does not assert the required state schemaRevision/result version, Spec format, ledger format, or catalog schemaRevision values.",
+              "suggestion": "Extend the migrated Version 2 fixture assertions to inspect and verify every independent revision field required by the Version 2 canonical envelope contract.",
+              "disposition": "must-fix",
+              "rationale": "R3 explicitly requires independent validation of these revisions and the task notes require the fixture to make them explicit.",
+              "findingId": "519bfae6fb6218495808f4fcdabcb08e465a637c2f86c194c395f411a47c76e6",
+              "fingerprint": "519bfae6fb6218495808f4fcdabcb08e465a637c2f86c194c395f411a47c76e6",
+              "repeatCount": 1
+            }
+          ],
+          "dispositions": [
+            {
+              "findingKey": "unsupported-revision-fixture-missing",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The canonical task requirements require independent unsupported-revision coverage for state, result, record envelope, Spec, ledger, and catalog authorities, including CANONICAL_RECORD_INCONSISTENT assertions and unchanged snapshots."
+            },
+            {
+              "findingKey": "pagination-test-does-not-prove-no-gaps",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The current pagination assertion checks only ordering and uniqueness; it does not prove that every confirmationOrder in the validated confirmed prefix is returned without gaps."
+            },
+            {
+              "findingKey": "migrated-unavailable-timestamp-contract-underasserted",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The migrated fixture must assert the complete unavailable timestamp contract, including null value, unavailable status, non-empty reason, and valid provenance."
+            },
+            {
+              "findingKey": "version-envelope-revisions-underasserted",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The Version 2 fixture must independently verify state schemaRevision and result version, record envelope revision, Spec revision, ledger revision, and catalog schemaRevision as required by R3."
+            }
+          ],
+          "unreviewedAfterRepair": false
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "T-8-triage",
+      "outcome": "completed",
+      "result": {
+        "outcome": "passed",
+        "summary": "Worker handoff confirmed for task-triage.",
+        "confirmedAt": "2026-09-08T13:31:34.686Z",
+        "artifactRefs": [
+          {
+            "kind": "worker-handoff",
+            "id": "38322b50d2ab0b2830db65e7fc5109ebfe693ef0a4845f13187179aeddf20078"
+          },
+          {
+            "kind": "worker-handoff-request",
+            "id": "d9fe1df0ba57b0eee55f0f95fdc60bfb023b7f018cd3d2c532299f05fedcd4e0"
+          }
+        ]
+      },
+      "artifact": {
+        "logicalKey": "task.triage",
+        "payload": {
+          "version": 1,
+          "taskId": "T-8",
+          "binding": {
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "flowVersion": 1,
+            "taskId": "T-8",
+            "taskRound": 1,
+            "reviewOrdinal": 2,
+            "specDigest": "fdada3eb4c60c919ef2161b7ce6447357594269935f2eb758fda787eb3489d98",
+            "contextDigest": "a43e4f4b471b573e580608ad275fa0a718755441fe41b26707566c1685954fdd",
+            "sourceFingerprint": "4fe2583c30593c8eee9bd6fa9d90f06d9e90b7d2f4d6818bf4a6f330a490f472",
+            "review": {
+              "logicalKey": "task.review",
+              "digest": "75ed594e9ffe8215c57e336383b7cf8f016ba6090caff38d58289c2cf54991df",
+              "payloadDigest": "b03568ccf498cba3c889eeba7e0ec3ffda632b5953a30157f33931dcbd204c01",
+              "activityId": "task-review-stage-confirmed-cea7baa7-a0cf-44dc-bfe7-69256a84b8ee",
+              "attemptId": "attempt-T-8-review-fd370475-12ac-42cf-9983-e8a384a08082",
+              "sequence": 5
+            },
+            "triage": null
+          },
+          "attempt": {
+            "id": "attempt-T-8-triage-eb7c07ca-6526-4fc7-921b-670ff9b494c5",
+            "nodeId": "T-8-triage",
+            "sequence": 2
+          },
+          "handoffDigest": "38322b50d2ab0b2830db65e7fc5109ebfe693ef0a4845f13187179aeddf20078",
+          "reviewFindings": [
+            {
+              "findingKey": "artifact-relation-fixture-underasserted",
+              "title": "Artifact relation projection is not contract-tested",
+              "failureMode": "missing_acceptance_requirement",
+              "file": "tests/integration/flow/query.test.js",
+              "requirementId": "R7",
+              "issue": "The migrated Version fixture only asserts that some artifact has a null logicalKey. It does not assert the exact public ArtifactDescriptor shape or that catalog Activity associations resolve to the expected activityIds, nodeIds, and taskIds.",
+              "suggestion": "Add assertions for the artifact descriptor keys and for association-backed relation arrays, including the expected public artifactId and unique activity/node/task references.",
+              "disposition": "must-fix",
+              "rationale": "The task implementation notes explicitly require Artifact relation coverage, and R7 makes validated catalog associations and their public projection mandatory.",
+              "findingId": "a58cc81fc7a82870e4b2858a666c71b382abf21bf7161ac6c571fc46877306d9",
+              "fingerprint": "a58cc81fc7a82870e4b2858a666c71b382abf21bf7161ac6c571fc46877306d9",
+              "repeatCount": 1
+            }
+          ],
+          "dispositions": [
+            {
+              "findingKey": "artifact-relation-fixture-underasserted",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The immutable review finding is a must-fix gap: the migrated Version fixture does not assert the exact public ArtifactDescriptor shape or association-derived activityIds, nodeIds, and taskIds required by R7."
+            }
+          ],
+          "unreviewedAfterRepair": false
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "T-8-triage",
+      "outcome": "completed",
+      "result": {
+        "outcome": "passed",
+        "summary": "Worker handoff confirmed for task-triage.",
+        "confirmedAt": "2026-09-08T13:36:31.746Z",
+        "artifactRefs": [
+          {
+            "kind": "worker-handoff",
+            "id": "a54034902e70557626cd84c88792bf3db8c2df45b9ec6db16516eef379f66dbd"
+          },
+          {
+            "kind": "worker-handoff-request",
+            "id": "0abad0430ed26cef5922d55ea16010623a68163d482b5956179ba551c02e6b7f"
+          }
+        ]
+      },
+      "artifact": {
+        "logicalKey": "task.triage",
+        "payload": {
+          "version": 1,
+          "taskId": "T-8",
+          "binding": {
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "flowVersion": 1,
+            "taskId": "T-8",
+            "taskRound": 1,
+            "reviewOrdinal": 3,
+            "specDigest": "fdada3eb4c60c919ef2161b7ce6447357594269935f2eb758fda787eb3489d98",
+            "contextDigest": "fa7093e50329e32a80d0343aa897c954d6b6f71ed55cffc594fe2ae8bac312db",
+            "sourceFingerprint": "6177b07421a0999cebdb7e28baa7ebcd7618a846fc9d8824701a498fe7f6e82b",
+            "review": {
+              "logicalKey": "task.review",
+              "digest": "7172b3641d0b208a6893dfcf96e73151b94ed2478f2975f2f092908a5157ae43",
+              "payloadDigest": "e070ce5b9b9ac7f9e48dc50900649d45671d61f973956c69532136d00069fe5c",
+              "activityId": "task-review-stage-confirmed-e3533794-ce4a-41e4-a54f-6bc680a07e05",
+              "attemptId": "attempt-T-8-review-cac16dd0-7a59-4217-ac1e-b882ce07971b",
+              "sequence": 6
+            },
+            "triage": null
+          },
+          "attempt": {
+            "id": "attempt-T-8-triage-5a188986-4802-4bc0-89f5-d5307f4350de",
+            "nodeId": "T-8-triage",
+            "sequence": 3
+          },
+          "handoffDigest": "a54034902e70557626cd84c88792bf3db8c2df45b9ec6db16516eef379f66dbd",
+          "reviewFindings": [
+            {
+              "findingKey": "runtime-state-snapshot-undercoverage",
+              "title": "Read-only fixture snapshots omit runtime lock and cache state",
+              "failureMode": "missing_acceptance_requirement",
+              "file": "tests/support/builders/flow-query-fixture.js",
+              "requirementId": "R16",
+              "issue": "snapshotTree() records specs, .sennel, and .tmp, plus Git status, but does not snapshot the version-local .runtime/locks owner files or other runtime/cache locations required by the side-effect-free query contract. The before/after assertions therefore cannot detect query-created, modified, or deleted runtime state.",
+              "suggestion": "Extend snapshotTree() to include each canonical Version's runtime lock/owner and cache paths (or an explicit bounded runtime-state inventory), recording existence, file content digests, and directory entries so the lifecycle and error-path assertions compare them before and after query execution.",
+              "disposition": "must-fix",
+              "rationale": "R16 mandates before/after evidence for canonical files, Version-local .runtime/locks / owner files, cache, temporary data, Activity ledger, runtime log, and Git status. The current fixture snapshot omits a required side-effect surface, so the task does not fully verify its acceptance contract.",
+              "findingId": "4178b1bbaab9c24edcea0ade9cc50bc868c60daf7fb5d107877d318b970cf928",
+              "fingerprint": "4178b1bbaab9c24edcea0ade9cc50bc868c60daf7fb5d107877d318b970cf928",
+              "repeatCount": 1
+            }
+          ],
+          "dispositions": [
+            {
+              "findingKey": "runtime-state-snapshot-undercoverage",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "R16 explicitly requires before/after evidence for version-local runtime locks, owner files, cache, temporary data, canonical files, ledgers, logs, and Git status. The canonical fixture snapshot records specs, .sennel, .tmp, and Git status but omits the required runtime lock/cache surfaces, so the acceptance evidence is incomplete and must be repaired."
+            }
+          ],
+          "unreviewedAfterRepair": false
+        }
+      }
+    }
+  ]
+}

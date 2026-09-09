@@ -1,0 +1,35 @@
+{
+  "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+  "specId": "e8af190b-flow-query-api",
+  "taskId": "T-8",
+  "role": "repair",
+  "attempt": {
+    "id": "attempt-T-8-repair-78658240-9860-44ce-8de8-426b509e39b5",
+    "sequence": 3
+  },
+  "budget": {
+    "round": 1,
+    "reviewAttemptSequenceAtStart": 0,
+    "gateAttemptSequenceAtStart": 0
+  },
+  "sourceFingerprint": "f3d91cb9ee872ad76fa4da8551963adaefc1d75bf745013d825118f172e45730",
+  "manifest": {
+    "attempt": {
+      "id": "attempt-T-8-repair-78658240-9860-44ce-8de8-426b509e39b5",
+      "nodeId": "T-8-repair",
+      "sequence": 3
+    },
+    "baselineDigest": "f664e3eaede91e503918126d3b511786f75073680312731a8ace8ab698a536d2",
+    "mutations": [
+      {
+        "mutationId": "0aec9a9f21466dd2622f708cc308035d34d4cd52bb453d773cfafc8136f7873b",
+        "path": "tests/support/builders/flow-query-fixture.js",
+        "changeKind": "content",
+        "beforeDigest": "93f8ecc124b95fcccf57b8fe75f6f781d62954304fe842d05ee649eb65e70b6f",
+        "afterDigest": "362548a31965db230c4b9a2c309287069be74e7440b2ae5cc0710b4dee4b6955"
+      }
+    ],
+    "digest": "f3d91cb9ee872ad76fa4da8551963adaefc1d75bf745013d825118f172e45730"
+  },
+  "noChangeReason": null
+}

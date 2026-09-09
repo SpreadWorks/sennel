@@ -37,7 +37,11 @@ import {
   validateSpecJsonObject,
 } from "../../lib/spec-json.js";
 import { reconcileFileMap } from "./req-map.js";
-import { CanonicalFileMap } from "./canonical-file-map.js";
+import {
+  CanonicalFileMap,
+  CanonicalSourceRequirementAuthority,
+  CanonicalSourceRequirementScope,
+} from "./canonical-file-map.js";
 import { buildAcknowledgedRationaleSection } from "./acknowledged-rationale.js";
 import { checkTasksMonotonic } from "./check-tasks-monotonic.js";
 import {
@@ -91,6 +95,7 @@ import {
   CanonicalGatePromotion,
   CanonicalGatePublishedResultRecovery,
   canonicalGateNodeId,
+  canonicalGateLogicalKeys,
   taskGateSettlementIssueLogId,
 } from "./canonical-gate-artifacts.js";
 import {
@@ -316,19 +321,196 @@ export async function collectUntrackedDiff(root, options = {}) {
   return parts.join("");
 }
 
-function splitDiffByFile(diffText) {
-  const map = new Map();
-  if (!diffText) return map;
-  const segments = diffText.split(/(?=^diff --git )/m);
-  for (const segment of segments) {
-    if (!segment.trim()) continue;
-    const headerMatch = segment.match(/^diff --git a\/.+? b\/(.+)$/m);
-    if (!headerMatch) continue;
-    const filePath = headerMatch[1];
-    const existing = map.get(filePath) || "";
-    map.set(filePath, existing + segment);
+function parseGitQuotedPath(value, index) {
+  if (value[index] !== '"') return null;
+  const parts = [];
+  let cursor = index + 1;
+  while (cursor < value.length) {
+    const char = String.fromCodePoint(value.codePointAt(cursor));
+    if (char === '"') {
+      return { value: Buffer.concat(parts).toString("utf8"), next: cursor + 1 };
+    }
+    if (char !== "\\") {
+      parts.push(Buffer.from(char, "utf8"));
+      cursor += char.length;
+      continue;
+    }
+    cursor += 1;
+    const escape = value[cursor];
+    if (escape === undefined) return null;
+    const control = { a: "\x07", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\x0b" };
+    if (Object.hasOwn(control, escape)) {
+      parts.push(Buffer.from(control[escape], "utf8"));
+      cursor += 1;
+      continue;
+    }
+    if (escape === '"' || escape === "\\") {
+      parts.push(Buffer.from(escape, "utf8"));
+      cursor += 1;
+      continue;
+    }
+    if (/^[0-7]$/.test(escape) && /^[0-7]{3}$/.test(value.slice(cursor, cursor + 3))) {
+      parts.push(Buffer.from([Number.parseInt(value.slice(cursor, cursor + 3), 8)]));
+      cursor += 3;
+      continue;
+    }
+    return null;
   }
-  return map;
+  return null;
+}
+
+function parseGitDiffPathToken(value, index) {
+  if (value[index] === '"') return parseGitQuotedPath(value, index);
+  const end = value.indexOf(" ", index);
+  if (end === -1) return { value: value.slice(index), next: value.length };
+  return { value: value.slice(index, end), next: end };
+}
+
+function parseGitPatchPath(value) {
+  if (value.startsWith('"')) {
+    const parsed = parseGitQuotedPath(value, 0);
+    return parsed && parsed.next === value.length ? parsed.value : null;
+  }
+  return value;
+}
+
+function pathFromPatchMetadata(text, prefix) {
+  const hunkStart = text.search(/^@@@? /m);
+  const metadata = hunkStart === -1 ? text : text.slice(0, hunkStart);
+  const match = metadata.match(new RegExp(`^${prefix} (.+?)(?:\\t.*)?\\r?$`, "m"));
+  return match ? parseGitPatchPath(match[1]) : null;
+}
+
+function addGitDiffPath(paths, value, prefix = "") {
+  if (value?.startsWith(prefix)) paths.push(value.slice(prefix.length));
+}
+
+function parseGitDiffPaths(header, text) {
+  const prefix = "diff --git ";
+  if (!header.startsWith(prefix)) return [];
+  const paths = [];
+  addGitDiffPath(paths, pathFromPatchMetadata(text, "---"), "a/");
+  const addedPath = pathFromPatchMetadata(text, "\\+\\+\\+");
+  addGitDiffPath(paths, addedPath, "b/");
+  const renamedFrom = pathFromPatchMetadata(text, "rename from") || pathFromPatchMetadata(text, "copy from");
+  const renamedTo = pathFromPatchMetadata(text, "rename to") || pathFromPatchMetadata(text, "copy to");
+  if (renamedFrom) paths.push(renamedFrom);
+  if (renamedTo) paths.push(renamedTo);
+  if (paths.length > 0) return [...new Set(paths)];
+
+  const headerPaths = header.slice(prefix.length);
+  const oldPath = parseGitDiffPathToken(headerPaths, 0);
+  if (!oldPath || headerPaths[oldPath.next] !== " ") return [];
+  const newPath = parseGitDiffPathToken(headerPaths, oldPath.next + 1);
+  if (!newPath || newPath.next !== headerPaths.length) return [];
+  if (!oldPath.value.startsWith("a/") || !newPath.value.startsWith("b/")) return [];
+  return [...new Set([oldPath.value.slice(2), newPath.value.slice(2)])];
+}
+
+class GitDiffSegment {
+  constructor(text, paths = null) {
+    if (typeof text !== "string" || text === "") throw new Error("diff segment must be a non-empty string");
+    this.text = text;
+    const newline = text.indexOf("\n");
+    const header = (newline === -1 ? text : text.slice(0, newline)).replace(/\r$/, "");
+    this.paths = Object.freeze(paths === null ? parseGitDiffPaths(header, text) : [...paths]);
+    this.path = this.paths.at(-1) || null;
+    Object.freeze(this);
+  }
+
+  static fromMappedPath(path, text) {
+    return new GitDiffSegment(text, [path]);
+  }
+
+  hasPath() {
+    return this.path !== null;
+  }
+}
+
+class GateDiffCollection extends Map {
+  constructor(entries = [], unparsedSegments = [], parsedSegments = [], preambleText = "") {
+    super(entries);
+    if (!Array.isArray(unparsedSegments) || !unparsedSegments.every((segment) => segment instanceof GitDiffSegment)) {
+      throw new Error("unparsedSegments must contain GitDiffSegment values");
+    }
+    if (!Array.isArray(parsedSegments) || !parsedSegments.every((segment) => segment instanceof GitDiffSegment)) {
+      throw new Error("parsedSegments must contain GitDiffSegment values");
+    }
+    if (typeof preambleText !== "string") throw new Error("preambleText must be a string");
+    this.unparsedSegments = Object.freeze([...unparsedSegments]);
+    this.parsedSegments = Object.freeze([...parsedSegments]);
+    this.preambleText = preambleText;
+  }
+
+  static from(value) {
+    if (value instanceof GateDiffCollection) return value;
+    if (!(value instanceof Map)) throw new Error("perFileDiffs must be a Map");
+    return new GateDiffCollection(value);
+  }
+
+  append(collection) {
+    const next = GateDiffCollection.from(collection);
+    const entries = new Map(this);
+    for (const [file, diff] of next) entries.set(file, (entries.get(file) || "") + diff);
+    return new GateDiffCollection(entries, [...this.unparsedSegments, ...next.unparsedSegments], [
+      ...this.parsedSegments,
+      ...next.parsedSegments,
+    ], this.preambleText + next.preambleText);
+  }
+
+  retainingFiles(predicate) {
+    return new GateDiffCollection(
+      [...this].filter(([file]) => predicate(file)),
+      this.unparsedSegments,
+      this.parsedSegments.filter((segment) => predicate(segment.path)),
+      this.preambleText,
+    );
+  }
+
+  unparsedText() {
+    return this.unparsedSegments.map((segment) => segment.text).join("");
+  }
+
+  evidenceSegments() {
+    return this.parsedSegments.length > 0
+      ? this.parsedSegments
+      : [...this].map(([file, text]) => GitDiffSegment.fromMappedPath(file, text));
+  }
+}
+
+function splitGitDiffSegments(diffText) {
+  if (!diffText) return [];
+  return diffText
+    .split(/(?=^diff --git )/m)
+    .filter((segment) => segment !== "")
+    .map((segment) => new GitDiffSegment(segment));
+}
+
+function splitDiffByFile(diffText) {
+  const entries = new Map();
+  const unparsed = [];
+  const parsed = [];
+  let preambleText = "";
+  for (const segment of splitGitDiffSegments(diffText)) {
+    if (!segment.text.startsWith("diff --git ")) {
+      preambleText += segment.text;
+      continue;
+    }
+    if (!segment.hasPath()) {
+      unparsed.push(segment);
+      continue;
+    }
+    parsed.push(segment);
+    entries.set(segment.path, (entries.get(segment.path) || "") + segment.text);
+  }
+  return new GateDiffCollection(entries, unparsed, parsed, preambleText);
+}
+
+function filterDiffSegments(diff, includesPath) {
+  return splitGitDiffSegments(diff)
+    .filter((segment) => !segment.hasPath() || includesPath(segment.path))
+    .map((segment) => segment.text)
+    .join("");
 }
 
 export function excludeScenarioValidityEvidenceFromTaskGateDiff(diff, specPath) {
@@ -337,35 +519,17 @@ export function excludeScenarioValidityEvidenceFromTaskGateDiff(diff, specPath) 
     throw new Error("specPath must be a non-empty string");
   }
   const registry = new RepairArtifactRegistry(specPath);
-  return diff
-    .split(/(?=^diff --git )/m)
-    .filter((segment) => {
-      const header = segment.match(/^diff --git a\/.+? b\/(.+)\r?$/m);
-      return !header || !registry.owns(header[1]);
-    })
-    .join("");
+  return filterDiffSegments(diff, (file) => !registry.owns(file));
 }
 
 export function excludeGateLifecycleArtifactsFromGateDiff(diff, specPath) {
   if (typeof diff !== "string") throw new Error("diff must be a string");
-  return diff
-    .split(/(?=^diff --git )/m)
-    .filter((segment) => {
-      const header = segment.match(/^diff --git a\/.+? b\/(.+)\r?$/m);
-      return !header || !isGateLifecycleArtifactForGate(header[1], specPath);
-    })
-    .join("");
+  return filterDiffSegments(diff, (file) => !isGateLifecycleArtifactForGate(file, specPath));
 }
 
 export function excludeGeneratedSpecArtifactsFromGateDiff(diff, specPath) {
   if (typeof diff !== "string") throw new Error("diff must be a string");
-  return diff
-    .split(/(?=^diff --git )/m)
-    .filter((segment) => {
-      const header = segment.match(/^diff --git a\/.+? b\/(.+)\r?$/m);
-      return !header || shouldIncludeGateDiffFile(header[1], specPath);
-    })
-    .join("");
+  return filterDiffSegments(diff, (file) => shouldIncludeGateDiffFile(file, specPath));
 }
 
 function shouldIncludeGateDiffFile(relPath, specPath) {
@@ -373,7 +537,8 @@ function shouldIncludeGateDiffFile(relPath, specPath) {
 }
 
 function excludeGeneratedSpecArtifactsFromPerFileDiffs(perFileDiffs, specPath) {
-  return new Map([...perFileDiffs].filter(([file]) => shouldIncludeGateDiffFile(file, specPath)));
+  return GateDiffCollection.from(perFileDiffs)
+    .retainingFiles((file) => shouldIncludeGateDiffFile(file, specPath));
 }
 
 function buildGateEvaluationDiff({ committed, uncommitted, untracked, specPath }) {
@@ -387,7 +552,8 @@ function summarizeDiffSegment(file, fileDiff) {
   const added = (fileDiff.match(/^\+(?!\+\+)/gm) || []).length;
   const removed = (fileDiff.match(/^-(?!--)/gm) || []).length;
   const header = fileDiff.split(/\r?\n/).slice(0, 4).filter(Boolean).join(" | ");
-  return `- ${file}: +${added} -${removed}; ${header}`;
+  const boundedHeader = header.length <= 240 ? header : `${header.slice(0, 237)}...`;
+  return `- ${file}: +${added} -${removed}; ${boundedHeader}`;
 }
 
 function appendPromptLine(lines, line, maxChars) {
@@ -411,7 +577,16 @@ function compactDiffForGuardrailPrompt(diff, maxChars = MAX_GUARDRAIL_TARGET_CHA
   const summarized = [];
   const omitted = [];
 
-  for (const [file, fileDiff] of splitDiffByFile(diff)) {
+  const perFileDiffs = splitDiffByFile(diff);
+  const segments = [
+    ...(perFileDiffs.preambleText ? [["diff preamble", perFileDiffs.preambleText]] : []),
+    ...perFileDiffs.unparsedSegments.map((segment, index) => [
+      `unparsed diff segment ${index + 1}`,
+      segment.text,
+    ]),
+    ...perFileDiffs,
+  ];
+  for (const [file, fileDiff] of segments) {
     const hasAddedLines = /^\+(?!\+\+)/m.test(fileDiff);
     if (!hasAddedLines) {
       summarized.push(summarizeDiffSegment(file, fileDiff));
@@ -446,14 +621,9 @@ function compactDiffForGuardrailPrompt(diff, maxChars = MAX_GUARDRAIL_TARGET_CHA
 }
 
 function collectPerFileDiffsForGate(committed, uncommitted, untracked) {
-  const merged = splitDiffByFile(committed);
-  for (const [file, d] of splitDiffByFile(uncommitted)) {
-    merged.set(file, (merged.get(file) || "") + d);
-  }
-  for (const [file, d] of splitDiffByFile(untracked)) {
-    merged.set(file, (merged.get(file) || "") + d);
-  }
-  return merged;
+  return splitDiffByFile(committed)
+    .append(splitDiffByFile(uncommitted))
+    .append(splitDiffByFile(untracked));
 }
 
 function taskCursorRequiredGateFailure(scopeDecision, phase, state) {
@@ -1758,6 +1928,106 @@ export function computeGateEvidenceState({
   return { headSha: head.stdout.trim(), worktreeHash: target.fingerprint() };
 }
 
+function stableGateEvaluationValue(value) {
+  if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number") {
+    return value;
+  }
+  if (value instanceof RegExp) return { regexp: value.toString() };
+  if (Array.isArray(value)) return value.map((entry) => stableGateEvaluationValue(entry));
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableGateEvaluationValue(value[key])]));
+  }
+  return String(value);
+}
+
+function validatedGateEvaluationScopeIdentity({ phase, taskId, sourceFingerprint }, stored = false) {
+  const prefix = stored ? "stored Gate evaluation scope" : "Gate evaluation scope";
+  if (!VALID_GATE_PHASES.includes(phase)) throw new Error(`${prefix} phase is invalid`);
+  if ((taskId === null) !== (sourceFingerprint === null)) {
+    throw new Error(`${prefix} Task identity requires its source fingerprint`);
+  }
+  if (taskId !== null && (typeof taskId !== "string" || taskId.trim() === "")) {
+    throw new Error(`${prefix} Task id is invalid`);
+  }
+  if (sourceFingerprint !== null && !/^[a-f0-9]{64}$/.test(sourceFingerprint)) {
+    throw new Error(`${prefix} source fingerprint is invalid`);
+  }
+  return { phase, taskId, sourceFingerprint };
+}
+
+/**
+ * Stable identity of the inputs one Gate evaluation was allowed to reuse.
+ * Activity and catalog revisions are deliberately absent: they do not change
+ * the evaluated contract, whereas the rendered source, requirement context,
+ * or guardrail definition does.
+ */
+export class GateEvaluationScope {
+  constructor({ phase, taskId = null, sourceFingerprint = null, inputs } = {}) {
+    Object.assign(this, validatedGateEvaluationScopeIdentity({ phase, taskId, sourceFingerprint }));
+    this.contentFingerprint = crypto.createHash("sha256")
+      .update(JSON.stringify(stableGateEvaluationValue(inputs)))
+      .digest("hex");
+    Object.freeze(this);
+  }
+
+  static fromJSON(value) {
+    if (value instanceof GateEvaluationScope) return value;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("stored Gate evaluation scope is invalid");
+    }
+    const scope = Object.create(GateEvaluationScope.prototype);
+    Object.assign(scope, validatedGateEvaluationScopeIdentity(value, true));
+    if (typeof value.contentFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.contentFingerprint)) {
+      throw new Error("stored Gate evaluation scope content fingerprint is invalid");
+    }
+    scope.contentFingerprint = value.contentFingerprint;
+    return Object.freeze(scope);
+  }
+
+  matches(other) {
+    const candidate = GateEvaluationScope.fromJSON(other);
+    return this.phase === candidate.phase
+      && this.taskId === candidate.taskId
+      && this.sourceFingerprint === candidate.sourceFingerprint
+      && this.contentFingerprint === candidate.contentFingerprint;
+  }
+
+  toJSON() {
+    return {
+      phase: this.phase,
+      taskId: this.taskId,
+      sourceFingerprint: this.sourceFingerprint,
+      contentFingerprint: this.contentFingerprint,
+    };
+  }
+}
+
+function currentGateEvaluationScope({ root, phase, taskId = null, sourceFingerprint = null, inputs }) {
+  let guardrails;
+  try {
+    guardrails = filterGuardrailsForEvaluation(loadMergedGuardrails(root), phase);
+  } catch (error) {
+    // Gate evaluation itself owns this configuration failure.  It cannot have
+    // produced a reusable PASS, so the failure identity is sufficient here.
+    guardrails = { unavailable: error.message };
+  }
+  return new GateEvaluationScope({
+    phase,
+    taskId,
+    sourceFingerprint,
+    inputs: { guardrails, ...inputs },
+  });
+}
+
+function attachGateEvaluationScope(result, scope) {
+  if (!result || !["pass", "fail", "recovered"].includes(result.result) || !(scope instanceof GateEvaluationScope)) {
+    return result;
+  }
+  result.artifacts ||= {};
+  result.artifacts.evaluationScope = scope.toJSON();
+  return result;
+}
+
 /**
  * Extract FAIL-only evaluations as `{ guardrail_id, reason }` pairs for
  * persistence in issue-log. PASS / SKIP are dropped.
@@ -1787,26 +2057,48 @@ export function buildPassedGuardrails(evaluations) {
     .map((e) => e.guardrail_id);
 }
 
-export function findPreviousPassedGuardrails({ issueLog, phase }) {
-  const entries = Array.isArray(issueLog?.entries) ? issueLog.entries : [];
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i];
-    if (e.phase !== phase) continue;
-    if (!Array.isArray(e.passedGuardrails)) continue;
-    return {
-      passedGuardrails: e.passedGuardrails,
-      headSha: e.headSha,
-      worktreeHash: e.worktreeHash,
-    };
+/**
+ * Return only PASS evidence bound to the exact current evaluation inputs.
+ * The producer-owned canonical result history is the authority; the older
+ * issue log remains an audit projection and cannot omit an evaluation.
+ */
+export function findReusablePassedGuardrails({ flowManager, flowState, evaluationScope }) {
+  const scope = GateEvaluationScope.fromJSON(evaluationScope);
+  if (!flowManager || typeof flowManager.readProducerArtifact !== "function" || !flowState?.specId) return null;
+  const nodeId = canonicalGateNodeId({ phase: scope.phase, taskId: scope.taskId });
+  const keys = canonicalGateLogicalKeys(scope.phase, scope.taskId);
+  const source = flowManager.readProducerArtifact({
+    specId: flowState.specId,
+    nodeId,
+    logicalKey: keys.result,
+    parameters: keys.parameters,
+    optional: true,
+  });
+  if (source === null) return null;
+  const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: keys.result, bytes: source.bytes });
+  for (let i = history.attempts.length - 1; i >= 0; i--) {
+    const payload = history.attempts[i]?.payload;
+    if ((payload?.result !== "pass" && payload?.result !== "fail")
+      || !Array.isArray(payload?.artifacts?.evaluations)) continue;
+    try {
+      const prior = GateEvaluationScope.fromJSON(payload.artifacts.evaluationScope);
+      if (!scope.matches(prior)) continue;
+      if (scope.taskId !== null) {
+        if (payload.artifacts.taskId !== scope.taskId
+          || payload.artifacts.sourceFingerprint !== scope.sourceFingerprint) continue;
+      }
+      const passedGuardrails = buildPassedGuardrails(payload.artifacts.evaluations);
+      if (passedGuardrails.length > 0) return { passedGuardrails };
+    } catch {
+      // A malformed historical result remains auditable but cannot authorize
+      // semantic evaluation reuse.
+    }
   }
   return null;
 }
 
-export function applyFlipOverride({ evaluations, previousEntry, currentState, phase }) {
+export function applyFlipOverride({ evaluations, previousEntry }) {
   if (!previousEntry) return evaluations;
-  if (!currentState) return evaluations;
-  if (previousEntry.headSha !== currentState.headSha) return evaluations;
-  if (previousEntry.worktreeHash !== currentState.worktreeHash) return evaluations;
 
   const prevPassed = new Set(previousEntry.passedGuardrails || []);
   return evaluations.map((e) => {
@@ -2362,12 +2654,14 @@ export function buildRequirementGateContext({
   requirement,
   fileMap = {},
   relatedDiff = "",
+  sharedDiffEvidence = false,
   executionEvidence = null,
 }) {
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) throw new Error("spec must be an object");
   const normalizedRequirement = normalizeRequirementPromptInput(requirement);
   if (!fileMap || typeof fileMap !== "object" || Array.isArray(fileMap)) throw new Error("fileMap must be an object");
   if (typeof relatedDiff !== "string") throw new Error("relatedDiff must be a string");
+  if (typeof sharedDiffEvidence !== "boolean") throw new Error("sharedDiffEvidence must be a boolean");
   if (executionEvidence !== null && !(executionEvidence instanceof IntegrationExecutionEvidence)) {
     throw new Error("executionEvidence must be an IntegrationExecutionEvidence or null");
   }
@@ -2470,6 +2764,12 @@ export function buildRequirementGateContext({
       reference: `[EVIDENCE:${requirementId}]`,
       text: relatedDiff,
     }));
+  } else if (sharedDiffEvidence) {
+    entries.push(new RequirementContextEntry({
+      section: "evidence",
+      reference: `[EVIDENCE:${requirementId}]`,
+      text: "See this batch's shared Git Diff section for the mapped implementation evidence.",
+    }));
   }
   return new RequirementGateContext({ requirementId, obligation, entries });
 }
@@ -2525,6 +2825,17 @@ function renderRequirementContextSection(contexts) {
   return contexts.map((context) => context.toPromptText()).join("\n\n");
 }
 
+function renderRequirementBatchInput({ requirements, contexts, usesFullSpec, fullSpecText, sourceScope }) {
+  const requirementsText = usesFullSpec
+    ? fullSpecText
+    : contexts
+      ? renderRequirementContextSection(contexts)
+      : renderRequirementPromptSection(requirements);
+  return sourceScope === null
+    ? requirementsText
+    : `${requirementsText}\n\n${sourceScope.toPromptText()}`;
+}
+
 export class RequirementGateBatch {
   constructor({
     requirements,
@@ -2534,6 +2845,8 @@ export class RequirementGateBatch {
     usesFullSpec = false,
     fullSpecText = null,
     structuredSpec = null,
+    compactDiff = true,
+    sourceScope = null,
   }) {
     if (!Array.isArray(requirements) || requirements.length === 0) {
       throw new Error("requirements must be a non-empty array");
@@ -2551,6 +2864,11 @@ export class RequirementGateBatch {
     this.fullSpecText = fullSpecText;
     this.requirementIds = Object.freeze(this.requirements.map((requirement) => requirement.id));
     this.structuredSpec = structuredSpec;
+    this.compactDiff = compactDiff === true;
+    if (sourceScope !== null && !(sourceScope instanceof CanonicalSourceRequirementScope)) {
+      throw new Error("sourceScope must be a CanonicalSourceRequirementScope or null");
+    }
+    this.sourceScope = sourceScope;
     this.sameSpecContractContext = structuredSpec === null
       ? null
       : new SameSpecContractContext({ spec: structuredSpec, currentRequirementIds: this.requirementIds });
@@ -2561,12 +2879,14 @@ export class RequirementGateBatch {
       ? null
       : Object.freeze(contexts.map((context, index) => normalizeRequirementContext(context, this.requirementIds[index])));
     this.category = "requirements";
-    this.requirementPromptText = this.usesFullSpec
-      ? this.fullSpecText
-      : this.contexts
-        ? renderRequirementContextSection(this.contexts)
-        : renderRequirementPromptSection(this.requirements);
-    if (this.requirementPromptText.length + this.diff.length > MAX_AGENT_PROMPT_INPUT_CHARS) {
+    this.requirementPromptText = renderRequirementBatchInput({
+      requirements: this.requirements,
+      contexts: this.contexts,
+      usesFullSpec: this.usesFullSpec,
+      fullSpecText: this.fullSpecText,
+      sourceScope: this.sourceScope,
+    });
+    if (this.compactDiff && this.requirementPromptText.length + this.diff.length > MAX_AGENT_PROMPT_INPUT_CHARS) {
       const budget = Math.max(20000, this.maxChars - this.requirementPromptText.length);
       this.diff = summarizeDiffForPrompt(this.diff, budget);
     }
@@ -2580,9 +2900,13 @@ export class RequirementGateBatch {
     const contexts = this.contexts
       ? [...this.contexts, normalizeRequirementContext(context, requirements.at(-1).id)]
       : null;
-    const promptCharCount = (contexts
-      ? renderRequirementContextSection(contexts)
-      : renderRequirementPromptSection(requirements)).length + this.diff.length;
+    const promptCharCount = renderRequirementBatchInput({
+      requirements,
+      contexts,
+      usesFullSpec: this.usesFullSpec,
+      fullSpecText: this.fullSpecText,
+      sourceScope: this.sourceScope,
+    }).length + this.diff.length;
     return promptCharCount <= this.maxChars;
   }
 
@@ -2595,7 +2919,11 @@ export class RequirementGateBatch {
         : null,
       diff: this.diff,
       maxChars: this.maxChars,
+      usesFullSpec: this.usesFullSpec,
+      fullSpecText: this.fullSpecText,
       structuredSpec: this.structuredSpec,
+      compactDiff: this.compactDiff,
+      sourceScope: this.sourceScope,
     });
   }
 
@@ -2606,6 +2934,7 @@ export class RequirementGateBatch {
       diff: this.diff,
       knownIds: this.requirementIds,
       sameSpecContractContext: this.sameSpecContractContext,
+      sourceScope: this.sourceScope,
     });
   }
 }
@@ -2614,7 +2943,16 @@ function summarizeDiffForPrompt(diff, maxChars) {
   const lines = [
     "[diff summarized: original diff exceeded provider input limits]",
   ];
-  for (const [file, fileDiff] of splitDiffByFile(diff)) {
+  const perFileDiffs = splitDiffByFile(diff);
+  const segments = [
+    ...(perFileDiffs.preambleText ? [["diff preamble", perFileDiffs.preambleText]] : []),
+    ...perFileDiffs.unparsedSegments.map((segment, index) => [
+      `unparsed diff segment ${index + 1}`,
+      segment.text,
+    ]),
+    ...perFileDiffs,
+  ];
+  for (const [file, fileDiff] of segments) {
     const entry = summarizeDiffSegment(file, fileDiff);
     if (lines.join("\n").length + entry.length + 1 > maxChars) {
       lines.push("- ... additional files omitted from summary");
@@ -2714,6 +3052,8 @@ export function buildRequirementGateBatches({
   relatedDiffs,
   maxChars = MAX_IMPL_REQUIREMENT_BATCH_CHARS,
   structuredSpec = null,
+  compactDiff = true,
+  sourceScope = null,
 }) {
   if (!Array.isArray(requirements)) throw new Error("requirements must be an array");
   if (contexts !== null && !(contexts instanceof Map)) throw new Error("contexts must be a Map or null");
@@ -2737,6 +3077,8 @@ export function buildRequirementGateBatches({
           diff,
           maxChars,
           structuredSpec,
+          compactDiff,
+          sourceScope,
         });
         continue;
       }
@@ -2752,6 +3094,8 @@ export function buildRequirementGateBatches({
         diff,
         maxChars,
         structuredSpec,
+        compactDiff,
+        sourceScope,
       });
     }
     if (current) batches.push(current);
@@ -2769,6 +3113,8 @@ export function planRequirementGateCalls({
   phase = "task-impl",
   maxChars = MAX_IMPL_REQUIREMENT_BATCH_CHARS,
   structuredSpec = null,
+  compactDiff = true,
+  sourceScope = null,
 }) {
   const requirementExcerpts = requirements.map(normalizeRequirementPromptInput);
   if (contexts !== null && !(contexts instanceof Map)) throw new Error("contexts must be a Map or null");
@@ -2782,6 +3128,8 @@ export function planRequirementGateCalls({
         maxChars,
         usesFullSpec: contexts === null,
         fullSpecText,
+        compactDiff,
+        sourceScope,
       })],
       evaluations: [],
     });
@@ -2813,9 +3161,93 @@ export function planRequirementGateCalls({
       relatedDiffs,
       maxChars,
       structuredSpec: phase === "integration" ? structuredSpec : null,
+      compactDiff,
+      sourceScope,
     }),
     evaluations,
   });
+}
+
+async function evaluateCanonicalRequirements({
+  level,
+  phase,
+  targetPath,
+  spec,
+  requirements,
+  fileMap,
+  relatedDiffs,
+  fullDiff,
+  previousResult = null,
+  executionEvidence = null,
+  structuredSpec = null,
+  compactDiff = true,
+  sourceScope = null,
+}) {
+  const requirementContexts = new Map(requirements.map((requirement) => [
+    requirement.id,
+    buildRequirementGateContext({
+      spec,
+      requirement,
+      fileMap: sourceScope === null ? fileMap : {},
+      // The batch carries one authoritative diff for all Requirements with
+      // the same source scope. Repeating it inside every context inflates the
+      // prompt and call count without adding evidence.
+      relatedDiff: "",
+      sharedDiffEvidence: (relatedDiffs?.get(requirement.id) ?? fullDiff).trim() !== "",
+      executionEvidence,
+    }),
+  ]));
+  const plan = planRequirementGateCalls({
+    requirements,
+    contexts: requirementContexts,
+    relatedDiffs,
+    previouslyPassed: new Set(previousResult?.passedGuardrails || []),
+    fullDiff,
+    phase,
+    maxChars: MAX_IMPL_REQUIREMENT_BATCH_CHARS,
+    structuredSpec,
+    compactDiff,
+    sourceScope,
+  });
+  const overflow = plan.calls.find((batch) => batch.overflow);
+  if (overflow) {
+    return gateFail(level, phase, targetPath, [], [
+      `Requirement evaluation input is ${overflow.promptCharCount} chars, exceeds limit ${overflow.maxChars}`,
+    ]);
+  }
+  const evaluations = [...plan.evaluations];
+  if (plan.calls.length === 0) return evaluations;
+  const agent = container.get("agent");
+  const agentResolutionFailure = requiredGateAgentResolutionFailure(agent);
+  if (agentResolutionFailure) {
+    return gateRequiredEvaluationFail(level, phase, targetPath, agentResolutionFailure);
+  }
+  try {
+    for (const batch of plan.calls) {
+      const built = batch.buildPrompt().build();
+      const result = await evaluateImplRequirementsWithRetry({
+        knownIds: batch.requirementIds,
+        phase,
+        callAgent: (attempt) => callGateAgent(agent, built, attempt),
+      });
+      evaluations.push(...result.evaluations.map((entry) => ({
+        ...entry,
+        title: entry.guardrail_id,
+        category: "requirements",
+      })));
+    }
+  } catch (error) {
+    return gateRequiredEvaluationFail(
+      level,
+      phase,
+      targetPath,
+      requiredGateEvaluationFailure(error),
+    );
+  }
+  if (!evaluations.every((entry) => entry.result === "pass" || entry.result === "skip")) {
+    return gateFail(level, phase, targetPath, evaluations, []);
+  }
+  return evaluations;
 }
 
 function buildImplCheckPrompt(specTextOrOptions, diffArg, knownIdsArg) {
@@ -2827,8 +3259,12 @@ function buildImplCheckPrompt(specTextOrOptions, diffArg, knownIdsArg) {
   const diff = options.diff || "";
   const knownIds = options.knownIds || [];
   const sameSpecContractContext = options.sameSpecContractContext || null;
+  const sourceScope = options.sourceScope || null;
   if (sameSpecContractContext !== null && !(sameSpecContractContext instanceof SameSpecContractContext)) {
     throw new Error("sameSpecContractContext must be a SameSpecContractContext or null");
+  }
+  if (sourceScope !== null && !(sourceScope instanceof CanonicalSourceRequirementScope)) {
+    throw new Error("sourceScope must be a CanonicalSourceRequirementScope or null");
   }
   const pb = new PromptBuilder();
   pb.setRole("You are an implementation compliance checker.\nCheck whether each spec requirement has been implemented in the diff.");
@@ -2869,6 +3305,9 @@ function buildImplCheckPrompt(specTextOrOptions, diffArg, knownIdsArg) {
   if (sameSpecContractContext) {
     pb.addUserPrompt("## Same-Spec Contract Context", sameSpecContractContext.toPromptText());
   }
+  if (sourceScope) {
+    pb.addUserPrompt("## Canonical Requirement-Source Mapping", sourceScope.toPromptText());
+  }
   pb.addUserPrompt("## Git Diff", diff);
 
   return pb;
@@ -2876,6 +3315,10 @@ function buildImplCheckPrompt(specTextOrOptions, diffArg, knownIdsArg) {
 
 function buildPerRequirementDiffs(fileMap, perFileDiffs, reqIds, fullDiff) {
   if (!fileMap || Object.keys(fileMap).length === 0) return null;
+  const collection = GateDiffCollection.from(perFileDiffs);
+  if (collection.size === 0 && fullDiff.trim() !== "") {
+    return new Map(reqIds.map((reqId) => [reqId, fullDiff]));
+  }
 
   const allMappedFiles = new Set();
   for (const files of Object.values(fileMap)) {
@@ -2892,33 +3335,49 @@ function buildPerRequirementDiffs(fileMap, perFileDiffs, reqIds, fullDiff) {
     return false;
   };
 
-  let unmappedDiff = "";
-  for (const [file, diff] of perFileDiffs) {
-    if (!isMappedFile(file)) unmappedDiff += diff;
-  }
-
   const result = new Map();
+  const unscopedEvidence = collection.preambleText + collection.unparsedText();
   for (const reqId of reqIds) {
     const mappedFiles = fileMap[reqId];
     if (!Array.isArray(mappedFiles)) {
       result.set(reqId, fullDiff);
       continue;
     }
-    let reqDiff = "";
-    for (const file of mappedFiles) {
-      const fileDiff = perFileDiffs.get(file);
-      if (fileDiff) reqDiff += fileDiff;
-      const prefix = String(file).replace(/\/$/, "");
-      if (prefix) {
-        for (const [diffFile, diffText] of perFileDiffs) {
-          if (diffFile.startsWith(`${prefix}/`)) reqDiff += diffText;
-        }
-      }
+    const normalized = mappedFiles.map((file) => String(file).replace(/\/$/, ""));
+    const selected = [];
+    for (const segment of collection.evidenceSegments()) {
+      const mappedToRequirement = segment.paths.some((diffFile) => normalized.some((file) => (
+        file === diffFile || (file && diffFile.startsWith(`${file}/`))
+      )));
+      // A changed file outside the canonical map may affect any Requirement,
+      // so every evaluation receives it. Each file is appended at most once,
+      // including overlapping file/directory mappings or rename aliases.
+      if (mappedToRequirement || !segment.paths.some((file) => isMappedFile(file))) selected.push(segment.text);
     }
-    reqDiff += unmappedDiff;
-    result.set(reqId, reqDiff);
+    // Leading and unparseable Git text cannot be scoped safely. It remains
+    // visible to every Requirement instead of being silently discarded or
+    // marking a mapped Requirement as having no evidence.
+    if (unscopedEvidence) selected.push(unscopedEvidence);
+    result.set(reqId, selected.join(""));
   }
   return result;
+}
+
+function renderCanonicalTaskSourceEntry(entry) {
+  return entry.status === "deleted"
+    ? `## ${entry.path}\n(deleted)`
+    : `## ${entry.path}\n${entry.content}`;
+}
+
+function renderCanonicalTaskSource(entries) {
+  return entries.map(renderCanonicalTaskSourceEntry).join("\n\n");
+}
+
+function canonicalTaskSourceEntriesByPath(entries) {
+  return new Map(entries.map((entry) => [
+    entry.path,
+    `${renderCanonicalTaskSourceEntry(entry)}\n\n`,
+  ]));
 }
 
 // ---------------------------------------------------------------------------
@@ -3083,6 +3542,14 @@ export async function runGateFlow(args) {
 
   validateLevelPhase(level, phase);
 
+  if (ctx && !(ctx.evaluationScope instanceof GateEvaluationScope)) {
+    ctx.evaluationScope = currentGateEvaluationScope({
+      root,
+      phase,
+      inputs: { targetText, authoritativeEvaluations },
+    });
+  }
+
   try {
     validateConfiguredPresetChains(root, config);
   } catch (error) {
@@ -3107,11 +3574,16 @@ export async function runGateFlow(args) {
     return gatePass(level, phase, targetPath, ownedEvaluations);
   }
 
+  let previousEntry = null;
   let previouslyPassedIds;
   if (ctx && GATE_OBSERVATION_PHASES.includes(phase)) {
-    const prevEntry = findPreviousPassedGuardrails({ flowState: ctx.flowState, issueLog: ctx.issueLog, phase });
-    if (prevEntry) {
-      previouslyPassedIds = prevEntry.passedGuardrails;
+    previousEntry = findReusablePassedGuardrails({
+      flowManager: ctx.flowManager,
+      flowState: ctx.flowState,
+      evaluationScope: ctx.evaluationScope,
+    });
+    if (previousEntry) {
+      previouslyPassedIds = previousEntry.passedGuardrails;
     }
   }
 
@@ -3137,13 +3609,10 @@ export async function runGateFlow(args) {
 
   let evaluations = [...ownedEvaluations, ...result.evaluations];
 
-  if (ctx && GATE_OBSERVATION_PHASES.includes(phase) && ctx.gitState) {
-    const prevEntry = findPreviousPassedGuardrails({ flowState: ctx.flowState, issueLog: ctx.issueLog, phase });
+  if (previousEntry !== null) {
     evaluations = applyFlipOverride({
       evaluations,
-      previousEntry: prevEntry,
-      currentState: ctx.gitState,
-      phase,
+      previousEntry,
     });
   }
 
@@ -3396,6 +3865,7 @@ export class RunGateCommand extends FlowCommand {
     // No filesystem result/source writer is permitted here.  The registry
     // confirms a pass with its lifecycle Activity; a non-pass is published
     // before the retry lifecycle keeps the Attempt active.
+    attachGateEvaluationScope(result, canonicalCtx.evaluationScope);
     if (result?.result === "pass" || result?.result === "fail" || result?.result === "recovered") {
       new CanonicalGatePromotion({
         state: ctx.flowManager.canonicalState(ctx.flowState.specId),
@@ -3422,24 +3892,78 @@ export class RunGateCommand extends FlowCommand {
       source,
     });
     const targetPath = path.posix.join(path.posix.dirname(specPath), "tasks", `${task.id}.md`);
+    const complete = (result) => this.completeCanonicalTaskGateResult({
+      result,
+      root: executionRoot,
+      flowManager: ctx.flowManager,
+      state,
+      taskId: task.id,
+      source,
+      evaluationScope: ctx.evaluationScope,
+    });
+    const requirementAuthority = CanonicalSourceRequirementAuthority
+      .fromTaskRequirements(context.requirements);
+    const sourcePaths = source.entries.map((entry) => entry.path);
+    const sourceScope = requirementAuthority.bindSourceScope(sourcePaths);
+    ctx.evaluationScope = currentGateEvaluationScope({
+      root: executionRoot,
+      phase,
+      taskId: task.id,
+      sourceFingerprint: source.fingerprint,
+      inputs: {
+        spec,
+        taskContext: context.readOnlyInput(),
+        source: source.toJSON(),
+        sourceScope: sourceScope.toJSON(),
+      },
+    });
     if (source.entries.length === 0) {
       const result = gateFail(level, phase, targetPath, [], [
         "Task Gate is inadmissible for an empty mutation manifest; Definition must settle the reviewed no-change result",
       ]);
-      result.artifacts.sourceFingerprint = source.fingerprint;
-      return result;
+      return complete(result);
     }
-    const currentSource = source.entries.map((entry) => entry.status === "deleted"
-      ? `## ${entry.path}\n(deleted)`
-      : `## ${entry.path}\n${entry.content}`).join("\n\n");
+    const currentSource = renderCanonicalTaskSource(source.entries);
     const diffBytes = Buffer.byteLength(currentSource, "utf8");
     if (diffBytes > TASK_IMPL_GATE_DIFF_MAX_BYTES) {
-      return gateFail(level, phase, targetPath, [], [
+      return complete(gateFail(level, phase, targetPath, [], [
         `Task current source is ${diffBytes} bytes, exceeds limit ${TASK_IMPL_GATE_DIFF_MAX_BYTES}`,
-      ]);
+      ]));
     }
     const gitState = computeGitState(executionRoot);
     ctx.gitState = gitState;
+    const fileMap = requirementAuthority.bindPaths(sourcePaths).toJSON();
+    const requirements = context.requirements.map((requirement) => new RequirementPromptExcerpt(requirement));
+    const relatedDiffs = buildPerRequirementDiffs(
+      fileMap,
+      canonicalTaskSourceEntriesByPath(source.entries),
+      requirements.map((requirement) => requirement.id),
+      currentSource,
+    );
+    if (relatedDiffs === null) {
+      return complete(gateFail(level, phase, targetPath, [], [
+        "Task Gate requires a canonical Requirement-to-source mapping",
+      ]));
+    }
+    const previousResult = findReusablePassedGuardrails({
+      flowManager: ctx.flowManager,
+      flowState: state,
+      evaluationScope: ctx.evaluationScope,
+    });
+    const requirementEvaluation = await evaluateCanonicalRequirements({
+      level,
+      phase,
+      targetPath,
+      spec,
+      requirements,
+      fileMap,
+      relatedDiffs,
+      fullDiff: currentSource,
+      previousResult,
+      compactDiff: false,
+      sourceScope,
+    });
+    if (!Array.isArray(requirementEvaluation)) return complete(requirementEvaluation);
     const result = await runGateFlow({
       root: executionRoot,
       artifactRoot: executionRoot,
@@ -3452,10 +3976,53 @@ export class RunGateCommand extends FlowCommand {
       checkerRole: "You are a task implementation compliance checker. Check only this Task's mapped requirements against its current allow-listed source. Do not run tests.",
       skipGuardrail,
       ctx,
+      authoritativeEvaluations: requirementEvaluation,
     });
-    const recapturedSource = captureCurrentTaskSource({ root: executionRoot, flowManager: ctx.flowManager, state, taskId: task.id });
+    return complete(result);
+  }
+
+  completeCanonicalTaskGateResult({ result, root, flowManager, state, taskId, source, evaluationScope }) {
+    const currentState = flowManager.loadReadOnly(state.specId);
+    const recapturedSource = captureCurrentTaskSource({
+      root,
+      flowManager,
+      state: currentState,
+      taskId,
+    });
     if (recapturedSource.fingerprint !== source.fingerprint) {
       throw new Error("Task Gate source changed during evaluation; reload the current Task context");
+    }
+    const specSource = flowManager.readArtifact({
+      specId: currentState.specId,
+      logicalKey: "spec.record",
+      consumerNodeId: currentState.currentNodeId,
+    });
+    const currentSpec = JSON.parse(specSource.bytes.toString("utf8"));
+    const currentContext = CanonicalTaskContext.capture({
+      root,
+      flowManager,
+      state: currentState,
+      taskId,
+      spec: currentSpec,
+      source: recapturedSource,
+    });
+    const currentScope = currentGateEvaluationScope({
+      root,
+      phase: "task-impl",
+      taskId,
+      sourceFingerprint: recapturedSource.fingerprint,
+      inputs: {
+        spec: currentSpec,
+        taskContext: currentContext.readOnlyInput(),
+        source: recapturedSource.toJSON(),
+        sourceScope: CanonicalSourceRequirementAuthority
+          .fromTaskRequirements(currentContext.requirements)
+          .bindSourceScope(recapturedSource.entries.map((entry) => entry.path))
+          .toJSON(),
+      },
+    });
+    if (!(evaluationScope instanceof GateEvaluationScope) || !evaluationScope.matches(currentScope)) {
+      throw new Error("Task Gate evaluation inputs changed during evaluation; reload the current Task context");
     }
     result.artifacts ||= {};
     result.artifacts.sourceFingerprint = source.fingerprint;
@@ -3561,11 +4128,6 @@ export class RunGateCommand extends FlowCommand {
     if (requirements.length === 0) {
       return gateFail(level, phase, specPath, [], ["spec.json has no requirements with usable ids"]);
     }
-    const agent = container.get("agent");
-    const agentResolutionFailure = requiredGateAgentResolutionFailure(agent);
-    if (agentResolutionFailure) {
-      return gateRequiredEvaluationFail(level, phase, specPath, agentResolutionFailure);
-    }
     const specification = specJsonToPromptText(spec, { title: getSpecName(state) });
     const reqIds = requirements;
     const requirementEntries = spec.requirements
@@ -3588,58 +4150,36 @@ export class RunGateCommand extends FlowCommand {
       );
       perReqDiffs = buildPerRequirementDiffs(fileMap, perFileDiffs, reqIds, diff);
     }
-    const requirementContexts = new Map(requirementEntries.map((requirement) => [
-      requirement.id,
-      buildRequirementGateContext({
+    ctx.evaluationScope = currentGateEvaluationScope({
+      root: executionRoot,
+      phase,
+      inputs: {
         spec,
-        requirement,
+        diff,
         fileMap,
-        relatedDiff: perReqDiffs?.get(requirement.id) ?? diff,
         executionEvidence: integrationExecutionEvidence,
-      }),
-    ]));
-    const previousResult = findPreviousPassedGuardrails({
-      flowState: state,
-      issueLog: ctx.issueLog,
-      phase,
+      },
     });
-    const requirementPlan = planRequirementGateCalls({
-      requirements: requirementEntries,
-      contexts: requirementContexts,
-      relatedDiffs: perReqDiffs,
-      previouslyPassed: new Set(previousResult?.passedGuardrails || []),
-      fullSpecText: specification,
-      fullDiff: diff,
+    const previousResult = findReusablePassedGuardrails({
+      flowManager: ctx.flowManager,
+      flowState: state,
+      evaluationScope: ctx.evaluationScope,
+    });
+    const requirementEvaluation = await evaluateCanonicalRequirements({
+      level,
       phase,
-      maxChars: MAX_IMPL_REQUIREMENT_BATCH_CHARS,
+      targetPath: specPath,
+      spec,
+      requirements: requirementEntries,
+      fileMap,
+      relatedDiffs: perReqDiffs,
+      fullDiff: diff,
+      previousResult,
+      executionEvidence: integrationExecutionEvidence,
       structuredSpec: phase === "integration" ? spec : null,
     });
-    const reqEvaluations = [...requirementPlan.evaluations];
-    try {
-      for (const batch of requirementPlan.calls) {
-        const built = batch.buildPrompt().build();
-        const { evaluations } = await evaluateImplRequirementsWithRetry({
-          knownIds: batch.requirementIds,
-          phase,
-          callAgent: (attempt) => callGateAgent(agent, built, attempt),
-        });
-        reqEvaluations.push(...evaluations.map((entry) => ({
-          ...entry,
-          title: entry.guardrail_id,
-          category: "requirements",
-        })));
-      }
-    } catch (error) {
-      return gateRequiredEvaluationFail(
-        level,
-        phase,
-        specPath,
-        requiredGateEvaluationFailure(error),
-      );
-    }
-    if (!reqEvaluations.every((entry) => entry.result === "pass" || entry.result === "skip")) {
-      return gateFail(level, phase, specPath, reqEvaluations, []);
-    }
+    if (!Array.isArray(requirementEvaluation)) return requirementEvaluation;
+    const reqEvaluations = requirementEvaluation;
     const fileMapWarnings = this.reconcileCanonicalFileMapWarnings({
       executionRoot,
       state,
@@ -3695,6 +4235,7 @@ export {
   compactDiffForGuardrailPrompt,
   collectPerFileDiffsForGate,
   buildPerRequirementDiffs,
+  renderCanonicalTaskSource,
 };
 
 export class GateIssueLogEntry {
