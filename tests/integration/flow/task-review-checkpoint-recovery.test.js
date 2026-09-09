@@ -12,7 +12,8 @@ import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { readTaskReviewRecoveryAuthorization, readTaskReviewUnsealedCheckpoint } from "../../../src/flow/lib/task-review-recovery-checkpoint.js";
 import { ReviewTargetAuthority } from "../../../src/flow/lib/review-target-authority.js";
 import { ReviewWorkUnit, ReviewWorkUnitOutput } from "../../../src/flow/lib/review-work-unit.js";
-import { SourceMutationBaseline, SourceMutationManifest, SourceWorkerEffect } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
+import { SourceMutationBaseline } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
@@ -353,24 +354,19 @@ test("an external execution checkout cleans the exact authorized worker", async 
     },
     taskDocuments: [{ id: taskId, title: "Split checkout", goal: "Keep recovery checkout-bound.", parent: null, origin: "plan", added_round: 0, status: "pending" }],
   }).create();
-  const baseline = SourceMutationBaseline.capture({ root: executionRoot, attempt: manager.canonicalState(specId).attempt });
-  fs.writeFileSync(path.join(executionRoot, "README.md"), "implemented source\n");
-  const manifest = SourceMutationManifest.capture({ baseline });
-  manager.confirmSourceWorkerHandoff({
-    specId,
-    mutationManifest: manifest,
-    handoffDigest: "c".repeat(64),
-    effect: new SourceWorkerEffect({
+  completeCanonicalSourceHandoff({
+    root: executionRoot, mainRoot, manager, specId, stepId: "task-impl", taskId,
+    mutate: () => fs.writeFileSync(path.join(executionRoot, "README.md"), "implemented source\n"),
+    effect: {
       version: 1,
       stepId: "task-impl",
       completionStatus: "done",
-      files: [{ requirementId: "R-1", mutationIds: manifest.mutations.map((entry) => entry.mutationId) }],
       issues: [],
       overview: { modules: [], data_flow: [], decisions: [] },
       triage: null,
       repair: null,
-    }),
-    result: { outcome: "passed", summary: "Split checkout implementation fixture", confirmedAt: "2026-09-08T00:00:00.000Z", artifactRefs: [] },
+      noChangeReason: null,
+    },
   });
   manager.updateStepStatus({ stepId: `${taskId}-review`, requestedStatus: "in_progress" }, { specId });
   exhaustSplitCheckout({ manager, specId });

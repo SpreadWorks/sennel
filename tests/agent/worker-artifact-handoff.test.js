@@ -1,3 +1,4 @@
+import { completeCanonicalSourceHandoff } from "../support/builders/source-handoff-scenario.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -16,9 +17,6 @@ import { sourceWorkerEffectJsonSchema } from "../../src/flow/lib/source-worker-e
 import { TaskStageArtifact } from "../../src/flow/lib/task-review-stage-artifacts.js";
 import { findStepById } from "../../src/flow/lib/step-tree.js";
 import {
-  SourceMutationBaseline,
-  SourceMutationManifest,
-  SourceWorkerEffect,
   WorkerArtifactHandoffCoordinator,
 } from "../../src/flow/lib/worker-artifact-handoff.js";
 import { Agent } from "../../src/lib/agent.js";
@@ -652,37 +650,18 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       // Establish the real Task source lineage that Review, triage, and repair
       // consume. The deliberately incomplete implementation is the only seed;
       // no Review, triage, or repair artifact is preconstructed.
-      const implementationBaseline = SourceMutationBaseline.capture({
-        root,
-        attempt: flowManager.canonicalState(specId).attempt,
-      });
-      fs.writeFileSync(sourcePath, [
-        "export function statusLabel(input) {",
-        "  return input === \"ready\" ? \"ready\" : \"unknown\";",
-        "}",
-        "",
-      ].join("\n"));
-      const implementationManifest = SourceMutationManifest.capture({ baseline: implementationBaseline });
-      flowManager.confirmSourceWorkerHandoff({
-        specId,
-        mutationManifest: implementationManifest,
-        handoffDigest: "a".repeat(64),
-        effect: new SourceWorkerEffect({
-          version: 1,
-          stepId: "task-impl",
-          completionStatus: "done",
-          files: [{ requirementId: "R-1", mutationIds: implementationManifest.mutations.map((entry) => entry.mutationId) }],
-          issues: [],
+      completeCanonicalSourceHandoff({
+        root, manager: flowManager, specId, stepId: "task-impl", taskId,
+        mutate: () => fs.writeFileSync(sourcePath, [
+          "export function statusLabel(input) {",
+          "  return input === \"ready\" ? \"ready\" : \"unknown\";",
+          "}",
+          "",
+        ].join("\n")),
+        effect: {
+          version: 1, stepId: "task-impl", completionStatus: "done", issues: [],
           overview: { modules: [], data_flow: [], decisions: [] },
-          triage: null,
-          repair: null,
-          noChangeReason: null,
-        }),
-        result: {
-          outcome: "passed",
-          summary: "Task fixture implementation published through the source-handoff boundary.",
-          confirmedAt: "2026-09-08T00:00:00.000Z",
-          artifactRefs: [],
+          triage: null, repair: null, noChangeReason: null,
         },
       });
       flowManager.updateStepStatus({ stepId: `${taskId}-review`, requestedStatus: "in_progress" }, { specId });

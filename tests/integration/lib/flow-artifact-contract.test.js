@@ -77,8 +77,9 @@ describe("Flow artifact contract registry", () => {
       [
         "flow.activities", "spec.snapshot", "spec.review", "artifact.catalog", "test.review.repair.progress", "test.bootstrap.observation", "acceptance.decision",
         "retry.recovery.baseline", "retry.recovery.receipt",
+        "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement",
         "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.review.aborted.work-unit",
-        "task.triage", "task.repair", "task.triage.source.handoff.baseline", "task.repair.source.handoff.baseline",
+        "task.triage", "task.repair",
         "task.review", "task.mutation.lineage", "activity.evidence", "runtime.step-metadata",
       ],
     );

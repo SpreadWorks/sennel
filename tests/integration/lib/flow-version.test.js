@@ -1148,6 +1148,68 @@ describe("Flow Version migration classification", () => {
 });
 
 describe("Current Flow Version storage", () => {
+  it("rejects reentrant catalog reads while a transaction owns the coherent view", () => {
+    const location = canonicalLocation();
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    boundary.openVersionStore({ location }).create(freshState(boundary, location), { specRecord: specRecord() });
+    const store = new FlowArtifactCatalogStore({ location });
+    const artifact = FLOW_ARTIFACT_CONTRACTS.resolve("report");
+    assert.throws(() => store.publish({
+      ...artifact.publication({ updater: "report", mediaType: "application/json" }),
+      publicationClaim: artifactPublicationClaimForStep("report"),
+      write: () => new FlowArtifactCatalogStore({ location }).require(),
+    }), /(?:nested Version catalog access|file lock is already held by this process)/);
+    assert.equal(store.require().artifacts.some((entry) => entry.logicalKey === "report"), false);
+  });
+
+  it("recovers publication and unpublication transactions after real process death at every catalog commit boundary", async () => {
+    const root = temporaryRoot();
+    const location = canonicalLocation({ root });
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    boundary.openVersionStore({ location }).create(freshState(boundary, location), { specRecord: specRecord() });
+    const modulePath = fileURLToPath(new URL("../../../src/lib/flow-version.js", import.meta.url));
+    const authorityPath = fileURLToPath(new URL("../../../src/flow/lib/flow-artifact-authority.js", import.meta.url));
+    const contractPath = fileURLToPath(new URL("../../../src/lib/flow-artifact-contract.js", import.meta.url));
+    const runCrash = async (operation, phase) => {
+      const mutation = operation === "publish"
+        ? `store.publish({ ...artifact.publication({ updater: "report", mediaType: "application/json" }), publicationClaim: artifactPublicationClaimForStep("report"), write: () => { fs.mkdirSync(path.dirname(location.resolve(artifact.relativePath)), { recursive: true }); fs.writeFileSync(location.resolve(artifact.relativePath), "{}\\n"); if (${JSON.stringify(phase)} === "uncommitted") process.kill(process.pid, "SIGKILL"); } });`
+        : `store.unpublish({ relativePath: artifact.relativePath, publicationClaim: artifactPublicationClaimForStep("report"), write: () => { fs.unlinkSync(location.resolve(artifact.relativePath)); if (${JSON.stringify(phase)} === "uncommitted") process.kill(process.pid, "SIGKILL"); } });`;
+      const source = `
+        import fs from "node:fs"; import path from "node:path";
+        import { FlowArtifactCatalogStore, FlowVersionLocation, FlowVersionAuthorityScope } from ${JSON.stringify(modulePath)};
+        import { artifactPublicationClaimForStep } from ${JSON.stringify(authorityPath)};
+        import { FLOW_ARTIFACT_CONTRACTS } from ${JSON.stringify(contractPath)};
+        const location = new FlowVersionLocation({ repositoryRoot: ${JSON.stringify(root)}, authorityScope: FlowVersionAuthorityScope.canonical(), specId: "508-flow-version", version: 1 });
+        const store = new FlowArtifactCatalogStore({ location, faultInjector: ({ phase: point }) => { if ((${JSON.stringify(phase)} === "prepared" && point === "before-json-rename") || (${JSON.stringify(phase)} === "committed" && point === "before-json-directory-fsync")) process.kill(process.pid, "SIGKILL"); } });
+        const artifact = FLOW_ARTIFACT_CONTRACTS.resolve("report");
+        ${mutation}
+      `;
+      const child = spawn(process.execPath, ["--input-type=module", "--eval", source], { stdio: "ignore" });
+      const [code, signal] = await once(child, "exit");
+      assert.equal(code, null);
+      assert.equal(signal, "SIGKILL");
+    };
+    await runCrash("publish", "uncommitted");
+    let recovered = new FlowArtifactCatalogStore({ location });
+    assert.equal(recovered.require().artifacts.some((entry) => entry.logicalKey === "report"), false);
+    assert.equal(fs.existsSync(location.artifact("report")), false);
+    await runCrash("publish", "prepared");
+    recovered = new FlowArtifactCatalogStore({ location });
+    assert.equal(recovered.require().artifacts.some((entry) => entry.logicalKey === "report"), false);
+    assert.equal(fs.existsSync(location.artifact("report")), false);
+    await runCrash("publish", "committed");
+    recovered = new FlowArtifactCatalogStore({ location });
+    assert.equal(recovered.require().artifacts.some((entry) => entry.logicalKey === "report"), true);
+    assert.equal(fs.readFileSync(location.artifact("report"), "utf8"), "{}\n");
+    for (const phase of ["uncommitted", "prepared", "committed"]) {
+      await runCrash("unpublish", phase);
+      recovered = new FlowArtifactCatalogStore({ location });
+      const published = recovered.require().artifacts.some((entry) => entry.logicalKey === "report");
+      assert.equal(published, phase !== "committed");
+      assert.equal(fs.existsSync(location.artifact("report")), phase !== "committed");
+    }
+  });
+
   it("requires a typed canonical Spec record and catalogs every root authority", () => {
     const location = canonicalLocation();
     const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });

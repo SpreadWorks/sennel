@@ -537,8 +537,32 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
-  publishTaskSourceHandoffBaseline(input = {}) {
-    return this._store.publishTaskSourceHandoffBaseline({
+  publishSourceHandoffCheckpoint(input = {}) {
+    return this._store.publishSourceHandoffCheckpoint({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  appendSourceHandoffEvent(input = {}) {
+    return this._store.appendSourceHandoffEvent({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  settleSourceHandoff(input = {}) {
+    return this._store.settleSourceHandoff({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  readSourceHandoffAuthority(input = {}) {
+    return this._store.readSourceHandoffAuthority({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  sourceHandoffAuthorities(input = {}) {
+    return this._store.sourceHandoffAuthorities({
       ...input,
       specId: input.specId ?? this._boundSpecId,
     });

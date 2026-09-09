@@ -42,8 +42,8 @@ function implementationRepairRecord() {
         mutationId,
         path: "src/one.js",
         changeKind: "content",
-        beforeDigest: DIGEST_B,
-        afterDigest: DIGEST_C,
+        beforeKind: "file", beforeMode: 0o644, beforeDigest: DIGEST_B,
+        afterKind: "file", afterMode: 0o644, afterDigest: DIGEST_C,
       }],
     }).toJSON(),
   }).toJSON();
@@ -105,8 +105,8 @@ function taskLineage({ taskId, sequence, round, reviewStart = 0, role = "impleme
       mutationId: SourceMutationManifest.mutationId(attempt, path),
       path,
       changeKind: "content",
-      beforeDigest: DIGEST_B,
-      afterDigest: DIGEST_C,
+      beforeKind: "file", beforeMode: 0o644, beforeDigest: DIGEST_B,
+      afterKind: "file", afterMode: 0o644, afterDigest: DIGEST_C,
     }],
   });
   return new TaskMutationLineage({
@@ -312,8 +312,8 @@ describe("review recurrence projections", () => {
           mutations: [{
             path: "src/one.js",
             changeKind: "content",
-            beforeDigest: DIGEST_B,
-            afterDigest: DIGEST_C,
+            beforeKind: "file", beforeMode: 0o644, beforeDigest: DIGEST_B,
+            afterKind: "file", afterMode: 0o644, afterDigest: DIGEST_C,
           }],
         },
       }],

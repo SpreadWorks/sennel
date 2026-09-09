@@ -30,7 +30,7 @@ export class TaskSourceFailureObservation {
     };
   }
 
-  record(flowManager) {
+  record(flowManager, { sourceHandoffSettlement = null } = {}) {
     const state = flowManager.canonicalState(this.request.specId);
     const expected = this.request.sourceMutationBaseline.attempt;
     if (state?.runId !== this.request.runId || state.attempt?.id !== expected.id || state.attempt?.sequence !== expected.sequence || state.attempt?.nodeId !== expected.nodeId) return false;
@@ -40,6 +40,7 @@ export class TaskSourceFailureObservation {
       expectedRunId: this.request.runId,
       expectedAttempt: expected,
       failure: this.failure(),
+      sourceHandoffSettlement,
       result: {
         outcome: "failed", summary: this.error.message, confirmedAt: new Date().toISOString(),
         artifactRefs: [{ kind: "worker-handoff-request", id: this.request.requestDigest }],

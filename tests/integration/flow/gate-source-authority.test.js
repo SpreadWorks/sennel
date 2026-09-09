@@ -1,3 +1,4 @@
+import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
@@ -12,12 +13,6 @@ import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-trans
 import { resolveGateTransition } from "../../../src/flow/definition.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { container } from "../../../src/lib/container.js";
-import { CanonicalSourceRequirementAuthority } from "../../../src/flow/lib/canonical-file-map.js";
-import {
-  SourceMutationBaseline,
-  SourceMutationManifest,
-  SourceWorkerEffect,
-} from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../../support/builders/tmp-dir.js";
@@ -72,34 +67,14 @@ function taskGateFixture(root) {
   fixture.settleBefore("T-1-impl");
   fixture.activateTask("T-1", { settlePredecessors: false });
 
-  const state = flowManager.canonicalState(SPEC_ID);
-  const baseline = SourceMutationBaseline.capture({ root, attempt: state.attempt });
-  writeFile(root, "src/task-behavior.js", "export const currentTaskBehavior = false;\n");
-  const manifest = SourceMutationManifest.capture({ baseline });
-  const spec = JSON.parse(flowManager.readArtifact({
-    specId: SPEC_ID,
-    logicalKey: "spec.record",
-    consumerNodeId: "T-1-impl",
-  }).bytes.toString("utf8"));
-  flowManager.confirmSourceWorkerHandoff({
-    specId: SPEC_ID,
-    mutationManifest: manifest,
-    handoffDigest: "e".repeat(64),
-    effect: new SourceWorkerEffect({
-      version: 1,
-      stepId: "task-impl",
-      completionStatus: "done",
-      files: CanonicalSourceRequirementAuthority
-        .fromSpec(spec, { taskId: "T-1" })
-        .bindMutationIds(manifest.mutations.map((mutation) => mutation.mutationId))
-        .map((entry) => entry.toJSON()),
-      issues: [],
+  completeCanonicalSourceHandoff({
+    root, manager: flowManager, specId: SPEC_ID, stepId: "task-impl", taskId: "T-1",
+    mutate: () => writeFile(root, "src/task-behavior.js", "export const currentTaskBehavior = false;\n"),
+    effect: {
+      version: 1, stepId: "task-impl", completionStatus: "done", issues: [],
       overview: { modules: [], data_flow: [], decisions: [] },
-      triage: null,
-      repair: null,
-      noChangeReason: null,
-    }),
-    result: { outcome: "passed", summary: "Task source captured.", confirmedAt: "2026-09-03T00:00:00.000Z", artifactRefs: [] },
+      triage: null, repair: null, noChangeReason: null,
+    },
   });
   fixture.activate("T-1-review", { settlePredecessors: false });
   fixture.settle("T-1-review");

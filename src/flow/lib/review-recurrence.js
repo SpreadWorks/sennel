@@ -94,11 +94,20 @@ export class CanonicalImplementationRepairRecord {
       throw new Error("implementation repair mutation manifest is invalid");
     }
     for (const mutation of manifest.mutations) {
-      exactKeys(mutation, new Set(["mutationId", "path", "changeKind", "beforeDigest", "afterDigest"]), "implementation repair mutation");
+      exactKeys(mutation, new Set([
+        "mutationId", "path", "changeKind",
+        "beforeKind", "beforeMode", "beforeDigest",
+        "afterKind", "afterMode", "afterDigest",
+      ]), "implementation repair mutation");
       if (!isFingerprint(mutation.mutationId) || typeof mutation.path !== "string" || mutation.path === ""
         || !new Set(["added", "deleted", "content", "mode", "type"]).has(mutation.changeKind)
+        || !new Set(["missing", "symlink", "directory", "file", "other"]).has(mutation.beforeKind)
+        || !new Set(["missing", "symlink", "directory", "file", "other"]).has(mutation.afterKind)
+        || (mutation.beforeMode !== null && (!Number.isSafeInteger(mutation.beforeMode) || mutation.beforeMode < 0 || mutation.beforeMode > 0o7777))
+        || (mutation.afterMode !== null && (!Number.isSafeInteger(mutation.afterMode) || mutation.afterMode < 0 || mutation.afterMode > 0o7777))
         || (mutation.beforeDigest !== null && !isFingerprint(mutation.beforeDigest))
-        || (mutation.afterDigest !== null && !isFingerprint(mutation.afterDigest))) {
+        || (mutation.afterDigest !== null && !isFingerprint(mutation.afterDigest))
+        || (mutation.beforeKind === mutation.afterKind && mutation.beforeMode === mutation.afterMode && mutation.beforeDigest === mutation.afterDigest)) {
         throw new Error("implementation repair mutation is invalid");
       }
     }
@@ -163,8 +172,10 @@ export class CanonicalImplementationRepairRecord {
       activityId: activity.id,
       attempt: structuredClone(this.sourceMutationManifest.attempt),
       sourceFingerprint: this.sourceMutationManifest.digest,
-      mutations: this.sourceMutationManifest.mutations.map(({ path, changeKind, beforeDigest, afterDigest }) => ({
-        path, changeKind, beforeDigest, afterDigest,
+      mutations: this.sourceMutationManifest.mutations.map((mutation) => ({
+        path: mutation.path, changeKind: mutation.changeKind,
+        beforeKind: mutation.beforeKind, beforeMode: mutation.beforeMode, beforeDigest: mutation.beforeDigest,
+        afterKind: mutation.afterKind, afterMode: mutation.afterMode, afterDigest: mutation.afterDigest,
       })),
     };
   }
@@ -406,11 +417,15 @@ function taskRepairEvidence(stage, triage) {
     appliedFindingKeys: [...stage.repair.appliedFindingKeys],
     recurrenceResolutions: structuredClone(stage.repair.recurrenceResolutions ?? []),
     sourceFingerprint: stage.sourceMutationManifest.digest,
-    mutations: stage.sourceMutationManifest.mutations.map(({ path, beforeDigest, afterDigest, changeKind }) => ({
-      path,
-      beforeDigest,
-      afterDigest,
-      changeKind,
+    mutations: stage.sourceMutationManifest.mutations.map((mutation) => ({
+      path: mutation.path,
+      beforeKind: mutation.beforeKind,
+      beforeMode: mutation.beforeMode,
+      beforeDigest: mutation.beforeDigest,
+      afterKind: mutation.afterKind,
+      afterMode: mutation.afterMode,
+      afterDigest: mutation.afterDigest,
+      changeKind: mutation.changeKind,
     })),
   };
 }

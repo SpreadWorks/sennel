@@ -6,8 +6,7 @@ import { TaskLifecycleFixture, makeFlowManager } from "../infrastructure/flow-se
 import { initGitRepo, commitAll } from "../infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "./tmp-dir.js";
 import {
-  SourceMutationBaseline, SourceMutationManifest, SourceWorkerEffect,
-  WorkerArtifactHandoffCoordinator, WorkerArtifactMutationAuthoritySnapshot,
+  WorkerArtifactHandoffCoordinator,
   materializeSourceWorkerEffect, sealParentMaterializedSourceWorkerEffect,
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import SetRetryCommand from "../../../src/flow/lib/set-retry.js";
@@ -16,6 +15,8 @@ import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { TaskReviewExecutionIdentity } from "../../../src/flow/lib/task-review-execution-identity.js";
 import { runTaskReviewProtocol, parseImplReviewFindings, formatImplReviewJson } from "../../../src/flow/commands/review.js";
 import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
+import { completeCanonicalSourceHandoff } from "./source-handoff-scenario.js";
+import { FlowHandoffAuthorityLease } from "../../../src/lib/flow-handoff-authority-lease.js";
 
 class TaskReviewScenarioAgent {
   constructor(findings, edit) { this.findings = findings; this.edit = edit; }
@@ -52,20 +53,52 @@ export function createTaskStageHandoff({ root, manager, specId, taskId, role }) 
     action: { digest: "b".repeat(64), nextAction: { step: `task-${role}`, taskId } },
   };
   const ctx = taskStageContext({ root, manager, specId });
-  const request = coordinator.createRequest({ ctx, state: manager.loadReadOnly(specId), invocation });
-  return {
-    coordinator,
-    request,
-    authority: WorkerArtifactMutationAuthoritySnapshot.capture(request),
-    ctx,
+  const lease = new FlowHandoffAuthorityLease({ mainRoot: root, executionRoot: root });
+  lease.acquire();
+  let released = false;
+  const release = () => {
+    if (!released) lease.release();
+    released = true;
   };
+  try {
+    const request = coordinator.createRequest({ ctx, state: manager.loadReadOnly(specId), invocation });
+    coordinator.startSourceWorker({ ctx, request, invocation });
+    return { coordinator, request, authority: coordinator.sourceMutationAuthority({ ctx, request }), ctx, release };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
+/** Materialize and durably record one stopped Task source worker. */
+export function finishTaskStageHandoff(work, effect) {
+  materializeSourceWorkerEffect({ request: work.request, responseText: JSON.stringify(effect) });
+  sealParentMaterializedSourceWorkerEffect({ request: work.request });
+  work.coordinator.finishSourceWorker({ ctx: work.ctx, request: work.request });
+  return work;
+}
+
+/** Reconcile a stopped Task stage through its canonical parent boundary. */
+export function reconcileTaskStageHandoff(work) {
+  try {
+    return work.coordinator.reconcile({
+      ctx: work.ctx, request: work.request,
+      mutationAuthority: work.coordinator.sourceMutationAuthority({ ctx: work.ctx, request: work.request }),
+    });
+  } finally {
+    work.release();
+  }
 }
 
 /** Seal and reconcile one Task stage through its canonical parent boundary. */
 export function completeTaskStageHandoff(work, effect) {
-  materializeSourceWorkerEffect({ request: work.request, responseText: JSON.stringify(effect) });
-  sealParentMaterializedSourceWorkerEffect({ request: work.request });
-  return work.coordinator.reconcile({ ctx: work.ctx, request: work.request, mutationAuthority: work.authority });
+  try {
+    finishTaskStageHandoff(work, effect);
+  } catch (error) {
+    work.release();
+    throw error;
+  }
+  return reconcileTaskStageHandoff(work);
 }
 
 /** Local canonical fixture; never dispatches a Flow or starts a worker. */
@@ -96,17 +129,15 @@ export class TaskReviewScenario {
   }
 
   confirmImplementation(content, { claimReview = true } = {}) {
-    const baseline = SourceMutationBaseline.capture({ root: this.root, attempt: this.state().attempt });
-    fs.writeFileSync(this.sourcePath, content);
-    const manifest = SourceMutationManifest.capture({ baseline });
-    this.manager.confirmSourceWorkerHandoff({
-      specId: this.specId, mutationManifest: manifest, handoffDigest: "c".repeat(64),
-      effect: new SourceWorkerEffect({
+    completeCanonicalSourceHandoff({
+      root: this.root, manager: this.manager, specId: this.specId,
+      stepId: "task-impl", taskId: this.taskId,
+      mutate: () => fs.writeFileSync(this.sourcePath, content),
+      effect: {
         version: 1, stepId: "task-impl", completionStatus: "done",
-        files: [{ requirementId: "R-1", mutationIds: manifest.mutations.map((entry) => entry.mutationId) }],
         issues: [], overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null,
-      }),
-      result: { outcome: "passed", summary: "Implementation fixture", confirmedAt: "2026-09-07T00:00:00.000Z", artifactRefs: [] },
+        noChangeReason: null,
+      },
     });
     if (claimReview) {
       this.manager.updateStepStatus({ stepId: "T-1-review", requestedStatus: "in_progress" }, { specId: this.specId });
@@ -115,17 +146,15 @@ export class TaskReviewScenario {
   }
 
   confirmNoChangeImplementation({ claimReview = true } = {}) {
-    const baseline = SourceMutationBaseline.capture({ root: this.root, attempt: this.state().attempt });
-    const manifest = SourceMutationManifest.capture({ baseline });
-    this.manager.confirmSourceWorkerHandoff({
-      specId: this.specId, mutationManifest: manifest, handoffDigest: "d".repeat(64),
-      effect: new SourceWorkerEffect({
+    completeCanonicalSourceHandoff({
+      root: this.root, manager: this.manager, specId: this.specId,
+      stepId: "task-impl", taskId: this.taskId,
+      effect: {
         version: 1, stepId: "task-impl", completionStatus: "done",
-        files: [], issues: [], overview: { modules: [], data_flow: [], decisions: [] },
+        issues: [], overview: { modules: [], data_flow: [], decisions: [] },
         triage: null, repair: null,
         noChangeReason: "The requested behavior is already present in the canonical source.",
-      }),
-      result: { outcome: "passed", summary: "No source mutation required", confirmedAt: "2026-09-07T00:00:00.000Z", artifactRefs: [] },
+      },
     });
     if (claimReview) {
       this.manager.updateStepStatus({ stepId: "T-1-review", requestedStatus: "in_progress" }, { specId: this.specId });
@@ -188,8 +217,24 @@ export class TaskReviewScenario {
   }
 
   sealHandoff(work, effect) {
-    materializeSourceWorkerEffect({ request: work.request, responseText: JSON.stringify(effect) });
-    sealParentMaterializedSourceWorkerEffect({ request: work.request });
+    try {
+      finishTaskStageHandoff(work, effect);
+    } finally {
+      work.release();
+    }
+  }
+
+  finishHandoff(work, effect) {
+    try {
+      return finishTaskStageHandoff(work, effect);
+    } catch (error) {
+      work.release();
+      throw error;
+    }
+  }
+
+  reconcileHandoff(work) {
+    return reconcileTaskStageHandoff(work);
   }
 
   completeHandoff(work, effect) {
