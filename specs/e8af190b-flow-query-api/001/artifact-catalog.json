@@ -5,15 +5,15 @@
       "logicalKey": "flow.activities",
       "kind": "activity-ledger",
       "relativePath": "activities.jsonl",
-      "hash": "173aaa4a46616bfb2ffdc9734f1d58fad5647776882234cb742c289c645c9168",
-      "size": 938011,
+      "hash": "3809d734f15a058d541d093000f5ade84e4b05411f1136ad04bccd64a47910e9",
+      "size": 939840,
       "mediaType": "application/x-ndjson",
       "authority": "canonical-flow-artifacts",
       "cardinality": "singleton",
       "memberId": null,
-      "publicationStep": "system",
+      "publicationStep": "task-impl",
       "retention": "permanent",
-      "activityId": "note-recorded-0a431014-e054-454c-bfd9-06a1cc0430f9",
+      "activityId": "artifacts-published-f3373f6a-4d4e-4b11-ad47-b06ac0adf2f2",
       "migrationMaterialization": false
     },
     {
@@ -680,30 +680,30 @@
       "logicalKey": "flow.state",
       "kind": "flow-state",
       "relativePath": "flow.json",
-      "hash": "122368015b7afc7e57618ed588541c89863eeaeee123f3f16ecbe58beea4ff99",
+      "hash": "bfde753973c60a1ee99ac33987c54d5ffb3cd1b72c64dc0bc55d6535222d9ef2",
       "size": 46801,
       "mediaType": "application/json",
       "authority": "repository-metadata",
       "cardinality": "singleton",
       "memberId": null,
-      "publicationStep": "system",
+      "publicationStep": "task-impl",
       "retention": "permanent",
-      "activityId": "note-recorded-0a431014-e054-454c-bfd9-06a1cc0430f9",
+      "activityId": "artifacts-published-f3373f6a-4d4e-4b11-ad47-b06ac0adf2f2",
       "migrationMaterialization": false
     },
     {
       "logicalKey": "issue.log",
       "kind": "issue-log",
       "relativePath": "issue-log.json",
-      "hash": "a2a2c871fb03fb296561c19f307c32de221482ad0f4e16d78484ade664f55871",
-      "size": 528852,
+      "hash": "c90dc75066596e144559ac0394ef1fb3d87435a33f996642275f772aeae8e456",
+      "size": 529483,
       "mediaType": "application/json",
       "authority": "canonical-flow-artifacts",
       "cardinality": "singleton",
       "memberId": null,
       "publicationStep": "task-impl",
       "retention": "permanent",
-      "activityId": "artifacts-published-d0ce09b6-9fb0-43d3-9bcc-1b2af53640ac",
+      "activityId": "artifacts-published-f3373f6a-4d4e-4b11-ad47-b06ac0adf2f2",
       "migrationMaterialization": false
     },
     {
@@ -2957,5 +2957,5 @@
       "migrationMaterialization": false
     }
   ],
-  "hash": "c6369076335f038fd69873fa04b322e1f10f0b70f910452a0cc7e806d85cbf43"
+  "hash": "1a408c83fd86e04ee80bbb5d23a3526fbdfba2f7f7198681a95e1bca44c559e0"
 }
