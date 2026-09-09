@@ -12,7 +12,8 @@ import { managedDir } from "./config.js";
 import { AtomicFile } from "./atomic-file.js";
 import { AtomicJsonFile } from "./atomic-json-file.js";
 import { PreparingFlowState } from "./preparing-flow-state.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "./process-owned-lock.js";
+import { FileLock } from "./file-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import {
   PREPARING_PREFIX,
   PREPARING_SCAN_LIMIT,
@@ -216,13 +217,13 @@ export class PreparingFlowStore {
     });
     const errorFactory = (status, message, { lockPath, cause } = {}) => {
       const error = new Error(message, { cause });
-      error.code = status === "live"
+      error.code = status === "live" || status === "timeout"
         ? "PREPARING_FLOW_BUSY"
         : `PREPARING_FLOW_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
       error.lockPath = lockPath;
       return error;
     };
-    const lock = new ProcessOwnedLock({
+    const lock = new FileLock({
       directoryAuthority,
       fileName: id.lockName(),
       kind: "preparing-flow",
@@ -230,28 +231,7 @@ export class PreparingFlowStore {
       ...(this._processIdentitySource && { processIdentitySource: this._processIdentitySource }),
       errorFactory,
     });
-    lock.acquire();
-    let result;
-    let primaryError = null;
-    try {
-      result = body();
-    } catch (error) {
-      primaryError = error;
-    }
-    try {
-      lock.release();
-    } catch (cleanupError) {
-      if (primaryError) {
-        throw new AggregateError(
-          [primaryError, cleanupError],
-          "preparing flow mutation and lock cleanup both failed",
-          { cause: primaryError },
-        );
-      }
-      throw cleanupError;
-    }
-    if (primaryError) throw primaryError;
-    return result;
+    return lock.runExclusive(body);
   }
 
 }

@@ -40,8 +40,8 @@ src/spec/commands/    (cli)
 
 | ディレクトリ | ファイル数 | 役割 |
 | --- | --- | --- |
-| src/flow | 225 | controller, lib, model, spec rationale section builder for prompts, config, cli, get guardrail flow command, middleware, route, Typed review-observation model with validation and legacy normalization., Retry counter and failure classification utility, Metric setter command handler, test-header-validator |
-| src/lib | 93 | lib, Metric dimension normalizer shared by agent runner and metrics aggregator, middleware, model, cli, config, controller, Error preview formatter utility, Option normalization utility, Core utility for translating glob patterns into executable regular expressions., migration, lint-executor, Makefile parsing utility for automated test command discovery., view, Repository path matching utility, Fluent builder for AI prompts assembled from labeled sections, Skill rule loader and directive expander, Test command source collection and precedence resolution., other |
+| src/flow | 239 | controller, lib, cli, model, config, get guardrail flow command, middleware, route, Typed review-observation model with validation and legacy normalization., Retry counter and failure classification utility, Metric setter command handler, test-header-validator |
+| src/lib | 95 | lib, Metric dimension normalizer shared by agent runner and metrics aggregator, middleware, model, cli, config, controller, Error preview formatter utility, Option normalization utility, Core utility for translating glob patterns into executable regular expressions., migration, lint-executor, Makefile parsing utility for automated test command discovery., view, Repository path matching utility, Fluent builder for AI prompts assembled from labeled sections, Skill rule loader and directive expander, Test command source collection and precedence resolution., other |
 | src/docs | 45 | cli, analysis entry core library, utility, model, lib, rendering, test environment detector, text fill prompt library |
 | src | 13 | cli, route, view |
 | src/data | 6 | model, data-source |

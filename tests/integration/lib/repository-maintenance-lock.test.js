@@ -24,6 +24,18 @@ function identitySource({ boot = "boot", start = "100", unknown = false } = {}) 
   });
 }
 
+function lockSnapshot(lockPath) {
+  const stat = fs.lstatSync(lockPath);
+  return { bytes: fs.readFileSync(lockPath), dev: stat.dev, ino: stat.ino };
+}
+
+function assertLockUnchanged(lockPath, snapshot, label) {
+  assert.deepEqual(fs.readFileSync(lockPath), snapshot.bytes, `${label} preserves lock bytes`);
+  const current = fs.lstatSync(lockPath);
+  assert.equal(current.dev, snapshot.dev, `${label} preserves lock device`);
+  assert.equal(current.ino, snapshot.ino, `${label} preserves lock identity`);
+}
+
 describe("repository maintenance lock", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
@@ -47,11 +59,15 @@ describe("repository maintenance lock", () => {
     flow.release();
   });
 
-  it("shares a flow-operation lock within the owning process", () => {
+  it("shares a flow-operation lock only with an explicitly supplied owner token", () => {
     tmp = createTmpDir("repository-flow-reentrant-");
     const outer = new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: identitySource() });
     const ownerToken = outer.acquire();
-    const nested = new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: identitySource() });
+    const nested = new RepositoryFlowOperationLock({
+      mainRoot: tmp,
+      operationOwnerToken: ownerToken,
+      processIdentitySource: identitySource(),
+    });
 
     assert.equal(nested.acquire(), ownerToken);
     nested.release();
@@ -59,6 +75,96 @@ describe("repository maintenance lock", () => {
 
     outer.release();
     assert.equal(fs.existsSync(path.join(tmp, ".sennel", ".repository-flow-operation.lock")), false);
+  });
+
+  it("rejects implicit same-process borrowing and a different supplied owner token", () => {
+    tmp = createTmpDir("repository-flow-explicit-owner-");
+    const source = identitySource();
+    const outer = new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: source });
+    outer.acquire();
+    try {
+      assert.throws(
+        () => new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: source }).acquire(),
+        (error) => error.code === "REPOSITORY_FLOW_OPERATION_BUSY",
+      );
+      assert.throws(
+        () => new RepositoryFlowOperationLock({
+          mainRoot: tmp,
+          operationOwnerToken: "22222222-2222-4222-8222-222222222222",
+          processIdentitySource: source,
+        }).acquire(),
+        (error) => error.code === "REPOSITORY_FLOW_OPERATION_BUSY",
+      );
+    } finally {
+      outer.release();
+    }
+  });
+
+  it("assesses the canonical owner before rejecting supplied operation tokens", () => {
+    tmp = createTmpDir("repository-flow-owner-assessment-");
+    const ownerSource = identitySource();
+    const outer = new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: ownerSource });
+    const ownerToken = outer.acquire();
+    const lockPath = path.join(tmp, ".sennel", ".repository-flow-operation.lock");
+    const before = lockSnapshot(lockPath);
+    const differentToken = "22222222-2222-4222-8222-222222222222";
+
+    try {
+      const cases = [
+        ["without a token", null, identitySource(), "REPOSITORY_FLOW_OPERATION_BUSY", "live"],
+        ["without a token against an unknown owner", null, identitySource({ unknown: true }), "REPOSITORY_FLOW_OPERATION_LOCK_UNKNOWN", "unknown"],
+        ["with the matching live token", ownerToken, identitySource(), null, null],
+        ["with a different live token", differentToken, identitySource(), "REPOSITORY_FLOW_OPERATION_BUSY", "live"],
+        ["with the matching unknown token", ownerToken, identitySource({ unknown: true }), "REPOSITORY_FLOW_OPERATION_LOCK_UNKNOWN", "unknown"],
+        ["with a different unknown token", differentToken, identitySource({ unknown: true }), "REPOSITORY_FLOW_OPERATION_LOCK_UNKNOWN", "unknown"],
+        ["with the matching stale token", ownerToken, identitySource({ boot: "other-boot" }), "REPOSITORY_FLOW_OPERATION_LOCK_STALE", "stale"],
+        ["with a different stale token", differentToken, identitySource({ boot: "other-boot" }), "REPOSITORY_FLOW_OPERATION_LOCK_STALE", "stale"],
+      ];
+
+      for (const [label, operationOwnerToken, processIdentitySource, code, lockStatus] of cases) {
+        const candidate = new RepositoryFlowOperationLock({
+          mainRoot: tmp,
+          operationOwnerToken,
+          processIdentitySource,
+        });
+        if (code === null) {
+          assert.equal(candidate.acquire(), ownerToken, label);
+          assert.equal(candidate.assertOwned(), ownerToken, `${label} retains canonical ownership`);
+          candidate.release();
+        } else {
+          assert.throws(
+            () => candidate.acquire(),
+            (error) => error.code === code
+              && error.lockStatus === lockStatus
+              && error.lockPath === lockPath
+              && error.owner?.processIdentity?.ownerToken === ownerToken
+              && Object.hasOwn(error, "cause")
+              && error.cause === undefined,
+            label,
+          );
+        }
+        assertLockUnchanged(lockPath, before, label);
+      }
+    } finally {
+      outer.release();
+    }
+  });
+
+  it("rejects a supplied owner token after its canonical lock was released", () => {
+    tmp = createTmpDir("repository-flow-released-owner-");
+    const source = identitySource();
+    const outer = new RepositoryFlowOperationLock({ mainRoot: tmp, processIdentitySource: source });
+    const ownerToken = outer.acquire();
+    outer.release();
+
+    assert.throws(
+      () => new RepositoryFlowOperationLock({
+        mainRoot: tmp,
+        operationOwnerToken: ownerToken,
+        processIdentitySource: source,
+      }).acquire(),
+      (error) => error.code === "REPOSITORY_LOCK_OWNERSHIP_CHANGED",
+    );
   });
 
   it("reports structured diagnostics for a foreign live flow-operation owner", () => {

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { FlowHandoffAuthorityLease } from "../../lib/flow-handoff-authority-lease.js";
 import { PRODUCT } from "../../lib/product.js";
 import { validateSpecJsonObject } from "../../lib/spec-json.js";
 import { validateSchema } from "../../lib/schema-validate.js";
@@ -25,7 +26,9 @@ import {
   PromoteDraftQuestionAndKeepRefineActive,
   resolveDraftCoverageRepairCompletion,
   resolveLifecyclePlan,
+  resolveSourceHandoffTransitionPlan,
 } from "../definition.js";
+import { SourceHandoffFailureFacts } from "./source-handoff-failure.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
 import {
   DraftCompletionFacts,
@@ -100,9 +103,9 @@ import { loadMergedGuardrails } from "../../lib/guardrail.js";
 import { CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
 
 export const WORKER_ARTIFACT_HANDOFF_REQUEST_ENV = PRODUCT.env("FLOW_HANDOFF_REQUEST");
-// Structured source responses change fresh-dispatch producer ownership only.
-// The durable request, effects, and submission documents stay Version 3 so
-// existing pending handoffs retain their recovery contract.
+// Artifact-only requests retain Version 3.  Source workers additionally bind
+// a canonical checkpoint and intentionally reject legacy pending requests:
+// they cannot prove the pre-worker authority after a parent restart.
 export const WORKER_ARTIFACT_HANDOFF_VERSION = 3;
 export const WORKER_ARTIFACT_HANDOFF_ROOT = PRODUCT.managedPath("handoffs");
 
@@ -119,6 +122,7 @@ const MAX_AUTHORITY_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_AUTHORITY_TOTAL_FILE_BYTES = 256 * 1024 * 1024;
 const FLOW_REPOSITORY_RUNTIME_ARTIFACTS = new FlowRepositoryRuntimeArtifactRegistry();
 const AUTHORITY_ENTRY_KINDS = new Set(["missing", "symlink", "directory", "file", "other"]);
+const TEMPORARY_CANONICAL_READ_CODES = new Set(["EAGAIN", "EBUSY", "EIO", "EMFILE", "ENFILE"]);
 const SPEC_TEST_FILE = /\.(?:js|mjs|ts|json|md|ya?ml|txt|sh)$/;
 const COMMAND_OWNED_SPEC_TEST_DIRECTORY = ".raw";
 
@@ -136,6 +140,16 @@ const SOURCE_EFFECT_KEYS = Object.freeze([
 const SOURCE_EFFECT_REPORT_KEYS = Object.freeze(
   SOURCE_EFFECT_KEYS.filter((key) => key !== "files"),
 );
+
+function sourceHandoffReadError(cause, message) {
+  const temporary = TEMPORARY_CANONICAL_READ_CODES.has(cause?.code ?? cause?.cause?.code);
+  return new WorkerArtifactHandoffError(
+    temporary ? "missing" : "recovery-required",
+    temporary ? "FLOW_SOURCE_HANDOFF_RECOVERY_UNAVAILABLE" : "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+    `${message}: ${cause.message}`,
+    { cause, retryable: temporary, recoveryPossible: false },
+  );
+}
 
 function requiredString(value, field) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
@@ -194,6 +208,13 @@ function stableStringify(value) {
 function digest(value) {
   const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
   return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+
+function base64Bytes(value, label) {
+  if (typeof value !== "string") throw new Error(`${label} must be a base64 string`);
+  const bytes = Buffer.from(value, "base64");
+  if (bytes.toString("base64") !== value) throw new Error(`${label} is not canonical base64`);
+  return bytes;
 }
 
 function boundedJson(filePath, label, { retryableMalformedJson = false } = {}) {
@@ -1638,12 +1659,24 @@ function authorityFileEntry(root, relativePath, budget) {
   });
 }
 
-function gitIndexComparableEntry(entry) {
-  if (entry.kind !== "file" && entry.kind !== "symlink") return entry;
-  return new WorkerArtifactRepositoryEntry({
-    ...entry.toJSON(),
-    mode: entry.kind === "symlink" ? 0o777 : (entry.mode & 0o111) === 0 ? 0o644 : 0o755,
-  });
+/** Fingerprint a tracked path's filesystem kind and exact permission bits. */
+function authorityModeEntry(root, relativePath) {
+  const normalized = normalizedRelativePath(relativePath, "worker artifact tracked mode path");
+  const filePath = path.resolve(root, ...normalized.split("/"));
+  if (!isWithin(root, filePath)) throw authoritySnapshotError(`worker artifact tracked mode escapes its repository: ${normalized}`);
+  let stat;
+  try {
+    stat = fs.lstatSync(filePath);
+  } catch (cause) {
+    if (cause.code === "ENOENT") {
+      return new WorkerArtifactRepositoryEntry({ path: normalized, kind: "missing", mode: null, digest: null });
+    }
+    throw authoritySnapshotError(`worker artifact authority could not inspect tracked mode ${normalized}: ${cause.message}`, cause);
+  }
+  const kind = stat.isSymbolicLink() ? "symlink"
+    : stat.isDirectory() ? "directory"
+      : stat.isFile() ? "file" : "other";
+  return new WorkerArtifactRepositoryEntry({ path: normalized, kind, mode: stat.mode & 0o7777, digest: null });
 }
 
 function filteredIndexDigest(root, bytes, ignoredDirectories, runtimeLocks) {
@@ -1667,7 +1700,7 @@ function gitAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = []
     ignoredDirectories,
     runtimeLocks,
   );
-  const tracked = nullSeparatedPaths(
+  const dirtyTracked = nullSeparatedPaths(
     boundedGitOutput(
       root,
       ["diff", "--name-only", "-z", "--no-renames", "HEAD", "--"],
@@ -1683,7 +1716,7 @@ function gitAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = []
     ),
     "untracked path set",
   );
-  const paths = [...new Set([...tracked, ...untracked])]
+  const paths = [...new Set([...dirtyTracked, ...untracked])]
     .filter((relativePath) => !isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks))
     .sort((left, right) => left.localeCompare(right));
   if (paths.length > MAX_AUTHORITY_DIRTY_PATHS) {
@@ -1692,11 +1725,20 @@ function gitAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = []
     );
   }
   const budget = { bytes: 0 };
+  const trackedPaths = nullSeparatedPaths(
+    boundedGitOutput(root, ["ls-files", "-z"], "tracked path set"),
+    "tracked path set",
+  ).filter((relativePath) => !isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks))
+    .sort((left, right) => left.localeCompare(right));
   return {
     mode: "git",
     head,
     indexDigest,
     entries: paths.map((relativePath) => authorityFileEntry(root, relativePath, budget)),
+    // Git's executable bit cannot represent the full filesystem mode, and
+    // core.filemode can suppress even that diff. Record exact lstat metadata
+    // for tracked paths without copying their content into the checkpoint.
+    modeEntries: trackedPaths.map((relativePath) => authorityModeEntry(root, relativePath)),
   };
 }
 
@@ -1732,11 +1774,12 @@ function filesystemAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLoc
     entries: relativePaths
       .sort((left, right) => left.localeCompare(right))
       .map((relativePath) => authorityFileEntry(root, relativePath, budget)),
+    modeEntries: [],
   };
 }
 
 export class WorkerArtifactRepositoryMutationSnapshot {
-  constructor({ root, authorities, ignoredDirectories = [], runtimeLocks = [], mode, head, indexDigest, entries }) {
+  constructor({ root, authorities, ignoredDirectories = [], runtimeLocks = [], mode, head, indexDigest, entries, modeEntries = [] }) {
     this.root = path.resolve(root);
     this.authorities = Object.freeze(authorities.map((entry) => requiredString(
       entry,
@@ -1755,11 +1798,19 @@ export class WorkerArtifactRepositoryMutationSnapshot {
         ? entry
         : new WorkerArtifactRepositoryEntry(entry)
     )));
+    if (!Array.isArray(modeEntries)) throw new Error("worker artifact repository mode entries must be an array");
+    this.modeEntries = Object.freeze(modeEntries.map((entry) => (
+      entry instanceof WorkerArtifactRepositoryEntry ? entry : new WorkerArtifactRepositoryEntry(entry)
+    )));
+    if (new Set(this.modeEntries.map((entry) => entry.path)).size !== this.modeEntries.length) {
+      throw new Error("worker artifact repository mode entries must be unique");
+    }
     this.digest = digest(stableStringify({
       mode,
       head,
       indexDigest,
       entries: this.entries.map((entry) => entry.toJSON()),
+      modeEntries: this.modeEntries.map((entry) => entry.toJSON()),
     }));
     Object.freeze(this);
   }
@@ -1789,8 +1840,8 @@ export class WorkerArtifactRepositoryMutationSnapshot {
   }
 
   static fromStored(value, { root, authorities = ["execution"], runtimeLocks = [] } = {}) {
-    exactObjectKeys(value, ["mode", "head", "indexDigest", "entries", "ignoredDirectories"], "source mutation baseline snapshot");
-    if (!Array.isArray(value.entries)) throw new Error("source mutation baseline snapshot entries must be an array");
+    exactObjectKeys(value, ["mode", "head", "indexDigest", "entries", "modeEntries", "ignoredDirectories"], "source mutation baseline snapshot");
+    if (!Array.isArray(value.entries) || !Array.isArray(value.modeEntries)) throw new Error("source mutation baseline snapshot entries must be arrays");
     return new WorkerArtifactRepositoryMutationSnapshot({
       root,
       authorities,
@@ -1800,6 +1851,7 @@ export class WorkerArtifactRepositoryMutationSnapshot {
       head: value.head,
       indexDigest: value.indexDigest,
       entries: value.entries,
+      modeEntries: value.modeEntries,
     });
   }
 
@@ -1809,6 +1861,7 @@ export class WorkerArtifactRepositoryMutationSnapshot {
       head: this.head,
       indexDigest: this.indexDigest,
       entries: this.entries.map((entry) => entry.toJSON()),
+      modeEntries: this.modeEntries.map((entry) => entry.toJSON()),
       ignoredDirectories: [...this.ignoredDirectories],
     };
   }
@@ -1822,10 +1875,27 @@ export class WorkerArtifactRepositoryMutationSnapshot {
     const changed = [];
     if (this.head !== current.head) changed.push("<HEAD>");
     if (this.indexDigest !== current.indexDigest) changed.push("<index>");
+    const beforeEntries = new Map(this.entries.map((entry) => [entry.path, entry]));
+    const afterEntries = new Map(current.entries.map((entry) => [entry.path, entry]));
     const before = new Map(this.entries.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
     const after = new Map(current.entries.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
-    for (const relativePath of new Set([...before.keys(), ...after.keys()])) {
-      if (before.get(relativePath) !== after.get(relativePath)) changed.push(relativePath);
+    const beforeModes = new Map(this.modeEntries.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
+    const afterModes = new Map(current.modeEntries.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
+    for (const relativePath of new Set([...before.keys(), ...after.keys(), ...beforeModes.keys(), ...afterModes.keys()])) {
+      if (before.get(relativePath) !== after.get(relativePath)
+        || beforeModes.get(relativePath) !== afterModes.get(relativePath)) {
+        // A transient handoff subtree can be created after baseline capture.
+        // Its previously absent ancestor directories are bookkeeping, not
+        // source changes; sibling entries remain independently fingerprinted.
+        const beforeEntry = beforeEntries.get(relativePath) ?? null;
+        const afterEntry = afterEntries.get(relativePath) ?? null;
+        const createdIgnoredAncestor = this.ignoredDirectories.some((directory) => directory.startsWith(`${relativePath}/`))
+          && (beforeEntry === null || beforeEntry.kind === "missing")
+          && afterEntry?.kind === "directory";
+        if (!createdIgnoredAncestor) {
+          changed.push(relativePath);
+        }
+      }
     }
     return changed;
   }
@@ -1882,18 +1952,44 @@ export class SourceMutationBaseline {
 }
 
 export class SourceMutationEntry {
-  constructor({ mutationId, path: relativePath, changeKind, beforeDigest, afterDigest } = {}) {
+  constructor({ mutationId, path: relativePath, changeKind, beforeKind, beforeMode, beforeDigest, afterKind, afterMode, afterDigest } = {}) {
     this.mutationId = requiredDigest(mutationId, "source mutation id");
     this.path = normalizedRelativePath(relativePath, "source mutation path");
     this.changeKind = requiredString(changeKind, "source mutation changeKind");
     if (!new Set(["added", "deleted", "content", "mode", "type"]).has(this.changeKind)) {
       throw new Error("source mutation changeKind is invalid");
     }
-    this.beforeDigest = beforeDigest === null ? null : requiredDigest(beforeDigest, "source mutation beforeDigest");
-    this.afterDigest = afterDigest === null ? null : requiredDigest(afterDigest, "source mutation afterDigest");
+    const before = new WorkerArtifactRepositoryEntry({
+      path: this.path, kind: beforeKind, mode: beforeMode, digest: beforeDigest,
+    });
+    const after = new WorkerArtifactRepositoryEntry({
+      path: this.path, kind: afterKind, mode: afterMode, digest: afterDigest,
+    });
+    if (before.kind === after.kind && before.mode === after.mode && before.digest === after.digest) {
+      throw new Error("source mutation entry has no before/after change");
+    }
+    const expectedChangeKind = before.kind === "missing" ? "added"
+      : after.kind === "missing" ? "deleted"
+        : before.kind !== after.kind ? "type"
+          : before.mode !== after.mode ? "mode" : "content";
+    if (this.changeKind !== expectedChangeKind) {
+      throw new Error("source mutation changeKind does not match its entry fingerprints");
+    }
+    this.beforeKind = before.kind;
+    this.beforeMode = before.mode;
+    this.beforeDigest = before.digest;
+    this.afterKind = after.kind;
+    this.afterMode = after.mode;
+    this.afterDigest = after.digest;
     Object.freeze(this);
   }
-  toJSON() { return { mutationId: this.mutationId, path: this.path, changeKind: this.changeKind, beforeDigest: this.beforeDigest, afterDigest: this.afterDigest }; }
+  toJSON() {
+    return {
+      mutationId: this.mutationId, path: this.path, changeKind: this.changeKind,
+      beforeKind: this.beforeKind, beforeMode: this.beforeMode, beforeDigest: this.beforeDigest,
+      afterKind: this.afterKind, afterMode: this.afterMode, afterDigest: this.afterDigest,
+    };
+  }
 }
 
 /** Canonical, Attempt-bound declaration of actual source mutations. */
@@ -1935,6 +2031,8 @@ export class SourceMutationManifest {
     }
     const before = new Map(baseline.snapshot.entries.map((entry) => [entry.path, entry]));
     const after = new Map(current.entries.map((entry) => [entry.path, entry]));
+    const beforeModes = new Map(baseline.snapshot.modeEntries.map((entry) => [entry.path, entry]));
+    const afterModes = new Map(current.modeEntries.map((entry) => [entry.path, entry]));
     const indexBudget = { bytes: 0 };
     const mutations = changed.map((relativePath) => {
       // Git snapshots intentionally record only dirty paths. With HEAD and
@@ -1946,23 +2044,32 @@ export class SourceMutationManifest {
       const indexedAfter = after.get(relativePath) === undefined && baseline.snapshot.mode === "git"
         ? indexedSourceMutationCurrentEntry(baseline.snapshot.root, relativePath, indexBudget)
         : null;
-      const left = before.get(relativePath) || indexedBefore || new WorkerArtifactRepositoryEntry({ path: relativePath, kind: "missing", mode: null, digest: null });
+      const recordedBefore = before.get(relativePath) || indexedBefore || new WorkerArtifactRepositoryEntry({ path: relativePath, kind: "missing", mode: null, digest: null });
       const recordedAfter = after.get(relativePath);
-      const right = recordedAfter === undefined
+      const recordedRight = recordedAfter === undefined
         ? indexedAfter || new WorkerArtifactRepositoryEntry({ path: relativePath, kind: "missing", mode: null, digest: null })
-        : indexedBefore === null
-          ? recordedAfter
-          : gitIndexComparableEntry(recordedAfter);
+        : recordedAfter;
+      const leftMode = beforeModes.get(relativePath) ?? null;
+      const rightMode = afterModes.get(relativePath) ?? null;
+      const left = leftMode === null ? recordedBefore : new WorkerArtifactRepositoryEntry({
+        ...recordedBefore.toJSON(), kind: leftMode.kind, mode: leftMode.mode,
+      });
+      const right = rightMode === null ? recordedRight : new WorkerArtifactRepositoryEntry({
+        ...recordedRight.toJSON(), kind: rightMode.kind, mode: rightMode.mode,
+      });
       const changeKind = left.kind === "missing" ? "added"
         : right.kind === "missing" ? "deleted"
           : left.kind !== right.kind ? "type"
             : left.mode !== right.mode ? "mode" : "content";
-      if ((left.kind === "directory" || right.kind === "directory") && changeKind !== "type") return null;
       return new SourceMutationEntry({
         mutationId: SourceMutationManifest.mutationId(baseline.attempt, relativePath),
         path: relativePath,
         changeKind,
+        beforeKind: left.kind,
+        beforeMode: left.mode,
         beforeDigest: left.digest,
+        afterKind: right.kind,
+        afterMode: right.mode,
         afterDigest: right.digest,
       });
     }).filter((entry) => entry !== null);
@@ -2014,6 +2121,22 @@ export class SourceMutationManifest {
     }
     return current;
   }
+}
+
+function assertRollbackResumeObservation({ baseline, observed }) {
+  observed.assertBinding(baseline);
+  const current = SourceMutationManifest.capture({ baseline });
+  const expected = new Map(observed.mutations.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
+  for (const mutation of current.mutations) {
+    if (expected.get(mutation.path) !== stableStringify(mutation.toJSON())) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED",
+        "source rollback cannot prove ownership of the current after-image",
+        { retryable: false, recoveryPossible: false },
+      );
+    }
+  }
+  return current;
 }
 
 function indexedSourceMutationBaselineEntry(root, relativePath, budget) {
@@ -2085,28 +2208,17 @@ export class SourceWorkerCanonicalObservationAdvance {
 
   static capture({ flowManager, specId }) {
     try {
-      const location = flowManager.specLocation(specId);
-      const activityPrefix = flowManager.activityLedger(specId);
-      const activityBytes = fs.readFileSync(location.activitiesFile);
-      const runtimeLocks = [
-        location.runtimeLock("runtime.lock.artifact-catalog"),
-        location.runtimeLock("runtime.lock.current-flow-state"),
-      ];
-      return new SourceWorkerCanonicalObservationAdvance({
-        activityPrefix,
-        activityBytes,
-        mutablePaths: [
-          path.relative(location.directory, location.flowStateFile),
-          path.relative(location.directory, location.activitiesFile),
-          path.relative(location.directory, location.catalogFile),
-        ].map((entry) => entry.split(path.sep).join("/")),
-        canonicalSnapshot: WorkerArtifactRepositoryMutationSnapshot.capture({
-          root: location.directory,
-          authorities: ["canonical"],
-          runtimeLocks,
-        }),
+      if (typeof flowManager.readCanonicalTransitionView !== "function") {
+        throw new Error("canonical Version does not provide a coherent transition view");
+      }
+      return flowManager.readCanonicalTransitionView({
+        specId,
+        read: (view) => SourceWorkerCanonicalObservationAdvance.captureTransitionView(view),
       });
     } catch (cause) {
+      if (TEMPORARY_CANONICAL_READ_CODES.has(cause?.code ?? cause?.cause?.code)) {
+        throw sourceHandoffReadError(cause, "canonical source handoff authority is unavailable");
+      }
       throw new WorkerArtifactHandoffError(
         "invalid",
         "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
@@ -2116,14 +2228,46 @@ export class SourceWorkerCanonicalObservationAdvance {
     }
   }
 
-  static fromStored(value, { flowManager, specId } = {}) {
+  static captureTransitionView(view) {
+    if (view === null || typeof view !== "object" || !Array.isArray(view.activities)
+      || view.location === null || typeof view.location.activitiesFile !== "string") {
+      throw new Error("source worker canonical observation requires a transition view");
+    }
+    const location = view.location;
+    const activityPrefix = view.activities.map((activity) => {
+      if (typeof activity?.toJSON !== "function") {
+        throw new Error("source worker canonical observation requires typed Activities");
+      }
+      return activity.toJSON();
+    });
+    const runtimeLocks = [
+      location.runtimeLock("runtime.lock.artifact-catalog"),
+      location.runtimeLock("runtime.lock.current-flow-state"),
+    ];
+    return new SourceWorkerCanonicalObservationAdvance({
+      activityPrefix,
+      activityBytes: fs.readFileSync(location.activitiesFile),
+      mutablePaths: [
+        path.relative(location.directory, location.flowStateFile),
+        path.relative(location.directory, location.activitiesFile),
+        path.relative(location.directory, location.catalogFile),
+      ].map((entry) => entry.split(path.sep).join("/")),
+      canonicalSnapshot: WorkerArtifactRepositoryMutationSnapshot.capture({
+        root: location.directory,
+        authorities: ["canonical"],
+        runtimeLocks,
+      }),
+    });
+  }
+
+  static fromStored(value, { canonicalLocation } = {}) {
     if (value === null || typeof value !== "object" || !Array.isArray(value.activityPrefix)
       || typeof value.activityBytes !== "string" || !Array.isArray(value.mutablePaths)
       || value.canonicalSnapshot === null || typeof value.canonicalSnapshot !== "object"
-      || flowManager === null || typeof flowManager?.specLocation !== "function") {
+      || canonicalLocation === null || typeof canonicalLocation?.runtimeLock !== "function") {
       throw new Error("stored source worker canonical observation is invalid");
     }
-    const location = flowManager.specLocation(specId);
+    const location = canonicalLocation;
     const runtimeLocks = [
       location.runtimeLock("runtime.lock.artifact-catalog"),
       location.runtimeLock("runtime.lock.current-flow-state"),
@@ -2182,58 +2326,18 @@ export class SourceWorkerCanonicalObservationAdvance {
     if (!(canonicalSnapshot instanceof WorkerArtifactRepositoryMutationSnapshot)) {
       throw new Error("source worker canonical observation validation requires a canonical repository snapshot");
     }
-    let current;
-    let location;
     try {
-      // These readers validate the Version Store's catalog/state/journal
-      // consistency. Do not inspect raw files here: a readable Version is the
-      // only authority for deciding whether an observation is legitimate.
-      if (flowManager.load(specId) === null) {
-        throw new Error("canonical Version no longer exists");
+      if (typeof flowManager.readCanonicalTransitionView !== "function") {
+        throw new Error("canonical Version does not provide a coherent transition view");
       }
-      current = flowManager.activityLedger(specId);
-      location = flowManager.specLocation(specId);
-    } catch (cause) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-        `canonical Version is unreadable after source worker handoff: ${cause.message}`,
-        { cause, retryable: false },
-      );
-    }
-    let currentSnapshot;
-    let activityBytes;
-    try {
-      currentSnapshot = WorkerArtifactRepositoryMutationSnapshot.capture({
-        root: canonicalSnapshot.root,
-        authorities: canonicalSnapshot.authorities,
-        ignoredDirectories: canonicalSnapshot.ignoredDirectories,
-        runtimeLocks: canonicalSnapshot.runtimeLocks,
+      return flowManager.readCanonicalTransitionView({
+        specId,
+        read: (view) => this.#advanceTransitionView(view, canonicalSnapshot, true),
       });
-      activityBytes = fs.readFileSync(location.activitiesFile);
     } catch (cause) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-        `canonical Version changed outside its validated Activity ledger: ${cause.message}`,
-        { cause, retryable: false },
-      );
+      if (cause instanceof WorkerArtifactHandoffError) throw cause;
+      throw sourceHandoffReadError(cause, "canonical source handoff authority is unavailable");
     }
-    const addedActivities = assertCanonicalObservationAdvance({
-      observation: this,
-      current,
-      activityBytes,
-      currentSnapshot,
-      allowedPublications: this.allowedPublications,
-      allowedActivityIds: this.allowedActivityIds,
-    });
-    return new SourceWorkerCanonicalObservationAdvance({
-      activityPrefix: current,
-      activityBytes,
-      mutablePaths: this.mutablePaths,
-      canonicalSnapshot: currentSnapshot,
-      addedActivities,
-    });
   }
 
   /**
@@ -2242,6 +2346,11 @@ export class SourceWorkerCanonicalObservationAdvance {
    * reentering FlowManager while a transition owns the catalog lock.
    */
   assertTransitionView(view) {
+    this.#advanceTransitionView(view, this.canonicalSnapshot, false);
+    return this;
+  }
+
+  #advanceTransitionView(view, canonicalSnapshot, advance) {
     if (view === null || typeof view !== "object" || !Array.isArray(view.activities)
       || view.location === null || typeof view.location.activitiesFile !== "string") {
       throw new Error("source worker canonical observation requires a transition view");
@@ -2252,20 +2361,34 @@ export class SourceWorkerCanonicalObservationAdvance {
       }
       return activity.toJSON();
     });
+    const runtimeLocks = [
+      ...canonicalSnapshot.runtimeLocks,
+      view.location.runtimeLock("runtime.lock.artifact-catalog"),
+      view.location.runtimeLock("runtime.lock.current-flow-state"),
+    ];
     const currentSnapshot = WorkerArtifactRepositoryMutationSnapshot.capture({
-      root: this.canonicalSnapshot.root,
-      authorities: this.canonicalSnapshot.authorities,
-      ignoredDirectories: this.canonicalSnapshot.ignoredDirectories,
-      runtimeLocks: this.canonicalSnapshot.runtimeLocks,
+      root: canonicalSnapshot.root,
+      authorities: canonicalSnapshot.authorities,
+      ignoredDirectories: canonicalSnapshot.ignoredDirectories,
+      runtimeLocks,
     });
     const activityBytes = fs.readFileSync(view.location.activitiesFile);
-    assertCanonicalObservationAdvance({
+    const addedActivities = assertCanonicalObservationAdvance({
       observation: this,
       current,
       activityBytes,
       currentSnapshot,
+      allowedPublications: this.allowedPublications,
+      allowedActivityIds: this.allowedActivityIds,
     });
-    return this;
+    if (!advance) return this;
+    return new SourceWorkerCanonicalObservationAdvance({
+      activityPrefix: current,
+      activityBytes,
+      mutablePaths: this.mutablePaths,
+      canonicalSnapshot: currentSnapshot,
+      addedActivities,
+    });
   }
 
   toJSON() {
@@ -2356,7 +2479,7 @@ function assertCanonicalObservationAdvance({
 }
 
 export class WorkerArtifactMutationAuthoritySnapshot {
-  constructor({ specId, repositories, sourceMode = false, canonicalObservationAdvance = null, sourceMutationBaseline = null }) {
+  constructor({ specId, repositories, sourceMode = false, canonicalObservationAdvance = null, sourceMutationBaseline = null, sourceRollbackCheckpoint = null }) {
     this.specId = requiredString(specId, "worker artifact mutation authority specId");
     this.repositories = Object.freeze(repositories);
     this.sourceMode = sourceMode === true;
@@ -2368,8 +2491,11 @@ export class WorkerArtifactMutationAuthoritySnapshot {
       throw new Error("source worker mutation authority requires an Attempt source baseline");
     }
     this.sourceMutationBaseline = sourceMutationBaseline;
+    if (sourceRollbackCheckpoint !== null && !(sourceRollbackCheckpoint instanceof WorkerArtifactSourceRollbackCheckpoint)) {
+      throw new Error("source worker mutation authority has an invalid rollback checkpoint");
+    }
     this.sourceRollbackCheckpoint = this.sourceMode
-      ? new WorkerArtifactSourceRollbackCheckpoint(this.repositories)
+      ? (sourceRollbackCheckpoint ?? new WorkerArtifactSourceRollbackCheckpoint(this.repositories))
       : null;
     Object.freeze(this);
   }
@@ -2400,7 +2526,7 @@ export class WorkerArtifactMutationAuthoritySnapshot {
         for (const lock of request.runtimeLocks) {
           if (isWithin(resolved, fs.realpathSync(lock.directory))) existing.runtimeLocks.push(lock);
         }
-        const relativeHandoff = path.relative(resolved, path.resolve(request.directory))
+        const relativeHandoff = path.relative(resolved, request.handoffRoot)
           .split(path.sep)
           .join("/");
         if (
@@ -2409,6 +2535,17 @@ export class WorkerArtifactMutationAuthoritySnapshot {
           && !relativeHandoff.startsWith("../")
           && !path.posix.isAbsolute(relativeHandoff)
         ) existing.ignoredDirectories.push(relativeHandoff);
+        const relativeCanonical = path.relative(resolved, request.canonicalDirectory)
+          .split(path.sep)
+          .join("/");
+        if (authority === "execution" && request.policy.kind === "source"
+          && relativeCanonical !== "" && relativeCanonical !== "." && relativeCanonical !== ".."
+          && !relativeCanonical.startsWith("../") && !path.posix.isAbsolute(relativeCanonical)) {
+          // The active Version is observed through its own immutable
+          // canonical snapshot. It is never a worker-owned source edit or a
+          // rollback target within the enclosing execution checkout.
+          existing.ignoredDirectories.push(relativeCanonical);
+        }
         roots.set(resolved, existing);
       }
       return new WorkerArtifactMutationAuthoritySnapshot({
@@ -2439,7 +2576,7 @@ export class WorkerArtifactMutationAuthoritySnapshot {
     }
   }
 
-  static rehydrate(request, canonicalObservationAdvance) {
+  static rehydrate(request, canonicalObservationAdvance, sourceRollbackCheckpoint = null) {
     if (!(canonicalObservationAdvance instanceof SourceWorkerCanonicalObservationAdvance)) {
       throw new Error("source worker recovery requires its persisted canonical observation");
     }
@@ -2452,6 +2589,7 @@ export class WorkerArtifactMutationAuthoritySnapshot {
       sourceMode: request.policy.kind === "source",
       sourceMutationBaseline: request.sourceMutationBaseline,
       canonicalObservationAdvance,
+      sourceRollbackCheckpoint,
     });
   }
 
@@ -2696,7 +2834,7 @@ class WorkerArtifactSourceRollbackEntry {
     const absolute = path.join(root, this.entry.path);
     if (this.entry.kind === "directory") {
       if (gitMode) throw new Error(`source rollback cannot restore Git directory path ${this.entry.path}`);
-      return new WorkerArtifactSourceRollbackOperation({ absolute, kind: "directory", root });
+      return new WorkerArtifactSourceRollbackOperation({ absolute, kind: "directory", root, mode: this.entry.mode });
     }
     if (this.entry.kind === "missing") return new WorkerArtifactSourceRollbackOperation({ absolute, kind: "remove", root });
     if (this.entry.kind === "symlink") return new WorkerArtifactSourceRollbackOperation({ absolute, kind: "symlink", root, target: this.target });
@@ -2708,6 +2846,14 @@ class WorkerArtifactSourceRollbackEntry {
       mode: this.entry.mode,
     });
     throw new Error(`source rollback cannot restore ${this.entry.kind} path ${this.entry.path}`);
+  }
+
+  toBlobJSON() {
+    return {
+      entry: this.entry.toJSON(),
+      bytes: this.entry.kind === "file" ? this.#bytes.toString("base64") : null,
+      target: this.entry.kind === "symlink" ? this.target : null,
+    };
   }
 }
 
@@ -2721,7 +2867,10 @@ class WorkerArtifactSourceRollbackOperation {
     if (!new Set(["remove", "remove-directory", "directory", "file", "symlink"]).has(kind)) {
       throw new Error(`invalid source rollback operation kind: ${kind}`);
     }
-    if (kind === "file" && (!Buffer.isBuffer(bytes) || !Number.isSafeInteger(mode) || mode < 0 || mode > 0o7777)) {
+    if ((kind === "file" || kind === "directory") && (!Number.isSafeInteger(mode) || mode < 0 || mode > 0o7777)) {
+      throw new Error(`source rollback ${kind} operation requires a mode`);
+    }
+    if (kind === "file" && !Buffer.isBuffer(bytes)) {
       throw new Error("source rollback file operation requires bytes and mode");
     }
     if (kind === "symlink" && typeof target !== "string") {
@@ -2752,6 +2901,7 @@ class WorkerArtifactSourceRollbackOperation {
       }
       if (stat !== null && (!stat.isDirectory() || stat.isSymbolicLink())) removeSourceRollbackPath(this.absolute);
       ensureRealDirectory(this.absolute, this.root);
+      fs.chmodSync(this.absolute, this.mode);
       return;
     }
     removeSourceRollbackPath(this.absolute);
@@ -2805,7 +2955,7 @@ function indexedSourceRollbackEntry(root, relativePath) {
   return Number.parseInt(match[1], 8);
 }
 
-function indexedSourceRollbackOperation(root, relativePath, budget) {
+function indexedSourceRollbackOperation(root, relativePath, budget, { baselineMode = null } = {}) {
   const mode = indexedSourceRollbackEntry(root, relativePath);
   const absolute = path.join(root, relativePath);
   if (mode === null) return new WorkerArtifactSourceRollbackOperation({ absolute, kind: "remove", root });
@@ -2827,7 +2977,7 @@ function indexedSourceRollbackOperation(root, relativePath, budget) {
     kind: "file",
     root,
     bytes,
-    mode: mode & 0o777,
+    mode: baselineMode ?? (mode & 0o777),
   });
 }
 
@@ -2840,14 +2990,45 @@ function filesystemSourceRollbackOperation(root, relativePath, currentEntry) {
 }
 
 class WorkerArtifactSourceRollbackRepositoryCheckpoint {
-  constructor(snapshot) {
+  constructor(snapshot, { entries = null } = {}) {
     this.snapshot = snapshot;
     const budget = { bytes: 0 };
-    this.entries = new Map(snapshot.entries.map((entry) => [
-      entry.path,
-      WorkerArtifactSourceRollbackEntry.capture(snapshot.root, entry, budget),
+    this.entries = entries ?? new Map(snapshot.entries.map((entry) => [
+      entry.path, WorkerArtifactSourceRollbackEntry.capture(snapshot.root, entry, budget),
     ]));
     Object.freeze(this);
+  }
+
+  static fromBlob(value, { root, runtimeLocks = [] } = {}) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)
+      || value.snapshot === null || !Array.isArray(value.entries)) {
+      throw new Error("source rollback blob repository is invalid");
+    }
+    const snapshot = WorkerArtifactRepositoryMutationSnapshot.fromStored(value.snapshot, {
+      root, authorities: ["execution"], runtimeLocks,
+    });
+    const entries = new Map(value.entries.map((stored) => {
+      if (stored === null || typeof stored !== "object" || stored.entry === null) {
+        throw new Error("source rollback blob entry is invalid");
+      }
+      const entry = new WorkerArtifactRepositoryEntry(stored.entry);
+      const bytes = stored.bytes === null ? null : base64Bytes(stored.bytes, "source rollback blob bytes");
+      const target = stored.target === null ? null : requiredString(stored.target, "source rollback blob symlink target");
+      if (entry.kind === "file" && digest(bytes) !== entry.digest) throw new Error("source rollback blob file digest is invalid");
+      if (entry.kind === "symlink" && digest(target) !== entry.digest) throw new Error("source rollback blob symlink digest is invalid");
+      return [entry.path, new WorkerArtifactSourceRollbackEntry({ entry, bytes, target })];
+    }));
+    if (entries.size !== snapshot.entries.length || [...entries.keys()].some((key) => !snapshot.entries.some((entry) => entry.path === key))) {
+      throw new Error("source rollback blob entries do not match its baseline");
+    }
+    for (const snapshotEntry of snapshot.entries) {
+      const rollbackEntry = entries.get(snapshotEntry.path);
+      if (rollbackEntry === undefined
+        || stableStringify(rollbackEntry.entry.toJSON()) !== stableStringify(snapshotEntry.toJSON())) {
+        throw new Error("source rollback blob entry metadata does not match its baseline");
+      }
+    }
+    return new WorkerArtifactSourceRollbackRepositoryCheckpoint(snapshot, { entries });
   }
 
   restore() {
@@ -2875,11 +3056,17 @@ class WorkerArtifactSourceRollbackRepositoryCheckpoint {
     for (const relativePath of paths) {
       const checkpoint = this.entries.get(relativePath);
       const operation = checkpoint !== undefined
-        ? checkpoint.operation(this.snapshot.root, {
-          gitMode: this.snapshot.mode === "git",
-        })
+        ? (checkpoint.entry.kind === "missing" && currentStates.get(relativePath).kind === "directory"
+            ? new WorkerArtifactSourceRollbackOperation({
+                absolute: path.join(this.snapshot.root, relativePath), kind: "remove-directory", root: this.snapshot.root,
+              })
+            : checkpoint.operation(this.snapshot.root, {
+                gitMode: this.snapshot.mode === "git",
+              }))
         : this.snapshot.mode === "git"
-          ? indexedSourceRollbackOperation(this.snapshot.root, relativePath, restoreBudget)
+          ? indexedSourceRollbackOperation(this.snapshot.root, relativePath, restoreBudget, {
+              baselineMode: this.snapshot.modeEntries.find((entry) => entry.path === relativePath)?.mode ?? null,
+            })
           : filesystemSourceRollbackOperation(
             this.snapshot.root,
             relativePath,
@@ -2909,11 +3096,13 @@ class WorkerArtifactSourceRollbackRepositoryCheckpoint {
   }
 }
 
-class WorkerArtifactSourceRollbackCheckpoint {
+export class WorkerArtifactSourceRollbackCheckpoint {
   constructor(repositories) {
     this.repositories = Object.freeze(repositories
-      .filter((entry) => entry.authorities.includes("execution"))
-      .map((entry) => new WorkerArtifactSourceRollbackRepositoryCheckpoint(entry)));
+      .filter((entry) => entry instanceof WorkerArtifactSourceRollbackRepositoryCheckpoint || entry.authorities.includes("execution"))
+      .map((entry) => entry instanceof WorkerArtifactSourceRollbackRepositoryCheckpoint
+        ? entry
+        : new WorkerArtifactSourceRollbackRepositoryCheckpoint(entry)));
     Object.freeze(this);
   }
 
@@ -2928,6 +3117,320 @@ class WorkerArtifactSourceRollbackCheckpoint {
         { cause, retryable: false, recoveryPossible: false },
       );
     }
+  }
+
+  /**
+   * The before-image is deliberately serialised separately from the canonical
+   * checkpoint.  A checkpoint only carries this content address; callers put
+   * the returned bytes in the canonical blob store before publishing it.
+   */
+  blobBytes() {
+    const document = {
+      version: 1,
+      repositories: this.repositories.map((repository) => ({
+        snapshot: repository.snapshot.toJSON(),
+        entries: [...repository.entries.values()].map((entry) => entry.toBlobJSON()),
+      })),
+    };
+    return Buffer.from(`${JSON.stringify(document)}\n`);
+  }
+
+  static fromBlob(bytes, { root, runtimeLocks = [] } = {}) {
+    let document;
+    try {
+      document = JSON.parse(Buffer.from(bytes).toString("utf8"));
+    } catch (cause) {
+      throw new Error(`source rollback blob is malformed: ${cause.message}`);
+    }
+    if (document?.version !== 1 || !Array.isArray(document.repositories)) {
+      throw new Error("source rollback blob version is invalid");
+    }
+    return new WorkerArtifactSourceRollbackCheckpoint(document.repositories.map((repository) => (
+      WorkerArtifactSourceRollbackRepositoryCheckpoint.fromBlob(repository, { root, runtimeLocks })
+    )));
+  }
+}
+
+/** Stable identity shared by every durable source-worker protocol record. */
+function sourceHandoffPolicyRevision(policy) {
+  if (!(policy instanceof WorkerArtifactHandoffPolicy) || policy.kind !== "source") {
+    throw new Error("source handoff policy revision requires a source policy");
+  }
+  return digest(stableStringify({
+    protocolVersion: 1,
+    stepId: policy.stepId,
+    kind: policy.kind,
+    preservesRejectedSource: policy.preservesRejectedSource,
+    sourceMutation: policy.sourceMutation.toJSON(),
+    inputs: policy.inputContract.inputs,
+    repairInputs: policy.inputContract.repairInputs,
+    testReviewRepairInputs: policy.inputContract.testReviewRepairInputs,
+    acceptanceRepairInputs: policy.inputContract.acceptanceRepairInputs,
+    virtualInputs: policy.inputContract.virtualInputs,
+    payloads: policy.payloads.map((rule) => ({
+      logicalName: rule.logicalName, kind: rule.kind, targetRelativePath: rule.targetRelativePath, required: rule.required,
+    })),
+  }));
+}
+
+export class SourceWorkerHandoffIdentity {
+  constructor({ flowIdentity, runId, specId, issue = null, stepId, taskId = null, attempt, nodeId, dispatchInvocationId, actionDigest, inputDigest, policyRevision, canonicalGeneration } = {}) {
+    this.flowIdentity = flowIdentity instanceof CurrentFlowIdentity ? flowIdentity : new CurrentFlowIdentity(flowIdentity);
+    this.runId = requiredString(runId, "source handoff runId");
+    this.specId = requiredString(specId, "source handoff specId");
+    this.issue = issue === null ? null : requiredString(String(issue), "source handoff issue");
+    this.stepId = requiredString(stepId, "source handoff stepId");
+    this.taskId = taskId === null ? null : requiredString(taskId, "source handoff taskId");
+    this.attempt = CurrentAttemptIdentity.from(attempt);
+    this.nodeId = requiredString(nodeId, "source handoff nodeId");
+    this.dispatchInvocationId = requiredString(dispatchInvocationId, "source handoff dispatcher invocation");
+    this.actionDigest = requiredDigest(actionDigest, "source handoff action digest");
+    this.inputDigest = requiredDigest(inputDigest, "source handoff input digest");
+    this.policyRevision = requiredDigest(policyRevision, "source handoff policy revision");
+    this.canonicalGeneration = requiredDigest(canonicalGeneration, "source handoff canonical generation");
+    if (this.flowIdentity.runId.value !== this.runId || this.flowIdentity.specId.value !== this.specId || this.flowIdentity.issue !== this.issue
+      || this.attempt.nodeId !== this.nodeId
+      || (this.stepId.startsWith("task-") !== (this.taskId !== null))
+      || (this.taskId === null && this.nodeId !== this.stepId)
+      || (this.taskId !== null && this.nodeId !== `${this.taskId}-${this.stepId.slice(5)}`)) {
+      throw new Error("source handoff identity does not bind its Flow node");
+    }
+    this.storageId = digest(stableStringify({
+      flowIdentity: this.flowIdentity.toJSON(), runId: this.runId, specId: this.specId, issue: this.issue,
+      stepId: this.stepId, taskId: this.taskId, attempt: this.attempt.toJSON(), nodeId: this.nodeId,
+      dispatchInvocationId: this.dispatchInvocationId, actionDigest: this.actionDigest, inputDigest: this.inputDigest,
+      policyRevision: this.policyRevision, canonicalGeneration: this.canonicalGeneration,
+    }));
+    Object.freeze(this);
+  }
+
+  static fromRequest(request) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || request.policy.kind !== "source") {
+      throw new Error("source handoff identity requires a source handoff request");
+    }
+    return new SourceWorkerHandoffIdentity({
+      flowIdentity: canonicalSemanticInputIdentity({ flowManager: request.flowManager, state: request.state }).flowIdentity,
+      runId: request.runId,
+      specId: request.specId,
+      issue: request.issue,
+      stepId: request.stepId,
+      taskId: request.taskId,
+      attempt: request.sourceMutationBaseline.attempt,
+      nodeId: request.sourceMutationBaseline.attempt.nodeId,
+      dispatchInvocationId: request.dispatchInvocationId,
+      actionDigest: request.actionDigest,
+      inputDigest: request.inputDigest,
+      policyRevision: sourceHandoffPolicyRevision(request.policy),
+      canonicalGeneration: request.canonicalGeneration,
+    });
+  }
+
+  matches(other) {
+    return other instanceof SourceWorkerHandoffIdentity
+      && stableStringify(this.toJSON()) === stableStringify(other.toJSON());
+  }
+
+  toJSON() {
+    return {
+      flowIdentity: this.flowIdentity.toJSON(), runId: this.runId, specId: this.specId, issue: this.issue, stepId: this.stepId, taskId: this.taskId,
+      attempt: this.attempt.toJSON(), nodeId: this.nodeId, dispatchInvocationId: this.dispatchInvocationId,
+      actionDigest: this.actionDigest, inputDigest: this.inputDigest, policyRevision: this.policyRevision,
+      canonicalGeneration: this.canonicalGeneration,
+    };
+  }
+}
+
+/** Immutable checkpoint published before a source worker can be started. */
+export class CanonicalSourceHandoffCheckpoint {
+  constructor({ identity, baseline, canonicalObservation, rollbackBlobDigest, allowedCanonicalPaths = [], producer = null, digest: storedDigest = null } = {}) {
+    this.identity = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
+    if (!(baseline instanceof SourceMutationBaseline)) throw new Error("source handoff checkpoint requires a source baseline");
+    if (!(canonicalObservation instanceof SourceWorkerCanonicalObservationAdvance)) throw new Error("source handoff checkpoint requires a canonical observation");
+    this.baseline = baseline;
+    this.canonicalObservation = canonicalObservation;
+    this.rollbackBlobDigest = requiredDigest(rollbackBlobDigest, "source handoff rollback blob digest");
+    this.allowedCanonicalPaths = Object.freeze(allowedCanonicalPaths.map((entry) => normalizedRelativePath(entry, "source handoff allowed canonical path")));
+    if (stableStringify(this.allowedCanonicalPaths) !== stableStringify(canonicalObservation.mutablePaths)) {
+      throw new Error("source handoff checkpoint allowed paths do not match its canonical observation");
+    }
+    this.producer = Object.freeze({
+      nodeId: requiredString(producer?.nodeId ?? identity.nodeId, "source handoff checkpoint producer node"),
+      attemptId: requiredString(producer?.attemptId ?? baseline.attempt.id, "source handoff checkpoint producer attempt"),
+      sequence: producer?.sequence ?? baseline.attempt.sequence,
+    });
+    if (!Number.isSafeInteger(this.producer.sequence) || this.producer.sequence < 1
+      || this.producer.nodeId !== this.identity.nodeId || this.producer.attemptId !== this.identity.attempt.id
+      || this.producer.sequence !== this.identity.attempt.sequence
+      || baseline.attempt.id !== this.identity.attempt.id || baseline.attempt.nodeId !== this.identity.nodeId
+      || baseline.attempt.sequence !== this.identity.attempt.sequence) {
+      throw new Error("source handoff checkpoint producer binding is invalid");
+    }
+    this.digest = digest(stableStringify(this.unsignedJSON()));
+    if (storedDigest !== null && this.digest !== requiredDigest(storedDigest, "source handoff checkpoint digest")) {
+      throw new Error("source handoff checkpoint digest does not match its content");
+    }
+    Object.freeze(this);
+  }
+
+  unsignedJSON() {
+    return {
+      version: 1, identity: this.identity.toJSON(), baseline: this.baseline.toJSON(),
+      canonicalObservation: this.canonicalObservation.storedJSON(), rollbackBlobDigest: this.rollbackBlobDigest,
+      allowedCanonicalPaths: [...this.allowedCanonicalPaths], producer: this.producer,
+    };
+  }
+  toJSON() { return { ...this.unsignedJSON(), digest: this.digest }; }
+
+  static fromStored(value, { root, canonicalLocation } = {}) {
+    exactObjectKeys(value, ["version", "identity", "baseline", "canonicalObservation", "rollbackBlobDigest", "allowedCanonicalPaths", "producer", "digest"], "source handoff checkpoint");
+    if (value.version !== 1) throw new Error("source handoff checkpoint version is invalid");
+    return new CanonicalSourceHandoffCheckpoint({
+      identity: value.identity,
+      baseline: SourceMutationBaseline.fromStored(value.baseline, { root }),
+      canonicalObservation: SourceWorkerCanonicalObservationAdvance.fromStored(value.canonicalObservation, { canonicalLocation }),
+      rollbackBlobDigest: value.rollbackBlobDigest,
+      allowedCanonicalPaths: value.allowedCanonicalPaths,
+      producer: value.producer,
+      digest: value.digest,
+    });
+  }
+}
+
+/** One append-only protocol event, linked by the preceding event digest. */
+export class SourceHandoffEvent {
+  constructor({ identity, checkpointDigest, sequence, previousDigest = null, kind, requestDigest = null, rollbackPlanDigest = null, sourceManifest = null, workerStopped = null, failureFacts = null, digest: storedDigest = null } = {}) {
+    this.identity = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
+    this.checkpointDigest = requiredDigest(checkpointDigest, "source handoff event checkpoint digest");
+    if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error("source handoff event sequence is invalid");
+    this.sequence = sequence;
+    this.previousDigest = previousDigest === null ? null : requiredDigest(previousDigest, "source handoff event previous digest");
+    if ((sequence === 1) !== (this.previousDigest === null)) throw new Error("source handoff event chain is invalid");
+    if (!new Set(["prepared", "start-intent", "worker-exited", "rollback-intent", "failure"]).has(kind)) throw new Error("source handoff event kind is invalid");
+    this.kind = kind;
+    this.requestDigest = requestDigest === null ? null : requiredDigest(requestDigest, "source handoff event request digest");
+    this.rollbackPlanDigest = rollbackPlanDigest === null ? null : requiredDigest(rollbackPlanDigest, "source handoff rollback plan digest");
+    this.sourceManifest = sourceManifest === null ? null : (sourceManifest instanceof SourceMutationManifest ? sourceManifest : SourceMutationManifest.fromStored(sourceManifest));
+    if (workerStopped !== null && typeof workerStopped !== "boolean") throw new Error("source handoff workerStopped is invalid");
+    this.workerStopped = workerStopped;
+    this.failureFacts = failureFacts === null ? null : (failureFacts instanceof SourceHandoffFailureFacts
+      ? failureFacts
+      : new SourceHandoffFailureFacts({
+          ...failureFacts,
+          identity: failureFacts.identity === null ? null : new SourceWorkerHandoffIdentity(failureFacts.identity),
+        }));
+    if (sequence === 1 && kind !== "prepared") throw new Error("source handoff event chain must begin prepared");
+    if (sequence > 1 && kind === "prepared") throw new Error("source handoff prepared event must begin its chain");
+    if (kind === "prepared" && (this.requestDigest !== null || this.rollbackPlanDigest !== null || this.sourceManifest !== null || this.workerStopped !== null || this.failureFacts !== null)) {
+      throw new Error("source handoff prepared event has unexpected fields");
+    }
+    if (kind === "start-intent" && (this.requestDigest === null || this.rollbackPlanDigest !== null || this.sourceManifest !== null || this.workerStopped !== null || this.failureFacts !== null)) {
+      throw new Error("source handoff start-intent has invalid fields");
+    }
+    if (kind === "worker-exited" && (this.requestDigest === null || this.rollbackPlanDigest !== null || this.sourceManifest === null || this.workerStopped !== true || this.failureFacts !== null)) {
+      throw new Error("source handoff worker-exited requires its sealed stopped-worker evidence");
+    }
+    if (kind === "rollback-intent" && (this.requestDigest !== null || this.rollbackPlanDigest === null || this.sourceManifest === null || this.workerStopped !== null || this.failureFacts !== null)) {
+      throw new Error("source handoff rollback-intent requires only plan and observed source manifest");
+    }
+    if (kind === "failure" && (this.requestDigest === null || this.rollbackPlanDigest !== null || this.sourceManifest !== null || this.workerStopped !== null || this.failureFacts === null)) {
+      throw new Error("source handoff failure requires its request and typed facts");
+    }
+    if (kind === "failure" && (!this.failureFacts.identity?.matches?.(this.identity)
+      || this.failureFacts.checkpointDigest !== this.checkpointDigest)) {
+      throw new Error("source handoff failure facts do not bind the enclosing protocol event");
+    }
+    this.digest = digest(stableStringify(this.unsignedJSON()));
+    if (storedDigest !== null && this.digest !== requiredDigest(storedDigest, "source handoff event digest")) throw new Error("source handoff event digest does not match its content");
+    Object.freeze(this);
+  }
+  unsignedJSON() { return { version: 1, identity: this.identity.toJSON(), checkpointDigest: this.checkpointDigest, sequence: this.sequence, previousDigest: this.previousDigest, kind: this.kind, requestDigest: this.requestDigest, rollbackPlanDigest: this.rollbackPlanDigest, sourceManifest: this.sourceManifest?.toJSON() ?? null, workerStopped: this.workerStopped, failureFacts: this.failureFacts?.toJSON() ?? null }; }
+  toJSON() { return { ...this.unsignedJSON(), digest: this.digest }; }
+  static fromStored(value) {
+    exactObjectKeys(value, [
+      "version", "identity", "checkpointDigest", "sequence", "previousDigest", "kind",
+      "requestDigest", "rollbackPlanDigest", "sourceManifest", "workerStopped", "failureFacts", "digest",
+    ], "source handoff event");
+    if (value.version !== 1) throw new Error("source handoff event version is invalid");
+    const event = new SourceHandoffEvent({
+      ...value,
+      sourceManifest: value.sourceManifest === null ? null : SourceMutationManifest.fromStored(value.sourceManifest),
+      failureFacts: value.failureFacts === null ? null : new SourceHandoffFailureFacts({
+        ...value.failureFacts,
+        identity: value.failureFacts.identity === null ? null : new SourceWorkerHandoffIdentity(value.failureFacts.identity),
+      }),
+    });
+    if (value.failureFacts !== null && stableStringify(event.failureFacts.toJSON()) !== stableStringify(value.failureFacts)) {
+      throw new Error("source handoff failure facts contain unknown or inconsistent fields");
+    }
+    return event;
+  }
+}
+
+/** CAS-protected terminal decision for one immutable checkpoint. */
+export class SourceHandoffSettlement {
+  constructor({ identity, checkpointDigest, handoffDigest = null, eventDigest, kind, digest: storedDigest = null } = {}) {
+    this.identity = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
+    this.checkpointDigest = requiredDigest(checkpointDigest, "source handoff settlement checkpoint digest");
+    this.handoffDigest = handoffDigest === null ? null : requiredDigest(handoffDigest, "source handoff settlement handoff digest");
+    this.eventDigest = requiredDigest(eventDigest, "source handoff settlement event digest");
+    if (!new Set(["accepted", "rolled-back", "aborted-before-start", "quarantined"]).has(kind)) throw new Error("source handoff settlement kind is invalid");
+    if ((kind === "accepted") !== (this.handoffDigest !== null)) throw new Error("source handoff settlement handoff digest does not match its terminal kind");
+    this.kind = kind;
+    this.digest = digest(stableStringify(this.unsignedJSON()));
+    if (storedDigest !== null && this.digest !== requiredDigest(storedDigest, "source handoff settlement digest")) throw new Error("source handoff settlement digest does not match its content");
+    Object.freeze(this);
+  }
+  unsignedJSON() { return { version: 1, identity: this.identity.toJSON(), checkpointDigest: this.checkpointDigest, handoffDigest: this.handoffDigest, eventDigest: this.eventDigest, kind: this.kind }; }
+  toJSON() { return { ...this.unsignedJSON(), digest: this.digest }; }
+  static fromStored(value) {
+    exactObjectKeys(value, ["version", "identity", "checkpointDigest", "handoffDigest", "eventDigest", "kind", "digest"], "source handoff settlement");
+    if (value.version !== 1) throw new Error("source handoff settlement version is invalid");
+    return new SourceHandoffSettlement(value);
+  }
+}
+
+/** Immutable recovery recipe referenced by a rollback-intent event. */
+export class SourceHandoffRollbackPlan {
+  constructor({ identity, checkpointDigest, rollbackBlobDigest, sourceManifest, facts, digest: storedDigest = null } = {}) {
+    this.identity = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
+    this.checkpointDigest = requiredDigest(checkpointDigest, "source rollback plan checkpoint digest");
+    this.rollbackBlobDigest = requiredDigest(rollbackBlobDigest, "source rollback plan blob digest");
+    this.sourceManifest = sourceManifest instanceof SourceMutationManifest
+      ? sourceManifest : SourceMutationManifest.fromStored(sourceManifest);
+    this.facts = facts instanceof SourceHandoffFailureFacts ? facts : new SourceHandoffFailureFacts({
+      ...facts, identity: facts.identity instanceof SourceWorkerHandoffIdentity ? facts.identity : new SourceWorkerHandoffIdentity(facts.identity),
+    });
+    if (!this.facts.identity.matches(this.identity) || this.facts.checkpointDigest !== this.checkpointDigest
+      || this.facts.kind !== "rejected" || !this.facts.ownershipProven || !this.facts.workerStopped) {
+      throw new Error("source rollback plan facts do not authorize its immutable source restore");
+    }
+    this.digest = digest(stableStringify(this.unsignedJSON()));
+    if (storedDigest !== null && this.digest !== requiredDigest(storedDigest, "source rollback plan digest")) {
+      throw new Error("source rollback plan digest does not match its content");
+    }
+    Object.freeze(this);
+  }
+
+  unsignedJSON() {
+    return {
+      version: 1, identity: this.identity.toJSON(), checkpointDigest: this.checkpointDigest,
+      rollbackBlobDigest: this.rollbackBlobDigest, sourceManifest: this.sourceManifest.toJSON(), facts: this.facts.toJSON(),
+    };
+  }
+  toJSON() { return { ...this.unsignedJSON(), digest: this.digest }; }
+
+  static fromEvents({ checkpoint, rollbackEvent, failureEvent }) {
+    if (!(checkpoint instanceof CanonicalSourceHandoffCheckpoint)
+      || !(rollbackEvent instanceof SourceHandoffEvent) || rollbackEvent.kind !== "rollback-intent"
+      || !(failureEvent instanceof SourceHandoffEvent) || failureEvent.kind !== "failure") {
+      throw new Error("source rollback recovery requires adjacent typed failure and rollback events");
+    }
+    return new SourceHandoffRollbackPlan({
+      identity: checkpoint.identity, checkpointDigest: checkpoint.digest,
+      rollbackBlobDigest: checkpoint.rollbackBlobDigest,
+      sourceManifest: rollbackEvent.sourceManifest, facts: failureEvent.failureFacts,
+      digest: rollbackEvent.rollbackPlanDigest,
+    });
   }
 }
 
@@ -2998,6 +3501,19 @@ function inputRevision(inputDigest, {
     testReviewRepair,
     acceptanceRepairRoute,
   }).toString();
+}
+
+export function sourceHandoffCanonicalGeneration({ state, activities }) {
+  const stateDocument = typeof state?.toJSON === "function" ? state.toJSON() : state;
+  const activityDocuments = activities.map((activity) => typeof activity?.toJSON === "function" ? activity.toJSON() : activity);
+  return digest(stableStringify({ state: stateDocument, activities: activityDocuments }));
+}
+
+function canonicalSourceHandoffGeneration({ flowManager, state }) {
+  const current = typeof flowManager.canonicalState === "function"
+    ? flowManager.canonicalState(state.specId)
+    : flowManager.load(state.specId);
+  return sourceHandoffCanonicalGeneration({ state: current, activities: flowManager.activityLedger(state.specId) });
 }
 
 function currentPlanGateRepair({ flowManager, state, stepId }) {
@@ -3204,12 +3720,16 @@ export class WorkerArtifactHandoffRequest {
     testReviewRepairProgress = null,
     workerVisibleTestReviewRepair = null,
     sourceMutationBaseline = null,
+    sourceHandoffCheckpoint = null,
+    sourceHandoffIdentity = null,
+    canonicalGeneration = null,
     canonicalLocation = null,
     flowManager = null,
   }) {
     this.mainRoot = path.resolve(mainRoot);
     this.executionRoot = path.resolve(executionRoot);
     this.state = state;
+    this.invocation = invocation;
     if (state?.schemaRevision !== 3) {
       throw new Error("worker handoff requires a Version-1 Flow state");
     }
@@ -3244,6 +3764,40 @@ export class WorkerArtifactHandoffRequest {
       throw new Error("source worker handoff requires exactly one SourceMutationBaseline");
     }
     this.sourceMutationBaseline = sourceMutationBaseline;
+    this.canonicalGeneration = policy.kind === "source"
+      ? requiredDigest(canonicalGeneration, "source handoff canonical generation")
+      : null;
+    if (policy.kind !== "source" && (sourceHandoffIdentity !== null || canonicalGeneration !== null)) {
+      throw new Error("artifact worker handoff cannot carry source identity");
+    }
+    if (policy.kind !== "source" && sourceHandoffCheckpoint !== null) {
+      throw new Error("artifact worker handoff cannot carry a source checkpoint");
+    }
+    if (sourceHandoffCheckpoint !== null && !(sourceHandoffCheckpoint instanceof CanonicalSourceHandoffCheckpoint)) {
+      throw new Error("source worker handoff checkpoint must be typed");
+    }
+    if (sourceHandoffCheckpoint !== null) {
+      const identity = SourceWorkerHandoffIdentity.fromRequest(this);
+      if (!sourceHandoffCheckpoint.identity.matches(identity)
+        || sourceHandoffCheckpoint.baseline.digest !== sourceMutationBaseline.digest) {
+        throw new Error("source worker handoff checkpoint does not bind its request");
+      }
+    }
+    this.sourceHandoffIdentity = policy.kind === "source"
+      ? (sourceHandoffIdentity instanceof SourceWorkerHandoffIdentity
+        ? sourceHandoffIdentity
+        : sourceHandoffIdentity === null ? SourceWorkerHandoffIdentity.fromRequest(this) : new SourceWorkerHandoffIdentity(sourceHandoffIdentity))
+      : null;
+    if (this.sourceHandoffIdentity !== null && (
+      this.sourceHandoffIdentity.runId !== this.runId || this.sourceHandoffIdentity.specId !== this.specId
+      || this.sourceHandoffIdentity.stepId !== this.stepId || this.sourceHandoffIdentity.taskId !== this.taskId
+      || this.sourceHandoffIdentity.dispatchInvocationId !== this.dispatchInvocationId
+      || this.sourceHandoffIdentity.actionDigest !== this.actionDigest || this.sourceHandoffIdentity.inputDigest !== this.inputDigest
+      || this.sourceHandoffIdentity.canonicalGeneration !== this.canonicalGeneration
+      || this.sourceHandoffIdentity.policyRevision !== sourceHandoffPolicyRevision(this.policy)
+      || this.sourceHandoffIdentity.attempt.id !== this.sourceMutationBaseline.attempt.id
+    )) throw new Error("source worker handoff identity does not bind its request");
+    this.sourceHandoffCheckpoint = sourceHandoffCheckpoint;
     this.inputs = Object.freeze(inputs);
     if (contextSnapshot != null && !(contextSnapshot instanceof DraftWorkerContextSnapshot) && !(contextSnapshot instanceof TaskWorkerContextSnapshot)) {
       throw new Error("handoff contextSnapshot must be a supported worker context snapshot or null");
@@ -3384,13 +3938,14 @@ export class WorkerArtifactHandoffRequest {
     if (testReviewRepair !== null && selectedBatch === null) throw new WorkerArtifactHandoffError("recovery-required", "FLOW_TEST_REVIEW_REPAIR_PROGRESS_COMPLETE", "test-review repair has no pending batch", { retryable: false, recoveryPossible: true });
     const selectedRepairContract = selectedBatch === null ? null : testReviewRepair.forBatch(selectedBatch);
     const semanticIdentity = canonicalSemanticInputIdentity({ flowManager, state });
+    const sourceHandoffRoot = executionHandoffRoot(executionRoot, state.specId);
     const actionDirectory = handoffActionDirectory(
-      executionHandoffRoot(executionRoot, state.specId),
+      sourceHandoffRoot,
       state.runId,
       invocation.id,
       invocation.action.digest,
     );
-    const sourceIgnoredDirectories = [path.relative(executionRoot, actionDirectory).split(path.sep).join("/")];
+    const sourceIgnoredDirectories = [path.relative(executionRoot, sourceHandoffRoot).split(path.sep).join("/")];
     // Canonical Version artifacts are governed by the persisted canonical
     // observation below. They are not source edits, including the baseline
     // artifact that records this Attempt before the worker starts.
@@ -3407,17 +3962,6 @@ export class WorkerArtifactHandoffRequest {
       attempt: semanticIdentity.attempt,
       ignoredDirectories: sourceIgnoredDirectories,
     });
-    if (sourceMutationBaseline !== null && ["task-triage", "task-repair"].includes(policy.stepId)) {
-      const canonicalObservation = SourceWorkerCanonicalObservationAdvance.capture({ flowManager, specId: state.specId });
-      flowManager.publishTaskSourceHandoffBaseline({
-        specId: state.specId,
-        taskId: invocation.action.nextAction.taskId,
-        stage: policy.stepId.slice(5),
-        attempt: semanticIdentity.attempt,
-        baseline: sourceMutationBaseline,
-        canonicalObservation,
-      });
-    }
     return new WorkerArtifactHandoffRequest({
       mainRoot,
       executionRoot,
@@ -3439,6 +3983,7 @@ export class WorkerArtifactHandoffRequest {
       testReviewRepairProgress,
       workerVisibleTestReviewRepair: selectedRepairContract,
       sourceMutationBaseline,
+      canonicalGeneration: policy.kind === "source" ? canonicalSourceHandoffGeneration({ flowManager, state }) : null,
       canonicalLocation: flowManager.specLocation(state.specId),
       flowManager,
     });
@@ -3514,6 +4059,8 @@ export class WorkerArtifactHandoffRequest {
       testReviewRepair: visibleRepair?.toJSON?.() ?? visibleRepair,
       contextSnapshot: this.contextSnapshot?.toJSON() ?? null,
       sourceMutationBaseline: this.sourceMutationBaseline?.toJSON() ?? null,
+      sourceHandoffIdentity: this.sourceHandoffIdentity?.toJSON() ?? null,
+      sourceHandoffCheckpoint: this.sourceHandoffCheckpoint?.toJSON() ?? null,
       payloads: this.payloads.map(({ rule, baselineDigest, baselineByteLength }) => ({
         logicalName: rule.logicalName,
         kind: rule.kind,
@@ -3534,6 +4081,14 @@ export class WorkerArtifactHandoffRequest {
   }
 
   prepare() {
+    if (this.policy.kind === "source" && this.sourceHandoffCheckpoint === null) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required",
+        "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+        "source worker handoff cannot be prepared without its canonical checkpoint",
+        { retryable: false, recoveryPossible: false },
+      );
+    }
     // The handoff is an uncommitted work unit, not a Flow artifact. Keep it
     // inside the execution checkout that the worker is allowed to mutate.
     ensureRealDirectory(this.handoffRoot, this.executionRoot);
@@ -3548,6 +4103,20 @@ export class WorkerArtifactHandoffRequest {
     new AtomicFile(this.requestPath, { phaseNamespace: "worker-handoff-request" })
       .write(`${JSON.stringify(this.toJSON(), null, 2)}\n`);
     return this;
+  }
+
+  withSourceHandoffCheckpoint(sourceHandoffCheckpoint) {
+    if (this.policy.kind !== "source") throw new Error("artifact worker handoff cannot attach a source checkpoint");
+    return new WorkerArtifactHandoffRequest({
+      mainRoot: this.mainRoot, executionRoot: this.executionRoot, state: this.state, invocation: this.invocation,
+      policy: this.policy, inputs: this.inputs, contextSnapshot: this.contextSnapshot, payloads: this.payloads,
+      inputDigest: this.inputDigest, inputRevision: this.inputRevision, generatedAt: this.generatedAt,
+      testReviewRepair: this.testReviewRepair, testReviewRepairProgress: this.testReviewRepairProgress,
+      workerVisibleTestReviewRepair: this.workerVisibleTestReviewRepair,
+      sourceMutationBaseline: this.sourceMutationBaseline, sourceHandoffCheckpoint,
+      sourceHandoffIdentity: this.sourceHandoffIdentity, canonicalGeneration: this.canonicalGeneration,
+      canonicalLocation: this.flowManager.specLocation(this.specId), flowManager: this.flowManager,
+    });
   }
 
   #materializeCanonicalRepairTests() {
@@ -4116,7 +4685,7 @@ function requestFromStored(filePath) {
   exactObjectKeys(document, [
     "version", "runId", "specId", "issue", "stepId", "taskId", "actionDigest", "dispatchInvocationId",
       "targetAuthority", "inputDigest", "inputRevision", "inputs", "testReviewRepair", "contextSnapshot",
-    "payloads", "generatedAt", "sourceMutationBaseline",
+    "payloads", "generatedAt", "sourceMutationBaseline", "sourceHandoffIdentity", "sourceHandoffCheckpoint",
   ], "worker artifact handoff request");
   if (document.version !== WORKER_ARTIFACT_HANDOFF_VERSION) {
     throw new Error(`worker artifact handoff version must be ${WORKER_ARTIFACT_HANDOFF_VERSION}`);
@@ -4211,6 +4780,14 @@ function requestFromStored(filePath) {
     sourceMutationBaseline: document.sourceMutationBaseline === null
       ? null
       : SourceMutationBaseline.fromStored(document.sourceMutationBaseline, { root: executionRoot }),
+    // The canonical observation is rehydrated only after a manager has been
+    // supplied by recovery.  This runtime document is not authority by itself.
+    sourceHandoffCheckpoint: document.sourceHandoffCheckpoint === null
+      ? null
+      : Object.freeze(structuredClone(document.sourceHandoffCheckpoint)),
+    sourceHandoffIdentity: document.sourceHandoffIdentity === null
+      ? null
+      : Object.freeze(structuredClone(document.sourceHandoffIdentity)),
     payloadPath(logicalName) {
       const rule = policy.payloads.find((entry) => entry.logicalName === logicalName);
       if (!rule) throw new Error(`unknown handoff payload: ${logicalName}`);
@@ -4231,11 +4808,43 @@ function requestFromStored(filePath) {
   if ((policy.kind === "source") !== (request.sourceMutationBaseline instanceof SourceMutationBaseline)) {
     throw new Error("handoff request source mutation baseline does not match its step policy");
   }
+  if (policy.kind === "source" && request.sourceHandoffCheckpoint === null) {
+    throw new Error("source handoff request lacks its canonical checkpoint reference");
+  }
+  if (policy.kind === "source" && request.sourceHandoffIdentity === null) {
+    throw new Error("source handoff request lacks its canonical identity");
+  }
   request.requestDigest = digest(stableStringify(document));
   if (!isWithin(handoffRoot, request.requestPath) || !isWithin(handoffRoot, payloadDirectory)) {
     throw new Error("handoff request escapes execution root");
   }
   return Object.freeze(request);
+}
+
+/**
+ * Prove that the capability about to be handed to a source worker is exactly
+ * the one the dispatcher prepared.  The runtime document is mutable storage,
+ * so a matching path alone is never authority to spawn.
+ */
+function assertCurrentSourceRequestCapability(request) {
+  if (!(request instanceof WorkerArtifactHandoffRequest) || request.policy.kind !== "source") {
+    throw new Error("source request capability validation requires a typed source request");
+  }
+  const stored = requestFromStored(request.requestPath);
+  const { document } = boundedJson(request.requestPath, "worker artifact handoff request");
+  if (stored.requestDigest !== request.requestDigest
+    || stableStringify(document) !== stableStringify(request.toJSON())
+    || stableStringify(stored.sourceMutationBaseline.toJSON()) !== stableStringify(request.sourceMutationBaseline.toJSON())
+    || stableStringify(stored.sourceHandoffIdentity) !== stableStringify(request.sourceHandoffIdentity.toJSON())
+    || stableStringify(stored.sourceHandoffCheckpoint) !== stableStringify(request.sourceHandoffCheckpoint.toJSON())) {
+    throw new WorkerArtifactHandoffError(
+      "recovery-required",
+      "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+      "source worker request capability changed after checkpoint preparation",
+      { retryable: false, recoveryPossible: false },
+    );
+  }
+  return stored;
 }
 
 function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, policy, payloads, canonicalLocation, flowManager }) {
@@ -4262,6 +4871,12 @@ function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, 
     generatedAt: stored.generatedAt,
     workerVisibleTestReviewRepair: stored.testReviewRepair,
     sourceMutationBaseline: stored.sourceMutationBaseline,
+    sourceHandoffIdentity: stored.sourceHandoffIdentity,
+    canonicalGeneration: stored.sourceHandoffIdentity?.canonicalGeneration ?? null,
+    sourceHandoffCheckpoint: stored.sourceHandoffCheckpoint === null ? null : CanonicalSourceHandoffCheckpoint.fromStored(
+      stored.sourceHandoffCheckpoint,
+      { root: executionRoot, canonicalLocation },
+    ),
     canonicalLocation,
     flowManager,
   });
@@ -4298,6 +4913,12 @@ function reboundRestoredHandoffRequest({ identityRequest, mainRoot, executionRoo
     testReviewRepairProgress,
     workerVisibleTestReviewRepair: stored.testReviewRepair,
     sourceMutationBaseline: stored.sourceMutationBaseline,
+    sourceHandoffIdentity: stored.sourceHandoffIdentity,
+    canonicalGeneration: stored.sourceHandoffIdentity?.canonicalGeneration ?? null,
+    sourceHandoffCheckpoint: stored.sourceHandoffCheckpoint === null ? null : CanonicalSourceHandoffCheckpoint.fromStored(
+      stored.sourceHandoffCheckpoint,
+      { root: executionRoot, canonicalLocation },
+    ),
     canonicalLocation,
     flowManager,
   });
@@ -5913,7 +6534,214 @@ export class WorkerArtifactHandoffCoordinator {
       flowManager: ctx.flowManager,
       now: this.now,
     });
-    return request?.prepare() || null;
+    if (request === null) return null;
+    if (request.policy.kind !== "source") return request.prepare();
+    return this.prepareSourceWorker({ ctx, request, invocation });
+  }
+
+  /** Capture, publish, and read back durable authority before request.json exists. */
+  prepareSourceWorker({ ctx, request, invocation }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || request.policy.kind !== "source") {
+      throw new Error("source worker preparation requires a typed source handoff request");
+    }
+    const identity = SourceWorkerHandoffIdentity.fromRequest(request);
+    if (invocation?.id !== identity.dispatchInvocationId) {
+      throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "source handoff invocation does not bind its checkpoint identity", { retryable: false });
+    }
+    const captured = WorkerArtifactMutationAuthoritySnapshot.capture(request);
+    const rollbackBlob = captured.sourceRollbackCheckpoint.blobBytes();
+    const checkpoint = new CanonicalSourceHandoffCheckpoint({
+      identity,
+      baseline: request.sourceMutationBaseline,
+      canonicalObservation: captured.canonicalObservationAdvance,
+      rollbackBlobDigest: digest(rollbackBlob),
+      allowedCanonicalPaths: captured.canonicalObservationAdvance.mutablePaths,
+    });
+    const preparedEvent = new SourceHandoffEvent({
+      identity, checkpointDigest: checkpoint.digest, sequence: 1, kind: "prepared",
+    });
+    if (typeof ctx.flowManager.publishSourceHandoffCheckpoint !== "function"
+      || typeof ctx.flowManager.readSourceHandoffAuthority !== "function") {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "canonical store does not provide the source handoff checkpoint protocol", { retryable: false, recoveryPossible: false });
+    }
+    ctx.flowManager.publishSourceHandoffCheckpoint({
+      specId: request.specId, checkpoint, rollbackBlob, preparedEvent,
+    });
+    const authority = this.#readSourceAuthority({ ctx, request, identity, requireUnsettled: true });
+    if (authority.checkpoint.digest !== checkpoint.digest || authority.event.digest !== preparedEvent.digest) {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "canonical source handoff checkpoint read-back does not match its publication", { retryable: false, recoveryPossible: false });
+    }
+    return request.withSourceHandoffCheckpoint(authority.checkpoint).prepare();
+  }
+
+  sourceMutationAuthority({ ctx, request }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || request.policy.kind !== "source"
+      || !(request.sourceHandoffCheckpoint instanceof CanonicalSourceHandoffCheckpoint)) {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "source mutation authority requires a checkpoint-bound request", { retryable: false, recoveryPossible: false });
+    }
+    const authority = this.#readSourceAuthority({
+      ctx, request, identity: request.sourceHandoffIdentity, requireUnsettled: true,
+    });
+    const checkpoint = authority.checkpoint;
+    if (checkpoint.digest !== request.sourceHandoffCheckpoint.digest
+      || !checkpoint.identity.matches(request.sourceHandoffIdentity)
+      || checkpoint.baseline.digest !== request.sourceMutationBaseline.digest) {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "canonical source handoff checkpoint does not bind the request", { retryable: false, recoveryPossible: false });
+    }
+    if (!Buffer.isBuffer(authority.rollbackBlob) || digest(authority.rollbackBlob) !== checkpoint.rollbackBlobDigest) {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED", "canonical source handoff rollback blob is missing or modified", { retryable: false, recoveryPossible: false });
+    }
+    let observation = checkpoint.canonicalObservation;
+    const descriptors = authority.descriptors ?? [
+      authority.checkpointDescriptor,
+      authority.rollbackBlobDescriptor,
+      ...(authority.eventDescriptors ?? []),
+      authority.settlementDescriptor,
+    ];
+    for (const descriptor of descriptors) {
+      if (descriptor?.activityId && descriptor?.relativePath && (descriptor.hash ?? descriptor.digest)) {
+        observation = observation.withAllowedPublication({
+          activityId: descriptor.activityId, relativePath: descriptor.relativePath,
+          digest: descriptor.hash ?? descriptor.digest,
+        });
+      }
+    }
+    const rollback = WorkerArtifactSourceRollbackCheckpoint.fromBlob(authority.rollbackBlob, {
+      root: request.executionRoot, runtimeLocks: request.runtimeLocks,
+    });
+    return WorkerArtifactMutationAuthoritySnapshot.rehydrate(request, observation, rollback);
+  }
+
+  startSourceWorker({ ctx, request, invocation }) {
+    const authority = this.#readSourceAuthority({ ctx, request, identity: request.sourceHandoffIdentity, requireUnsettled: true });
+    if (authority.event.kind !== "prepared"
+      || invocation?.id !== request.dispatchInvocationId
+      || invocation?.action?.digest !== request.actionDigest
+      || invocation?.action?.nextAction?.step !== request.stepId
+      || (invocation?.action?.nextAction?.taskId ?? null) !== request.taskId) {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "source worker start does not follow its prepared checkpoint", { retryable: false, recoveryPossible: false });
+    }
+    assertCurrentSourceRequestCapability(request);
+    request.assertCurrent(ctx.flowManager.load(request.specId));
+    const beforeStart = SourceMutationManifest.capture({ baseline: request.sourceMutationBaseline });
+    if (beforeStart.mutations.length !== 0) {
+      throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_MANIFEST_STALE", "source changed after checkpoint publication and before worker start", {
+        retryable: false, data: { changedPaths: beforeStart.paths().slice(0, 20) },
+      });
+    }
+    this.sourceMutationAuthority({ ctx, request }).assertSourceCanonicalTransaction(request);
+    const event = new SourceHandoffEvent({
+      identity: request.sourceHandoffIdentity, checkpointDigest: request.sourceHandoffCheckpoint.digest,
+      sequence: authority.event.sequence + 1, previousDigest: authority.event.digest,
+      kind: "start-intent", requestDigest: request.requestDigest,
+    });
+    ctx.flowManager.appendSourceHandoffEvent({ specId: request.specId, event });
+    // A second canonical read and source comparison closes the intent-to-spawn
+    // TOCTOU window.  A crashed parent after this point is intentionally
+    // uncertain; recovery must never infer that it is safe to spawn again.
+    assertCurrentSourceRequestCapability(request);
+    request.assertCurrent(ctx.flowManager.load(request.specId));
+    const finalBeforeSpawn = SourceMutationManifest.capture({ baseline: request.sourceMutationBaseline });
+    if (finalBeforeSpawn.mutations.length !== 0) {
+      throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_MANIFEST_STALE", "source changed after worker start-intent", { retryable: false });
+    }
+    this.sourceMutationAuthority({ ctx, request }).assertSourceCanonicalTransaction(request);
+  }
+
+  finishSourceWorker({ ctx, request }) {
+    const authority = this.#readSourceAuthority({ ctx, request, identity: request.sourceHandoffIdentity, requireUnsettled: true });
+    if (authority.event.kind !== "start-intent" || authority.event.requestDigest !== request.requestDigest) {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_START_UNCERTAIN", "source worker exit cannot be tied to a start-intent", { retryable: false, recoveryPossible: false });
+    }
+    const sourceManifest = SourceMutationManifest.capture({ baseline: request.sourceMutationBaseline });
+    const event = new SourceHandoffEvent({
+      identity: request.sourceHandoffIdentity, checkpointDigest: request.sourceHandoffCheckpoint.digest,
+      sequence: authority.event.sequence + 1, previousDigest: authority.event.digest,
+      kind: "worker-exited", requestDigest: request.requestDigest, sourceManifest, workerStopped: true,
+    });
+    ctx.flowManager.appendSourceHandoffEvent({ specId: request.specId, event });
+  }
+
+  recordSourceFailure({ ctx, request, plan }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || request.policy.kind !== "source"
+      || !plan?.facts?.identity?.matches?.(request.sourceHandoffIdentity)) {
+      throw new Error("source handoff failure requires its checkpoint-bound Definition plan");
+    }
+    // A failed canonical acceptance may already have a durable settlement or
+    // be waiting for its transaction journal to recover.  Do not append a
+    // competing failure event in either case; the original failure remains
+    // the caller's typed result and recovery owns the pending transaction.
+    if (plan.disposition === "wait"
+      || plan.facts.code === "FLOW_ARTIFACT_HANDOFF_CONFLICT"
+      || plan.facts.kind === "recovery-untrusted" || plan.facts.kind === "settlement-pending") return null;
+    let authority;
+    try {
+      authority = this.#readSourceAuthority({ ctx, request, identity: request.sourceHandoffIdentity, requireUnsettled: false });
+    } catch {
+      return null;
+    }
+    if (authority.settlement !== null) return null;
+    const event = new SourceHandoffEvent({
+      identity: request.sourceHandoffIdentity, checkpointDigest: request.sourceHandoffCheckpoint.digest,
+      sequence: authority.event.sequence + 1, previousDigest: authority.event.digest,
+      // A prepared checkpoint has no start intent yet, but its immutable
+      // request capability is already digest-bound and must identify a
+      // terminal pre-spawn failure without inventing a start.
+      kind: "failure", requestDigest: authority.event.requestDigest ?? request.requestDigest,
+      failureFacts: plan.facts,
+    });
+    ctx.flowManager.appendSourceHandoffEvent({ specId: request.specId, event });
+    return event;
+  }
+
+  /**
+   * Return the terminal record to be committed with Definition's failure
+   * transition.  The caller owns that transition; this method owns only the
+   * source protocol binding and never derives a new disposition.
+   */
+  createSourceFailureSettlement({ ctx = null, request, plan }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || request.policy.kind !== "source"
+      || !["preserve", "quarantine"].includes(plan?.disposition)
+      || !plan?.facts?.identity?.matches?.(request.sourceHandoffIdentity)) {
+      throw new Error("source failure settlement requires a terminal Definition source plan");
+    }
+    const flowManager = ctx?.flowManager ?? request.flowManager;
+    const authority = this.#readSourceAuthority({
+      ctx: { flowManager }, request, identity: request.sourceHandoffIdentity, requireUnsettled: true,
+    });
+    if (authority.event.kind !== "failure" || authority.event.failureFacts?.checkpointDigest !== request.sourceHandoffCheckpoint.digest) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+        "source failure settlement lacks its canonical failure event", { retryable: false, recoveryPossible: false },
+      );
+    }
+    return new SourceHandoffSettlement({
+      identity: request.sourceHandoffIdentity,
+      checkpointDigest: request.sourceHandoffCheckpoint.digest,
+      eventDigest: authority.event.digest,
+      kind: "quarantined",
+    });
+  }
+
+  #readSourceAuthority({ ctx, request, identity, requireUnsettled }) {
+    if (typeof ctx.flowManager.readSourceHandoffAuthority !== "function") {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "canonical store cannot read source handoff authority", { retryable: false, recoveryPossible: false });
+    }
+    let authority;
+    try {
+      authority = ctx.flowManager.readSourceHandoffAuthority({ specId: request.specId, identity, requireUnsettled });
+    } catch (cause) {
+      throw sourceHandoffReadError(cause, "canonical source handoff authority is unavailable");
+    }
+    if (authority === null || !(authority.checkpoint instanceof CanonicalSourceHandoffCheckpoint)
+      || !(authority.event instanceof SourceHandoffEvent) || !authority.checkpoint.identity.matches(identity)
+      || authority.event.checkpointDigest !== authority.checkpoint.digest || !authority.event.identity.matches(identity)) {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "canonical source handoff authority is corrupt or foreign", { retryable: false, recoveryPossible: false });
+    }
+    if (requireUnsettled && authority.settlement !== null) {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "canonical source handoff is already settled", { retryable: false, recoveryPossible: false });
+    }
+    return authority;
   }
 
   /**
@@ -5922,12 +6750,40 @@ export class WorkerArtifactHandoffCoordinator {
    * authority: a matching receipt blocks recovery, and a malformed or forged
    * marker blocks it fail-closed as well.
    */
-  quarantine({ request, error }) {
+  quarantine({ request, error, plan = null }) {
     if (!(request instanceof WorkerArtifactHandoffRequest)) {
       throw new Error("worker artifact handoff quarantine requires a typed request");
     }
     if (!(error instanceof WorkerArtifactHandoffError)) {
       throw new Error("worker artifact handoff quarantine requires a typed error");
+    }
+    if (request.policy.kind === "source") {
+      const settlement = this.createSourceFailureSettlement({ request, plan });
+      if (plan?.failure === null || typeof plan?.failure?.toJSON !== "function") {
+        throw new Error("source handoff quarantine requires Definition-owned terminal failure facts");
+      }
+      try {
+        const recorded = request.flowManager.failCurrentAttemptIfCurrent({
+          specId: request.specId,
+          expectedRunId: request.runId,
+          expectedAttempt: request.sourceMutationBaseline.attempt,
+          failure: plan.failure.toJSON(),
+          sourceHandoffSettlement: settlement,
+          result: {
+            outcome: "failed", summary: plan.failure.message, confirmedAt: this.now().toISOString(),
+            artifactRefs: [{ kind: "worker-handoff-request", id: request.requestDigest }],
+          },
+        });
+        if (recorded !== true) {
+          throw new Error("current Attempt no longer accepts the source quarantine settlement");
+        }
+      } catch (cause) {
+        throw new WorkerArtifactHandoffError(
+          "recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+          `source handoff quarantine could not record its terminal settlement: ${cause.message}`,
+          { cause, retryable: false, recoveryPossible: false },
+        );
+      }
     }
     if (!fs.existsSync(request.submissionPath)) return null;
     const submission = readSubmission(request);
@@ -5953,43 +6809,334 @@ export class WorkerArtifactHandoffCoordinator {
     return cleanupTransientExecutionHandoffDirectory(request.handoffRoot, request.directory);
   }
 
-  rollbackRejectedSourceHandoff({ ctx, request, mutationAuthority }) {
+  rollbackRejectedSourceHandoff({ ctx, request, mutationAuthority, plan }) {
     if (!(request instanceof WorkerArtifactHandoffRequest) || request.policy.kind !== "source") {
       throw new Error("source rollback requires a typed source handoff request");
     }
-    if (request.policy.preservesRejectedSource) return false;
+    if (plan?.disposition !== "rollback") return false;
     if (!(mutationAuthority instanceof WorkerArtifactMutationAuthoritySnapshot)) {
       throw new Error("source rollback requires a parent-owned mutation authority snapshot");
     }
-    let state;
+    const authority = this.#readSourceAuthority({ ctx, request, identity: request.sourceHandoffIdentity, requireUnsettled: true });
+    if (authority.event.kind !== "failure" || !authority.event.failureFacts?.identity?.matches(request.sourceHandoffIdentity)) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+        "source rollback requires its canonical failure event before restore intent",
+        { retryable: false, recoveryPossible: false },
+      );
+    }
+    const workerExit = authority.events.at(-2) ?? null;
+    if (workerExit?.kind !== "worker-exited" || !(workerExit.sourceManifest instanceof SourceMutationManifest)) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED",
+        "source rollback lacks a durable stopped-worker after-image",
+        { retryable: false, recoveryPossible: false },
+      );
+    }
     try {
-      state = ctx.flowManager.load(request.specId);
+      workerExit.sourceManifest.assertBinding(request.sourceMutationBaseline);
+      workerExit.sourceManifest.assertMatchesCurrent(request.sourceMutationBaseline);
     } catch (cause) {
       throw new WorkerArtifactHandoffError(
-        "recovery-required",
-        "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED",
-        `source rollback cannot verify canonical publication state: ${cause.message}`,
+        "recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED",
+        "source rollback cannot attribute the current source surface to its stopped worker",
         { cause, retryable: false, recoveryPossible: false },
       );
     }
-    if (canonicalHandoffReceiptForRequest(state, request, ctx.flowManager) !== null) return false;
-    mutationAuthority.rollbackRejectedSourceMutation();
+    const restorePlan = new SourceHandoffRollbackPlan({
+      identity: request.sourceHandoffIdentity,
+      checkpointDigest: request.sourceHandoffCheckpoint.digest,
+      rollbackBlobDigest: authority.checkpoint.rollbackBlobDigest,
+      sourceManifest: workerExit.sourceManifest,
+      facts: authority.event.failureFacts,
+    });
+    const intent = new SourceHandoffEvent({
+      identity: request.sourceHandoffIdentity, checkpointDigest: request.sourceHandoffCheckpoint.digest,
+      sequence: authority.event.sequence + 1, previousDigest: authority.event.digest,
+      kind: "rollback-intent", rollbackPlanDigest: restorePlan.digest,
+      sourceManifest: restorePlan.sourceManifest,
+    });
+    ctx.flowManager.appendSourceHandoffEvent({ specId: request.specId, event: intent });
+    // Rehydrate after the intent, never from the dispatcher-held object.  It
+    // makes a crash between intent and restore resume the same before-image.
+    const persistedAuthority = this.sourceMutationAuthority({ ctx, request });
+    persistedAuthority.rollbackRejectedSourceMutation();
+    if (SourceMutationManifest.capture({ baseline: request.sourceMutationBaseline }).mutations.length !== 0) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED",
+        "source rollback did not restore the immutable baseline", { retryable: false, recoveryPossible: false },
+      );
+    }
+    const settlement = new SourceHandoffSettlement({
+      identity: request.sourceHandoffIdentity, checkpointDigest: request.sourceHandoffCheckpoint.digest,
+      eventDigest: intent.digest, kind: "rolled-back",
+    });
+    try {
+      ctx.flowManager.settleSourceHandoff({
+        specId: request.specId, settlement, expectedAttempt: request.sourceMutationBaseline.attempt,
+      });
+    } catch (cause) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED",
+        `source rollback restored files but could not record its settlement: ${cause.message}`,
+        { cause, retryable: false, recoveryPossible: false },
+      );
+    }
     this.cleanupRejectedSourceHandoff(request);
     return true;
   }
 
   recoverPending({ ctx }) {
-    const state = typeof ctx.flowManager.load === "function"
-      ? ctx.flowManager.load(ctx.specId)
-      : ctx.flowManager.loadReadOnly(ctx.specId);
-    if (state?.schemaRevision !== 3 || typeof ctx.flowManager.confirmCurrentAttempt !== "function") {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_ARTIFACT_HANDOFF_INVALID",
-        "worker artifact handoff recovery requires a Version-1 Flow",
-      );
+    const lease = new FlowHandoffAuthorityLease({
+      mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root,
+    });
+    lease.acquire();
+    try {
+      let state;
+      try {
+        state = typeof ctx.flowManager.load === "function"
+          ? ctx.flowManager.load(ctx.specId)
+          : ctx.flowManager.loadReadOnly(ctx.specId);
+      } catch (cause) {
+        throw sourceHandoffReadError(cause, "canonical source handoff authority cannot be read");
+      }
+      if (state?.schemaRevision !== 3 || typeof ctx.flowManager.confirmCurrentAttempt !== "function") {
+        throw new WorkerArtifactHandoffError(
+          "invalid",
+          "FLOW_ARTIFACT_HANDOFF_INVALID",
+          "worker artifact handoff recovery requires a Version-1 Flow",
+        );
+      }
+      const source = this.#recoverPendingSource({ ctx, state });
+      const artifact = this.#recoverCanonicalPending({ ctx, state });
+      if (source === null) return artifact;
+      if (artifact === null) return source;
+      return {
+        completed: source.completed === true || artifact.completed === true,
+        replayed: source.replayed === true || artifact.replayed === true,
+        cleanedHandoffs: (source.cleanedHandoffs ?? 0) + (artifact.cleanedHandoffs ?? 0),
+      };
+    } finally {
+      lease.release();
     }
-    return this.#recoverCanonicalPending({ ctx, state });
+  }
+
+  #recoverPendingSource({ ctx, state }) {
+    if (typeof ctx.flowManager.sourceHandoffAuthorities !== "function") {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "canonical store does not provide source handoff recovery", { retryable: false, recoveryPossible: false });
+    }
+    let authorities;
+    try {
+      authorities = ctx.flowManager.sourceHandoffAuthorities({ specId: state.specId, unsettledOnly: false });
+    } catch (cause) {
+      throw sourceHandoffReadError(cause, "canonical source handoff authorities cannot be read");
+    }
+      let cleaned = 0;
+      let completedRecovery = false;
+      for (const authority of authorities) {
+        const checkpoint = authority?.checkpoint;
+        if (!(checkpoint instanceof CanonicalSourceHandoffCheckpoint)
+          || !(authority?.event instanceof SourceHandoffEvent)
+          || checkpoint.identity.runId !== state.runId || checkpoint.identity.specId !== state.specId) {
+          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "canonical source handoff checkpoint is corrupt or belongs to another Flow", { retryable: false, recoveryPossible: false });
+        }
+        const identity = checkpoint.identity;
+        const requestPath = path.join(
+          handoffActionDirectory(executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId), identity.runId, identity.dispatchInvocationId, identity.actionDigest),
+          "request.json",
+        );
+        if (authority.settled) {
+          // Settlement is canonical authority for cleanup. The derived path is
+          // identity-bound; no runtime request enumeration or source read is
+          // needed to remove its now-consumed capability directory.
+          if (cleanupTransientExecutionHandoffDirectory(
+            executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId), path.dirname(requestPath),
+          )) {
+            cleaned += 1;
+            completedRecovery = true;
+          }
+          continue;
+        }
+        if (authority.event.kind === "prepared") {
+          // No start intent proves that no worker could have been launched.
+          const settlement = new SourceHandoffSettlement({
+            identity, checkpointDigest: checkpoint.digest, eventDigest: authority.event.digest, kind: "aborted-before-start",
+          });
+          ctx.flowManager.settleSourceHandoff({ specId: state.specId, settlement, expectedAttempt: checkpoint.baseline.attempt });
+          completedRecovery = true;
+          if (fs.existsSync(requestPath) && cleanupTransientExecutionHandoffDirectory(executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId), path.dirname(requestPath))) cleaned += 1;
+          continue;
+        }
+        if (!fs.existsSync(requestPath)) {
+          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "started source handoff is missing its request capability", { retryable: false, recoveryPossible: false });
+        }
+        let stored;
+        let request;
+        try {
+          stored = requestFromStored(requestPath);
+          request = restoreExecutionHandoffRequest({
+            mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root,
+            state, stored, canonicalLocation: ctx.flowManager.specLocation(state.specId), flowManager: ctx.flowManager,
+          });
+        } catch (cause) {
+          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", `canonical source handoff request cannot be restored: ${cause.message}`, { cause, retryable: false, recoveryPossible: false });
+        }
+        if (!request.sourceHandoffIdentity.matches(identity) || request.sourceHandoffCheckpoint.digest !== checkpoint.digest) {
+          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "source handoff request does not bind its canonical checkpoint", { retryable: false, recoveryPossible: false });
+        }
+        if (authority.events.some((event) => ["start-intent", "worker-exited", "failure"].includes(event.kind)
+          && event.requestDigest !== request.requestDigest)) {
+          throw new WorkerArtifactHandoffError(
+            "recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+            "source handoff event request digest does not bind its persisted capability",
+            { retryable: false, recoveryPossible: false },
+          );
+        }
+        if (authority.event.kind === "failure") {
+          const facts = authority.event.failureFacts;
+          if (!(facts instanceof SourceHandoffFailureFacts)
+            || !facts.identity.matches(identity) || facts.checkpointDigest !== checkpoint.digest) {
+            throw new WorkerArtifactHandoffError(
+              "recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+              "source failure event facts do not bind the canonical checkpoint",
+              { retryable: false, recoveryPossible: false },
+            );
+          }
+          const plan = resolveSourceHandoffTransitionPlan({ facts, policy: request.policy });
+          const prior = authority.events.at(-2) ?? null;
+          if (plan.disposition === "rollback") {
+            if (prior?.kind !== "worker-exited" || !(prior.sourceManifest instanceof SourceMutationManifest)) {
+              throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED", "source failure lacks a stopped worker after-image for rollback", { retryable: false, recoveryPossible: false });
+            }
+            prior.sourceManifest.assertBinding(checkpoint.baseline);
+            prior.sourceManifest.assertMatchesCurrent(checkpoint.baseline);
+            this.rollbackRejectedSourceHandoff({
+              ctx, request, mutationAuthority: this.sourceMutationAuthority({ ctx, request }), plan,
+            });
+            completedRecovery = true;
+            if (cleanupTransientExecutionHandoffDirectory(request.handoffRoot, request.directory)) cleaned += 1;
+            continue;
+          }
+          const failure = new WorkerArtifactHandoffError(
+            plan.disposition === "wait" ? "missing" : "recovery-required",
+            facts.code,
+            facts.message,
+            { retryable: facts.retryable, recoveryPossible: false, data: facts.failureKind === null ? {} : { failureKind: facts.failureKind } },
+          );
+          if (plan.disposition === "preserve") {
+            const observation = new TaskSourceFailureObservation({
+              request,
+              error: failure,
+              mutationAuthority: this.sourceMutationAuthority({ ctx, request }),
+              agentError: facts.providerFailed ? Object.freeze({}) : null,
+            });
+            if (!observation.record(ctx.flowManager, {
+              sourceHandoffSettlement: this.createSourceFailureSettlement({ ctx, request, plan }),
+            })) {
+              throw new WorkerArtifactHandoffError(
+                "recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+                "preserved source failure could not atomically settle its current Attempt",
+                { retryable: false, recoveryPossible: false },
+              );
+            }
+            completedRecovery = true;
+            if (cleanupTransientExecutionHandoffDirectory(request.handoffRoot, request.directory)) cleaned += 1;
+            continue;
+          }
+          if (plan.disposition === "quarantine") {
+            this.quarantine({ request, error: failure, plan });
+            completedRecovery = true;
+            continue;
+          }
+          // Block/wait are terminal recovery outcomes for this invocation;
+          // they are never implicit permission to begin another worker.
+          throw failure;
+        }
+        if (authority.event.kind === "start-intent") {
+          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_START_UNCERTAIN", "source worker has a start-intent without a durable exit observation", { retryable: false, recoveryPossible: false });
+        }
+        if (authority.event.kind === "rollback-intent") {
+          const restorePlan = SourceHandoffRollbackPlan.fromEvents({
+            checkpoint, rollbackEvent: authority.event, failureEvent: authority.events.at(-2),
+          });
+          restorePlan.sourceManifest.assertBinding(checkpoint.baseline);
+          assertRollbackResumeObservation({ baseline: checkpoint.baseline, observed: restorePlan.sourceManifest });
+          const mutationAuthority = this.sourceMutationAuthority({ ctx, request });
+          mutationAuthority.rollbackRejectedSourceMutation();
+          if (SourceMutationManifest.capture({ baseline: checkpoint.baseline }).mutations.length !== 0) {
+            throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED", "source rollback did not restore the immutable baseline", { retryable: false, recoveryPossible: false });
+          }
+          const settlement = new SourceHandoffSettlement({
+            identity, checkpointDigest: checkpoint.digest, eventDigest: authority.event.digest, kind: "rolled-back",
+          });
+          ctx.flowManager.settleSourceHandoff({ specId: state.specId, settlement, expectedAttempt: checkpoint.baseline.attempt });
+          completedRecovery = true;
+          if (cleanupTransientExecutionHandoffDirectory(request.handoffRoot, request.directory)) cleaned += 1;
+          continue;
+        }
+        if (authority.event.kind !== "worker-exited" || authority.event.requestDigest !== request.requestDigest) {
+          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "source handoff event chain cannot prove a stopped worker", { retryable: false, recoveryPossible: false });
+        }
+        if (!fs.existsSync(request.submissionPath)) {
+          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "stopped source worker did not leave a sealed handoff", { retryable: false, recoveryPossible: false });
+        }
+        let recovered;
+        try {
+          const sealed = readSubmission(request);
+          validateSubmission(request, sealed);
+          const mutationAuthority = this.sourceMutationAuthority({ ctx, request });
+          recovered = this.#reconcileCanonical({ ctx, request, state, submission: sealed, mutationAuthority });
+        } catch (cause) {
+          recovered = this.#settleRecoveredSourceFailure({ ctx, request, error: cause });
+        }
+        if (recovered?.completed) {
+          completedRecovery = true;
+          cleaned += 1;
+        }
+      }
+    return completedRecovery || cleaned > 0
+      ? { completed: true, replayed: true, cleanedHandoffs: cleaned }
+      : null;
+  }
+
+  #settleRecoveredSourceFailure({ ctx, request, error }) {
+    const failure = error instanceof WorkerArtifactHandoffError ? error : new WorkerArtifactHandoffError(
+      "invalid", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", error.message, { cause: error, retryable: false },
+    );
+    const authority = this.#readSourceAuthority({ ctx, request, identity: request.sourceHandoffIdentity, requireUnsettled: true });
+    let ownershipProven = false;
+    if (authority.event.kind === "worker-exited" && authority.event.sourceManifest instanceof SourceMutationManifest) {
+      try {
+        authority.event.sourceManifest.assertBinding(request.sourceMutationBaseline);
+        authority.event.sourceManifest.assertMatchesCurrent(request.sourceMutationBaseline);
+        ownershipProven = true;
+      } catch { ownershipProven = false; }
+    }
+    const facts = SourceHandoffFailureFacts.fromError(failure, {
+      request, ownershipProven, workerStopped: authority.event.kind === "worker-exited",
+    });
+    const plan = resolveSourceHandoffTransitionPlan({ facts, policy: request.policy });
+    const event = this.recordSourceFailure({ ctx, request, plan });
+    if (event === null || plan.disposition === "wait") throw failure;
+    if (plan.disposition === "rollback") {
+      this.rollbackRejectedSourceHandoff({ ctx, request, mutationAuthority: this.sourceMutationAuthority({ ctx, request }), plan });
+      return { completed: true, replayed: true };
+    }
+    if (plan.disposition === "preserve") {
+      const observation = new TaskSourceFailureObservation({
+        request,
+        error: failure,
+        mutationAuthority: this.sourceMutationAuthority({ ctx, request }),
+        agentError: facts.providerFailed ? Object.freeze({}) : null,
+      });
+      if (!observation.record(ctx.flowManager, { sourceHandoffSettlement: this.createSourceFailureSettlement({ ctx, request, plan }) })) throw failure;
+      return { completed: true, replayed: true };
+    }
+    if (plan.disposition === "quarantine") {
+      this.quarantine({ request, error: failure, plan });
+      return { completed: true, replayed: true };
+    }
+    throw failure;
   }
 
   #recoverCanonicalPending({ ctx, state }) {
@@ -6019,81 +7166,22 @@ export class WorkerArtifactHandoffCoordinator {
           { data: { requestPath, specId: stored.specId, runId: stored.runId } },
         );
       }
+      if (stored.policy.kind === "source") {
+        if (stored.sourceHandoffCheckpoint === null) {
+          throw new WorkerArtifactHandoffError(
+            "recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+            "source worker runtime lacks a canonical checkpoint and cannot be trusted", { retryable: false, recoveryPossible: false },
+          );
+        }
+        // Source recovery is driven above by canonical checkpoints. Runtime is
+        // only a capability location, never an enumeration authority.
+        continue;
+      }
       let submission;
       try {
         submission = readSubmission(stored);
       } catch (cause) {
         if (cause instanceof WorkerArtifactHandoffError && cause.classification === "missing") {
-          if (workerArtifactHandoffPolicy(stored.stepId)?.kind === "source") {
-            if (["task-triage", "task-repair"].includes(stored.stepId)) {
-              try {
-                const request = restoreExecutionHandoffRequest({ mainRoot, executionRoot, state, stored, canonicalLocation, flowManager: ctx.flowManager });
-                const failed = state.attempt?.failure;
-                const failedActivity = ctx.flowManager.activityLedger(request.specId).find((activity) => (
-                  activity?.transition?.operation === "fail_attempt"
-                  && activity.nodeId === `${request.taskId}-${request.stepId.slice(5)}`
-                  && activity?.result?.artifactRefs?.some((entry) => (
-                    entry?.kind === "worker-handoff-request" && entry.id === request.requestDigest
-                  ))
-                )) ?? null;
-                const failedFacts = failedActivity?.failure ?? failed?.toJSON?.() ?? failed;
-                const source = ctx.flowManager.readArtifact({
-                  specId: request.specId,
-                  logicalKey: `task.${request.stepId.slice(5)}.source.handoff.baseline`,
-                  parameters: { taskId: request.taskId, attemptId: request.sourceMutationBaseline.attempt.id },
-                  consumerNodeId: request.stepId,
-                });
-                const storedBaseline = JSON.parse(source.bytes.toString("utf8"));
-                const baseline = SourceMutationBaseline.fromStored(storedBaseline.baseline, { root: executionRoot });
-                // A missing or forged baseline publication must keep the
-                // transient handoff sealed for forensics; semantic retry is
-                // available only after the canonical producer is proven.
-                const descriptor = source.descriptor;
-                const publication = ctx.flowManager.activityLedger(request.specId)
-                  .find((activity) => activity.id === descriptor.activityId) ?? null;
-                const canonicalObservation = SourceWorkerCanonicalObservationAdvance.fromStored(
-                  storedBaseline.canonicalObservation,
-                  { flowManager: ctx.flowManager, specId: request.specId },
-                ).withAllowedPublication({
-                  activityId: descriptor.activityId,
-                  relativePath: descriptor.relativePath,
-                  digest: descriptor.hash,
-                }).withAllowedActivity(failedActivity?.id ?? "missing-failure-activity");
-                if (new Set(["semantic", "tooling"]).has(failedFacts?.category)
-                  && failedFacts.retryKind === failedFacts.category && failedActivity !== null
-                  && baseline.digest === request.sourceMutationBaseline.digest
-                  && descriptor.logicalKey === `task.${request.stepId.slice(5)}.source.handoff.baseline`
-                  && descriptor.hash === digest(source.bytes)
-                  && descriptor.size === source.bytes.length
-                  && publication?.nodeId === `${request.taskId}-${request.stepId.slice(5)}`
-                  && publication?.attemptId === baseline.attempt.id
-                  && publication?.sequence === baseline.attempt.sequence
-                  && publication?.transition?.operation === "publish_artifacts"
-                  && SourceMutationManifest.capture({ baseline }).mutations.length === 0) {
-                  canonicalObservation.assertAllowed({
-                    flowManager: ctx.flowManager,
-                    specId: request.specId,
-                    canonicalSnapshot: canonicalObservation.canonicalSnapshot,
-                  });
-                  if (cleanupTransientExecutionHandoffDirectory(handoffRoot, request.directory)) cleaned += 1;
-                  continue;
-                }
-              } catch (cause) {
-                throw new WorkerArtifactHandoffError(
-                  "recovery-required",
-                  "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
-                  `unsealed Task source handoff cannot prove its retry authority: ${cause.message}`,
-                  { cause, retryable: false },
-                );
-              }
-            }
-            throw new WorkerArtifactHandoffError(
-              "recovery-required",
-              "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
-              "unsealed source worker handoff may contain unverified source edits and cannot be retried automatically",
-              { data: { stepId: stored.stepId, handoffDirectory: stored.directory } },
-            );
-          }
           // No sealed payload exists.  The next dispatcher attempt owns a
           // fresh request; this incomplete work unit is not persisted truth.
           if (cleanupTransientExecutionHandoffDirectory(handoffRoot, stored.directory)) cleaned += 1;
@@ -6130,79 +7218,6 @@ export class WorkerArtifactHandoffCoordinator {
       if (canonicalHandoffIsCommitted(state, request, submission, ctx.flowManager)) {
         cleanupCompletedHandoff(request.handoffRoot, canonicalHandoffReceipt(request, submission, this.now), this.faultInjector);
         cleaned += 1;
-        continue;
-      }
-      if (request.policy.kind === "source") {
-        if (!["task-triage", "task-repair"].includes(request.stepId)) {
-          throw new WorkerArtifactHandoffError(
-            "recovery-required",
-            "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
-            "sealed source worker handoff cannot be recovered without its parent-held immutable baseline",
-            { data: { stepId: request.stepId, handoffDirectory: request.directory } },
-          );
-        }
-        let catalogBaseline;
-        let canonicalObservation;
-        try {
-          const catalogBaselineSource = ctx.flowManager.readArtifact({
-            specId: request.specId,
-            logicalKey: `task.${request.stepId.slice(5)}.source.handoff.baseline`,
-            parameters: { taskId: request.taskId, attemptId: request.sourceMutationBaseline.attempt.id },
-            consumerNodeId: request.stepId,
-          });
-          const storedBaseline = JSON.parse(catalogBaselineSource.bytes.toString("utf8"));
-          catalogBaseline = SourceMutationBaseline.fromStored(storedBaseline.baseline, { root: request.executionRoot });
-          if (catalogBaseline.attempt.id !== request.sourceMutationBaseline.attempt.id
-            || catalogBaseline.attempt.sequence !== request.sourceMutationBaseline.attempt.sequence
-            || catalogBaseline.attempt.nodeId !== request.sourceMutationBaseline.attempt.nodeId
-            || typeof catalogBaselineSource?.descriptor?.activityId !== "string") {
-            throw new Error("canonical Task source baseline does not bind its producer Activity");
-          }
-          const descriptor = catalogBaselineSource.descriptor;
-          const publication = ctx.flowManager.activityLedger(request.specId)
-            .find((activity) => activity.id === descriptor.activityId) ?? null;
-          if (descriptor.logicalKey !== `task.${request.stepId.slice(5)}.source.handoff.baseline`
-            || descriptor.hash !== digest(catalogBaselineSource.bytes)
-            || descriptor.size !== catalogBaselineSource.bytes.length
-            || publication === null
-            || publication.nodeId !== `${request.taskId}-${request.stepId.slice(5)}`
-            || publication.attemptId !== catalogBaseline.attempt.id
-            || publication.sequence !== catalogBaseline.attempt.sequence
-            || publication.transition?.operation !== "publish_artifacts") {
-            throw new Error("canonical Task source baseline publication is not the exact producer Activity");
-          }
-          canonicalObservation = SourceWorkerCanonicalObservationAdvance.fromStored(
-            storedBaseline.canonicalObservation,
-            { flowManager: ctx.flowManager, specId: request.specId },
-          ).withAllowedPublication({
-            activityId: descriptor.activityId,
-            relativePath: descriptor.relativePath,
-            digest: descriptor.hash,
-          });
-        } catch (cause) {
-          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", `sealed Task source handoff lacks its canonical baseline: ${cause.message}`, { cause, retryable: false });
-        }
-        if (catalogBaseline.digest !== request.sourceMutationBaseline.digest) {
-          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "sealed Task source handoff baseline does not match its canonical publication", { retryable: false });
-        }
-        const authority = WorkerArtifactMutationAuthoritySnapshot.rehydrate(request, canonicalObservation);
-        let recovered;
-        try {
-          recovered = this.#reconcileCanonical({ ctx, request, state, submission, mutationAuthority: authority });
-        } catch (cause) {
-          const observation = new TaskSourceFailureObservation({
-            request,
-            error: cause,
-            mutationAuthority: authority,
-          });
-          if (!observation.record(ctx.flowManager)) throw cause;
-          if (observation.manifest !== null && observation.manifest.mutations.length === 0) {
-            if (cleanupTransientExecutionHandoffDirectory(handoffRoot, request.directory)) cleaned += 1;
-            continue;
-          }
-          throw cause;
-        }
-        if (recovered?.completed) cleaned += 1;
         continue;
       }
       // A parent restart has lost the in-memory validation authority. Never
@@ -6290,6 +7305,12 @@ export class WorkerArtifactHandoffCoordinator {
         `canonical Version is invalid before worker artifact handoff publication: ${cause.message}`,
         { cause, retryable: false },
       );
+    }
+    if (request.policy.kind === "source") {
+      // Worker-exited and failure observations are canonical protocol events.
+      // Never validate a sealed source result against a caller-held snapshot
+      // taken before those events were appended.
+      mutationAuthority = this.sourceMutationAuthority({ ctx, request });
     }
     return this.#reconcileCanonical({
       ctx, request, state, submission, mutationAuthority, bootstrapObservationAuthority,
@@ -6513,6 +7534,24 @@ export class WorkerArtifactHandoffCoordinator {
       effect,
       manifest,
     });
+    const protocolAuthority = this.#readSourceAuthority({
+      ctx, request, identity: request.sourceHandoffIdentity, requireUnsettled: true,
+    });
+    if (protocolAuthority.event.kind !== "worker-exited"
+      || protocolAuthority.event.requestDigest !== request.requestDigest) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+        "source handoff cannot settle without a durable worker exit observation",
+        { retryable: false, recoveryPossible: false },
+      );
+    }
+    const sourceHandoffSettlement = new SourceHandoffSettlement({
+      identity: request.sourceHandoffIdentity,
+      checkpointDigest: request.sourceHandoffCheckpoint.digest,
+      handoffDigest: submission.handoffDigest,
+      eventDigest: protocolAuthority.event.digest,
+      kind: "accepted",
+    });
     try {
       ctx.flowManager.confirmSourceWorkerHandoff({
         sourceMutationBaseline: request.sourceMutationBaseline,
@@ -6520,6 +7559,7 @@ export class WorkerArtifactHandoffCoordinator {
         effect,
         mutationManifest: manifest,
         handoffDigest: submission.handoffDigest,
+        sourceHandoffSettlement,
         taskStageBinding: request.inputs.some((input) => input.name === "task-review-binding.json")
           ? new TaskReviewEpisodeBinding(request.inputs.find((input) => input.name === "task-review-binding.json").document)
           : null,

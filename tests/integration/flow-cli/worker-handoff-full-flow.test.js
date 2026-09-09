@@ -473,7 +473,20 @@ describe("deterministic full Flow worker handoff", () => {
       const taskReviewRuns = new Map();
       const taskMutationPaths = [];
       const commandArtifactHistories = new Map();
-      const coordinator = new WorkerArtifactHandoffCoordinator();
+      // Keep every durable preparation/start/recovery boundary on the real
+      // coordinator; only the fixture's scripted route cursor is observed.
+      class FullFlowHandoffCoordinator extends WorkerArtifactHandoffCoordinator {
+        createRequest(input) {
+          this.request = super.createRequest(input);
+          return this.request;
+        }
+        reconcile(input) {
+          const result = super.reconcile(input);
+          advance(route[position]);
+          return result;
+        }
+      }
+      const coordinator = new FullFlowHandoffCoordinator();
       const commandPublishedPrimaryArtifact = new Set([
         "draft-questions-review",
         "draft-coverage-review",
@@ -572,6 +585,14 @@ describe("deterministic full Flow worker handoff", () => {
             handoffCount += 1;
             try {
               if (WORKER_SOURCE_HANDOFF_STEPS.includes(stepId)) {
+                const pending = flowManager.sourceHandoffAuthorities({ specId, unsettledOnly: true });
+                assert.equal(pending.length, 1, "worker start must have exactly one unsettled canonical checkpoint");
+                const authority = pending[0];
+                assert.equal(authority.checkpoint.identity.dispatchInvocationId, request.dispatchInvocationId);
+                assert.equal(authority.checkpoint.digest, request.sourceHandoffCheckpoint.digest);
+                assert.equal(authority.event.kind, "start-intent", "worker must start after durable request binding");
+                assert.equal(authority.event.requestDigest, coordinator.request.requestDigest);
+                assert.equal(authority.settlement, null);
                 const { paths, effect } = writeSourcePayload(stepId, request, executionRoot);
                 if (stepId === "task-impl") {
                   taskMutationPaths.push({ taskId: request.taskId, paths });
@@ -602,16 +623,7 @@ describe("deterministic full Flow worker handoff", () => {
         repositoryFingerprint: () => `full-flow-${position}`,
         maxDispatches: 64,
         leaseFactory: () => ({ acquire() {}, release() {} }),
-        handoffCoordinator: {
-          recoverPending(input) { return coordinator.recoverPending(input); },
-          createRequest(input) { return coordinator.createRequest(input); },
-          reconcile(input) {
-            const result = coordinator.reconcile(input);
-            advance(route[position]);
-            return result;
-          },
-          rollbackRejectedSourceHandoff(input) { return coordinator.rollbackRejectedSourceHandoff(input); },
-        },
+        handoffCoordinator: coordinator,
       });
       dispatcher.container = {};
       const baseCtx = {
@@ -639,6 +651,14 @@ describe("deterministic full Flow worker handoff", () => {
       assert.equal(completed.dispatch?.boundary, "completed", JSON.stringify(completed));
       assert.deepEqual(new Set(artifactWorkers), new Set(WORKER_ARTIFACT_HANDOFF_STEPS));
       assert.deepEqual(new Set(sourceWorkers), new Set(WORKER_SOURCE_HANDOFF_STEPS));
+      const sourceAuthorities = flowManager.sourceHandoffAuthorities({ specId, unsettledOnly: false });
+      assert.equal(sourceAuthorities.length, sourceWorkers.length);
+      assert.equal(new Set(sourceAuthorities.map((authority) => authority.checkpoint.digest)).size, sourceWorkers.length);
+      for (const authority of sourceAuthorities) {
+        assert.equal(authority.settlement.kind, "accepted");
+        assert.equal(authority.settlement.checkpointDigest, authority.checkpoint.digest);
+        assert.equal(authority.settlement.eventDigest, authority.event.digest);
+      }
       assert.equal(specRepairCalls, 1, "one valid repair delta is confirmed without a correction loop");
       assert.equal(
         handoffCount,

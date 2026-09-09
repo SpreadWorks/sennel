@@ -33,7 +33,7 @@ describe("PreparingFlowStore atomic persistence", () => {
     }
   });
 
-  it("serializes writers and rejects unsafe run identifiers", () => {
+  it("rejects same-process writer reentry and unsafe run identifiers", () => {
     const root = createTmpDir("preparing-flow-lock-");
     try {
       const runId = "run-420-lock";
@@ -44,7 +44,8 @@ describe("PreparingFlowStore atomic persistence", () => {
 
       assert.throws(
         () => first.mutate(runId, () => second.mutate(runId, (state) => { state.request = "lost"; })),
-        (error) => error.code === "PREPARING_FLOW_BUSY",
+        (error) => error.code === "PREPARING_FLOW_LOCK_REENTRANT"
+          && error.lockStatus === "reentrant",
       );
       assert.deepEqual(fs.readFileSync(file), before);
       assert.throws(() => first.load("../outside"), /runId/);

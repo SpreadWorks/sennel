@@ -68,7 +68,6 @@ export function recoverInterruptedFinalizeSync(ctx) {
 
   const operation = new RepositoryFlowOperationLock({
     mainRoot: stateOwner.mainRepoPath,
-    allowProcessOwnerBorrow: false,
   });
   let token;
   try {

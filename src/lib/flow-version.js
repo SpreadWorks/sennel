@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { AtomicJsonFile } from "./atomic-json-file.js";
 import { AtomicFile } from "./atomic-file.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "./process-owned-lock.js";
+import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
+import { ProcessLock } from "./process-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { ArtifactAuthority, ArtifactAuthoritySlot, ArtifactCardinality } from "./artifact-authority.js";
 import {
   ArtifactPublicationClaim,
@@ -74,13 +76,33 @@ const RETRY_RECOVERY_TASK_ARTIFACTS = new Set([
   "retry.recovery.baseline",
   "retry.recovery.receipt",
 ]);
+const SOURCE_HANDOFF_TASK_ARTIFACTS = new Set([
+  "source.handoff.rollback-blob",
+  "source.handoff.checkpoint",
+  "source.handoff.event",
+  "source.handoff.settlement",
+]);
 const MIGRATION_CATALOG_INITIALIZATION = Symbol("migration-catalog-initialization");
 const CATALOG_LOCK_RETRY_INTERVAL_MS = 250;
 const CATALOG_LOCK_WAIT_TIMEOUT_MS = 10_000;
+const ACTIVE_VERSION_TRANSACTIONS = new Set();
 const FLOW_STATE_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("flow.state").relativePath;
 const FLOW_ACTIVITIES_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("flow.activities").relativePath;
 const SPEC_RECORD_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("spec.record").relativePath;
 const ARTIFACT_CATALOG_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("artifact.catalog").relativePath;
+
+function artifactCatalogLockError(status, message, { lockPath, cause } = {}) {
+  const error = new Error(message, { cause });
+  if (status === "live" || status === "timeout") {
+    error.name = "FlowArtifactCatalogBusyError";
+    error.code = "FLOW_ARTIFACT_CATALOG_BUSY";
+  } else {
+    error.name = "ProcessLockError";
+    error.code = `PROCESS_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
+  }
+  error.lockPath = lockPath;
+  return error;
+}
 
 /** Typed path/Task relation for the route-scoped retry artifacts. */
 class TaskRetryRecoveryArtifactOwner {
@@ -238,11 +260,12 @@ function managedFiles(location, current = location.directory, result = []) {
 }
 
 class VersionTreeSnapshot {
-  constructor(location) {
+  constructor(location, { directories = null, files = null } = {}) {
     this.location = location;
-    this.directories = new Set([""]);
-    this.files = new Map();
-    this.#capture(location.directory);
+    if ((directories === null) !== (files === null)) throw new Error("Version tree snapshot image must be complete");
+    this.directories = directories === null ? new Set([""]) : new Set(directories);
+    this.files = files === null ? new Map() : new Map(files);
+    if (directories === null) this.#capture(location.directory);
   }
   #capture(directory) {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -315,9 +338,69 @@ class VersionTreeSnapshot {
       fs.mkdirSync(path.dirname(absolute), { recursive: true, mode: 0o755 });
       fs.writeFileSync(absolute, image.bytes, { mode: image.mode });
       fs.chmodSync(absolute, image.mode);
+      const descriptor = fs.openSync(absolute, "r");
+      try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
     }
     fsyncDirectory(this.location.directory);
   }
+  toJSON() {
+    return {
+      directories: [...this.directories].sort(codeUnitOrder),
+      files: [...this.files].sort(([left], [right]) => codeUnitOrder(left, right)).map(([file, image]) => ({
+        path: file, mode: image.mode, bytes: image.bytes.toString("base64"),
+      })),
+    };
+  }
+  static fromStored(location, value) {
+    if (value === null || typeof value !== "object" || !Array.isArray(value.directories) || !Array.isArray(value.files)) {
+      throw new Error("Version transaction snapshot is invalid");
+    }
+    if (Object.keys(value).sort().join(",") !== "directories,files") throw new Error("Version transaction snapshot fields are invalid");
+    const directories = new Set(value.directories.map((entry) => {
+      const directory = entry === "" ? "" : relativePath(entry, "Version transaction directory");
+      if (directory === ".runtime" || directory.startsWith(".runtime/")) throw new Error("Version transaction directory is runtime-owned");
+      return directory;
+    }));
+    const files = new Map(value.files.map((entry) => {
+      if (entry === null || typeof entry !== "object" || Object.keys(entry).sort().join(",") !== "bytes,mode,path") {
+        throw new Error("Version transaction file image fields are invalid");
+      }
+      const file = relativePath(entry?.path, "Version transaction file");
+      if (file === ".runtime" || file.startsWith(".runtime/")
+        || (!catalogManagedPath(file) && file !== ARTIFACT_CATALOG_RELATIVE_PATH)
+        || !Number.isInteger(entry.mode) || entry.mode < 0 || entry.mode > 0o777
+        || typeof entry.bytes !== "string" || Buffer.from(entry.bytes, "base64").toString("base64") !== entry.bytes) {
+        throw new Error("Version transaction file image is invalid");
+      }
+      return [file, Object.freeze({ mode: entry.mode, bytes: Buffer.from(entry.bytes, "base64") })];
+    }));
+    if (files.size !== value.files.length || directories.size !== value.directories.length || !directories.has("")) throw new Error("Version transaction snapshot contains duplicate paths or lacks its root");
+    for (const directory of directories) {
+      if (directory !== "" && !directories.has(path.posix.dirname(directory) === "." ? "" : path.posix.dirname(directory))) {
+        throw new Error("Version transaction snapshot directory ancestry is incomplete");
+      }
+    }
+    return new VersionTreeSnapshot(location, { directories, files });
+  }
+}
+
+class VersionCatalogTransactionJournal {
+  constructor({ file, document }) {
+    if (!(file instanceof AtomicJsonFile) || document === null || typeof document !== "object") {
+      throw new Error("Version catalog transaction journal is invalid");
+    }
+    this.file = file;
+    this.document = document;
+  }
+  prepare(targetCatalogHash) {
+    this.document = { ...this.document, targetCatalogHash };
+    this.file.write({ ...this.document, digest: sha256(Buffer.from(JSON.stringify(this.document), "utf8")) });
+  }
+  finish() {
+    this.file.remove();
+    ACTIVE_VERSION_TRANSACTIONS.delete(this.file.filePath);
+  }
+  abandon() { ACTIVE_VERSION_TRANSACTIONS.delete(this.file.filePath); }
 }
 
 class IdentityValue {
@@ -732,7 +815,7 @@ export class FlowVersionRuntimeLockLocation {
     const candidate = relativePath(value, "runtime lock repository path");
     if (candidate === this.relativeRepositoryPath) return true;
     return path.posix.dirname(candidate) === path.posix.dirname(this.relativeRepositoryPath)
-      && ProcessOwnedLock.isOwnerTemporaryFileName(this.fileName, path.posix.basename(candidate));
+      && ProcessLock.isOwnerTemporaryFileName(this.fileName, path.posix.basename(candidate));
   }
 }
 
@@ -957,6 +1040,7 @@ export class FlowArtifactActivityAssociation {
       }).assertActivityNode(this.nodeId);
       return this;
     }
+    if (updaterStep.startsWith("task-") && SOURCE_HANDOFF_TASK_ARTIFACTS.has(artifact.logicalKey)) return this;
     if (updaterStep.startsWith("task-") && !FLOW_WIDE_TASK_ACTIVITY_ARTIFACTS.has(artifact.logicalKey)) {
       const taskPath = artifact.relativePath.match(/^steps\/impl\/([^/]+)\/(?:impl|review|triage|repair|gate)(?:\/|$)/);
       if (taskPath === null) throw new Error(`task-scoped updater Activity is not bound to a task artifact: ${artifact.relativePath}`);
@@ -1298,8 +1382,7 @@ export class FlowArtifactCatalogStore {
       this.location.assertAuthority(ARTIFACT_CATALOG_RELATIVE_PATH);
       const snapshot = new VersionTreeSnapshot(this.location);
       const previous = this.#requireUnlocked();
-      try {
-        precondition?.(previous);
+      precondition?.(previous);
         for (const artifact of artifacts) {
           if (artifact.logicalKey === null) continue;
           FLOW_ARTIFACT_CONTRACTS.require(artifact.logicalKey).assertPublicationRole({
@@ -1334,7 +1417,7 @@ export class FlowArtifactCatalogStore {
           const prior = previous.artifacts.find((entry) => entry.relativePath === artifact.relativePath);
           previousContent.set(artifact.relativePath, prior === undefined ? null : fs.readFileSync(this.location.resolve(artifact.relativePath)));
         }
-        const result = write();
+      return this.#executeCatalogTransaction(snapshot, previous.hash, write, () => {
         snapshot.assertOnlyDeclaredChanges(paths);
         for (const removal of normalizedRemovals) {
           if (fs.existsSync(this.location.resolve(removal.relativePath))) {
@@ -1389,9 +1472,8 @@ export class FlowArtifactCatalogStore {
         const catalog = new FlowArtifactCatalog({
           artifacts: [...previous.artifacts.filter((artifact) => !paths.has(artifact.relativePath)), ...descriptors],
         });
-        this.#saveUnlocked(catalog);
-        return Object.freeze({ result, catalog });
-      } catch (error) { this.#rollback(snapshot, error); }
+        return catalog;
+      });
     });
   }
   unpublish({ relativePath: file, publicationClaim, allowedKinds = null, write } = {}) {
@@ -1414,15 +1496,33 @@ export class FlowArtifactCatalogStore {
       }
       if (system) this.#assertSystemSlots([artifact.slot]);
       else publicationClaim.assertSlot(artifact.slot);
-      try {
-        const result = write();
+      return this.#executeCatalogTransaction(snapshot, previous.hash, write, () => {
         snapshot.assertOnlyDeclaredChanges(new Set([safePath]));
         if (fs.existsSync(this.location.resolve(safePath))) throw new Error(`unpublished artifact still exists: ${safePath}`);
-        const catalog = new FlowArtifactCatalog({ artifacts: previous.artifacts.filter((artifact) => artifact.relativePath !== safePath) });
-        this.#saveUnlocked(catalog);
-        return Object.freeze({ result, catalog });
-      } catch (error) { this.#rollback(snapshot, error); }
+        return new FlowArtifactCatalog({ artifacts: previous.artifacts.filter((artifact) => artifact.relativePath !== safePath) });
+      });
     });
+  }
+  #executeCatalogTransaction(snapshot, baselineCatalogHash, write, validateAndBuildCatalog) {
+    const transaction = this.#beginTransaction(snapshot, baselineCatalogHash);
+    let catalogCommitted = false;
+    try {
+      const result = write();
+      const catalog = validateAndBuildCatalog();
+      transaction.prepare(catalog.hash);
+      this.#saveUnlocked(catalog);
+      catalogCommitted = true;
+      transaction.finish();
+      return Object.freeze({ result, catalog });
+    } catch (error) {
+      if (catalogCommitted) { transaction.abandon(); throw error; }
+      try { snapshot.restore(); } catch (rollbackError) {
+        transaction.abandon();
+        throw new AggregateError([error, rollbackError], "artifact catalog publication authority corrupted during rollback", { cause: error });
+      }
+      transaction.finish();
+      throw error;
+    }
   }
   unpublishSystem(options = {}) {
     return this.#unpublish({ ...options, allowedKinds: STEP_OWNED_ARTIFACT_KINDS }, true);
@@ -1433,6 +1533,55 @@ export class FlowArtifactCatalogStore {
       || slot.publicationStep !== "system"
       || STEP_OWNED_ARTIFACT_KINDS.has(slot.kind)
     ))) throw new Error("system publication is not authorized for one or more artifact kinds");
+  }
+  #transactionFile() {
+    const runtimeDirectory = this.location.runtimeLock("runtime.lock.artifact-catalog").runtimeDirectory;
+    fs.mkdirSync(runtimeDirectory, { recursive: true, mode: 0o755 });
+    return new AtomicJsonFile(path.join(runtimeDirectory, "catalog-transaction.json"));
+  }
+  #beginTransaction(snapshot, baselineCatalogHash) {
+    const file = this.#transactionFile();
+    if (ACTIVE_VERSION_TRANSACTIONS.has(file.filePath)) throw new Error("nested Version catalog transaction is not allowed");
+    ACTIVE_VERSION_TRANSACTIONS.add(file.filePath);
+    const document = {
+      version: 1,
+      location: { specId: this.location.specId.toString(), version: this.location.version.toString(), relativeDirectory: this.location.relativeDirectory },
+      baselineCatalogHash,
+      targetCatalogHash: null,
+      snapshot: snapshot.toJSON(),
+    };
+    try { file.write({ ...document, digest: sha256(Buffer.from(JSON.stringify(document), "utf8")) }); }
+    catch (error) { ACTIVE_VERSION_TRANSACTIONS.delete(file.filePath); throw error; }
+    return new VersionCatalogTransactionJournal({ file, document });
+  }
+  #recoverTransaction() {
+    const file = this.#transactionFile();
+    if (ACTIVE_VERSION_TRANSACTIONS.has(file.filePath)) throw new Error("nested Version catalog access during a transaction is not allowed");
+    const stored = file.read(null);
+    if (stored === null) return;
+    const { digest: storedDigest, ...document } = stored;
+    if (Object.keys(stored).sort().join(",") !== "baselineCatalogHash,digest,location,snapshot,targetCatalogHash,version"
+      || storedDigest !== sha256(Buffer.from(JSON.stringify(document), "utf8"))
+      || document.version !== 1 || !/^[a-f0-9]{64}$/.test(document.baselineCatalogHash)
+      || (document.targetCatalogHash !== null && !/^[a-f0-9]{64}$/.test(document.targetCatalogHash))) {
+      throw new Error("Version transaction journal integrity is invalid");
+    }
+    if (document.location?.specId !== this.location.specId.toString()
+      || document.location?.version !== this.location.version.toString()
+      || document.location?.relativeDirectory !== this.location.relativeDirectory) {
+      throw new Error("Version transaction journal location binding is invalid");
+    }
+    const storedCatalog = this.file.read(null);
+    const parsedCatalog = storedCatalog === null ? null : new FlowArtifactCatalog(storedCatalog);
+    if (parsedCatalog !== null && parsedCatalog.hash !== storedCatalog.hash) throw new Error("Version transaction visible catalog hash is invalid");
+    const visibleHash = parsedCatalog?.hash ?? null;
+    const committed = document.targetCatalogHash !== null && visibleHash === document.targetCatalogHash;
+    if (committed) parsedCatalog.verify(this.location, this.#activityIndexFile);
+    else if (visibleHash === document.baselineCatalogHash) VersionTreeSnapshot.fromStored(this.location, document.snapshot).restore();
+    else throw new Error("Version transaction visible catalog has an unknown commit identity");
+    file.remove();
+    this.#catalog = null;
+    this.#catalogBytes = null;
   }
   #withPublicationLock(operation) {
     this.location.assertAuthority(null, { mustExist: true });
@@ -1446,47 +1595,19 @@ export class FlowArtifactCatalogStore {
     fs.mkdirSync(lockDirectory, { recursive: true, mode: 0o755 });
     const runtimeAuthority = new RealDirectoryAuthority(runtimeDirectory, { parentAuthority: directoryAuthority });
     const lockDirectoryAuthority = new RealDirectoryAuthority(lockDirectory, { parentAuthority: runtimeAuthority });
-    const lock = new ProcessOwnedLock({
+    const lock = new FileLock({
       directoryAuthority: lockDirectoryAuthority, fileName: runtimeLock.fileName, kind: "artifact-catalog-publication",
       authority: { directory: this.location.directory, runtimeDirectory, catalog: this.location.catalogFile },
+      waitPolicy: new FileLockWaitPolicy({
+        timeoutMs: CATALOG_LOCK_WAIT_TIMEOUT_MS,
+        intervalMs: CATALOG_LOCK_RETRY_INTERVAL_MS,
+      }),
+      errorFactory: artifactCatalogLockError,
     });
-    let acquired = false;
-    const deadline = Date.now() + CATALOG_LOCK_WAIT_TIMEOUT_MS;
-    for (;;) {
-      try { lock.acquire({ claimStale: true }); acquired = true; break; } catch (cause) {
-        if (cause?.code !== "PROCESS_OWNED_LOCK_LIVE") throw cause;
-        const remaining = deadline - Date.now();
-        if (remaining > 0) {
-          Atomics.wait(
-            new Int32Array(new SharedArrayBuffer(4)),
-            0,
-            0,
-            Math.min(CATALOG_LOCK_RETRY_INTERVAL_MS, remaining),
-          );
-          continue;
-        }
-        const error = new Error("Flow artifact catalog authority is busy", { cause });
-        error.name = "FlowArtifactCatalogBusyError";
-        error.code = "FLOW_ARTIFACT_CATALOG_BUSY";
-        error.retryable = true;
-        throw error;
-      }
-    }
-    let result;
-    let primaryError = null;
-    try { result = operation(); } catch (error) { primaryError = error; }
-    try { lock.release(); } catch (releaseError) {
-      if (primaryError) throw new AggregateError([primaryError, releaseError], "artifact catalog publication and lock release failed", { cause: primaryError });
-      throw releaseError;
-    }
-    if (primaryError) throw primaryError;
-    return result;
-  }
-  #rollback(snapshot, originalError) {
-    try { snapshot.restore(); } catch (rollbackError) {
-      throw new AggregateError([originalError, rollbackError], "artifact catalog publication authority corrupted during rollback", { cause: originalError });
-    }
-    throw originalError;
+    return lock.runExclusive(() => {
+      this.#recoverTransaction();
+      return operation();
+    });
   }
 }
 

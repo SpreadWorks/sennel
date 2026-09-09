@@ -6,15 +6,7 @@ import { spawnSync } from "node:child_process";
 import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../support/builders/tmp-dir.js";
 import { initGitRepo, commitAll, checkoutNewBranch } from "../support/infrastructure/git-repo.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../support/infrastructure/flow-setup.js";
-import {
-  SourceMutationBaseline,
-  SourceMutationManifest,
-  SourceWorkerEffect,
-  WorkerArtifactHandoffCoordinator,
-  WorkerArtifactMutationAuthoritySnapshot,
-  materializeSourceWorkerEffect,
-  sealParentMaterializedSourceWorkerEffect,
-} from "../../src/flow/lib/worker-artifact-handoff.js";
+import { completeCanonicalSourceHandoff } from "../support/builders/source-handoff-scenario.js";
 
 const CMD = path.resolve("src/sennel.js");
 const SPEC_ID = "001-cli-lifecycle";
@@ -153,35 +145,11 @@ function completeTaskStage(tmp, role, effect, edit = null) {
   const manager = makeFlowManager(tmp);
   const state = manager.canonicalState(SPEC_ID);
   assert.equal(state.current.at(-1), `T-1-${role}`);
-  const coordinator = new WorkerArtifactHandoffCoordinator({
+  return completeCanonicalSourceHandoff({
+    root: tmp, manager, specId: SPEC_ID, stepId: `task-${role}`, taskId: "T-1",
+    mutate: edit ?? (() => {}), effect,
     now: () => new Date("2026-09-03T00:00:00.000Z"),
-  });
-  const ctx = {
-    root: tmp,
-    mainRoot: tmp,
-    executionRoot: tmp,
-    specId: SPEC_ID,
-    flowManager: manager,
-    flowState: manager.loadReadOnly(SPEC_ID),
-    config: {},
-  };
-  const request = coordinator.createRequest({
-    ctx,
-    state: ctx.flowState,
-    invocation: {
-      id: `dispatch-${state.attempt.id}`,
-      target: { digest: "c".repeat(64) },
-      action: {
-        digest: "b".repeat(64),
-        nextAction: { step: `task-${role}`, taskId: "T-1" },
-      },
-    },
-  });
-  const authority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
-  edit?.();
-  materializeSourceWorkerEffect({ request, responseText: JSON.stringify(effect) });
-  sealParentMaterializedSourceWorkerEffect({ request });
-  return coordinator.reconcile({ ctx, request, mutationAuthority: authority });
+  }).reconciliation;
 }
 
 function setupFixture(tmp) {
@@ -332,34 +300,26 @@ describe("231: full lifecycle through CLI and the typed source handoff boundary"
     runEnvelope(tmp, ["flow", "set", "step", "implement", "done"]);
     assertNext(tmp, "task-impl", "T-1");
     const manager = makeFlowManager(tmp);
-    const taskAttempt = manager.canonicalState(SPEC_ID).attempt;
-    const baseline = SourceMutationBaseline.capture({ root: tmp, attempt: taskAttempt });
-    writeFile(tmp, "src/value.js", [
-      "// Task-scoped implementation evidence.",
-      "export function add(left, right) {",
-      "  if (!left || !right) return 0;",
-      "  return left + right;",
-      "}",
-      "",
-    ].join("\n"));
-    const manifest = SourceMutationManifest.capture({ baseline });
-    runEnvelope(tmp, ["flow", "set", "files", "R1", "src/value.js"]);
-    manager.confirmSourceWorkerHandoff({
-      specId: SPEC_ID,
-      mutationManifest: manifest,
-      handoffDigest: "e".repeat(64),
-      effect: new SourceWorkerEffect({
+    completeCanonicalSourceHandoff({
+      root: tmp, manager, specId: SPEC_ID, stepId: "task-impl", taskId: "T-1",
+      mutate: () => writeFile(tmp, "src/value.js", [
+        "// Task-scoped implementation evidence.",
+        "export function add(left, right) {",
+        "  if (!left || !right) return 0;",
+        "  return left + right;",
+        "}",
+        "",
+      ].join("\n")),
+      effect: {
         version: 1,
         stepId: "task-impl",
         completionStatus: "done",
-        files: [{ requirementId: "R1", mutationIds: manifest.mutations.map((mutation) => mutation.mutationId) }],
         issues: [],
         overview: { modules: [], data_flow: [], decisions: [] },
         triage: null,
         repair: null,
         noChangeReason: null,
-      }),
-      result: { outcome: "passed", summary: "Task source recorded.", confirmedAt: "2026-09-03T00:00:00.000Z", artifactRefs: [] },
+      },
     });
     assertNext(tmp, "task-review", "T-1");
 

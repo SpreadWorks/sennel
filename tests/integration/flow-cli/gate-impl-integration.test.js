@@ -1,3 +1,4 @@
+import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
 /**
  * spec 202 — integration tests for gate-impl wiring.
  *
@@ -25,17 +26,11 @@ import {
 } from "../../support/fakes/stub-agent.js";
 import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { CanonicalSourceRequirementAuthority } from "../../../src/flow/lib/canonical-file-map.js";
 import {
   FlowArtifactAttemptHistory,
   FlowArtifactAttemptRecord,
 } from "../../../src/lib/flow-artifact-contract.js";
 import { buildRepairFingerprint } from "../../../src/flow/lib/repair-fingerprint.js";
-import {
-  SourceMutationBaseline,
-  SourceMutationManifest,
-  SourceWorkerEffect,
-} from "../../../src/flow/lib/worker-artifact-handoff.js";
 import {
   CanonicalTestArtifactStore,
   canonicalRawEvidenceFingerprint,
@@ -283,34 +278,17 @@ function setupFixture(tmp, {
   fixture.settle("implement");
 
   fixture.activate(`${gateTask.id}-impl`, { settlePredecessors: false });
-  const implementationState = flowManager.canonicalState(SPEC_ID);
-  const implementationBaseline = SourceMutationBaseline.capture({ root: tmp, attempt: implementationState.attempt });
-  if (modifiedTest !== undefined) writeFile(tmp, "tests/dummy.test.js", modifiedTest);
-  const implementationManifest = SourceMutationManifest.capture({ baseline: implementationBaseline });
-  const implementationSpec = JSON.parse(flowManager.readArtifact({
-    specId: SPEC_ID, logicalKey: "spec.record", consumerNodeId: `${gateTask.id}-impl`,
-  }).bytes.toString("utf8"));
-  flowManager.confirmSourceWorkerHandoff({
-    specId: SPEC_ID,
-    mutationManifest: implementationManifest,
-    handoffDigest: "e".repeat(64),
-    effect: new SourceWorkerEffect({
-      version: 1,
-      stepId: "task-impl",
-      completionStatus: "done",
-      files: implementationManifest.mutations.length === 0 ? [] : CanonicalSourceRequirementAuthority
-        .fromSpec(implementationSpec, { taskId: gateTask.id })
-        .bindMutationIds(implementationManifest.mutations.map((mutation) => mutation.mutationId))
-        .map((entry) => entry.toJSON()),
-      issues: [],
-      overview: { modules: [], data_flow: [], decisions: [] },
-      triage: null,
-      repair: null,
-      noChangeReason: implementationManifest.paths().length === 0
-        ? "The fixture Task implementation requires no source change."
-        : null,
-    }),
-    result: { outcome: "passed", summary: "Fixture Task implementation completed.", confirmedAt: "2026-09-03T00:00:00.000Z", artifactRefs: [] },
+  completeCanonicalSourceHandoff({
+    root: tmp, manager: flowManager, specId: SPEC_ID, stepId: "task-impl", taskId: gateTask.id,
+    mutate: () => {
+      if (modifiedTest !== undefined) writeFile(tmp, "tests/dummy.test.js", modifiedTest);
+    },
+    effect: {
+      version: 1, stepId: "task-impl", completionStatus: "done", issues: [],
+      overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null,
+      noChangeReason: modifiedTest === undefined
+        ? "The fixture Task implementation requires no source change." : null,
+    },
   });
   fixture.activate(`${gateTask.id}-review`, { settlePredecessors: false });
   fixture.settle(`${gateTask.id}-review`);

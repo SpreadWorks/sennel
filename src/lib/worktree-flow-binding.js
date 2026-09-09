@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { AtomicFile } from "./atomic-file.js";
 import { FlowSpecId } from "./flow-spec-id.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "./process-owned-lock.js";
+import { FileLock } from "./file-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { PRODUCT } from "./product.js";
 
 export const WORKTREE_FLOW_BINDING_FILE = PRODUCT.managedPath("flow-identity.json");
@@ -702,7 +703,7 @@ export class WorktreeFlowBindingStore {
       "binding",
       this.publicationJournal,
     );
-    this.lock = new ProcessOwnedLock({
+    this.lock = new FileLock({
       directoryAuthority: this.directoryAuthority,
       fileName: BINDING_LOCK_FILE,
       kind: "worktree-flow-binding",
@@ -722,32 +723,11 @@ export class WorktreeFlowBindingStore {
   }
 
   withLock(body) {
-    const ownerToken = this.lock.acquire({ claimStale: true });
-    let result;
-    let primary = null;
-    try {
+    return this.lock.runExclusive(() => {
       this.publicationJournal.recoverIntent(() => this.#readPublicationReceipt());
       this.#recoverInitialPublication();
-      result = body(ownerToken);
-    } catch (error) {
-      primary = error;
-    }
-    let releaseError = null;
-    try {
-      this.lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-    if (primary && releaseError) {
-      throw new AggregateError(
-        [primary, releaseError],
-        "worktree flow binding transaction and lock release both failed",
-        { cause: primary },
-      );
-    }
-    if (primary) throw primary;
-    if (releaseError) throw releaseError;
-    return result;
+      return body(this.lock.processIdentity.ownerToken);
+    });
   }
 
   load() {

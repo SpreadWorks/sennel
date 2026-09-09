@@ -49,7 +49,6 @@ export default class RunRecoverFinalizationCommand extends FlowCommand {
       const owner = FinalizeFlowStateOwner.fromContext(ctx);
       const operation = new RepositoryFlowOperationLock({
         mainRoot: owner.mainRepoPath,
-        allowProcessOwnerBorrow: false,
       });
       const token = operation.acquire();
       try {

@@ -22,7 +22,7 @@ import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-art
 import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
 import { resolveGateTransition } from "../../../src/flow/definition.js";
 import { ReviewFindingFingerprint } from "../../../src/flow/lib/finding-disposition-policy.js";
-import { SourceMutationManifest, SourceWorkerEffect } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { completeCanonicalSourceHandoff } from "../builders/source-handoff-scenario.js";
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
 import { appendIssueLogFromGateResult } from "../../../src/flow/lib/run-gate.js";
 
@@ -109,32 +109,22 @@ export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status 
     candidate.steps.some((step) => step.id === nodeId)
   )) ?? null;
   if (status === "done" && task !== null && nodeId === `${task.id}-impl`) {
-    const canonical = flowManager.canonicalState(resolvedSpecId);
-    const manifest = new SourceMutationManifest({
-      attempt: canonical.attempt,
-      baselineDigest: "a".repeat(64),
-      mutations: [],
-    });
-    flowManager.confirmSourceWorkerHandoff({
+    completeCanonicalSourceHandoff({
+      root: flowManager.executionRoot(),
+      mainRoot: flowManager.specLocation(resolvedSpecId).repositoryRoot,
+      manager: flowManager,
       specId: resolvedSpecId,
-      mutationManifest: manifest,
-      handoffDigest: "b".repeat(64),
-      effect: new SourceWorkerEffect({
+      stepId: "task-impl",
+      taskId: task.id,
+      effect: {
         version: 1,
         stepId: "task-impl",
         completionStatus: "done",
-        files: [],
         issues: [],
         overview: { modules: [], data_flow: [], decisions: [] },
         triage: null,
         repair: null,
         noChangeReason: "The fixture Task requires no source mutation.",
-      }),
-      result: {
-        outcome: "passed",
-        summary: "Fixture Task implementation completed without source mutation.",
-        confirmedAt: "2026-01-01T00:00:00.000Z",
-        artifactRefs: [],
       },
     });
     return flowManager.loadReadOnly(resolvedSpecId);

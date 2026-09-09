@@ -6,27 +6,25 @@ import { FlowArtifactCatalogStore, FlowVersionLocation } from "../../lib/flow-ve
 import { buildCurrentFlowDefinition } from "../definition.js";
 import { CanonicalFlowRuntime } from "./canonical-flow-runtime.js";
 import { ProcessIdentitySource } from "../../lib/process-identity.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "../../lib/process-owned-lock.js";
+import { FileLock, FileLockWaitPolicy } from "../../lib/file-lock.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { RepositoryFlowOperationLock } from "../../lib/repository-maintenance-lock.js";
-
-const LOCK_WAIT_ATTEMPTS = 500;
-const LOCK_WAIT_MS = 10;
 
 function requireAuthorityString(value, name) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${name} is required`);
   return value.trim();
 }
 
-function issueLogError(status, message, { lockPath, cause } = {}) {
+function issueLogError(status, message, { lockPath, owner = null, cause } = {}) {
   const error = new Error(message, { cause });
   error.name = "IssueLogStoreError";
-  error.code = `ISSUE_LOG_${status.replace(/-/g, "_").toUpperCase()}`;
+  error.code = status === "timeout"
+    ? "ISSUE_LOG_BUSY"
+    : `ISSUE_LOG_${status.replace(/-/g, "_").toUpperCase()}`;
+  error.lockStatus = status;
   error.lockPath = lockPath;
+  error.owner = owner;
   return error;
-}
-
-function waitForWriter() {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LOCK_WAIT_MS);
 }
 
 function revisionOf(document) {
@@ -122,7 +120,7 @@ export class IssueLogStore {
       errorFactory: (status, message, data) => issueLogError(status, message, data),
     });
     lockAuthority.ensure();
-    this.lock = new ProcessOwnedLock({
+    this.lock = new FileLock({
       directoryAuthority: lockAuthority,
       fileName: "issue-log.lock",
       kind: "issue-log-writer",
@@ -133,6 +131,7 @@ export class IssueLogStore {
       },
       processIdentitySource,
       errorFactory: (status, message, data) => issueLogError(status, message, data),
+      waitPolicy: new FileLockWaitPolicy({ timeoutMs: 5_000, intervalMs: 10 }),
     });
   }
 
@@ -197,22 +196,11 @@ export class IssueLogStore {
       operationOwnerToken: this.operationOwnerToken,
       processIdentitySource: this.processIdentitySource,
     });
-    let repositoryAcquired = false;
-    for (let attempt = 0; attempt < LOCK_WAIT_ATTEMPTS; attempt += 1) {
-      try {
-        repositoryOperation.acquire();
-        repositoryAcquired = true;
-        break;
-      } catch (error) {
-        if (error.code !== "REPOSITORY_FLOW_OPERATION_BUSY") throw error;
-        waitForWriter();
-      }
-    }
-    if (!repositoryAcquired) throw issueLogError("busy", "repository flow-operation lock wait limit exceeded");
+    repositoryOperation.acquire();
     let result;
     let primaryError;
     try {
-      result = this.#withWriterLock(operation);
+      result = this.lock.runExclusive(operation);
     } catch (error) {
       primaryError = error;
     }
@@ -226,44 +214,6 @@ export class IssueLogStore {
       throw new AggregateError(
         [primaryError, releaseError],
         "issue-log operation and repository barrier release both failed",
-        { cause: primaryError },
-      );
-    }
-    if (primaryError) throw primaryError;
-    if (releaseError) throw releaseError;
-    return result;
-  }
-
-  #withWriterLock(operation) {
-    let acquired = false;
-    for (let attempt = 0; attempt < LOCK_WAIT_ATTEMPTS; attempt += 1) {
-      try {
-        this.lock.acquire({ claimStale: true });
-        acquired = true;
-        break;
-      } catch (error) {
-        if (error.code !== "ISSUE_LOG_LIVE") throw error;
-        waitForWriter();
-      }
-    }
-    if (!acquired) throw issueLogError("busy", "issue-log writer lock wait limit exceeded");
-    let result;
-    let primaryError;
-    try {
-      result = operation();
-    } catch (error) {
-      primaryError = error;
-    }
-    let releaseError;
-    try {
-      this.lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-    if (primaryError && releaseError) {
-      throw new AggregateError(
-        [primaryError, releaseError],
-        "issue-log operation and writer-lock release both failed",
         { cause: primaryError },
       );
     }

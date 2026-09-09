@@ -2,14 +2,14 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { ProcessIdentitySource } from "./process-identity.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "./process-owned-lock.js";
+import { ProcessLock } from "./process-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { PRODUCT } from "./product.js";
 
 const MAINTENANCE_KIND = "repository-maintenance";
 const FLOW_OPERATION_KIND = "repository-flow-operation";
 const MAINTENANCE_FILE = ".repository-maintenance.lock";
 const FLOW_OPERATION_FILE = ".repository-flow-operation.lock";
-const PROCESS_OPERATION_OWNERS = new Map();
 
 export function resolveRepositoryLockRoot(root) {
   const resolved = path.resolve(root);
@@ -20,11 +20,19 @@ export function resolveRepositoryLockRoot(root) {
 }
 
 export class RepositoryLockError extends Error {
-  constructor(code, message, { lockPath, cause, contention = null } = {}) {
+  constructor(code, message, {
+    lockStatus = null,
+    lockPath,
+    owner = null,
+    cause,
+    contention = null,
+  } = {}) {
     super(message, { cause });
     this.name = "RepositoryLockError";
     this.code = code;
+    this.lockStatus = lockStatus;
     this.lockPath = lockPath;
+    this.owner = owner;
     this.contention = contention;
     this.committed = false;
   }
@@ -62,10 +70,10 @@ function lockCode(kind, status) {
 }
 
 function repositoryErrorFactory(kind) {
-  return (status, message, { lockPath, cause } = {}) => new RepositoryLockError(
+  return (status, message, { lockPath, owner = null, cause } = {}) => new RepositoryLockError(
     lockCode(kind, status),
     message,
-    { lockPath, cause },
+    { lockStatus: status, lockPath, owner, cause },
   );
 }
 
@@ -82,10 +90,10 @@ class RepositoryLockAuthority {
   }
 }
 
-class ProcessOwnedRepositoryLock {
+class ProcessRepositoryLock {
   constructor({ repositoryAuthority, kind, fileName, processIdentitySource }) {
     this.kind = kind;
-    this.core = new ProcessOwnedLock({
+    this.core = new ProcessLock({
       directoryAuthority: repositoryAuthority.directory,
       fileName,
       kind,
@@ -99,8 +107,8 @@ class ProcessOwnedRepositoryLock {
     return this.core.processIdentity;
   }
 
-  acquire({ claimStale = false } = {}) {
-    return this.core.acquire({ claimStale });
+  acquire() {
+    return this.core.acquire();
   }
 
   release() {
@@ -120,7 +128,11 @@ class ProcessOwnedRepositoryLock {
 function inspectForeign(lock, allowedOwnerToken) {
   const owner = lock.inspect();
   if (!owner) return null;
-  if (allowedOwnerToken && owner.processIdentity.ownerToken === allowedOwnerToken) return null;
+  if (allowedOwnerToken && owner.processIdentity.ownerToken === allowedOwnerToken) {
+    const assessment = lock.core.processIdentitySource.assess(owner.processIdentity);
+    if (assessment.status === "live") return null;
+    return lock.core.conflict(owner, assessment);
+  }
   return lock.conflict(owner);
 }
 
@@ -140,7 +152,7 @@ export function assertRepositoryMaintenanceAvailable({
   processIdentitySource = new ProcessIdentitySource(),
 }) {
   const repositoryAuthority = new RepositoryLockAuthority(mainRoot);
-  const maintenance = new ProcessOwnedRepositoryLock({
+  const maintenance = new ProcessRepositoryLock({
     repositoryAuthority,
     kind: MAINTENANCE_KIND,
     fileName: MAINTENANCE_FILE,
@@ -153,13 +165,13 @@ export function assertRepositoryMaintenanceAvailable({
 export class RepositoryMaintenanceLock {
   constructor({ mainRoot, processIdentitySource = new ProcessIdentitySource() }) {
     const repositoryAuthority = new RepositoryLockAuthority(mainRoot);
-    this.lock = new ProcessOwnedRepositoryLock({
+    this.lock = new ProcessRepositoryLock({
       repositoryAuthority,
       kind: MAINTENANCE_KIND,
       fileName: MAINTENANCE_FILE,
       processIdentitySource,
     });
-    this.flowOperation = new ProcessOwnedRepositoryLock({
+    this.flowOperation = new ProcessRepositoryLock({
       repositoryAuthority,
       kind: FLOW_OPERATION_KIND,
       fileName: FLOW_OPERATION_FILE,
@@ -206,26 +218,21 @@ export class RepositoryFlowOperationLock {
     mainRoot,
     maintenanceOwnerToken = null,
     operationOwnerToken = null,
-    allowProcessOwnerBorrow = true,
     processIdentitySource = new ProcessIdentitySource(),
   }) {
-    if (typeof allowProcessOwnerBorrow !== "boolean") {
-      throw new Error("repository flow-operation process-owner borrowing flag must be boolean");
-    }
     const repositoryAuthority = new RepositoryLockAuthority(mainRoot);
     this.lockPath = path.join(repositoryAuthority.mainRoot, PRODUCT.managedPath(FLOW_OPERATION_FILE));
     this.maintenanceOwnerToken = maintenanceOwnerToken;
     this.operationOwnerToken = operationOwnerToken;
-    this.allowProcessOwnerBorrow = allowProcessOwnerBorrow;
     this.borrowed = false;
     this.acquiredOwnerToken = null;
-    this.maintenance = new ProcessOwnedRepositoryLock({
+    this.maintenance = new ProcessRepositoryLock({
       repositoryAuthority,
       kind: MAINTENANCE_KIND,
       fileName: MAINTENANCE_FILE,
       processIdentitySource,
     });
-    this.lock = new ProcessOwnedRepositoryLock({
+    this.lock = new ProcessRepositoryLock({
       repositoryAuthority,
       kind: FLOW_OPERATION_KIND,
       fileName: FLOW_OPERATION_FILE,
@@ -264,31 +271,35 @@ export class RepositoryFlowOperationLock {
     } catch (error) {
       throw this.#attachContention(error, null);
     }
-    const processOwner = PROCESS_OPERATION_OWNERS.get(this.lockPath);
-    const knownOwnerToken = this.operationOwnerToken
-      || (this.allowProcessOwnerBorrow ? processOwner?.ownerToken : null);
-    if (
-      existing
-      && knownOwnerToken
-      && existing.processIdentity.ownerToken === knownOwnerToken
-    ) {
-      if (processOwner && this.lock.core.processIdentitySource.assess(processOwner).status === "live") {
-        this.borrowed = true;
-        this.acquiredOwnerToken = knownOwnerToken;
-        return knownOwnerToken;
+    if (this.operationOwnerToken) {
+      if (
+        existing
+        && existing.processIdentity.ownerToken === this.operationOwnerToken
+      ) {
+        const assessment = this.lock.core.processIdentitySource.assess(existing.processIdentity);
+        if (assessment.status === "live") {
+          this.borrowed = true;
+          this.acquiredOwnerToken = this.operationOwnerToken;
+          return this.operationOwnerToken;
+        }
+        throw this.#attachContention(this.lock.core.conflict(existing, assessment), existing);
       }
-      throw this.#attachContention(
-        repositoryErrorFactory(FLOW_OPERATION_KIND)(
-          "live",
-          "repository flow-operation lock is owned by a different requester identity",
+      if (!existing) {
+        throw repositoryErrorFactory(FLOW_OPERATION_KIND)(
+          "ownership-changed",
+          "repository flow-operation owner token no longer identifies the canonical lock",
           { lockPath: this.lockPath },
-        ),
+        );
+      }
+      const assessment = this.lock.core.processIdentitySource.assess(existing.processIdentity);
+      throw this.#attachContention(
+        this.lock.core.conflict(existing, assessment),
         existing,
       );
     }
     let token;
     try {
-      token = this.lock.acquire({ claimStale: true });
+      token = this.lock.acquire();
     } catch (error) {
       throw this.#attachContention(error, existing);
     }
@@ -296,7 +307,6 @@ export class RepositoryFlowOperationLock {
       const after = inspectForeign(this.maintenance, this.maintenanceOwnerToken);
       if (after) throw after;
       this.acquiredOwnerToken = token;
-      PROCESS_OPERATION_OWNERS.set(this.lockPath, this.lock.processIdentity);
       return token;
     } catch (primaryError) {
       try {
@@ -320,15 +330,19 @@ export class RepositoryFlowOperationLock {
 
   assertOwned() {
     const owner = this.lock.inspect();
+    const assessment = owner == null
+      ? null
+      : this.lock.core.processIdentitySource.assess(owner.processIdentity);
     if (
       this.acquiredOwnerToken == null
       || owner == null
       || owner.processIdentity.ownerToken !== this.acquiredOwnerToken
+      || assessment.status !== "live"
     ) {
       throw repositoryErrorFactory(FLOW_OPERATION_KIND)(
         "ownership-changed",
         "repository flow-operation ownership changed",
-        { lockPath: this.lockPath },
+        { lockPath: this.lockPath, owner: owner?.toJSON() ?? null },
       );
     }
     return this.acquiredOwnerToken;
@@ -341,9 +355,6 @@ export class RepositoryFlowOperationLock {
       return;
     }
     this.lock.release();
-    if (PROCESS_OPERATION_OWNERS.get(this.lockPath)?.ownerToken === this.acquiredOwnerToken) {
-      PROCESS_OPERATION_OWNERS.delete(this.lockPath);
-    }
     this.acquiredOwnerToken = null;
   }
 }

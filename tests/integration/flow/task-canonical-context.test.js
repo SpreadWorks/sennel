@@ -21,12 +21,9 @@ import {
   captureCurrentTaskSource,
 } from "../../../src/flow/lib/task-mutation-lineage.js";
 import {
-  SourceMutationBaseline,
   SourceMutationManifest,
   SourceWorkerEffect,
   WorkerArtifactHandoffCoordinator,
-  WorkerArtifactMutationAuthoritySnapshot,
-  captureSourceMutationManifestForParent,
   materializeSourceWorkerEffect,
   sealParentMaterializedSourceWorkerEffect,
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
@@ -36,13 +33,15 @@ import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { CanonicalReviewWorkUnit } from "../../../src/flow/lib/canonical-review-artifacts.js";
 import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
-import { resolveGateTransition } from "../../../src/flow/definition.js";
+import { resolveGateTransition, resolveSourceHandoffTransitionPlan } from "../../../src/flow/definition.js";
+import { SourceHandoffFailureFacts } from "../../../src/flow/lib/source-handoff-failure.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
 import { appendIssueLogFromGateResult } from "../../../src/flow/lib/run-gate.js";
 import { FlowDispatchSession, FlowDispatchTarget } from "../../../src/flow/lib/dispatch-invocation.js";
 import { FlowTargetExpectation } from "../../../src/lib/flow-target-guard.js";
 import { CurrentFlowSpecRecord } from "../../../src/flow/lib/current-flow-state.js";
 import { ExecuteStepDirective } from "../../../src/flow/lib/next-action-directive.js";
+import { completeCanonicalSourceHandoff, withSourceHandoffLease } from "../../support/builders/source-handoff-scenario.js";
 import { TaskLifecycleFixture, confirmCanonicalFixtureStep } from "../../support/infrastructure/flow-setup.js";
 
 const digest = "a".repeat(64);
@@ -106,24 +105,39 @@ function assertTaskCanonicalDrift({ label, mutate }) {
     }).create();
     const coordinator = new WorkerArtifactHandoffCoordinator({ now: () => new Date("2026-09-04T00:00:00.000Z") });
     const invocation = { id: `dispatch-task-canonical-drift-${label}`, target: { digest: "c".repeat(64) }, action: { digest: "b".repeat(64), nextAction: { step: "task-impl", taskId: "T-1" } } };
-    const request = coordinator.createRequest({ ctx: { ...ctx(), flowManager: captureView }, state: manager.loadReadOnly(specId), invocation });
-    const authority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
-    fs.writeFileSync(path.join(executionRoot, "drift.js"), "export const drift = true;\n");
-    materializeSourceWorkerEffect({ request, responseText: JSON.stringify({
-      version: 1, stepId: "task-impl", completionStatus: "done",
-      issues: [],
-      overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null, noChangeReason: null,
-    }) });
-    const currentSpec = JSON.parse(manager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "T-1-impl" }).bytes.toString("utf8"));
-    mutate(currentSpec);
-    driftedSpec = currentSpec;
-    sealParentMaterializedSourceWorkerEffect({ request, now: () => new Date("2026-09-04T00:00:01.000Z") });
-    assert.throws(
-      () => coordinator.reconcile({ ctx: ctx(), request, mutationAuthority: authority }),
-      (error) => error.code === "FLOW_ARTIFACT_HANDOFF_STALE" && error.classification === "stale",
-      label,
-    );
-    assert.equal(coordinator.rollbackRejectedSourceHandoff({ ctx: ctx(), request, mutationAuthority: authority }), true, label);
+    withSourceHandoffLease({ root: executionRoot, mainRoot }, () => {
+      const request = coordinator.createRequest({ ctx: { ...ctx(), flowManager: captureView }, state: manager.loadReadOnly(specId), invocation });
+      coordinator.startSourceWorker({ ctx: ctx(), request, invocation });
+      fs.writeFileSync(path.join(executionRoot, "drift.js"), "export const drift = true;\n");
+      materializeSourceWorkerEffect({ request, responseText: JSON.stringify({
+        version: 1, stepId: "task-impl", completionStatus: "done",
+        issues: [],
+        overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null, noChangeReason: null,
+      }) });
+      const currentSpec = JSON.parse(manager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "T-1-impl" }).bytes.toString("utf8"));
+      mutate(currentSpec);
+      driftedSpec = currentSpec;
+      sealParentMaterializedSourceWorkerEffect({ request, now: () => new Date("2026-09-04T00:00:01.000Z") });
+      coordinator.finishSourceWorker({ ctx: ctx(), request });
+      let failure;
+      try {
+        coordinator.reconcile({
+          ctx: ctx(), request, mutationAuthority: coordinator.sourceMutationAuthority({ ctx: ctx(), request }),
+        });
+      } catch (error) {
+        failure = error;
+      }
+      assert.equal(failure?.code, "FLOW_ARTIFACT_HANDOFF_STALE", label);
+      assert.equal(failure?.classification, "stale", label);
+      const facts = SourceHandoffFailureFacts.fromError(failure, {
+        request, ownershipProven: true, workerStopped: true,
+      });
+      const plan = resolveSourceHandoffTransitionPlan({ facts, policy: request.policy });
+      coordinator.recordSourceFailure({ ctx: ctx(), request, plan });
+      assert.equal(coordinator.rollbackRejectedSourceHandoff({
+        ctx: ctx(), request, mutationAuthority: coordinator.sourceMutationAuthority({ ctx: ctx(), request }), plan,
+      }), true, label);
+    });
     assert.equal(fs.existsSync(path.join(executionRoot, "drift.js")), false, `${label} must roll back the source mutation`);
     assert.deepEqual(manager.taskMutationLineages({ specId, taskId: "T-1" }), [], `${label} must not publish source lineage`);
   } finally {
@@ -383,34 +397,27 @@ describe("canonical Task context", () => {
       const coordinator = new WorkerArtifactHandoffCoordinator({
         now: () => new Date("2026-09-03T00:00:00.000Z"),
       });
-      const request = coordinator.createRequest({ ctx, state, invocation });
-      const mutationAuthority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
-
-      assert.deepEqual(
-        request.contextSnapshot.context.requirements.map((requirement) => requirement.id),
-        ["R-4", "R-4-6"],
-      );
-      captureSourceMutationManifestForParent({ request });
-      fs.writeFileSync(request.payloadPath("effects.json"), JSON.stringify({
-        version: 1,
-        stepId: "task-impl",
-        completionStatus: "done",
-        files: [],
-        issues: [],
-        overview: { modules: [], data_flow: [], decisions: [] },
-        triage: null,
-        repair: null,
-        noChangeReason: "The Task already satisfies its source implementation requirement.",
-      }));
-      sealParentMaterializedSourceWorkerEffect({ request, now: () => new Date("2026-09-03T00:00:01.000Z") });
-
-      assert.throws(
-        () => coordinator.recoverPending({ ctx }),
-        (error) => error.code === "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
-        "recovery parses the Task snapshot and reaches the source-handoff recovery rule",
-      );
-
-      const result = coordinator.reconcile({ ctx, request, mutationAuthority });
+      const { request, result } = withSourceHandoffLease({ root }, () => {
+        const request = coordinator.createRequest({ ctx, state, invocation });
+        coordinator.startSourceWorker({ ctx, request, invocation });
+        assert.deepEqual(
+          request.contextSnapshot.context.requirements.map((requirement) => requirement.id),
+          ["R-4", "R-4-6"],
+        );
+        materializeSourceWorkerEffect({ request, responseText: JSON.stringify({
+          version: 1, stepId: "task-impl", completionStatus: "done", issues: [],
+          overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null,
+          noChangeReason: "The Task already satisfies its source implementation requirement.",
+        }) });
+        sealParentMaterializedSourceWorkerEffect({ request, now: () => new Date("2026-09-03T00:00:01.000Z") });
+        coordinator.finishSourceWorker({ ctx, request });
+        return {
+          request,
+          result: coordinator.reconcile({
+            ctx, request, mutationAuthority: coordinator.sourceMutationAuthority({ ctx, request }),
+          }),
+        };
+      });
       assert.equal(result.completed, true);
       assert.equal(fs.existsSync(request.directory), false, "parent acceptance atomically consumes the sealed handoff");
     } finally {
@@ -444,31 +451,18 @@ describe("canonical Task context", () => {
         targetStep: "task-impl",
       }).create();
 
-      const firstBaseline = SourceMutationBaseline.capture({
-        root,
-        attempt: manager.canonicalState(specId).attempt,
-      });
-      fs.writeFileSync(path.join(root, "shared.js"), "export const revision = 1;\n");
-      const firstManifest = SourceMutationManifest.capture({ baseline: firstBaseline });
-      manager.confirmSourceWorkerHandoff({
-        specId,
-        mutationManifest: firstManifest,
-        handoffDigest: "d".repeat(64),
-        effect: new SourceWorkerEffect({
+      completeCanonicalSourceHandoff({
+        root, manager, specId, stepId: "task-impl", taskId: "T-1",
+        mutate: () => fs.writeFileSync(path.join(root, "shared.js"), "export const revision = 1;\n"),
+        effect: {
           version: 1,
           stepId: "task-impl",
           completionStatus: "done",
-          files: [{ requirementId: "R-T-1", mutationIds: firstManifest.mutations.map((entry) => entry.mutationId) }],
           issues: [],
           overview: { modules: [], data_flow: [], decisions: [] },
           triage: null,
           repair: null,
-        }),
-        result: {
-          outcome: "passed",
-          summary: "First Task implementation established the source lineage.",
-          confirmedAt: "2026-09-03T00:00:00.000Z",
-          artifactRefs: [],
+          noChangeReason: null,
         },
       });
       manager.updateStepStatus({ stepId: "T-1-review", requestedStatus: "in_progress" }, { specId });
@@ -562,38 +556,45 @@ describe("canonical Task context", () => {
           nextAction: { step: "task-impl", taskId: "T-1" },
         },
       };
-      const request = coordinator.createRequest({ ctx: ctx(), state: manager.loadReadOnly(specId), invocation });
-      const mutationAuthority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
-      const capturedFingerprint = request.contextSnapshot.context.sourceFingerprint;
-      assert.equal(capturedFingerprint, captureCurrentTaskSource({
-        root,
-        flowManager: manager,
-        state: manager.loadReadOnly(specId),
-        taskId: "T-1",
-      }).fingerprint);
+      const { request, result } = withSourceHandoffLease({ root }, () => {
+        const request = coordinator.createRequest({ ctx: ctx(), state: manager.loadReadOnly(specId), invocation });
+        coordinator.startSourceWorker({ ctx: ctx(), request, invocation });
+        const capturedFingerprint = request.contextSnapshot.context.sourceFingerprint;
+        assert.equal(capturedFingerprint, captureCurrentTaskSource({
+          root,
+          flowManager: manager,
+          state: manager.loadReadOnly(specId),
+          taskId: "T-1",
+        }).fingerprint);
 
-      // This is precisely the path that formerly recaptured the changed
-      // lineage source in assertCurrent and rejected it as stale.
-      fs.writeFileSync(path.join(root, "shared.js"), "export const revision = 2;\n");
-      assert.notEqual(capturedFingerprint, captureCurrentTaskSource({
-        root,
-        flowManager: manager,
-        state: manager.loadReadOnly(specId),
-        taskId: "T-1",
-      }).fingerprint, "the legacy post-worker source recapture would have invalidated the Task snapshot");
-      materializeSourceWorkerEffect({ request, responseText: JSON.stringify({
-        version: 1,
-        stepId: "task-impl",
-        completionStatus: "done",
-        issues: [],
-        overview: { modules: [], data_flow: [], decisions: [] },
-        triage: null,
-        repair: null,
-        noChangeReason: null,
-      }) });
-      sealParentMaterializedSourceWorkerEffect({ request, now: () => new Date("2026-09-03T00:00:01.000Z") });
-
-      const result = coordinator.reconcile({ ctx: ctx(), request, mutationAuthority });
+        // This is precisely the path that formerly recaptured the changed
+        // lineage source in assertCurrent and rejected it as stale.
+        fs.writeFileSync(path.join(root, "shared.js"), "export const revision = 2;\n");
+        assert.notEqual(capturedFingerprint, captureCurrentTaskSource({
+          root,
+          flowManager: manager,
+          state: manager.loadReadOnly(specId),
+          taskId: "T-1",
+        }).fingerprint, "the legacy post-worker source recapture would have invalidated the Task snapshot");
+        materializeSourceWorkerEffect({ request, responseText: JSON.stringify({
+          version: 1,
+          stepId: "task-impl",
+          completionStatus: "done",
+          issues: [],
+          overview: { modules: [], data_flow: [], decisions: [] },
+          triage: null,
+          repair: null,
+          noChangeReason: null,
+        }) });
+        sealParentMaterializedSourceWorkerEffect({ request, now: () => new Date("2026-09-03T00:00:01.000Z") });
+        coordinator.finishSourceWorker({ ctx: ctx(), request });
+        return {
+          request,
+          result: coordinator.reconcile({
+            ctx: ctx(), request, mutationAuthority: coordinator.sourceMutationAuthority({ ctx: ctx(), request }),
+          }),
+        };
+      });
       assert.equal(result.completed, true);
       assert.equal(fs.existsSync(request.directory), false, "parent acceptance consumes the sealed second handoff");
       assert.equal(manager.canonicalState(specId).current, null);
@@ -638,18 +639,15 @@ describe("canonical Task context", () => {
         taskDocuments: [{ id: "T-1", title: "Quality", goal: "Exercise parent-owned quality persistence.", parent: null, origin: "plan", added_round: 0, status: "pending" }],
         taskId: "T-1", targetStep: "task-impl",
       }).create();
-      const baseline = SourceMutationBaseline.capture({ root, attempt: manager.canonicalState(specId).attempt });
-      fs.writeFileSync(path.join(root, "quality.js"), "export const quality = true;\n");
-      const manifest = SourceMutationManifest.capture({ baseline });
-      manager.confirmSourceWorkerHandoff({
-        specId, mutationManifest: manifest, handoffDigest: "9".repeat(64),
-        effect: new SourceWorkerEffect({
+      const handoff = completeCanonicalSourceHandoff({
+        root, manager, specId, stepId: "task-impl", taskId: "T-1",
+        mutate: () => fs.writeFileSync(path.join(root, "quality.js"), "export const quality = true;\n"),
+        effect: {
           version: 1, stepId: "task-impl", completionStatus: "done",
-          files: [{ requirementId: "R-T-1", mutationIds: manifest.mutations.map((entry) => entry.mutationId) }],
           issues: [{ classification: "quality", reason: "The implementation needs a later quality review for its boundary behavior.", remainingRisk: "The changed behavior remains subject to the mandatory Task Review checkpoint." }],
           overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null,
-        }),
-        result: { outcome: "passed", summary: "Persisted a parent-bound source quality risk.", confirmedAt: "2026-09-03T00:00:00.000Z", artifactRefs: [] },
+          noChangeReason: null,
+        },
       });
       const issueLog = JSON.parse(manager.readArtifact({ specId, logicalKey: "issue.log", consumerNodeId: "T-1-review" }).bytes.toString("utf8"));
       assert.deepEqual(issueLog.entries.map((entry) => ({
@@ -658,7 +656,10 @@ describe("canonical Task context", () => {
         classification: "quality", sourceStep: "task-impl", recoveryStep: "T-1-review",
         risk: "The changed behavior remains subject to the mandatory Task Review checkpoint.",
       }]);
-      assert.match(issueLog.entries[0].evidence.ref, /^worker-handoff:9{64}#effects\.json$/);
+      const accepted = manager.readSourceHandoffAuthority({
+        specId, identity: handoff.request.sourceHandoffIdentity,
+      }).settlement;
+      assert.equal(issueLog.entries[0].evidence.ref, `worker-handoff:${accepted.handoffDigest}#effects.json`);
       assert.throws(() => new SourceWorkerEffect({
         version: 1, stepId: "task-impl", completionStatus: "done", files: [],
         issues: [{ classification: "integrity", reason: "A worker must not persist an integrity failure as an advisory quality issue.", remainingRisk: "Integrity failures must remain terminal before any source completion is published." }],
@@ -678,7 +679,11 @@ describe("canonical Task context", () => {
     const manifest = new SourceMutationManifest({
       attempt,
       baselineDigest: digest,
-      mutations: [{ mutationId: "b".repeat(64), path: "src/one.js", changeKind: "content", beforeDigest: digest, afterDigest: "c".repeat(64) }],
+      mutations: [{
+        mutationId: "b".repeat(64), path: "src/one.js", changeKind: "content",
+        beforeKind: "file", beforeMode: 0o100644, beforeDigest: digest,
+        afterKind: "file", afterMode: 0o100644, afterDigest: "c".repeat(64),
+      }],
     });
     const lineage = new TaskMutationLineage({
       runId: "run-1", specId: "spec-1", taskId: "T-1", role: "implementation", attempt,
@@ -732,30 +737,20 @@ describe("canonical Task context", () => {
     }).create();
 
     const confirmTaskMutation = (taskId, requirementId, writes) => {
-      const baseline = SourceMutationBaseline.capture({ root, attempt: manager.canonicalState(specId).attempt });
-      for (const [relativePath, content] of writes) {
-        fs.writeFileSync(path.join(root, relativePath), content);
-      }
-      const manifest = SourceMutationManifest.capture({ baseline });
-      manager.confirmSourceWorkerHandoff({
-        specId,
-        mutationManifest: manifest,
-        handoffDigest: "f".repeat(64),
-        effect: new SourceWorkerEffect({
+      completeCanonicalSourceHandoff({
+        root, manager, specId, stepId: "task-impl", taskId,
+        mutate: () => {
+          for (const [relativePath, content] of writes) fs.writeFileSync(path.join(root, relativePath), content);
+        },
+        effect: {
           version: 1,
           stepId: "task-impl",
           completionStatus: "done",
-          files: [{ requirementId, mutationIds: manifest.mutations.map((entry) => entry.mutationId) }],
           issues: [],
           overview: { modules: [], data_flow: [], decisions: [] },
           triage: null,
           repair: null,
-        }),
-        result: {
-          outcome: "passed",
-          summary: `Fixture ${taskId} source mutation completed.`,
-          confirmedAt: "2026-09-03T00:00:00.000Z",
-          artifactRefs: [],
+          noChangeReason: null,
         },
       });
     };

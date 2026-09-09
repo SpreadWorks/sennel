@@ -317,7 +317,7 @@ async function runNormalUpgrade(cli) {
     : null;
   if (authorityLease !== null) {
     logger.log("[upgrade] waiting for checkout handoff authority when necessary");
-    authorityLease.acquire({ wait: true });
+    authorityLease.acquire();
   }
   try {
     const activeFlows = dryRun

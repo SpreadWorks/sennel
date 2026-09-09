@@ -139,9 +139,11 @@ function acquireFinalizeSyncOperation(ctx) {
   const owner = FinalizeFlowStateOwner.forMainContext(ctx);
   const operation = new RepositoryFlowOperationLock({
     mainRoot: owner.mainRepoPath,
-    allowProcessOwnerBorrow: false,
+    operationOwnerToken: ctx.repositoryOperationOwnerToken || null,
   });
-  operation.acquire();
+  const token = operation.acquire();
+  ctx.finalizeSyncPreviousRepositoryOperationOwnerToken = ctx.repositoryOperationOwnerToken || null;
+  ctx.repositoryOperationOwnerToken = token;
   ctx.finalizeSyncOperation = operation;
 }
 
@@ -150,6 +152,10 @@ function releaseFinalizeSyncOperation(ctx) {
   if (!(operation instanceof RepositoryFlowOperationLock)) return;
   operation.assertOwned();
   operation.release();
+  const previousToken = ctx.finalizeSyncPreviousRepositoryOperationOwnerToken;
+  if (previousToken) ctx.repositoryOperationOwnerToken = previousToken;
+  else delete ctx.repositoryOperationOwnerToken;
+  delete ctx.finalizeSyncPreviousRepositoryOperationOwnerToken;
   delete ctx.finalizeSyncOperation;
 }
 
@@ -559,6 +565,9 @@ class RegistryLifecycleAdapter {
     const activeNode = this.ctx.flowState ? findActiveNode(this.ctx.flowState) : null;
     return {
       ...extras,
+      ...(this.ctx.repositoryOperationOwnerToken && {
+        operationOwnerToken: this.ctx.repositoryOperationOwnerToken,
+      }),
       taskId: step === this.gateStepId
         ? this.gateTaskId
         : taskIdForResolvedStep(activeNode, step),

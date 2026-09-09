@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { RealDirectoryAuthority } from "./process-owned-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 
 export function fsyncDirectory(directory) {
   const descriptor = fs.openSync(directory, "r");

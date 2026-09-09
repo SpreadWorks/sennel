@@ -12,8 +12,10 @@
  */
 
 import { createHash } from "node:crypto";
+import { SourceHandoffFailureFacts } from "./lib/source-handoff-failure.js";
 
 import {
+  ActivityFailure,
   CurrentFlowDefinition,
   DefinitionDraftDisposition,
   DefinitionReviewDisposition,
@@ -150,6 +152,54 @@ export {
 };
 export { selectTaskNoChangeContinuation } from "./lib/task-review-stage-transition.js";
 export { resolveTaskExecutionOverrun } from "./lib/task-execution-policy.js";
+
+/** Definition-owned response to verified source handoff failure facts. */
+export class SourceHandoffTransitionPlan {
+  constructor({ facts, disposition }) {
+    if (!(facts instanceof SourceHandoffFailureFacts)) throw new Error("source handoff plan requires typed failure facts");
+    if (!["wait", "block", "rollback", "preserve", "quarantine"].includes(disposition)) {
+      throw new Error("invalid source handoff disposition");
+    }
+    if (disposition === "rollback" && (facts.kind !== "rejected" || !facts.ownershipProven || !facts.workerStopped)) {
+      throw new Error("source rollback requires proven ownership and a stopped worker");
+    }
+    if ((disposition === "preserve" && (facts.kind !== "rejected" || !facts.workerStopped))
+      || (disposition === "wait" && facts.kind !== "temporary-unavailable")
+      || (disposition === "quarantine" && facts.kind !== "authority-violation")) {
+      throw new Error("source handoff disposition contradicts its failure facts");
+    }
+    this.facts = facts;
+    this.disposition = disposition;
+    this.retryAfterSettlement = disposition === "rollback" && facts.retryable;
+    this.failure = disposition === "quarantine" ? new ActivityFailure({
+      category: "source-integrity", code: facts.code, message: facts.message,
+      retryable: false, retryKind: null,
+    }) : null;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      disposition: this.disposition, retryAfterSettlement: this.retryAfterSettlement,
+      failure: this.failure?.toJSON() ?? null, facts: this.facts.toJSON(),
+    };
+  }
+}
+
+export function resolveSourceHandoffTransitionPlan({ facts, policy }) {
+  if (!(facts instanceof SourceHandoffFailureFacts)) throw new Error("source handoff resolution requires typed facts");
+  if (policy?.kind !== "source" || typeof policy.preservesRejectedSource !== "boolean") {
+    throw new Error("source handoff resolution requires its source policy");
+  }
+  let disposition = "block";
+  if (facts.kind === "temporary-unavailable") disposition = "wait";
+  else if (facts.kind === "authority-violation") disposition = "quarantine";
+  else if (facts.kind === "rejected") {
+    if (policy.preservesRejectedSource && facts.workerStopped) disposition = "preserve";
+    else if (facts.ownershipProven && facts.workerStopped) disposition = "rollback";
+  }
+  return new SourceHandoffTransitionPlan({ facts, disposition });
+}
 
 /** Resolve the Task-local review funnel from canonical, binding-checked facts. */
 export function resolveTaskReviewStageTransition(facts) {

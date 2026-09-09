@@ -11085,6 +11085,15 @@
       "taskId": null,
       "timestamp": "2026-09-08T13:43:56.684Z",
       "issueLogId": "worker-handoff-2d0e48ab89fd294fb71603e0676ca66d436c1c584ae0f069d16b45a3f3fbb34b-invalid"
+    },
+    {
+      "step": "task-impl",
+      "reason": "Worker artifact handoff recovery-required: rejected source handoff could not be safely restored: source rollback cannot verify canonical publication state: lock owner pid 2025332 is active",
+      "trigger": "Parent dispatcher rejected or could not complete a worker artifact handoff.",
+      "resolution": "Correct the worker artifact payload and dispatch the current action again.",
+      "taskId": null,
+      "timestamp": "2026-09-09T00:44:49.058Z",
+      "issueLogId": "worker-handoff-6de58f9458160158c26117450257ad5f359f7f0529d795dfa06f3dc64a43c498-recovery-required"
     }
   ]
 }

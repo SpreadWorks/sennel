@@ -121,7 +121,21 @@ import { ExternalBlockedOutcome, StepAttempt } from "./step-outcome.js";
 import { CanonicalSpecReview } from "./spec-review-artifacts.js";
 import { TaskCollection } from "../../spec/lib/render-contract.js";
 import { SourceMutationPublicationAdmission } from "./source-mutation-publication-admission.js";
-import { SourceMutationManifest, SourceWorkerEffect, SourceWorkerCanonicalObservationAdvance } from "./worker-artifact-handoff.js";
+import {
+  CanonicalSourceHandoffCheckpoint,
+  SourceHandoffEvent,
+  SourceHandoffSettlement,
+  SourceMutationManifest,
+  SourceWorkerEffect,
+  SourceWorkerCanonicalObservationAdvance,
+  SourceWorkerHandoffIdentity,
+} from "./worker-artifact-handoff.js";
+import {
+  assertSourceHandoffEventTransition,
+  readSourceHandoffAuthorityFromView,
+  SourceHandoffPersistenceAdmission,
+  sourceHandoffArtifactWrites,
+} from "./source-handoff-persistence.js";
 import { captureCurrentTaskSource, TaskExecutionBudget, TaskMutationLineage, TaskMutationLineageSet, readTaskMutationLineagesFromCatalog } from "./task-mutation-lineage.js";
 import { DefinitionLifecycleTransition } from "./step-transition-policy.js";
 import {
@@ -502,6 +516,39 @@ export class TaskGateSettlementAdmission {
 class CombinedAdmission {
   constructor(...admissions) { this.admissions = admissions.filter(Boolean); Object.freeze(this.admissions); Object.freeze(this); }
   assert(view) { for (const admission of this.admissions) admission.assert(view); }
+}
+
+function nextTaskExecutionBudget({ state, taskId, lineages }) {
+  const implementations = lineages.filter((lineage) => lineage.role === "implementation");
+  const task = state.findNode(taskId);
+  const review = task?.steps?.find((step) => step.id === `${taskId}-review`);
+  const gate = task?.steps?.find((step) => step.id === `${taskId}-gate`);
+  return new TaskExecutionBudget({
+    round: implementations.length + 1,
+    reviewAttemptSequenceAtStart: review?.attemptSequence,
+    gateAttemptSequenceAtStart: gate?.attemptSequence,
+  });
+}
+
+/** Reject a legacy-overrun Task implementation before publishing handoff protocol state. */
+class TaskSourceHandoffPreparationAdmission {
+  constructor(identity) {
+    if (!(identity instanceof SourceWorkerHandoffIdentity) || identity.stepId !== "task-impl" || identity.taskId === null) {
+      throw new CurrentFlowStateInvariantError("Task source handoff preparation requires its typed implementation identity");
+    }
+    this.identity = identity;
+    Object.freeze(this);
+  }
+  assert(view) {
+    const lineages = readTaskMutationLineagesFromCatalog({
+      state: view.state,
+      catalog: view.catalog,
+      activities: view.activities,
+      taskId: this.identity.taskId,
+      readCatalogedArtifact: (descriptor) => view.readCatalogedArtifact(descriptor),
+    });
+    nextTaskExecutionBudget({ state: view.state, taskId: this.identity.taskId, lineages });
+  }
 }
 
 const TEST_CHAIN_TRANSITION_DEFINITIONS = Object.freeze({
@@ -2338,30 +2385,144 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  /** Persist the pre-worker Task source observation as catalog authority. */
-  publishTaskSourceHandoffBaseline({ specId = null, taskId, stage, attempt, baseline, canonicalObservation } = {}) {
+  /** Publish the immutable pre-worker authority and its first event together. */
+  publishSourceHandoffCheckpoint({ specId = null, checkpoint, rollbackBlob, preparedEvent } = {}) {
     const resolved = this.#resolveSpecId(specId);
-    const state = this.runtime.load(resolved);
-    const nodeId = `${requiredText(taskId, "Task source baseline taskId")}-${requiredText(stage, "Task source baseline stage")}`;
-    const logicalKey = `task.${stage}.source.handoff.baseline`;
-    if (!new Set(["triage", "repair"]).has(stage) || state.current?.at(-1) !== nodeId
-      || state.attempt?.id !== attempt?.id || state.attempt?.sequence !== attempt?.sequence) {
-      throw new CurrentFlowStateInvariantError("Task source baseline must bind the active Task source Attempt");
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    if (!(checkpoint instanceof CanonicalSourceHandoffCheckpoint)
+      || !(preparedEvent instanceof SourceHandoffEvent)
+      || !Buffer.isBuffer(rollbackBlob)) {
+      throw new CurrentFlowStateInvariantError("source handoff checkpoint publication requires typed checkpoint, event, and rollback blob");
     }
-    const existing = this.readArtifact({ specId: resolved, logicalKey, parameters: { taskId, attemptId: attempt.id }, consumerNodeId: nodeId, optional: true });
-    if (!(canonicalObservation instanceof SourceWorkerCanonicalObservationAdvance)) throw new CurrentFlowStateInvariantError("Task source baseline requires its canonical observation");
-    const bytes = Buffer.from(`${JSON.stringify({ baseline: baseline.toJSON(), canonicalObservation: canonicalObservation.storedJSON() }, null, 2)}\n`);
+    const identity = checkpoint.identity;
+    if (!identity.matches(preparedEvent.identity) || preparedEvent.kind !== "prepared"
+      || preparedEvent.sequence !== 1 || preparedEvent.previousDigest !== null
+      || preparedEvent.checkpointDigest !== checkpoint.digest
+      || crypto.createHash("sha256").update(rollbackBlob).digest("hex") !== checkpoint.rollbackBlobDigest) {
+      throw new CurrentFlowStateInvariantError("source handoff checkpoint publication binding is invalid");
+    }
+    const existing = this.readSourceHandoffAuthority({ specId: resolved, identity, optional: true });
     if (existing !== null) {
-      if (!existing.bytes.equals(bytes)) throw new CurrentFlowStateInvariantError("Task source baseline conflicts with the existing canonical observation");
+      if (existing.checkpoint.digest !== checkpoint.digest || existing.event.digest !== preparedEvent.digest
+        || !existing.rollbackBlob.equals(rollbackBlob)) {
+        throw new CurrentFlowStateConflictError("source handoff checkpoint conflicts with its existing canonical publication");
+      }
       return existing;
     }
     this.publishArtifacts({
       specId: resolved,
-      nodeId,
-      expectedAttempt: attempt,
-      artifactWrites: [{ logicalKey, parameters: { taskId, attemptId: attempt.id }, mediaType: "application/json", bytes }],
+      nodeId: identity.nodeId,
+      artifactWrites: sourceHandoffArtifactWrites({ checkpoint, rollbackBlob, event: preparedEvent }),
+      admission: new CombinedAdmission(
+        identity.stepId === "task-impl" ? new TaskSourceHandoffPreparationAdmission(identity) : null,
+        new SourceHandoffPersistenceAdmission({
+          identity, checkpoint, expectedPreviousEventDigest: null, validateCapture: true,
+        }),
+      ),
     });
-    return this.readArtifact({ specId: resolved, logicalKey, parameters: { taskId, attemptId: attempt.id }, consumerNodeId: nodeId });
+    return this.readSourceHandoffAuthority({ specId: resolved, identity });
+  }
+
+  /** Append one immutable, digest-linked event with catalog-lock CAS. */
+  appendSourceHandoffEvent({ specId = null, event } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    if (!(event instanceof SourceHandoffEvent)) throw new CurrentFlowStateInvariantError("source handoff event must be typed");
+    const authority = this.readSourceHandoffAuthority({ specId: resolved, identity: event.identity });
+    if (authority.settled) throw new CurrentFlowStateConflictError("source handoff is already settled");
+    if (event.checkpointDigest !== authority.checkpoint.digest
+      || event.sequence !== authority.events.length + 1
+      || event.previousDigest !== authority.event.digest) {
+      throw new CurrentFlowStateConflictError("source handoff event does not extend the canonical event head");
+    }
+    assertSourceHandoffEventTransition(authority.event, event);
+    this.publishArtifacts({
+      specId: resolved,
+      nodeId: event.identity.nodeId,
+      artifactWrites: sourceHandoffArtifactWrites({ event }),
+      admission: new SourceHandoffPersistenceAdmission({
+        identity: event.identity, checkpoint: authority.checkpoint,
+        expectedCheckpointDigest: authority.checkpoint.digest,
+        expectedPreviousEventDigest: authority.event.digest,
+      }),
+    });
+    return this.readSourceHandoffAuthority({ specId: resolved, identity: event.identity });
+  }
+
+  /** Read one complete source handoff authority through one coherent catalog view. */
+  readSourceHandoffAuthority({ specId = null, identity, optional = false, requireUnsettled = false } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const expected = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
+    const authority = this.runtime.readCanonicalTransitionView(resolved, (view) => (
+      readSourceHandoffAuthorityFromView({ view, identity: expected, root: this.root, canonicalLocation: this.location(resolved) })
+    ));
+    if (authority === null && !optional) throw new CurrentFlowStateInvariantError("canonical source handoff checkpoint is absent");
+    if (authority !== null && requireUnsettled && authority.settled) {
+      throw new CurrentFlowStateConflictError("canonical source handoff is already settled");
+    }
+    return authority;
+  }
+
+  /** Publish one non-acceptance terminal decision with event-head CAS. */
+  settleSourceHandoff({ specId = null, settlement, expectedAttempt = null } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    if (!(settlement instanceof SourceHandoffSettlement) || settlement.kind === "accepted") {
+      throw new CurrentFlowStateInvariantError("standalone source handoff settlement must be a typed non-acceptance decision");
+    }
+    const authority = this.readSourceHandoffAuthority({ specId: resolved, identity: settlement.identity });
+    if (authority.settled) {
+      if (authority.settlement.digest !== settlement.digest) {
+        throw new CurrentFlowStateConflictError("source handoff has a different terminal settlement");
+      }
+      return authority;
+    }
+    const expected = expectedAttempt === null
+      ? CurrentAttemptIdentity.from(settlement.identity.attempt)
+      : CurrentAttemptIdentity.from(expectedAttempt);
+    const identityAttempt = CurrentAttemptIdentity.from(settlement.identity.attempt);
+    if (expected.id !== identityAttempt.id || expected.nodeId !== identityAttempt.nodeId || expected.sequence !== identityAttempt.sequence) {
+      throw new CurrentFlowStateInvariantError("source handoff settlement expected Attempt does not match its identity");
+    }
+    if (settlement.checkpointDigest !== authority.checkpoint.digest
+      || settlement.eventDigest !== authority.event.digest) {
+      throw new CurrentFlowStateConflictError("source handoff settlement does not bind the canonical event head");
+    }
+    this.publishArtifacts({
+      specId: resolved,
+      nodeId: settlement.identity.nodeId,
+      artifactWrites: sourceHandoffArtifactWrites({ settlement }),
+      admission: new SourceHandoffPersistenceAdmission({
+        identity: settlement.identity,
+        checkpoint: authority.checkpoint,
+        expectedCheckpointDigest: authority.checkpoint.digest,
+        expectedPreviousEventDigest: authority.event.digest,
+        settlement,
+      }),
+    });
+    return this.readSourceHandoffAuthority({ specId: resolved, identity: settlement.identity });
+  }
+
+  /** Enumerate canonical checkpoints; runtime handoff directories are never discovery authority. */
+  sourceHandoffAuthorities({ specId = null, unsettledOnly = false } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) return Object.freeze([]);
+    return this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      const identities = view.catalog.artifacts
+        .filter((entry) => entry.logicalKey === "source.handoff.checkpoint")
+        .map((descriptor) => {
+          let document;
+          try { document = JSON.parse(view.readCatalogedArtifact(descriptor).toString("utf8")); } catch (cause) {
+            throw new CurrentFlowStateInvariantError(`canonical source handoff checkpoint is invalid: ${cause.message}`);
+          }
+          return new SourceWorkerHandoffIdentity(document.identity);
+        });
+      const authorities = identities.map((entry) => readSourceHandoffAuthorityFromView({
+        view, identity: entry, root: this.root, canonicalLocation: this.location(resolved),
+      }));
+      return Object.freeze(authorities.filter((entry) => !unsettledOnly || !entry.settled));
+    });
   }
 
   promoteDraftQuestionAndKeepRefineActive({
@@ -3232,7 +3393,7 @@ export class CanonicalFlowManagerStore {
    * Commit a sealed source-worker effect and its Attempt confirmation in one
    * Version Store transaction. Workers never receive this surface.
    */
-  confirmSourceWorkerHandoff({ specId = null, effect, mutationManifest, handoffDigest, result, upgradeResult = null, taskStageBinding = null, sourceMutationBaseline = null } = {}) {
+  confirmSourceWorkerHandoff({ specId = null, effect, mutationManifest, handoffDigest, result, upgradeResult = null, taskStageBinding = null, sourceMutationBaseline = null, sourceHandoffSettlement = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(effect instanceof SourceWorkerEffect)) {
@@ -3252,6 +3413,34 @@ export class CanonicalFlowManagerStore {
     const effectTargetsActiveNode = nodeId === effect.stepId
       || (effect.stepId.startsWith("task-") && taskIdForNode(state, nodeId) !== null && nodeId === `${taskIdForNode(state, nodeId)}-${effect.stepId.slice(5)}`);
     if (!effectTargetsActiveNode) throw new CurrentFlowStateInvariantError("source worker effect does not target the active Attempt");
+    if (!(sourceHandoffSettlement instanceof SourceHandoffSettlement)
+      || sourceHandoffSettlement.kind !== "accepted"
+      || sourceHandoffSettlement.handoffDigest !== handoffDigest) {
+      throw new CurrentFlowStateInvariantError("source worker acceptance requires its typed accepted settlement");
+    }
+    const sourceHandoffAuthority = this.readSourceHandoffAuthority({
+      specId: resolved, identity: sourceHandoffSettlement.identity,
+    });
+    if (sourceHandoffAuthority.settled
+      || sourceHandoffSettlement.checkpointDigest !== sourceHandoffAuthority.checkpoint.digest
+      || sourceHandoffSettlement.eventDigest !== sourceHandoffAuthority.event.digest) {
+      throw new CurrentFlowStateConflictError("source worker settlement does not bind the unsettled canonical handoff");
+    }
+    const settlementWrites = sourceHandoffArtifactWrites({ settlement: sourceHandoffSettlement });
+    const settlementAdmission = new SourceHandoffPersistenceAdmission({
+      identity: sourceHandoffSettlement.identity,
+      checkpoint: sourceHandoffAuthority.checkpoint,
+      expectedCheckpointDigest: sourceHandoffAuthority.checkpoint.digest,
+      expectedPreviousEventDigest: sourceHandoffAuthority.event.digest,
+      settlement: sourceHandoffSettlement,
+    });
+    const acceptanceAdmission = new CombinedAdmission(
+      settlementAdmission,
+      new SourceMutationPublicationAdmission({
+        baseline: sourceHandoffAuthority.checkpoint.baseline,
+        manifest: mutationManifest,
+      }),
+    );
     const specSource = this.readArtifact({ specId: resolved, logicalKey: "spec.record", consumerNodeId: nodeId });
     let spec = JSON.parse(specSource.bytes.toString("utf8"));
     const requirementDefinitions = new CanonicalRequirementDefinitions(spec.requirements).applyTo(spec);
@@ -3270,25 +3459,18 @@ export class CanonicalFlowManagerStore {
       if (taskId === null) throw new CurrentFlowStateInvariantError("source overview effect requires an active Task implementation");
       spec = new CanonicalOverviewUpdate({ taskId, additions: effect.overview.additions }).applyTo(spec).document;
     }
-    const artifactWrites = [];
+    const artifactWrites = [...settlementWrites];
     if (effect.stepId === "task-impl") {
       const taskId = taskIdForNode(state, nodeId);
       if (taskId === null) throw new CurrentFlowStateInvariantError("Task mutation lineage requires an active Task");
       const priorLineages = this.taskMutationLineages({ specId: resolved, taskId });
-      const task = state.findNode(taskId);
-      const reviewStep = task?.steps?.find((step) => step.id === `${taskId}-review`);
-      const gateStep = task?.steps?.find((step) => step.id === `${taskId}-gate`);
       const lineage = new TaskMutationLineage({
         runId: state.runId,
         specId: state.specId,
         taskId,
         role: "implementation",
         attempt: mutationManifest.attempt,
-        budget: new TaskExecutionBudget({
-          round: priorLineages.filter((entry) => entry.role === "implementation").length + 1,
-          reviewAttemptSequenceAtStart: reviewStep?.attemptSequence,
-          gateAttemptSequenceAtStart: gateStep?.attemptSequence,
-        }),
+        budget: nextTaskExecutionBudget({ state, taskId, lineages: priorLineages }),
         sourceFingerprint: mutationManifest.digest,
         manifest: mutationManifest.toJSON(),
         noChangeReason: effect.noChangeReason?.text ?? null,
@@ -3352,7 +3534,7 @@ export class CanonicalFlowManagerStore {
       artifactWrites.push({ logicalKey: "issue.log", mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(issues.toJSON(), null, 2)}\n`, "utf8") });
     }
     if (["task-triage", "task-repair"].includes(effect.stepId)) {
-      return this.#confirmTaskReviewSourceStage({ state, spec, effect, mutationManifest, handoffDigest, result, artifactWrites, taskStageBinding, sourceMutationBaseline });
+      return this.#confirmTaskReviewSourceStage({ state, spec, effect, mutationManifest, handoffDigest, result, artifactWrites, taskStageBinding, sourceMutationBaseline, settlementAdmission: acceptanceAdmission });
     }
     if (effect.repair !== null) {
       const repairRecord = CanonicalImplementationRepairRecord.capture({
@@ -3376,6 +3558,7 @@ export class CanonicalFlowManagerStore {
           artifacts: [{ id: handoffDigest, label: "worker-handoff" }],
         },
         artifactWrites,
+        admission: acceptanceAdmission,
         ...(sourceWorkerUpgrade === null ? {} : { sourceWorkerUpgrade: true }),
       });
     }
@@ -3392,6 +3575,7 @@ export class CanonicalFlowManagerStore {
           artifacts: [{ id: handoffDigest, label: "worker-handoff" }],
         },
         artifactWrites,
+        admission: acceptanceAdmission,
         ...(sourceWorkerUpgrade === null ? {} : { sourceWorkerUpgrade: true }),
       });
     }
@@ -3408,23 +3592,27 @@ export class CanonicalFlowManagerStore {
           artifacts: [{ id: handoffDigest, label: "worker-handoff" }],
         },
         artifactWrites,
+        admission: acceptanceAdmission,
         ...(sourceWorkerUpgrade === null ? {} : { sourceWorkerUpgrade: true }),
       });
     }
     const sourceSpecChanged = requirementDefinitions.changed || effect.overview !== null;
-    this.runtime.confirmAttempt({
+    return this.runtime.confirmAttempt({
       specId: resolved,
       activityId: activityId(nodeId === "impl-repair" ? "impl-repair-invalidation-confirmed" : "source-handoff-confirmed"),
       result,
       status: effect.completionStatus,
       ...(sourceSpecChanged ? { specRecord: new CanonicalSourceWorkerSpecCompletion(spec) } : {}),
       artifactWrites,
-      ...(effect.completionStatus === "done" && { admission: this.#producerCompletionAdmission(nodeId, artifactWrites) }),
+      admission: new CombinedAdmission(
+        acceptanceAdmission,
+        effect.completionStatus === "done" ? this.#producerCompletionAdmission(nodeId, artifactWrites) : null,
+      ),
       ...(sourceWorkerUpgrade === null ? {} : { sourceWorkerUpgrade: true }),
     });
   }
 
-  #confirmTaskReviewSourceStage({ state, spec, effect, mutationManifest, handoffDigest, result, artifactWrites, taskStageBinding, sourceMutationBaseline }) {
+  #confirmTaskReviewSourceStage({ state, spec, effect, mutationManifest, handoffDigest, result, artifactWrites, taskStageBinding, sourceMutationBaseline, settlementAdmission }) {
     state.assertAttemptConfirmable();
     if (!(taskStageBinding instanceof TaskReviewEpisodeBinding)) throw new CurrentFlowStateInvariantError("Task source stage requires its parent-owned immutable episode binding");
     const taskId = taskIdForNode(state, state.current.at(-1));
@@ -3465,7 +3653,7 @@ export class CanonicalFlowManagerStore {
       reason: effect.triage === null ? effect.repair.summary : dispositions.map((entry) => entry.rationale).join("\n"),
     });
     const plan = resolveTaskReviewStageTransition(facts);
-    return this.runtime.completeTaskReviewStage({ specId: state.specId, activityId: activityId("task-review-stage-confirmed"), result, artifactWrites, admission: new SourceMutationPublicationAdmission({ baseline: sourceMutationBaseline, manifest: mutationManifest, producerAdmission: this.#producerCompletionAdmission(state.current.at(-1), artifactWrites) }), plan, ...(plan.targetStepId === null ? {} : { targetAttempt: commandContextAttempt(state, plan.targetStepId) }) });
+    return this.runtime.completeTaskReviewStage({ specId: state.specId, activityId: activityId("task-review-stage-confirmed"), result, artifactWrites, admission: new CombinedAdmission(settlementAdmission, this.#producerCompletionAdmission(state.current.at(-1), artifactWrites)), plan, ...(plan.targetStepId === null ? {} : { targetAttempt: commandContextAttempt(state, plan.targetStepId) }) });
   }
 
   /** Read only the immutable source lineages belonging to one canonical Task. */
@@ -3668,7 +3856,7 @@ export class CanonicalFlowManagerStore {
    * confirmed, failed, retried, or replaced that Attempt while lifecycle
    * hooks were running; in all of those cases this is deliberately a no-op.
    */
-  failCurrentAttemptIfCurrent({ specId = null, expectedRunId, expectedAttempt, failure, result, commandResult = undefined, taskGateFallback = null, taskReviewAbortedWorkUnit = null } = {}) {
+  failCurrentAttemptIfCurrent({ specId = null, expectedRunId, expectedAttempt, failure, result, commandResult = undefined, taskGateFallback = null, taskReviewAbortedWorkUnit = null, sourceHandoffSettlement = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const expected = CurrentAttemptIdentity.from(expectedAttempt);
@@ -3699,7 +3887,7 @@ export class CanonicalFlowManagerStore {
           ...this.#commandPublicationWrites(commandResult),
         ];
     if (taskReviewAbortedWorkUnit !== null) artifactWrites.push(taskReviewAbortedWorkUnit.artifactWrite);
-    const admission = taskGateFallback === null
+    let admission = taskGateFallback === null
       ? undefined
       : new TaskGateFallbackFailureAdmission({
         specId: resolved,
@@ -3708,6 +3896,36 @@ export class CanonicalFlowManagerStore {
         nodeId: taskGateFallback.nodeId,
         taskId: taskGateFallback.taskId,
       });
+    if (sourceHandoffSettlement !== null) {
+      if (!(sourceHandoffSettlement instanceof SourceHandoffSettlement)
+        || sourceHandoffSettlement.kind !== "quarantined") {
+        throw new CurrentFlowStateInvariantError("source failure requires a typed quarantined handoff settlement");
+      }
+      const authority = this.readSourceHandoffAuthority({
+        specId: resolved,
+        identity: sourceHandoffSettlement.identity,
+        requireUnsettled: true,
+      });
+      if (sourceHandoffSettlement.checkpointDigest !== authority.checkpoint.digest
+        || sourceHandoffSettlement.eventDigest !== authority.event.digest
+        || authority.identity.runId !== expectedRunId
+        || authority.identity.attempt.id !== expected.id
+        || authority.identity.attempt.nodeId !== expected.nodeId
+        || authority.identity.attempt.sequence !== expected.sequence) {
+        throw new CurrentFlowStateConflictError("source failure settlement does not bind the current canonical Attempt and event head");
+      }
+      artifactWrites.push(...sourceHandoffArtifactWrites({ settlement: sourceHandoffSettlement }));
+      admission = new CombinedAdmission(
+        admission,
+        new SourceHandoffPersistenceAdmission({
+          identity: authority.identity,
+          checkpoint: authority.checkpoint,
+          expectedCheckpointDigest: authority.checkpoint.digest,
+          expectedPreviousEventDigest: authority.event.digest,
+          settlement: sourceHandoffSettlement,
+        }),
+      );
+    }
     const recorded = this.runtime.failAttempt({
       specId: resolved,
       activityId: activityId("attempt-tooling-failed"),

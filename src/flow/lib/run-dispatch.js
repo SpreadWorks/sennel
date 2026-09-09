@@ -25,10 +25,8 @@ import { DeferredAgentInvocationMetric } from "../../lib/agent-invocation-metric
 import { flowCommands } from "../../lib/command-registry.js";
 import { dispatch } from "../../lib/dispatcher.js";
 import { FlowHandoffAuthorityLease } from "../../lib/flow-handoff-authority-lease.js";
-import {
-  ProcessOwnedLock,
-  RealDirectoryAuthority,
-} from "../../lib/process-owned-lock.js";
+import { ProcessLock } from "../../lib/process-lock.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import {
   AbortedDirective,
   AwaitDraftQuestionDirective,
@@ -48,7 +46,6 @@ import {
   WorkerArtifactHandoffCoordinator,
   WorkerArtifactHandoffError,
   WorkerArtifactRetryExhaustedError,
-  WorkerArtifactMutationAuthoritySnapshot,
   WorkerArtifactHandoffRequest,
   SpecTestBootstrapObservationAuthority,
   materializeSourceWorkerEffect,
@@ -56,6 +53,7 @@ import {
   workerArtifactHandoffPolicy,
 } from "./worker-artifact-handoff.js";
 import { TaskSourceFailureObservation } from "./task-source-failure.js";
+import { SourceHandoffFailureFacts } from "./source-handoff-failure.js";
 import { sourceWorkerEffectJsonSchema } from "./source-worker-effect-schema.js";
 import {
   AutoApprovedFlowDispatchAuthorization,
@@ -67,7 +65,7 @@ import {
   flowDispatchDigest,
 } from "./dispatch-invocation.js";
 import { buildFlowCommandHookContext } from "./flow-context.js";
-import { ConfirmAndAdvance, resolveDefinitionRoute, resolveDispatcherOwnedFlowAction } from "../definition.js";
+import { ConfirmAndAdvance, resolveDefinitionRoute, resolveDispatcherOwnedFlowAction, resolveSourceHandoffTransitionPlan } from "../definition.js";
 import { CanonicalSpecApproval } from "./canonical-spec-approval.js";
 import { reconcileCompletedReviewWorkUnits } from "./review-work-unit.js";
 import { approvalRouteFacts } from "./definition-route-facts.js";
@@ -531,13 +529,15 @@ export function dispatchRepositoryFingerprint(ctx) {
   });
 }
 
-function dispatchLockError(status, message, { lockPath, cause } = {}) {
+function dispatchLockError(status, message, { lockPath, owner = null, cause } = {}) {
   const error = new Error(message, { cause });
   error.name = "FlowDispatchLockError";
   error.code = status === "live"
     ? "FLOW_DISPATCH_BUSY"
     : `FLOW_DISPATCH_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
+  error.lockStatus = status;
   error.lockPath = lockPath;
+  error.owner = owner;
   return error;
 }
 
@@ -561,7 +561,7 @@ export class FlowDispatchLease {
       parentAuthority: root,
       errorFactory: dispatchLockError,
     });
-    this.lock = new ProcessOwnedLock({
+    this.lock = new ProcessLock({
       directoryAuthority: directory,
       fileName: `.flow-dispatch-${flowDispatchDigest(runId).slice(0, 24)}.lock`,
       kind: DISPATCH_LOCK_KIND,
@@ -574,10 +574,7 @@ export class FlowDispatchLease {
   }
 
   acquire() {
-    // ProcessOwnedLock only reclaims locks when the recorded dispatcher
-    // identity is conclusively stale. Live and indeterminate owners remain
-    // exclusive, while a crashed dispatcher cannot block the Flow forever.
-    return this.lock.acquire({ claimStale: true });
+    return this.lock.acquire();
   }
 
   release() {
@@ -884,7 +881,10 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
   // diagnostic issue-log append is itself a Flow Activity/catalog mutation;
   // defer it until a non-recoverable boundary instead of partially publishing
   // alongside the interrupted handoff.
-  if (state?.specId && error.recoveryPossible !== true && !request?.policy.preservesRejectedSource) {
+  // Source failures have their own checkpoint-bound canonical facts. An
+  // unrelated diagnostic write would invalidate an unsettled checkpoint.
+  if (state?.specId && error.recoveryPossible !== true
+    && (request?.policy ?? workerArtifactHandoffPolicy(stepId))?.kind !== "source") {
     try {
       const entry = {
         step: stepId,
@@ -919,7 +919,7 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
   return {
     ...blockedBoundary({
       target,
-      nextAction: request?.invocation?.action?.nextAction || null,
+      nextAction: null,
       dispatchCount,
       message: error.recoveryPossible
         ? "Canonical publication is journaled and requires deterministic dispatcher recovery."
@@ -958,10 +958,12 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
   };
 }
 
-function quarantineRejectedWorkerHandoff(coordinator, request, error) {
-  if (!NON_REPLAYABLE_HANDOFF_ERROR_CODES.has(error.code)) return error;
+function quarantineRejectedWorkerHandoff(coordinator, request, error, sourcePlan = null) {
+  if (request.policy.kind === "source"
+    ? sourcePlan?.disposition !== "quarantine"
+    : !NON_REPLAYABLE_HANDOFF_ERROR_CODES.has(error.code)) return error;
   try {
-    coordinator.quarantine({ request, error });
+    coordinator.quarantine({ request, error, plan: sourcePlan });
     return error;
   } catch (cause) {
     return new WorkerArtifactHandoffError(
@@ -1238,7 +1240,6 @@ export default class RunDispatchCommand extends FlowCommand {
     let handoffPolicy = null;
     let handoffAuthorityAcquired = false;
     try {
-      const state = readFlowState(ctx);
       handoffPolicy = workerArtifactHandoffPolicy(action.nextAction.step);
       if (handoffPolicy !== null) {
         handoffAuthority = new FlowHandoffAuthorityLease({
@@ -1248,9 +1249,10 @@ export default class RunDispatchCommand extends FlowCommand {
         // The authority is acquired before parent input capture. External
         // upgrades therefore cannot alter immutable handoff inputs between
         // request construction and its mutation snapshot.
-        handoffAuthority.acquire({ wait: true });
+        handoffAuthority.acquire();
         handoffAuthorityAcquired = true;
       }
+      const state = readFlowState(ctx);
       handoffRequest = this.handoffCoordinator.createRequest({
         ctx,
         state,
@@ -1284,7 +1286,7 @@ export default class RunDispatchCommand extends FlowCommand {
       try {
         workerArtifactAuthority = handoffRequest?.policy.kind !== "source"
           ? null
-          : WorkerArtifactMutationAuthoritySnapshot.capture(handoffRequest);
+          : this.handoffCoordinator.sourceMutationAuthority({ ctx, request: handoffRequest });
       } catch (error) {
         if (!(error instanceof WorkerArtifactHandoffError)) throw error;
         return { error, handoffRequest, agentError: null };
@@ -1297,6 +1299,7 @@ export default class RunDispatchCommand extends FlowCommand {
         : null;
       let agentError = null;
       let sourceResponseError = null;
+      let sourceWorkerStopped = false;
       const supervisorEvents = [];
       const activityMonitor = testReviewRepairWorkerMonitor(
         handoffRequest,
@@ -1310,27 +1313,51 @@ export default class RunDispatchCommand extends FlowCommand {
           action.nextAction.output_schema,
         );
         const { promptGuidance, ...agentOptions } = workerOptions;
-        const responseText = await agent.call(work.prompt(promptGuidance), {
-          commandId: handoffRequest?.policy.preservesRejectedSource ? `flow.dispatch.${handoffRequest.stepId}` : "flow.dispatch",
-          executionWorkDir: ctx.executionRoot || ctx.root,
-          cacheMode: "bypass",
-          retryCount: 0,
-          waitForProcessTree: true,
-          executionEnvironment: work.executionEnvironment(),
-          deferredMetric,
-          ...(activityMonitor && {
-            timeoutMs: activityMonitor.maximumLifetimeMs,
-            timeoutDiagnostic: new AgentTimeoutDiagnostic({
-              reason: "maximum_lifetime",
+        const prompt = work.prompt(promptGuidance);
+        if (handoffRequest?.policy.kind === "source") {
+          this.handoffCoordinator.startSourceWorker({ ctx, request: handoffRequest, invocation });
+        }
+        let responseText;
+        let processError = null;
+        try {
+          responseText = await agent.call(prompt, {
+            commandId: handoffRequest?.policy.preservesRejectedSource ? `flow.dispatch.${handoffRequest.stepId}` : "flow.dispatch",
+            executionWorkDir: ctx.executionRoot || ctx.root,
+            cacheMode: "bypass",
+            retryCount: 0,
+            waitForProcessTree: true,
+            executionEnvironment: work.executionEnvironment(),
+            deferredMetric,
+            ...(activityMonitor && {
               timeoutMs: activityMonitor.maximumLifetimeMs,
+              timeoutDiagnostic: new AgentTimeoutDiagnostic({
+                reason: "maximum_lifetime",
+                timeoutMs: activityMonitor.maximumLifetimeMs,
+              }),
+              activityMonitor,
             }),
-            activityMonitor,
-          }),
-          onSupervisorEvent(event) {
-            supervisorEvents.push(Object.freeze({ at: new Date().toISOString(), ...event }));
-          },
-          ...agentOptions,
-        });
+            onSupervisorEvent(event) {
+              supervisorEvents.push(Object.freeze({ at: new Date().toISOString(), ...event }));
+            },
+            ...agentOptions,
+          });
+        } catch (error) {
+          processError = error;
+          throw error;
+        } finally {
+          if (handoffRequest?.policy.kind === "source") {
+            if (processError?.unterminatedMembers?.length > 0) {
+              throw new WorkerArtifactHandoffError(
+                "recovery-required", "FLOW_SOURCE_HANDOFF_START_UNCERTAIN",
+                "source worker process tree did not terminate; source authority remains uncertain",
+                { cause: processError, retryable: false, recoveryPossible: false },
+              );
+            }
+            this.handoffCoordinator.finishSourceWorker({ ctx, request: handoffRequest });
+            sourceWorkerStopped = true;
+            workerArtifactAuthority = this.handoffCoordinator.sourceMutationAuthority({ ctx, request: handoffRequest });
+          }
+        }
         if (handoffRequest?.policy.kind === "source") {
           materializeSourceWorkerEffect({ request: handoffRequest, responseText });
           sealParentMaterializedSourceWorkerEffect({ request: handoffRequest });
@@ -1406,18 +1433,30 @@ export default class RunDispatchCommand extends FlowCommand {
             deferredMetric: holdsSpecRepairMetric ? deferredMetric : null,
           };
         }
-        const rejectedSource = error instanceof WorkerArtifactHandoffError
-          && handoffRequest !== null
-          && handoffRequest.policy.kind === "source"
-          && !handoffRequest.policy.preservesRejectedSource
-          && workerArtifactAuthority !== null
-          && !NON_REPLAYABLE_HANDOFF_ERROR_CODES.has(error.code);
-        if (rejectedSource) {
+        const sourcePlan = error instanceof WorkerArtifactHandoffError && handoffRequest.policy.kind === "source"
+          ? resolveSourceHandoffTransitionPlan({
+              facts: SourceHandoffFailureFacts.fromError(error, {
+                request: handoffRequest,
+                ownershipProven: workerArtifactAuthority !== null,
+                workerStopped: sourceWorkerStopped,
+                agentError,
+              }),
+              policy: handoffRequest.policy,
+            })
+          : null;
+        if (sourcePlan !== null) {
+          const failureEvent = this.handoffCoordinator.recordSourceFailure({ ctx, request: handoffRequest, plan: sourcePlan });
+          if (failureEvent !== null) {
+            workerArtifactAuthority = this.handoffCoordinator.sourceMutationAuthority({ ctx, request: handoffRequest });
+          }
+        }
+        if (sourcePlan?.disposition === "rollback") {
           try {
             this.handoffCoordinator.rollbackRejectedSourceHandoff({
               ctx,
               request: handoffRequest,
               mutationAuthority: workerArtifactAuthority,
+              plan: sourcePlan,
             });
           } catch (rollbackError) {
             await deferredMetric.flush();
@@ -1441,12 +1480,14 @@ export default class RunDispatchCommand extends FlowCommand {
             };
           }
         }
-        if (handoffRequest.policy.preservesRejectedSource && error instanceof WorkerArtifactHandoffError && error.recoveryPossible !== true) {
-          new TaskSourceFailureObservation({ request: handoffRequest, error, mutationAuthority: workerArtifactAuthority, agentError }).record(ctx.flowManager);
+        if (sourcePlan?.disposition === "preserve" && error.recoveryPossible !== true) {
+          new TaskSourceFailureObservation({ request: handoffRequest, error, mutationAuthority: workerArtifactAuthority, agentError }).record(ctx.flowManager, {
+            sourceHandoffSettlement: this.handoffCoordinator.createSourceFailureSettlement({ ctx, request: handoffRequest, plan: sourcePlan }),
+          });
         }
         if (!holdsSpecRepairMetric) await deferredMetric.flush();
         if (!(error instanceof WorkerArtifactHandoffError)) throw error;
-        const rejected = quarantineRejectedWorkerHandoff(this.handoffCoordinator, handoffRequest, error);
+        const rejected = quarantineRejectedWorkerHandoff(this.handoffCoordinator, handoffRequest, error, sourcePlan);
         const reported = agentError && rejected instanceof WorkerArtifactHandoffError
           ? new WorkerArtifactHandoffError(
               rejected.classification,
@@ -1462,6 +1503,7 @@ export default class RunDispatchCommand extends FlowCommand {
           : rejected;
         return {
           error: reported,
+          sourceRetryAllowed: sourcePlan?.retryAfterSettlement === true,
           handoffRequest,
           agentError,
           supervisorEvents,
@@ -1969,6 +2011,7 @@ export default class RunDispatchCommand extends FlowCommand {
         if (
           attempt.error.retryable !== true
           || !attempt.handoffRequest
+          || (attempt.handoffRequest.policy.kind === "source" && attempt.sourceRetryAllowed !== true)
         ) {
           discardDeferredMetrics(deferredMetrics);
           return this.failure(

@@ -690,6 +690,7 @@ export class TaskReviewCanonicalObservationBoundary {
       canonicalSnapshot: WorkerArtifactRepositoryMutationSnapshot.capture({
         root: location.directory,
         authorities: ["canonical"],
+        runtimeLocks: taskReviewPublicationRuntimeLocks(flowManager, specId),
       }),
     });
   }
@@ -790,7 +791,9 @@ class TaskReviewPersistedCanonicalObservation {
     try { document = JSON.parse(input.assertSnapshot(workUnit.root).bytes.toString("utf8")); }
     catch (cause) { throw new Error(`Task Review canonical observation is unreadable: ${cause.message}`); }
     try {
-      this.observation = SourceWorkerCanonicalObservationAdvance.fromStored(document, { flowManager, specId });
+      this.observation = SourceWorkerCanonicalObservationAdvance.fromStored(document, {
+        canonicalLocation: flowManager.specLocation(specId),
+      });
     } catch (cause) {
       throw new Error(`Task Review canonical observation is invalid: ${cause.message}`);
     }

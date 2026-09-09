@@ -1,3 +1,4 @@
+import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -83,14 +84,9 @@ import {
   WorkerArtifactHandoffCoordinator,
   WorkerArtifactHandoffRequest,
   WorkerArtifactPublicationJournal,
-  WorkerArtifactMutationAuthoritySnapshot,
   WorkerArtifactSemanticInputRevision,
   SourceMutationBaseline,
-  SourceMutationManifest,
   WORKER_ARTIFACT_HANDOFF_REQUEST_ENV,
-  SourceWorkerEffect,
-  captureSourceMutationManifestForParent,
-  sealParentMaterializedSourceWorkerEffect,
   sealWorkerArtifactHandoff,
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
@@ -98,62 +94,20 @@ import { canonicalPlanGateRepairForTarget, inspectCanonicalPlanGateRepair } from
 import RunRecoverTaskExecutionOverrunCommand from "../../../src/flow/lib/run-recover-task-execution-overrun.js";
 import { readTaskExecutionOverrunFacts, readTaskExecutionOverrunFactsFromView } from "../../../src/flow/lib/task-execution-overrun.js";
 
-function emptySourceMutationManifest(manager, specId) {
-  return new SourceMutationManifest({
-    attempt: manager.canonicalState(specId).attempt,
-    baselineDigest: "a".repeat(64),
-    mutations: [],
-  });
-}
-
-function repairSourceMutationManifest(manager, specId, relativePath = "src/example.js") {
-  const attempt = manager.canonicalState(specId).attempt;
-  return new SourceMutationManifest({
-    attempt,
-    baselineDigest: "a".repeat(64),
-    mutations: [{
-      mutationId: SourceMutationManifest.mutationId(attempt, relativePath),
-      path: relativePath,
-      changeKind: "content",
-      beforeDigest: "b".repeat(64),
-      afterDigest: "c".repeat(64),
-    }],
-  });
-}
-
-function confirmTaskImplementationMutation({ repository, manager, specId, requirementId = "R-1", relativePath = "README.md", content }) {
-  const baseline = SourceMutationBaseline.capture({
-    root: repository,
-    attempt: manager.canonicalState(specId).attempt,
-  });
-  fs.writeFileSync(path.join(repository, relativePath), content);
-  const mutationManifest = SourceMutationManifest.capture({ baseline });
-  manager.confirmSourceWorkerHandoff({
-    specId,
-    mutationManifest,
-    handoffDigest: "c".repeat(64),
-    effect: new SourceWorkerEffect({
-      version: 1,
-      stepId: "task-impl",
-      completionStatus: "done",
-      files: [{ requirementId, mutationIds: mutationManifest.mutations.map((entry) => entry.mutationId) }],
-      issues: [],
-      overview: { modules: [], data_flow: [], decisions: [] },
-      triage: null,
-      repair: null,
-    }),
-    result: {
-      outcome: "passed",
-      summary: "Fixture Task implementation changed one allow-listed source file.",
-      confirmedAt: "2026-09-03T00:00:00.000Z",
-      artifactRefs: [],
+function confirmTaskImplementationMutation({ repository, manager, specId, relativePath = "README.md", content }) {
+  completeCanonicalSourceHandoff({
+    root: repository, manager, specId, stepId: "task-impl", taskId: "T-1",
+    mutate: () => fs.writeFileSync(path.join(repository, relativePath), content),
+    effect: {
+      version: 1, stepId: "task-impl", completionStatus: "done", issues: [],
+      overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null,
+      noChangeReason: null,
     },
   });
   manager.updateStepStatus(
     { stepId: "T-1-review", requestedStatus: "in_progress" },
     { specId },
   );
-  return mutationManifest;
 }
 
 function currentTaskSourceFingerprint(manager, specId, taskId = "T-1") {
@@ -259,6 +213,21 @@ function canonicalTaskReviewFinding(finding) {
     fingerprint,
     repeatCount: Number.isSafeInteger(finding.repeatCount) ? finding.repeatCount : 1,
   };
+}
+
+function publishImplementationRepairFinding(manager, specId) {
+  const finding = canonicalTaskReviewFinding({
+    findingKey: "finding-1", title: "Required implementation correction",
+    failureMode: "required_behavior", file: "src/example.js", requirementId: "R1",
+    issue: "The required behavior is absent.", suggestion: "Apply the implementation correction.",
+    disposition: "must-fix", rationale: "The accepted requirement must be implemented.",
+  });
+  publishAttemptArtifact(manager, specId, "impl-review", "impl.review", {
+    version: 1, phase: "impl", runId: manager.load(specId).runId, taskId: null,
+    planRewindAt: null, verdict: "REJECTED",
+    summary: { blocking: 1, nonBlocking: 0, total: 1 },
+    blockingFindings: [finding], nonBlockingImprovements: [], repairFingerprint: "a".repeat(64),
+  });
 }
 
 async function publishTaskReview({ repository, manager, specId, blockingFindings = [] }) {
@@ -935,7 +904,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     try {
       assert.throws(
         () => manager._store.runtime.load(specId),
-        (error) => error?.code === "FLOW_STATE_ATOMIC_BUSY",
+        (error) => error?.code === "CURRENT_FLOW_STATE_LOCK_REENTRANT"
+          && error.lockStatus === "reentrant",
       );
     } finally {
       directStore.lock.release();
@@ -1550,47 +1520,33 @@ describe("FlowManager canonical Version-1 runtime", () => {
 
     const state = manager.load(created.specId);
     assert.equal(state.currentNodeId, "impl-triage");
-    const coordinator = new WorkerArtifactHandoffCoordinator({
+    const { reconciliation } = completeCanonicalSourceHandoff({
+      root: repository, manager, specId: created.specId, stepId: "impl-triage",
       now: () => new Date("2026-08-18T00:00:00.000Z"),
-    });
-    const handoff = coordinator.createRequest({
-      ctx,
-      state,
-      invocation: {
-        id: "acceptance-hard-blocker-triage",
-        action: {
-          digest: crypto.createHash("sha256").update("acceptance-hard-blocker-triage").digest("hex"),
-          nextAction: { step: "impl-triage", taskId: null },
-        },
+      mutate: (handoff) => {
+        assert.deepEqual(handoff.inputs.map((input) => input.name), ["spec.json", "acceptance-review.json", "approved-finding-exceptions.json"]);
+        assert.deepEqual(handoff.inputs[1].document.hardBlockers.map((entry) => entry.findingId), [
+          "DF-acceptance-a", "DF-acceptance-b",
+        ]);
       },
-    });
-    assert.deepEqual(handoff.inputs.map((input) => input.name), ["spec.json", "acceptance-review.json", "approved-finding-exceptions.json"]);
-    assert.deepEqual(handoff.inputs[1].document.hardBlockers.map((entry) => entry.findingId), [
-      "DF-acceptance-a", "DF-acceptance-b",
-    ]);
-    const authority = WorkerArtifactMutationAuthoritySnapshot.capture(handoff);
-    const effect = new SourceWorkerEffect({
-      version: 1,
-      stepId: "impl-triage",
-      completionStatus: "done",
-      requirements: [],
-      files: [],
-      issues: [],
-      overview: null,
-      triage: {
+      effect: {
+        noChangeReason: null,
         version: 1,
-        dispositions: [
-          { findingKey: "requirement:R-1", disposition: "apply", basis: "repair-required", rationale: "The failed requirement needs an implementation repair." },
-          { findingKey: "hard-blocker:DF-acceptance-a", disposition: "apply", basis: "repair-required", rationale: "The first canonical blocker requires repair." },
-          { findingKey: "hard-blocker:DF-acceptance-b", disposition: "apply", basis: "repair-required", rationale: "The second canonical blocker requires repair." },
-        ],
+        stepId: "impl-triage",
+        completionStatus: "done",
+        issues: [],
+        overview: null,
+        triage: {
+          version: 1,
+          dispositions: [
+            { findingKey: "requirement:R-1", disposition: "apply", basis: "repair-required", rationale: "The failed requirement needs an implementation repair." },
+            { findingKey: "hard-blocker:DF-acceptance-a", disposition: "apply", basis: "repair-required", rationale: "The first canonical blocker requires repair." },
+            { findingKey: "hard-blocker:DF-acceptance-b", disposition: "apply", basis: "repair-required", rationale: "The second canonical blocker requires repair." },
+          ],
+        },
+        repair: null,
       },
-      repair: null,
     });
-    fs.writeFileSync(handoff.payloadPath("effects.json"), `${JSON.stringify(effect.toJSON(), null, 2)}\n`);
-    captureSourceMutationManifestForParent({ request: handoff });
-    sealParentMaterializedSourceWorkerEffect({ request: handoff, now: () => new Date("2026-08-18T00:00:01.000Z") });
-    const reconciliation = coordinator.reconcile({ ctx, request: handoff, mutationAuthority: authority });
     assert.equal(reconciliation.completed, true);
 
     const reloadedManager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
@@ -1642,15 +1598,19 @@ describe("FlowManager canonical Version-1 runtime", () => {
         specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, { specId }),
       }));
       manager.addActiveFlow(created.specId, "direct");
-      advanceTo(manager, created.specId, "impl-triage");
-      const handoffDigest = scenario.disposition === "apply" ? "a".repeat(64) : "b".repeat(64);
-      manager.confirmSourceWorkerHandoff({
-        specId: created.specId,
-        effect: new SourceWorkerEffect({
+      advanceTo(manager, created.specId, "impl-triage", {
+        onActive(stepId) {
+          if (stepId === "impl-review") publishImplementationRepairFinding(manager, created.specId);
+        },
+      });
+      completeCanonicalSourceHandoff({
+        root: repository, manager, specId: created.specId, stepId: "impl-triage",
+        effect: {
+          noChangeReason: null,
           version: 1,
           stepId: "impl-triage",
           completionStatus: "done",
-          files: [], issues: [], overview: null, repair: null,
+          issues: [], overview: null, repair: null,
           triage: {
             version: 1,
             dispositions: [{
@@ -1660,17 +1620,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
               rationale: "The canonical triage route has a fixed target.",
             }],
           },
-        }),
-        mutationManifest: emptySourceMutationManifest(manager, created.specId),
-        handoffDigest,
-        result: {
-          outcome: "passed",
-          summary: "Worker handoff confirmed for impl-triage.",
-          confirmedAt: "2026-08-18T00:00:00.000Z",
-          artifactRefs: [
-            { kind: "worker-handoff", id: handoffDigest },
-            { kind: "worker-handoff-request", id: "c".repeat(64) },
-          ],
         },
       });
       const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
@@ -1746,10 +1695,11 @@ describe("FlowManager canonical Version-1 runtime", () => {
         );
       },
     });
-    manager.confirmSourceWorkerHandoff({
-      specId,
-      effect: new SourceWorkerEffect({
-        version: 1, stepId: "impl-triage", completionStatus: "done", files: [], issues: [], overview: null, repair: null,
+    completeCanonicalSourceHandoff({
+      root: repository, manager, specId, stepId: "impl-triage",
+      effect: {
+        noChangeReason: null,
+        version: 1, stepId: "impl-triage", completionStatus: "done", issues: [], overview: null, repair: null,
         triage: {
           version: 1,
           dispositions: [repairedFinding, rejectedFinding].map((entry) => ({
@@ -1759,31 +1709,24 @@ describe("FlowManager canonical Version-1 runtime", () => {
             rationale: "The finding requires a material implementation repair.",
           })),
         },
-      }),
-      mutationManifest: emptySourceMutationManifest(manager, specId),
-      handoffDigest: "a".repeat(64),
-      result: { outcome: "passed", summary: "triage", confirmedAt: "2026-08-18T00:00:00.000Z", artifactRefs: [] },
+      },
     });
-    const firstRepairManifest = repairSourceMutationManifest(manager, specId);
-    manager.confirmSourceWorkerHandoff({
-      specId,
-      effect: new SourceWorkerEffect({
-        version: 1, stepId: "impl-repair", completionStatus: "done",
-        files: [{ requirementId: "R1", mutationIds: [firstRepairManifest.mutations[0].mutationId] }],
-        issues: [], overview: null, triage: null,
+    completeCanonicalSourceHandoff({
+      root: repository, manager, specId, stepId: "impl-repair",
+      mutate: () => {
+        fs.mkdirSync(path.join(repository, "src"), { recursive: true });
+        fs.writeFileSync(path.join(repository, "src/example.js"), "export const repaired = true;\n");
+      },
+      effect: {
+        noChangeReason: null,
+        version: 1, stepId: "impl-repair", completionStatus: "done", issues: [], overview: null, triage: null,
         repair: {
           version: 1,
-          appliedFindingKeys: ["repair-me", "do-not-repair"],
-          findingMutations: ["repair-me", "do-not-repair"].map((findingKey) => ({
-            findingKey,
-            mutationIds: [firstRepairManifest.mutations[0].mutationId],
-          })),
+          findings: ["repair-me", "do-not-repair"].map((findingKey) => ({ findingKey, paths: ["src/example.js"] })),
           summary: "Applied the required implementation repairs.",
+          recurrenceResolutions: [],
         },
-      }),
-      mutationManifest: firstRepairManifest,
-      handoffDigest: "b".repeat(64),
-      result: { outcome: "passed", summary: "repair", confirmedAt: "2026-08-18T00:01:00.000Z", artifactRefs: [] },
+      },
     });
     const settleThroughImplementationReview = (findings, repairFingerprint) => {
       const cycleLeaves = leaves(manager.load(specId).steps);
@@ -1801,10 +1744,11 @@ describe("FlowManager canonical Version-1 runtime", () => {
     settleThroughImplementationReview([repairedFinding, rejectedFinding], "b".repeat(64));
     assert.equal(manager.load(specId).currentNodeId, null);
     manager.updateStepStatus({ stepId: "impl-triage", requestedStatus: "in_progress" }, { specId });
-    manager.confirmSourceWorkerHandoff({
-      specId,
-      effect: new SourceWorkerEffect({
-        version: 1, stepId: "impl-triage", completionStatus: "done", files: [], issues: [], overview: null, repair: null,
+    completeCanonicalSourceHandoff({
+      root: repository, manager, specId, stepId: "impl-triage",
+      effect: {
+        noChangeReason: null,
+        version: 1, stepId: "impl-triage", completionStatus: "done", issues: [], overview: null, repair: null,
         triage: {
           version: 1,
           dispositions: [
@@ -1812,38 +1756,26 @@ describe("FlowManager canonical Version-1 runtime", () => {
             { findingKey: "do-not-repair", disposition: "reject", basis: "finding-invalid", rationale: "This recurring finding is not accepted for repair." },
           ],
         },
-      }),
-      mutationManifest: emptySourceMutationManifest(manager, specId),
-      handoffDigest: "c".repeat(64),
-      result: { outcome: "passed", summary: "recurring triage", confirmedAt: "2026-08-18T00:02:00.000Z", artifactRefs: [] },
-    });
-    assert.equal(manager.load(specId).currentNodeId, "impl-repair");
-    const handoff = new WorkerArtifactHandoffCoordinator().createRequest({
-      ctx: { root: repository, executionRoot: repository, mainRoot: repository, specId, flowManager: manager },
-      state: manager.load(specId),
-      invocation: {
-        id: "recurring-impl-repair",
-        target: { digest: "d".repeat(64) },
-        action: { digest: "e".repeat(64), nextAction: { step: "impl-repair" } },
       },
     });
-    const recurrenceInput = handoff.inputs.find((entry) => entry.name === "impl-review-recurrence.json");
-    assert.deepEqual(
-      recurrenceInput.document.entries.map((entry) => entry.findingKey),
-      ["repair-me"],
-      "the real impl-repair handoff must omit a recurring finding rejected by current triage",
-    );
-    const recurringRepairManifest = repairSourceMutationManifest(manager, specId);
-    manager.confirmSourceWorkerHandoff({
-      specId,
-      effect: new SourceWorkerEffect({
-        version: 1, stepId: "impl-repair", completionStatus: "done",
-        files: [{ requirementId: "R1", mutationIds: [recurringRepairManifest.mutations[0].mutationId] }],
-        issues: [], overview: null, triage: null,
+    assert.equal(manager.load(specId).currentNodeId, "impl-repair");
+    completeCanonicalSourceHandoff({
+      root: repository, manager, specId, stepId: "impl-repair",
+      mutate: (handoff) => {
+        const recurrenceInput = handoff.inputs.find((entry) => entry.name === "impl-review-recurrence.json");
+        assert.deepEqual(
+          recurrenceInput.document.entries.map((entry) => entry.findingKey),
+          ["repair-me"],
+          "the real impl-repair handoff must omit a recurring finding rejected by current triage",
+        );
+        fs.writeFileSync(path.join(repository, "src/example.js"), "export const repaired = 'shared boundary';\n");
+      },
+      effect: {
+        noChangeReason: null,
+        version: 1, stepId: "impl-repair", completionStatus: "done", issues: [], overview: null, triage: null,
         repair: {
           version: 1,
-          appliedFindingKeys: ["repair-me"],
-          findingMutations: [{ findingKey: "repair-me", mutationIds: [recurringRepairManifest.mutations[0].mutationId] }],
+          findings: [{ findingKey: "repair-me", paths: ["src/example.js"] }],
           summary: "Applied a different strategy for the recurring finding.",
           recurrenceResolutions: [{
             findingKey: "repair-me",
@@ -1852,10 +1784,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
             repairStrategy: "Move the correction to the shared behavior boundary.",
           }],
         },
-      }),
-      mutationManifest: recurringRepairManifest,
-      handoffDigest: "f".repeat(64),
-      result: { outcome: "passed", summary: "recurring repair", confirmedAt: "2026-08-18T00:03:00.000Z", artifactRefs: [] },
+      },
     });
     const status = new GetStatusCommand().execute({
       root: repository,
@@ -2714,7 +2643,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     raceArmed = true;
     raced.manager.applyTestChainTransitionDecision({ specId: raced.created.specId, decision: racedDecision });
     assert.equal(rawRaceAttempts, 1);
-    assert.equal(rawRaceError?.code, "FLOW_ARTIFACT_CATALOG_BUSY");
+    assert.equal(rawRaceError?.code, "PROCESS_LOCK_REENTRANT");
+    assert.equal(rawRaceError?.lockStatus, "reentrant");
     assert.deepEqual(raced.manager.readRuntimeArtifact({
       specId: raced.created.specId, logicalKey: "scenario.validity.raw-log", consumerNodeId: "scenario-validity",
     }).bytes, stableRaw);
@@ -5100,13 +5030,15 @@ describe("FlowManager canonical Version-1 runtime", () => {
 
   it("records a material impl repair and invalidates to one replacement test-execute Attempt", () => {
     const repository = root();
+    initializeReviewSource(repository);
     const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     const created = manager.createFresh(request("001-canonical-impl-repair", {
       specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, { specId: "001-canonical-impl-repair" }),
     }));
     manager.addActiveFlow(created.specId, "direct");
-    advanceTo(manager, created.specId, "impl-repair", {
+    advanceTo(manager, created.specId, "impl-triage", {
       onActive(stepId) {
+        if (stepId === "impl-review") publishImplementationRepairFinding(manager, created.specId);
         if (stepId === "implement") manager.updateFileMap({
           specId: created.specId,
           requirementId: "R1",
@@ -5114,28 +5046,35 @@ describe("FlowManager canonical Version-1 runtime", () => {
         });
       },
     });
-    const confirmedAt = "2026-08-13T00:00:00.000Z";
-    const repairManifest = repairSourceMutationManifest(manager, created.specId);
-    manager.confirmSourceWorkerHandoff({
-      specId: created.specId,
-      effect: new SourceWorkerEffect({
-        version: 1,
-        stepId: "impl-repair",
-        completionStatus: "done",
-        files: [{ requirementId: "R1", mutationIds: [repairManifest.mutations[0].mutationId] }],
-        issues: [], overview: null, triage: null,
+    completeCanonicalSourceHandoff({
+      root: repository, manager, specId: created.specId, stepId: "impl-triage",
+      effect: {
+        version: 1, stepId: "impl-triage", completionStatus: "done", issues: [],
+        overview: null, repair: null, noChangeReason: null,
+        triage: {
+          version: 1,
+          dispositions: [{
+            findingKey: "finding-1", disposition: "apply", basis: "repair-required",
+            rationale: "The reviewed correction requires an implementation repair.",
+          }],
+        },
+      },
+    });
+    completeCanonicalSourceHandoff({
+      root: repository, manager, specId: created.specId, stepId: "impl-repair",
+      mutate: () => {
+        fs.mkdirSync(path.join(repository, "src"), { recursive: true });
+        fs.writeFileSync(path.join(repository, "src/example.js"), "export const repaired = true;\n");
+      },
+      effect: {
+        noChangeReason: null,
+        version: 1, stepId: "impl-repair", completionStatus: "done", issues: [], overview: null, triage: null,
         repair: {
           version: 1,
-          appliedFindingKeys: ["finding-1"],
-          findingMutations: [{ findingKey: "finding-1", mutationIds: [repairManifest.mutations[0].mutationId] }],
+          findings: [{ findingKey: "finding-1", paths: ["src/example.js"] }],
           summary: "Applied the reviewed implementation correction.",
+          recurrenceResolutions: [],
         },
-      }),
-      mutationManifest: repairManifest,
-      handoffDigest: "a".repeat(64),
-      result: {
-        outcome: "passed", summary: "Worker handoff confirmed for impl-repair.", confirmedAt,
-        artifactRefs: [{ kind: "worker-handoff", id: "a".repeat(64) }, { kind: "worker-handoff-request", id: "b".repeat(64) }],
       },
     });
     const state = manager.load(created.specId);
@@ -5885,13 +5824,12 @@ describe("FlowManager canonical Version-1 runtime", () => {
     manager.addActiveFlow(created.specId, "direct");
     advanceTo(manager, created.specId, "T-1-impl");
     const before = currentSpecRevisionAuthority(manager, created.specId);
-    manager.confirmSourceWorkerHandoff({
-      specId: created.specId,
-      effect: new SourceWorkerEffect({
+    completeCanonicalSourceHandoff({
+      root: repository, manager, specId: created.specId, stepId: "task-impl", taskId: "T-1",
+      effect: {
         version: 1,
         stepId: "task-impl",
         completionStatus: "done",
-        files: [],
         issues: [],
         overview: {
           modules: ["src/flow/lib/source-worker-spec-completion.js"],
@@ -5900,14 +5838,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
         },
         triage: null,
         repair: null,
-      }),
-      mutationManifest: emptySourceMutationManifest(manager, created.specId),
-      handoffDigest: "a".repeat(64),
-      result: {
-        outcome: "passed",
-        summary: "Source worker Task implementation completed.",
-        confirmedAt: "2026-08-29T00:00:00.000Z",
-        artifactRefs: [],
+        noChangeReason: "The fixture Task contribution requires no source change.",
       },
     });
     const after = currentSpecRevisionAuthority(manager, created.specId);
@@ -5929,25 +5860,18 @@ describe("FlowManager canonical Version-1 runtime", () => {
     manager.addActiveFlow(created.specId, "direct");
     advanceTo(manager, created.specId, "implement");
     const before = currentSpecRevisionAuthority(manager, created.specId);
-    manager.confirmSourceWorkerHandoff({
-      specId: created.specId,
-      effect: new SourceWorkerEffect({
+    completeCanonicalSourceHandoff({
+      root: repository, manager, specId: created.specId, stepId: "implement",
+      mutate: () => fs.writeFileSync(path.join(repository, "implementation.js"), "export const implemented = true;\n"),
+      effect: {
+        noChangeReason: null,
         version: 1,
         stepId: "implement",
         completionStatus: "done",
-        files: [],
         issues: [],
         overview: null,
         triage: null,
         repair: null,
-      }),
-      mutationManifest: emptySourceMutationManifest(manager, created.specId),
-      handoffDigest: "b".repeat(64),
-      result: {
-        outcome: "passed",
-        summary: "Flow-level source worker implementation completed.",
-        confirmedAt: "2026-08-29T00:00:00.000Z",
-        artifactRefs: [],
       },
     });
     const after = currentSpecRevisionAuthority(manager, created.specId);
@@ -7501,7 +7425,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
       repository,
       manager,
       specId,
-      requirementId: "R-T-1",
       content: "Task implementation round 1\n",
     });
     const firstReview = await publishTaskReview({ repository, manager, specId });
@@ -7518,7 +7441,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
       repository,
       manager,
       specId,
-      requirementId: "R-T-1",
       content: "Task implementation round 2\n",
     });
     const roundTwoImplementationState = manager.canonicalState(specId);
@@ -7689,17 +7611,12 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const beforeAttemptThreeHandoff = {
       state: manager.canonicalState(specId).toJSON(), activities: manager.activityLedger(specId),
     };
-    assert.throws(() => manager.confirmSourceWorkerHandoff({
-      specId,
-      mutationManifest: emptySourceMutationManifest(manager, specId),
-      handoffDigest: "d".repeat(64),
-      effect: new SourceWorkerEffect({
-        version: 1, stepId: "task-impl", completionStatus: "done", files: [], issues: [],
+    assert.throws(() => completeCanonicalSourceHandoff({
+      root: repository, manager, specId, stepId: "task-impl", taskId: "T-1",
+      effect: {
+        version: 1, stepId: "task-impl", completionStatus: "done", issues: [],
         overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null,
         noChangeReason: "The stale Attempt is not an admitted Task execution round.",
-      }),
-      result: {
-        outcome: "passed", summary: "must not accept stale Task Attempt", confirmedAt: "2026-09-04T00:00:00.000Z", artifactRefs: [],
       },
     }), /round|budget|Task execution/);
     assert.deepEqual(manager.canonicalState(specId).toJSON(), beforeAttemptThreeHandoff.state);
@@ -8517,23 +8434,13 @@ describe("FlowManager canonical Version-1 runtime", () => {
       taskId: "T-1",
       targetStep: "task-impl",
     }).create();
-    const manifest = emptySourceMutationManifest(manager, specId);
-    manager.confirmSourceWorkerHandoff({
-      specId,
-      mutationManifest: manifest,
-      handoffDigest: "c".repeat(64),
-      effect: new SourceWorkerEffect({
-        version: 1,
-        stepId: "task-impl",
-        completionStatus: "done",
-        files: [],
-        issues: [],
-        overview: { modules: [], data_flow: [], decisions: [] },
-        triage: null,
-        repair: null,
+    completeCanonicalSourceHandoff({
+      root: repository, manager, specId, stepId: "task-impl", taskId: "T-1",
+      effect: {
+        version: 1, stepId: "task-impl", completionStatus: "done", issues: [],
+        overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null,
         noChangeReason: "The requested implementation is already present.",
-      }),
-      result: { outcome: "passed", summary: "No source change.", confirmedAt: "2026-09-01T00:00:00.000Z", artifactRefs: [] },
+      },
     });
     const before = manager.taskMutationLineages({ specId, taskId: "T-1" }).map((entry) => entry.toJSON());
     assert.equal(before.length, 1);

@@ -2,10 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 
 const LOCK_VERSION = 1;
 const MAX_LOCK_BYTES = 64 * 1024;
 const MAX_ACQUIRE_ATTEMPTS = 4;
+const MAX_OWNER_OBSERVATION_ATTEMPTS = 4;
 const OWNER_TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function sameFile(left, right) {
@@ -14,8 +16,8 @@ function sameFile(left, right) {
 
 function defaultErrorFactory(status, message, { lockPath, cause } = {}) {
   const error = new Error(message, { cause });
-  error.name = "ProcessOwnedLockError";
-  error.code = `PROCESS_OWNED_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
+  error.name = "ProcessLockError";
+  error.code = `PROCESS_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
   error.lockPath = lockPath;
   return error;
 }
@@ -76,11 +78,12 @@ function residueAt(filePath, cleanupErrors) {
   }
 }
 
-export class ProcessOwnedLockTransitionError extends Error {
+export class ProcessLockTransitionError extends Error {
   constructor(message, {
     cause,
     code,
     phase,
+    lockStatus,
     lockPath,
     owner,
     publishedToVisibleName,
@@ -88,9 +91,10 @@ export class ProcessOwnedLockTransitionError extends Error {
     residue,
   }) {
     super(message, { cause });
-    this.name = "ProcessOwnedLockTransitionError";
+    this.name = "ProcessLockTransitionError";
     this.code = code;
     this.phase = phase;
+    this.lockStatus = lockStatus;
     this.lockPath = lockPath;
     this.owner = ownerSnapshot(owner);
     this.publishedToVisibleName = publishedToVisibleName;
@@ -99,94 +103,14 @@ export class ProcessOwnedLockTransitionError extends Error {
   }
 }
 
-export class RealDirectoryAuthority {
-  constructor(directory, {
-    create = false,
-    parentAuthority = null,
-    errorFactory = defaultErrorFactory,
-  } = {}) {
-    this.directory = path.resolve(directory);
-    if (parentAuthority !== null && !(parentAuthority instanceof RealDirectoryAuthority)) {
-      throw new Error("lock directory parent authority must be a RealDirectoryAuthority");
-    }
-    if (parentAuthority !== null && path.dirname(this.directory) !== parentAuthority.directory) {
-      throw new Error("lock directory parent authority must own its direct parent");
-    }
-    this.create = create;
-    this.parentAuthority = parentAuthority;
-    this.errorFactory = errorFactory;
-    this.identity = null;
-    this.#captureIfPresent();
-  }
-
-  ensure() {
-    this.parentAuthority?.assertStable();
-    if (this.identity == null) {
-      if (!this.create) this.#fail("authority-invalid", `lock directory is unavailable: ${this.directory}`);
-      try {
-        fs.mkdirSync(this.directory);
-      } catch (cause) {
-        if (cause.code !== "EEXIST") {
-          this.#fail("authority-invalid", `lock directory creation failed: ${this.directory}`, cause);
-        }
-      }
-      this.#capture();
-    }
-    this.assertStable();
-    return this.directory;
-  }
-
-  assertStable() {
-    this.parentAuthority?.assertStable();
-    const stat = this.#validatedStat();
-    if (this.identity && !sameFile(stat, this.identity)) {
-      this.#fail("authority-invalid", `lock directory identity changed: ${this.directory}`);
-    }
-    if (this.identity == null) this.identity = { dev: stat.dev, ino: stat.ino };
-    return this.directory;
-  }
-
-  #captureIfPresent() {
-    try {
-      fs.lstatSync(this.directory);
-    } catch (cause) {
-      if (cause.code === "ENOENT") return;
-      this.#fail("authority-invalid", `lock directory is unavailable: ${this.directory}`, cause);
-    }
-    this.#capture();
-  }
-
-  #capture() {
-    const stat = this.#validatedStat();
-    this.identity = { dev: stat.dev, ino: stat.ino };
-  }
-
-  #validatedStat() {
-    let stat;
-    try {
-      stat = fs.lstatSync(this.directory);
-      // A validated direct parent already proves every ancestor is real. The
-      // child lstat is therefore sufficient to exclude the only remaining
-      // symlink boundary without repeating a full realpath walk.
-      if (
-        !stat.isDirectory()
-        || stat.isSymbolicLink()
-        || (this.parentAuthority === null && fs.realpathSync(this.directory) !== this.directory)
-      ) {
-        throw new Error("lock authority must be a real directory");
-      }
-    } catch (cause) {
-      this.#fail("authority-invalid", `invalid lock directory authority: ${this.directory}`, cause);
-    }
-    return stat;
-  }
-
-  #fail(status, message, cause) {
-    throw this.errorFactory(status, message, { lockPath: this.directory, cause });
+class ProcessLockOwnerObservationChanged extends Error {
+  constructor(message, { cause } = {}) {
+    super(message, { cause });
+    this.name = "ProcessLockOwnerObservationChanged";
   }
 }
 
-class ProcessOwnedLockOwner {
+class ProcessLockOwner {
   constructor({ kind, authority, processIdentity }) {
     this.version = LOCK_VERSION;
     this.kind = kind;
@@ -206,13 +130,13 @@ class ProcessOwnedLockOwner {
   }
 }
 
-export class ProcessOwnedLock {
+export class ProcessLock {
   static ownerTemporaryFileName(fileName, ownerToken) {
     if (typeof fileName !== "string" || fileName === "" || path.basename(fileName) !== fileName) {
-      throw new Error("process-owned lock fileName must be a basename");
+      throw new Error("process lock fileName must be a basename");
     }
     if (typeof ownerToken !== "string" || !OWNER_TOKEN_PATTERN.test(ownerToken)) {
-      throw new Error("process-owned lock ownerToken must be a UUID");
+      throw new Error("process lock ownerToken must be a UUID");
     }
     return `.${fileName}.${ownerToken}.owner.tmp`;
   }
@@ -233,6 +157,9 @@ export class ProcessOwnedLock {
     processIdentitySource = new ProcessIdentitySource(),
     errorFactory = defaultErrorFactory,
   }) {
+    if (!(directoryAuthority instanceof RealDirectoryAuthority)) {
+      throw new Error("process lock directoryAuthority must be a RealDirectoryAuthority");
+    }
     this.directoryAuthority = directoryAuthority;
     this.directory = directoryAuthority.directory;
     this.lockPath = path.join(this.directory, fileName);
@@ -245,11 +172,11 @@ export class ProcessOwnedLock {
     this.lockIdentity = null;
   }
 
-  acquire({ claimStale = false } = {}) {
+  acquire() {
     const initial = fs.existsSync(this.directory) ? this.inspect() : null;
     if (initial) {
       const assessment = this.processIdentitySource.assess(initial.owner.processIdentity);
-      if (assessment.status !== "stale" || !claimStale) {
+      if (assessment.status !== "stale") {
         throw this.conflict(initial.owner, assessment);
       }
     }
@@ -259,7 +186,7 @@ export class ProcessOwnedLock {
       const existing = this.inspect();
       if (existing) {
         const assessment = this.processIdentitySource.assess(existing.owner.processIdentity);
-        if (assessment.status !== "stale" || !claimStale) {
+        if (assessment.status !== "stale") {
           throw this.conflict(existing.owner, assessment);
         }
         if (!this.#removeStale(existing)) continue;
@@ -278,19 +205,32 @@ export class ProcessOwnedLock {
   }
 
   inspect() {
-    this.directoryAuthority.assertStable();
-    let stat;
-    try {
-      stat = fs.lstatSync(this.lockPath);
-    } catch (cause) {
-      if (cause.code === "ENOENT") return null;
-      throw this.#error("corrupt", `process-owned lock is unreadable: ${cause.message}`, cause);
+    let observationChanged = null;
+    for (let attempt = 0; attempt < MAX_OWNER_OBSERVATION_ATTEMPTS; attempt += 1) {
+      this.directoryAuthority.assertStable();
+      let stat;
+      try {
+        stat = fs.lstatSync(this.lockPath);
+      } catch (cause) {
+        if (cause.code === "ENOENT") return null;
+        throw this.#error("corrupt", `process-owned lock is unreadable: ${cause.message}`, cause);
+      }
+      try {
+        return { owner: this.#readOwner(stat), stat: { dev: stat.dev, ino: stat.ino } };
+      } catch (cause) {
+        if (!(cause instanceof ProcessLockOwnerObservationChanged)) throw cause;
+        observationChanged = cause;
+      }
     }
-    return { owner: this.#readOwner(stat), stat: { dev: stat.dev, ino: stat.ino } };
+    throw this.#error(
+      "transition-failed",
+      `process-owned lock changed during owner observation: ${this.lockPath}`,
+      observationChanged,
+    );
   }
 
   conflict(owner, assessment = this.processIdentitySource.assess(owner.processIdentity)) {
-    return this.#error(assessment.status, assessment.reason);
+    return this.#error(assessment.status, assessment.reason, undefined, owner);
   }
 
   release() {
@@ -348,7 +288,7 @@ export class ProcessOwnedLock {
     const token = crypto.randomUUID();
     const tempPath = path.join(
       this.directory,
-      ProcessOwnedLock.ownerTemporaryFileName(path.basename(this.lockPath), token),
+      ProcessLock.ownerTemporaryFileName(path.basename(this.lockPath), token),
     );
     let descriptor = null;
     let published = false;
@@ -356,7 +296,7 @@ export class ProcessOwnedLock {
     let phase = "owner-temp-open";
     try {
       this.processIdentity = this.processIdentitySource.createOwner(token);
-      owner = new ProcessOwnedLockOwner({
+      owner = new ProcessLockOwner({
         kind: this.kind,
         authority: this.authority,
         processIdentity: this.processIdentity,
@@ -510,17 +450,29 @@ export class ProcessOwnedLock {
 
   #readOwner(stat) {
     let descriptor = null;
+    let owner = null;
+    let failure = null;
     try {
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_LOCK_BYTES) {
         throw new Error("process-owned lock must be a bounded regular file");
       }
-      descriptor = fs.openSync(
-        this.lockPath,
-        fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0),
-      );
+      try {
+        descriptor = fs.openSync(
+          this.lockPath,
+          fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0),
+        );
+      } catch (cause) {
+        if (cause.code === "ENOENT") {
+          throw new ProcessLockOwnerObservationChanged("process-owned lock disappeared while opening its owner record", { cause });
+        }
+        throw cause;
+      }
       const openedStat = fs.fstatSync(descriptor);
-      if (!sameFile(stat, openedStat) || !openedStat.isFile() || openedStat.size > MAX_LOCK_BYTES) {
-        throw new Error("process-owned lock identity changed while reading");
+      if (!sameFile(stat, openedStat)) {
+        throw new ProcessLockOwnerObservationChanged("process-owned lock identity changed while opening its owner record");
+      }
+      if (!openedStat.isFile() || openedStat.size > MAX_LOCK_BYTES) {
+        throw new Error("process-owned lock must be a bounded regular file");
       }
       const value = JSON.parse(fs.readFileSync(descriptor, "utf8"));
       const actualAuthority = Object.fromEntries(
@@ -533,20 +485,47 @@ export class ProcessOwnedLock {
       ) {
         throw new Error("process-owned lock authority is invalid");
       }
-      return new ProcessOwnedLockOwner({
+      owner = new ProcessLockOwner({
         kind: value.kind,
         authority: actualAuthority,
         processIdentity: value.processIdentity,
       });
     } catch (cause) {
-      throw this.#error("corrupt", `process-owned lock is corrupt: ${cause.message}`, cause);
-    } finally {
-      if (descriptor != null) fs.closeSync(descriptor);
+      failure = cause;
     }
+    if (descriptor != null) {
+      try {
+        fs.closeSync(descriptor);
+      } catch (cleanupError) {
+        failure = failure
+          ? orderedFailure(failure, [cleanupError], "process lock owner read and descriptor cleanup both failed")
+          : cleanupError;
+      }
+    }
+    if (failure instanceof ProcessLockOwnerObservationChanged) throw failure;
+    if (failure) throw this.#error("corrupt", `process-owned lock is corrupt: ${failure.message}`, failure, owner);
+    let currentStat;
+    try {
+      currentStat = fs.lstatSync(this.lockPath);
+    } catch (cause) {
+      if (cause.code === "ENOENT") {
+        throw new ProcessLockOwnerObservationChanged("process-owned lock disappeared while reading its owner record", { cause });
+      }
+      throw this.#error("corrupt", `process-owned lock is unreadable: ${cause.message}`, cause, owner);
+    }
+    if (!sameFile(stat, currentStat)) {
+      throw new ProcessLockOwnerObservationChanged("process-owned lock identity changed while reading its owner record");
+    }
+    return owner;
   }
 
-  #error(status, message, cause) {
-    return this.errorFactory(status, message, { lockPath: this.lockPath, cause });
+  #error(status, message, cause, owner = null) {
+    const error = this.errorFactory(status, message, { lockPath: this.lockPath, cause });
+    error.lockStatus = status;
+    error.lockPath = this.lockPath;
+    error.owner = ownerSnapshot(owner);
+    if (!("cause" in error)) error.cause = cause ?? null;
+    return error;
   }
 
   #transitionError({
@@ -562,10 +541,11 @@ export class ProcessOwnedLock {
       ? `process-owned lock durability is uncertain during ${phase}: ${this.lockPath}`
       : `process-owned lock transition failed during ${phase}: ${this.lockPath}`;
     const mapped = this.errorFactory(status, message, { lockPath: this.lockPath, cause });
-    return new ProcessOwnedLockTransitionError(message, {
+    return new ProcessLockTransitionError(message, {
       cause,
-      code: mapped.code || `PROCESS_OWNED_LOCK_${status.replace(/-/g, "_").toUpperCase()}`,
+      code: mapped.code || `PROCESS_LOCK_${status.replace(/-/g, "_").toUpperCase()}`,
       phase,
+      lockStatus: status,
       lockPath: this.lockPath,
       owner,
       publishedToVisibleName,

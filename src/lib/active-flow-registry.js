@@ -15,7 +15,8 @@ import { managedDir } from "./config.js";
 import { runGit } from "./git-helpers.js";
 import { ACTIVE_FLOW_FILE } from "./flow-helpers.js";
 import { AtomicJsonFile } from "./atomic-json-file.js";
-import { ProcessOwnedLock, RealDirectoryAuthority } from "./process-owned-lock.js";
+import { FileLock } from "./file-lock.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import {
   RepositoryFlowOperationLock,
   resolveRepositoryLockRoot,
@@ -318,7 +319,7 @@ export class ActiveFlowRegistry {
     this._processIdentitySource = processIdentitySource;
     const rootErrorFactory = (status, message, { lockPath, cause } = {}) => {
       const error = new Error(message, { cause });
-      error.code = status === "live"
+      error.code = status === "live" || status === "timeout"
         ? "ACTIVE_FLOW_REGISTRY_BUSY"
         : `ACTIVE_FLOW_REGISTRY_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
       error.lockPath = lockPath;
@@ -330,7 +331,7 @@ export class ActiveFlowRegistry {
       parentAuthority: rootAuthority,
       errorFactory: rootErrorFactory,
     });
-    this._lock = new ProcessOwnedLock({
+    this._lock = new FileLock({
       directoryAuthority,
       fileName: REGISTRY_LOCK_FILE,
       kind: "active-flow-registry",
@@ -476,7 +477,11 @@ export class ActiveFlowRegistry {
           if (cause.code !== "REPOSITORY_FLOW_OPERATION_BUSY") throw cause;
           const error = new Error("active-flow registry is blocked by another flow operation", { cause });
           error.code = "ACTIVE_FLOW_REGISTRY_BUSY";
+          error.lockStatus = cause.lockStatus;
           error.lockPath = cause.lockPath;
+          error.owner = cause.owner;
+          if (cause.waitedMs !== undefined) error.waitedMs = cause.waitedMs;
+          if (cause.retryable !== undefined) error.retryable = cause.retryable;
           throw error;
         }
       },
@@ -489,12 +494,7 @@ export class ActiveFlowRegistry {
   #withRegistryLock(body) {
     // Registry mutations always acquire repository flow-operation first.
     // A caller may already hold an unrelated outer transaction lock.
-    return this.#withOwnedLock(
-      () => this._lock.acquire({ claimStale: true }),
-      () => this._lock.release(),
-      body,
-      "active-flow registry body and lock release both failed",
-    );
+    return this._lock.runExclusive(body);
   }
 
   #withOwnedLock(acquire, release, body, aggregateMessage) {
