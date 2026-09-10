@@ -6,7 +6,7 @@ import {
   mergeTaskReviewChunkResponses,
   TASK_REVIEW_PROMPT_CHAR_LIMIT,
 } from "../../src/flow/commands/review.js";
-import { ReviewPromptSize } from "../../src/flow/lib/review-prompt-size.js";
+import { PromptLogicalFootprint as ReviewPromptSize } from "../../src/lib/prompt-batching.js";
 import {
   TaskReviewPromptChunk,
   TaskReviewPromptPlan,

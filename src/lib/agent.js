@@ -41,10 +41,14 @@ import {
   AgentTimeoutFailure,
   EmptyAgentResponseFailure,
 } from "./agent-failure.js";
+import { resolvePromptCharacterLimit } from "./config.js";
+import { PromptInvocationProjectionOverflowFailure } from "./prompt-batching.js";
 
 const DEFAULT_DIRECT_CHILD_EXIT_DRAIN_MS = 250;
 const PROCESS_DEATH_POLL_MS = 10;
 const DEFAULT_STDIN_FALLBACK_THRESHOLD = 100_000;
+export const MAX_AGENT_ARGUMENT_BYTES = (128 * 1024) - 1;
+export const MAX_AGENT_ARGV_BYTES = 256 * 1024;
 const MAX_EXECUTION_ENVIRONMENT_VARIABLES = 64;
 const MAX_EXECUTION_ENVIRONMENT_BYTES = 64 * 1024;
 const MAX_RETRY = 5;
@@ -93,6 +97,141 @@ class AgentExecutionContext {
     this.providerWorkDir = providerWorkDir;
     this.spawnCwd = spawnCwd;
     Object.freeze(this);
+  }
+}
+
+/**
+ * Side-effect-free description of the provider/profile-specific request which
+ * Agent would send. Character accounting is deliberately independent from the
+ * UTF-8 byte accounting used to select argv or stdin transport.
+ */
+export class ResolvedAgentInvocationProjection {
+  constructor({
+    providerKey,
+    profileKey,
+    command,
+    promptCharacterCount,
+    systemPromptCharacterCount,
+    schemaCharacterCount,
+    finalArgs,
+    inlineArgvByteCount,
+    schemaMode,
+    usesStdin,
+  }) {
+    for (const [field, value] of Object.entries({
+      promptCharacterCount,
+      systemPromptCharacterCount,
+      schemaCharacterCount,
+      inlineArgvByteCount,
+    })) {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new Error(`agent invocation projection ${field} must be a non-negative integer`);
+      }
+    }
+    if (!Array.isArray(finalArgs)) throw new Error("agent invocation projection finalArgs must be an array");
+    if (!["none", "inline", "file", "fallback"].includes(schemaMode)) {
+      throw new Error(`unsupported agent invocation projection schemaMode: ${schemaMode}`);
+    }
+    this.providerKey = providerKey;
+    this.profileKey = profileKey;
+    this.command = command;
+    this.promptCharacterCount = promptCharacterCount;
+    this.systemPromptCharacterCount = systemPromptCharacterCount;
+    this.schemaCharacterCount = schemaCharacterCount;
+    this.finalArgs = Object.freeze([...finalArgs]);
+    this.inlineArgvByteCount = inlineArgvByteCount;
+    this.argvByteCount = argvByteLength(this.finalArgs);
+    this.maxArgumentByteCount = argvMaxElementByteLength(this.finalArgs);
+    this.schemaMode = schemaMode;
+    this.usesStdin = usesStdin === true;
+    Object.freeze(this);
+  }
+
+  fits(limit) {
+    return this.promptCharacterCount <= normalizeProjectionCharacterLimit(limit)
+      && this.argvByteCount <= MAX_AGENT_ARGV_BYTES
+      && this.maxArgumentByteCount <= MAX_AGENT_ARGUMENT_BYTES;
+  }
+
+  assertWithinLimit(limit) {
+    const maximum = normalizeProjectionCharacterLimit(limit);
+    if (this.promptCharacterCount > maximum) {
+      throw new PromptInvocationProjectionOverflowFailure(
+        `resolved agent invocation prompt has ${this.promptCharacterCount} characters; limit is ${maximum}`,
+        {
+          actualCharacters: this.promptCharacterCount,
+          maximumCharacters: maximum,
+          providerKey: this.providerKey,
+          profileKey: this.profileKey,
+          schemaMode: this.schemaMode,
+          usesStdin: this.usesStdin,
+        },
+      );
+    }
+    if (this.argvByteCount > MAX_AGENT_ARGV_BYTES || this.maxArgumentByteCount > MAX_AGENT_ARGUMENT_BYTES) {
+      throw new PromptInvocationProjectionOverflowFailure(
+        `resolved agent invocation argv exceeds its safe byte limit; argv=${this.argvByteCount}, maxArgument=${this.maxArgumentByteCount}`,
+        {
+          actualArgvBytes: this.argvByteCount,
+          maximumArgvBytes: MAX_AGENT_ARGV_BYTES,
+          actualArgumentBytes: this.maxArgumentByteCount,
+          maximumArgumentBytes: MAX_AGENT_ARGUMENT_BYTES,
+          providerKey: this.providerKey,
+          profileKey: this.profileKey,
+          schemaMode: this.schemaMode,
+          usesStdin: this.usesStdin,
+        },
+      );
+    }
+    return this;
+  }
+}
+
+class ResolvedAgentInvocationBlueprint {
+  constructor({
+    projection,
+    projectedSchemaPath,
+    schemaContent,
+    missingSchemaProfileFields,
+    executionEnvironment,
+    stdinContent,
+  }) {
+    if (!(projection instanceof ResolvedAgentInvocationProjection)) {
+      throw new Error("resolved agent invocation blueprint requires a projection");
+    }
+    this.projection = projection;
+    this.projectedSchemaPath = projectedSchemaPath;
+    this.schemaContent = schemaContent;
+    this.missingSchemaProfileFields = Object.freeze([...missingSchemaProfileFields]);
+    this.executionEnvironment = Object.freeze({ ...executionEnvironment });
+    this.stdinContent = stdinContent;
+    Object.freeze(this);
+  }
+
+  materialize({ agentWorkDir, commandId }) {
+    let finalArgs = [...this.projection.finalArgs];
+    let pendingSchemaWrite = null;
+    if (this.projectedSchemaPath) {
+      const schemaPath = path.join(agentWorkDir, `schema-${crypto.randomUUID()}.json`);
+      finalArgs = finalArgs.map((argument) => (
+        argument === this.projectedSchemaPath ? schemaPath : argument
+      ));
+      pendingSchemaWrite = { path: schemaPath, content: this.schemaContent };
+    }
+    reportMissingJsonSchemaProfileFields({
+      commandId,
+      profileKey: this.projection.profileKey,
+      missing: this.missingSchemaProfileFields,
+    });
+    const env = { ...process.env, ...this.executionEnvironment };
+    delete env.CLAUDECODE;
+    return {
+      finalArgs,
+      env,
+      stdinContent: this.stdinContent,
+      pendingSchemaWrite,
+      projection: this.projection,
+    };
   }
 }
 
@@ -186,6 +325,10 @@ class Agent {
     this._supervision = supervision || {};
   }
 
+  get promptCharacterLimit() {
+    return resolvePromptCharacterLimit(this._config);
+  }
+
   /**
    * Resolve a profile for the given commandId.
    * Priority: SENNEL_PROFILE env > config.agent.useProfile > default profile > default.
@@ -214,6 +357,28 @@ class Agent {
   }
 
   /**
+   * Resolve and project an invocation without creating directories, schema
+   * files, cache entries, logs, metrics, or provider processes.
+   */
+  projectInvocation(prompt, options = {}) {
+    try {
+      const attempt = AgentResolutionAttempt.from({
+        agentSection: this._config.agent || {},
+        commandId: options.commandId,
+        options,
+        registry: this._registry,
+      });
+      const resolved = this._resolveAttempt(attempt);
+      if (!resolved) {
+        throw new AgentPermissionConfigurationFailure({ message: attempt.formatFailure() });
+      }
+      return this._createInvocationBlueprint(resolved, prompt, options).projection;
+    } catch (error) {
+      throw AgentFailure.from(error).recordAttempts(1, 1);
+    }
+  }
+
+  /**
    * Invoke the resolved AI agent.
    *
    * @param {string} prompt
@@ -228,13 +393,17 @@ class Agent {
    * @param {boolean} [options.waitForProcessTree=false] - Wait for the provider process group to become idle
    * @param {"ambient"|"none"} [options.flowAttribution="ambient"]
    * @param {import("./agent-invocation-metric.js").DeferredAgentInvocationMetric} [options.deferredMetric]
+   * @param {import("./prompt-batching.js").PromptProviderCallAdmission} [options.providerCallAdmission]
    * @param {boolean} [options._dryRun] - Test-only short-circuit
    * @returns {Promise<string>} response text (trimmed)
    */
   async call(prompt, options) {
     const opts = options || {};
-    const flowAttribution = new FlowAttributionPolicy(opts.flowAttribution);
     if (opts._dryRun) return "";
+    const providerCallAdmission = opts.providerCallAdmission ?? null;
+    providerCallAdmission?.claim();
+    try {
+    const flowAttribution = new FlowAttributionPolicy(opts.flowAttribution);
 
     let attempt;
     let resolved;
@@ -264,6 +433,13 @@ class Agent {
     }
 
     const retry = this.providerRetryPolicy(opts);
+    const invocationOptions = {
+      ...opts,
+      executionWorkDir: executionContext.providerWorkDir,
+      spawnCwd: executionContext.spawnCwd,
+    };
+    const invocationBlueprint = this._createInvocationBlueprint(resolved, prompt, invocationOptions);
+    invocationBlueprint.projection.assertWithinLimit(this.promptCharacterLimit);
     const cachePolicy = new PromptCachePolicy(opts.cacheMode);
     const promptCache = flowAttribution.usesFlowState && (cachePolicy.readsCache || cachePolicy.writesCache)
       ? this._resolvePromptCache(resolved, prompt, opts)
@@ -312,12 +488,9 @@ class Agent {
         cacheCandidate = await this._callOnceWithRetry(
           resolved,
           prompt,
-          {
-            ...opts,
-            executionWorkDir: executionContext.providerWorkDir,
-            spawnCwd: executionContext.spawnCwd,
-          },
+          invocationOptions,
           retry,
+          invocationBlueprint,
         );
         return cacheCandidate;
       },
@@ -326,6 +499,9 @@ class Agent {
       await promptCache.cache.set(promptCache.key, text);
     }
     return text;
+    } finally {
+      providerCallAdmission?.settle();
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -412,6 +588,15 @@ class Agent {
   }
 
   _buildInvocation(resolved, prompt, options) {
+    const blueprint = this._createInvocationBlueprint(resolved, prompt, options);
+    blueprint.projection.assertWithinLimit(this.promptCharacterLimit);
+    return blueprint.materialize({
+      agentWorkDir: this._paths.agentWorkDir,
+      commandId: options.commandId,
+    });
+  }
+
+  _createInvocationBlueprint(resolved, prompt, options) {
     const { provider, profile } = resolved;
     const baseArgs = Array.isArray(profile.args) ? [...profile.args] : [];
     const systemFlag = provider.systemPromptFlag();
@@ -429,73 +614,105 @@ class Agent {
     const schemaFlag = jsonSchema ? (profile.jsonSchemaFlag || null) : null;
     const schemaMode = jsonSchema ? (profile.jsonSchemaMode || null) : null;
     const schemaSuffix = [];
-    let pendingSchemaWrite = null;
-    if (jsonSchema && (!schemaFlag || !schemaMode)) {
-      reportMissingJsonSchemaProfileFields({
-        commandId: options.commandId,
-        profileKey: resolved.profileKey,
-        missing: [
-          ...(!schemaFlag ? ["jsonSchemaFlag"] : []),
-          ...(!schemaMode ? ["jsonSchemaMode"] : []),
-        ],
-      });
-    }
+    const missingSchemaProfileFields = jsonSchema && (!schemaFlag || !schemaMode)
+      ? [
+        ...(!schemaFlag ? ["jsonSchemaFlag"] : []),
+        ...(!schemaMode ? ["jsonSchemaMode"] : []),
+      ]
+      : [];
     const schemaCapable = jsonSchema
       && schemaFlag
       && ["inline", "file"].includes(schemaMode);
+    let projectedSchemaPath = null;
+    let schemaContent = null;
+    let projectedSchemaMode = "none";
     if (jsonSchema && schemaCapable) {
+      schemaContent = JSON.stringify(jsonSchema);
+      projectedSchemaMode = schemaMode;
       if (schemaMode === "file") {
-        const schemaPath = path.join(this._paths.agentWorkDir, `schema-${crypto.randomUUID()}.json`);
-        pendingSchemaWrite = { path: schemaPath, content: JSON.stringify(jsonSchema) };
-        schemaSuffix.push(schemaFlag, schemaPath);
+        projectedSchemaPath = path.join(
+          this._paths.agentWorkDir,
+          `schema-${"0".repeat(36)}.json`,
+        );
+        schemaSuffix.push(schemaFlag, projectedSchemaPath);
       } else {
-        schemaSuffix.push(schemaFlag, JSON.stringify(jsonSchema));
+        schemaSuffix.push(schemaFlag, schemaContent);
       }
     } else if (jsonSchema && options.fmtFallback) {
       effectivePrompt = `${options.fmtFallback}\n\n${effectivePrompt}`;
+      projectedSchemaMode = "fallback";
     }
 
     const promptedArgs = substitutePromptToken(baseArgs, effectivePrompt);
 
     const workDirFlag = provider.workDirFlag();
-    const executionWorkDir = options.executionWorkDir
-      || this._resolveExecutionWorkDir(null);
+    const executionWorkDir = this._resolveExecutionWorkDir(options.executionWorkDir);
     const workDirInjected = workDirFlag
       ? injectWorkDirFlag(workDirFlag, executionWorkDir, promptedArgs)
       : promptedArgs;
 
     const finalArgs = [...prefix, ...workDirInjected, ...schemaSuffix];
-    const env = {
-      ...process.env,
-      ...normalizedExecutionEnvironment(options.executionEnvironment),
-    };
-    delete env.CLAUDECODE;
-
     const threshold = this._config.agent?.stdinFallbackThreshold ?? DEFAULT_STDIN_FALLBACK_THRESHOLD;
-    const totalBytes = finalArgs.reduce((sum, a) => sum + Buffer.byteLength(String(a)), 0);
-    if (totalBytes <= threshold) {
-      return { finalArgs, env, stdinContent: null, pendingSchemaWrite };
+    const inlineArgvByteCount = argvByteLength(finalArgs);
+    const usesStdin = inlineArgvByteCount > threshold
+      || inlineArgvByteCount > MAX_AGENT_ARGV_BYTES
+      || argvMaxElementByteLength(finalArgs) > MAX_AGENT_ARGUMENT_BYTES;
+    let transportedArgs = finalArgs;
+    let stdinContent = null;
+    if (usesStdin) {
+      // Stdin fallback routes only the effective user prompt away from argv.
+      // Separate system/schema arguments remain exactly as the provider profile
+      // declares them and are accounted independently in the projection.
+      const strippedArgs = stripPromptArgs(baseArgs);
+      const strippedFinal = workDirFlag
+        ? injectWorkDirFlag(workDirFlag, executionWorkDir, strippedArgs)
+        : strippedArgs;
+      transportedArgs = [...prefix, ...strippedFinal, ...schemaSuffix];
+      stdinContent = effectivePrompt;
     }
-
-    // Stdin fallback: route the prompt via stdin instead of CLI args.
-    const strippedArgs = stripPromptArgs(baseArgs);
-    const strippedFinal = workDirFlag
-      ? injectWorkDirFlag(workDirFlag, executionWorkDir, strippedArgs)
-      : strippedArgs;
-    return {
-      finalArgs: [...prefix, ...strippedFinal, ...schemaSuffix],
-      env,
-      stdinContent: effectivePrompt,
-      pendingSchemaWrite,
-    };
+    const separatedSystemPromptCharacters = systemFlag && systemPrompt
+      ? String(systemPrompt).length
+      : 0;
+    const transportedPromptCharacters = usesStdin
+      ? String(effectivePrompt).length
+      : substitutedPromptCharacterCount(baseArgs, effectivePrompt);
+    const projection = new ResolvedAgentInvocationProjection({
+      providerKey: resolved.providerKey,
+      profileKey: resolved.profileKey,
+      command: profile.command,
+      promptCharacterCount: transportedPromptCharacters
+        + separatedSystemPromptCharacters
+        + (schemaContent?.length ?? 0),
+      systemPromptCharacterCount: systemPrompt ? String(systemPrompt).length : 0,
+      schemaCharacterCount: schemaContent?.length ?? 0,
+      finalArgs: transportedArgs,
+      inlineArgvByteCount,
+      schemaMode: projectedSchemaMode,
+      usesStdin,
+    });
+    return new ResolvedAgentInvocationBlueprint({
+      projection,
+      projectedSchemaPath,
+      schemaContent,
+      missingSchemaProfileFields,
+      executionEnvironment: normalizedExecutionEnvironment(options.executionEnvironment),
+      stdinContent,
+    });
   }
 
-  async _callOnceWithRetry(resolved, prompt, options, retry) {
+  async _callOnceWithRetry(resolved, prompt, options, retry, blueprint) {
     const maxAttempts = retry.retryCount + 1;
     let lastFailure = null;
     for (let attempt = 0; attempt <= retry.retryCount; attempt++) {
+      await options.providerCallAdmission?.beforeProviderAttempt({
+        attempt: attempt + 1,
+        index: attempt,
+        maxAttempts,
+        providerKey: resolved.providerKey,
+        profileKey: resolved.profileKey,
+      });
       try {
-        const result = await this._callOnce(resolved, prompt, options);
+        const result = await this._callOnce(resolved, prompt, options, blueprint);
         if (result.text) return result;
         lastFailure = new EmptyAgentResponseFailure()
           .recordAttempts(attempt + 1, maxAttempts);
@@ -514,11 +731,14 @@ class Agent {
     throw lastFailure;
   }
 
-  async _callOnce(resolved, prompt, options) {
+  async _callOnce(resolved, prompt, options, blueprint) {
     const { provider, profile, providerKey, profileKey, timeoutMs: configuredTimeoutMs } = resolved;
     const timeoutMs = options.timeoutMs ?? configuredTimeoutMs;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("agent per-call timeoutMs must be a positive number");
-    const { finalArgs, env, stdinContent, pendingSchemaWrite } = this._buildInvocation(resolved, prompt, options);
+    const { finalArgs, env, stdinContent, pendingSchemaWrite } = blueprint.materialize({
+      agentWorkDir: this._paths.agentWorkDir,
+      commandId: options.commandId,
+    });
     // A provider work-directory flag is an optional provider optimization,
     // not the execution-boundary mechanism.  An explicit per-call directory
     // is always the child cwd too, so flagless providers cannot fall back to
@@ -1308,6 +1528,22 @@ function stableStringify(value) {
   return JSON.stringify(value);
 }
 
+function argvByteLength(args) {
+  return args.reduce((sum, argument) => sum + Buffer.byteLength(String(argument)), 0);
+}
+
+function argvMaxElementByteLength(args) {
+  return args.reduce((maximum, argument) => Math.max(maximum, Buffer.byteLength(String(argument))), 0);
+}
+
+function normalizeProjectionCharacterLimit(limit) {
+  const normalized = Number(limit);
+  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+    throw new Error("agent invocation projection limit must be a positive integer");
+  }
+  return normalized;
+}
+
 class AgentResolutionAttempt {
   constructor({
     agentSection,
@@ -1469,6 +1705,15 @@ function substitutePromptToken(args, prompt) {
     ));
   }
   return [...args, prompt];
+}
+
+function substitutedPromptCharacterCount(args, prompt) {
+  const templates = args.filter((argument) => typeof argument === "string" && argument.includes("{{PROMPT}}"));
+  if (templates.length === 0) return String(prompt).length;
+  return templates.reduce(
+    (total, template) => total + template.replaceAll("{{PROMPT}}", () => prompt).length,
+    0,
+  );
 }
 
 function stripPromptArgs(args) {
@@ -1633,6 +1878,14 @@ class PluginAgentApi {
   call(prompt, options = {}) {
     const resolvedOptions = this.#options(options.commandId, options);
     return this.agent.call(prompt, resolvedOptions);
+  }
+
+  projectInvocation(prompt, options = {}) {
+    if (typeof this.agent.projectInvocation !== "function") {
+      throw new Error("agent.projectInvocation is required");
+    }
+    const resolvedOptions = this.#options(options.commandId, options);
+    return this.agent.projectInvocation(prompt, resolvedOptions);
   }
 
   #options(commandId, options) {

@@ -1,6 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { collectAllKeywords, buildKeywordSelectionPrompt, fallbackSearch } from "../../../src/flow/lib/get-context.js";
+import { collectAllKeywords, buildKeywordSelectionPrompt, fallbackSearch, contextSearch } from "../../../src/flow/lib/get-context.js";
+import { container } from "../../../src/lib/container.js";
+import { PromptLogicalFootprint } from "../../../src/lib/prompt-batching.js";
 
 const SAMPLE_ANALYSIS = {
   _meta: { version: 1 },
@@ -26,6 +28,33 @@ const SAMPLE_ENTRIES = [
 ];
 
 describe("collectAllKeywords", () => {
+  it("examines keywords beyond the old 2,000-item cutoff across bounded AI calls", async () => {
+    const keywords = Array.from({ length: 2100 }, (_, index) => `${String(index).padStart(4, "0")}-${"x".repeat(60)}`);
+    const entries = keywords.map((keyword, index) => ({ file: `src/${index}.js`, keywords: [keyword] }));
+    const analysis = { modules: { entries } };
+    const originalGet = container.get.bind(container);
+    const seen = [];
+    let calls = 0;
+    container.get = (key) => key !== "agent" ? originalGet(key) : {
+      resolve: () => true,
+      call: async (userPrompt, options) => {
+        calls += 1;
+        assert.ok(PromptLogicalFootprint.measure({ userPrompt, ...options }).total <= 120000);
+        const batch = userPrompt.split("## Available keywords\n")[1].split(", ");
+        seen.push(...batch);
+        return JSON.stringify({ keywords: batch.filter((keyword) => keyword === keywords.at(-1)) });
+      },
+    };
+    try {
+      const results = await contextSearch(entries, analysis, "semantic query", ".", "ai");
+      assert.deepEqual(results.map((entry) => entry.file), ["src/2099.js"]);
+      assert.deepEqual(seen, keywords);
+      assert.ok(calls > 1);
+    } finally {
+      container.get = originalGet;
+    }
+  });
+
   it("collects unique keywords from all entries", () => {
     const keywords = collectAllKeywords(SAMPLE_ANALYSIS);
     assert.ok(keywords.includes("auth"));

@@ -12,10 +12,9 @@
 import fs from "fs";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
-import { managedOutputDir, resolveConcurrency } from "../../lib/config.js";
-import { resolveWorkDir } from "../../lib/config.js";
+import { managedOutputDir, resolveConcurrency, resolvePromptCharacterLimit } from "../../lib/config.js";
 import { minify } from "../lib/minify.js";
-import { mapWithConcurrency } from "../lib/concurrency.js";
+import { ConcurrentBatchResult } from "../lib/concurrency.js";
 import { loadFullAnalysis } from "../lib/command-context.js";
 import { resolveChaptersOrder } from "../lib/template-merger.js";
 import { buildCategoryMapFromDocs, mergeChapters } from "../lib/chapter-resolver.js";
@@ -30,11 +29,22 @@ import { Command } from "../../lib/command.js";
 import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
 import { DocumentationAgent } from "../lib/documentation-agent.js";
+import {
+  LinearPromptBatchTopology,
+  PromptBatchExecutor,
+  PromptBatchPlan,
+  PromptExecutionLimit,
+  PromptInputBuilder,
+  PromptRequestLimit,
+} from "../../lib/prompt-batching.js";
+import { DocumentationAnalysisPromptElement, documentationSourceRevision } from "../lib/prompt-elements.js";
+import {
+  DocumentationEnrichPromptEnvelope,
+  DocumentationEnrichmentResponseContract,
+  reduceDocumentationEnrichment,
+} from "../lib/documentation-enrich-batching.js";
 
 const logger = createLogger("enrich");
-const DEFAULT_BATCH_TOKEN_LIMIT = 10000;
-
-
 function printHelp() {
   const t = translate();
   const h = t.raw("ui:help.cmdHelp.enrich");
@@ -84,37 +94,6 @@ function entryKey(category, index) {
 }
 
 /**
- * エントリーをトークン数ベースでバッチに分割する。
- * 各エントリーの essential フィールド（Essential 抽出済みテキスト）のトークン数を基準にする。
- * トークン数は Math.ceil(text.length / 4) で概算する。
- *
- * @param {Array} entries - collectEntries の結果（essential フィールド付き）
- * @param {number} maxTokens - 1バッチあたりの最大トークン数
- * @returns {Array<Array>} バッチの配列
- */
-function splitIntoBatches(entries, maxTokens) {
-  if (maxTokens <= 0) maxTokens = DEFAULT_BATCH_TOKEN_LIMIT;
-  const batches = [];
-  let current = [];
-  let currentTokens = 0;
-
-  for (const entry of entries) {
-    const tokens = Math.ceil((entry.essential || "").length / 4);
-    if (current.length > 0 && currentTokens + tokens > maxTokens) {
-      batches.push(current);
-      current = [];
-      currentTokens = 0;
-    }
-    current.push(entry);
-    currentTokens += tokens;
-  }
-  if (current.length > 0) {
-    batches.push(current);
-  }
-  return batches;
-}
-
-/**
  * バッチ用の enrich プロンプトを生成する。
  * 対象ファイルの一覧を明示し、AI にそれぞれのソースを読ませる。
  *
@@ -125,7 +104,7 @@ function splitIntoBatches(entries, maxTokens) {
 const ENRICH_FMT_FALLBACK = [
   "## Output format",
   "Return a JSON object with the following structure:",
-  '{"entries": [{"category": "modules", "index": 0, "summary": "...", "detail": "...", "chapter": "...", "role": "...", "keywords": [...], "app": null}]}',
+  '{"entries": [{"elementId": "analysis:modules:0", "category": "modules", "index": 0, "summary": "...", "detail": "...", "chapter": "...", "role": "...", "keywords": [...], "app": null}]}',
   "Return ONLY valid JSON, no markdown fences, no explanation text.",
 ].join("\n");
 
@@ -357,9 +336,11 @@ export class EnrichmentCheckpointCoordinator {
   }
 
   apply(batchResults) {
+    // Enrichment is one logical publication. Never expose checkpoints from a
+    // successful prefix when a later independent batch failed.
+    batchResults.throwIfErrors();
     let totalEnriched = 0;
     for (const result of batchResults) {
-      if (result.error) continue;
       const { batch, enrichment } = result.value;
       const attemptsByKey = buildAttemptsByKey(this.analysis, batch, 1);
       mergeEnrichment(this.analysis, enrichment, {
@@ -373,18 +354,10 @@ export class EnrichmentCheckpointCoordinator {
         0,
       );
       totalEnriched += batchCount;
-      this.onCheckpoint(this.analysis, totalEnriched);
     }
-    batchResults.throwIfErrors();
+    this.onCheckpoint(this.analysis, totalEnriched);
     return totalEnriched;
   }
-}
-
-function formatBatchError(err, b, batches) {
-  if (err?.message === "empty response") {
-    return `enrich: AI agent returned empty response at batch ${b + 1}/${batches.length}.`;
-  }
-  return `enrich: AI agent failed at batch ${b + 1}/${batches.length}: ${err.message}`;
 }
 
 /**
@@ -508,53 +481,86 @@ async function runEnrich(ctx, rawArgs) {
     }
   }
 
-  // Split into batches (token-based)
-  const maxTokens = Number(config.agent?.batchTokenLimit || 0) || DEFAULT_BATCH_TOKEN_LIMIT;
+  const promptCharacterLimit = resolvePromptCharacterLimit(config);
   const retryCount = Number(config?.agent?.retryCount) || 0;
-  const batches = splitIntoBatches(pending, maxTokens);
   const concurrency = resolveConcurrency(config);
-
-  let totalEnriched = 0;
-
-  logger.log(`${batches.length} batches (token limit: ${maxTokens}, concurrency: ${concurrency})`);
-
-  const batchResults = await mapWithConcurrency(batches, concurrency, async (batch) => {
-    const batchIdx = batches.indexOf(batch);
-    logger.log(`batch ${batchIdx + 1}/${batches.length} (${batch.length} entries)`);
-
-    const enrichPb = _buildEnrichPromptBuilder(chapters, batch, { monorepoApps: config.monorepo?.apps, lang: config.docs?.defaultLanguage || "en" });
-    const enrichBuilt = enrichPb.build();
-
-    let response;
-    try {
-      response = await DocumentationAgent.from(agent).call(enrichBuilt.userPrompt, {
-        commandId: ctx.commandId || "docs.enrich",
-        systemPrompt: enrichBuilt.systemPrompt,
-        jsonSchema: enrichBuilt.jsonSchema,
-        fmtFallback: enrichBuilt.fmtFallback,
-        retryCount,
-      });
-    } catch (err) {
-      throw new Error(formatBatchError(err, batchIdx, batches));
-    }
-
-    const enrichment = parseEnrichResponse(response);
-    if (!enrichment) {
-      // Dump failed response for debugging (to workDir, not .sennel/output/)
-      const dumpDir = resolveWorkDir(root, config);
-      fs.mkdirSync(dumpDir, { recursive: true });
-      const dumpPath = path.join(dumpDir, `enrich-fail-batch${batchIdx + 1}.txt`);
-      const responseText = String(response ?? "");
-      try { fs.writeFileSync(dumpPath, responseText); } catch (_) { /* ignore */ }
-      logger.log(`response preview (${responseText.length} chars): ${responseText.slice(0, 200)}...`);
-      logger.log(`full response dumped to: ${path.relative(root, dumpPath)}`);
-      throw new Error(`enrich: could not parse AI response at batch ${batchIdx + 1}/${batches.length}.`);
-    }
-
-    return { batch, batchIdx, enrichment };
+  const envelope = new DocumentationEnrichPromptEnvelope({
+    chapters,
+    monorepoApps: config.monorepo?.apps,
+    lang: config.docs?.defaultLanguage || "en",
+    fmtFallback: ENRICH_FMT_FALLBACK,
   });
-
-  totalEnriched = new EnrichmentCheckpointCoordinator({
+  const requestLimit = new PromptRequestLimit({ maxCharacters: promptCharacterLimit });
+  const builder = new PromptInputBuilder({ envelope, limit: requestLimit });
+  pending.forEach((entry, sequence) => builder.add(new DocumentationAnalysisPromptElement({
+    id: `analysis:${entry.category}:${entry.index}`,
+    sourceRevision: documentationSourceRevision(entry.essential || ""),
+    sequence,
+    category: entry.category,
+    index: entry.index,
+    file: entry.file,
+    text: entry.essential || "",
+  })));
+  const collection = builder.build();
+  const executionLimit = new PromptExecutionLimit({
+    maxRequestCharacters: promptCharacterLimit,
+    concurrency,
+    maxProtocolRetryCount: retryCount,
+  });
+  const plan = PromptBatchPlan.create({
+    collection,
+    envelope,
+    limit: requestLimit,
+    topology: new LinearPromptBatchTopology(),
+    executionLimit,
+  });
+  logger.log(`${plan.batches.length} batches (character limit: ${promptCharacterLimit}, concurrency: ${concurrency})`);
+  const docsAgent = DocumentationAgent.from(agent);
+  const executor = new PromptBatchExecutor({ executionLimit });
+  const originRangeCounts = new Map();
+  for (const batch of plan.batches) {
+    for (const element of batch.payloadElements) {
+      originRangeCounts.set(element.originId, (originRangeCounts.get(element.originId) || 0) + 1);
+    }
+  }
+  const synthesisCount = [...originRangeCounts.values()].filter((count) => count > 1).length;
+  executor.executionBudget.assertCanExecute(plan.batches.length + synthesisCount);
+  if (synthesisCount > 0) executor.executionBudget.consumeSynthesisCalls(synthesisCount);
+  const callOptions = (request) => ({
+    commandId: ctx.commandId || "docs.enrich",
+    systemPrompt: request.systemPrompt,
+    jsonSchema: request.jsonSchema,
+    fmtFallback: request.fmtFallback,
+    retryCount,
+  });
+  const callAgent = (request, _batch, _retryIndex, _attemptContext, providerCallAdmission) => docsAgent.call(request.userPrompt, {
+    ...callOptions(request),
+    providerCallAdmission,
+  });
+  const projectInvocation = typeof agent.projectInvocation === "function"
+    ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request))
+    : undefined;
+  const completions = await executor.executeCompletions({
+    plan,
+    responseContract: new DocumentationEnrichmentResponseContract(),
+    callAgent,
+    projectInvocation,
+  });
+  const enrichment = await reduceDocumentationEnrichment({
+    completions,
+    agent,
+    executor,
+    limit: requestLimit,
+    executionLimit,
+    lang: config.docs?.defaultLanguage || "en",
+    callOptions,
+    projectInvocation,
+  });
+  const batchEntries = pending.map(({ category, index, file }) => ({ category, index, file }));
+  const batchResults = new ConcurrentBatchResult([{
+    value: { batch: batchEntries, enrichment }, error: null,
+  }]);
+  const totalEnriched = new EnrichmentCheckpointCoordinator({
     analysis,
     chapters,
     onWarn: (message) => logger.log(message),
@@ -566,7 +572,7 @@ async function runEnrich(ctx, rawArgs) {
     },
   }).apply(batchResults);
 
-  logger.log(`enriched ${totalEnriched} entries in ${batches.length} batches`);
+  logger.log(`enriched ${totalEnriched} entries in ${plan.batches.length} batches`);
 
   // Final output
   if (ctx.stdout || ctx.dryRun) {
@@ -583,8 +589,6 @@ export {
   mergeEnrichment,
   collectEntries,
   filterByDocsExclude,
-  splitIntoBatches,
-  DEFAULT_BATCH_TOKEN_LIMIT,
 };
 
 export default class DocsEnrichCommand extends Command {

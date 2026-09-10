@@ -46,21 +46,11 @@ describe("enrich failure dump path", () => {
     assert.equal(result, "/project/.tmp");
   });
 
-  it("enrich.js source uses resolveWorkDir for dump path, not managedOutputDir", () => {
+  it("enrich uses typed batch execution instead of persisting raw failed responses", () => {
     const enrichPath = path.join(process.cwd(), "src/docs/commands/enrich.js");
     const source = fs.readFileSync(enrichPath, "utf8");
 
-    assert.ok(
-      source.includes("resolveWorkDir"),
-      "enrich.js should reference resolveWorkDir",
-    );
-
-    const dumpLines = source.split("\n").filter((l) => l.includes("enrich-fail-batch"));
-    for (const line of dumpLines) {
-      assert.ok(
-        !line.includes("managedOutputDir"),
-        `dump path line should not use managedOutputDir: ${line.trim()}`,
-      );
-    }
+    assert.ok(source.includes("PromptBatchExecutor"));
+    assert.ok(!source.includes("enrich-fail-batch"));
   });
 });

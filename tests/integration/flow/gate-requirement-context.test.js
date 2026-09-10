@@ -1,15 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  MAX_REQUIREMENT_CONTEXT_CHARS,
-  MAX_REQUIREMENT_CONTEXT_ITEM_CHARS,
-  MAX_REQUIREMENT_CONTEXT_ITEMS,
   IntegrationExecutionEvidence,
   RequirementGateBatch,
   buildImplCheckPrompt,
   buildRequirementGateContext,
   classifyRequirementObligation,
 } from "../../../src/flow/lib/run-gate.js";
+import { PromptLogicalFootprint } from "../../../src/lib/prompt-batching.js";
 
 function specFixture() {
   return {
@@ -36,7 +34,7 @@ function specFixture() {
 }
 
 describe("requirement gate context", () => {
-  it("renders linked sources with stable bounds and obligation semantics", () => {
+  it("renders complete linked sources with stable references and obligation semantics", () => {
     const requirement = { id: "R1", desc: "Preserve delegated `resultField` behavior", priority: "must" };
     const context = buildRequirementGateContext({
       spec: specFixture(),
@@ -51,9 +49,7 @@ describe("requirement gate context", () => {
     assert.match(text, /\[SCHEMA:DECISION:1:1\]/);
     assert.match(text, /\[FILE-MAP:R1:1\]/);
     assert.match(text, /\[EVIDENCE:R1\]/);
-    assert.ok(text.length <= MAX_REQUIREMENT_CONTEXT_CHARS);
-    assert.equal(MAX_REQUIREMENT_CONTEXT_ITEMS, 12);
-    assert.equal(MAX_REQUIREMENT_CONTEXT_ITEM_CHARS, 1000);
+    for (const entry of context.entries) assert.ok(text.includes(entry.toPromptText()));
   });
 
   it("counts rendered contexts toward batch and prompt identity", () => {
@@ -66,8 +62,8 @@ describe("requirement gate context", () => {
     });
     const diff = "x".repeat(120001 - context.toPromptText().length);
     const batch = new RequirementGateBatch({ requirements: [requirement], contexts: [context], diff });
-    assert.equal(batch.promptCharCount, 120001);
-    assert.equal(batch.overflow, true);
+    assert.equal(batch.promptCharCount, PromptLogicalFootprint.measure(batch.buildPrompt().build()).total);
+    assert.ok(batch.promptCharCount > 120000);
     const prompt = buildImplCheckPrompt({ contexts: [context], diff, knownIds: ["R1"] }).build();
     assert.match(prompt.userPrompt, /## Requirement Contexts/);
     assert.match(prompt.systemPrompt, /Every evaluation reason MUST cite \[REQ:<id>\]/);

@@ -7,6 +7,14 @@
 
 import { createI18n } from "../../lib/i18n.js";
 import { iterateAnalysisCategories } from "./analysis-entry.js";
+import { ForgeInputReferencePromptElement } from "./prompt-elements.js";
+
+function requireForgeInputReference(inputReference) {
+  if (!(inputReference instanceof ForgeInputReferencePromptElement)) {
+    throw new TypeError("forge prompt requires an immutable typed input reference");
+  }
+  return inputReference.toPromptText();
+}
 
 /**
  * analysis.json をプロンプト用テキストに変換する。
@@ -71,35 +79,27 @@ function enrichedSummaryToText(analysis) {
 
 /**
  * Build the system prompt (shared across all files in a round).
- * Contains: role, rules, user request, spec, analysis summary.
+ * Contains only bounded role/rules and an immutable input reference.
  *
  * @param {Object} params
  * @param {string} [params.lang] - Locale (default: "ja")
- * @param {string} params.userPrompt
- * @param {string} [params.specPath]
- * @param {string} [params.specText]
- * @param {string} [params.analysisSummary]
+ * @param {ForgeInputReferencePromptElement} params.inputReference
  * @returns {string}
  */
-export function buildForgeSystemPrompt({ lang, userPrompt, specPath, specText, analysisSummary }) {
+export function buildForgeSystemPrompt({ lang, inputReference }) {
   const t = createI18n(lang || "ja", { domain: "prompts" });
   const role = t("forge.systemRole");
   const rules = t.raw("forge.rules") || [];
 
-  const specBlock = specPath
-    ? ["[SPEC_PATH]", specPath, "", "[SPEC_CONTENT]", specText || "(empty)", ""]
-    : [];
   return [
     role,
     "",
-    "[USER_PROMPT]",
-    userPrompt,
+    "[IMMUTABLE_INPUT_REFERENCE]",
+    requireForgeInputReference(inputReference),
+    "Read the referenced JSON before editing. Treat it as immutable and do not modify it.",
     "",
-    ...specBlock,
     "[RULES]",
     ...rules.map((r) => `- ${r}`),
-    "",
-    ...(analysisSummary ? ["[SOURCE_ANALYSIS]", analysisSummary, ""] : []),
   ].join("\n");
 }
 
@@ -111,20 +111,18 @@ export function buildForgeSystemPrompt({ lang, userPrompt, specPath, specText, a
  * @param {string} params.targetFile
  * @param {number} params.round
  * @param {number} params.maxRuns
- * @param {string} [params.reviewFeedback]
+ * @param {ForgeInputReferencePromptElement} params.inputReference
  * @returns {string}
  */
-export function buildForgeFilePrompt({ lang, targetFile, round, maxRuns, reviewFeedback }) {
-  const t = createI18n(lang || "ja", { domain: "prompts" });
-  const noFeedback = t("forge.noFeedback");
+export function buildForgeFilePrompt({ targetFile, round, maxRuns, inputReference }) {
   return [
     `round: ${round}/${maxRuns}`,
     "",
     "[TARGET_FILE]",
     targetFile,
     "",
-    "[PREVIOUS_REVIEW_FEEDBACK]",
-    reviewFeedback || noFeedback,
+    "[IMMUTABLE_INPUT_REFERENCE]",
+    requireForgeInputReference(inputReference),
   ].join("\n");
 }
 
@@ -133,43 +131,30 @@ export function buildForgeFilePrompt({ lang, targetFile, round, maxRuns, reviewF
  *
  * @param {Object} params
  * @param {string} [params.lang]
- * @param {string} params.userPrompt
  * @param {number} params.round
  * @param {number} params.maxRuns
- * @param {string} [params.reviewFeedback]
- * @param {string} [params.specPath]
- * @param {string} [params.specText]
- * @param {string} [params.analysisSummary]
  * @param {string[]} params.targetFiles
+ * @param {ForgeInputReferencePromptElement} params.inputReference
  * @returns {string}
  */
-export function buildForgePrompt({ lang, userPrompt, round, maxRuns, reviewFeedback, specPath, specText, analysisSummary, targetFiles }) {
+export function buildForgePrompt({ lang, round, maxRuns, targetFiles, inputReference }) {
   const t = createI18n(lang || "ja", { domain: "prompts" });
   const role = t("forge.systemRole");
   const rules = t.raw("forge.rules") || [];
-  const noFeedback = t("forge.noFeedback");
-
   const files = targetFiles.map((f) => `- ${f}`).join("\n");
-  const specBlock = specPath
-    ? ["[SPEC_PATH]", specPath, "", "[SPEC_CONTENT]", specText || "(empty)", ""]
-    : [];
   return [
     role,
     "",
     `round: ${round}/${maxRuns}`,
     "",
-    "[USER_PROMPT]",
-    userPrompt,
+    "[IMMUTABLE_INPUT_REFERENCE]",
+    requireForgeInputReference(inputReference),
+    "Read the referenced JSON before editing. Treat it as immutable and do not modify it.",
     "",
-    ...specBlock,
     "[TARGET_FILES]",
     files,
     "",
     "[RULES]",
     ...rules.map((r) => `- ${r}`),
-    "",
-    ...(analysisSummary ? ["[SOURCE_ANALYSIS]", analysisSummary, ""] : []),
-    "[PREVIOUS_REVIEW_FEEDBACK]",
-    reviewFeedback || noFeedback,
   ].join("\n");
 }

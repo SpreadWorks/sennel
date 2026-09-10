@@ -3,7 +3,7 @@
  *
  * Generic JSON Schema subset validator.
  * Supports: type, required, properties, additionalProperties, enum,
- * oneOf, items, minimum, minLength, maxLength, pattern, minItems, maxItems,
+ * oneOf, items, minimum, maximum, minLength, maxLength, pattern, minItems, maxItems,
  * deprecated.
  */
 
@@ -70,6 +70,9 @@ export function validateSchema(value, schema, path = "") {
   if ((schemaHasType(schema, "number") || schemaHasType(schema, "integer")) && typeof value === "number") {
     if (schema.minimum != null && value < schema.minimum) {
       errors.push(`${path || "(root)"}: minimum ${schema.minimum}, got ${value}`);
+    }
+    if (schema.maximum != null && value > schema.maximum) {
+      errors.push(`${path || "(root)"}: maximum ${schema.maximum}, got ${value}`);
     }
   }
 

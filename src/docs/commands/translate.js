@@ -12,15 +12,15 @@
 import fs from "fs";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
-import { resolveConcurrency } from "../../lib/config.js";
+import { resolveConcurrency, resolvePromptCharacterLimit } from "../../lib/config.js";
 import { createLogger } from "../../lib/progress.js";
-import { getChapterFiles, stripResponsePreamble } from "../lib/command-context.js";
+import { getChapterFiles } from "../lib/command-context.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { container } from "../../lib/container.js";
-import { PromptBuilder } from "../../lib/prompt-builder.js";
-import { DocumentationAgent } from "../lib/documentation-agent.js";
+import { translateMarkdownWithBatches } from "../lib/markdown-prompt-document.js";
 import { resolveDocsContext } from "../lib/docs-context.js";
 import { Command } from "../../lib/command.js";
+import { AtomicFile } from "../../lib/atomic-file.js";
 
 const logger = createLogger("translate");
 
@@ -34,57 +34,18 @@ const logger = createLogger("translate");
  * @param {string} root - Project root
  * @returns {Promise<string>} Translated content
  */
-/**
- * Map documentStyle.tone to target-language writing style instruction.
- */
-function toneInstruction(tone, toLang) {
-  if (toLang !== "ja") return "";
-  const map = {
-    polite: "Use です/ます style (敬体).",
-    formal: "Use である style (常体).",
-    casual: "Use casual, conversational tone (口語的).",
-  };
-  return map[tone] || "";
-}
-
-async function translateDocument(content, fromLang, toLang, agent, _root, documentStyle) {
-  const toneInstr = documentStyle?.tone ? toneInstruction(documentStyle.tone, toLang) : "";
-
-  const pb = new PromptBuilder();
-  pb.setRole(`You are a professional technical document translator specializing in ${toLang}.\nTranslate the following Markdown document from ${fromLang} to ${toLang}.`);
-
-  const ruleLines = [
-    "## Formatting rules",
-    "- Preserve ALL Markdown formatting (headings, tables, code blocks, links)",
-    "- Preserve ALL directives exactly as-is: <!-- {{data(...)}} -->, <!-- {{text(...)}} -->, <!-- {{/data}} -->, <!-- {%block%} -->, <!-- {%extends%} -->",
-    "- Keep inline code (`...`), file paths, and CLI command names unchanged",
-    "- DO translate: heading text, prose, table cell text (including table headers), and descriptive labels inside mermaid diagrams",
-    "- DO NOT translate: code blocks (``` ... ```), variable names, function names, identifiers",
-    "- Output ONLY the translated document, no commentary",
-    "",
-    "## Translation quality rules",
-    "- Do NOT translate word-by-word. Restructure sentences to follow natural grammar and conventions of the target language.",
-    "- Avoid excessive use of loanwords/katakana when the target language has natural equivalents.",
-    "- Avoid verbose patterns such as chains of nominalizations or passive voice.",
-    "- Respect the cultural conventions and writing customs of the target language — the result should read as if originally written in that language, not as a translation.",
-  ];
-  if (toneInstr) ruleLines.push(`- Writing style: ${toneInstr}`);
-  if (documentStyle?.customInstruction) ruleLines.push(`- ${documentStyle.customInstruction}`);
-  pb.setRules(ruleLines.join("\n"));
-
-  pb.addUserPrompt("## Document", content);
-  const built = pb.build();
-
-  const result = await DocumentationAgent.from(agent).call(built.userPrompt, {
+async function translateDocument(content, fromLang, toLang, agent, root, documentStyle, options = {}) {
+  return translateMarkdownWithBatches({
+    content,
+    documentId: options.documentId || path.basename(root || "document"),
+    fromLang,
+    toLang,
+    agent,
     commandId: "docs.translate",
-    systemPrompt: built.systemPrompt,
+    documentStyle,
+    maxCharacters: options.maxCharacters,
+    concurrency: options.concurrency,
   });
-
-  if (!result || result.trim().length === 0) {
-    throw new Error("Empty translation response");
-  }
-
-  return stripResponsePreamble(result, 5);
 }
 
 /**
@@ -202,33 +163,35 @@ async function runTranslate(ctx, rawArgs) {
   }
 
   const concurrency = resolveConcurrency(cfg);
+  const maxCharacters = resolvePromptCharacterLimit(cfg);
   logger.log(`Translating ${tasks.length} file(s) (concurrency=${concurrency})...`);
 
   const results = await mapWithConcurrency(tasks, concurrency, async (task) => {
     logger.verbose(`Translating: ${task.label}`);
     const content = fs.readFileSync(task.sourcePath, "utf8");
-    const translated = await translateDocument(content, defaultLang, task.lang, agent, root, cfg.docs?.style);
-    fs.writeFileSync(task.targetPath, translated, "utf8");
-    logger.verbose(`DONE: ${task.label}`);
-    return task.label;
+    const translated = await translateDocument(content, defaultLang, task.lang, agent, root, cfg.docs?.style, {
+      documentId: task.label,
+      maxCharacters,
+      concurrency: 1,
+    });
+    return { task, translated };
   });
 
-  let totalTranslated = 0;
-  let totalErrors = 0;
-  for (const r of results) {
-    if (r.error) {
-      totalErrors++;
-      logger.log(`ERROR: ${r.error.message}`);
-    } else {
-      totalTranslated++;
-    }
+  // Translation is planned completely before publication. A provider failure
+  // must not leave successful sibling files updated on disk.
+  results.throwIfErrors();
+  for (const result of results) {
+    const { task, translated } = result.value;
+    new AtomicFile(task.targetPath).write(Buffer.from(translated, "utf8"));
+    logger.verbose(`DONE: ${task.label}`);
   }
+  const totalTranslated = results.length;
 
   const totalSkipped = (sourceFiles.length + (hasReadme ? 1 : 0)) * targetLangs.length - tasks.length;
-  logger.log(`Done. ${totalTranslated} file(s) translated, ${totalSkipped} skipped${totalErrors ? `, ${totalErrors} error(s)` : ""}.`);
+  logger.log(`Done. ${totalTranslated} file(s) translated, ${totalSkipped} skipped.`);
 }
 
-export { buildTranslationTasks };
+export { buildTranslationTasks, translateDocument };
 
 export default class DocsTranslateCommand extends Command {
   static outputMode = "raw";

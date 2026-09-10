@@ -399,10 +399,12 @@ describe("Task Gate source authority", () => {
     assert.equal(resolveGateTransition(facts).disposition.operation, "external-blocked");
   });
 
-  it("binds an oversized-source refusal before a fresh reader classifies it", async () => {
+  it("binds the canonical source byte-limit refusal before a fresh reader classifies it", async () => {
     root = createTmpDir("gate-source-oversized-");
     const flowManager = taskGateFixture(root);
-    writeFile(root, "src/task-behavior.js", `export const currentTaskBehavior = "${"x".repeat(140_000)}";\n`);
+    // Prompt-sized source is now partitionable. The independent canonical
+    // source admission limit remains 1 MiB and must still refuse before AI.
+    writeFile(root, "src/task-behavior.js", `export const currentTaskBehavior = "${"x".repeat(1024 * 1024)}";\n`);
     let calls = 0;
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
@@ -417,6 +419,7 @@ describe("Task Gate source authority", () => {
     }
     assert.equal(result.result, "fail");
     assert.equal(calls, 0);
+    assert.match(result.artifacts.issues.join("\n"), /exceeds limit 1048576/);
     assert.match(result.artifacts.sourceFingerprint, /^[a-f0-9]{64}$/);
     flowManager.publishCurrentAttemptResult({ specId: SPEC_ID, commandResult: result });
     const reloaded = makeFlowManager(root);

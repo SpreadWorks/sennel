@@ -172,7 +172,7 @@ describe("init CLI", () => {
             command: "node",
             args: [
               "-e",
-              "const fs=require('fs');const prompt=process.argv[process.argv.length-1]||'';fs.writeFileSync(process.env.PROMPT_CAPTURE,prompt,'utf8');process.stdout.write('[\"overview.md\"]');",
+              "const fs=require('fs');const prompt=process.argv[process.argv.length-1]||'';fs.writeFileSync(process.env.PROMPT_CAPTURE,prompt,'utf8');process.stdout.write('{\"chapters\":[\"overview.md\"]}');",
               "{{PROMPT}}",
             ],
           },

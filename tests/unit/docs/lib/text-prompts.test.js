@@ -109,7 +109,7 @@ describe("getEnrichedContext", () => {
     removeTmpDir(tmp);
   });
 
-  it("truncates source code at 8000 chars in deep mode", () => {
+  it("preserves source code beyond the former 8000 character boundary", () => {
     tmp = createTmpDir("enriched");
     const longCode = "x".repeat(9000);
     writeFile(tmp, "src/big.js", longCode);
@@ -124,7 +124,8 @@ describe("getEnrichedContext", () => {
     };
     const result = getEnrichedContext(analysis, "overview.md", "deep", tmp);
     assert.ok(result);
-    assert.ok(result.includes("(truncated)"));
+    assert.ok(result.includes(longCode));
+    assert.ok(!result.includes("(truncated)"));
     removeTmpDir(tmp);
   });
 

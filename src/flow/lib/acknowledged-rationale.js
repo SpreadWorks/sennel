@@ -1,8 +1,5 @@
 import { guardrailAllowsAcknowledgedException } from "../../lib/guardrail.js";
 
-const MAX_ENTRIES_PER_GUARDRAIL = 3;
-const MAX_ENTRY_TEXT_CHARS = 600;
-const MAX_SECTION_CHARS = 4000;
 const DEFAULT_HEADING = "Matched Spec Acknowledgment Rationale";
 const UNAVAILABLE_WARNING = "parent spec context unavailable";
 
@@ -56,19 +53,8 @@ function qualifies(text, guardrailId) {
   return withoutIds.replace(/\s/g, "").length >= 20;
 }
 
-function truncateText(text) {
-  if (text.length <= MAX_ENTRY_TEXT_CHARS) {
-    return { text, truncated: false };
-  }
-  const marker = " [truncated]";
-  return {
-    text: text.slice(0, MAX_ENTRY_TEXT_CHARS - marker.length).trimEnd() + marker,
-    truncated: true,
-  };
-}
-
 class AcknowledgedRationaleEntry {
-  constructor(guardrailId, sourcePath, text, truncated = false) {
+  constructor(guardrailId, sourcePath, text) {
     if (!guardrailId) throw new Error("guardrailId is required");
     if (!sourcePath) throw new Error("sourcePath is required");
     const normalized = normalizeText(text);
@@ -76,13 +62,13 @@ class AcknowledgedRationaleEntry {
     this.guardrailId = guardrailId;
     this.sourcePath = sourcePath;
     this.text = normalized;
-    this.truncated = Boolean(truncated);
+    Object.freeze(this);
   }
 
   toPromptLines() {
     return [
       `- source: ${this.sourcePath}`,
-      `  text: ${this.text}${this.truncated && !this.text.endsWith("[truncated]") ? " [truncated]" : ""}`,
+      `  text: ${this.text}`,
     ];
   }
 
@@ -99,13 +85,11 @@ class AcknowledgedRationaleSet {
 
   addEntry(guardrailId, sourcePath, text) {
     const entries = this.entriesByGuardrail.get(guardrailId);
-    if (!entries || entries.length >= MAX_ENTRIES_PER_GUARDRAIL) return;
-    const truncated = truncateText(normalizeText(text));
+    if (!entries) return;
     entries.push(new AcknowledgedRationaleEntry(
       guardrailId,
       sourcePath,
-      truncated.text,
-      truncated.truncated,
+      text,
     ));
   }
 
@@ -123,9 +107,6 @@ class AcknowledgedRationaleSet {
       for (const entry of entries) {
         const prefix = guardrailStarted ? "\n" : `\n\n### ${guardrail.id}\n`;
         const addition = `${prefix}${entry.toMarkdown()}`;
-        if (markdown.length + addition.length > MAX_SECTION_CHARS) {
-          return renderedEntries === 0 ? "" : markdown;
-        }
         markdown += addition;
         renderedEntries += 1;
         guardrailStarted = true;

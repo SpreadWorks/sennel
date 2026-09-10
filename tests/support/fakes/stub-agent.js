@@ -113,9 +113,28 @@ export function defaultPassResponse() {
 }
 
 class SchemaAwareStubProvider {
-  enrich(prompt = "") {
+  enrich(prompt = "", { jsonSchema } = {}) {
+    if (jsonSchema?.properties?.entry) {
+      const elementId = String(prompt).match(/^elementId:\s*(.+)$/m)?.[1] || "analysis:unknown:0";
+      const category = String(prompt).match(/^category:\s*(.+)$/m)?.[1] || "modules";
+      const index = Number(String(prompt).match(/^index:\s*(\d+)$/m)?.[1] || 0);
+      return JSON.stringify({
+        entry: {
+          elementId,
+          category,
+          index,
+          summary: `Stub synthesized summary for ${elementId}`,
+          detail: `Deterministic synthesized enrichment for ${elementId}.`,
+          chapter: "overview",
+          role: "other",
+          keywords: ["stub", "synthesis", category],
+          app: null,
+        },
+      });
+    }
     const chapters = parseAvailableChapters(prompt);
-    const entries = parseEnrichTargets(prompt).map(({ category, index, file }) => ({
+    const entries = parseEnrichTargets(prompt).map(({ elementId, category, index, file }) => ({
+      elementId,
       category,
       index,
       summary: `Stub summary for ${file}`,
@@ -136,12 +155,18 @@ class SchemaAwareStubProvider {
     return JSON.stringify(Object.fromEntries(keys.map((key) => [key, `stub text for ${key}`])));
   }
 
+  init(_prompt = "", { jsonSchema } = {}) {
+    const chapters = jsonSchema?.properties?.chapters?.items?.enum;
+    return JSON.stringify({ chapters: Array.isArray(chapters) ? chapters : [] });
+  }
+
   quality() {
     return JSON.stringify({ verdict: "pass", evaluations: [] });
   }
 
   respond(options = {}, prompt = "") {
     if (options.commandId === "docs.enrich") return this.enrich(prompt, options);
+    if (options.commandId === "docs.init") return this.init(prompt, options);
     if (options.commandId === "docs.text") return this.text(prompt, options);
     return this.quality();
   }
@@ -170,10 +195,11 @@ export function createStubAgent(provider) {
 }
 
 function parseEnrichTargets(prompt) {
-  return [...String(prompt).matchAll(/^### \[([^:\]]+):(\d+)\] (.+)$/gm)].map((match) => ({
-    category: match[1],
-    index: Number(match[2]),
-    file: match[3],
+  return [...String(prompt).matchAll(/^### \[([^\]]+)\] entry=([^:]+):(\d+) file=(.+?) range=/gm)].map((match) => ({
+    elementId: match[1],
+    category: match[2],
+    index: Number(match[3]),
+    file: match[4],
   }));
 }
 

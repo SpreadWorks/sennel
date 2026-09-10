@@ -40,15 +40,15 @@ describe("processTemplateFileBatch", () => {
       "",
     ].join("\n");
 
-    // Agent returns JSON with directive ids as keys (ignore prompt via {{PROMPT}})
-    const jsonResponse = JSON.stringify({
+    const generated = {
       d0: "This is the overview.",
       d1: "These are the details.",
-    });
-    const agent = makeAgent({
-      command: "node",
-      args: ["-e", `process.stdout.write(${JSON.stringify(jsonResponse)})`, "{{PROMPT}}"],
-    }, tmp);
+    };
+    const agent = {
+      async call(_prompt, options) {
+        return JSON.stringify(Object.fromEntries(options.jsonSchema.required.map((id) => [id, generated[id]])));
+      },
+    };
 
     const result = await processTemplateFileBatch(
       templateContent,
@@ -99,8 +99,11 @@ describe("processTemplateFileBatch", () => {
     );
 
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].executionWorkDir, tmp);
-    assert.equal(calls[0].flowAttribution, "none");
+    for (const options of calls) {
+      assert.equal(options.executionWorkDir, tmp);
+      assert.equal(options.flowAttribution, "none");
+      assert.equal(typeof options.providerCallAdmission?.claim, "function");
+    }
   });
 
   it("replaces existing content between {{text}} tags without duplicating opening tag", async () => {
@@ -126,14 +129,15 @@ describe("processTemplateFileBatch", () => {
       "",
     ].join("\n");
 
-    const jsonResponse = JSON.stringify({
+    const generated = {
       d0: "New overview content.",
       d1: "New details content.",
-    });
-    const agent = makeAgent({
-      command: "node",
-      args: ["-e", `process.stdout.write(${JSON.stringify(jsonResponse)})`, "{{PROMPT}}"],
-    }, tmp);
+    };
+    const agent = {
+      async call(_prompt, options) {
+        return JSON.stringify(Object.fromEntries(options.jsonSchema.required.map((id) => [id, generated[id]])));
+      },
+    };
 
     const result = await processTemplateFileBatch(
       templateContent,
@@ -204,5 +208,45 @@ describe("processTemplateFileBatch", () => {
     assert.strictEqual(result.text, templateContent);
     assert.strictEqual(result.filled, 0);
     assert.strictEqual(result.skipped, 1);
+  });
+
+  it("preserves unselected generated content when filtering by directive ID", async () => {
+    tmp = createTmpDir();
+    const templateContent = [
+      "# Test Document",
+      '<!-- {{text({prompt: "first", id: "one"})}} -->',
+      "OLD ONE",
+      "<!-- {{/text}} -->",
+      '<!-- {{text({prompt: "second", id: "two"})}} -->',
+      "OLD TWO",
+      "<!-- {{/text}} -->",
+      "",
+    ].join("\n");
+    const agent = {
+      async call(_prompt, options) {
+        return JSON.stringify(Object.fromEntries(options.jsonSchema.required.map((id) => [id, "NEW ONE"])));
+      },
+    };
+
+    const result = await processTemplateFileBatch(
+      templateContent,
+      {},
+      "test.md",
+      agent,
+      false,
+      [],
+      "",
+      "one",
+      1,
+      "en",
+      tmp,
+      0,
+      4000,
+    );
+
+    assert.match(result.text, /NEW ONE/);
+    assert.doesNotMatch(result.text, /OLD ONE/);
+    assert.match(result.text, /OLD TWO/);
+    assert.equal(result.filled, 1);
   });
 });

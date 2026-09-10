@@ -423,13 +423,13 @@ export function createCrossCheckWorkUnitIdentity({
   schemaDigest = null,
   allowedRequirementIds = [],
 }) {
-  const summaryHashes = summaries.map((summary) => hashWorkUnitInput(summary.proposals));
+  const summaryHashes = summaries.map((summary) => hashWorkUnitInput(stableJson(summary)));
   return new WorkUnitIdentity({
     phase: "impl-review",
     kind: "cross-check",
     stableOrderKey: `cross-check-${hashWorkUnitInput(stableJson(summaryHashes)).slice(0, 16)}`,
     parentUnitId: null,
-    targetFiles: summaries.map((summary) => summary.file),
+    targetFiles: summaries.flatMap((summary) => summary.files || [summary.file]),
     inputHash: hashWorkUnitInput(stableJson(summaryHashes)),
     commandId,
     providerIdentity,

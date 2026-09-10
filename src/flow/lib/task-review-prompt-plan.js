@@ -1,5 +1,16 @@
+import { createHash } from "node:crypto";
+
+import {
+  LinearPromptBatchTopology,
+  PartitionedPromptPayloadElement,
+  PromptBatchPlan,
+  PromptBatchingError,
+  PromptInputBuilder,
+  PromptLogicalFootprint,
+  PromptRequestEnvelope,
+  PromptRequestLimit,
+} from "../../lib/prompt-batching.js";
 import { WorkUnitToolingFailure } from "./work-unit.js";
-import { ReviewPromptSize } from "./review-prompt-size.js";
 import { renderCanonicalTaskSource } from "./run-gate.js";
 
 function requiredText(value, name) {
@@ -7,35 +18,50 @@ function requiredText(value, name) {
   return value.trim();
 }
 
-export class TaskReviewSourceElement {
-  constructor(entry) {
-    this.path = requiredText(entry?.path, "Task Review source path");
-    this.status = entry?.status;
-    if (!new Set(["present", "deleted"]).has(this.status)) throw new Error(`Task Review source status is invalid: ${this.path}`);
-    if (this.status === "present" && typeof entry.content !== "string") {
-      throw new Error(`Task Review source content must be text: ${this.path}`);
-    }
-    this.content = this.status === "present" ? entry.content : "";
-    Object.freeze(this);
-  }
+function sourceRevision({ path, status, content }) {
+  return createHash("sha256").update(JSON.stringify({ path, status, content })).digest("hex");
 }
 
-export class TaskReviewSourceSegment {
-  constructor({ element, start, end } = {}) {
-    if (!(element instanceof TaskReviewSourceElement)) throw new Error("Task Review source segment requires its typed element");
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end > element.content.length) {
-      throw new Error(`Task Review source segment range is invalid: ${element.path}`);
+/** One canonical Task source whose character ranges may be planned independently. */
+export class TaskReviewSourceElement extends PartitionedPromptPayloadElement {
+  constructor(entry, range = {}) {
+    const path = requiredText(entry?.path, "Task Review source path");
+    const status = entry?.status;
+    if (!new Set(["present", "deleted"]).has(status)) throw new Error(`Task Review source status is invalid: ${path}`);
+    if (status === "present" && typeof entry.content !== "string") {
+      throw new Error(`Task Review source content must be text: ${path}`);
     }
-    if (element.status === "deleted" && (start !== 0 || end !== 0)) {
-      throw new Error(`deleted Task Review source has an invalid segment: ${element.path}`);
+    const canonicalContent = status === "present" ? entry.content : "";
+    const start = range.start ?? 0;
+    const end = range.end ?? canonicalContent.length;
+    const sequence = entry.sequence ?? 0;
+    const originId = entry.originId || `task-source:${sequence}:${path}`;
+    super({
+      id: range.id || (start === 0 && end === canonicalContent.length ? originId : `${originId}@${start}:${end}`),
+      originId,
+      sourceRevision: entry.sourceRevision || sourceRevision({ path, status, content: canonicalContent }),
+      sequence,
+      text: canonicalContent.slice(start, end),
+      start,
+      end,
+      sourceLength: canonicalContent.length,
+      status,
+    });
+    this.path = path;
+    this.content = this.text;
+    this.canonicalContent = canonicalContent;
+    if (new.target === TaskReviewSourceElement) Object.freeze(this);
+  }
+
+  createRange({ start, end } = {}) {
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < this.start || end > this.end || end < start) {
+      throw new Error(`Task Review source segment range is invalid: ${this.path}`);
     }
-    this.path = element.path;
-    this.status = element.status;
-    this.start = start;
-    this.end = end;
-    this.sourceLength = element.content.length;
-    this.content = element.content.slice(start, end);
-    Object.freeze(this);
+    return new TaskReviewSourceSegment({
+      element: this,
+      start,
+      end,
+    });
   }
 
   toPromptText() {
@@ -48,20 +74,38 @@ export class TaskReviewSourceSegment {
   }
 }
 
+/** A coverage-preserving range of one canonical Task source. */
+export class TaskReviewSourceSegment extends TaskReviewSourceElement {
+  constructor({ element, start, end } = {}) {
+    if (!(element instanceof TaskReviewSourceElement)) throw new Error("Task Review source segment requires its typed element");
+    super({
+      path: element.path,
+      status: element.status,
+      content: element.canonicalContent,
+      sequence: element.sequence,
+      originId: element.originId,
+      sourceRevision: element.sourceRevision,
+    }, { start, end });
+    Object.freeze(this);
+  }
+}
+
 export class TaskReviewPromptChunkContext {
-  constructor({ index, segments } = {}) {
+  constructor({ index, count = 1, segments } = {}) {
     if (!Number.isSafeInteger(index) || index < 0) throw new Error("Task Review prompt chunk index is invalid");
+    if (!Number.isSafeInteger(count) || count < 1) throw new Error("Task Review prompt chunk count is invalid");
     if (!Array.isArray(segments) || segments.length === 0 || segments.some((entry) => !(entry instanceof TaskReviewSourceSegment))) {
       throw new Error("Task Review prompt chunk requires source segments");
     }
     this.index = index;
+    this.count = count;
     this.segments = Object.freeze([...segments]);
     Object.freeze(this);
   }
 
   toPromptText() {
     return [
-      `Bounded source chunk: ${this.index + 1}`,
+      `Bounded source chunk: ${this.index + 1} of ${this.count}`,
       "Review only defects evidenced by the source ranges supplied in this chunk.",
       "Do not infer that implementation is missing merely because another canonical source range is absent from this chunk.",
       "The canonical Task specification, requirements, mapping, touched-file set, context, and previous review memory are repeated in every chunk.",
@@ -75,8 +119,40 @@ export class TaskReviewPromptChunkContext {
   }
 }
 
+function asSegment(element) {
+  if (element instanceof TaskReviewSourceSegment) return element;
+  return new TaskReviewSourceSegment({ element, start: element.start, end: element.end });
+}
+
+function renderSegments(segments) {
+  return segments.map((segment) => segment.toPromptText()).join("\n\n");
+}
+
+class TaskReviewPromptEnvelope extends PromptRequestEnvelope {
+  constructor(buildPrompt) {
+    super({ revision: "task-review-source-v2" });
+    this._buildPrompt = buildPrompt;
+    Object.freeze(this);
+  }
+
+  build(elements, batchContext) {
+    const segments = elements.map(asSegment);
+    const isCanonicalSingleShot = batchContext.singleShot
+      && segments.every((segment) => segment.start === 0 && segment.end === segment.sourceLength);
+    if (isCanonicalSingleShot) {
+      return this._buildPrompt({ sourceText: renderCanonicalTaskSource(segments), chunkContext: null });
+    }
+    const chunkContext = new TaskReviewPromptChunkContext({
+      index: batchContext.index,
+      count: batchContext.count,
+      segments,
+    });
+    return this._buildPrompt({ sourceText: renderSegments(segments), chunkContext });
+  }
+}
+
 export class TaskReviewPromptChunk {
-  constructor({ index, segments, prompt, maxChars, singleShot = false } = {}) {
+  constructor({ index, segments, prompt, maxChars, singleShot = false, batch = null } = {}) {
     if (!Number.isSafeInteger(index) || index < 0) throw new Error("Task Review prompt chunk index is invalid");
     if (!Array.isArray(segments) || segments.some((segment) => !(segment instanceof TaskReviewSourceSegment))) {
       throw new Error("Task Review prompt chunk segments are invalid");
@@ -85,7 +161,7 @@ export class TaskReviewPromptChunk {
     this.index = index;
     this.segments = Object.freeze([...segments]);
     this.prompt = Object.freeze({ ...prompt });
-    this.size = ReviewPromptSize.measure(prompt);
+    this.size = PromptLogicalFootprint.measure(prompt);
     if (this.size.total > maxChars) throw new Error("Task Review prompt chunk exceeds its plan limit");
     const userPrompt = String(prompt?.userPrompt || "");
     const sourceText = singleShot ? renderCanonicalTaskSource(segments) : renderSegments(segments);
@@ -93,13 +169,17 @@ export class TaskReviewPromptChunk {
       throw new Error("Task Review prompt chunk does not contain its claimed source coverage");
     }
     this.singleShot = singleShot;
+    this.batch = batch;
     Object.freeze(this);
   }
 }
 
 export class TaskReviewPromptPlanningFailure extends WorkUnitToolingFailure {
-  constructor({ elementName, size, maxChars } = {}) {
-    const breakdown = size instanceof ReviewPromptSize ? size : ReviewPromptSize.measure(size);
+  constructor({ elementName, size, maxChars, cause } = {}) {
+    const breakdown = size && Number.isSafeInteger(size.systemPrompt)
+      && Number.isSafeInteger(size.userPrompt) && Number.isSafeInteger(size.fmtFallback)
+      ? new PromptLogicalFootprint(size)
+      : PromptLogicalFootprint.measure(size);
     const namedElement = requiredText(elementName, "Task Review prompt element");
     super({
       failureKind: "invariant_violation",
@@ -108,30 +188,18 @@ export class TaskReviewPromptPlanningFailure extends WorkUnitToolingFailure {
       recoveryHint: "Reduce the named canonical non-source element; Task source is already split at the smallest supported boundary.",
       message: `TASK_REVIEW_PROMPT_ELEMENT_TOO_LARGE: ${namedElement} cannot fit within ${maxChars} chars; `
         + `systemPrompt=${breakdown.systemPrompt}, userPrompt=${breakdown.userPrompt}, `
-        + `fmtFallback=${breakdown.fmtFallback}, total=${breakdown.total}`,
+        + `fmtFallback=${breakdown.fmtFallback}, total=${breakdown.total}, jsonSchema=${breakdown.jsonSchema}`,
     });
+    if (cause !== undefined) this.cause = cause;
     this.elementName = namedElement;
     this.size = breakdown;
     this.maxChars = maxChars;
   }
 }
 
-function renderSegments(segments) {
-  return segments.map((segment) => segment.toPromptText()).join("\n\n");
-}
-
-function safeSliceEnd(content, start, requestedEnd) {
-  let end = requestedEnd;
-  if (end < content.length
-    && end > start
-    && /[\uD800-\uDBFF]/.test(content[end - 1])
-    && /[\uDC00-\uDFFF]/.test(content[end])) end -= 1;
-  return end;
-}
-
 /** Complete, deterministic plan for one Task Review provider input. */
 export class TaskReviewPromptPlan {
-  constructor({ chunks, elements, sourceLength, maxChars } = {}) {
+  constructor({ chunks, elements, sourceLength, maxChars, corePlan = null } = {}) {
     if (!Array.isArray(chunks) || chunks.length === 0 || chunks.some((chunk) => !(chunk instanceof TaskReviewPromptChunk))) {
       throw new Error("Task Review prompt plan requires chunks");
     }
@@ -176,116 +244,50 @@ export class TaskReviewPromptPlan {
     this.chunks = Object.freeze([...chunks]);
     this.sourceLength = sourceLength;
     this.maxChars = maxChars;
+    this.corePlan = corePlan;
     Object.freeze(this);
   }
 
   static create({ sourceEntries, buildPrompt, maxChars } = {}) {
     if (!Array.isArray(sourceEntries)) throw new Error("Task Review prompt plan sourceEntries must be an array");
     if (typeof buildPrompt !== "function") throw new Error("Task Review prompt plan requires buildPrompt");
-    if (!Number.isSafeInteger(maxChars) || maxChars < 1) throw new Error("Task Review prompt plan maxChars is invalid");
-    const elements = sourceEntries.map((entry) => new TaskReviewSourceElement(entry));
-    const fullSource = renderCanonicalTaskSource(sourceEntries);
-    const fullPrompt = buildPrompt({ sourceText: fullSource, chunkContext: null });
-    const fullSize = ReviewPromptSize.measure(fullPrompt);
-    if (fullSize.total <= maxChars) {
-      const segments = elements.map((element) => new TaskReviewSourceSegment({ element, start: 0, end: element.content.length }));
+    const limit = new PromptRequestLimit({ maxCharacters: maxChars });
+    const elements = sourceEntries.map((entry, sequence) => new TaskReviewSourceElement({ ...entry, sequence }));
+    const envelope = new TaskReviewPromptEnvelope(buildPrompt);
+    try {
+      const builder = new PromptInputBuilder({ envelope, limit });
+      for (const element of elements) builder.add(element);
+      const collection = builder.build();
+      const corePlan = PromptBatchPlan.create({
+        collection,
+        envelope,
+        limit,
+        topology: new LinearPromptBatchTopology(),
+      });
+      const chunks = corePlan.batches.map((batch) => new TaskReviewPromptChunk({
+        index: batch.index,
+        segments: batch.payloadElements.map(asSegment),
+        prompt: batch.request,
+        maxChars,
+        singleShot: batch.count === 1,
+        batch,
+      }));
       return new TaskReviewPromptPlan({
-        chunks: [new TaskReviewPromptChunk({ index: 0, segments, prompt: fullPrompt, maxChars, singleShot: true })],
+        chunks,
         elements,
         sourceLength: elements.reduce((total, element) => total + element.content.length, 0),
         maxChars,
+        corePlan,
+      });
+    } catch (error) {
+      if (!(error instanceof PromptBatchingError)) throw error;
+      const fixed = error.code === "PROMPT_FIXED_CONTEXT_TOO_LARGE" || elements.length === 0;
+      throw new TaskReviewPromptPlanningFailure({
+        elementName: fixed ? "fixed Task Review context" : (error.details?.elementId || "Task source segment"),
+        size: error.details?.footprint || buildPrompt({ sourceText: "", chunkContext: null }),
+        maxChars,
+        cause: error,
       });
     }
-    if (elements.length === 0) {
-      throw new TaskReviewPromptPlanningFailure({ elementName: "fixed Task Review context", size: fullSize, maxChars });
-    }
-    const fixedPrompt = buildPrompt({ sourceText: "", chunkContext: null });
-    const fixedSize = ReviewPromptSize.measure(fixedPrompt);
-    if (fixedSize.total > maxChars) {
-      throw new TaskReviewPromptPlanningFailure({ elementName: "fixed Task Review context", size: fixedSize, maxChars });
-    }
-
-    const chunks = [];
-    let elementIndex = 0;
-    let offset = 0;
-    while (elementIndex < elements.length) {
-      const index = chunks.length;
-      const segments = [];
-      while (elementIndex < elements.length) {
-        const element = elements[elementIndex];
-        const remaining = new TaskReviewSourceSegment({ element, start: offset, end: element.content.length });
-        const candidateSegments = [...segments, remaining];
-        const candidateContext = new TaskReviewPromptChunkContext({ index, segments: candidateSegments });
-        const candidatePrompt = buildPrompt({ sourceText: renderSegments(candidateSegments), chunkContext: candidateContext });
-        if (ReviewPromptSize.measure(candidatePrompt).total <= maxChars) {
-          segments.push(remaining);
-          elementIndex += 1;
-          offset = 0;
-          continue;
-        }
-        if (segments.length > 0) break;
-        if (element.status === "deleted") {
-          throw new TaskReviewPromptPlanningFailure({ elementName: `Task source header ${element.path}`, size: ReviewPromptSize.measure(candidatePrompt), maxChars });
-        }
-
-        let low = offset;
-        let high = element.content.length;
-        let accepted = null;
-        while (low <= high) {
-          const rawMidpoint = Math.floor((low + high) / 2);
-          const midpoint = safeSliceEnd(element.content, offset, rawMidpoint);
-          if (midpoint <= offset) {
-            low = rawMidpoint + 1;
-            continue;
-          }
-          const segment = new TaskReviewSourceSegment({ element, start: offset, end: midpoint });
-          const context = new TaskReviewPromptChunkContext({ index, segments: [segment] });
-          const prompt = buildPrompt({ sourceText: renderSegments([segment]), chunkContext: context });
-          if (ReviewPromptSize.measure(prompt).total <= maxChars) {
-            accepted = { segment, prompt };
-            low = rawMidpoint + 1;
-          } else {
-            high = rawMidpoint - 1;
-          }
-        }
-        if (accepted === null) {
-          if (element.content.length === offset) {
-            throw new TaskReviewPromptPlanningFailure({ elementName: `Task source header ${element.path}`, size: ReviewPromptSize.measure(candidatePrompt), maxChars });
-          }
-          const probeEnd = safeSliceEnd(element.content, offset, Math.min(element.content.length, offset + 2));
-          const probe = new TaskReviewSourceSegment({ element, start: offset, end: probeEnd });
-          const context = new TaskReviewPromptChunkContext({ index, segments: [probe] });
-          const prompt = buildPrompt({ sourceText: renderSegments([probe]), chunkContext: context });
-          throw new TaskReviewPromptPlanningFailure({ elementName: `Task source segment ${element.path}`, size: ReviewPromptSize.measure(prompt), maxChars });
-        }
-        if (accepted.segment.end < element.content.length) {
-          const newline = element.content.lastIndexOf("\n", accepted.segment.end - 1);
-          if (newline >= offset) {
-            const lineEnd = newline + 1;
-            if (lineEnd > offset) {
-              const segment = new TaskReviewSourceSegment({ element, start: offset, end: lineEnd });
-              const context = new TaskReviewPromptChunkContext({ index, segments: [segment] });
-              accepted = { segment, prompt: buildPrompt({ sourceText: renderSegments([segment]), chunkContext: context }) };
-            }
-          }
-        }
-        segments.push(accepted.segment);
-        offset = accepted.segment.end;
-        if (offset === element.content.length) {
-          elementIndex += 1;
-          offset = 0;
-        }
-        break;
-      }
-      const context = new TaskReviewPromptChunkContext({ index, segments });
-      const prompt = buildPrompt({ sourceText: renderSegments(segments), chunkContext: context });
-      chunks.push(new TaskReviewPromptChunk({ index, segments, prompt, maxChars }));
-    }
-    return new TaskReviewPromptPlan({
-      chunks,
-      elements,
-      sourceLength: elements.reduce((total, element) => total + element.content.length, 0),
-      maxChars,
-    });
   }
 }

@@ -4080,6 +4080,16 @@ export class WorkerArtifactHandoffRequest {
     return digest(stableStringify(this.toJSON()));
   }
 
+  get actionRequestPath() {
+    return path.join(this.directory, "action.json");
+  }
+
+  get actionRequestDigest() {
+    // Hash the wire value written by prepare(), including nested capability
+    // toJSON() projections, rather than the classes' private implementation data.
+    return digest(stableStringify(JSON.parse(JSON.stringify(this.invocation.action.nextAction))));
+  }
+
   prepare() {
     if (this.policy.kind === "source" && this.sourceHandoffCheckpoint === null) {
       throw new WorkerArtifactHandoffError(
@@ -4102,6 +4112,8 @@ export class WorkerArtifactHandoffRequest {
     this.#materializeCanonicalRepairTests();
     new AtomicFile(this.requestPath, { phaseNamespace: "worker-handoff-request" })
       .write(`${JSON.stringify(this.toJSON(), null, 2)}\n`);
+    new AtomicFile(this.actionRequestPath, { phaseNamespace: "worker-action-request" })
+      .write(`${JSON.stringify(this.invocation.action.nextAction, null, 2)}\n`);
     return this;
   }
 
@@ -4186,6 +4198,22 @@ export class WorkerArtifactHandoffRequest {
       ...(this.policy.kind !== "source" && { sealCommand: "sennel flow run seal-handoff" }),
       completionOwner: "parent-dispatcher",
     };
+  }
+
+  toPromptReference() {
+    for (const [filePath, expectedDigest, label] of [
+      [this.requestPath, this.requestDigest, "worker handoff request"],
+      [this.actionRequestPath, this.actionRequestDigest, "worker guarded action request"],
+    ]) {
+      const { document } = boundedJson(filePath, label);
+      if (digest(stableStringify(document)) !== expectedDigest) {
+        throw new WorkerArtifactHandoffError(
+          "stale", "FLOW_ARTIFACT_HANDOFF_STALE", `${label} reference changed before dispatch`,
+          { retryable: false },
+        );
+      }
+    }
+    return new WorkerArtifactHandoffReference(this);
   }
 
   executionEnvironment() {
@@ -4340,6 +4368,39 @@ export class WorkerArtifactHandoffRequest {
       );
     }
     return state;
+  }
+}
+
+/** Bounded prompt projection; immutable request.json retains the full capability. */
+export class WorkerArtifactHandoffReference {
+  constructor(request) {
+    if (!(request instanceof WorkerArtifactHandoffRequest)) throw new Error("worker input reference requires a handoff request");
+    const contract = request.toWorkerJSON();
+    this.requestPath = request.requestPath;
+    this.requestDigest = request.requestDigest;
+    this.actionRequestPath = request.actionRequestPath;
+    this.actionRequestDigest = request.actionRequestDigest;
+    this.actionDigest = request.actionDigest;
+    this.dispatchInvocationId = request.dispatchInvocationId;
+    this.inputDigest = request.inputDigest;
+    this.inputRevision = request.inputRevision;
+    this.inputs = Object.freeze(contract.inputs.map(({ name, targetRelativePath, digest: inputDigest, byteLength }) =>
+      Object.freeze({ name, targetRelativePath, digest: inputDigest, byteLength })));
+    this.payloads = Object.freeze(contract.payloads.map((payload) => Object.freeze(payload)));
+    this.specTestTopology = contract.specTestTopology ? Object.freeze(contract.specTestTopology) : null;
+    this.sealCommand = contract.sealCommand ?? null;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      requestPath: this.requestPath, requestDigest: this.requestDigest,
+      actionRequestPath: this.actionRequestPath, actionRequestDigest: this.actionRequestDigest,
+      actionDigest: this.actionDigest, dispatchInvocationId: this.dispatchInvocationId,
+      inputDigest: this.inputDigest, inputRevision: this.inputRevision,
+      inputs: this.inputs, payloads: this.payloads, specTestTopology: this.specTestTopology,
+      sealCommand: this.sealCommand, completionOwner: "parent-dispatcher",
+    };
   }
 }
 

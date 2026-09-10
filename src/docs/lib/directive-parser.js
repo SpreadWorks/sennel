@@ -83,7 +83,7 @@ const EXTENDS_RE     = /^<!--\s*\{%extends(?:\s+"([\w-]+)")?%\}\s*-->$/;
  * @param {number} index - 現在の行インデックス
  * @returns {{ content: string, endIndex: number }|null}
  */
-function extractCommentBlock(line, lines, index) {
+export function extractCommentBlock(line, lines, index) {
   const trimmed = line.trim();
 
   // Single-line: <!-- ... -->

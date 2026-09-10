@@ -6,6 +6,17 @@ import {
   buildForgeFilePrompt,
   buildForgePrompt,
 } from "../../../../src/docs/lib/forge-prompts.js";
+import { ForgeInputReferencePromptElement } from "../../../../src/docs/lib/prompt-elements.js";
+
+const INPUT_REFERENCE = new ForgeInputReferencePromptElement({
+  id: "forge-input:test",
+  sourceRevision: "a".repeat(64),
+  sequence: 0,
+  path: ".tmp/forge-inputs/test.json",
+  digest: "a".repeat(64),
+  byteLength: 128,
+  authorization: "read-only",
+});
 
 // ---------------------------------------------------------------------------
 // summaryToText
@@ -208,101 +219,19 @@ describe("summaryToText", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildForgeSystemPrompt", () => {
-  it("loads role and rules from prompts.json (ja)", () => {
-    const result = buildForgeSystemPrompt({
-      lang: "ja",
-      userPrompt: "improve docs",
-      specPath: "",
-      specText: "",
-      analysisSummary: "",
-    });
+  it("loads role and rules and contains only the immutable input reference", () => {
+    const result = buildForgeSystemPrompt({ lang: "ja", inputReference: INPUT_REFERENCE });
     assert.ok(result.includes("docs-forge"));
     assert.ok(result.includes("[RULES]"));
     assert.ok(result.includes("推測は避け"));
+    assert.ok(result.includes(".tmp/forge-inputs/test.json"));
+    assert.ok(result.includes('"authorization":"read-only"'));
   });
 
   it("works with en locale", () => {
-    const result = buildForgeSystemPrompt({
-      lang: "en",
-      userPrompt: "improve docs",
-      specPath: "",
-      specText: "",
-      analysisSummary: "",
-    });
+    const result = buildForgeSystemPrompt({ lang: "en", inputReference: INPUT_REFERENCE });
     assert.ok(result.includes("docs-forge"));
     assert.ok(result.includes("Avoid speculation"));
-  });
-
-  it("includes user prompt", () => {
-    const result = buildForgeSystemPrompt({
-      lang: "ja",
-      userPrompt: "Please update the overview section",
-      specPath: "",
-      specText: "",
-      analysisSummary: "",
-    });
-    assert.ok(result.includes("[USER_PROMPT]"));
-    assert.ok(result.includes("Please update the overview section"));
-  });
-
-  it("includes spec when specPath is provided", () => {
-    const result = buildForgeSystemPrompt({
-      lang: "ja",
-      userPrompt: "update",
-      specPath: "specs/042/spec.md",
-      specText: "# Goal\nUpdate all docs",
-      analysisSummary: "",
-    });
-    assert.ok(result.includes("[SPEC_PATH]"));
-    assert.ok(result.includes("specs/042/spec.md"));
-    assert.ok(result.includes("[SPEC_CONTENT]"));
-    assert.ok(result.includes("# Goal\nUpdate all docs"));
-  });
-
-  it("omits spec block when specPath is empty", () => {
-    const result = buildForgeSystemPrompt({
-      lang: "ja",
-      userPrompt: "update",
-      specPath: "",
-      specText: "",
-      analysisSummary: "",
-    });
-    assert.ok(!result.includes("[SPEC_PATH]"));
-    assert.ok(!result.includes("[SPEC_CONTENT]"));
-  });
-
-  it("includes analysis summary when provided", () => {
-    const result = buildForgeSystemPrompt({
-      lang: "ja",
-      userPrompt: "update",
-      specPath: "",
-      specText: "",
-      analysisSummary: "Controllers: 5 files\nModels: 3 files",
-    });
-    assert.ok(result.includes("[SOURCE_ANALYSIS]"));
-    assert.ok(result.includes("Controllers: 5 files"));
-  });
-
-  it("omits analysis block when summary is empty", () => {
-    const result = buildForgeSystemPrompt({
-      lang: "ja",
-      userPrompt: "update",
-      specPath: "",
-      specText: "",
-      analysisSummary: "",
-    });
-    assert.ok(!result.includes("[SOURCE_ANALYSIS]"));
-  });
-
-  it("shows (empty) when specPath set but specText missing", () => {
-    const result = buildForgeSystemPrompt({
-      lang: "ja",
-      userPrompt: "update",
-      specPath: "specs/042/spec.md",
-      specText: "",
-      analysisSummary: "",
-    });
-    assert.ok(result.includes("(empty)"));
   });
 });
 
@@ -311,33 +240,12 @@ describe("buildForgeSystemPrompt", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildForgeFilePrompt", () => {
-  it("uses locale-specific no-feedback text", () => {
-    const ja = buildForgeFilePrompt({
-      lang: "ja",
-      targetFile: "docs/01.md",
-      round: 1,
-      maxRuns: 3,
-      reviewFeedback: "",
-    });
-    assert.ok(ja.includes("なし"));
-
-    const en = buildForgeFilePrompt({
-      lang: "en",
-      targetFile: "docs/01.md",
-      round: 1,
-      maxRuns: 3,
-      reviewFeedback: "",
-    });
-    assert.ok(en.includes("none"));
-  });
-
   it("includes target file path", () => {
     const result = buildForgeFilePrompt({
-      lang: "ja",
       targetFile: "docs/overview.md",
       round: 1,
       maxRuns: 3,
-      reviewFeedback: "",
+      inputReference: INPUT_REFERENCE,
     });
     assert.ok(result.includes("[TARGET_FILE]"));
     assert.ok(result.includes("docs/overview.md"));
@@ -345,26 +253,14 @@ describe("buildForgeFilePrompt", () => {
 
   it("includes round/maxRuns info", () => {
     const result = buildForgeFilePrompt({
-      lang: "ja",
       targetFile: "docs/01.md",
       round: 2,
       maxRuns: 5,
-      reviewFeedback: "",
+      inputReference: INPUT_REFERENCE,
     });
     assert.ok(result.includes("round: 2/5"));
   });
 
-  it("includes review feedback when provided", () => {
-    const result = buildForgeFilePrompt({
-      lang: "ja",
-      targetFile: "docs/01.md",
-      round: 2,
-      maxRuns: 3,
-      reviewFeedback: "Missing section on error handling",
-    });
-    assert.ok(result.includes("[PREVIOUS_REVIEW_FEEDBACK]"));
-    assert.ok(result.includes("Missing section on error handling"));
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -375,68 +271,38 @@ describe("buildForgePrompt", () => {
   it("includes all target files", () => {
     const result = buildForgePrompt({
       lang: "ja",
-      userPrompt: "test",
       round: 1,
       maxRuns: 2,
-      reviewFeedback: "",
-      specPath: "",
-      specText: "",
-      analysisSummary: "",
       targetFiles: ["docs/01.md", "docs/02.md"],
+      inputReference: INPUT_REFERENCE,
     });
     assert.ok(result.includes("docs/01.md"));
     assert.ok(result.includes("docs/02.md"));
     assert.ok(result.includes("[TARGET_FILES]"));
   });
 
-  it("includes role, rules, round, user prompt and review feedback", () => {
+  it("includes role, rules, round and immutable reference", () => {
     const result = buildForgePrompt({
       lang: "ja",
-      userPrompt: "my prompt",
       round: 3,
       maxRuns: 5,
-      reviewFeedback: "fix section 2",
-      specPath: "",
-      specText: "",
-      analysisSummary: "",
       targetFiles: ["docs/01.md"],
+      inputReference: INPUT_REFERENCE,
     });
     assert.ok(result.includes("docs-forge"));
     assert.ok(result.includes("[RULES]"));
     assert.ok(result.includes("round: 3/5"));
-    assert.ok(result.includes("[USER_PROMPT]"));
-    assert.ok(result.includes("my prompt"));
-    assert.ok(result.includes("[PREVIOUS_REVIEW_FEEDBACK]"));
-    assert.ok(result.includes("fix section 2"));
-  });
-
-  it("includes spec and analysis when provided", () => {
-    const result = buildForgePrompt({
-      lang: "ja",
-      userPrompt: "update",
-      round: 1,
-      maxRuns: 1,
-      reviewFeedback: "",
-      specPath: "specs/001/spec.md",
-      specText: "# Goal",
-      analysisSummary: "5 controllers",
-      targetFiles: ["docs/01.md"],
-    });
-    assert.ok(result.includes("[SPEC_PATH]"));
-    assert.ok(result.includes("[SOURCE_ANALYSIS]"));
+    assert.ok(result.includes("[IMMUTABLE_INPUT_REFERENCE]"));
+    assert.ok(result.includes(".tmp/forge-inputs/test.json"));
   });
 
   it("handles empty target files array", () => {
     const result = buildForgePrompt({
       lang: "ja",
-      userPrompt: "test",
       round: 1,
       maxRuns: 1,
-      reviewFeedback: "",
-      specPath: "",
-      specText: "",
-      analysisSummary: "",
       targetFiles: [],
+      inputReference: INPUT_REFERENCE,
     });
     assert.ok(result.includes("[TARGET_FILES]"));
   });

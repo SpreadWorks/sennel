@@ -12,9 +12,8 @@
 import fs from "fs";
 import path from "path";
 import { parseBlocks, BLOCK_START_RE, BLOCK_END_RE } from "./directive-parser.js";
-import { PromptBuilder } from "../../lib/prompt-builder.js";
-import { DocumentationAgent } from "./documentation-agent.js";
 import { resolveChainSafe, resolveMultiChains } from "../../lib/presets.js";
+import { translateMarkdownWithBatches } from "./markdown-prompt-document.js";
 
 const SPECIAL_FILES = new Set(["README.md", "flow-agent-instructions.md", "layout.md"]);
 
@@ -419,23 +418,17 @@ export function resolveChaptersOrder(presetKeys, configChapters, projectRoot) {
  * @param {string} [root] - プロジェクトルート
  * @returns {string}
  */
-export async function translateTemplate(content, fromLang, toLang, agent, _root) {
-  const pb = new PromptBuilder();
-  pb.setRole(`Translate the following Markdown template from ${fromLang} to ${toLang}.`);
-  pb.setRules([
-    '- Preserve ALL directives exactly as-is: {{data(...)}}, {{text(...)}}, {{/data}}, {%block%}, {%/block%}, {%extends%}',
-    "- Translate ONLY: Markdown headings (#), static text, table headers in data directive labels",
-    "- For {{text(...)}} directives, translate the prompt text inside them",
-    "- Do NOT add or remove any lines",
-    "- Output ONLY the translated template, no explanation",
-  ].join("\n"));
-  pb.addUserPrompt("## Template", content);
-  const built = pb.build();
-
+export async function translateTemplate(content, fromLang, toLang, agent, root, { maxCharacters } = {}) {
   try {
-    return await DocumentationAgent.from(agent).call(built.userPrompt, {
+    return await translateMarkdownWithBatches({
+      content,
+      documentId: `template:${fromLang}:${toLang}:${root || "project"}`,
+      fromLang,
+      toLang,
+      agent,
       commandId: "docs.init",
-      systemPrompt: built.systemPrompt,
+      template: true,
+      maxCharacters,
     });
   } catch (err) {
     process.stderr.write(`[sennel] template translation failed: ${err.message}\n`);

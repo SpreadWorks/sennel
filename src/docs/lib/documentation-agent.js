@@ -30,6 +30,20 @@ export class DocumentationAgent {
     return this.#agent.resolve(commandId, options);
   }
 
+  get promptCharacterLimit() {
+    return this.#agent.promptCharacterLimit;
+  }
+
+  projectInvocation(prompt, options = {}) {
+    if (typeof this.#agent.projectInvocation !== "function") {
+      throw new Error("documentation agent does not expose a projectInvocation API");
+    }
+    return this.#agent.projectInvocation(prompt, {
+      ...options,
+      flowAttribution: this.#flowAttribution.mode,
+    });
+  }
+
   call(prompt, options = {}) {
     return this.#agent.call(prompt, {
       ...options,

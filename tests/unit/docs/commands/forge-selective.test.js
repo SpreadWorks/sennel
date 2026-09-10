@@ -1,6 +1,15 @@
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { estimateRelevantFiles } from "../../../../src/docs/commands/forge.js";
+import fs from "node:fs";
+import path from "node:path";
+import { estimateRelevantFiles, materializeForgeInputReference } from "../../../../src/docs/commands/forge.js";
+import { createTmpDir, removeTmpDir } from "../../../support/builders/tmp-dir.js";
+
+let tmp;
+afterEach(() => {
+  if (tmp) removeTmpDir(tmp);
+  tmp = null;
+});
 
 describe("estimateRelevantFiles", () => {
   const allFiles = [
@@ -42,5 +51,30 @@ describe("estimateRelevantFiles", () => {
     const specText = "overview cli commands configuration internal design";
     const result = estimateRelevantFiles(specText, allFiles);
     assert.equal(result.length, allFiles.length);
+  });
+});
+
+describe("materializeForgeInputReference", () => {
+  it("stores a giant request byte-for-byte behind a digest-only prompt reference", () => {
+    tmp = createTmpDir();
+    const request = `${"requested behavior\n".repeat(9000)}tail request`;
+    const input = {
+      request,
+      specification: null,
+      analysis: "complete analysis",
+      previousReviewFeedback: null,
+      round: 1,
+      maxRuns: 3,
+    };
+
+    const reference = materializeForgeInputReference(tmp, {}, input);
+    const stored = fs.readFileSync(path.join(tmp, reference.path), "utf8");
+    const parsed = JSON.parse(stored);
+
+    assert.equal(parsed.request, request);
+    assert.ok(parsed.request.endsWith("tail request"));
+    assert.equal(reference.byteLength, Buffer.byteLength(stored));
+    assert.ok(reference.toPromptText().includes(reference.digest));
+    assert.ok(!reference.toPromptText().includes("requested behavior"));
   });
 });

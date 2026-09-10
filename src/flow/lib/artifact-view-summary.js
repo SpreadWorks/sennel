@@ -8,6 +8,16 @@
  */
 
 import { validateSchema } from "../../lib/schema-validate.js";
+import {
+  AtomicPromptElement,
+  PromptBatchExecutor,
+  PromptBatchPlan,
+  PromptBatchReducer,
+  PromptExecutionLimit,
+  PromptInputBuilder,
+  PromptRequestEnvelope,
+  PromptRequestLimit,
+} from "../../lib/prompt-batching.js";
 import { MAX_SAME_SPEC_CONTRACT_CONTEXT_CHARS } from "./flow-context-limit.js";
 import {
   artifactViewSha256,
@@ -94,6 +104,59 @@ export class ArtifactViewSummaryChunk {
   }
 }
 
+class ArtifactViewPromptElement extends AtomicPromptElement {
+  constructor({ unit, sequence }) {
+    super({
+      id: unit.id,
+      sourceRevision: artifactViewSha256(unit.markdown),
+      sequence,
+      text: unit.markdown,
+    });
+    this.unit = unit;
+    Object.freeze(this);
+  }
+}
+
+class ArtifactViewPromptEnvelope extends PromptRequestEnvelope {
+  constructor(contract = null, { raw = false } = {}) {
+    super({ revision: contract?.promptRevision || "artifact-view-raw-v1" });
+    this.contract = contract;
+    this.raw = raw;
+  }
+
+  chunkFor(elements) {
+    return new ArtifactViewSummaryChunk(elements.map((element) => element.unit));
+  }
+
+  build(elements) {
+    if (elements.length === 0) return { userPrompt: "" };
+    const chunk = this.chunkFor(elements);
+    if (this.raw) return { userPrompt: chunk.markdown };
+    return {
+      systemPrompt: null,
+      userPrompt: this.contract.prompt(chunk),
+      jsonSchema: this.contract.schemaForChunk(chunk),
+      fmtFallback: this.contract.fmtFallback(chunk),
+    };
+  }
+}
+
+class ArtifactViewSummaryReducer extends PromptBatchReducer {
+  constructor({ contract, units }) {
+    super();
+    this.contract = contract;
+    this.units = units;
+    Object.freeze(this);
+  }
+
+  reduce(completions) {
+    return this.contract.createResult(
+      this.units,
+      completions.flatMap((completion) => completion.response),
+    );
+  }
+}
+
 function semanticUnits(fullView) {
   const values = fullView?.semanticUnits ?? fullView?.units;
   if (!Array.isArray(values) || values.length === 0) {
@@ -121,26 +184,20 @@ function semanticUnits(fullView) {
 /** Split a full view only between renderer-declared semantic units. */
 export function splitArtifactViewSummary(fullView) {
   const units = semanticUnits(fullView);
-  const chunks = [];
-  let current = [];
-  let currentLength = 0;
-  for (const unit of units) {
-    if (unit.markdown.length > MAX_SAME_SPEC_CONTRACT_CONTEXT_CHARS) {
-      throw new ArtifactViewSummaryError(
-        "ARTIFACT_VIEW_INPUT_LIMIT",
-        `semantic unit ${unit.id} exceeds ${MAX_SAME_SPEC_CONTRACT_CONTEXT_CHARS} characters`,
-      );
-    }
-    if (currentLength + unit.markdown.length > MAX_SAME_SPEC_CONTRACT_CONTEXT_CHARS) {
-      chunks.push(new ArtifactViewSummaryChunk(current));
-      current = [];
-      currentLength = 0;
-    }
-    current.push(unit);
-    currentLength += unit.markdown.length;
+  const envelope = new ArtifactViewPromptEnvelope(null, { raw: true });
+  const limit = new PromptRequestLimit({ maxCharacters: MAX_SAME_SPEC_CONTRACT_CONTEXT_CHARS });
+  const builder = new PromptInputBuilder({ envelope, limit });
+  units.forEach((unit, sequence) => builder.add(new ArtifactViewPromptElement({ unit, sequence })));
+  try {
+    const plan = PromptBatchPlan.create({ collection: builder.build(), envelope, limit });
+    return Object.freeze(plan.batches.map((batch) => envelope.chunkFor(batch.payloadElements)));
+  } catch (cause) {
+    throw new ArtifactViewSummaryError(
+      "ARTIFACT_VIEW_INPUT_LIMIT",
+      `artifact summary semantic units cannot fit within ${MAX_SAME_SPEC_CONTRACT_CONTEXT_CHARS} characters`,
+      { cause },
+    );
   }
-  if (current.length > 0) chunks.push(new ArtifactViewSummaryChunk(current));
-  return Object.freeze(chunks);
 }
 
 function excerptSchema(units) {
@@ -731,29 +788,63 @@ export class ArtifactViewSummaryService {
       return Object.freeze({ markdown: cacheHit.markdown, fingerprint, cache: { hit: true, warning: null } });
     }
 
-    const chunks = splitArtifactViewSummary({ ...fullView, semanticUnits: units });
-    const entries = [];
-    for (const chunk of chunks) {
-      if (contract.relevantUnits(chunk).length === 0) continue;
-      let response;
-      try {
-        response = await this.agent.call(contract.prompt(chunk), {
-          commandId: contract.commandId,
-          jsonSchema: contract.schemaForChunk(chunk),
-          fmtFallback: contract.fmtFallback(chunk),
-          flowAttribution: "none",
-          cacheMode: "bypass",
+    // Summary contracts explicitly distinguish modeled excerpt sources from
+    // validated, non-summary full-view sections. Keep the latter in the
+    // fingerprint and coverage validation, but do not send them to a model
+    // that is forbidden to reason about or return them.
+    const relevant = units.filter((unit) => contract.relevantUnits(new ArtifactViewSummaryChunk([unit])).length > 0);
+    const envelope = new ArtifactViewPromptEnvelope(contract);
+    const limit = new PromptRequestLimit({ maxCharacters: this.agent.promptCharacterLimit });
+    const builder = new PromptInputBuilder({ envelope, limit });
+    relevant.forEach((unit, sequence) => builder.add(new ArtifactViewPromptElement({ unit, sequence })));
+    let result;
+    if (relevant.length === 0) result = contract.createResult(units, []);
+    try {
+      if (result === undefined) {
+        const plan = PromptBatchPlan.create({
+          collection: builder.build(),
+          envelope,
+          limit,
+          executionLimit: new PromptExecutionLimit(),
         });
-      } catch (cause) {
-        throw new ArtifactViewSummaryError(
-          "ARTIFACT_VIEW_SUMMARY_FAILED",
-          `artifact summary agent failed: ${cause.message || cause}`,
-          { cause },
-        );
+        result = await new PromptBatchExecutor().execute({
+          plan,
+          callAgent: (request, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => this.agent.call(request.userPrompt, {
+            commandId: contract.commandId,
+            jsonSchema: request.jsonSchema,
+            fmtFallback: request.fmtFallback,
+            flowAttribution: "none",
+            cacheMode: "bypass",
+            providerCallAdmission,
+          }),
+          ...(typeof this.agent.projectInvocation === "function" ? {
+            projectInvocation: (request) => this.agent.projectInvocation(request.userPrompt, {
+              commandId: contract.commandId,
+              jsonSchema: request.jsonSchema,
+              fmtFallback: request.fmtFallback,
+              flowAttribution: "none",
+              cacheMode: "bypass",
+            }),
+          } : {}),
+          responseContract: {
+            parse: (response, batch) => contract.parseChunk(envelope.chunkFor(batch.payloadElements), response),
+            itemCount: (entries) => entries.length,
+          },
+          reducer: new ArtifactViewSummaryReducer({ contract, units }),
+        });
       }
-      entries.push(...contract.parseChunk(chunk, response));
+    } catch (cause) {
+      let domainCause = cause;
+      while (domainCause && !(domainCause instanceof ArtifactViewSummaryError)) domainCause = domainCause.cause;
+      if (domainCause instanceof ArtifactViewSummaryError) throw domainCause;
+      throw new ArtifactViewSummaryError(
+        cause?.code === "PROMPT_ELEMENT_TOO_LARGE" || cause?.code === "PROMPT_FIXED_CONTEXT_TOO_LARGE"
+          ? "ARTIFACT_VIEW_INPUT_LIMIT"
+          : "ARTIFACT_VIEW_SUMMARY_FAILED",
+        `artifact summary agent failed: ${cause.message || cause}`,
+        { cause },
+      );
     }
-    const result = contract.createResult(units, entries);
     const markdown = result.toMarkdown();
     let warning = null;
     if (this.cache?.write) {

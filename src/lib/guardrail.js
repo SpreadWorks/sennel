@@ -6,6 +6,8 @@
 
 import fs from "fs";
 import path from "path";
+import { createHash } from "node:crypto";
+import { AtomicPromptElement } from "./prompt-batching.js";
 import { loadConfig, managedDir } from "./config.js";
 import { resolveChainSafe } from "./presets.js";
 import { patternToRegex } from "../docs/lib/scanner.js";
@@ -48,7 +50,24 @@ function parseLintString(lintStr) {
  * @param {Object} entry - Raw guardrail from JSON
  * @returns {Object} Hydrated guardrail
  */
+export class GuardrailArticlePromptElement extends AtomicPromptElement {
+  constructor(entry, sourcePath) {
+    super({
+      id: `${sourcePath}:${entry.id}:body`, sequence: 0, text: entry.body,
+      sourceRevision: createHash("sha256").update(entry.body).digest("hex"),
+    });
+    this.guardrailId = entry.id;
+    Object.freeze(this);
+  }
+}
+
+function assertGuardrailBody(entry, sourcePath) {
+  if (typeof entry.body === "string") new GuardrailArticlePromptElement(entry, sourcePath).assertWithinHardLimit();
+  return entry;
+}
+
 function hydrate(entry, sourcePath) {
+  assertGuardrailBody(entry, sourcePath);
   const meta = { ...entry.meta };
   if (!meta.phase) {
     meta.phase = [...DEFAULT_PHASE];
@@ -204,10 +223,10 @@ function preserveAcknowledgedExceptionClauses(guardrails) {
     if (guardrailAllowsAcknowledgedException(guardrail)) {
       return guardrail;
     }
-    return {
+    return assertGuardrailBody({
       ...guardrail,
       body: `${String(guardrail.body || "").trim()}\n\n${ACKNOWLEDGED_EXCEPTION_CLAUSE}`,
-    };
+    }, "acknowledged-exception augmentation");
   });
 }
 

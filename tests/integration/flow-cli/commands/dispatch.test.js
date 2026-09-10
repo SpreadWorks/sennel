@@ -1133,8 +1133,10 @@ describe("flow dispatch CLI", () => {
     const actionMarker = "\n\nGuarded next action:\n";
     const reportMarker = "\n\nYour response is only a worker report.";
     const [, actionAndReport] = prompt.split(actionMarker);
-    const [actionJson] = actionAndReport.split(reportMarker);
-    const workerAction = JSON.parse(actionJson);
+    const [actionReference] = actionAndReport.split(reportMarker);
+    const actionPath = actionReference.match(/^Read and execute the full guarded action at (.+)\. Its canonical JSON digest is /)?.[1];
+    assert.ok(actionPath, "the worker receives the full action through an immutable file reference");
+    const workerAction = JSON.parse(fs.readFileSync(actionPath, "utf8"));
     const boundaryAction = boundary.envelope.data.nextAction;
     assert.equal(resumed.envelope.data.nextAction, null, "the deliberately failed worker must not advance the handoff step");
     assert.deepEqual(Object.keys(workerAction), [
@@ -1164,6 +1166,7 @@ describe("flow dispatch CLI", () => {
     assert.equal(invocation.authorization.actionDigest, legacyIdentity.digest);
     assert.equal(Object.hasOwn(invocation.authorization, "approvalToken"), false);
     assert.doesNotMatch(prompt, /"actionPrompt"/);
+    assert.doesNotMatch(JSON.stringify(workerAction), /"actionPrompt"/);
     assert.doesNotMatch(JSON.stringify(invocation), /actionPrompt/);
     assert.notDeepEqual(resumed.envelope.data.nextAction, boundaryAction);
     assert.deepEqual(

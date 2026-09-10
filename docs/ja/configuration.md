@@ -50,7 +50,7 @@ sennel は `.sennel/config.json` を唯一の設定ファイルとして読み�
 | `agent.workDir` | — | string | — | エージェントの作業ディレクトリ |
 | `agent.timeout` | — | number | `900` | エージェントのタイムアウト値（秒、1以上） |
 | `agent.retryCount` | — | number | — | エージェントのリトライ回数（1以上の整数） |
-| `agent.batchTokenLimit` | — | number | — | バッチ処理のトークン上限（1000以上の整数） |
+| `agent.promptCharacterLimit` | — | integer | `120000` | 1回の論理 Agent 呼び出しで provider に渡す最大文字数（`1000`〜`120000`）。UTF-8 argv の byte 上限とは独立です。 |
 | `agent.providers` | — | object | — | エージェントプロバイダーの定義マップ |
 | `agent.providers.<key>.command` | ✓ | string | — | プロバイダーの実行コマンド |
 | `agent.providers.<key>.args` | ✓ | string[] | — | コマンドに渡す引数の配列 |

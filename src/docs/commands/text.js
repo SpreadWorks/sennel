@@ -17,19 +17,13 @@ import { parseDirectives, TEXT_OPEN_RE } from "../lib/directive-parser.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { container } from "../../lib/container.js";
 import { resolveDocsContext } from "../lib/docs-context.js";
-import { PromptBuilder } from "../../lib/prompt-builder.js";
-import { DocumentationAgent } from "../lib/documentation-agent.js";
 import {
-  getAnalysisContext,
   getEnrichedContext,
   buildTextSystemPrompt,
-  buildPrompt,
-  buildFileSystemPrompt,
-  buildBatchPrompt,
-  formatLimitRule,
 } from "../lib/text-prompts.js";
 import { parseArgs } from "../../lib/cli.js";
 import { resolveConcurrency, DEFAULT_CONCURRENCY } from "../../lib/config.js";
+import { resolvePromptCharacterLimit } from "../../lib/config.js";
 import { Command } from "../../lib/command.js";
 import { createLogger } from "../../lib/progress.js";
 import { translate } from "../../lib/i18n.js";
@@ -37,12 +31,12 @@ import { getChapterFiles, loadFullAnalysis } from "../lib/command-context.js";
 import { iterateAnalysisCategories } from "../lib/analysis-entry.js";
 import { repairJson } from "../../lib/json-parse.js";
 import { EXIT_ERROR } from "../../lib/constants.js";
-import { formatPreview } from "../../lib/error-preview.js";
 import {
   DocumentUpdatePlan,
   DocumentUpdateTransaction,
   DocumentValidationResult,
 } from "../lib/document-update-plan.js";
+import { generateDocumentationDirectives } from "../lib/documentation-text-batching.js";
 
 const logger = createLogger("text");
 
@@ -97,7 +91,7 @@ function validateBatchResult(original, result, totalDirectives, fileName) {
   if (totalDirectives > 0 && result.filled === 0) {
     return {
       ok: false,
-      reason: `0/${totalDirectives} directives filled. Re-run with --per-directive for retry.`,
+      reason: `0/${totalDirectives} directives filled. No file update was published.`,
     };
   }
 
@@ -110,7 +104,7 @@ function validateBatchResult(original, result, totalDirectives, fileName) {
 }
 
 // ---------------------------------------------------------------------------
-// バッチモード：ファイル単位で全ディレクティブを1回の LLM 呼び出しで処理
+// バッチモード：ファイル単位で全ディレクティブをbounded map/reduceで処理
 // ---------------------------------------------------------------------------
 
 /**
@@ -118,13 +112,18 @@ function validateBatchResult(original, result, totalDirectives, fileName) {
  * 除去してクリーンなテンプレート状態に戻す。
  * processTemplate の endLine 計算と同じ境界ロジックを使用する。
  */
-function stripFillContent(text) {
+function stripFillContent(text, directiveId) {
   const lines = text.split("\n");
+  const selectedLines = directiveId === undefined
+    ? null
+    : new Set(parseDirectives(text)
+      .filter((directive) => directive.type === "text" && directive.params?.id === directiveId)
+      .map((directive) => directive.line));
   const result = [];
   let i = 0;
   while (i < lines.length) {
     result.push(lines[i]);
-    if (TEXT_OPEN_RE.test(lines[i].trim())) {
+    if (TEXT_OPEN_RE.test(lines[i].trim()) && (selectedLines === null || selectedLines.has(i))) {
       i++;
       // {{/text}} 終了タグまでスキップ
       while (i < lines.length && !ENDTEXT_LINE_RE.test(lines[i].trim())) {
@@ -181,39 +180,6 @@ function directiveBatchId(directive, index) {
   return directive.params?.id || `d${index}`;
 }
 
-function buildBatchJsonSchema(textFills) {
-  const properties = {};
-  const required = [];
-  for (let i = 0; i < textFills.length; i++) {
-    const id = directiveBatchId(textFills[i], i);
-    properties[id] = { type: "string" };
-    if (!required.includes(id)) required.push(id);
-  }
-  return {
-    type: "object",
-    additionalProperties: false,
-    properties,
-    required,
-  };
-}
-
-function isValidBatchJsonData(jsonData, textFills) {
-  if (!jsonData || typeof jsonData !== "object" || Array.isArray(jsonData)) return false;
-  const expectedIds = textFills.map((d, i) => directiveBatchId(d, i));
-  for (const id of expectedIds) {
-    if (typeof jsonData[id] !== "string") return false;
-  }
-  for (const key of Object.keys(jsonData)) {
-    if (!expectedIds.includes(key)) return false;
-  }
-  return true;
-}
-
-function isValidBatchJsonResponse(response, textFills) {
-  const parsed = parseBatchJsonResponse(response);
-  return isValidBatchJsonData(parsed, textFills);
-}
-
 function resolveBatchContextOptions(srcRoot, retryCount) {
   if (retryCount === undefined && typeof srcRoot === "number") {
     return { srcRoot: undefined, retryCount: srcRoot };
@@ -238,7 +204,7 @@ function applyBatchJsonToFile(text, textFills, jsonData) {
   for (let i = textFills.length - 1; i >= 0; i--) {
     const d = textFills[i];
     const id = directiveBatchId(d, i);
-    const generated = jsonData[id];
+    let generated = jsonData[id];
 
     if (!generated) {
       skipped++;
@@ -251,8 +217,11 @@ function applyBatchJsonToFile(text, textFills, jsonData) {
       continue;
     }
 
+    if (d.params?.maxLines) generated = generated.split("\n").slice(0, d.params.maxLines).join("\n");
+    if (d.params?.maxChars) generated = generated.slice(0, d.params.maxChars);
+    const content = [d.params?.header, generated, d.params?.footer].filter(Boolean).join("\n");
     const endTag = lines[endLine];
-    const newLines = [d.raw, "\n" + generated, endTag];
+    const newLines = [d.raw, "\n" + content, endTag];
     lines.splice(d.line, endLine - d.line + 1, ...newLines);
     filled++;
   }
@@ -263,20 +232,21 @@ function applyBatchJsonToFile(text, textFills, jsonData) {
 }
 
 /**
- * ファイル内のすべての {{text}} ディレクティブを1回の LLM 呼び出しで処理する。
+ * ファイル内のすべての {{text}} ディレクティブをbounded LLM batchesで処理する。
  * AI には JSON 形式でディレクティブごとのテキストを返させ、
  * コード側で元ファイルの該当位置に挿入する。
  *
  * @returns {{ text: string, filled: number, skipped: number }}
  */
-async function processTemplateFileBatch(text, analysis, fileName, agent, dryRun, _preamblePatterns, systemPrompt, _filterId, _concurrency, lang, srcRoot, retryCount) {
+async function processTemplateFileBatch(text, analysis, fileName, agent, dryRun, _preamblePatterns, systemPrompt, _filterId, concurrency, lang, srcRoot, retryCount, promptCharacterLimit) {
   const batchOptions = resolveBatchContextOptions(srcRoot, retryCount);
   // cleanText を先に計算してから parseDirectives を呼ぶ。
   // stripFillContent は既存コンテンツを除去するため行数が変わる。
   // parseDirectives の行番号は applyBatchJsonToFile に渡す text と一致させる必要がある。
-  const cleanText = stripFillContent(text);
+  const cleanText = stripFillContent(text, _filterId);
   const directives = parseDirectives(cleanText);
-  const textFills = directives.filter((d) => d.type === "text");
+  let textFills = directives.filter((d) => d.type === "text");
+  if (_filterId) textFills = textFills.filter((directive) => directive.params?.id === _filterId);
 
   if (textFills.length === 0) return { text, filled: 0, skipped: 0 };
 
@@ -284,109 +254,36 @@ async function processTemplateFileBatch(text, analysis, fileName, agent, dryRun,
   const hasDeep = textFills.some((d) => d.params?.mode === "deep");
   const batchMode = hasDeep ? "deep" : "light";
   const enriched = getEnrichedContext(analysis, fileName, batchMode, batchOptions.srcRoot);
-  let prompt = buildBatchPrompt(fileName, cleanText, textFills, lang);
-  if (enriched) {
-    prompt = enriched + "\n\n" + prompt;
-  }
+  // The complete analysis is canonical source evidence. Directive-category
+  // projections can legitimately be empty (for example, project structure),
+  // so using one here would make a bounded batch complete but ungrounded.
+  const contextData = analysis;
 
   if (dryRun) {
-    console.log(`[text] DRY-RUN batch ${fileName}: ${textFills.length} directive(s) → 1 call (${prompt.length} chars)`);
+    console.log(`[text] DRY-RUN batch ${fileName}: ${textFills.length} directive(s)`);
     return { text, filled: 0, skipped: textFills.length };
   }
 
-  logger.verbose(`Batch ${fileName}: ${textFills.length} directive(s) → 1 call`);
-
-  const attempts = Math.max(1, (Number(batchOptions.retryCount) || 0) + 1);
-  const jsonSchema = buildBatchJsonSchema(textFills);
-  let jsonData = null;
-  let lastResult = "";
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const result = await invokeAgent(agent, prompt, [], systemPrompt, {
-      retryCount: batchOptions.retryCount || 0,
-      executionWorkDir: batchOptions.srcRoot,
-      jsonSchema,
-      validateResponseForCache: (response) => isValidBatchJsonResponse(response, textFills),
-    });
-
-    if (!result) {
-      throw new Error(`empty batch response for ${fileName}`);
-    }
-
-    lastResult = result;
-    jsonData = parseBatchJsonResponse(result);
-    if (isValidBatchJsonData(jsonData, textFills)) break;
-
-    const preview = formatPreview(result);
-    logger.log(`WARN: JSON parse failed for ${fileName}, response preview: ${preview}`);
-    if (attempt < attempts - 1) {
-      logger.log(`Retrying ${fileName} after batch JSON parse failure (${attempt + 1}/${attempts - 1})`);
-    }
-  }
-
-  if (!isValidBatchJsonData(jsonData, textFills)) {
-    const preview = formatPreview(lastResult);
-    throw new Error(`batch JSON parse failed for ${fileName}: responsePreview=${preview}`);
-  }
+  logger.verbose(`Batch ${fileName}: ${textFills.length} directive(s)`);
+  const jsonData = await generateDocumentationDirectives({
+    cleanText,
+    enrichedContext: enriched,
+    analysisContext: contextData,
+    textFills,
+    fileName,
+    systemPrompt,
+    lang,
+    agent,
+    executionWorkDir: batchOptions.srcRoot,
+    retryCount: batchOptions.retryCount || 0,
+    maxCharacters: promptCharacterLimit,
+    concurrency: concurrency || DEFAULT_CONCURRENCY,
+  });
 
   const applied = applyBatchJsonToFile(cleanText, textFills, jsonData);
   logger.verbose(`Batch DONE ${fileName}: ${applied.filled}/${textFills.length} filled`);
 
   return applied;
-}
-
-// ---------------------------------------------------------------------------
-// エージェント呼び出し
-// ---------------------------------------------------------------------------
-async function invokeAgent(agent, prompt, preamblePatterns, systemPrompt, extraOptions) {
-  const pb = new PromptBuilder();
-  if (systemPrompt) pb.setRole(systemPrompt);
-  pb.addUserPrompt("## Content", prompt);
-  const built = pb.build();
-  const result = await DocumentationAgent.from(agent).call(built.userPrompt, {
-    commandId: "docs.text",
-    systemPrompt: built.systemPrompt,
-    ...extraOptions,
-  });
-  return stripPreamble(result, preamblePatterns);
-}
-
-/**
- * LLM出力から不要なプレフィックス（メタコメンタリー）を除去する。
- * パターンは config.json の textFill.preamblePatterns から読み込む。
- */
-function stripPreamble(text, preamblePatterns) {
-  if (!preamblePatterns || preamblePatterns.length === 0) return text;
-
-  const lines = text.split("\n");
-  let start = 0;
-
-  // 先頭の空行をスキップ
-  while (start < lines.length && lines[start].trim() === "") start++;
-
-  // プレフィックスパターンの検出と除去（最大5行以内）
-  const maxPreambleLines = 5;
-  let preambleEnd = start;
-
-  for (let i = start; i < Math.min(start + maxPreambleLines, lines.length); i++) {
-    const trimmed = lines[i].trim();
-    if (trimmed === "") {
-      // 空行はプレフィックスの一部かもしれない — 続行
-      preambleEnd = i + 1;
-      continue;
-    }
-    const isMetaLine = preamblePatterns.some((p) => p.test(trimmed));
-    if (isMetaLine) {
-      preambleEnd = i + 1;
-      continue;
-    }
-    // 非メタ行に到達 → ここからが本文
-    break;
-  }
-
-  if (preambleEnd > start) {
-    return lines.slice(preambleEnd).join("\n").trim();
-  }
-  return text;
 }
 
 // ---------------------------------------------------------------------------
@@ -403,105 +300,11 @@ function stripPreamble(text, preamblePatterns) {
  * @param {boolean} dryRun     - dry-run モード
  * @returns {{ text: string, filled: number, skipped: number }}
  */
-async function processTemplate(text, analysis, fileName, agent, dryRun, preamblePatterns, systemPrompt, filterId, concurrency, lang, srcRoot, retryCount) {
-  const directives = parseDirectives(text);
-  let textFills = directives.filter((d) => d.type === "text");
-  if (filterId) {
-    textFills = textFills.filter((d) => d.params?.id === filterId);
-  }
-
-  if (textFills.length === 0) return { text, filled: 0, skipped: 0 };
-
-  const lines = text.split("\n");
-  const contextData = getAnalysisContext(analysis, directives);
-  // Analysis context をシステムプロンプトに含めることで、
-  // 同一ファイル内の複数ディレクティブ間でプロンプトキャッシュを活用する
-  const fileSystemPrompt = buildFileSystemPrompt(systemPrompt, contextData, lang);
-
-  if (dryRun) {
-    for (const d of textFills) {
-      const mode = d.params?.mode || "light";
-      const prompt = buildPrompt(d, fileName, lines);
-      console.log(`[text] DRY-RUN ${fileName}:${d.line + 1} [${mode}]: ${d.prompt.slice(0, 80)}`);
-      console.log(`[text]   prompt length: ${prompt.length} chars, system prompt: ${fileSystemPrompt.length} chars`);
-    }
-    return { text, filled: 0, skipped: textFills.length };
-  }
-
-  // Phase 1: Build all prompts upfront (with enriched context per mode)
-  const tasks = textFills.map((d) => {
-    const mode = d.params?.mode || "light";
-    let prompt = buildPrompt(d, fileName, lines);
-    const enriched = getEnrichedContext(analysis, fileName, mode, srcRoot);
-    if (enriched) {
-      prompt = enriched + "\n\n" + prompt;
-    }
-    return { directive: d, prompt };
-  });
-
-  // Phase 2: Parallel LLM calls with concurrency control
-  const maxConcurrency = concurrency || DEFAULT_CONCURRENCY;
-  const results = await mapWithConcurrency(tasks, maxConcurrency, async ({ directive: d, prompt }) => {
-    logger.verbose(`Processing ${fileName}:${d.line + 1}: ${d.prompt.slice(0, 60)}...`);
-    const generated = await invokeAgent(agent, prompt, preamblePatterns, fileSystemPrompt, {
-      retryCount: retryCount || 0,
-      executionWorkDir: srcRoot,
-    });
-    if (typeof generated !== "string" || generated.trim() === "") {
-      throw new Error(`empty agent response for ${fileName}:${d.line + 1}`);
-    }
-    return { generated };
-  });
-  results.throwIfErrors();
-
-  // Phase 3: Apply results in reverse order (line-number shift prevention)
-  let filled = 0;
-  let skipped = 0;
-
-  for (let i = textFills.length - 1; i >= 0; i--) {
-    const d = textFills[i];
-    let generated = results[i].value.generated;
-
-    // maxLines/maxChars によるポスト処理トランケート
-    if (d.params?.maxLines) {
-      const genLines = generated.split("\n");
-      if (genLines.length > d.params.maxLines) {
-        logger.log(`WARN: truncating ${fileName}:${d.line + 1} from ${genLines.length} to ${d.params.maxLines} lines`);
-        generated = genLines.slice(0, d.params.maxLines).join("\n");
-      }
-    }
-    if (d.params?.maxChars && generated.length > d.params.maxChars) {
-      logger.log(`WARN: truncating ${fileName}:${d.line + 1} from ${generated.length} to ${d.params.maxChars} chars`);
-      generated = generated.slice(0, d.params.maxChars);
-    }
-
-    // 終了タグ（endLine）までの範囲を置換
-    const endLine = d.endLine;
-    if (endLine < 0) {
-      logger.log(`WARN: missing {{/text}} end tag for ${fileName}:${d.line + 1}, skipping`);
-      skipped++;
-      continue;
-    }
-
-    // Build content with optional header/footer (same as data directives)
-    const { header, footer } = d.params || {};
-    const contentParts = [];
-    if (header) contentParts.push(header);
-    contentParts.push(generated);
-    if (footer) contentParts.push(footer);
-    const content = contentParts.join("\n");
-
-    // ディレクティブ行 + 生成内容 + 終了タグ行
-    const endTag = lines[endLine];
-    const newLines = [d.raw, content, endTag];
-    lines.splice(d.line, endLine - d.line + 1, ...newLines);
-    filled++;
-    logger.verbose(`FILLED ${fileName}:${d.line + 1} (${generated.split("\n").length} lines)`);
-  }
-
-  let result = lines.join("\n");
-  if (!result.endsWith("\n")) result += "\n";
-  return { text: result, filled, skipped };
+async function processTemplate(text, analysis, fileName, agent, dryRun, preamblePatterns, systemPrompt, filterId, concurrency, lang, srcRoot, retryCount, promptCharacterLimit) {
+  return processTemplateFileBatch(
+    text, analysis, fileName, agent, dryRun, preamblePatterns, systemPrompt,
+    filterId, concurrency, lang, srcRoot, retryCount, promptCharacterLimit,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -554,6 +357,7 @@ export async function textFillFromAnalysis(root, analysis, commandId, srcRoot, o
   const systemPrompt = buildTextSystemPrompt(documentStyle, lang);
   const type = cfg?.type || undefined;
   const concurrency = resolveConcurrency(cfg);
+  const promptCharacterLimit = resolvePromptCharacterLimit(cfg);
   const docsDir = path.join(root, "docs");
   const resolvedSrcRoot = srcRoot || root;
 
@@ -564,13 +368,13 @@ export async function textFillFromAnalysis(root, analysis, commandId, srcRoot, o
   let totalFilled = 0;
   let totalSkipped = 0;
 
-  // Batch mode: file-level parallelism (1 call per file)
+  // Batch mode: file-level parallelism; each file owns a bounded prompt plan.
   const fileResults = await mapWithConcurrency(targetFiles, concurrency, async (file) => {
     const filePath = path.join(docsDir, file);
     const originalBytes = fs.readFileSync(filePath);
     const original = originalBytes.toString("utf8");
     const retryCount = Number(cfg?.agent?.retryCount) || 0;
-    const result = await processTemplateFileBatch(original, analysis, file, agent, false, preamblePatterns, systemPrompt, undefined, undefined, lang, resolvedSrcRoot, retryCount);
+    const result = await processTemplateFileBatch(original, analysis, file, agent, false, preamblePatterns, systemPrompt, undefined, concurrency, lang, resolvedSrcRoot, retryCount, promptCharacterLimit);
     return { file, filePath, originalBytes, original, result };
   });
   fileResults.throwIfErrors();
@@ -693,6 +497,7 @@ async function runText(ctx, rawArgs) {
   const lang = ctx.outputLang;
   const systemPrompt = buildTextSystemPrompt(documentStyle, lang);
   const concurrency = resolveConcurrency(cfg);
+  const promptCharacterLimit = resolvePromptCharacterLimit(cfg);
 
   // File selection: use ctx.files if provided, otherwise get all chapter files and strip
   let targetFiles;
@@ -734,16 +539,16 @@ async function runText(ctx, rawArgs) {
   let totalSkipped = 0;
   const changedFiles = new Set();
 
-  // --id 指定時: per-directive モードを強制
+  // --id narrows the scoped batch plan to one directive.
   if (ctx.id) {
     ctx.perDirective = true;
     logger.verbose(`--id=${ctx.id}: per-directive mode forced.`);
   }
 
   const retryCount = Number(cfg?.agent?.retryCount) || 0;
-  const processFn = ctx.perDirective ? processTemplate : processTemplateFileBatch;
+  const processFn = processTemplateFileBatch;
   if (!ctx.perDirective) {
-    logger.verbose(`Mode: batch (file-level, ${targetFiles.length} file(s), concurrency=${concurrency}). Use --per-directive for single-call mode.`);
+    logger.verbose(`Mode: bounded batch (${targetFiles.length} file(s), concurrency=${concurrency}).`);
   }
 
   // Prepare file entries (filter for --id before parallel dispatch)
@@ -762,14 +567,13 @@ async function runText(ctx, rawArgs) {
     fileEntries.push({ file, filePath, originalBytes, original });
   }
 
-  // File-level concurrency: batch mode can parallelize files (1 call each),
-  // per-directive mode processes files sequentially to avoid concurrency² explosion
-  const fileConcurrency = ctx.perDirective ? 1 : concurrency;
+  // File-level concurrency is independent from each file's bounded prompt plan.
+  const fileConcurrency = concurrency;
   const plans = [];
   const fileResults = await mapWithConcurrency(fileEntries, fileConcurrency, async (entry) => {
     const { file, original } = entry;
     logger.verbose(`start: ${file}`);
-    const result = await processFn(original, analysis, file, agent, ctx.dryRun, preamblePatterns, systemPrompt, ctx.id || undefined, concurrency, lang, srcRoot, retryCount);
+    const result = await processFn(original, analysis, file, agent, ctx.dryRun, preamblePatterns, systemPrompt, ctx.id || undefined, concurrency, lang, srcRoot, retryCount, promptCharacterLimit);
     logger.verbose(`done: ${file}`);
     return { ...entry, result };
   });

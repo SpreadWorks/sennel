@@ -58,9 +58,9 @@ async function execute(ctx) {
 
 describe("docs text transaction", () => {
   for (const [name, call, pattern] of [
-    ["agent failure", async () => { throw new Error("agent failed"); }, /agent failed/],
-    ["invalid JSON", async () => "not JSON", /batch JSON parse failed/],
-    ["empty response", async () => "", /empty batch response/],
+    ["agent failure", async () => { throw new Error("agent failed"); }, /Prompt batch execution/],
+    ["invalid JSON", async () => "not JSON", /Prompt batch execution/],
+    ["empty response", async () => "", /Prompt batch execution/],
   ]) {
     it(`keeps the target byte-identical on ${name}`, async () => {
       const root = createTmpDir(`docs-text-${name.replaceAll(" ", "-")}-`);
@@ -90,7 +90,7 @@ describe("docs text transaction", () => {
       };
       await assert.rejects(
         execute(context(root, fixture.docsDir, fixture.files, agent)),
-        /second file failed/,
+        /Prompt batch execution/,
       );
       assertOriginalBytes(fixture.files, fixture.before);
     } finally {

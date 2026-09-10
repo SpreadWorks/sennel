@@ -130,10 +130,6 @@ export function getEnrichedContext(analysis, fileName, mode, srcRoot) {
           const absPath = path.resolve(srcRoot, filePath);
           let code = fs.readFileSync(absPath, "utf8");
           code = minify(code, filePath);
-          const MAX_CHARS = 8000;
-          if (code.length > MAX_CHARS) {
-            code = code.slice(0, MAX_CHARS) + "\n... (truncated)";
-          }
           parts.push("```");
           parts.push(code);
           parts.push("```");
@@ -242,10 +238,7 @@ export function buildFileSystemPrompt(baseSystemPrompt, contextData, lang) {
   }
   const t = createI18n(lang || "ja", { domain: "prompts" });
   const contextJson = JSON.stringify(contextData, null, 2);
-  const truncatedJson = contextJson.length > 8000
-    ? contextJson.slice(0, 8000) + "\n... (truncated)"
-    : contextJson;
-  return baseSystemPrompt + "\n\n" + t("text.analysisDataHeading") + "\n" + truncatedJson;
+  return baseSystemPrompt + "\n\n" + t("text.analysisDataHeading") + "\n" + contextJson;
 }
 
 /**

@@ -96,6 +96,31 @@ describe("validate (config)", () => {
     );
   });
 
+  it("validates agent.promptCharacterLimit as an integer from 1000 through 120000", () => {
+    assert.equal(
+      validate({ ...validConfig, agent: { promptCharacterLimit: 1_000 } }).agent.promptCharacterLimit,
+      1_000,
+    );
+    assert.equal(
+      validate({ ...validConfig, agent: { promptCharacterLimit: 120_000 } }).agent.promptCharacterLimit,
+      120_000,
+    );
+
+    for (const promptCharacterLimit of [999, 120_001, 1_000.5]) {
+      assert.throws(
+        () => validate({ ...validConfig, agent: { promptCharacterLimit } }),
+        /promptCharacterLimit/,
+      );
+    }
+  });
+
+  it("rejects the retired agent.batchTokenLimit field", () => {
+    assert.throws(
+      () => validate({ ...validConfig, agent: { batchTokenLimit: 10_000 } }),
+      /agent\.batchTokenLimit.*agent\.promptCharacterLimit/,
+    );
+  });
+
   it("rejects agent.providers entry without command", () => {
     assert.throws(
       () => validate({ ...validConfig, agent: { providers: { bad: { args: [] } } } }),

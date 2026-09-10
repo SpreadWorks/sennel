@@ -5,7 +5,6 @@ import {
   parseEnrichResponse,
   mergeEnrichment,
   collectEntries,
-  splitIntoBatches,
   EnrichmentCheckpointCoordinator,
 } from "../../../../src/docs/commands/enrich.js";
 import { ConcurrentBatchResult } from "../../../../src/docs/lib/concurrency.js";
@@ -94,7 +93,7 @@ describe("collectEntries", () => {
 });
 
 describe("EnrichmentCheckpointCoordinator", () => {
-  it("checkpoints successful batches, leaves failed entries pending, then throws", () => {
+  it("does not publish a successful prefix when a later batch fails", () => {
     const analysis = {
       modules: {
         entries: [
@@ -124,53 +123,10 @@ describe("EnrichmentCheckpointCoordinator", () => {
     });
 
     assert.throws(() => coordinator.apply(results), /second batch failed/);
-    assert.equal(checkpoints.length, 1);
-    assert.equal(analysis.modules.entries[0].summary, "first");
-    assert.ok(analysis.modules.entries[0].enrich?.processedAt);
+    assert.equal(checkpoints.length, 0);
+    assert.equal(analysis.modules.entries[0].summary, undefined);
+    assert.equal(analysis.modules.entries[0].enrich, undefined);
     assert.equal(analysis.modules.entries[1].enrich, undefined);
-  });
-});
-
-describe("splitIntoBatches (token-based)", () => {
-  it("splits by token count", () => {
-    // Each essential is 400 chars = 100 tokens. Limit 250 → 2 per batch
-    const entries = Array.from({ length: 5 }, (_, i) => ({ essential: "x".repeat(400), index: i }));
-    const batches = splitIntoBatches(entries, 250);
-    assert.equal(batches.length, 3);
-    assert.equal(batches[0].length, 2);
-    assert.equal(batches[1].length, 2);
-    assert.equal(batches[2].length, 1);
-  });
-
-  it("puts a single large file in its own batch", () => {
-    const entries = [
-      { essential: "x".repeat(20000) }, // 5000 tokens, exceeds limit alone
-      { essential: "x".repeat(200) },   // 50 tokens
-      { essential: "x".repeat(200) },   // 50 tokens
-    ];
-    const batches = splitIntoBatches(entries, 3000);
-    assert.equal(batches.length, 2);
-    assert.equal(batches[0].length, 1); // large file alone
-    assert.equal(batches[1].length, 2); // small files together
-  });
-
-  it("handles entries without essential field", () => {
-    const entries = [{ file: "a.js" }, { file: "b.js" }, { file: "c.js" }];
-    const batches = splitIntoBatches(entries, 1000);
-    assert.equal(batches.length, 1); // all 0 tokens, fit in one batch
-    assert.equal(batches[0].length, 3);
-  });
-
-  it("uses default limit when maxTokens is 0", () => {
-    const entries = Array.from({ length: 3 }, () => ({ essential: "x".repeat(400) }));
-    const batches = splitIntoBatches(entries, 0);
-    // Default 10000 tokens, each entry is 100 tokens → all fit in one batch
-    assert.equal(batches.length, 1);
-  });
-
-  it("handles empty entries", () => {
-    const batches = splitIntoBatches([], 3000, 20);
-    assert.equal(batches.length, 0);
   });
 });
 

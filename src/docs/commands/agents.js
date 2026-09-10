@@ -10,7 +10,7 @@
 import fs from "fs";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
-import { managedOutputDir } from "../../lib/config.js";
+import { managedOutputDir, resolveConcurrency, resolvePromptCharacterLimit } from "../../lib/config.js";
 import { container } from "../../lib/container.js";
 import { translate } from "../../lib/i18n.js";
 import { createResolver } from "../lib/resolver-factory.js";
@@ -20,50 +20,10 @@ import { loadFullAnalysis, getChapterFiles, readText } from "../lib/command-cont
 import { loadSpecDrivenDevelopmentTemplate } from "../../lib/agents-md.js";
 import { resolveDocsContext } from "../lib/docs-context.js";
 import { Command } from "../../lib/command.js";
-import { PromptBuilder } from "../../lib/prompt-builder.js";
-import { DocumentationAgent } from "../lib/documentation-agent.js";
+import { synthesizeProjectInstructions } from "../lib/documentation-agents-batching.js";
+import { AtomicFile } from "../../lib/atomic-file.js";
 
 const logger = createLogger("agents");
-
-// ---------------------------------------------------------------------------
-// AI プロンプト構築
-// ---------------------------------------------------------------------------
-
-function buildAgentsPromptBuilder(projectContent, docsContent, config, srcRoot, specDrivenDevelopmentContent) {
-  const t = translate();
-  const rules = t.raw("prompts:agents.outputRules") || [];
-
-  const pb = new PromptBuilder();
-  pb.setRole(t("prompts:agents.systemPrompt"));
-  pb.setRules("## Output Rules (strict)\n" + rules.map((r) => `- ${r}`).join("\n"));
-
-  if (specDrivenDevelopmentContent) {
-    pb.addUserPrompt("## Spec-Driven Development Section (already present — do not duplicate)", specDrivenDevelopmentContent);
-  }
-
-  pb.addUserPrompt("## Current PROJECT Section (template-generated)", projectContent);
-
-  if (config.type) {
-    const typeStr = Array.isArray(config.type) ? config.type.join(", ") : config.type;
-    pb.addUserPrompt("## Project Config", `- type: ${typeStr}`);
-  }
-
-  const pkgPath = path.join(srcRoot, "package.json");
-  if (fs.existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-      if (pkg.scripts) {
-        pb.addUserPrompt("## package.json scripts", JSON.stringify(pkg.scripts, null, 2));
-      }
-    } catch (_) { /* skip */ }
-  }
-
-  if (docsContent) {
-    pb.addUserPrompt("## Generated Documentation", docsContent);
-  }
-
-  return pb;
-}
 
 // ---------------------------------------------------------------------------
 // ディレクティブ解決
@@ -140,6 +100,7 @@ async function runAgents(ctx, rawArgs) {
   const { root, srcRoot, config, lang, t } = ctx;
 
   const agentsPath = path.join(srcRoot, "AGENTS.md");
+  let newFileTemplate = null;
   if (!fs.existsSync(agentsPath)) {
     // Generate from template
     const specDrivenDevelopmentSection = loadSpecDrivenDevelopmentTemplate(lang || config?.lang || "en", {
@@ -157,8 +118,7 @@ async function runAgents(ctx, rawArgs) {
       "<!-- {{/data}} -->",
       "",
     ].join("\n");
-    fs.writeFileSync(agentsPath, template, "utf8");
-    logger.log(`created ${agentsPath}`);
+    newFileTemplate = template;
   }
 
   // Load analysis
@@ -179,7 +139,7 @@ async function runAgents(ctx, rawArgs) {
   const resolver = await createResolver(resolvedType, root, { configChapters: config.chapters });
   const resolveFn = (preset, source, method, a, labels, params) => resolver.resolve(preset, source, method, analysis, labels, params);
 
-  let content = fs.readFileSync(agentsPath, "utf8");
+  let content = newFileTemplate ?? fs.readFileSync(agentsPath, "utf8");
   const { text: resolved, specDrivenDevelopmentContent, projectContent } = resolveAgentsDirectives(content, resolveFn);
   content = resolved;
 
@@ -191,17 +151,26 @@ async function runAgents(ctx, rawArgs) {
     }
 
     logger.log(t("messages:agents.refining"));
-    const agentsPb = buildAgentsPromptBuilder(projectContent, combinedDocs, config, srcRoot, specDrivenDevelopmentContent);
-    const agentsBuilt = agentsPb.build();
-
     try {
-      const result = await DocumentationAgent.from(agent).call(agentsBuilt.userPrompt, {
-        commandId: "docs.agents",
-        systemPrompt: agentsBuilt.systemPrompt,
+      let scripts = "";
+      const pkgPath = path.join(srcRoot, "package.json");
+      if (fs.existsSync(pkgPath)) {
+        try { scripts = JSON.stringify(JSON.parse(fs.readFileSync(pkgPath, "utf8")).scripts || {}, null, 2); } catch (_) { /* skip */ }
+      }
+      const outputRules = t.raw("prompts:agents.outputRules") || [];
+      const refined = await synthesizeProjectInstructions({
+        contexts: [
+          { label: "Current PROJECT section", text: projectContent },
+          { label: "Existing Spec-Driven Development section; do not duplicate", text: specDrivenDevelopmentContent || "" },
+          { label: "Project type", text: Array.isArray(config.type) ? config.type.join(", ") : String(config.type || "") },
+          { label: "package.json scripts", text: scripts },
+          { label: "Generated documentation", text: combinedDocs },
+        ],
+        rules: "## Output Rules (strict)\n" + outputRules.map((rule) => `- ${rule}`).join("\n"),
+        agent,
+        maxCharacters: resolvePromptCharacterLimit(config),
+        concurrency: resolveConcurrency(config),
       });
-
-      let refined = result.trim();
-
       content = replaceProjectContent(content, refined);
     } catch (err) {
       throw new Error(`AI agent call failed: ${err.message}`);
@@ -216,7 +185,8 @@ async function runAgents(ctx, rawArgs) {
     return;
   }
 
-  fs.writeFileSync(agentsPath, content, "utf8");
+  new AtomicFile(agentsPath).write(Buffer.from(content, "utf8"));
+  if (newFileTemplate !== null) logger.log(`created ${agentsPath}`);
   console.log(t("messages:agents.updated", { path: agentsPath }));
 }
 

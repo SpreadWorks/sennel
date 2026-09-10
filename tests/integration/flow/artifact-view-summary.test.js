@@ -10,6 +10,7 @@ import {
   splitArtifactViewSummary,
 } from "../../../src/flow/lib/artifact-view-summary.js";
 import { MAX_SAME_SPEC_CONTRACT_CONTEXT_CHARS } from "../../../src/flow/lib/flow-context-limit.js";
+import { PromptLogicalFootprint, PromptRequestLimit } from "../../../src/lib/prompt-batching.js";
 
 const SPEC_HEADINGS = Object.freeze({
   purpose: "Purpose",
@@ -283,8 +284,9 @@ describe("artifact view summary", () => {
     assert.equal(chunks.length, 2);
     const cache = new MemoryCache();
     const agent = new FakeAgent([
-      exactSpecResponseForUnits(chunks[0].units),
-      "not JSON from the second chunk",
+      exactSpecResponseForUnits([view.semanticUnits[0]]),
+      exactSpecResponseForUnits([view.semanticUnits[1]]),
+      "not JSON from a later chunk",
     ]);
     const service = new ArtifactViewSummaryService({
       agent,
@@ -297,7 +299,12 @@ describe("artifact view summary", () => {
       service.summarize({ fullView: view, contract: specContract() }),
       (error) => error instanceof ArtifactViewSummaryError && error.code === "ARTIFACT_VIEW_SUMMARY_INVALID",
     );
-    assert.equal(agent.calls.length, 2);
+    assert.equal(agent.calls.length, 3);
+    assert.ok(agent.calls.every((call) => PromptLogicalFootprint.measure({
+      userPrompt: call.prompt,
+      jsonSchema: call.options.jsonSchema,
+      fmtFallback: call.options.fmtFallback,
+    }).fits(new PromptRequestLimit())));
     assert.equal(cache.writes.length, 0);
   });
 

@@ -652,6 +652,68 @@ function specRepairSnapshot(value) {
 }
 
 describe("worker artifact handoff", () => {
+  it("references complete large worker inputs without changing the handoff digest or input authority", () => {
+    const input = `Complete worker request ${"x".repeat(133_813)} END_OF_WORKER_REQUEST`;
+    const value = fixture("draft", { request: input });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      const before = request.requestDigest;
+      const reference = request.toPromptReference().toJSON();
+      const prompt = JSON.stringify(reference);
+      assert.ok(prompt.length < 20_000);
+      assert.equal(prompt.includes("END_OF_WORKER_REQUEST"), false);
+      assert.equal(reference.requestDigest, before);
+      assert.equal(request.requestDigest, before);
+      const stored = JSON.parse(fs.readFileSync(reference.requestPath, "utf8"));
+      assert.ok(JSON.stringify(stored).includes(input));
+      assert.deepEqual(reference.inputs, stored.inputs.map(({ name, targetRelativePath, digest, byteLength }) => ({
+        name, targetRelativePath, digest, byteLength,
+      })));
+      assert.equal(reference.inputDigest, stored.inputDigest);
+      assert.equal(reference.actionDigest, stored.actionDigest);
+      assert.deepEqual(JSON.parse(fs.readFileSync(reference.actionRequestPath, "utf8")), value.invocation.action.nextAction);
+      assert.throws(() => { reference.payloads[0].required = !reference.payloads[0].required; }, TypeError);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("refuses a stale guarded-action reference before handing it to a worker", () => {
+    const value = fixture("draft");
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      const before = request.requestDigest;
+      fs.writeFileSync(request.actionRequestPath, JSON.stringify({ step: "different-step" }));
+      assert.throws(() => request.toPromptReference(), (error) =>
+        error instanceof WorkerArtifactHandoffError && error.code === "FLOW_ARTIFACT_HANDOFF_STALE");
+      assert.equal(request.requestDigest, before);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("refuses a changed request document before handing its reference to a worker", () => {
+    const value = fixture("draft");
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      const before = request.requestDigest;
+      const document = JSON.parse(fs.readFileSync(request.requestPath, "utf8"));
+      document.inputDigest = "0".repeat(64);
+      fs.writeFileSync(request.requestPath, JSON.stringify(document));
+      assert.throws(() => request.toPromptReference(), (error) =>
+        error instanceof WorkerArtifactHandoffError && error.code === "FLOW_ARTIFACT_HANDOFF_STALE");
+      assert.equal(request.requestDigest, before);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
   it("does not expose the retired spec-repair exhaustion diagnostic", () => {
     assert.equal(Object.hasOwn(runDispatchModule, "SpecRepairExhaustedDiagnostic"), false);
   });
