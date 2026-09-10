@@ -38,7 +38,7 @@
  * @property {string}   defaultLanguage      - Default output language
  * @property {"translate"|"generate"} [mode] - How non-default languages are produced
  * @property {DocumentStyle} [style]         - Document style settings
- * (enrichBatchSize/enrichBatchLines removed — replaced by agent.batchTokenLimit)
+ * (enrichBatchSize/enrichBatchLines removed — replaced by agent.promptCharacterLimit)
  */
 
 /**
@@ -72,6 +72,7 @@
  * @property {string} [workDir]              - Working directory for agent execution
  * @property {number} [timeout]              - Agent execution timeout in seconds
  * @property {number} [retryCount]           - Retry count for docs enrich agent calls
+ * @property {number} [promptCharacterLimit] - Provider-visible prompt character limit (1000..120000, default: 120000)
  * @property {Object<string, AgentProvider>} [providers] - Agent provider definitions
  * @property {Object<string, Object<string, string>>} [profiles] - Named profiles mapping commandId prefixes to provider keys
  */

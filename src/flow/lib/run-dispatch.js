@@ -63,6 +63,7 @@ import {
   FlowDispatchTarget,
   UnapprovedFlowDispatchAuthorization,
   flowDispatchDigest,
+  FLOW_DISPATCH_INVOCATION_ENV,
 } from "./dispatch-invocation.js";
 import { buildFlowCommandHookContext } from "./flow-context.js";
 import { ConfirmAndAdvance, resolveDefinitionRoute, resolveDispatcherOwnedFlowAction, resolveSourceHandoffTransitionPlan } from "../definition.js";
@@ -748,7 +749,7 @@ export class FlowDispatchWork {
     const { action, authorization, target } = this.invocation;
     const nextAction = workerFacingNextAction(action.nextAction);
     const authorizationInstruction = authorization.workerInstruction();
-    const handoffContract = this.handoffRequest?.toWorkerJSON() ?? null;
+    const handoffContract = this.handoffRequest?.toPromptReference().toJSON() ?? null;
     const nonblockingRule = nextAction.nonblockingDecision
       ? [
           "",
@@ -763,6 +764,7 @@ export class FlowDispatchWork {
           "",
           "This action uses the source-worker handoff contract below.",
           "Treat its input snapshots as the immutable source for this action.",
+          "Read requestPath in full before acting; it contains the input documents, context, selected repair capability, and source authority.",
           this.handoffRequest.policy.sourceMutation.mode === "forbidden"
             ? "Read the supplied source without editing any project files."
             : this.handoffRequest.policy.preservesRejectedSource
@@ -780,6 +782,7 @@ export class FlowDispatchWork {
           "",
           "This action uses the worker artifact handoff contract below.",
           "Treat its input snapshots as the immutable source for this action.",
+          "Read requestPath in full before acting; it contains the input documents, context, selected repair capability, and output authority.",
           "Write every declared payload only to its exact payloadPath. Existing",
           "instructions naming canonical artifact paths are overridden for outputs.",
           "Do not mark the Flow step done. After writing all payloads, run the exact",
@@ -856,10 +859,14 @@ export class FlowDispatchWork {
       schemaInstruction,
       "",
       "Machine-readable dispatch invocation contract:",
-      JSON.stringify(this.invocation.toJSON(), null, 2),
+      this.handoffRequest
+        ? `Read the JSON in environment variable ${FLOW_DISPATCH_INVOCATION_ENV}. Invocation identity: ${this.invocation.id}.`
+        : JSON.stringify(this.invocation.toJSON(), null, 2),
       "",
       "Guarded next action:",
-      JSON.stringify(nextAction, null, 2),
+      this.handoffRequest
+        ? `Read and execute the full guarded action at ${this.handoffRequest.actionRequestPath}. Its canonical JSON digest is ${this.handoffRequest.actionRequestDigest}. The invocation actionDigest is ${this.handoffRequest.actionDigest}.`
+        : JSON.stringify(nextAction, null, 2),
       "",
       "Your response is only a worker report. The CLI ignores it as a completion",
       "signal and independently verifies the refreshed Flow and repository state.",

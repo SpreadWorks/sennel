@@ -1469,7 +1469,7 @@ describe("test-review spec-local file scope", () => {
   });
 
   it("enforces the test-review prompt limit before calling the agent", async () => {
-    assert.equal(TEST_REVIEW_PROMPT_CHAR_LIMIT, 1_000_000);
+    assert.equal(TEST_REVIEW_PROMPT_CHAR_LIMIT, 120_000);
     const overLimitPrompt = {
       systemPrompt: "x".repeat(TEST_REVIEW_PROMPT_CHAR_LIMIT),
       userPrompt: "y",
@@ -1544,7 +1544,7 @@ describe("test-review spec-local file scope", () => {
     assert.doesNotMatch(md, /undefined/);
   });
 
-  it("asks for one-shot JSON blocking findings separately from advisory findings", () => {
+  it("asks each bounded map for JSON blocking findings separately from advisory findings", () => {
     const coverageArtifact = {
       toPromptSummary() {
         return {
@@ -1562,7 +1562,7 @@ describe("test-review spec-local file scope", () => {
 
     assert.ok(prompt.jsonSchema, "test review should provide a JSON schema to Agent");
     assert.match(prompt.fmtFallback, /Return only a JSON object/);
-    assert.match(combined, /one-shot static test reviewer/);
+    assert.match(combined, /bounded static test review mapper/);
     assert.match(combined, /blockingFindings\[\]/);
     assert.match(combined, /advisoryFindings\[\]/);
     assert.match(combined, /origin/);
@@ -1906,7 +1906,7 @@ describe("spec review classification helpers", () => {
         data_flow: [{ text: "spec.json -> review summary -> reviewer" }],
         decisions: [{
           text: "Use structured review memory.",
-          evidence: `This evidence should be present but truncated. ${longTail}`,
+          evidence: `This evidence must remain canonical. ${longTail}`,
           consideredAlternatives: "Pass full spec.md to review.",
         }],
       },
@@ -1939,13 +1939,13 @@ describe("spec review classification helpers", () => {
     assert.match(summary, /# Open Questions/);
     assert.match(summary, /Confirm whether live-provider behavior is in scope/);
     assert.match(summary, /## Decisions/);
-    assert.match(summary, /evidence: This evidence should be present but truncated/);
+    assert.match(summary, /evidence: This evidence must remain canonical/);
     assert.match(summary, /testable=false/);
     assert.match(summary, /# Tasks/);
     assert.match(summary, /T-1: Enrich spec review summary/);
     assert.match(summary, /acceptance: summary includes task acceptance/);
     assert.match(summary, /test_strategy: Unit test summary field projection/);
-    assert.doesNotMatch(summary, new RegExp(`x{800}`));
+    assert.match(summary, new RegExp(`x{800}`));
   });
 
   it("asks for JSON blocking findings separately from non-blocking improvements", () => {
@@ -2177,7 +2177,7 @@ describe("buildDraftReviewPrompt stage-specific QA projection", () => {
     assert.doesNotMatch(prompt, /\*\*Answer:\*\*/);
     assertAllDoesNotMatch(prompt, leakedAnswerFieldPatterns);
     assertAllDoesNotMatch(prompt, coverageOnlyPatterns);
-    assert.match(prompt, /one-shot finite check of the persisted user-decision list/);
+    assert.match(prompt, /bounded range of the persisted user-decision list/);
     assert.match(prompt, /This is not a question generation task/);
     assert.match(prompt, /An empty question ledger is valid/);
     assert.match(prompt, /redundant confirmation/);
@@ -2207,8 +2207,8 @@ describe("buildDraftReviewPrompt stage-specific QA projection", () => {
 
     assertAllMatch(prompt, renderedQaFieldPatterns);
     assertAllDoesNotMatch(prompt, omittedQuestionStagePatterns);
-    assert.match(prompt, /one-shot final check/);
-    assert.match(prompt, /at most 3 highest-impact blocking gaps/);
+    assert.match(prompt, /supplied bounded range of answered and dropped draft QA/);
+    assert.match(prompt, /Report every evidenced blocking gap in this bounded map input/);
     assert.match(prompt, /append ledger entries/);
     assert.match(prompt, /If no blocking user decision is required/);
     assert.match(prompt, /candidates: 2/);

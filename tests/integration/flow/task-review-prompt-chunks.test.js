@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { container } from "../../../src/lib/container.js";
 import { TemporaryRateLimitFailure } from "../../../src/lib/agent-failure.js";
+import { PromptLogicalFootprint } from "../../../src/lib/prompt-batching.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import FlowReviewCommand, { classifyReviewCommandError } from "../../../src/flow/commands/review.js";
 
@@ -20,7 +21,7 @@ class ChunkReviewAgent {
   async call(prompt, options) {
     this.calls.push({ prompt, options });
     assert.ok(prompt.length + (options.systemPrompt?.length ?? 0) + (options.fmtFallback?.length ?? 0) <= 120000);
-    return this.respond(this.calls.length, prompt);
+    return this.respond(this.calls.length, prompt, options);
   }
 }
 
@@ -73,7 +74,12 @@ test("oversized canonical Task source is fully reviewed before one published PAS
   const result = await scenario.review(worker(agent)).execute(scenario.context());
   assert.notEqual(result.ok, false, JSON.stringify(result));
   assert.ok(agent.calls.length > 1);
-  t.diagnostic(`174488-character baseline input: chunk sizes ${agent.calls.map(({ prompt, options }) => prompt.length + options.systemPrompt.length + options.fmtFallback.length).join(", ")}`);
+  t.diagnostic(`174488-character baseline input: chunk sizes ${agent.calls.map(({ prompt, options }) => PromptLogicalFootprint.measure({
+    userPrompt: prompt,
+    systemPrompt: options.systemPrompt,
+    jsonSchema: options.jsonSchema,
+    fmtFallback: options.fmtFallback,
+  }).total).join(", ")}`);
   for (const line of SOURCE.split("\n").filter(Boolean)) {
     assert.ok(agent.calls.some(call => call.prompt.includes(line)), `${line} must be reviewed`);
   }
@@ -105,6 +111,36 @@ test("a later Task chunk protocol failure leaves no final artifact, seal, or can
   assert.equal(fs.readFileSync(scenario.sourcePath, "utf8"), SOURCE);
 });
 
+test("a Task reduction source effect is rejected before final synthesis or publication", async t => {
+  const scenario = scenarioFor(t, { implementationContent: SOURCE });
+  let finalCalls = 0;
+  const agent = new ChunkReviewAgent((_call, _prompt, options) => {
+    if (/bounded review evidence reducer/.test(options.systemPrompt || "")) {
+      fs.appendFileSync(scenario.sourcePath, "\nreduction-side-effect\n");
+      return "preserved evidence summary";
+    }
+    if (/Final Task Review synthesis/.test(options.systemPrompt || "")) finalCalls += 1;
+    return PASS;
+  });
+  let observed = false;
+  let observedError = null;
+  const result = await scenario.review(worker(agent, (directory, error) => {
+    observedError = error;
+    assert.equal(fs.existsSync(path.join(directory, "impl-review.json")), false);
+    assert.equal(fs.existsSync(path.join(directory, "seal.json")), false);
+    observed = true;
+  })).execute(scenario.context());
+
+  assert.equal(observed, true);
+  while (observedError?.cause) observedError = observedError.cause;
+  assert.equal(observedError?.name, "ReviewProtocolFailure");
+  assert.equal(observedError?.kind, "effect_observed");
+  assert.equal(result.ok, false);
+  assert.equal(result.data.failureCode, "TASK_REVIEW_SOURCE_EFFECT_OBSERVED");
+  assert.equal(finalCalls, 0);
+  assert.equal(publications(scenario).length, 0);
+});
+
 test("Task chunk findings are merged and deduplicated before one rejected publication selects Triage", async t => {
   const scenario = scenarioFor(t, {
     implementationContent: SOURCE,
@@ -117,10 +153,25 @@ test("Task chunk findings are merged and deduplicated before one rejected public
     disposition, rationale: disposition === "must-fix" ? "R-1 requires this behavior." : "This optional explanation improves readability.",
   });
   const blocker = finding("missing-behavior", "must-fix");
-  const agent = new ChunkReviewAgent(call => JSON.stringify({
-    blockingFindings: [blocker],
-    nonBlockingImprovements: [finding(`optional-explanation-${call}`, "informational")],
-  }));
+  const mappedAdvisories = new Set();
+  const agent = new ChunkReviewAgent((call, prompt, options) => {
+    const evidenceKeys = [...new Set([...prompt.matchAll(/optional-explanation-\d+/g)].map((match) => match[0]))];
+    if (options.jsonSchema === null) {
+      return `Preserve blocker missing-behavior and candidates ${evidenceKeys.join(", ")}.`;
+    }
+    if (/Final Task Review synthesis/.test(options.systemPrompt || "")) {
+      return JSON.stringify({
+        blockingFindings: [blocker],
+        nonBlockingImprovements: evidenceKeys.map((key) => finding(key, "informational")),
+      });
+    }
+    const key = `optional-explanation-${call}`;
+    mappedAdvisories.add(key);
+    return JSON.stringify({
+      blockingFindings: [blocker],
+      nonBlockingImprovements: [finding(key, "informational")],
+    });
+  });
   let document;
   const result = await scenario.review(worker(agent, (directory, error) => {
     assert.equal(error, null);
@@ -129,7 +180,7 @@ test("Task chunk findings are merged and deduplicated before one rejected public
   assert.notEqual(result.ok, false, JSON.stringify(result));
   assert.ok(agent.calls.length > 1);
   assert.equal(document.blockingFindings.length, 1);
-  assert.equal(document.nonBlockingImprovements.length, agent.calls.length);
+  assert.equal(document.nonBlockingImprovements.length, mappedAdvisories.size);
   assert.equal(document.verdict, "REJECTED");
   assert.equal(document.blockingFindings[0].repeatCount, 1, "duplicate chunk reports must not consume semantic recurrence budget");
   assert.equal(publications(scenario).length, 0);

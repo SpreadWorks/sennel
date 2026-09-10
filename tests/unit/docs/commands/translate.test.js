@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
 import { createTmpDir, removeTmpDir, writeFile } from "../../../support/builders/tmp-dir.js";
-import { buildTranslationTasks } from "../../../../src/docs/commands/translate.js";
+import DocsTranslateCommand, { buildTranslationTasks, translateDocument } from "../../../../src/docs/commands/translate.js";
 
 describe("translate parallel", () => {
   let tmp;
@@ -119,5 +119,94 @@ describe("translate parallel", () => {
 
       assert.equal(tasks.length, 0);
     });
+  });
+
+  it("preserves Markdown structural blocks while translating typed block results", async () => {
+    const content = "# Heading\n\n```js\nconst x = 1;\n```\n";
+    const agent = {
+      resolve: () => true,
+      async call(_prompt, options) {
+        return JSON.stringify(Object.fromEntries(options.jsonSchema.required.map((id) => {
+          if (id.endsWith(":block:0")) return [id, "# 見出し\n"];
+          if (id.endsWith(":block:1")) return [id, "\n"];
+          return [id, "```js\nconst x = 1;\n```\n"];
+        })));
+      },
+    };
+    const translated = await translateDocument(content, "en", "ja", agent, "fixture", {}, {
+      documentId: "fixture",
+      maxCharacters: 4000,
+    });
+    assert.equal(translated, "# 見出し\n\n```js\nconst x = 1;\n```\n");
+  });
+
+  it("publishes no target file when one translation batch fails", async () => {
+    tmp = createTmpDir();
+    const docsDir = path.join(tmp, "docs");
+    writeFile(tmp, "docs/one.md", "first paragraph");
+    writeFile(tmp, "docs/two.md", "second paragraph");
+    let calls = 0;
+    const agent = {
+      resolve: () => true,
+      async call(_prompt, options) {
+        calls += 1;
+        if (calls === 2) throw new Error("translation failed");
+        return JSON.stringify(Object.fromEntries(options.jsonSchema.required.map((id) => [id, "translated"])));
+      },
+    };
+    const ctx = {
+      root: tmp,
+      docsDir,
+      config: {
+        type: "sample-node-command",
+        concurrency: 2,
+        agent: { promptCharacterLimit: 4000 },
+        chapters: ["one.md", "two.md"],
+        docs: { mode: "translate", languages: ["en", "ja"], defaultLanguage: "en" },
+      },
+      type: "sample-node-command",
+      force: true,
+      dryRun: false,
+      targetLang: "ja",
+      agent,
+    };
+    await assert.rejects(new DocsTranslateCommand().execute({ docsCtx: ctx, _rawArgs: [] }), /Prompt batch execution/);
+    assert.equal(fs.existsSync(path.join(docsDir, "ja", "one.md")), false);
+    assert.equal(fs.existsSync(path.join(docsDir, "ja", "two.md")), false);
+  });
+
+  it("publishes no target file when a later translation returns blank block text", async () => {
+    tmp = createTmpDir();
+    const docsDir = path.join(tmp, "docs");
+    writeFile(tmp, "docs/one.md", "first paragraph");
+    writeFile(tmp, "docs/two.md", "second paragraph");
+    let calls = 0;
+    const agent = {
+      resolve: () => true,
+      async call(_prompt, options) {
+        calls += 1;
+        const translated = calls === 2 ? "" : "translated";
+        return JSON.stringify(Object.fromEntries(options.jsonSchema.required.map((id) => [id, translated])));
+      },
+    };
+    const ctx = {
+      root: tmp,
+      docsDir,
+      config: {
+        type: "sample-node-command",
+        concurrency: 1,
+        agent: { promptCharacterLimit: 4000 },
+        chapters: ["one.md", "two.md"],
+        docs: { mode: "translate", languages: ["en", "ja"], defaultLanguage: "en" },
+      },
+      type: "sample-node-command",
+      force: true,
+      dryRun: false,
+      targetLang: "ja",
+      agent,
+    };
+    await assert.rejects(new DocsTranslateCommand().execute({ docsCtx: ctx, _rawArgs: [] }), /Prompt batch execution/);
+    assert.equal(fs.existsSync(path.join(docsDir, "ja", "one.md")), false);
+    assert.equal(fs.existsSync(path.join(docsDir, "ja", "two.md")), false);
   });
 });

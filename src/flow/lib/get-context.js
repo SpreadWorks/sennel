@@ -12,11 +12,16 @@
 
 import fs from "fs";
 import path from "path";
+import { createHash } from "node:crypto";
 import { managedOutputDir, loadConfig } from "../../lib/config.js";
 import { FlowCommand } from "./base-command.js";
 import { iterateAnalysisCategories } from "../../docs/lib/analysis-entry.js";
 import { container } from "../../lib/container.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
+import {
+  AtomicPromptElement, PromptInputBuilder, PromptRequestEnvelope, PromptRequestLimit,
+  PromptBatchPlan, PromptBatchExecutor, PromptBatchReducer, PromptResponseCoverageInvalidFailure,
+} from "../../lib/prompt-batching.js";
 
 const EXCLUDE_FIELDS = new Set(["hash", "mtime", "lines", "id", "enrich", "detail"]);
 
@@ -51,7 +56,7 @@ function searchEntries(entries, query) {
  * @param {Object} analysis - Parsed analysis.json
  * @returns {string[]} Unique keywords array
  */
-function collectAllKeywords(analysis, limit = 2000) {
+function collectAllKeywords(analysis, limit = 0) {
   const freq = new Map();
   for (const [, catData] of iterateAnalysisCategories(analysis)) {
     for (const e of catData.entries) {
@@ -115,6 +120,37 @@ function _buildKeywordSelectionPb(keywords, query) {
   pb.addUserPrompt("## Available keywords", keywords.join(", "));
 
   return pb;
+}
+
+class KeywordSelectionEnvelope extends PromptRequestEnvelope {
+  constructor(query) {
+    super();
+    this.query = query;
+  }
+
+  build(elements) {
+    return _buildKeywordSelectionPb(elements.map((element) => element.toPromptText()), this.query).build();
+  }
+}
+
+class SelectedKeywordResult {
+  constructor(raw, batch) {
+    const cleaned = raw.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "");
+    const parsed = JSON.parse(cleaned);
+    const selected = parsed.keywords;
+    const allowed = new Set(batch.elements.map((element) => element.toPromptText()));
+    if (!Array.isArray(selected) || selected.some((keyword) => typeof keyword !== "string" || !allowed.has(keyword))) {
+      throw new PromptResponseCoverageInvalidFailure("Keyword selection contains an unknown keyword");
+    }
+    this.keywords = Object.freeze([...new Set(selected)]);
+    Object.freeze(this);
+  }
+}
+
+class SelectedKeywordReducer extends PromptBatchReducer {
+  reduce(completions) {
+    return [...new Set(completions.flatMap((completion) => completion.response.keywords))];
+  }
 }
 
 /**
@@ -257,30 +293,29 @@ async function aiSearch(allEntries, analysis, query, _root) {
   const agent = container.get("agent");
   if (!agent.resolve("flow.context.search")) return fallbackSearch(allEntries, query);
 
-  const kwPb = _buildKeywordSelectionPb(allKeywords, query);
-  const kwBuilt = kwPb.build();
-  let response;
-  try {
-    response = await agent.call(kwBuilt.userPrompt, {
-      commandId: "flow.context.search",
-      systemPrompt: kwBuilt.systemPrompt,
-      jsonSchema: kwBuilt.jsonSchema,
-      fmtFallback: kwBuilt.fmtFallback,
-    });
-  } catch (err) {
-    process.stderr.write(`[sennel] context aiSearch agent call failed: ${err.message}\n`);
-    return fallbackSearch(allEntries, query);
-  }
-
-  // Parse AI response as JSON object containing selected keywords.
   let selectedKeywords;
   try {
-    const cleaned = response.trim().replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "");
-    const parsed = JSON.parse(cleaned);
-    selectedKeywords = Array.isArray(parsed) ? parsed : parsed?.keywords;
-    if (!Array.isArray(selectedKeywords)) return fallbackSearch(allEntries, query);
+    const limit = new PromptRequestLimit({ maxCharacters: agent.promptCharacterLimit ?? 120_000 });
+    const envelope = new KeywordSelectionEnvelope(query);
+    const builder = new PromptInputBuilder({ envelope, limit });
+    allKeywords.forEach((keyword, sequence) => builder.add(new AtomicPromptElement({
+      id: `keyword:${sequence}`, sequence, text: keyword,
+      sourceRevision: createHash("sha256").update(keyword).digest("hex"),
+    })));
+    const plan = PromptBatchPlan.create({ collection: builder.build(), envelope, limit });
+    selectedKeywords = await new PromptBatchExecutor().execute({
+      plan,
+      callAgent: (built, _batch, _retryIndex, _attempt, providerCallAdmission) => agent.call(built.userPrompt, {
+        ...built, commandId: "flow.context.search", providerCallAdmission,
+      }),
+      projectInvocation: typeof agent.projectInvocation === "function"
+        ? (built) => agent.projectInvocation(built.userPrompt, { ...built, commandId: "flow.context.search" })
+        : undefined,
+      responseContract: { parse: (raw, batch) => new SelectedKeywordResult(raw, batch) },
+      reducer: new SelectedKeywordReducer(),
+    });
   } catch (err) {
-    process.stderr.write(`[sennel] context aiSearch JSON parse failed: ${err.message}\n`);
+    process.stderr.write(`[sennel] context aiSearch failed: ${err.message}\n`);
     return fallbackSearch(allEntries, query);
   }
 

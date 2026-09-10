@@ -12,7 +12,7 @@ import fs from "fs";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
 import { Command } from "../../lib/command.js";
-import { loadPackageField } from "../../lib/config.js";
+import { loadPackageField, resolvePromptCharacterLimit } from "../../lib/config.js";
 import { resolveTemplates, mergeResolved, resolveChaptersOrder, translateTemplate } from "../lib/template-merger.js";
 import { summaryToText } from "../lib/forge-prompts.js";
 import { createLogger } from "../../lib/progress.js";
@@ -22,9 +22,8 @@ import { stripBlockDirectives } from "../lib/directive-parser.js";
 import { container } from "../../lib/container.js";
 import { PRODUCT } from "../../lib/product.js";
 import { resolveDocsContext } from "../lib/docs-context.js";
-import { PromptBuilder } from "../../lib/prompt-builder.js";
 import { ExecutionMode, WritePlan } from "../../lib/execution-plan.js";
-import { DocumentationAgent } from "../lib/documentation-agent.js";
+import { selectDocumentationChapters } from "../lib/documentation-init-batching.js";
 
 const logger = createLogger("init");
 
@@ -39,7 +38,7 @@ class InitChapterPlan {
     Object.freeze(this);
   }
 
-  async render(agent, root) {
+  async render(agent, root, maxCharacters) {
     if (this.resolution.action !== "translate" || !agent) return this.content;
     return translateTemplate(
       this.content,
@@ -47,6 +46,7 @@ class InitChapterPlan {
       this.resolution.to,
       agent,
       root,
+      { maxCharacters },
     );
   }
 }
@@ -65,85 +65,21 @@ class InitChapterPlan {
  * @param {string} purpose - documentStyle.purpose
  * @returns {{ fileName: string, content: string }[]}
  */
-async function aiFilterChapters(chapters, analysis, agent, _root, purpose) {
+async function aiFilterChapters(chapters, analysis, agent, _root, purpose, maxCharacters) {
   const summary = summaryToText(analysis);
-  const chapterList = chapters.map((ch) => {
-    // 章タイトル（最初の # 行）を抽出
-    const titleMatch = ch.content.match(/^#\s+(.+)$/m);
-    const title = titleMatch ? titleMatch[1] : ch.fileName;
-    return `- ${ch.fileName}: ${title}`;
-  }).join("\n");
-
-  const purposeClause = purpose
-    ? `\nThe documentation purpose is "${purpose}". Judge each chapter's primary audience from its title and expected content. Exclude chapters whose primary audience does not match this purpose.\n`
-    : "";
-
-  const audienceRule = purpose === "user-guide"
-    ? [
-      "Audience rule for user-guide:",
-      "- Include only chapters primarily useful to end users or adopters of the tool.",
-      "- Exclude chapters primarily intended for developers or maintainers, such as internal design, development/testing, implementation details, architecture-for-contributors, or contributor workflow.",
-      "- Do not include a chapter just because the project analysis contains relevant data. Audience fit is required.",
-      "- In particular, development_testing.md and internal_design.md should normally be excluded for user-guide unless the chapter is clearly written for end users.",
-    ].join("\n")
-    : "";
-
-  const selectionRule = "Look at the project analysis and each chapter title. Include a chapter only if both conditions are true: (1) the analysis contains data relevant to that chapter's topic, and (2) the chapter's primary audience matches the documentation purpose. Exclude a chapter if either condition is false. When unsure about audience fit, exclude developer-oriented chapters.";
-
-  const pb = new PromptBuilder();
-  pb.setRole("Select which documentation chapters to include for this project.");
-
-  const ruleLines = [selectionRule];
-  if (purposeClause) ruleLines.unshift(purposeClause.trim());
-  if (audienceRule) ruleLines.push(audienceRule);
-  pb.setRules(ruleLines.join("\n"));
-
-  pb.setJsonSchema({
-    type: "array",
-    items: { type: "string" },
-  });
-  pb.setFmtFallback('Reply with ONLY a JSON array of chapter filenames. Example: ["overview.md","commands.md"]');
-
-  pb.addUserPrompt("## Project analysis summary", summary);
-  pb.addUserPrompt("## Available chapters", chapterList);
-
-  const initBuilt = pb.build();
-
-  let response;
+  let selectedSet;
   try {
-    response = await DocumentationAgent.from(agent).call(initBuilt.userPrompt, {
-      commandId: "docs.init",
-      systemPrompt: initBuilt.systemPrompt,
-      jsonSchema: initBuilt.jsonSchema,
-      fmtFallback: initBuilt.fmtFallback,
+    selectedSet = await selectDocumentationChapters({
+      chapters,
+      analysisText: summary,
+      purpose,
+      agent,
+      maxCharacters,
     });
   } catch (err) {
     logger.log(`[init] WARN: AI chapter selection failed: ${err.message}`);
     return chapters;
   }
-
-  // JSON オブジェクトをパース（コードフェンスがあれば除去）
-  let cleaned = response.trim();
-  if (cleaned.startsWith("```")) {
-    cleaned = cleaned.replace(/^```[a-z]*\n?/, "").replace(/\n?```$/, "").trim();
-  }
-
-  let selected;
-  try {
-    const parsed = JSON.parse(cleaned);
-    selected = Array.isArray(parsed) ? parsed : null;
-  } catch (_) {
-    logger.log("[init] WARN: AI response is not valid JSON, skipping AI filter.");
-    logger.log(`[init]   response: ${cleaned.slice(0, 200)}`);
-    return chapters;
-  }
-
-  if (!Array.isArray(selected)) {
-    logger.log("[init] WARN: AI response does not contain a chapters array, skipping AI filter.");
-    return chapters;
-  }
-
-  const selectedSet = new Set(selected);
   const filtered = chapters.filter((ch) => selectedSet.has(ch.fileName));
 
   if (filtered.length === 0) {
@@ -183,6 +119,7 @@ async function runInit(ctx, rawArgs) {
   }
 
   const { root, config, outputLang: lang, docsDir, agent, t } = ctx;
+  const promptCharacterLimit = resolvePromptCharacterLimit(config);
 
   let type = ctx.type;
   if (!type) {
@@ -237,7 +174,7 @@ async function runInit(ctx, rawArgs) {
   plan.add(`create ${docsDir} and write the selected documentation files`, async () => {
     const chapters = [];
     for (const planned of plannedChapters) {
-      const content = await planned.render(agent, root);
+      const content = await planned.render(agent, root, promptCharacterLimit);
       chapters.push({ fileName: planned.fileName, content });
     }
 
@@ -256,6 +193,7 @@ async function runInit(ctx, rawArgs) {
         agent,
         root,
         config?.docs?.style?.purpose || "",
+        promptCharacterLimit,
       );
     }
 

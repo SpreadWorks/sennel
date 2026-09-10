@@ -13,12 +13,13 @@
 
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { runCmdAsync } from "../../lib/process.js";
 import { populateFromAnalysis } from "./data.js";
 import { textFillFromAnalysis } from "./text.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { PKG_DIR, parseArgs } from "../../lib/cli.js";
-import { resolveConcurrency } from "../../lib/config.js";
+import { resolveConcurrency, resolveWorkDir } from "../../lib/config.js";
 import { Command } from "../../lib/command.js";
 import { loadFullAnalysis, loadAnalysisData, getChapterFiles, readText } from "../lib/command-context.js";
 import { createResolver } from "../lib/resolver-factory.js";
@@ -28,6 +29,8 @@ import { PromptBuilder } from "../../lib/prompt-builder.js";
 import { DocumentationAgent } from "../lib/documentation-agent.js";
 import { EXIT_ERROR } from "../../lib/constants.js";
 import { loadSpecJson, specJsonToPromptText } from "../../lib/spec-json.js";
+import { AtomicFile } from "../../lib/atomic-file.js";
+import { ForgeInputReferencePromptElement } from "../lib/prompt-elements.js";
 import {
   summaryToText,
   buildForgeSystemPrompt,
@@ -160,18 +163,40 @@ async function invokeAgent(agent, prompt, { systemPrompt, verbose, label }) {
   }
 }
 
+export function materializeForgeInputReference(root, config, input) {
+  const serialized = JSON.stringify(input, null, 2) + "\n";
+  const digest = crypto.createHash("sha256").update(serialized).digest("hex");
+  const inputDir = path.join(resolveWorkDir(root, config), "forge-inputs");
+  const inputPath = path.join(inputDir, `${digest}.json`);
+  fs.mkdirSync(inputDir, { recursive: true });
+  if (fs.existsSync(inputPath)) {
+    const current = fs.readFileSync(inputPath, "utf8");
+    if (current !== serialized) throw new Error(`forge input digest collision: ${inputPath}`);
+  } else {
+    new AtomicFile(inputPath).write(Buffer.from(serialized));
+  }
+  return new ForgeInputReferencePromptElement({
+    id: `forge-input:${digest}`,
+    sourceRevision: digest,
+    sequence: 0,
+    path: path.relative(root, inputPath),
+    digest,
+    byteLength: Buffer.byteLength(serialized),
+    authorization: "read-only",
+  });
+}
+
 /**
  * Run agent for each file with concurrency control.
  * Returns an array of { file, ok, error? } results.
  */
-async function runPerFile({ agent, targetFiles, systemPrompt, lang, round, maxRuns, reviewFeedback, concurrency, verbose }) {
+async function runPerFile({ agent, targetFiles, systemPrompt, inputReference, round, maxRuns, concurrency, verbose }) {
   const raw = await mapWithConcurrency(targetFiles, concurrency, async (file) => {
     const filePrompt = buildForgeFilePrompt({
-      lang,
       targetFile: file,
       round,
       maxRuns,
-      reviewFeedback,
+      inputReference,
     });
 
     console.log(`[forge] start: ${file}`);
@@ -317,6 +342,17 @@ async function runForge(rawArgs, container) {
         }
       } else {
         const targetFiles = currentTargetFiles;
+        const inputReference = materializeForgeInputReference(root, config, {
+          request: userPrompt,
+          specification: specPath ? {
+            path: path.relative(root, specPath),
+            content: specText,
+          } : null,
+          analysis: analysisSummary || null,
+          previousReviewFeedback: reviewFeedback || null,
+          round,
+          maxRuns: effectiveMaxRuns,
+        });
         const resolvedAgent = agent.resolve("docs.forge");
         const usePerFile = !!(resolvedAgent && resolvedAgent.provider.systemPromptFlag());
 
@@ -324,10 +360,7 @@ async function runForge(rawArgs, container) {
           // Per-file async processing with system prompt separation
           const systemPrompt = buildForgeSystemPrompt({
             lang,
-            userPrompt,
-            specPath: specPath ? path.relative(root, specPath) : "",
-            specText,
-            analysisSummary,
+            inputReference,
           });
 
           console.log(`[forge] per-file mode: ${targetFiles.length} files, concurrency=${concurrency}`);
@@ -336,10 +369,9 @@ async function runForge(rawArgs, container) {
             agent,
             targetFiles,
             systemPrompt,
-            lang,
+            inputReference,
             round,
             maxRuns: effectiveMaxRuns,
-            reviewFeedback,
             concurrency,
             verbose: cli.verbose,
           });
@@ -354,14 +386,10 @@ async function runForge(rawArgs, container) {
           // Single-call mode: all files in one prompt (agent lacks systemPromptFlag)
           const prompt = buildForgePrompt({
             lang,
-            userPrompt,
             round,
             maxRuns: effectiveMaxRuns,
-            reviewFeedback,
-            specPath: specPath ? path.relative(root, specPath) : "",
-            specText,
-            analysisSummary,
             targetFiles,
+            inputReference,
           });
           try {
             await invokeAgent(agent, prompt, {

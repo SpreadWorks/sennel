@@ -5,7 +5,7 @@
  * sennel flow review — code quality review after implementation.
  * Phases: confirm → draft (propose) → approve → apply
  *
- * --phase test: one-shot static test review before impl.
+ * --phase test: bounded static test review before impl.
  * The test review writes requirement-to-test coverage evidence and structured
  * findings; it does not auto-fix tests.
  */
@@ -64,6 +64,17 @@ import {
 import { container, initContainer } from "../../lib/container.js";
 import { Command } from "../../lib/command.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
+import {
+  PromptExecutionBudget,
+  PromptExecutionLimit,
+  PromptBatchExecutor,
+  PromptBatchingError,
+  PromptBatchReducer,
+  PromptReductionLevel,
+  PromptReductionPlan,
+  PromptProviderCallAdmission,
+  PromptLogicalFootprint,
+} from "../../lib/prompt-batching.js";
 import { buildAcknowledgedRationaleSection } from "../lib/acknowledged-rationale.js";
 import { validateSchema } from "../../lib/schema-validate.js";
 import { ReviewFailure } from "../lib/review-failure.js";
@@ -111,19 +122,40 @@ import {
   ReviewProtocolAttemptSettlement,
   ReviewProtocolTransportRetryPolicy,
 } from "../lib/review-protocol.js";
-import { measureReviewPromptChars } from "../lib/review-prompt-size.js";
 import {
   TaskReviewPromptChunkContext,
   TaskReviewPromptPlan,
+  TaskReviewPromptPlanningFailure,
 } from "../lib/task-review-prompt-plan.js";
+import { TestReviewPromptPlan } from "../lib/test-review-prompt-plan.js";
+import {
+  DraftSectionPromptElement,
+  ReviewTextPromptPlan,
+  SpecSectionPromptElement,
+} from "../lib/review-text-prompt-plan.js";
+import {
+  ReviewCanonicalAuthorityElement,
+  ReviewFindingSynthesisPlan,
+  ReviewSynthesisEvidenceElement,
+} from "../lib/review-finding-synthesis.js";
 
 /**
  * Local helper for review-phase agent invocations. The Agent service handles
  * timeout and cwd internally; callers only provide the system prompt and
  * (optionally) commandId.
  */
-const callReviewAgent = (agent, prompt, commandId, systemPrompt, protocolOptions = {}) => {
-  const executionOptions = {
+const reviewAgentInvocationOptions = (prompt, commandId, systemPrompt, protocolOptions = {}) => ({
+  commandId,
+  systemPrompt: prompt && typeof prompt === "object" && "userPrompt" in prompt
+    ? prompt.systemPrompt ?? systemPrompt
+    : systemPrompt,
+  jsonSchema: prompt && typeof prompt === "object" && "userPrompt" in prompt
+    ? prompt.jsonSchema ?? null
+    : null,
+  fmtFallback: prompt && typeof prompt === "object" && "userPrompt" in prompt
+    ? prompt.fmtFallback ?? null
+    : null,
+  ...protocolOptions,
     // Review is diagnostic and runs against the actual execution checkout.
     // The parent binds its result to the before/after source fingerprint and
     // canonical target-state digest before promoting any review evidence.
@@ -131,20 +163,144 @@ const callReviewAgent = (agent, prompt, commandId, systemPrompt, protocolOptions
     // The parent keeps the provider admission lease until descendants have
     // ended; otherwise a direct and dispatched review can overlap after the
     // provider's immediate process exits.
-    waitForProcessTree: true,
-  };
+  waitForProcessTree: true,
+});
+
+const callReviewAgent = (agent, prompt, commandId, systemPrompt, protocolOptions = {}) => {
+  const options = reviewAgentInvocationOptions(prompt, commandId, systemPrompt, protocolOptions);
   if (prompt && typeof prompt === "object" && "userPrompt" in prompt) {
-    return agent.call(prompt.userPrompt, {
-      commandId,
-      systemPrompt: prompt.systemPrompt ?? systemPrompt,
-      jsonSchema: prompt.jsonSchema ?? null,
-      fmtFallback: prompt.fmtFallback ?? null,
-      ...protocolOptions,
-      ...executionOptions,
-    });
+    return agent.call(prompt.userPrompt, options);
   }
-  return agent.call(prompt, { commandId, systemPrompt, ...protocolOptions, ...executionOptions });
+  return agent.call(prompt, options);
 };
+
+const projectReviewAgentInvocation = (agent, prompt, commandId, systemPrompt, protocolOptions = {}) => (
+  agent.projectInvocation(
+    prompt && typeof prompt === "object" && "userPrompt" in prompt ? prompt.userPrompt : prompt,
+    reviewAgentInvocationOptions(prompt, commandId, systemPrompt, protocolOptions),
+  )
+);
+
+async function synthesizeReviewFindings({
+  initialItems,
+  authorityElements = [],
+  toText,
+  buildRequest,
+  parseResponse,
+  responseItems,
+  emptyResponse,
+  maxChars,
+  executionBudget,
+  callAgent,
+  projectInvocation,
+  protocolPolicy = null,
+  reductionProtocolPolicy = null,
+}) {
+  const authorityEvidence = authorityElements.map((element, sequence) => (
+    ReviewSynthesisEvidenceElement.fromAuthority(element, sequence)
+  ));
+  const findingOffset = authorityEvidence.length;
+  const findingEvidence = initialItems.map((item, index) => (
+    ReviewSynthesisEvidenceElement.fromFinding(toText(item), findingOffset + index)
+  ));
+  const elements = [...authorityEvidence, ...findingEvidence];
+  if (elements.length === 0) {
+    elements.push(ReviewSynthesisEvidenceElement.fromFinding(JSON.stringify({ noFindings: true }), 0));
+  }
+  const coverageDigest = crypto.createHash("sha256")
+    .update(JSON.stringify(elements.flatMap((element) => element.sourceRefs)))
+    .digest("hex");
+  const summaryRequest = (texts, _context, sourceRefs) => new PromptBuilder()
+    .setRole("You are a bounded review evidence reducer. Preserve every normative fact, contradiction, dependency, and unresolved relation needed by a later global cross-check, even when the local map found no defect.")
+    .setRules([
+      "Return a strictly shorter plain-text semantic summary, not a verdict.",
+      "Do not discard conflicting facts or resolve uncertainty.",
+      "The parent retains the listed immutable source references and rejects missing execution coverage.",
+    ])
+    .addUserPrompt("## Covered Source References", sourceRefs.join("\n"))
+    .addUserPrompt("## Authority and Validated Finding Evidence", texts.join("\n\n"))
+    .build();
+  const planFor = (levelElements, requestBuilder, revision) => ReviewFindingSynthesisPlan.create({
+    elements: levelElements,
+    buildRequest: requestBuilder,
+    maxChars,
+    revision,
+  });
+  let finalPlan = null;
+  const reduction = new PromptReductionPlan({
+    initialElements: elements,
+    coverageDigest,
+    executionBudget,
+  });
+  return reduction.execute({
+    isComplete: (levelElements) => {
+      try {
+        const candidate = planFor(levelElements, buildRequest, "review-global-cross-check-v2");
+        if (candidate.batches.length !== 1) return false;
+        finalPlan = candidate;
+        return true;
+      } catch (error) {
+        if (error instanceof PromptBatchingError && new Set([
+          "PROMPT_ELEMENT_TOO_LARGE",
+          "PROMPT_FIXED_CONTEXT_TOO_LARGE",
+          "PROMPT_BATCH_OVERFLOW",
+        ]).has(error.code)) return false;
+        throw error;
+      }
+    },
+    buildRound: (levelElements, depth) => planFor(
+      levelElements,
+      summaryRequest,
+      `review-evidence-reduction-v2.${depth}`,
+    ).corePlan,
+    executeRound: (plan) => new PromptBatchExecutor({ executionBudget }).executeCompletions({
+      plan,
+      callAgent,
+      responseContract: {
+        parse: (rawResponse, batch) => {
+          const text = typeof rawResponse === "string" ? rawResponse.trim() : JSON.stringify(rawResponse);
+          if (!text) throw new PromptBatchingError("PROMPT_RESPONSE_INVALID", "Review evidence summary must be non-empty");
+          const sourceRefs = [...new Set(batch.payloadElements.flatMap((element) => element.sourceRefs))];
+          return ReviewSynthesisEvidenceElement.fromSummary({
+            text,
+            sequence: batch.index,
+            sourceRefs,
+            coverageDigest,
+          });
+        },
+        itemCount: () => 1,
+      },
+      ...(projectInvocation ? { projectInvocation } : {}),
+      ...(reductionProtocolPolicy ? { protocolPolicy: reductionProtocolPolicy } : {}),
+    }),
+    toNextLevel: (completions) => new PromptReductionLevel({
+      elements: completions.map((completion) => completion.response),
+      coverageDigest,
+    }),
+    finalize: async () => {
+      executionBudget.consumeSynthesisCalls(1);
+      const completions = await new PromptBatchExecutor({ executionBudget }).executeCompletions({
+        plan: finalPlan.corePlan,
+        callAgent,
+        responseContract: {
+          parse: parseResponse,
+          itemCount: (response) => responseItems(response).length,
+        },
+        ...(projectInvocation ? { projectInvocation } : {}),
+        ...(protocolPolicy ? { protocolPolicy } : {}),
+      });
+      return completions[0]?.response ?? emptyResponse();
+    },
+  });
+}
+
+function splitReviewTextAtHeadings(text, headingPattern) {
+  const starts = [0];
+  for (const match of text.matchAll(headingPattern)) {
+    if (match.index > 0) starts.push(match.index);
+  }
+  return starts.map((start, index) => text.slice(start, starts[index + 1] ?? text.length));
+}
 
 class TaskReviewSourceObservation {
   constructor({ protocolAttempt, baseline } = {}) {
@@ -961,7 +1117,8 @@ function prepareLoopReviewInputsWithExclusions({
     strippedDiffs.set(file, stripDiffFileHeaders(diff));
   }
   const groups = groupByDiffContent(strippedDiffs, fileToRequirements);
-  const reviewChunks = createLoopReviewChunks(groups, maxLoopCalls);
+  const needsCrossCheck = groups.length > 1;
+  const reviewChunks = createLoopReviewChunks(groups, needsCrossCheck ? Math.max(1, maxLoopCalls - 1) : maxLoopCalls);
   return { scopedTouchedFiles, rawPerFileDiffs, groups, reviewChunks };
 }
 
@@ -1035,9 +1192,6 @@ const IMPL_REVIEW_BLOCKING_FAILURE_MODES = Object.freeze([
 ]);
 const IMPL_REVIEW_DISPOSITIONS = Object.freeze(["must-fix", "deferred", "informational"]);
 const IMPL_REVIEW_DISPOSITION_SET = new Set(IMPL_REVIEW_DISPOSITIONS);
-const IMPL_REVIEW_MEMORY_BLOCKING_LIMIT = 3;
-const IMPL_REVIEW_MEMORY_NON_BLOCKING_LIMIT = 5;
-const IMPL_REVIEW_MEMORY_FIELD_LIMIT = 500;
 
 function normalizeImplReviewRequirementIds(requirementIds) {
   if (!(requirementIds instanceof Set)) {
@@ -1105,12 +1259,6 @@ function buildImplReviewFmtFallback(schema) {
 
 function normalizeReviewPath(value) {
   return String(value || "").trim().replace(/\\/g, "/").replace(/^`|`$/g, "");
-}
-
-function truncateReviewMemoryText(value, limit = IMPL_REVIEW_MEMORY_FIELD_LIMIT) {
-  const text = String(value || "");
-  if (text.length <= limit) return text;
-  return `${text.slice(0, Math.max(0, limit - 13))}...[truncated]`;
 }
 
 class ImplReviewFinding {
@@ -1193,25 +1341,7 @@ class ImplReviewFinding {
   }
 
   toPromptMemory() {
-    return {
-      findingKey: truncateReviewMemoryText(this.findingKey),
-      title: truncateReviewMemoryText(this.title),
-      failureMode: truncateReviewMemoryText(this.failureMode),
-      ...(this.file ? { file: truncateReviewMemoryText(this.file) } : {}),
-      requirementId: this.requirementId,
-      ...(this.guardrailId ? { guardrailId: truncateReviewMemoryText(this.guardrailId) } : {}),
-      issue: truncateReviewMemoryText(this.issue),
-      suggestion: truncateReviewMemoryText(this.suggestion),
-      disposition: this.disposition,
-      rationale: truncateReviewMemoryText(this.rationale),
-      ...(this.priorRepairInsufficiency === null ? {} : {
-        priorRepairInsufficiency: truncateReviewMemoryText(this.priorRepairInsufficiency),
-        repairStrategy: truncateReviewMemoryText(this.repairStrategy),
-      }),
-      findingId: this.findingId,
-      fingerprint: this.fingerprint,
-      repeatCount: this.repeatCount,
-    };
+    return this.toJSON();
   }
 
   withDisposition(disposition, requirementIds) {
@@ -1261,10 +1391,8 @@ class ImplReviewArtifact {
       verdict: this.verdict,
       counts: this.summary,
       previousBlockingFindings: this.blockingFindings
-        .slice(0, IMPL_REVIEW_MEMORY_BLOCKING_LIMIT)
         .map((item) => item.toPromptMemory()),
       acknowledgedNonBlockingImprovements: this.nonBlockingImprovements
-        .slice(0, IMPL_REVIEW_MEMORY_NON_BLOCKING_LIMIT)
         .map((item) => item.toPromptMemory()),
     };
   }
@@ -1553,7 +1681,7 @@ const TASK_REVIEW_PROMPT_TOO_LARGE_CODE = "TASK_REVIEW_PROMPT_TOO_LARGE";
 export const TASK_REVIEW_PROMPT_CHAR_LIMIT = MAX_IMPL_REQUIREMENT_BATCH_CHARS;
 
 function assertTaskReviewPromptWithinLimit(prompt) {
-  const chars = measureReviewPromptChars(prompt);
+  const chars = PromptLogicalFootprint.measure(prompt).total;
   if (chars <= TASK_REVIEW_PROMPT_CHAR_LIMIT) return;
   throw new Error(
     `${TASK_REVIEW_PROMPT_TOO_LARGE_CODE}: Task Review prompt is ${chars} chars; `
@@ -1575,11 +1703,10 @@ function taskReviewProviderFinding(finding) {
   };
 }
 
-function mergeTaskReviewChunkResponses(rawResponses, requirementIds) {
+function mergeTaskReviewParsedResponses(parsedResponses) {
   const selected = new Map();
   const dispositionStrength = new Map([["informational", 1], ["deferred", 2], ["must-fix", 3]]);
-  for (const rawResponse of rawResponses) {
-    const parsed = parseImplReviewFindings(rawResponse, { requirementIds, taskReview: true });
+  for (const parsed of parsedResponses) {
     for (const [bucket, findings] of [
       ["blockingFindings", parsed.blockingFindings],
       ["nonBlockingImprovements", parsed.nonBlockingImprovements],
@@ -1600,30 +1727,124 @@ function mergeTaskReviewChunkResponses(rawResponses, requirementIds) {
   return JSON.stringify(merged);
 }
 
+class TaskReviewFindingReducer extends PromptBatchReducer {
+  reduce(completions) {
+    return mergeTaskReviewParsedResponses(completions.map((completion) => completion.response));
+  }
+}
+
+function mergeTaskReviewChunkResponses(rawResponses, requirementIds) {
+  return mergeTaskReviewParsedResponses(rawResponses.map((rawResponse) => (
+    parseImplReviewFindings(rawResponse, { requirementIds, taskReview: true })
+  )));
+}
+
+function buildTaskReviewSynthesisPrompt(seedPrompt, requirementIds, guardrails, findingTexts, sourceRefs = []) {
+  return {
+    systemPrompt: [
+      seedPrompt.systemPrompt,
+      "Final Task Review synthesis: all canonical source ranges completed. Resolve duplicate or contradictory findings and verify global Requirement/guardrail coverage before returning one result.",
+      "Adjudicate every supplied map finding against the canonical authority. Omit a map finding only when that authority disproves or resolves it; the returned JSON is the final authoritative result.",
+    ].filter(Boolean).join("\n\n"),
+    userPrompt: [
+      "## Complete Requirement IDs",
+      [...requirementIds].sort().join("\n") || "(none)",
+      "## Complete Review Guardrail IDs",
+      guardrails.map((guardrail) => guardrail.id).filter(Boolean).sort().join("\n") || "(none)",
+      "## Covered Evidence References",
+      sourceRefs.join("\n") || "(none)",
+      "## Canonical Authority and Validated Range Findings",
+      findingTexts.join("\n\n"),
+    ].join("\n\n"),
+    jsonSchema: seedPrompt.jsonSchema,
+    fmtFallback: seedPrompt.fmtFallback,
+  };
+}
+
+function buildTaskReviewAuthorityElements(taskSpec, previousReview) {
+  const elements = [new ReviewCanonicalAuthorityElement({
+    id: `task-review-spec:${taskSpec.relPath}`,
+    text: ["## Canonical Task Specification", taskSpec.content].join("\n"),
+    sequence: 0,
+  })];
+  const memoryEntries = previousReview === null ? [] : [
+    { kind: "metadata", value: { verdict: previousReview.verdict, counts: previousReview.counts } },
+    ...(previousReview.previousBlockingFindings || []).map((value) => ({ kind: "blocking", value })),
+    ...(previousReview.acknowledgedNonBlockingImprovements || []).map((value) => ({ kind: "advisory", value })),
+  ];
+  memoryEntries.forEach((entry, index) => elements.push(new ReviewCanonicalAuthorityElement({
+    id: `task-review-prior-memory:${entry.kind}:${index}`,
+    text: ["## Canonical Prior Review Memory", JSON.stringify(entry.value)].join("\n"),
+    sequence: index + 1,
+  })));
+  return elements;
+}
+
 async function runTaskReviewPromptPlanWithDependencies({
   plan,
   requirementIds,
   callAgent,
+  projectInvocation = null,
+  protocolPolicy = null,
+  synthesize = null,
+  synthesizeWhenSingle = false,
 }) {
   if (!(plan instanceof TaskReviewPromptPlan)) throw new Error("Task Review prompt execution requires its typed plan");
   if (!(requirementIds instanceof Set)) throw new Error("Task Review prompt execution requires requirementIds");
   if (typeof callAgent !== "function") throw new Error("Task Review prompt execution requires callAgent");
-  const rawResponses = [];
-  for (const chunk of plan.chunks) {
-    const rawResponse = await callAgent(chunk.prompt, chunk);
-    parseImplReviewFindings(rawResponse, { requirementIds, taskReview: true });
-    rawResponses.push(rawResponse);
+  if (projectInvocation !== null && typeof projectInvocation !== "function") {
+    throw new Error("Task Review invocation projection must be a function or null");
   }
-  return mergeTaskReviewChunkResponses(rawResponses, requirementIds);
+  if (protocolPolicy !== null && typeof protocolPolicy.execute !== "function") {
+    throw new Error("Task Review protocol policy must implement execute()");
+  }
+  const protocolAttemptCount = protocolPolicy === null ? 1 : protocolPolicy.maxProviderCalls;
+  if (!Number.isSafeInteger(protocolAttemptCount) || protocolAttemptCount < 1) {
+    throw new Error("Task Review protocol policy requires maxProviderCalls");
+  }
+  const executionBudget = new PromptExecutionBudget(new PromptExecutionLimit({
+      maxRequestCharacters: plan.maxChars,
+      maxBatchCount: Math.max(plan.chunks.length, 16),
+      maxProviderCallCount: (plan.chunks.length + 16) * protocolAttemptCount,
+      maxProtocolRetryCount: protocolAttemptCount - 1,
+      maxSynthesisCallCount: 16,
+      maxAggregateCharacters: 1_000_000,
+    }));
+  const executor = new PromptBatchExecutor({ executionBudget });
+  let completions;
+  try {
+    completions = await executor.executeCompletions({
+      plan: plan.corePlan,
+      callAgent: (request, batch, protocolRetryIndex, attemptContext, providerCallAdmission) => callAgent(
+        request,
+        plan.chunks[batch.index],
+        protocolRetryIndex,
+        attemptContext,
+        providerCallAdmission,
+      ),
+      responseContract: {
+        parse: (rawResponse) => parseImplReviewFindings(rawResponse, { requirementIds, taskReview: true }),
+        itemCount: (response) => response.blockingFindings.length + response.nonBlockingImprovements.length,
+      },
+      ...(projectInvocation === null ? {} : {
+        projectInvocation: (request, batch) => projectInvocation(request, plan.chunks[batch.index]),
+      }),
+      ...(protocolPolicy === null ? {} : { protocolPolicy }),
+    });
+  } catch (error) {
+    if (error instanceof PromptBatchingError && error.cause) throw error.cause;
+    throw error;
+  }
+  const merged = new TaskReviewFindingReducer().reduce(completions);
+  return (completions.length > 1 || synthesizeWhenSingle) && synthesize
+    ? synthesize({ completions, merged, executionBudget, protocolPolicy })
+    : merged;
 }
 
-async function runImplReviewAgentWithDependencies({ prompt, taskReview = false, taskReviewPlan = null, requirementIds = null, callAgent }) {
+async function runImplReviewAgentWithDependencies({ prompt, taskReview = false, taskReviewPlan = null, requirementIds = null, callAgent, projectInvocation = null, protocolPolicy = null, synthesize = null, synthesizeWhenSingle = false }) {
   if (taskReviewPlan !== null) {
     if (!(taskReviewPlan instanceof TaskReviewPromptPlan)) throw new Error("Task Review requires its typed prompt plan");
-    if (taskReviewPlan.chunks.length === 1 && taskReviewPlan.chunks[0].singleShot) {
-      return callAgent(taskReviewPlan.chunks[0].prompt, taskReviewPlan.chunks[0]);
-    }
-    return runTaskReviewPromptPlanWithDependencies({ plan: taskReviewPlan, requirementIds, callAgent });
+    return runTaskReviewPromptPlanWithDependencies({ plan: taskReviewPlan, requirementIds, callAgent, projectInvocation, protocolPolicy, synthesize, synthesizeWhenSingle });
   }
   if (taskReview) assertTaskReviewPromptWithinLimit(prompt);
   return callAgent(prompt);
@@ -1997,9 +2218,22 @@ function buildCrossCheckInput(summaries) {
   if (summaries.length === 0) return "No proposals were generated from individual file reviews.";
   const lines = ["## Individual File Review Summaries", ""];
   for (const s of summaries) {
-    lines.push(`### ${s.file}`);
+    lines.push(`### ${s.files?.join(", ") || s.file}`);
     lines.push(s.proposals);
     lines.push("");
+  }
+  const authorities = [...new Set(summaries.map((summary) => summary.requirementAuthority).filter(Boolean))];
+  lines.push("## Complete Related Requirement Authority", "");
+  lines.push(...(authorities.length > 0 ? authorities : ["(none)"]));
+  return lines.join("\n");
+}
+
+function buildChunkRequirementAuthority(chunk, fileToReqs) {
+  const lines = [];
+  for (const group of chunk) {
+    const requirements = fileToReqs.get(group.representative) || [];
+    lines.push(`### ${group.files.join(", ")}`);
+    lines.push(...(requirements.length > 0 ? requirements : ["(no related requirement binding)"]));
   }
   return lines.join("\n");
 }
@@ -2012,12 +2246,16 @@ function buildImplLoopSystemPrompt({ mode, guardrails = [], acknowledgedRational
       : "You are an implementation reviewer. Analyze the supplied code changes for requirement-backed improvements.")
     .setRules([
       crossCheck
-        ? "Focus on interface, duplication, and naming inconsistencies across files."
+        ? "Focus on interface, duplication, and naming inconsistencies across files, and verify proposals against the complete related Requirement authority."
         : "Focus on duplication, naming, dead code, design consistency, and simplification.",
       "Only return proposals that are backed by an allowed active-spec requirement.",
       "Use the repository-relative file that contains the issue.",
       "Treat guardrails as rationale context only; never use a guardrail identifier as a requirement identifier.",
       "When no valid requirement-backed proposal exists, return an empty proposals array.",
+      ...(crossCheck ? [
+        "Adjudicate every supplied map proposal against all other proposals and Requirement authority.",
+        "Return the complete distinct final proposal set. Omit proposals that are duplicated, contradicted, or disproved; this response replaces the map candidates.",
+      ] : []),
       "The supplied JSON Schema is authoritative for the response structure.",
     ].join("\n"));
 
@@ -2065,6 +2303,18 @@ function expandProposalsToGroup(proposals, groupFiles) {
         expanded.push(p.retarget(file));
       }
     }
+  }
+  return expanded;
+}
+
+function expandChunkProposals(proposals, chunk, expandGroupProposals) {
+  const expanded = [];
+  for (const group of chunk) {
+    const groupProposals = proposals.filter((proposal) => proposal.file && group.files.includes(proposal.file));
+    const applicable = groupProposals.length > 0 ? groupProposals : proposals;
+    expanded.push(...(group.files.length > 1
+      ? expandGroupProposals(applicable, group.files)
+      : applicable));
   }
   return expanded;
 }
@@ -2247,10 +2497,21 @@ async function executeWorkUnit({
   }
 }
 
+async function executeWithProviderAttemptBudget(execute, executionBudget, { synthesis = false } = {}) {
+  if (synthesis) executionBudget.consumeSynthesisCalls(1);
+  const admission = new PromptProviderCallAdmission(executionBudget);
+  try {
+    return await execute(admission);
+  } finally {
+    if (!admission.settled) admission.settle();
+  }
+}
+
 async function runLoopReviewWithDependencies({
   groups,
   maxLoopCalls = MAX_LOOP_CALLS,
   buildChunkInput,
+  buildChunkAuthority = (_chunk, input) => input,
   reviewChunk,
   crossCheck,
   expandGroupProposals = expandProposalsToGroup,
@@ -2267,7 +2528,14 @@ async function runLoopReviewWithDependencies({
   if (!(proposalContract instanceof ImplReviewProposalContract)) {
     throw new Error("loop review requires ImplReviewProposalContract");
   }
-  const reviewChunks = createLoopReviewChunks(groups, maxLoopCalls);
+  const needsCrossCheck = groups.length > 1;
+  const reviewChunks = createLoopReviewChunks(groups, needsCrossCheck ? Math.max(1, maxLoopCalls - 1) : maxLoopCalls);
+  const executionBudget = new PromptExecutionBudget(new PromptExecutionLimit({
+    maxBatchCount: maxLoopCalls,
+    maxProviderCallCount: maxLoopCalls,
+    maxSynthesisCallCount: 1,
+  }));
+  executionBudget.assertCanExecute(reviewChunks.length + (needsCrossCheck ? 1 : 0));
   if (groups.length > maxLoopCalls && onBatch) onBatch({ groups, reviewChunks, maxLoopCalls });
 
   const allProposals = [];
@@ -2301,23 +2569,33 @@ async function runLoopReviewWithDependencies({
           parentChunk: chunk,
           priorFailures,
         });
+        executionBudget.assertCanExecute(children.length);
         const childProposals = [];
         for (const child of children) {
           const childInput = buildChunkInput(child.groups);
           const childExecution = await executeWorkUnit({
             identity: child.identity,
             checkpointStore,
-            execute: () => reviewChunk(child.groups, childInput),
+            execute: () => executeWithProviderAttemptBudget(
+              (providerCallAdmission) => reviewChunk(child.groups, childInput, { providerCallAdmission }),
+              executionBudget,
+            ),
             proposalContract,
           });
-          if (childExecution.toolingOutcome) return childExecution;
-          childProposals.push(...childExecution.proposals);
+          if (childExecution.toolingOutcome) return { ...childExecution, reviewCallCount: executionBudget.providerCallCount };
+          childProposals.push(...expandChunkProposals(
+            childExecution.proposals,
+            child.groups,
+            expandGroupProposals,
+          ));
           if (!childExecution.reused) reviewCallCount += 1;
         }
         allProposals.push(...childProposals);
         summaries.push({
           file: chunk[0].representative,
+          files: chunk.flatMap((group) => group.files),
           proposals: JSON.stringify(proposalSuccessPayload(childProposals)),
+          requirementAuthority: buildChunkAuthority(chunk, input),
         });
         seen.set(chunkHash, childProposals);
         continue;
@@ -2325,34 +2603,34 @@ async function runLoopReviewWithDependencies({
       const execution = await executeWorkUnit({
         identity,
         checkpointStore,
-        execute: () => reviewChunk(chunk, input),
+        execute: () => executeWithProviderAttemptBudget(
+          (providerCallAdmission) => reviewChunk(chunk, input, { providerCallAdmission }),
+          executionBudget,
+        ),
         proposalContract,
       });
-      if (execution.toolingOutcome) return execution;
+      if (execution.toolingOutcome) return { ...execution, reviewCallCount: executionBudget.providerCallCount };
       proposals = execution.proposals;
       if (!execution.reused) reviewCallCount += 1;
-      seen.set(chunkHash, proposals);
     }
-    if (proposals.length === 0) continue;
-
-    for (const g of chunk) {
-      const gProposals = proposals.filter((p) => p.file && g.files.includes(p.file));
-      const toExpand = gProposals.length > 0 ? gProposals : proposals;
-      const expanded = g.files.length > 1
-        ? expandGroupProposals(toExpand, g.files)
-        : toExpand;
-      allProposals.push(...expanded);
-    }
+    const expandedProposals = seen.has(chunkHash)
+      ? proposals
+      : expandChunkProposals(proposals, chunk, expandGroupProposals);
+    if (!seen.has(chunkHash)) seen.set(chunkHash, expandedProposals);
     summaries.push({
       file: chunk[0].representative,
-      proposals: JSON.stringify(proposalSuccessPayload(proposals)),
+      files: chunk.flatMap((group) => group.files),
+      proposals: JSON.stringify(proposalSuccessPayload(expandedProposals)),
+      requirementAuthority: buildChunkAuthority(chunk, input),
     });
+    allProposals.push(...expandedProposals);
   }
 
-  if (summaries.length > 1 && reviewCallCount < maxLoopCalls) {
+  if (summaries.length > 1) {
     const identity = createCrossCheckWorkUnitIdentity({
       summaries,
       providerIdentity,
+      promptVersion: `${promptVersion}:cross-check-v3-authoritative`,
       schemaVersion: proposalContract.schemaVersion,
       schemaDigest: proposalContract.schemaDigest,
       allowedRequirementIds: proposalContract.allowedRequirementIds,
@@ -2360,18 +2638,22 @@ async function runLoopReviewWithDependencies({
     const execution = await executeWorkUnit({
       identity,
       checkpointStore,
-      execute: () => crossCheck(summaries),
+      execute: () => executeWithProviderAttemptBudget(
+        (providerCallAdmission) => crossCheck(summaries, { providerCallAdmission }),
+        executionBudget,
+        { synthesis: true },
+      ),
       proposalContract,
     });
-    if (execution.toolingOutcome) return execution;
+    if (execution.toolingOutcome) return { ...execution, reviewCallCount: executionBudget.providerCallCount };
     if (!execution.reused) reviewCallCount += 1;
-    allProposals.push(...execution.proposals);
+    allProposals.splice(0, allProposals.length, ...execution.proposals);
   }
 
   if (persistFinalArtifacts) {
     persistLoopFinalArtifacts({ specDir, proposals: allProposals, requirementIds });
   }
-  return { proposals: allProposals, summaries, reviewChunks, reviewCallCount };
+  return { proposals: allProposals, summaries, reviewChunks, reviewCallCount: executionBudget.providerCallCount };
 }
 
 function requireImplLoopRequirementId(proposal, requirementIds) {
@@ -2479,11 +2761,16 @@ async function runTaskReviewProtocol({
   agent,
   prompt,
   systemPrompt,
+  callTransport = null,
+  responseContract = null,
 }) {
-  const contract = new ReviewProtocolContract({
-    phase: "task-review",
-    parse: (rawResponse) => parseImplReviewFindings(rawResponse, { requirementIds, taskReview: true }),
-  });
+  const contract = responseContract ?? new ReviewProtocolContract({
+      phase: "task-review",
+      parse: (rawResponse) => parseImplReviewFindings(rawResponse, { requirementIds, taskReview: true }),
+    });
+  if (!(contract instanceof ReviewProtocolContract)) {
+    throw new Error("Task Review protocol requires its typed response contract");
+  }
   const transportRetryPolicy = taskReviewTransportRetryPolicy(agent);
   const controller = new ReviewProtocolController({
     contract,
@@ -2513,12 +2800,7 @@ async function runTaskReviewProtocol({
       callAgent: (attempt) => {
         const deferredMetric = new DeferredAgentInvocationMetric({ flowManager });
         deferredMetrics.set(attempt, deferredMetric);
-        return callReviewAgent(
-          agent,
-          prompt,
-          "flow.impl.review.propose",
-          systemPrompt,
-          {
+        const protocolOptions = {
             cacheMode: attempt.cacheMode,
             // Source-effect observation encloses exactly one provider execution.
             retryCount: 0,
@@ -2527,8 +2809,10 @@ async function runTaskReviewProtocol({
               contract.accept(rawResponse);
               return true;
             },
-          },
-        );
+          };
+        return callTransport === null
+          ? callReviewAgent(agent, prompt, "flow.impl.review.propose", systemPrompt, protocolOptions)
+          : callTransport(prompt, protocolOptions);
       },
     });
   } catch (cause) {
@@ -2587,12 +2871,15 @@ async function runLoopReview(executionRoot, flow, spec, mergeBase, fileMap, touc
     requirementIds,
     proposalContract,
     buildChunkInput: (chunk) => buildChunkReviewInput(chunk, rawPerFileDiffs, fileToReqs),
-    reviewChunk: (chunk, input) => callReviewAgent(
+    buildChunkAuthority: (chunk) => buildChunkRequirementAuthority(chunk, fileToReqs),
+    reviewChunk: (chunk, input, invocationOptions = {}) => callReviewAgent(
       draftAgent,
       proposalContract.prompt({ userPrompt: input, systemPrompt }),
       "flow.impl.review.propose",
+      null,
+      invocationOptions,
     ),
-    crossCheck: (summaries) => {
+    crossCheck: (summaries, invocationOptions = {}) => {
       console.error("  [loop-review] Running cross-check pass...");
       const crossCheckInput = buildCrossCheckInput(summaries);
       return callReviewAgent(
@@ -2602,6 +2889,8 @@ async function runLoopReview(executionRoot, flow, spec, mergeBase, fileMap, touc
           systemPrompt: buildImplLoopCrossCheckSystemPrompt(guardrails, acknowledgedRationale),
         }),
         "flow.impl.review.propose",
+        null,
+        invocationOptions,
       );
     },
     onBatch: ({ reviewChunks }) => {
@@ -2699,7 +2988,7 @@ function extractRequirements(spec) {
 }
 
 const TEST_REVIEW_PROMPT_TOO_LARGE_CODE = "TEST_REVIEW_PROMPT_TOO_LARGE";
-const TEST_REVIEW_PROMPT_CHAR_LIMIT = 1_000_000;
+const TEST_REVIEW_PROMPT_CHAR_LIMIT = MAX_IMPL_REQUIREMENT_BATCH_CHARS;
 
 /**
  * Collect test files from the spec-local tests/ directory only.
@@ -3156,9 +3445,9 @@ class TestReviewArtifact {
 
 function buildTestReviewPrompt(requirements, coverageArtifact, testFiles) {
   return new PromptBuilder()
-    .setRole("You are a one-shot static test reviewer. Classify only test design and static anti-pattern issues before implementation.")
+    .setRole("You are a bounded static test review mapper. Classify only test design and static anti-pattern issues before implementation.")
     .setRules([
-      "This review runs once and does not auto-fix tests.",
+      "This map reviews its supplied canonical test ranges and does not auto-fix tests; final cross-file synthesis runs only after every range completes.",
       "PASS means blockingFindings[] and advisoryFindings[] are both empty.",
       "ADVISORY means blockingFindings[] is empty and advisoryFindings[] has useful non-blocking improvements.",
       "REJECTED means blockingFindings[] has at least one issue that blocks implementation.",
@@ -3195,6 +3484,23 @@ function buildTestReviewPrompt(requirements, coverageArtifact, testFiles) {
     .build();
 }
 
+function buildTestReviewSynthesisPrompt(findingTexts, sourceRefs = []) {
+  return new PromptBuilder()
+    .setRole("You are the final cross-file test review synthesizer. Resolve duplicate or contradictory map findings only after all canonical test ranges were reviewed.")
+    .setRules([
+      "Return JSON only with blockingFindings[] and advisoryFindings[].",
+      "Prefer blocking when the same fingerprint has contradictory dispositions.",
+      "Check requirement coverage and cross-file header/test-name consistency globally.",
+      "Adjudicate every supplied map finding; omit one only when canonical authority disproves or resolves it. The returned JSON is authoritative.",
+      "Do not invent a finding merely because a source range is absent; all ranges were completed before this synthesis.",
+    ])
+    .setJsonSchema(TEST_REVIEW_RESPONSE_SCHEMA)
+    .setFmtFallback(TEST_REVIEW_FMT_FALLBACK)
+    .addUserPrompt("## Covered Canonical Evidence References", sourceRefs.join("\n") || "(none)")
+    .addUserPrompt("## Reduced Canonical Authority and Validated Map Evidence", findingTexts.join("\n\n"))
+    .build();
+}
+
 function parseTestReviewJsonOutput(raw) {
   const candidate = extractJsonObjectCandidate(raw);
   let parsed;
@@ -3223,6 +3529,28 @@ function parseTestReviewFindings(raw) {
     blocking: parsed.blockingFindings.map((item) => new TestReviewFinding("blocking", item)),
     advisory: parsed.advisoryFindings.map((item) => new TestReviewFinding("advisory", item)),
   };
+}
+
+function mergeTestReviewFindingBatches(batches) {
+  const selected = new Map();
+  for (const batch of batches) {
+    for (const finding of [...batch.advisory, ...batch.blocking]) {
+      const previous = selected.get(finding.fingerprint);
+      if (previous === undefined || (previous.kind === "advisory" && finding.kind === "blocking")) {
+        selected.set(finding.fingerprint, finding);
+      }
+    }
+  }
+  return {
+    blocking: [...selected.values()].filter((finding) => finding.kind === "blocking"),
+    advisory: [...selected.values()].filter((finding) => finding.kind === "advisory"),
+  };
+}
+
+class TestReviewFindingReducer extends PromptBatchReducer {
+  reduce(completions) {
+    return mergeTestReviewFindingBatches(completions.map((completion) => completion.response));
+  }
 }
 
 function buildHeaderBlockingFindings(headerResult) {
@@ -3326,7 +3654,7 @@ function buildHeaderBlockingFindings(headerResult) {
 }
 
 function assertTestReviewPromptWithinLimit(prompt, label) {
-  const chars = measureReviewPromptChars(prompt);
+  const chars = PromptLogicalFootprint.measure(prompt).total;
   if (chars <= TEST_REVIEW_PROMPT_CHAR_LIMIT) return;
   throw new Error(
     `${TEST_REVIEW_PROMPT_TOO_LARGE_CODE}: ${label} prompt is ${chars} chars; `
@@ -3338,13 +3666,51 @@ async function runTestReviewWithDependencies({
   buildReviewPrompt,
   callAgent,
   promptLabel = "test review",
+  testFiles = null,
+  requirementEntries = null,
+  coverageSummary = null,
+  maxChars = TEST_REVIEW_PROMPT_CHAR_LIMIT,
+  parseResponse = null,
+  projectInvocation = null,
+  synthesize = null,
 }) {
+  if (testFiles !== null) {
+    const plan = TestReviewPromptPlan.create({
+      testFiles,
+      buildPrompt: buildReviewPrompt,
+      maxChars,
+      requirementEntries,
+      coverageSummary,
+    });
+    const executionBudget = new PromptExecutionBudget(new PromptExecutionLimit({
+        maxRequestCharacters: maxChars,
+        maxBatchCount: Math.max(plan.batches.length, 16),
+        maxProviderCallCount: plan.batches.length + 16,
+        maxSynthesisCallCount: 16,
+        maxAggregateCharacters: 1_000_000,
+      }));
+    const executor = new PromptBatchExecutor({ executionBudget });
+    const completions = await executor.executeCompletions({
+      plan: plan.corePlan,
+      callAgent,
+      responseContract: {
+        parse: parseResponse,
+        itemCount: (response) => response.blocking.length + response.advisory.length,
+      },
+      ...(projectInvocation === null ? {} : { projectInvocation }),
+    });
+    const merged = new TestReviewFindingReducer().reduce(completions);
+    return completions.length > 1 && synthesize
+      ? synthesize({ completions, merged, executionBudget, plan })
+      : merged;
+  }
   const reviewPrompt = buildReviewPrompt();
   assertTestReviewPromptWithinLimit(reviewPrompt, promptLabel);
   return callAgent(reviewPrompt);
 }
 
 function classifyReviewCommandError(err, phase) {
+  while (err instanceof PromptBatchingError && err.cause) err = err.cause;
   if (err instanceof ReviewProtocolFailure) {
     const resolvedPhase = phase || "impl";
     const sourceEffect = err.kind === "effect_observed";
@@ -3671,16 +4037,69 @@ async function runTestReview(root, flow, spec, config, dryRun) {
   let aiFindings;
   try {
     const agent = ensureAgent("flow.test.review");
-    console.error("  [test-review] Running one-shot static review...");
+    console.error("  [test-review] Running bounded static review...");
     if (dryRun) console.error("  [test-review] dry-run has no auto-fix phase; detection still runs once.");
-    const raw = await runTestReviewWithDependencies({
-      buildReviewPrompt: () => buildTestReviewPrompt(requirements, coverageArtifact, testFiles),
-      callAgent: (reviewPrompt) => callReviewAgent(
-        agent, reviewPrompt, "flow.test.review",
-        "You are a one-shot static test reviewer. Return JSON with blockingFindings and advisoryFindings.",
+    aiFindings = await runTestReviewWithDependencies({
+      buildReviewPrompt: (selectedTestFiles = testFiles, authority = null) => buildTestReviewPrompt(
+        authority?.requirements ?? requirements,
+        authority === null ? coverageArtifact : { toPromptSummary: () => authority.coverage },
+        selectedTestFiles,
       ),
+      callAgent: (reviewPrompt, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => callReviewAgent(
+        agent, reviewPrompt, "flow.test.review",
+        "You are a bounded static test review mapper. Return JSON with blockingFindings and advisoryFindings.",
+        { providerCallAdmission },
+      ),
+      testFiles,
+      requirementEntries: (spec.requirements || []).map((requirement) => ({
+        id: requirement.id,
+        text: extractRequirements({ requirements: [requirement] }),
+      })),
+      coverageSummary: coverageArtifact.toPromptSummary(),
+      maxChars: Math.min(TEST_REVIEW_PROMPT_CHAR_LIMIT, agent.promptCharacterLimit ?? TEST_REVIEW_PROMPT_CHAR_LIMIT),
+      parseResponse: parseTestReviewFindings,
+      projectInvocation: typeof agent.projectInvocation === "function"
+        ? (reviewPrompt) => projectReviewAgentInvocation(
+          agent,
+          reviewPrompt,
+          "flow.test.review",
+          "You are a bounded static test review mapper. Return JSON with blockingFindings and advisoryFindings.",
+        )
+        : null,
+      synthesize: async ({ completions, merged, executionBudget, plan }) => {
+        const synthesized = await synthesizeReviewFindings({
+          initialItems: completions.flatMap((completion) => [
+            ...completion.response.blocking,
+            ...completion.response.advisory,
+          ]),
+          authorityElements: plan.corePlan.collection.elements,
+          toText: (finding) => JSON.stringify(typeof finding.toJSON === "function" ? finding.toJSON() : finding),
+          buildRequest: (findingTexts, _context, sourceRefs) => buildTestReviewSynthesisPrompt(findingTexts, sourceRefs),
+          parseResponse: parseTestReviewFindings,
+          responseItems: (response) => [...response.blocking, ...response.advisory],
+          emptyResponse: () => ({ blocking: [], advisory: [] }),
+          maxChars: Math.min(TEST_REVIEW_PROMPT_CHAR_LIMIT, agent.promptCharacterLimit ?? TEST_REVIEW_PROMPT_CHAR_LIMIT),
+          executionBudget,
+          callAgent: (request, _batch, _retry, _context, providerCallAdmission) => callReviewAgent(
+            agent,
+            request,
+            "flow.test.review",
+            "You are the final cross-file test review synthesizer. Return JSON only.",
+            { retryCount: 0, providerCallAdmission },
+          ),
+          projectInvocation: typeof agent.projectInvocation === "function"
+            ? (request) => projectReviewAgentInvocation(
+              agent,
+              request,
+              "flow.test.review",
+              "You are the final cross-file test review synthesizer. Return JSON only.",
+              { retryCount: 0 },
+            )
+            : null,
+        });
+        return synthesized;
+      },
     });
-    aiFindings = parseTestReviewFindings(raw);
   } catch (err) {
     const kind = /JSON|schema|parse|Unexpected token/i.test(err?.message || "") ? "parser_error" : "agent_error";
     const reviewArtifact = buildToolingFailureReview({
@@ -3734,30 +4153,24 @@ async function runTestReview(root, flow, spec, config, dryRun) {
 
 import { minify } from "../../docs/lib/minify.js";
 
-const SPEC_REVIEW_TEXT_LIMIT = 500;
-const SPEC_REVIEW_EVIDENCE_LIMIT = 700;
-const SPEC_REVIEW_TASK_STRATEGY_LIMIT = 700;
-
-function summarizeSpecReviewValue(value, limit = SPEC_REVIEW_TEXT_LIMIT) {
+function canonicalSpecReviewValue(value) {
   if (value == null) return "";
-  const text = String(value).replace(/\s+/g, " ").trim();
-  if (text.length <= limit) return text;
-  return `${text.slice(0, limit).trimEnd()}...`;
+  return String(value);
 }
 
 function formatSpecReviewSimpleList(values) {
   if (!Array.isArray(values) || values.length === 0) return "";
-  return values.map((value) => `- ${summarizeSpecReviewValue(value)}`).join("\n");
+  return values.map((value) => `- ${canonicalSpecReviewValue(value)}`).join("\n");
 }
 
 function formatSpecReviewDecision(decision) {
-  const text = summarizeSpecReviewValue(decision?.text ?? decision);
+  const text = canonicalSpecReviewValue(decision?.text ?? decision);
   const details = [];
   if (decision?.evidence) {
-    details.push(`evidence: ${summarizeSpecReviewValue(decision.evidence, SPEC_REVIEW_EVIDENCE_LIMIT)}`);
+    details.push(`evidence: ${canonicalSpecReviewValue(decision.evidence)}`);
   }
   if (decision?.consideredAlternatives) {
-    details.push(`alternatives: ${summarizeSpecReviewValue(decision.consideredAlternatives, SPEC_REVIEW_EVIDENCE_LIMIT)}`);
+    details.push(`alternatives: ${canonicalSpecReviewValue(decision.consideredAlternatives)}`);
   }
   return details.length > 0
     ? `- ${text}\n  ${details.join("\n  ")}`
@@ -3765,14 +4178,14 @@ function formatSpecReviewDecision(decision) {
 }
 
 function formatSpecReviewTask(task) {
-  const lines = [`- ${task.id}: ${summarizeSpecReviewValue(task.title, 250)}`];
+  const lines = [`- ${task.id}: ${canonicalSpecReviewValue(task.title)}`];
   lines.push(`  status: ${task.status || "unknown"}`);
-  lines.push(`  goal: ${summarizeSpecReviewValue(task.goal, SPEC_REVIEW_TEXT_LIMIT)}`);
+  lines.push(`  goal: ${canonicalSpecReviewValue(task.goal)}`);
   if (Array.isArray(task.acceptance) && task.acceptance.length > 0) {
-    lines.push(`  acceptance: ${task.acceptance.map((item) => summarizeSpecReviewValue(item, 300)).join(" | ")}`);
+    lines.push(`  acceptance: ${task.acceptance.map((item) => canonicalSpecReviewValue(item)).join(" | ")}`);
   }
   if (task.test_strategy) {
-    lines.push(`  test_strategy: ${summarizeSpecReviewValue(task.test_strategy, SPEC_REVIEW_TASK_STRATEGY_LIMIT)}`);
+    lines.push(`  test_strategy: ${canonicalSpecReviewValue(task.test_strategy)}`);
   }
   return lines.join("\n");
 }
@@ -3805,14 +4218,14 @@ function buildSpecSummaryMarkdown(spec) {
   if (acceptance) lines.push(`# Acceptance Criteria\n${acceptance}`);
   if (Array.isArray(spec.clarifications) && spec.clarifications.length > 0) {
     lines.push(`# Clarifications\n${spec.clarifications.map((c) => [
-      `- Q: ${summarizeSpecReviewValue(c.q)}`,
-      `  A: ${summarizeSpecReviewValue(c.a)}`,
+      `- Q: ${canonicalSpecReviewValue(c.q)}`,
+      `  A: ${canonicalSpecReviewValue(c.a)}`,
     ].join("\n")).join("\n")}`);
   }
   if (Array.isArray(spec.alternatives_considered) && spec.alternatives_considered.length > 0) {
     lines.push(`# Alternatives Considered\n${spec.alternatives_considered.map((a) => [
-      `- Option: ${summarizeSpecReviewValue(a.option)}`,
-      `  Reason: ${summarizeSpecReviewValue(a.reason)}`,
+      `- Option: ${canonicalSpecReviewValue(a.option)}`,
+      `  Reason: ${canonicalSpecReviewValue(a.reason)}`,
     ].join("\n")).join("\n")}`);
   }
   const openQuestions = formatSpecReviewSimpleList(spec.open_questions);
@@ -3955,6 +4368,23 @@ function buildSpecReviewPrompt(specText, contextEntries, previousReview = null) 
   }
 
   return pb.build();
+}
+
+function buildSpecReviewSynthesisPrompt(findingTexts, _context, sourceRefs = []) {
+  return new PromptBuilder()
+    .setRole("You are the final spec review synthesizer. Cross-check findings only after every bounded spec and code-context range was reviewed.")
+    .setRules([
+      "Return JSON only with blockingFindings[] and nonBlockingImprovements[].",
+      "Resolve duplicate and contradictory findings globally.",
+      "Check requirement relationships and contradictions spanning bounded source ranges.",
+      "Preserve a blocker when any validated range establishes its concrete failure mode.",
+      "Adjudicate every supplied map finding; omit one only when canonical authority disproves or resolves it. The returned JSON is authoritative.",
+    ])
+    .setJsonSchema(SPEC_REVIEW_RESPONSE_SCHEMA)
+    .setFmtFallback(SPEC_REVIEW_FMT_FALLBACK)
+    .addUserPrompt("## Covered Canonical Evidence References", sourceRefs.join("\n") || "(none)")
+    .addUserPrompt("## Reduced Canonical Authority and Validated Map Evidence", findingTexts.join("\n\n"))
+    .build();
 }
 
 function extractMarkdownField(body, label) {
@@ -4115,6 +4545,28 @@ function parseSpecReviewFindings(text) {
   };
 }
 
+function mergeSpecReviewFindingBatches(batches) {
+  const selected = new Map();
+  for (const batch of batches) {
+    for (const finding of [...batch.blocking, ...batch.improvements]) {
+      const previous = selected.get(finding.findingId);
+      if (previous === undefined || (previous.kind !== "blocking" && finding.kind === "blocking")) {
+        selected.set(finding.findingId, finding);
+      }
+    }
+  }
+  return {
+    blocking: [...selected.values()].filter((finding) => finding.kind === "blocking"),
+    improvements: [...selected.values()].filter((finding) => finding.kind !== "blocking"),
+  };
+}
+
+class SpecReviewFindingReducer extends PromptBatchReducer {
+  reduce(completions) {
+    return mergeSpecReviewFindingBatches(completions.map((completion) => completion.response));
+  }
+}
+
 /** Build the sole worker result for spec-review.  The provider response is
  * transient parser input; this V2 delta is bound to the immutable canonical
  * review snapshot that the parent materialized for this Attempt. */
@@ -4232,9 +4684,70 @@ async function runSpecReview(root, flow, spec, config, dryRun) {
   // reviewer receives canonical review bytes, never a local prior artifact.
   previousReview = Object.freeze({ toPromptMemory: () => canonicalReview.toJSON() });
   const proposePrompt = buildSpecReviewPrompt(specSummary, contextEntries, previousReview);
-  const proposeRaw = await callReviewAgent(proposeAgent, proposePrompt, "flow.spec.review.propose");
-
-  const findings = parseSpecReviewFindings(proposeRaw);
+  const promptLimit = Math.min(TASK_REVIEW_PROMPT_CHAR_LIMIT, proposeAgent.promptCharacterLimit ?? TASK_REVIEW_PROMPT_CHAR_LIMIT);
+  const promptPlan = ReviewTextPromptPlan.create({
+    request: proposePrompt,
+    maxChars: promptLimit,
+    ElementClass: SpecSectionPromptElement,
+    id: "spec-review-document",
+    sections: splitReviewTextAtHeadings(proposePrompt.userPrompt, /^#{1,2}\s/gm),
+  });
+  const executionBudget = new PromptExecutionBudget(new PromptExecutionLimit({
+      maxRequestCharacters: promptLimit,
+      maxBatchCount: Math.max(promptPlan.batches.length, 16),
+      maxProviderCallCount: promptPlan.batches.length + 16,
+      maxSynthesisCallCount: 16,
+      maxAggregateCharacters: 1_000_000,
+    }));
+  const executor = new PromptBatchExecutor({ executionBudget });
+  const completions = await executor.executeCompletions({
+    plan: promptPlan.corePlan,
+    callAgent: (request, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => callReviewAgent(
+      proposeAgent,
+      request,
+      "flow.spec.review.propose",
+      null,
+      { providerCallAdmission },
+    ),
+    responseContract: {
+      parse: parseSpecReviewFindings,
+      itemCount: (response) => response.blocking.length + response.improvements.length,
+    },
+    ...(typeof proposeAgent.projectInvocation === "function" ? {
+      projectInvocation: (request) => projectReviewAgentInvocation(proposeAgent, request, "flow.spec.review.propose"),
+    } : {}),
+  });
+  let findings = new SpecReviewFindingReducer().reduce(completions);
+  if (completions.length > 1) {
+    const synthesized = await synthesizeReviewFindings({
+      initialItems: [...findings.blocking, ...findings.improvements],
+      authorityElements: promptPlan.corePlan.collection.elements,
+      toText: (finding) => JSON.stringify(finding.toJSON ? finding.toJSON() : finding),
+      buildRequest: buildSpecReviewSynthesisPrompt,
+      parseResponse: parseSpecReviewFindings,
+      responseItems: (response) => [...response.blocking, ...response.improvements],
+      emptyResponse: () => ({ blocking: [], improvements: [] }),
+      maxChars: promptLimit,
+      executionBudget,
+      callAgent: (request, _batch, _retry, _context, providerCallAdmission) => callReviewAgent(
+        proposeAgent,
+        request,
+        "flow.spec.review.propose",
+        null,
+        { retryCount: 0, providerCallAdmission },
+      ),
+      projectInvocation: typeof proposeAgent.projectInvocation === "function"
+        ? (request) => projectReviewAgentInvocation(
+          proposeAgent,
+          request,
+          "flow.spec.review.propose",
+          null,
+          { retryCount: 0 },
+        )
+        : null,
+    });
+    findings = synthesized;
+  }
   const blockingCount = findings.blocking.length;
   const improvementCount = findings.improvements.length;
   const proposalCount = blockingCount + improvementCount;
@@ -4356,7 +4869,7 @@ function buildDraftQuestionReviewPrompt(draftJson, requestText) {
     : "(no QA entries)";
 
   return [
-    "You are a draft question boundary reviewer. Perform a one-shot finite check of the persisted user-decision list.",
+    "You are a draft question boundary review mapper. Check the supplied bounded range of the persisted user-decision list.",
     "This is not a question generation task. An empty question ledger is valid when the supplied authorities resolve every requirement.",
     "Check only these finite defects in shown candidate entries:",
     "- The question is empty, duplicated, not self-contained, or asks for internal implementation details that project patterns should decide",
@@ -4416,12 +4929,12 @@ function buildDraftReviewPrompt(draftJson, requestText, contextEntries, stage) {
   ).join("\n");
 
   return [
-    "You are a draft coverage gate reviewer. Perform a one-shot final check of answered and dropped draft QA before spec writing.",
+    "You are a draft coverage gate mapper. Check the supplied bounded range of answered and dropped draft QA before spec writing.",
     "",
     loadDraftQaRulesPartial(),
     "",
     "Review limits:",
-    "- Report at most 3 highest-impact blocking gaps.",
+    "- Report every evidenced blocking gap in this bounded map input; final synthesis ranks the complete candidate set.",
     "- Do not append ledger entries.",
     "- Treat existing answers as authoritative. Do not grade answer clarity, support, wording quality, or propose edits to existing QA.",
     "",
@@ -4450,6 +4963,23 @@ function buildDraftReviewPrompt(draftJson, requestText, contextEntries, stage) {
     "These files are ordered by relevance to the spec.",
     contextText,
   ].join("\n");
+}
+
+function buildDraftReviewSynthesisPrompt(findingTexts, stage, sourceRefs = []) {
+  return [
+    "You are the final draft review synthesizer. All bounded question, decision, request, and context ranges have completed.",
+    "Resolve duplicates, findings already answered by authoritative information, and cross-range dependencies.",
+    "Adjudicate every map candidate; omit one only when canonical authority disproves or resolves it. This final response is authoritative.",
+    stage.key === "coverage"
+      ? "Rank the complete candidate set by impact and return at most 3 blocking user decisions."
+      : `Return at most ${DRAFT_REVIEW_ARTIFACT_LIMIT} distinct repair targets.`,
+    "Use the same numbered finding format as the map review. Output NO_PROPOSALS when none remain.",
+    "",
+    "## Covered Canonical Evidence References",
+    sourceRefs.join("\n") || "(none)",
+    "## Reduced Canonical Authority and Validated Map Evidence",
+    ...findingTexts,
+  ].join("\n\n");
 }
 
 function buildDraftReviewAuthorityText(flow, stage, flowManager) {
@@ -4533,6 +5063,26 @@ function buildDraftReviewArtifact({ raw, draftPath, draftRevision, proposals, st
     sourceDraftRevision: draftRevision,
     ...buckets,
   });
+}
+
+export class DraftReviewCandidateReducer extends PromptBatchReducer {
+  constructor({ finalLimit = Infinity } = {}) {
+    super();
+    this.finalLimit = finalLimit;
+    Object.freeze(this);
+  }
+
+  reduce(completions) {
+    const ranked = new Map();
+    for (const proposal of completions.flatMap((completion) => completion.response)) {
+      const key = crypto.createHash("sha256")
+        .update(JSON.stringify([proposal.title, proposal.body, proposal.file || null]))
+        .digest("hex");
+      if (!ranked.has(key)) ranked.set(key, proposal);
+    }
+    const proposals = [...ranked.values()];
+    return Object.freeze(Number.isFinite(this.finalLimit) ? proposals.slice(0, this.finalLimit) : proposals);
+  }
 }
 
 function writeJsonArtifact(filePath, artifact) {
@@ -4692,16 +5242,92 @@ async function runDraftReview(root, flow, config, dryRun) {
   const detectPrompt = buildDraftReviewPrompt(draftJson, requestText, contextEntries, stage);
   const fallbackSystemPrompt = stage.key === "questions"
     ? "You are a draft question boundary reviewer. Remove redundant confirmations using supplied authority; do not generate new questions."
-    : "You are a draft coverage gate reviewer. Report at most 3 blocking user decisions; do not generate follow-up loops.";
-  const raw = await callReviewAgent(
-    agent, detectPrompt, stage.commandId, fallbackSystemPrompt,
-  );
+    : "You are a draft coverage gate reviewer. Follow the current bounded map or final synthesis request; do not generate follow-up loops.";
+  const promptLimit = Math.min(TASK_REVIEW_PROMPT_CHAR_LIMIT, agent.promptCharacterLimit ?? TASK_REVIEW_PROMPT_CHAR_LIMIT);
+  const draftAuthorityStart = detectPrompt.search(/^## Request \/ Issue$/m);
+  const repeatedDraftInstructions = draftAuthorityStart < 0 ? "" : detectPrompt.slice(0, draftAuthorityStart);
+  const draftAuthorityText = draftAuthorityStart < 0 ? detectPrompt : detectPrompt.slice(draftAuthorityStart);
+  const promptPlan = ReviewTextPromptPlan.create({
+    request: {
+      systemPrompt: fallbackSystemPrompt,
+      userPrompt: detectPrompt,
+      jsonSchema: null,
+      fmtFallback: null,
+    },
+    maxChars: promptLimit,
+    ElementClass: DraftSectionPromptElement,
+    id: `draft-review-${stage.key}`,
+    repeatedPrefix: repeatedDraftInstructions,
+    sections: splitReviewTextAtHeadings(draftAuthorityText, /^##\s/gm),
+  });
+  const proposalLimit = stage.key === "coverage" ? 3 : DRAFT_REVIEW_ARTIFACT_LIMIT;
+  const executionBudget = new PromptExecutionBudget(new PromptExecutionLimit({
+      maxRequestCharacters: promptLimit,
+      maxBatchCount: Math.max(promptPlan.batches.length, 16),
+      maxProviderCallCount: promptPlan.batches.length + 16,
+      maxSynthesisCallCount: 16,
+      maxAggregateCharacters: 1_000_000,
+    }));
+  const executor = new PromptBatchExecutor({ executionBudget });
+  const completions = await executor.executeCompletions({
+    plan: promptPlan.corePlan,
+    callAgent: (request, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => callReviewAgent(
+      agent,
+      request,
+      stage.commandId,
+      fallbackSystemPrompt,
+      { providerCallAdmission },
+    ),
+    responseContract: {
+      parse: (batchRaw) => batchRaw.includes("NO_PROPOSALS")
+        ? []
+        : parseProposals(batchRaw),
+      itemCount: (response) => response.length,
+    },
+    ...(typeof agent.projectInvocation === "function" ? {
+      projectInvocation: (request) => projectReviewAgentInvocation(agent, request, stage.commandId, fallbackSystemPrompt),
+    } : {}),
+  });
+  let proposals = new DraftReviewCandidateReducer().reduce(completions);
+  if (stage.key === "coverage" || completions.length > 1) {
+    proposals = await synthesizeReviewFindings({
+      initialItems: proposals,
+      authorityElements: promptPlan.corePlan.collection.elements,
+      toText: (proposal) => JSON.stringify({ title: proposal.title, body: proposal.body, file: proposal.file || null }),
+      buildRequest: (findingTexts, _context, sourceRefs) => buildDraftReviewSynthesisPrompt(
+        findingTexts,
+        stage,
+        sourceRefs,
+      ),
+      parseResponse: (batchRaw) => batchRaw.includes("NO_PROPOSALS")
+        ? []
+        : parseProposals(batchRaw, { limit: DRAFT_REVIEW_ARTIFACT_LIMIT }),
+      responseItems: (response) => response,
+      emptyResponse: () => [],
+      maxChars: promptLimit,
+      executionBudget,
+      callAgent: (request, _batch, _retry, _context, providerCallAdmission) => callReviewAgent(
+        agent,
+        request,
+        stage.commandId,
+        fallbackSystemPrompt,
+        { retryCount: 0, providerCallAdmission },
+      ),
+      projectInvocation: typeof agent.projectInvocation === "function"
+        ? (request) => projectReviewAgentInvocation(
+          agent,
+          request,
+          stage.commandId,
+          fallbackSystemPrompt,
+          { retryCount: 0 },
+        )
+        : null,
+    });
+  }
+  proposals = proposals.slice(0, proposalLimit);
+  const raw = proposals.length === 0 ? "NO_PROPOSALS" : "BATCHED_PROPOSALS";
 
   canonicalDraftSnapshot(source, container.get("flowManager").load(), stage.retryPhase);
-
-  const proposals = raw.includes("NO_PROPOSALS")
-    ? []
-    : parseProposals(raw, { limit: DRAFT_REVIEW_ARTIFACT_LIMIT });
 
   const reviewPath = path.join(outputDirectory, stage.artifact);
   const reviewArtifact = buildDraftReviewArtifact({
@@ -4875,13 +5501,18 @@ async function runReview(rawArgs) {
         : loopProposalsToImplReviewJson(proposals, requirementIds);
     },
     runSingleReview: async () => {
-      const buildReviewPrompt = ({ sourceText = diff, chunkContext = null } = {}) => buildImplReviewPrompt({
+      const reviewAgent = ensureAgent("flow.impl.review.propose");
+      const systemPrompt = buildDraftSystemPrompt(
+        reviewGuardrails,
+        buildReviewAcknowledgedRationale(spec, reviewGuardrails),
+      );
+      const buildReviewPrompt = ({ sourceText = diff, chunkContext = null, priorReview = previousReview } = {}) => buildImplReviewPrompt({
         requirementFileMap: fileMap,
         requirementSourceScope: taskSpec?.sourceScope ?? null,
         requirementIds,
         diff: sourceText,
         touchedFiles,
-        previousReview,
+        previousReview: priorReview,
         taskSpec: taskSpec ? {
           relPath: taskSpec.relPath,
           content: taskSpec.content,
@@ -4891,41 +5522,127 @@ async function runReview(rawArgs) {
         taskNoChangeReasons: taskSpec?.source?.noChangeReasons ?? [],
         taskReviewChunk: chunkContext,
       });
-      const taskReviewPlan = taskSpec === null ? null : TaskReviewPromptPlan.create({
-        sourceEntries: taskSpec.source.entries,
-        buildPrompt: buildReviewPrompt,
-        maxChars: TASK_REVIEW_PROMPT_CHAR_LIMIT,
-      });
+      let taskReviewMemoryDeferred = false;
+      let taskReviewPlan = null;
+      if (taskSpec !== null) {
+        const planOptions = {
+          sourceEntries: taskSpec.source.entries,
+          maxChars: Math.min(
+            TASK_REVIEW_PROMPT_CHAR_LIMIT,
+            reviewAgent.promptCharacterLimit ?? TASK_REVIEW_PROMPT_CHAR_LIMIT,
+          ),
+        };
+        try {
+          taskReviewPlan = TaskReviewPromptPlan.create({ ...planOptions, buildPrompt: buildReviewPrompt });
+        } catch (error) {
+          const hasPriorMemory = ((previousReview?.previousBlockingFindings?.length || 0)
+            + (previousReview?.acknowledgedNonBlockingImprovements?.length || 0)) > 0;
+          if (!(error instanceof TaskReviewPromptPlanningFailure) || !hasPriorMemory) throw error;
+          const deferredMemory = {
+            verdict: previousReview.verdict,
+            counts: previousReview.counts,
+            previousBlockingFindings: [],
+            acknowledgedNonBlockingImprovements: [],
+          };
+          taskReviewPlan = TaskReviewPromptPlan.create({
+            ...planOptions,
+            buildPrompt: (input) => buildReviewPrompt({ ...input, priorReview: deferredMemory }),
+          });
+          taskReviewMemoryDeferred = true;
+        }
+      }
       const reviewPrompt = taskReviewPlan?.chunks[0]?.prompt ?? buildReviewPrompt();
+      const taskProtocolPolicyFor = (responseContract = null) => ({
+        maxProviderCalls: 2 * (taskReviewTransportRetryPolicy(reviewAgent).retryCount + 1),
+        execute: ({ request, call }) => runTaskReviewProtocol({
+          root,
+          executionIdentity: taskReviewExecution,
+          flowManager,
+          requirementIds,
+          agent: reviewAgent,
+          prompt: request,
+          systemPrompt,
+          callTransport: (currentPrompt, protocolOptions) => call(currentPrompt, protocolOptions),
+          responseContract,
+        }),
+      });
+      const taskProtocolPolicy = taskSpec ? taskProtocolPolicyFor() : null;
+      const taskSummaryProtocolPolicy = taskSpec ? taskProtocolPolicyFor(new ReviewProtocolContract({
+        phase: "task-review-evidence-summary",
+        parse: (rawResponse) => {
+          if (typeof rawResponse !== "string" || rawResponse.trim() === "") {
+            throw new Error("Task Review evidence summary must be non-empty text");
+          }
+          return rawResponse.trim();
+        },
+      })) : null;
       return runImplReviewAgentWithDependencies({
         prompt: reviewPrompt,
         taskReview: taskSpec !== null,
         taskReviewPlan,
         requirementIds,
-        callAgent: (currentPrompt) => {
-          const reviewAgent = ensureAgent("flow.impl.review.propose");
-          const systemPrompt = buildDraftSystemPrompt(
-            reviewGuardrails,
-            buildReviewAcknowledgedRationale(spec, reviewGuardrails),
-          );
-          if (taskSpec) {
-            return runTaskReviewProtocol({
-              root,
-              executionIdentity: taskReviewExecution,
-              flowManager,
-              requirementIds,
-              agent: reviewAgent,
-              prompt: currentPrompt,
-              systemPrompt,
-            });
-          }
-          return callReviewAgent(
+        callAgent: (currentPrompt, _chunk, _protocolRetryIndex, protocolOptions = {}, providerCallAdmission) => (
+          callReviewAgent(
             reviewAgent,
             currentPrompt,
             "flow.impl.review.propose",
             systemPrompt,
-          );
-        },
+            { ...protocolOptions, providerCallAdmission },
+          )
+        ),
+        projectInvocation: taskSpec && typeof reviewAgent.projectInvocation === "function"
+          ? (currentPrompt) => projectReviewAgentInvocation(
+            reviewAgent,
+            currentPrompt,
+            "flow.impl.review.propose",
+            systemPrompt,
+          )
+          : null,
+        protocolPolicy: taskProtocolPolicy,
+        synthesizeWhenSingle: taskReviewMemoryDeferred,
+        synthesize: taskSpec ? async ({ completions, executionBudget, protocolPolicy }) => {
+          const synthesized = await synthesizeReviewFindings({
+            initialItems: completions.flatMap((completion) => [
+              ...completion.response.blockingFindings,
+              ...completion.response.nonBlockingImprovements,
+            ]),
+            authorityElements: [
+              ...taskReviewPlan.corePlan.collection.elements,
+              ...buildTaskReviewAuthorityElements(taskSpec, previousReview),
+            ],
+            toText: (finding) => JSON.stringify(taskReviewProviderFinding(finding)),
+            buildRequest: (findingTexts, _context, sourceRefs) => buildTaskReviewSynthesisPrompt(
+              taskReviewPlan.chunks[0].prompt,
+              requirementIds,
+              reviewGuardrails,
+              findingTexts,
+              sourceRefs,
+            ),
+            parseResponse: (rawResponse) => parseImplReviewFindings(rawResponse, { requirementIds, taskReview: true }),
+            responseItems: (response) => [...response.blockingFindings, ...response.nonBlockingImprovements],
+            emptyResponse: () => ({ blockingFindings: [], nonBlockingImprovements: [] }),
+            maxChars: taskReviewPlan.maxChars,
+            executionBudget,
+            callAgent: (request, _batch, _retry, protocolOptions = {}, providerCallAdmission) => callReviewAgent(
+              reviewAgent,
+              request,
+              "flow.impl.review.propose",
+              systemPrompt,
+              { ...protocolOptions, providerCallAdmission },
+            ),
+            projectInvocation: typeof reviewAgent.projectInvocation === "function"
+              ? (request) => projectReviewAgentInvocation(
+                reviewAgent,
+                request,
+                "flow.impl.review.propose",
+                systemPrompt,
+              )
+              : null,
+            protocolPolicy,
+            reductionProtocolPolicy: taskSummaryProtocolPolicy,
+          });
+          return mergeTaskReviewParsedResponses([synthesized]);
+        } : null,
       });
     },
     persistImplReview: (reviewOutput, persistenceStrategy) => persistenceStrategy.persist({
@@ -5033,6 +5750,7 @@ export {
   runTaskReviewProtocol,
   runTaskReviewPromptPlanWithDependencies,
   runImplReviewAgentWithDependencies,
+  synthesizeReviewFindings,
   assertTaskReviewPromptWithinLimit,
   canonicalTaskReviewFileMap,
   mergeTaskReviewChunkResponses,

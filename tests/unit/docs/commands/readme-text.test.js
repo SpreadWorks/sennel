@@ -57,15 +57,15 @@ describe("README.md text directive processing", () => {
       "",
     ].join("\n");
 
-    // Agent returns JSON with directive texts (ignore prompt via {{PROMPT}})
-    const jsonResponse = JSON.stringify({
+    const generated = {
       d0: "This is the project overview.",
       d1: "| Node.js | >= 18.0.0 |",
-    });
-    const agent = makeAgent({
-      command: "node",
-      args: ["-e", `process.stdout.write(${JSON.stringify(jsonResponse)})`, "{{PROMPT}}"],
-    }, tmp);
+    };
+    const agent = {
+      async call(_prompt, options) {
+        return JSON.stringify(Object.fromEntries(options.jsonSchema.required.map((id) => [id, generated[id]])));
+      },
+    };
 
     const result = await processTemplateFileBatch(
       readmeContent,

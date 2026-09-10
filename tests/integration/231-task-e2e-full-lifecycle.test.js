@@ -65,7 +65,7 @@ function writeLifecycleStubAgentScript(tmp) {
   ].join("\n");
   const routes = [
     { includes: "if (!left || !right) return 0;", response: FAIL_REVIEW },
-    { includes: "one-shot static test reviewer", response: PASS_TEST_REVIEW },
+    { includes: "bounded static test review mapper", response: PASS_TEST_REVIEW },
     { includes: "guardrail_id MUST be one of the requirement ids", response: PASS_GATE },
     { includes: "## Guardrail Articles", response: JSON.stringify({ observations: [] }) },
     { includes: "semantic acceptance reviewer", response: PASS_ACCEPTANCE },

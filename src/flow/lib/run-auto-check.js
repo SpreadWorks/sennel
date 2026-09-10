@@ -36,6 +36,7 @@ import {
 } from "./resolve-auto-check-input.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
+import { PromptBatchPlan, PromptRequestLimit, PromptBatchingError } from "../../lib/prompt-batching.js";
 import {
   AgentFailure,
   AgentPermissionConfigurationFailure,
@@ -183,6 +184,8 @@ async function scoreWithAi(container, inputText) {
 
   let responseText;
   try {
+    const limit = new PromptRequestLimit({ maxCharacters: agent.promptCharacterLimit ?? 120_000 });
+    PromptBatchPlan.fromRequest({ request: built, limit, id: "auto-check-input" });
     responseText = await agent.call(built.userPrompt, {
       commandId: "flow.auto-check",
       systemPrompt: built.systemPrompt,
@@ -190,6 +193,12 @@ async function scoreWithAi(container, inputText) {
       fmtFallback: built.fmtFallback,
     });
   } catch (err) {
+    if (err instanceof PromptBatchingError) {
+      return {
+        breakdown: emptyBreakdown(), reason: err.message,
+        failure: { code: err.code, message: err.message, details: err.details }, ok: false,
+      };
+    }
     const failure = err instanceof AgentFailure ? err : AgentFailure.from(err);
     return {
       breakdown: emptyBreakdown(),

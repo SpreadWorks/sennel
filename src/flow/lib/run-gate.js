@@ -28,6 +28,12 @@ import { computeGitState } from "../../lib/git-state.js";
 const execFileAsync = promisify(execFile);
 import { container } from "../../lib/container.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
+import { GLOBAL_PROMPT_ELEMENT_HARD_MAX, PromptRequestLimit, PromptBatchingError, PromptBatchPlan, PromptExecutionBudget, PromptExecutionLimit, PromptLogicalFootprint } from "../../lib/prompt-batching.js";
+import {
+  RequirementEvidenceInput, RequirementEvidencePlan, RequirementObservationResponse,
+  executeGatePlan, gatePromptFits,
+  reduceRequirementEvidence,
+} from "./gate-prompt-plan.js";
 import { filterByPhase, loadMergedGuardrails } from "../../lib/guardrail.js";
 import { validateConfiguredPresetChains } from "../../lib/presets.js";
 import { getSpecName } from "../../lib/flow-helpers.js";
@@ -66,7 +72,6 @@ import {
   readJsonStrict,
   validateCanonicalUpgradeEvidence,
 } from "./test-artifacts.js";
-import { MAX_SAME_SPEC_CONTRACT_CONTEXT_CHARS } from "./flow-context-limit.js";
 import {
   Observation,
   Diagnosis,
@@ -198,18 +203,8 @@ function runGitDiff(args, errorMessage, cwd) {
 const UNTRACKED_DEFAULT_MAX_FILES = 500;
 const UNTRACKED_DEFAULT_MAX_FILE_SIZE = 1024 * 1024; // 1 MiB
 const TASK_IMPL_GATE_DIFF_MAX_BYTES = 1024 * 1024; // 1 MiB
-const MAX_IMPL_REQUIREMENT_BATCH_CHARS = 120000;
+const MAX_IMPL_REQUIREMENT_BATCH_CHARS = GLOBAL_PROMPT_ELEMENT_HARD_MAX;
 const MAX_AGENT_PROMPT_INPUT_CHARS = 900000;
-export const MAX_REQUIREMENT_CONTEXT_ITEMS = 12;
-export const MAX_REQUIREMENT_CONTEXT_ITEM_CHARS = 1000;
-export const MAX_REQUIREMENT_CONTEXT_CHARS = 24000;
-const MAX_GUARDRAIL_TARGET_CHARS = 250000;
-const MAX_SAME_SPEC_REQUIREMENT_SUMMARIES = 64;
-const MAX_SAME_SPEC_REQUIREMENT_SUMMARY_CHARS = 768;
-const MAX_SAME_SPEC_DECISIONS = 24;
-const MAX_SAME_SPEC_DECISION_CHARS = 1024;
-const MAX_SAME_SPEC_CLARIFICATIONS = 24;
-const MAX_SAME_SPEC_CLARIFICATION_CHARS = 1024;
 const GATE_SOURCE_ARTIFACT_BY_PHASE = Object.freeze({
   draft: "draft-gate-source.json",
   spec: "spec-gate-source.json",
@@ -549,78 +544,6 @@ function buildGateEvaluationDiff({ committed, uncommitted, untracked, specPath }
   );
 }
 
-function summarizeDiffSegment(file, fileDiff) {
-  const added = (fileDiff.match(/^\+(?!\+\+)/gm) || []).length;
-  const removed = (fileDiff.match(/^-(?!--)/gm) || []).length;
-  const header = fileDiff.split(/\r?\n/).slice(0, 4).filter(Boolean).join(" | ");
-  const boundedHeader = header.length <= 240 ? header : `${header.slice(0, 237)}...`;
-  return `- ${file}: +${added} -${removed}; ${boundedHeader}`;
-}
-
-function appendPromptLine(lines, line, maxChars) {
-  const currentLength = lines.join("\n").length;
-  if (currentLength + line.length + 1 > maxChars) return false;
-  lines.push(line);
-  return true;
-}
-
-function compactDiffForGuardrailPrompt(diff, maxChars = MAX_GUARDRAIL_TARGET_CHARS) {
-  if (typeof diff !== "string") throw new Error("diff must be a string");
-  if (!Number.isInteger(maxChars) || maxChars <= 0) throw new Error("maxChars must be a positive integer");
-  if (diff.length <= maxChars) return diff;
-
-  const lines = [
-    `[diff compacted for guardrail prompt: original ${diff.length} chars, budget ${maxChars} chars]`,
-    "Full file diffs with added or modified lines are prioritized. Deletion-only file bodies are summarized.",
-    "",
-    "## Full Diffs",
-  ];
-  const summarized = [];
-  const omitted = [];
-
-  const perFileDiffs = splitDiffByFile(diff);
-  const segments = [
-    ...(perFileDiffs.preambleText ? [["diff preamble", perFileDiffs.preambleText]] : []),
-    ...perFileDiffs.unparsedSegments.map((segment, index) => [
-      `unparsed diff segment ${index + 1}`,
-      segment.text,
-    ]),
-    ...perFileDiffs,
-  ];
-  for (const [file, fileDiff] of segments) {
-    const hasAddedLines = /^\+(?!\+\+)/m.test(fileDiff);
-    if (!hasAddedLines) {
-      summarized.push(summarizeDiffSegment(file, fileDiff));
-      continue;
-    }
-
-    if (appendPromptLine(lines, fileDiff.trimEnd(), maxChars)) continue;
-
-    const marker = `[full diff truncated for ${file}; file summary follows]`;
-    const remaining = maxChars - lines.join("\n").length - marker.length - 2;
-    if (remaining > 1000) {
-      lines.push(`${fileDiff.slice(0, remaining).trimEnd()}\n${marker}`);
-    } else {
-      omitted.push(summarizeDiffSegment(file, fileDiff));
-    }
-  }
-
-  if (summarized.length > 0 || omitted.length > 0) {
-    appendPromptLine(lines, "", maxChars);
-    appendPromptLine(lines, "## Summarized Or Omitted File Diffs", maxChars);
-  }
-  for (const summary of [...summarized, ...omitted]) {
-    if (!appendPromptLine(lines, summary, maxChars)) {
-      appendPromptLine(lines, "- ... additional file diffs omitted from compacted prompt", maxChars);
-      break;
-    }
-  }
-
-  const compacted = lines.join("\n");
-  if (compacted.length <= maxChars) return compacted;
-  return `${compacted.slice(0, Math.max(0, maxChars - 38)).trimEnd()}\n[compacted diff truncated]`;
-}
-
 function collectPerFileDiffsForGate(committed, uncommitted, untracked) {
   return splitDiffByFile(committed)
     .append(splitDiffByFile(uncommitted))
@@ -918,6 +841,19 @@ function exactIdFallback(baseFallback, placeholder, knownIds) {
 
 // spec 255 R6: rename buildGuardrailPromptFromFiltered to buildGuardrailArticleEvalPrompt
 // and add exhaustive-enumeration directive in the rules text.
+class GuardrailEvidenceObligation {
+  constructor(article) {
+    this.id = article.id;
+    this.title = article.title;
+    this.body = article.body;
+    Object.freeze(this);
+  }
+
+  toPromptText() {
+    return `Guardrail ${this.id}: ${this.title}\n${this.body}`;
+  }
+}
+
 export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, role, previouslyPassedIds, options = {}) {
   if (filtered.length === 0) return null;
 
@@ -973,6 +909,14 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
   );
 
   pb.addUserPrompt("## Guardrail Articles", articleList);
+  if (options.completeEvidence) {
+    pb.addUserPrompt("## Complete Evidence Judgment", [
+      "Every canonical source/context range has been evaluated. Reconcile supporting facts, contradictions, and unresolved questions across all ranges before judging.",
+      "Evaluate document-level omissions across the full collected evidence, not by absence from one source range.",
+      "Apply explicit article exception clauses using the collected acknowledgment rationale. Rationale alone cannot grant an exception.",
+      "Report each remaining violation at its original location; preserve distinct occurrences. Do not cite evidence serialization as project content.",
+    ].join("\n"));
+  }
   if (options?.acknowledgedRationale?.markdown) {
     pb.addUserRaw(options.acknowledgedRationale.markdown);
   }
@@ -1431,13 +1375,14 @@ export function buildGateResultArtifact({
 // Guardrail AI check — shared
 // ---------------------------------------------------------------------------
 
-async function callGateAgent(agent, built, attempt) {
+async function callGateAgent(agent, built, attempt, providerCallAdmission) {
   let cacheDecision = null;
   const text = await agent.call(built.userPrompt, {
     commandId: "flow.spec.gate",
     systemPrompt: built.systemPrompt,
     jsonSchema: built.jsonSchema,
     fmtFallback: built.fmtFallback,
+    providerCallAdmission,
     cacheMode: attempt.cacheMode,
     onCacheDecision(decision) { cacheDecision = decision; },
   });
@@ -1447,6 +1392,16 @@ async function callGateAgent(agent, built, attempt) {
     fresh: cacheDecision?.fresh ?? attempt.repair,
     providerCalled: cacheDecision?.providerCalled ?? true,
   };
+}
+
+function createGateExecutionBudget() {
+  return new PromptExecutionBudget(new PromptExecutionLimit({ maxProtocolRetryCount: 1 }));
+}
+
+function gateInvocationProjector(agent) {
+  return typeof agent.projectInvocation === "function"
+    ? (request) => agent.projectInvocation(request.userPrompt, { ...request, commandId: "flow.spec.gate" })
+    : undefined;
 }
 
 function requiredGuardrailFailure(failureKind, failureCode, failureReason, details = {}) {
@@ -1490,7 +1445,16 @@ function requiredGateAgentResolutionFailure(agent) {
 }
 
 function requiredGateEvaluationFailure(error) {
+  // Preserve the existing protocol/provider recovery classification through
+  // the shared executor's incomplete-batch wrapper.
+  while (error instanceof PromptBatchingError && error.cause) error = error.cause;
   const sourceError = error instanceof GateOutputProtocolFailure ? error.cause : error;
+  if (sourceError instanceof PromptBatchingError) {
+    return requiredGuardrailFailure("input", sourceError.code, sourceError.message, {
+      retryable: false,
+      recoveryHint: "Inspect the named prompt input, coverage, or execution limit before retrying.",
+    });
+  }
   const agentFailure = sourceError instanceof AgentFailure ? sourceError : null;
   const schema = error instanceof EvaluationSchemaError
     || (error instanceof GateOutputProtocolFailure
@@ -1526,6 +1490,7 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
   try {
     guardrails = loadGuardrails(root);
   } catch (error) {
+    if (error instanceof PromptBatchingError) return requiredGateEvaluationFailure(error);
     const spawn = error?.code === "ENOENT" || /spawn|executable|not found/i.test(error?.message || "");
     return requiredGuardrailFailure(
       spawn ? "guardrail-spawn" : "guardrail-evaluation",
@@ -1570,11 +1535,65 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
   const knownIds = filtered.map((g) => g.id);
   let parsed;
   try {
-    ({ observations: parsed } = await evaluateGuardrailObservationsWithRetry({
-      knownIds,
-      phase,
-      callAgent: (attempt) => callGateAgent(agent, built, attempt),
+    const limit = new PromptRequestLimit({ maxCharacters: agent.promptCharacterLimit ?? MAX_IMPL_REQUIREMENT_BATCH_CHARS });
+    const projectInvocation = gateInvocationProjector(agent);
+    const direct = gatePromptFits(built, limit);
+    const evidencePlans = direct ? [] : filtered.map((article) => new RequirementEvidencePlan({
+      requirement: new GuardrailEvidenceObligation(article), limit,
+      inputs: [
+        new RequirementEvidenceInput({ id: `${article.id}:source`, text: targetText }),
+        new RequirementEvidenceInput({ id: `${article.id}:rationale`, text: options.acknowledgedRationale?.markdown ?? "" }),
+        new RequirementEvidenceInput({ id: `${article.id}:prior-memory`, text: options.priorMemoryMarkdown ?? "" }),
+      ],
     }));
+    const plans = direct
+      ? [PromptBatchPlan.fromRequest({ request: built, limit, id: "guardrail-request" })]
+      : evidencePlans.map((evidence) => evidence.plan);
+    if (projectInvocation) {
+      for (const plan of plans) {
+        for (const batch of plan.batches) projectInvocation(batch.request).assertWithinLimit(limit);
+      }
+    }
+    const executionBudget = options.executionBudget ?? createGateExecutionBudget();
+    executionBudget.assertCanExecute(plans.reduce((count, plan) => count + plan.batches.length, evidencePlans.length));
+    const observations = [];
+    const callAgent = (request, _batch, _index, attempt, providerCallAdmission) => callGateAgent(agent, request, attempt, providerCallAdmission);
+    for (const [index, initialPlan] of plans.entries()) {
+      let plan = initialPlan;
+      if (!direct) {
+        const evidencePlan = evidencePlans[index];
+        const article = filtered[index];
+        const protocolPolicy = new GateOutputProtocolPolicy({
+          phase,
+          parseResponse: (raw, batch) => new RequirementObservationResponse(parseJsonObject(raw), article.id, batch),
+        });
+        const evidence = await evidencePlan.execute({ callAgent, projectInvocation, protocolPolicy, executionBudget });
+        const request = await reduceRequirementEvidence({
+          evidence, requirement: evidencePlan.requirement, limit, projectInvocation, protocolPolicy, executionBudget,
+          evaluateBatch: callAgent,
+          buildFinalRequest: (facts) => buildGuardrailArticleEvalPrompt(
+            "Complete evidence collected from all canonical ranges:\n" + facts,
+            [article], phase, role, promptPreviouslyPassedIds,
+            { completeEvidence: true },
+          ).build(),
+        });
+        plan = PromptBatchPlan.fromRequest({ request, limit, id: `${article.id}:final-judgment` });
+      }
+      const result = await executeGatePlan({
+        plan, projectInvocation, executionBudget,
+        callAgent,
+        protocolPolicy: new GateOutputProtocolPolicy({
+          phase,
+          parseResponse: (raw, batch) => parseGuardrailArticleEvaluation(raw,
+            batch.request.jsonSchema.properties.observations.items.properties.requirementRef.enum),
+        }),
+        parseResponse: (response) => response,
+      });
+      observations.push(...result.results.flat());
+    }
+    parsed = [...new Map(observations.map((entry) => [JSON.stringify([
+      entry.requirementRef ?? entry.guardrail_id, entry.where ?? entry.violations, entry.observed ?? entry.reason,
+    ]), entry])).values()];
   } catch (error) {
     return requiredGateEvaluationFailure(error);
   }
@@ -1798,6 +1817,22 @@ async function evaluateGateOutputWithRepair({
   throw gateOutputFailure({ phase, originalError, attempts });
 }
 
+/** Keep Gate retry/freshness in its existing protocol while the shared executor counts every call. */
+class GateOutputProtocolPolicy {
+  constructor({ phase, parseResponse }) {
+    this.phase = phase;
+    this.parseResponse = parseResponse;
+  }
+
+  execute({ request, batch, call }) {
+    return evaluateGateOutputWithRepair({
+      phase: this.phase,
+      callAgent: (attempt) => call(request, attempt),
+      parseResponse: (raw) => this.parseResponse(raw, batch),
+    });
+  }
+}
+
 export async function evaluateGuardrailObservationsWithRetry({
   knownIds,
   callAgent,
@@ -1811,19 +1846,6 @@ export async function evaluateGuardrailObservationsWithRetry({
     parseResponse: (raw) => parseGuardrailArticleEvaluation(raw, knownIds),
   });
   return { observations };
-}
-
-async function evaluateImplRequirementsWithRetry({
-  knownIds,
-  callAgent,
-  phase,
-}) {
-  const evaluations = await evaluateGateOutputWithRepair({
-    phase,
-    callAgent,
-    parseResponse: (raw) => parseImplRequirementEvaluation(raw, knownIds),
-  });
-  return { evaluations };
 }
 
 // ---------------------------------------------------------------------------
@@ -2145,26 +2167,18 @@ export class SameSpecContractRecord {
 }
 
 export class SameSpecContractSection {
-  constructor({ name, records, omittedRecords = [] }) {
+  constructor({ name, records }) {
     if (!Object.hasOwn(SAME_SPEC_SECTION_TITLES, name)) {
       throw new Error(`unknown same-spec contract section: ${name}`);
     }
     if (!Array.isArray(records) || !records.every((record) => record instanceof SameSpecContractRecord)) {
       throw new Error("same-spec contract section records must contain SameSpecContractRecord values");
     }
-    if (!Array.isArray(omittedRecords) || !omittedRecords.every((record) => record instanceof SameSpecContractRecord)) {
-      throw new Error("same-spec contract omittedRecords must contain SameSpecContractRecord values");
-    }
-    if (![...records, ...omittedRecords].every((record) => record.section === name)) {
+    if (!records.every((record) => record.section === name)) {
       throw new Error("same-spec contract records must belong to their section");
     }
     this.name = name;
     this.records = Object.freeze([...records]);
-    this.omittedItemCount = omittedRecords.length;
-    this.omittedOriginalCharacters = omittedRecords.reduce(
-      (total, record) => total + record.sourceCharacters,
-      0,
-    );
     Object.freeze(this);
   }
 
@@ -2172,12 +2186,6 @@ export class SameSpecContractSection {
     const records = this.records.length > 0
       ? this.records.map((record) => record.toPromptText())
       : ["- (none)"];
-    if (this.omittedItemCount > 0) {
-      records.push(
-        `- [truncated ${this.name}: omitted_items=${this.omittedItemCount}; `
-          + `original_characters=${this.omittedOriginalCharacters}]`,
-      );
-    }
     return [`### ${SAME_SPEC_SECTION_TITLES[this.name]}`, ...records].join("\n");
   }
 }
@@ -2238,18 +2246,6 @@ function sameSpecClarificationRecord(clarification, index) {
   });
 }
 
-function selectBoundedRecords(records, { maxItems, maxItemCharacters }) {
-  const withinItemLimit = [];
-  const omittedRecords = [];
-  for (const record of records) {
-    if (record.sourceCharacters > maxItemCharacters) omittedRecords.push(record);
-    else withinItemLimit.push(record);
-  }
-  return {
-    records: withinItemLimit.slice(0, maxItems),
-    omittedRecords: [...omittedRecords, ...withinItemLimit.slice(maxItems)],
-  };
-}
 
 function requirementIdIsReferenced(text, id) {
   const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, (character) => `\\${character}`);
@@ -2307,71 +2303,22 @@ export class SameSpecContractContext {
     const currentRecords = currentEntries.map(({ requirement, index }) => (
       sameSpecRequirementRecord(requirement, index, true)
     ));
-    if (currentRecords.reduce((total, record) => total + record.sourceCharacters, 0)
-      >= MAX_SAME_SPEC_CONTRACT_CONTEXT_CHARS) {
-      throw new Error("current requirement full text exceeds the 48000-character same-spec contract context bound");
-    }
-    const summarySelection = selectBoundedRecords(
-      [...referencedEntries, ...remainingEntries].map(({ requirement, index }) => (
-        sameSpecRequirementRecord(requirement, index, false)
-      )),
-      {
-        maxItems: MAX_SAME_SPEC_REQUIREMENT_SUMMARIES,
-        maxItemCharacters: MAX_SAME_SPEC_REQUIREMENT_SUMMARY_CHARS,
-      },
-    );
-    const decisionSelection = selectBoundedRecords(
-      spec.overview.decisions.map(sameSpecDecisionRecord),
-      { maxItems: MAX_SAME_SPEC_DECISIONS, maxItemCharacters: MAX_SAME_SPEC_DECISION_CHARS },
-    );
-    const clarificationSelection = selectBoundedRecords(
-      spec.clarifications.map(sameSpecClarificationRecord),
-      { maxItems: MAX_SAME_SPEC_CLARIFICATIONS, maxItemCharacters: MAX_SAME_SPEC_CLARIFICATION_CHARS },
-    );
-
-    const selected = {
-      requirements: [...summarySelection.records],
-      "overview.decisions": [...decisionSelection.records],
-      clarifications: [...clarificationSelection.records],
-    };
-    const omitted = {
-      requirements: [...summarySelection.omittedRecords],
-      "overview.decisions": [...decisionSelection.omittedRecords],
-      clarifications: [...clarificationSelection.omittedRecords],
-    };
-    const buildSections = () => ({
+    const sections = {
       requirements: new SameSpecContractSection({
         name: "requirements",
-        records: [...currentRecords, ...selected.requirements],
-        omittedRecords: omitted.requirements,
+        records: [...currentRecords, ...[...referencedEntries, ...remainingEntries]
+          .map(({ requirement, index }) => sameSpecRequirementRecord(requirement, index, false))],
       }),
       decisions: new SameSpecContractSection({
-        name: "overview.decisions",
-        records: selected["overview.decisions"],
-        omittedRecords: omitted["overview.decisions"],
+        name: "overview.decisions", records: spec.overview.decisions.map(sameSpecDecisionRecord),
       }),
       clarifications: new SameSpecContractSection({
-        name: "clarifications",
-        records: selected.clarifications,
-        omittedRecords: omitted.clarifications,
+        name: "clarifications", records: spec.clarifications.map(sameSpecClarificationRecord),
       }),
-    });
-    const renderSections = (sections) => [
-      sections.requirements.toPromptText(),
-      sections.decisions.toPromptText(),
-      sections.clarifications.toPromptText(),
+    };
+    const renderSections = (value) => [
+      value.requirements.toPromptText(), value.decisions.toPromptText(), value.clarifications.toPromptText(),
     ].join("\n\n");
-
-    let sections = buildSections();
-    const removalOrder = ["clarifications", "overview.decisions", "requirements"];
-    while (renderSections(sections).length > MAX_SAME_SPEC_CONTRACT_CONTEXT_CHARS) {
-      const section = removalOrder.find((name) => selected[name].length > 0);
-      if (!section) {
-        throw new Error("current requirements and contract metadata exceed the 48000-character context bound");
-      }
-      omitted[section].push(selected[section].pop());
-      sections = buildSections();
-    }
 
     this.requirements = sections.requirements;
     this.decisions = sections.decisions;
@@ -2436,17 +2383,6 @@ const CHANGED_BEHAVIOR_VERBS = Object.freeze([
   "require",
 ]);
 
-function positiveInteger(value, name) {
-  if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
-  return value;
-}
-
-function truncateContextItem(text, maxChars) {
-  if (text.length <= maxChars) return text;
-  const suffix = " [CONTEXT:TRUNCATED]";
-  return `${text.slice(0, Math.max(0, maxChars - suffix.length)).trimEnd()}${suffix}`;
-}
-
 export class RequirementContextEntry {
   constructor({ section, reference, text }) {
     if (!REQUIREMENT_CONTEXT_SECTIONS.has(section)) throw new Error(`unknown requirement context section: ${section}`);
@@ -2460,9 +2396,8 @@ export class RequirementContextEntry {
     Object.freeze(this);
   }
 
-  toPromptText(maxChars = MAX_REQUIREMENT_CONTEXT_ITEM_CHARS) {
-    positiveInteger(maxChars, "maxChars");
-    return truncateContextItem(`${this.reference} ${this.text}`, maxChars);
+  toPromptText() {
+    return `${this.reference} ${this.text}`;
   }
 }
 
@@ -2531,9 +2466,6 @@ export class RequirementGateContext {
     requirementId,
     obligation,
     entries,
-    maxItems = MAX_REQUIREMENT_CONTEXT_ITEMS,
-    maxItemChars = MAX_REQUIREMENT_CONTEXT_ITEM_CHARS,
-    maxChars = MAX_REQUIREMENT_CONTEXT_CHARS,
   }) {
     if (typeof requirementId !== "string" || requirementId.trim() === "") {
       throw new Error("requirementId must be a non-empty string");
@@ -2546,9 +2478,6 @@ export class RequirementGateContext {
     this.requirementId = requirementId.trim();
     this.obligation = obligation;
     this.entries = Object.freeze([...entries]);
-    this.maxItems = positiveInteger(maxItems, "maxItems");
-    this.maxItemChars = positiveInteger(maxItemChars, "maxItemChars");
-    this.maxChars = positiveInteger(maxChars, "maxChars");
     this.promptText = this.#render();
     Object.freeze(this);
   }
@@ -2559,25 +2488,10 @@ export class RequirementGateContext {
       `Obligation: ${this.obligation.kind}`,
       `Evaluation contract: ${this.obligation.toPromptText()}`,
     ];
-    let truncated = false;
-    sections: for (const section of REQUIREMENT_CONTEXT_SECTION_ORDER) {
-      const sectionEntries = this.entries.filter((entry) => entry.section === section);
-      if (sectionEntries.length > this.maxItems) truncated = true;
-      for (const entry of sectionEntries.slice(0, this.maxItems)) {
-        const rendered = entry.toPromptText(this.maxItemChars);
-        if (rendered.length < `${entry.reference} ${entry.text}`.length) truncated = true;
-        const next = [...lines, rendered].join("\n");
-        if (next.length > this.maxChars) {
-          truncated = true;
-          break sections;
-        }
-        lines.push(rendered);
+    for (const section of REQUIREMENT_CONTEXT_SECTION_ORDER) {
+      for (const entry of this.entries.filter((value) => value.section === section)) {
+        lines.push(entry.toPromptText());
       }
-    }
-    if (truncated) {
-      const marker = "[CONTEXT:TRUNCATED]";
-      while (lines.length > 3 && [...lines, marker].join("\n").length > this.maxChars) lines.pop();
-      if ([...lines, marker].join("\n").length <= this.maxChars) lines.push(marker);
     }
     return lines.join("\n");
   }
@@ -2812,17 +2726,6 @@ function renderRequirementContextSection(contexts) {
   return contexts.map((context) => context.toPromptText()).join("\n\n");
 }
 
-function renderRequirementBatchInput({ requirements, contexts, usesFullSpec, fullSpecText, sourceScope }) {
-  const requirementsText = usesFullSpec
-    ? fullSpecText
-    : contexts
-      ? renderRequirementContextSection(contexts)
-      : renderRequirementPromptSection(requirements);
-  return sourceScope === null
-    ? requirementsText
-    : `${requirementsText}\n\n${sourceScope.toPromptText()}`;
-}
-
 export class RequirementGateBatch {
   constructor({
     requirements,
@@ -2832,7 +2735,6 @@ export class RequirementGateBatch {
     usesFullSpec = false,
     fullSpecText = null,
     structuredSpec = null,
-    compactDiff = true,
     sourceScope = null,
   }) {
     if (!Array.isArray(requirements) || requirements.length === 0) {
@@ -2851,7 +2753,6 @@ export class RequirementGateBatch {
     this.fullSpecText = fullSpecText;
     this.requirementIds = Object.freeze(this.requirements.map((requirement) => requirement.id));
     this.structuredSpec = structuredSpec;
-    this.compactDiff = compactDiff === true;
     if (sourceScope !== null && !(sourceScope instanceof CanonicalSourceRequirementScope)) {
       throw new Error("sourceScope must be a CanonicalSourceRequirementScope or null");
     }
@@ -2866,35 +2767,12 @@ export class RequirementGateBatch {
       ? null
       : Object.freeze(contexts.map((context, index) => normalizeRequirementContext(context, this.requirementIds[index])));
     this.category = "requirements";
-    this.requirementPromptText = renderRequirementBatchInput({
-      requirements: this.requirements,
-      contexts: this.contexts,
-      usesFullSpec: this.usesFullSpec,
-      fullSpecText: this.fullSpecText,
-      sourceScope: this.sourceScope,
-    });
-    if (this.compactDiff && this.requirementPromptText.length + this.diff.length > MAX_AGENT_PROMPT_INPUT_CHARS) {
-      const budget = Math.max(20000, this.maxChars - this.requirementPromptText.length);
-      this.diff = summarizeDiffForPrompt(this.diff, budget);
-    }
-    this.promptCharCount = this.requirementPromptText.length + this.diff.length;
-    this.overflow = this.requirements.length === 1 && !this.usesFullSpec && this.promptCharCount > this.maxChars;
+    this.promptCharCount = PromptLogicalFootprint.measure(this.buildPrompt().build()).total;
     Object.freeze(this);
   }
 
   fitsWith(requirement, context = null) {
-    const requirements = [...this.requirements, normalizeRequirementPromptInput(requirement)];
-    const contexts = this.contexts
-      ? [...this.contexts, normalizeRequirementContext(context, requirements.at(-1).id)]
-      : null;
-    const promptCharCount = renderRequirementBatchInput({
-      requirements,
-      contexts,
-      usesFullSpec: this.usesFullSpec,
-      fullSpecText: this.fullSpecText,
-      sourceScope: this.sourceScope,
-    }).length + this.diff.length;
-    return promptCharCount <= this.maxChars;
+    return this.withRequirement(requirement, context).promptCharCount <= this.maxChars;
   }
 
   withRequirement(requirement, context = null) {
@@ -2909,7 +2787,6 @@ export class RequirementGateBatch {
       usesFullSpec: this.usesFullSpec,
       fullSpecText: this.fullSpecText,
       structuredSpec: this.structuredSpec,
-      compactDiff: this.compactDiff,
       sourceScope: this.sourceScope,
     });
   }
@@ -2926,40 +2803,9 @@ export class RequirementGateBatch {
   }
 }
 
-function summarizeDiffForPrompt(diff, maxChars) {
-  const lines = [
-    "[diff summarized: original diff exceeded provider input limits]",
-  ];
-  const perFileDiffs = splitDiffByFile(diff);
-  const segments = [
-    ...(perFileDiffs.preambleText ? [["diff preamble", perFileDiffs.preambleText]] : []),
-    ...perFileDiffs.unparsedSegments.map((segment, index) => [
-      `unparsed diff segment ${index + 1}`,
-      segment.text,
-    ]),
-    ...perFileDiffs,
-  ];
-  for (const [file, fileDiff] of segments) {
-    const entry = summarizeDiffSegment(file, fileDiff);
-    if (lines.join("\n").length + entry.length + 1 > maxChars) {
-      lines.push("- ... additional files omitted from summary");
-      break;
-    }
-    lines.push(entry);
-  }
-  return lines.join("\n");
-}
-
-const MAX_SPEC_TEST_HEADER_EVIDENCE = 100;
-const MAX_SPEC_TEST_HEADER_CHARS = 500;
-const MAX_SPEC_TEST_DECLARATION_EVIDENCE = 200;
-const MAX_SPEC_TEST_DECLARATION_CHARS = 500;
-const MAX_SPEC_TEST_EVIDENCE_CHARS = 24_000;
-
 class SpecTestPromptEvidence {
   constructor(diff) {
     this.entries = [];
-    let declarationCount = 0;
     for (const [file, fileDiff] of splitDiffByFile(diff)) {
       if (!/^specs\/[^/]+\/tests\/[^/]+\.(test|spec)\.(js|mjs|ts)$/.test(file)) continue;
       const header = fileDiff.match(/^\+\s*(\/\/\s*spec:\s*R\d+(?:\s+R\d+)*)\s*$/m)?.[1];
@@ -2967,50 +2813,39 @@ class SpecTestPromptEvidence {
       const declarations = [];
       const pattern = /^\+\s*(?:(?:test|it)(?:\.(?:only|skip|todo))?)\s*\(\s*(["'`])(.+?)\1/gm;
       for (const match of fileDiff.matchAll(pattern)) {
-        if (declarationCount >= MAX_SPEC_TEST_DECLARATION_EVIDENCE) break;
-        declarations.push(match[2].slice(0, MAX_SPEC_TEST_DECLARATION_CHARS));
-        declarationCount += 1;
+        declarations.push(match[2]);
       }
       this.entries.push({
         file,
-        header: header.slice(0, MAX_SPEC_TEST_HEADER_CHARS),
+        header,
         declarations,
       });
-      if (this.entries.length >= MAX_SPEC_TEST_HEADER_EVIDENCE) break;
     }
     Object.freeze(this.entries);
     Object.freeze(this);
   }
 
-  toMarkdown(maxChars = MAX_SPEC_TEST_EVIDENCE_CHARS) {
-    if (this.entries.length === 0 || maxChars <= 0) return "";
+  toMarkdown() {
+    if (this.entries.length === 0) return "";
     const lines = [
       "## Spec Test Header And Declaration Evidence",
-      "The following bounded evidence is extracted from added spec-local test lines.",
+      "The following evidence is extracted from added spec-local test lines; the full diff remains authoritative.",
     ];
     for (const entry of this.entries) {
-      if (!appendPromptLine(lines, `- ${entry.file}: ${entry.header}`, maxChars)) break;
+      lines.push(`- ${entry.file}: ${entry.header}`);
       for (const declaration of entry.declarations) {
-        if (!appendPromptLine(lines, `  - test: ${declaration}`, maxChars)) break;
+        lines.push(`  - test: ${declaration}`);
       }
     }
     return `${lines.join("\n")}\n\n`;
   }
 }
 
-function buildGuardrailTargetTextForPrompt(specText, diff, maxChars = MAX_GUARDRAIL_TARGET_CHARS) {
+function buildGuardrailTargetTextForPrompt(specText, diff) {
   if (typeof specText !== "string") throw new Error("specText must be a string");
   if (typeof diff !== "string") throw new Error("diff must be a string");
-  if (!Number.isInteger(maxChars) || maxChars <= 0) throw new Error("maxChars must be a positive integer");
-
-  const evidenceBudget = Math.min(MAX_SPEC_TEST_EVIDENCE_CHARS, Math.floor(maxChars / 4));
-  const specTestEvidence = new SpecTestPromptEvidence(diff).toMarkdown(evidenceBudget);
-  const prefix = `${specText}\n\n${specTestEvidence}## Git Diff\n`;
-  if (prefix.length + diff.length <= maxChars) return `${prefix}${diff}`;
-  const diffBudget = Math.max(1, maxChars - prefix.length);
-  const targetText = `${prefix}${compactDiffForGuardrailPrompt(diff, diffBudget)}`;
-  if (targetText.length <= maxChars) return targetText;
-  return `${targetText.slice(0, Math.max(0, maxChars - 36)).trimEnd()}\n[target text truncated]`;
+  const specTestEvidence = new SpecTestPromptEvidence(diff).toMarkdown();
+  return `${specText}\n\n${specTestEvidence}## Git Diff\n${diff}`;
 }
 
 class RequirementGatePlan {
@@ -3039,7 +2874,6 @@ export function buildRequirementGateBatches({
   relatedDiffs,
   maxChars = MAX_IMPL_REQUIREMENT_BATCH_CHARS,
   structuredSpec = null,
-  compactDiff = true,
   sourceScope = null,
 }) {
   if (!Array.isArray(requirements)) throw new Error("requirements must be an array");
@@ -3064,7 +2898,6 @@ export function buildRequirementGateBatches({
           diff,
           maxChars,
           structuredSpec,
-          compactDiff,
           sourceScope,
         });
         continue;
@@ -3081,7 +2914,6 @@ export function buildRequirementGateBatches({
         diff,
         maxChars,
         structuredSpec,
-        compactDiff,
         sourceScope,
       });
     }
@@ -3100,7 +2932,6 @@ export function planRequirementGateCalls({
   phase = "task-impl",
   maxChars = MAX_IMPL_REQUIREMENT_BATCH_CHARS,
   structuredSpec = null,
-  compactDiff = true,
   sourceScope = null,
 }) {
   const requirementExcerpts = requirements.map(normalizeRequirementPromptInput);
@@ -3115,7 +2946,6 @@ export function planRequirementGateCalls({
         maxChars,
         usesFullSpec: contexts === null,
         fullSpecText,
-        compactDiff,
         sourceScope,
       })],
       evaluations: [],
@@ -3148,11 +2978,103 @@ export function planRequirementGateCalls({
       relatedDiffs,
       maxChars,
       structuredSpec: phase === "integration" ? structuredSpec : null,
-      compactDiff,
       sourceScope,
     }),
     evaluations,
   });
+}
+
+export class RequirementGateExecutionPlan {
+  constructor({ batch, limit, direct = null, evidence = null, requirement = null }) {
+    this.batch = batch;
+    this.limit = limit;
+    this.direct = direct;
+    this.evidence = evidence;
+    this.requirement = requirement;
+    Object.freeze(this);
+  }
+
+  static create(batch, limit) {
+    const request = batch.buildPrompt().build();
+    if (gatePromptFits(request, limit)) {
+      return [new RequirementGateExecutionPlan({ batch, limit, direct: PromptBatchPlan.fromRequest({ request, limit, id: "requirement-gate-request" }) })];
+    }
+    return batch.requirements.map((requirement) => {
+      const inputs = [];
+      const context = batch.contexts?.find((entry) => entry.requirementId === requirement.id);
+      if (context) {
+        inputs.push(new RequirementEvidenceInput({
+          id: `${requirement.id}:obligation`, text: context.obligation.toPromptText(),
+        }));
+        context.entries.forEach((entry, index) => inputs.push(new RequirementEvidenceInput({
+          id: `${requirement.id}:context:${index}:${entry.reference}`, text: entry.toPromptText(),
+        })));
+      } else if (batch.usesFullSpec) {
+        inputs.push(new RequirementEvidenceInput({ id: `${requirement.id}:spec`, text: batch.fullSpecText }));
+      }
+      for (const section of [batch.sameSpecContractContext?.requirements, batch.sameSpecContractContext?.decisions, batch.sameSpecContractContext?.clarifications]) {
+        for (const record of section?.records || []) {
+          inputs.push(new RequirementEvidenceInput({ id: `${requirement.id}:contract:${record.locator}`, text: record.toPromptText() }));
+        }
+      }
+      if (batch.sourceScope) {
+        inputs.push(new RequirementEvidenceInput({ id: `${requirement.id}:mapping`, text: batch.sourceScope.toPromptText() }));
+      }
+      const source = GateDiffCollection.from(splitDiffByFile(batch.diff));
+      if (source.preambleText) inputs.push(new RequirementEvidenceInput({ id: `${requirement.id}:source:preamble`, text: source.preambleText }));
+      source.unparsedSegments.forEach((segment, index) => inputs.push(new RequirementEvidenceInput({
+        id: `${requirement.id}:source:unparsed:${index}`, text: segment.text,
+      })));
+      for (const [file, text] of source) inputs.push(new RequirementEvidenceInput({ id: `${requirement.id}:source:${file}`, text }));
+      if (source.size === 0 && !source.preambleText && source.unparsedSegments.length === 0) {
+        inputs.push(new RequirementEvidenceInput({ id: `${requirement.id}:source`, text: batch.diff }));
+      }
+      return new RequirementGateExecutionPlan({
+        batch, limit, requirement,
+        evidence: new RequirementEvidencePlan({ requirement, inputs, limit }),
+      });
+    });
+  }
+
+  preflight(projectInvocation) {
+    if (!projectInvocation) return;
+    const plan = this.direct ?? this.evidence.plan;
+    for (const batch of plan.batches) projectInvocation(batch.request).assertWithinLimit(this.limit);
+  }
+
+  async execute({ agent, phase, projectInvocation, executionBudget }) {
+    const callAgent = (request, _batch, _index, attempt, providerCallAdmission) => callGateAgent(agent, request, attempt, providerCallAdmission);
+    if (this.direct) {
+      const result = await executeGatePlan({
+        plan: this.direct, projectInvocation, callAgent, executionBudget,
+        protocolPolicy: new GateOutputProtocolPolicy({
+          phase, parseResponse: (raw) => parseImplRequirementEvaluation(raw, this.batch.requirementIds),
+        }),
+        parseResponse: (response) => response,
+      });
+      return result.results.flat();
+    }
+    const protocolPolicy = new GateOutputProtocolPolicy({
+      phase,
+      parseResponse: (raw, batch) => new RequirementObservationResponse(parseJsonObject(raw), this.requirement.id, batch),
+    });
+    const evidence = await this.evidence.execute({ projectInvocation, callAgent, protocolPolicy, executionBudget });
+    const built = await reduceRequirementEvidence({
+      evidence, requirement: this.requirement, limit: this.limit, projectInvocation, protocolPolicy, executionBudget,
+      buildFinalRequest: (observationEvidence) => buildImplCheckPrompt({
+        requirements: [this.requirement], knownIds: [this.requirement.id], observationEvidence,
+      }).build(),
+      evaluateBatch: callAgent,
+    });
+    const result = await executeGatePlan({
+      plan: PromptBatchPlan.fromRequest({ request: built, limit: this.limit, id: "requirement-gate-judgment" }), projectInvocation, callAgent, executionBudget,
+      protocolPolicy: new GateOutputProtocolPolicy({
+        phase, parseResponse: (raw) => parseImplRequirementEvaluation(raw, [this.requirement.id]),
+      }),
+      parseResponse: (response) => response,
+    });
+    return result.results.flat();
+  }
 }
 
 async function evaluateCanonicalRequirements({
@@ -3167,8 +3089,8 @@ async function evaluateCanonicalRequirements({
   previousResult = null,
   executionEvidence = null,
   structuredSpec = null,
-  compactDiff = true,
   sourceScope = null,
+  executionBudget = createGateExecutionBudget(),
 }) {
   const requirementContexts = new Map(requirements.map((requirement) => [
     requirement.id,
@@ -3193,15 +3115,8 @@ async function evaluateCanonicalRequirements({
     phase,
     maxChars: MAX_IMPL_REQUIREMENT_BATCH_CHARS,
     structuredSpec,
-    compactDiff,
     sourceScope,
   });
-  const overflow = plan.calls.find((batch) => batch.overflow);
-  if (overflow) {
-    return gateFail(level, phase, targetPath, [], [
-      `Requirement evaluation input is ${overflow.promptCharCount} chars, exceeds limit ${overflow.maxChars}`,
-    ]);
-  }
   const evaluations = [...plan.evaluations];
   if (plan.calls.length === 0) return evaluations;
   const agent = container.get("agent");
@@ -3210,14 +3125,16 @@ async function evaluateCanonicalRequirements({
     return gateRequiredEvaluationFail(level, phase, targetPath, agentResolutionFailure);
   }
   try {
-    for (const batch of plan.calls) {
-      const built = batch.buildPrompt().build();
-      const result = await evaluateImplRequirementsWithRetry({
-        knownIds: batch.requirementIds,
-        phase,
-        callAgent: (attempt) => callGateAgent(agent, built, attempt),
-      });
-      evaluations.push(...result.evaluations.map((entry) => ({
+    const limit = new PromptRequestLimit({ maxCharacters: agent.promptCharacterLimit ?? MAX_IMPL_REQUIREMENT_BATCH_CHARS });
+    const projectInvocation = gateInvocationProjector(agent);
+    const executions = plan.calls.flatMap((batch) => RequirementGateExecutionPlan.create(batch, limit));
+    executionBudget.assertCanExecute(executions.reduce((count, execution) => count
+      + (execution.direct?.batches.length ?? execution.evidence.plan.batches.length + 1), 0));
+    // Every source and context range is planned before the first provider call.
+    for (const execution of executions) execution.preflight(projectInvocation);
+    for (const execution of executions) {
+      const result = await execution.execute({ agent, phase, projectInvocation, executionBudget });
+      evaluations.push(...result.map((entry) => ({
         ...entry,
         title: entry.guardrail_id,
         category: "requirements",
@@ -3295,7 +3212,16 @@ function buildImplCheckPrompt(specTextOrOptions, diffArg, knownIdsArg) {
   if (sourceScope) {
     pb.addUserPrompt("## Canonical Requirement-Source Mapping", sourceScope.toPromptText());
   }
-  pb.addUserPrompt("## Git Diff", diff);
+  if (options.observationEvidence !== undefined) {
+    pb.addUserPrompt("## Complete canonical evidence observations", options.observationEvidence);
+    pb.addUserPrompt("## Final judgment contract", [
+      "All source and contract ranges have been scanned. Make one final requirement judgment from the complete observation set.",
+      "Distinguish source facts from authoritative contract facts, preserve contradictions, and resolve questions across ranges.",
+      "The absence of a fact from one range alone is not evidence of missing implementation.",
+    ].join("\n"));
+  } else {
+    pb.addUserPrompt("## Git Diff", diff);
+  }
 
   return pb;
 }
@@ -3582,6 +3508,7 @@ export async function runGateFlow(args) {
     previouslyPassedIds,
     {
       ...guardrailPromptOptions,
+      executionBudget: ctx?.promptExecutionBudget ?? guardrailPromptOptions.executionBudget,
       priorMemoryMarkdown,
       excludedGuardrailIds: ownedEvaluations.map((evaluation) => evaluation.guardrail_id),
     },
@@ -3689,6 +3616,7 @@ export class RunGateCommand extends FlowCommand {
    * replaced by the Store-attached result returned at the end of this method.
    */
   async executeCanonical(ctx, { phase, level, skipGuardrail, executionRoot }) {
+    ctx.promptExecutionBudget = createGateExecutionBudget();
     const flowManager = ctx.flowManager;
     if (!flowManager || typeof flowManager.canonicalState !== "function") {
       throw new Error("canonical gate requires FlowManager.canonicalState");
@@ -3946,8 +3874,8 @@ export class RunGateCommand extends FlowCommand {
       fileMap,
       relatedDiffs,
       fullDiff: currentSource,
+      executionBudget: ctx.promptExecutionBudget,
       previousResult,
-      compactDiff: false,
       sourceScope,
     });
     if (!Array.isArray(requirementEvaluation)) return complete(requirementEvaluation);
@@ -4161,6 +4089,7 @@ export class RunGateCommand extends FlowCommand {
       fileMap,
       relatedDiffs: perReqDiffs,
       fullDiff: diff,
+      executionBudget: ctx.promptExecutionBudget,
       previousResult,
       executionEvidence: integrationExecutionEvidence,
       structuredSpec: phase === "integration" ? spec : null,
@@ -4180,7 +4109,10 @@ export class RunGateCommand extends FlowCommand {
       phase,
       "You are an implementation compliance checker. Check the implementation against each guardrail.",
       previousResult?.passedGuardrails,
-      { acknowledgedRationale: buildAcknowledgedRationaleSection({ spec, guardrails: diffGuardrails }) },
+      {
+        acknowledgedRationale: buildAcknowledgedRationaleSection({ spec, guardrails: diffGuardrails }),
+        executionBudget: ctx.promptExecutionBudget,
+      },
     );
     if (!grResult) return gatePass(level, phase, specPath, reqEvaluations, fileMapWarnings);
     if (grResult.failureCode) return gateRequiredEvaluationFail(level, phase, specPath, grResult);
@@ -4215,11 +4147,9 @@ export {
   buildGuardrailPrompt,
   buildImplCheckPrompt,
   MAX_IMPL_REQUIREMENT_BATCH_CHARS,
-  MAX_GUARDRAIL_TARGET_CHARS,
   checkGuardrail,
   splitDiffByFile,
   buildGuardrailTargetTextForPrompt,
-  compactDiffForGuardrailPrompt,
   collectPerFileDiffsForGate,
   buildPerRequirementDiffs,
   renderCanonicalTaskSource,

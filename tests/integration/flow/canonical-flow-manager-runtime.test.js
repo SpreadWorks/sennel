@@ -3683,7 +3683,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
         phase: "draft", flowManager: manager, flowState: manager.load(created.specId), config: {},
       };
       const result = await review.execute(ctx);
-      assert.equal(agentCalls, reviewPhase === "draft-coverage" ? 2 : 1);
+      assert.equal(agentCalls, reviewPhase === "draft-coverage" ? 3 : 1,
+        "coverage adds one final cross-check after the questions review and coverage map");
       assert.equal(result.artifacts.phase, reviewPhase);
       assert.equal(result.artifacts.verdict, "PASS");
       assert.equal(fs.existsSync(path.join(outputDirectory, reviewPhase === "draft-questions"

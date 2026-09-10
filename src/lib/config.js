@@ -11,12 +11,16 @@ import { validateSchema } from "./schema-validate.js";
 import { defaultAgentProfiles } from "./agent-defaults.js";
 import { flowSpecRootFromConfig } from "./flow-workspace.js";
 import { PRODUCT } from "./product.js";
+import { GLOBAL_PROMPT_ELEMENT_HARD_MAX } from "./prompt-batching.js";
 
 /** Default concurrency for parallel file processing. */
 export const DEFAULT_CONCURRENCY = 5;
 
 /** Default fallback language when config is unavailable or lang is unset. */
 export const DEFAULT_LANG = "en";
+
+/** Default and global maximum for one provider-visible prompt invocation. */
+export const DEFAULT_PROMPT_CHARACTER_LIMIT = GLOBAL_PROMPT_ELEMENT_HARD_MAX;
 
 /**
  * Resolve concurrency from config, falling back to DEFAULT_CONCURRENCY.
@@ -26,6 +30,15 @@ export const DEFAULT_LANG = "en";
  */
 export function resolveConcurrency(cfg) {
   return Number(cfg.concurrency || 0) || DEFAULT_CONCURRENCY;
+}
+
+/**
+ * Resolve the configured provider-visible prompt character limit.
+ * Config validation owns the integer/range boundary; internal callers receive
+ * the global hard maximum when the optional setting is absent.
+ */
+export function resolvePromptCharacterLimit(cfg) {
+  return cfg?.agent?.promptCharacterLimit ?? DEFAULT_PROMPT_CHARACTER_LIMIT;
 }
 
 /**
@@ -183,7 +196,11 @@ const CONFIG_SCHEMA = {
         workDir: { type: "string" },
         timeout: { type: "number", minimum: 1 },
         retryCount: { type: "number", minimum: 1 },
-        batchTokenLimit: { type: "number", minimum: 1000 },
+        promptCharacterLimit: {
+          type: "integer",
+          minimum: 1000,
+          maximum: GLOBAL_PROMPT_ELEMENT_HARD_MAX,
+        },
         stdinFallbackThreshold: { type: "number", minimum: 1 },
         providers: {
           type: "object",
@@ -373,6 +390,10 @@ export function validate(raw, options = {}) {
     ? { ...defaultAgentProfiles(), ...(raw.agent.profiles || {}) }
     : {};
   const registry = raw.agent ? new ProviderRegistry(raw.agent?.providers || {}) : null;
+
+  if (Object.hasOwn(raw.agent || {}, "batchTokenLimit")) {
+    errors.push("'agent.batchTokenLimit': unknown field; use 'agent.promptCharacterLimit'");
+  }
 
   if (raw.agent?.profiles) {
     for (const [profileName, profile] of Object.entries(raw.agent.profiles)) {

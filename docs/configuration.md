@@ -49,7 +49,7 @@ sennel is configured through a single project-level JSON file (`.sennel/config.j
 | `agent.workDir` | No | string | `".tmp"` | Working directory for agent execution, relative to the project root. |
 | `agent.timeout` | No | number | `900` | Agent execution timeout in seconds. |
 | `agent.retryCount` | No | number | — | Retry count for `docs enrich` agent calls on failure. |
-| `agent.batchTokenLimit` | No | number | — | Maximum tokens per processing batch; must be ≥ 1000 if set. |
+| `agent.promptCharacterLimit` | No | integer | `120000` | Maximum provider-visible characters per logical agent invocation; must be between `1000` and `120000`. This is independent of the UTF-8 argv byte threshold. |
 | `agent.providers` | No | object | `{}` | Map of custom agent provider definitions keyed by a user-chosen identifier. |
 | `agent.providers[key].command` | Yes (per provider) | string | — | Executable to invoke (e.g., `"claude"`, `"codex"`). |
 | `agent.providers[key].args` | Yes (per provider) | string[] | — | Arguments passed to the command. Use `{{PROMPT}}` as the placeholder for the generated prompt. |

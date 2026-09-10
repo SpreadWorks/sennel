@@ -1,7 +1,15 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "path";
-import { loadJsonFile, loadPackageField, loadConfig, loadRawConfig, resolveWorkDir } from "../../../src/lib/config.js";
+import {
+  DEFAULT_PROMPT_CHARACTER_LIMIT,
+  loadJsonFile,
+  loadPackageField,
+  loadConfig,
+  loadRawConfig,
+  resolvePromptCharacterLimit,
+  resolveWorkDir,
+} from "../../../src/lib/config.js";
 import { createTmpDir, removeTmpDir, writeJson, writeFile } from "../../support/builders/tmp-dir.js";
 
 describe("loadJsonFile", () => {
@@ -166,6 +174,20 @@ describe("resolveWorkDir", () => {
     assert.equal(
       resolveWorkDir("/project", { agent: { workDir: ".config-work" } }, { agentWorkDirOverride: ".agent-work" }),
       "/project/.agent-work",
+    );
+  });
+});
+
+describe("resolvePromptCharacterLimit", () => {
+  it("defaults to the global 120000-character hard maximum", () => {
+    assert.equal(DEFAULT_PROMPT_CHARACTER_LIMIT, 120_000);
+    assert.equal(resolvePromptCharacterLimit({}), 120_000);
+  });
+
+  it("uses the configured lower character limit", () => {
+    assert.equal(
+      resolvePromptCharacterLimit({ agent: { promptCharacterLimit: 12_000 } }),
+      12_000,
     );
   });
 });

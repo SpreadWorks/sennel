@@ -37,6 +37,19 @@ function minimalSpec() {
 }
 
 describe("loadSpecJson (spec 207 / T8)", () => {
+  it("accepts an atomic requirement below the global character cap and rejects the cap itself", () => {
+    const dir = mkSpecDir();
+    const file = path.join(dir, "spec.json");
+    const data = minimalSpec();
+    data.requirements[0].desc = "x".repeat(119999);
+    fs.writeFileSync(file, JSON.stringify(data));
+    assert.equal(loadSpecJson(file).requirements[0].desc.length, 119999);
+    data.requirements[0].desc += "x";
+    fs.writeFileSync(file, JSON.stringify(data));
+    assert.throws(() => loadSpecJson(file), (error) => error.code === "PROMPT_ELEMENT_TOO_LARGE"
+      && error.details.elementId === "requirements[0].desc");
+  });
+
   it("loads spec.json from a spec directory and returns a plain object", () => {
     const dir = mkSpecDir();
     fs.writeFileSync(path.join(dir, "spec.json"), JSON.stringify(minimalSpec()));

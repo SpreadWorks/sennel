@@ -7,7 +7,6 @@ import {
   buildGuardrailTargetTextForPrompt,
   buildPerRequirementDiffs,
   buildRequirementGateBatches,
-  compactDiffForGuardrailPrompt,
   collectPerFileDiffsForGate,
   excludeGeneratedSpecArtifactsFromGateDiff,
   excludeGateLifecycleArtifactsFromGateDiff,
@@ -22,6 +21,7 @@ import {
   CanonicalSourceRequirementAuthority,
 } from "../../../src/flow/lib/canonical-file-map.js";
 import { container } from "../../../src/lib/container.js";
+import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../../support/builders/tmp-dir.js";
@@ -66,36 +66,33 @@ function specTestDiff(file, header, testNames) {
   ].join("\n");
 }
 
-describe("guardrail diff prompt compaction", () => {
-  it("keeps added-line diffs and summarizes deletion-only file bodies", () => {
+describe("guardrail complete prompt source", () => {
+  it("keeps added-line diffs and complete deletion-only file bodies", () => {
     const removedBody = Array.from({ length: 200 }, (_, i) => `removed line ${i}`).join("\n");
     const diff = deletionOnlyDiff("src/removed-plugin/large-template.md", removedBody)
       + modifiedDiff("src/flow/lib/run-gate.js");
 
-    const compacted = compactDiffForGuardrailPrompt(diff, 1200);
-
-    assert.ok(compacted.length <= 1200);
-    assert.match(compacted, /diff compacted for guardrail prompt/);
-    assert.match(compacted, /src\/removed-plugin\/large-template\.md: \+0 -200/);
-    assert.match(compacted, /\+const addedGuardrailRelevantLine = true;/);
-    assert.doesNotMatch(compacted, /removed line 199/);
+    const target = buildGuardrailTargetTextForPrompt("spec", diff);
+    assert.ok(target.endsWith(diff));
+    assert.match(target, /\+const addedGuardrailRelevantLine = true;/);
+    assert.match(target, /removed line 199/);
   });
 
-  it("bounds spec plus diff target text for integration guardrail calls", () => {
+  it("preserves spec plus complete diff for shared batch planning", () => {
     const diff = deletionOnlyDiff(
       "src/removed-plugin/large-template.md",
       Array.from({ length: 300 }, (_, i) => `removed line ${i}`).join("\n"),
     ) + modifiedDiff("src/lib/include.js");
 
-    const targetText = buildGuardrailTargetTextForPrompt("## Spec\n- R1: test", diff, 1400);
+    const targetText = buildGuardrailTargetTextForPrompt("## Spec\n- R1: test", diff);
 
-    assert.ok(targetText.length <= 1400);
+    assert.ok(targetText.endsWith(diff));
     assert.match(targetText, /## Spec/);
     assert.match(targetText, /## Git Diff/);
     assert.match(targetText, /\+const addedGuardrailRelevantLine = true;/);
   });
 
-  it("reserves bounded spec-local header and test declaration evidence", () => {
+  it("retains spec-local header and test declarations alongside complete source", () => {
     const largeDiff = deletionOnlyDiff(
       "src/removed-plugin/large-template.md",
       Array.from({ length: 400 }, (_, i) => `removed line ${i}`).join("\n"),
@@ -109,9 +106,9 @@ describe("guardrail diff prompt compaction", () => {
       ],
     );
 
-    const targetText = buildGuardrailTargetTextForPrompt("## Spec\n- R2\n- R9", diff, 2_000);
+    const targetText = buildGuardrailTargetTextForPrompt("## Spec\n- R2\n- R9", diff);
 
-    assert.ok(targetText.length <= 2_000);
+    assert.ok(targetText.endsWith(diff));
     assert.match(targetText, /## Spec Test Header And Declaration Evidence/);
     assert.match(targetText, /review-regression\.test\.js: \/\/ spec: R2 R9/);
     assert.match(targetText, /R2: rejects stale target evidence/);
@@ -272,11 +269,11 @@ describe("requirement diff authority", () => {
     }
   });
 
-  it("identifies retained unparseable source in compacted evidence", () => {
+  it("retains the complete unparseable source for batch planning", () => {
     const malformed = "diff --git malformed-header\n+unparseableEvidence\n";
-    const compacted = compactDiffForGuardrailPrompt(`${modifiedDiff("src/a.js")}${malformed}${"x".repeat(2_000)}`, 800);
-
-    assert.match(compacted, /unparsed diff segment 1/);
+    const source = `${modifiedDiff("src/a.js")}${malformed}${"x".repeat(2_000)}`;
+    const target = buildGuardrailTargetTextForPrompt("spec", source);
+    assert.ok(target.endsWith(source));
   });
 
   it("counts one compact shared source scope when splitting Requirement batches", () => {
@@ -649,20 +646,81 @@ describe("task gate scenario-validity evidence through task scope", () => {
     assert.deepEqual(result.artifacts.evaluations.map((entry) => entry.guardrail_id).sort(), ["R-1", "R-2"]);
   });
 
-  it("rejects oversized current Task source before an agent call", async () => {
+  it("persists a tooling failure without partial judgments after a later source batch fails", async () => {
+    tmp = createTmpDir("task-gate-partial-batch-");
+    const { flowManager, fixture } = setupTaskGateRepository(tmp);
+    advanceToTaskGate(flowManager, fixture, "", () => {
+      writeFile(tmp, "src/oversized.js", "x".repeat(133_813));
+    });
+    let calls = 0;
+    const originalGet = container.get.bind(container);
+    container.get = (key) => key !== "agent" ? originalGet(key) : {
+      resolve: () => ({ provider: "fixture" }),
+      call: async (prompt, options) => {
+        calls += 1;
+        assert.ok(options.jsonSchema.properties.observations, "final judgment must not run");
+        if (calls > 1) return "invalid provider JSON";
+        const ranges = JSON.parse(prompt.split("## Canonical input ranges\n")[1]);
+        return JSON.stringify({ observations: ranges.map((range) => ({
+          requirementId: "R-1", sourceRef: range.sourceRef,
+          support: [], contradictions: [], unresolved: [],
+        })) });
+      },
+    };
+    let result;
+    try {
+      result = await executeTaskGate(tmp, flowManager, true);
+    } finally {
+      container.get = originalGet;
+    }
+    assert.equal(result.result, "fail");
+    assert.equal(calls, 3);
+    assert.deepEqual(result.artifacts.evaluations, []);
+    flowManager.publishCurrentAttemptResult({ specId: TASK_GATE_SPEC_ID, commandResult: result });
+    const reloaded = makeFlowManager(tmp);
+    const facts = readCurrentGateTransitionFacts({
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(TASK_GATE_SPEC_ID), phase: "task-impl", root: tmp,
+    });
+    assert.equal(facts.result, "fail");
+    assert.equal(facts.failure.category, "tooling");
+  });
+
+  it("evaluates all 133,813 source characters before a single final Task Gate judgment", async () => {
     tmp = createTmpDir("task-gate-oversized-source-");
     const { flowManager, fixture } = setupTaskGateRepository(tmp);
     advanceToTaskGate(flowManager, fixture, "", () => {
-      writeFile(tmp, "src/oversized.js", `export const oversized = "${"x".repeat(140_000)}";\n`);
+      const source = `// HEAD_EVIDENCE\n${"x".repeat(66_800)}\n// MIDDLE_EVIDENCE\n`;
+      writeFile(tmp, "src/oversized.js", `${source}${"x".repeat(133_813 - source.length - "\n// TAIL_EVIDENCE\n".length)}\n// TAIL_EVIDENCE\n`);
     });
 
     let calls = 0;
+    let sourceCalls = 0;
+    let finalCalls = 0;
+    const capturedRanges = [];
     const originalGet = container.get.bind(container);
     container.get = (key) => {
       if (key !== "agent") return originalGet(key);
       return {
         resolve: () => ({ provider: "fixture" }),
-        call: async () => { calls += 1; return "unreachable"; },
+        call: async (prompt, options) => {
+          calls += 1;
+          assert.ok(prompt.length + (options.systemPrompt || "").length
+            + JSON.stringify(options.jsonSchema).length + (options.fmtFallback || "").length <= 120_000);
+          if (options.jsonSchema.properties.observations) {
+            sourceCalls += 1;
+            const ranges = JSON.parse(prompt.split("## Canonical input ranges\n")[1]);
+            capturedRanges.push(...ranges.filter((range) => range.sourceRef.includes(":source")));
+            return JSON.stringify({ observations: ranges.map((range) => ({
+              requirementId: "R-1", sourceRef: range.sourceRef,
+              support: ["HEAD_EVIDENCE", "MIDDLE_EVIDENCE", "TAIL_EVIDENCE"].filter((marker) => range.content.includes(marker)),
+              contradictions: [], unresolved: [],
+            })) });
+          }
+          finalCalls += 1;
+          assert.ok(sourceCalls > 1);
+          for (const marker of ["HEAD_EVIDENCE", "MIDDLE_EVIDENCE", "TAIL_EVIDENCE"]) assert.ok(prompt.includes(marker));
+          return JSON.stringify({ evaluations: [{ guardrail_id: "R-1", result: "pass", reason: "[REQ:R-1] all source evidence is present." }] });
+        },
       };
     };
     let result;
@@ -672,8 +730,18 @@ describe("task gate scenario-validity evidence through task scope", () => {
       container.get = originalGet;
     }
 
-    assert.equal(result.result, "fail");
-    assert.equal(calls, 0);
-    assert.ok(result.artifacts.issues.some((issue) => /exceeds limit/.test(issue)));
+    assert.equal(result.result, "pass", JSON.stringify(result.artifacts));
+    assert.ok(calls >= 3);
+    assert.equal(finalCalls, 1);
+    const source = capturedRanges.map((range) => range.content).join("");
+    assert.equal(source.match(/HEAD_EVIDENCE/g)?.length, 1);
+    assert.equal(source.match(/MIDDLE_EVIDENCE/g)?.length, 1);
+    assert.equal(source.match(/TAIL_EVIDENCE/g)?.length, 1);
+    flowManager.publishCurrentAttemptResult({ specId: TASK_GATE_SPEC_ID, commandResult: result });
+    const reloaded = makeFlowManager(tmp);
+    const facts = readCurrentGateTransitionFacts({
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(TASK_GATE_SPEC_ID), phase: "task-impl", root: tmp,
+    });
+    assert.equal(facts.result, "pass");
   });
 });

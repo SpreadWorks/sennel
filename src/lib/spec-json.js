@@ -10,6 +10,8 @@
  */
 
 import fs from "node:fs";
+import { createHash } from "node:crypto";
+import { AtomicPromptElement } from "./prompt-batching.js";
 import { CanonicalTaskRequirementMap } from "./canonical-task-requirement-map.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -107,7 +109,23 @@ export function loadSpecJson(input, { validate = true } = {}) {
   return data;
 }
 
+export class RequirementPromptElement extends AtomicPromptElement {
+  constructor(requirement, index) {
+    super({
+      id: `requirements[${index}].desc`, sequence: index, text: requirement.desc,
+      sourceRevision: createHash("sha256").update(requirement.desc).digest("hex"),
+    });
+    this.requirementId = requirement.id;
+    Object.freeze(this);
+  }
+}
+
 export function validateSpecJsonObject(spec) {
+  if (Array.isArray(spec?.requirements)) {
+    spec.requirements.forEach((requirement, index) => {
+      if (typeof requirement?.desc === "string") new RequirementPromptElement(requirement, index).assertWithinHardLimit();
+    });
+  }
   const errors = validateSchema(spec, loadSchema());
   if (errors.length > 0) {
     throw new Error(`spec.json failed schema validation: ${errors.join("; ")}`);
