@@ -6983,17 +6983,33 @@ export class WorkerArtifactHandoffCoordinator {
   }
 
   #recoverPendingSource({ ctx, state }) {
-    if (typeof ctx.flowManager.sourceHandoffAuthorities !== "function") {
+    if (typeof ctx.flowManager.sourceHandoffAuthorities !== "function"
+      || typeof ctx.flowManager.settledSourceHandoffAuthorities !== "function") {
       throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "canonical store does not provide source handoff recovery", { retryable: false, recoveryPossible: false });
     }
     let authorities;
+    let settledAuthorities;
     try {
-      authorities = ctx.flowManager.sourceHandoffAuthorities({ specId: state.specId, unsettledOnly: false });
+      settledAuthorities = ctx.flowManager.settledSourceHandoffAuthorities({ specId: state.specId });
+      authorities = ctx.flowManager.sourceHandoffAuthorities({ specId: state.specId, unsettledOnly: true });
     } catch (cause) {
       throw sourceHandoffReadError(cause, "canonical source handoff authorities cannot be read");
     }
       let cleaned = 0;
       let completedRecovery = false;
+      for (const authority of settledAuthorities) {
+        const identity = authority.identity;
+        const requestPath = path.join(
+          handoffActionDirectory(executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId), identity.runId, identity.dispatchInvocationId, identity.actionDigest),
+          "request.json",
+        );
+        if (cleanupTransientExecutionHandoffDirectory(
+          executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId), path.dirname(requestPath),
+        )) {
+          cleaned += 1;
+          completedRecovery = true;
+        }
+      }
       for (const authority of authorities) {
         const checkpoint = authority?.checkpoint;
         if (!(checkpoint instanceof CanonicalSourceHandoffCheckpoint)
@@ -7006,18 +7022,6 @@ export class WorkerArtifactHandoffCoordinator {
           handoffActionDirectory(executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId), identity.runId, identity.dispatchInvocationId, identity.actionDigest),
           "request.json",
         );
-        if (authority.settled) {
-          // Settlement is canonical authority for cleanup. The derived path is
-          // identity-bound; no runtime request enumeration or source read is
-          // needed to remove its now-consumed capability directory.
-          if (cleanupTransientExecutionHandoffDirectory(
-            executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId), path.dirname(requestPath),
-          )) {
-            cleaned += 1;
-            completedRecovery = true;
-          }
-          continue;
-        }
         if (authority.event.kind === "prepared") {
           // No start intent proves that no worker could have been launched.
           const settlement = new SourceHandoffSettlement({

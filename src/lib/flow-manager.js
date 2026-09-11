@@ -567,6 +567,12 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  settledSourceHandoffAuthorities(input = {}) {
+    return this._store.settledSourceHandoffAuthorities({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   promoteDraftQuestionAndKeepRefineActive(input = {}) {
     return this._store.promoteDraftQuestionAndKeepRefineActive({
       ...input,

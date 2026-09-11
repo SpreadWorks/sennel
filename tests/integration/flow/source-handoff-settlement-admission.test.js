@@ -9,6 +9,7 @@ import {
   SourceWorkerEffect,
   WorkerArtifactHandoffCoordinator,
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { readSettledSourceHandoffAuthoritiesFromView } from "../../../src/flow/lib/source-handoff-persistence.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
@@ -137,4 +138,43 @@ test("source quarantine rejects an incompatible predecessor before failure recor
       retryKind: null,
     },
   }) });
+});
+
+test("terminal cleanup authority does not reopen a retired checkpoint snapshot body", (t) => {
+  const { manager, specId, request } = preparedSourceHandoff(t);
+  const authority = manager.readSourceHandoffAuthority({
+    specId,
+    identity: request.sourceHandoffIdentity,
+  });
+  manager.settleSourceHandoff({
+    specId,
+    settlement: new SourceHandoffSettlement({
+      identity: authority.identity,
+      checkpointDigest: authority.checkpoint.digest,
+      eventDigest: authority.event.digest,
+      kind: "aborted-before-start",
+    }),
+  });
+
+  const location = manager.specLocation(specId);
+  const catalog = manager.artifactCatalog(specId);
+  const bytesByPath = new Map(catalog.artifacts.map((descriptor) => [
+    descriptor.relativePath,
+    fs.readFileSync(location.resolve(descriptor.relativePath)),
+  ]));
+  const checkpointDescriptor = catalog.artifacts.find((entry) => (
+    entry.logicalKey === "source.handoff.checkpoint"
+  ));
+  const retiredCheckpoint = JSON.parse(bytesByPath.get(checkpointDescriptor.relativePath).toString("utf8"));
+  retiredCheckpoint.baseline.snapshot.modeEntries = [];
+  bytesByPath.set(checkpointDescriptor.relativePath, Buffer.from(JSON.stringify(retiredCheckpoint)));
+
+  const [settled] = readSettledSourceHandoffAuthoritiesFromView({
+    view: {
+      catalog,
+      readCatalogedArtifact: (descriptor) => bytesByPath.get(descriptor.relativePath),
+    },
+  });
+  assert.equal(settled.identity.storageId, request.sourceHandoffIdentity.storageId);
+  assert.equal(settled.settlement.kind, "aborted-before-start");
 });
