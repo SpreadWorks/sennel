@@ -27,6 +27,7 @@ import {
 export const FLOW_QUERY_LIMITS = Object.freeze({
   MAX_REQUEST_BYTES: 1_048_576,
   MAX_RESPONSE_BYTES: 2_097_152,
+  MAX_PAGE_LIMIT: 100,
   MAX_AVAILABLE_FLOW_VERSIONS: 10_000,
   MAX_CONFIRMED_ACTIVITIES: 100_000,
   MAX_STATE_RECORD_BYTES: 16_777_216,
@@ -41,6 +42,8 @@ export const FLOW_QUERY_LIMITS = Object.freeze({
   MAX_CANONICAL_JSON_DEPTH: 32,
 });
 
+export const FLOW_QUERY_SCHEMA_REVISION = 1;
+
 const ERROR_CODES = Object.freeze({
   INVALID_JSON: "INVALID_JSON",
   INVALID_REQUEST: "INVALID_REQUEST",
@@ -50,6 +53,17 @@ const ERROR_CODES = Object.freeze({
   CANONICAL_RECORD_INCONSISTENT: "CANONICAL_RECORD_INCONSISTENT",
   INVALID_CURSOR: "INVALID_CURSOR",
   CURSOR_QUERY_MISMATCH: "CURSOR_QUERY_MISMATCH",
+});
+
+const ERROR_PATHS = Object.freeze({
+  INVALID_JSON: "/request",
+  INVALID_REQUEST: null,
+  SPEC_NOT_FOUND: "/condition/specId",
+  FLOW_VERSION_NOT_FOUND: "/condition/flowVersion",
+  CANONICAL_RECORD_UNREADABLE: "/canonical",
+  CANONICAL_RECORD_INCONSISTENT: "/canonical",
+  INVALID_CURSOR: "/page/after",
+  CURSOR_QUERY_MISMATCH: "/page/after",
 });
 
 const CURSOR_PAYLOAD_FIELDS = Object.freeze([
@@ -64,6 +78,7 @@ const ARTIFACT_DESCRIPTOR_FIELDS = new Set([
 ]);
 
 export const FLOW_QUERY_ERROR_CODES = ERROR_CODES;
+export const FLOW_QUERY_ERROR_PATHS = ERROR_PATHS;
 
 class QueryError extends Error {
   constructor(code, jsonPath, message, { cause = null } = {}) {
@@ -88,8 +103,8 @@ class QueryPage {
     if (value === undefined) value = {};
     else requireRequestObject(value, ["limit", "after"], "/page", "page");
     const { limit = 100, after = null } = value;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
-      throw new QueryError(ERROR_CODES.INVALID_REQUEST, "/page/limit", "page.limit must be an integer from 1 to 100");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT) {
+      throw new QueryError(ERROR_CODES.INVALID_REQUEST, "/page/limit", `page.limit must be an integer from 1 to ${FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT}`);
     }
     if (after !== null && (typeof after !== "string"
       || after === ""
@@ -270,6 +285,9 @@ async function readBoundedFile(file, maxBytes, {
     return bytes;
   } catch (error) {
     if (error instanceof QueryError) throw error;
+    if (error?.code === "ELOOP") {
+      throw new QueryError(identityCode, jsonPath, "canonical record is not a regular real file", { cause: error });
+    }
     throw new QueryError(code, jsonPath, message, { cause: error });
   } finally {
     if (handle !== undefined) {
@@ -284,7 +302,7 @@ async function readBoundedFile(file, maxBytes, {
 
 function parseJson(bytes, label) {
   try { return JSON.parse(bytes.toString("utf8")); } catch (error) {
-    throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", `${label} is not valid canonical JSON`, { cause: error });
+    throw new QueryError(ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical", `${label} is not valid canonical JSON`, { cause: error });
   }
 }
 
@@ -295,9 +313,13 @@ function isCanonicalReadError(error) {
 
 const FLOW_ACTIVITIES_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("flow.activities").relativePath;
 
-function queryCatalogManagedFiles(location, current = location.directory, result = []) {
+function queryCatalogManagedFiles(location, current = location.directory, result = [], scan = { count: 0 }) {
   location.assertAuthority(null, { mustExist: true });
   for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+    scan.count += 1;
+    if (scan.count > FLOW_QUERY_LIMITS.MAX_ARTIFACTS) {
+      throw new Error("Version storage entry count exceeds the Artifact limit");
+    }
     const absolute = path.join(current, entry.name);
     const relative = path.relative(location.directory, absolute).split(path.sep).join("/");
     if (relative === ".runtime") {
@@ -306,7 +328,7 @@ function queryCatalogManagedFiles(location, current = location.directory, result
     }
     if (entry.isSymbolicLink()) throw new Error(`Version storage must not contain symbolic links: ${relative}`);
     if (entry.isDirectory()) {
-      queryCatalogManagedFiles(location, absolute, result);
+      queryCatalogManagedFiles(location, absolute, result, scan);
       continue;
     }
     if (!entry.isFile()) throw new Error(`Version storage contains an unsupported entry: ${relative}`);
@@ -326,7 +348,7 @@ function queryCatalogManagedFiles(location, current = location.directory, result
   return result.sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
 }
 
-function verifyQueryCatalog(catalog, location, activities, ledgerBytes) {
+async function verifyQueryCatalog(catalog, location, activities, ledgerBytes) {
   const actual = new Set(queryCatalogManagedFiles(location));
   const cataloged = new Set(catalog.artifacts.map((artifact) => artifact.relativePath));
   for (const file of actual) {
@@ -355,7 +377,7 @@ function verifyQueryCatalog(catalog, location, activities, ledgerBytes) {
     if (artifact.logicalKey !== null) {
       const contract = FLOW_ARTIFACT_CONTRACTS.require(artifact.logicalKey);
       contract.contentContract?.assertCatalogAssociation({
-        bytes: fs.readFileSync(location.resolve(artifact.relativePath)),
+        bytes: await readBoundedFile(location.resolve(artifact.relativePath), artifact.size),
         descriptor: artifact,
         activity,
       });
@@ -908,7 +930,7 @@ class CanonicalFlowVersionReader {
     } catch (error) {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical state and Activity ledger are inconsistent", { cause: error });
     }
-    const catalog = this.readCatalog(await this.readArtifactCatalogBytes(location), location, activities, confirmedLedger.bytes);
+    const catalog = await this.readCatalog(await this.readArtifactCatalogBytes(location), location, activities, confirmedLedger.bytes);
     return Object.freeze({ location, state, spec, activities, catalog });
   }
 
@@ -955,8 +977,14 @@ class CanonicalFlowVersionReader {
       if (line.length === 0) {
         throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "Activity ledger has an invalid entry");
       }
+      let serialized;
       try {
-        const activity = FlowActivity.fromSerialized(JSON.parse(line));
+        serialized = JSON.parse(line);
+      } catch (error) {
+        throw new QueryError(ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical", "Activity ledger contains invalid JSON", { cause: error });
+      }
+      try {
+        const activity = FlowActivity.fromSerialized(serialized);
         if (activity.confirmationOrder !== index + 1) throw new Error("Activity confirmationOrder is not contiguous");
         if (ids.has(activity.id)) throw new Error("Activity id is duplicated");
         ids.add(activity.id);
@@ -968,7 +996,7 @@ class CanonicalFlowVersionReader {
     return activities;
   }
 
-  readCatalog(bytes, location, activities, ledgerBytes) {
+  async readCatalog(bytes, location, activities, ledgerBytes) {
     const value = parseJson(bytes, "Artifact catalog");
     if (!isPlainObject(value) || Object.keys(value).sort().join(",") !== "artifacts,hash,schemaRevision" || value.schemaRevision !== 2 || !Array.isArray(value.artifacts) || value.artifacts.length > FLOW_QUERY_LIMITS.MAX_ARTIFACTS) {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "Artifact catalog schema is inconsistent");
@@ -985,8 +1013,9 @@ class CanonicalFlowVersionReader {
     }
     if (catalog.hash !== value.hash) throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "Artifact catalog digest is inconsistent");
     try {
-      verifyQueryCatalog(catalog, location, activities, ledgerBytes);
+      await verifyQueryCatalog(catalog, location, activities, ledgerBytes);
     } catch (error) {
+      if (error instanceof QueryError) throw error;
       if (isCanonicalReadError(error)) {
         throw new QueryError(ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical", "canonical Artifact record could not be read", { cause: error });
       }
@@ -1112,7 +1141,7 @@ class QueryProjector {
 
   async metadata(request, version, selected) {
     const item = await this.metadataItem(version, selected.flowVersion);
-    return { schemaRevision: 1, ok: true, resource: "metadata", selectedFlowVersion: selected.toJSON(), availableFlowVersions: await this.reader.listAvailableVersions(request.specId), item: item.toJSON() };
+    return { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: true, resource: "metadata", selectedFlowVersion: selected.toJSON(), availableFlowVersions: await this.reader.listAvailableVersions(request.specId), item: item.toJSON() };
   }
 
   async metadataItem({ state, spec, activities, catalog, location }, flowVersion) {
@@ -1235,7 +1264,7 @@ class QueryProjector {
     const items = filtered.slice(0, request.page.limit).map((entry) => this.activityItem(entry, version.activities, version.catalog).toJSON());
     const hasNext = filtered.length > items.length;
     const endCursor = items.length === 0 ? null : new Cursor({ request, order: items.at(-1).confirmationOrder }).encode();
-    return { schemaRevision: 1, ok: true, resource: "activities", selectedFlowVersion: selected.toJSON(), availableFlowVersions: await this.reader.listAvailableVersions(request.specId), items, pageInfo: pageInfo(request.page, endCursor, hasNext) };
+    return { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: true, resource: "activities", selectedFlowVersion: selected.toJSON(), availableFlowVersions: await this.reader.listAvailableVersions(request.specId), items, pageInfo: pageInfo(request.page, endCursor, hasNext) };
   }
 
   activityItem(activity, activities, catalog) {
@@ -1276,16 +1305,16 @@ class QueryProjector {
 }
 
 function knownResourceError({ resource, pageLimit = null }, code, jsonPath, message, availableFlowVersions = [], selectedFlowVersion = null) {
-  const base = { schemaRevision: 1, ok: false, resource, selectedFlowVersion, availableFlowVersions, error: { code, path: jsonPath, message } };
+  const base = { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: false, resource, selectedFlowVersion, availableFlowVersions, error: { code, path: jsonPath, message } };
   return resource === "metadata"
     ? { ...base, item: null }
     : { ...base, items: [], pageInfo: { limit: pageLimit, endCursor: null, hasNext: false } };
 }
 
 function unknownResourceError(code, jsonPath, message, resource = null) {
-  const response = { schemaRevision: 1, ok: false, error: { code, path: jsonPath, message } };
+  const response = { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: false, error: { code, path: jsonPath, message } };
   if (resource === null) return response;
-  return { schemaRevision: 1, ok: false, resource, selectedFlowVersion: null, availableFlowVersions: [], error: response.error };
+  return { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: false, resource, selectedFlowVersion: null, availableFlowVersions: [], error: response.error };
 }
 
 function publicError(error) {
@@ -1403,15 +1432,20 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
     if (!available.includes(request.flowVersion)) throw new QueryError(ERROR_CODES.FLOW_VERSION_NOT_FOUND, "/condition/flowVersion", "requested Flow Version was not found");
     const version = await reader.open(request.specId, request.flowVersion);
     const response = await new QueryProjector(reader).project(request, version);
-    const output = JSON.stringify(response);
+    const output = `${JSON.stringify(response)}\n`;
     if (Buffer.byteLength(output, "utf8") > FLOW_QUERY_LIMITS.MAX_RESPONSE_BYTES) throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "query response exceeds the maximum size");
-    process.stdout.write(`${output}\n`);
+    process.stdout.write(output);
     return 0;
   } catch (cause) {
     const error = publicError(cause);
     let response;
     if (request instanceof QueryRequest) {
-      response = knownResourceError({ resource: request.resource, pageLimit: request.page?.limit ?? null }, error.code, error.jsonPath, error.message, available, error.code === ERROR_CODES.FLOW_VERSION_NOT_FOUND || error.code === ERROR_CODES.SPEC_NOT_FOUND ? null : new SelectedFlowVersion(request.specId, request.flowVersion).toJSON());
+      const selectionUnavailable = [
+        ERROR_CODES.SPEC_NOT_FOUND,
+        ERROR_CODES.FLOW_VERSION_NOT_FOUND,
+        ERROR_CODES.INVALID_CURSOR,
+      ].includes(error.code);
+      response = knownResourceError({ resource: request.resource, pageLimit: request.page?.limit ?? null }, error.code, error.jsonPath, error.message, selectionUnavailable ? [] : available, selectionUnavailable ? null : new SelectedFlowVersion(request.specId, request.flowVersion).toJSON());
     } else if (["metadata", "activities"].includes(requestedResource)) {
       response = knownResourceError({ resource: requestedResource }, error.code, error.jsonPath, error.message);
     } else {

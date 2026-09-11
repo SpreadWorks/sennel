@@ -3178,7 +3178,9 @@ export class SourceWorkerHandoffIdentity {
     this.flowIdentity = flowIdentity instanceof CurrentFlowIdentity ? flowIdentity : new CurrentFlowIdentity(flowIdentity);
     this.runId = requiredString(runId, "source handoff runId");
     this.specId = requiredString(specId, "source handoff specId");
-    this.issue = issue === null ? null : requiredString(String(issue), "source handoff issue");
+    // CurrentFlowIdentity owns the numeric Issue contract; the binding check
+    // below also rejects missing, foreign or differently typed Issue values.
+    this.issue = issue;
     this.stepId = requiredString(stepId, "source handoff stepId");
     this.taskId = taskId === null ? null : requiredString(taskId, "source handoff taskId");
     this.attempt = CurrentAttemptIdentity.from(attempt);

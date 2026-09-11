@@ -9,6 +9,7 @@ import { describe, it } from "node:test";
 import {
   WorkerArtifactHandoffCoordinator,
   WorkerArtifactHandoffError,
+  SourceWorkerHandoffIdentity,
   SourceHandoffEvent,
   SourceHandoffSettlement,
   SourceMutationManifest,
@@ -92,7 +93,7 @@ function sourceEffect(stepId, paths = []) {
 }
 
 class SourceCheckpointScenario {
-  constructor(t, stepId, { worktree = false } = {}) {
+  constructor(t, stepId, { worktree = false, issue = null } = {}) {
     this.temporaryRoot = createTmpDir(`source-checkpoint-${stepId}-`);
     t.after(() => removeTmpDir(this.temporaryRoot));
     this.executionRoot = worktree ? path.join(this.temporaryRoot, "execution") : this.temporaryRoot;
@@ -108,6 +109,7 @@ class SourceCheckpointScenario {
     this.flow = new CanonicalFlowFixture({
       flowManager: this.manager, specId: this.specId, runId: `run-${this.specId}`,
       request: "Recover the source worker from canonical state.",
+      issue,
       execution: worktree
         ? { mode: "worktree", baseBranch: "main", featureBranch: `feature/${this.specId}` }
         : { mode: "direct", baseBranch: "main", featureBranch: null },
@@ -418,6 +420,32 @@ describe("durable source handoff checkpoints", () => {
       specId: scenario.specId,
       identity: scenario.manager.sourceHandoffAuthorities({ specId: scenario.specId })[0].identity,
     }).settlement.kind, "accepted");
+  });
+
+  it("preserves a linked Issue through source checkpoint publication, reload and recovery", (t) => {
+    const scenario = new SourceCheckpointScenario(t, "task-impl", { worktree: true, issue: 73 });
+    const request = scenario.stageSealed("task-impl");
+    const originalId = request.sourceHandoffIdentity.storageId;
+    scenario.reload();
+    const [authority] = scenario.manager.sourceHandoffAuthorities({ specId: scenario.specId });
+    const identity = authority.checkpoint.identity.toJSON();
+    assert.equal(identity.issue, 73);
+    assert.equal(identity.flowIdentity.issue, 73);
+    assert.equal(authority.checkpoint.identity.storageId, originalId);
+    assert.equal(authority.event.kind, "worker-exited");
+    assert.equal(authority.settlement, null);
+    for (const issue of ["73", 74, null]) {
+      assert.throws(() => new SourceWorkerHandoffIdentity({ ...identity, issue }), /does not bind its Flow node/);
+    }
+    assert.equal(new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() })?.completed, true);
+    scenario.reload();
+    const [settled] = scenario.manager.sourceHandoffAuthorities({ specId: scenario.specId });
+    assert.equal(settled.checkpoint.identity.storageId, originalId);
+    assert.equal(settled.settlement.kind, "accepted");
+    assert.equal(scenario.manager.canonicalState(scenario.specId).findNode("T1-impl").status, "done");
+    const counts = protocolCounts(scenario.manager, scenario.specId);
+    assert.equal(new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() }), null);
+    assert.deepEqual(protocolCounts(scenario.manager, scenario.specId), counts);
   });
 
   it("recovers source acceptance across the canonical catalog commit point", async (t) => {

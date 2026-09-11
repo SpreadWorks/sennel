@@ -23,6 +23,32 @@ import {
 const ROLE_VALUES = ["controller", "model", "lib", "config", "cli", "middleware", "test", "migration", "route", "view", "other"];
 const ENRICHMENT_FIELDS = ["elementId", "category", "index", "summary", "detail", "chapter", "role", "keywords", "app"];
 
+function enrichmentSchema(elementIds, categories, indexes) {
+  return {
+    type: "object",
+    properties: {
+      elementId: { type: "string", enum: elementIds },
+      category: { type: "string", enum: categories },
+      index: { type: "integer", enum: indexes },
+      summary: { type: "string" },
+      detail: { type: "string" },
+      chapter: { type: "string" },
+      role: { type: "string", enum: ROLE_VALUES },
+      keywords: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 10 },
+      app: { type: ["string", "null"] },
+    },
+    required: ENRICHMENT_FIELDS,
+    additionalProperties: false,
+  };
+}
+
+function identityMismatch(expected, actual) {
+  return new PromptResponseCoverageInvalidFailure(
+    `Enrichment response identity mismatch: expected=${JSON.stringify(expected)} actual=${JSON.stringify(actual)}`,
+    { expected, actual },
+  );
+}
+
 function validateEnrichmentValue(value, { elementId, category, index }) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new PromptResponseInvalidFailure(`Enrichment result is invalid: ${elementId}`);
   const fields = Object.keys(value);
@@ -30,7 +56,9 @@ function validateEnrichmentValue(value, { elementId, category, index }) {
     throw new PromptResponseInvalidFailure(`Enrichment result fields are invalid: ${elementId}`);
   }
   if (value.elementId !== elementId || value.category !== category || value.index !== index) {
-    throw new PromptResponseCoverageInvalidFailure(`Enrichment result identity mismatch: ${elementId}`);
+    throw identityMismatch({ elementId, category, index }, {
+      elementId: value.elementId, category: value.category, index: value.index,
+    });
   }
   for (const field of ["summary", "detail", "chapter", "role"]) {
     if (typeof value[field] !== "string" || value[field].trim() === "") {
@@ -58,6 +86,9 @@ export class DocumentationEnrichPromptEnvelope extends PromptRequestEnvelope {
 
   build(elements, chunkContext) {
     const entries = elements.filter((element) => element instanceof DocumentationAnalysisPromptElement);
+    const elementIds = entries.map((entry) => entry.id);
+    const categories = [...new Set(entries.map((entry) => entry.category))];
+    const indexes = [...new Set(entries.map((entry) => entry.index))];
     const pb = new PromptBuilder();
     pb.setRole("Analyze the following source code extracts and add structured metadata.");
     pb.addUserPrompt(
@@ -77,7 +108,7 @@ export class DocumentationEnrichPromptEnvelope extends PromptRequestEnvelope {
     pb.setRules([
       "- Return exactly one result for every target elementId and no foreign IDs.",
       "- Base each result only on its supplied source range.",
-      "- Preserve category and index exactly.",
+      "- Copy elementId, category and index from each target's JSON identity exactly, including all prefixes and range suffixes. Do not derive category or index by splitting elementId.",
       `- Write summary and detail strictly in ${this.lang}.`,
       "- keywords must be 3-10 English search terms.",
     ].join("\n"));
@@ -86,22 +117,7 @@ export class DocumentationEnrichPromptEnvelope extends PromptRequestEnvelope {
       properties: {
         entries: {
           type: "array",
-          items: {
-            type: "object",
-            properties: {
-              elementId: { type: "string" },
-              category: { type: "string" },
-              index: { type: "integer" },
-              summary: { type: "string" },
-              detail: { type: "string" },
-              chapter: { type: "string" },
-              role: { type: "string", enum: ROLE_VALUES },
-              keywords: { type: "array", items: { type: "string" } },
-              app: { type: ["string", "null"] },
-            },
-            required: ["elementId", "category", "index", "summary", "detail", "chapter", "role", "keywords", "app"],
-            additionalProperties: false,
-          },
+          items: enrichmentSchema(elementIds, categories, indexes),
         },
       },
       required: ["entries"],
@@ -141,15 +157,12 @@ export class DocumentationEnrichmentResponseContract {
     const values = new Map();
     for (const value of parsed.entries) {
       if (!value || typeof value.elementId !== "string" || values.has(value.elementId)) {
-        throw new PromptResponseCoverageInvalidFailure("Enrichment response has missing or duplicate element identity");
+        throw identityMismatch(expected.map((element) => element.id), parsed.entries.map((entry) => entry?.elementId ?? null));
       }
       values.set(value.elementId, value);
     }
     if (values.size !== expected.length || expected.some((element) => !values.has(element.id))) {
-      throw new PromptResponseCoverageInvalidFailure("Enrichment response does not exactly cover its source ranges", {
-        expected: expected.map((element) => element.id),
-        actual: [...values.keys()],
-      });
+      throw identityMismatch(expected.map((element) => element.id), [...values.keys()]);
     }
     return Object.freeze(expected.map((element) => new DocumentationEnrichmentResult({ element, value: values.get(element.id) })));
   }
@@ -266,22 +279,7 @@ class DocumentationEnrichmentSynthesisEnvelope extends PromptRequestEnvelope {
     pb.setJsonSchema({
       type: "object",
       properties: {
-        entry: {
-          type: "object",
-          properties: {
-            elementId: { type: "string" },
-            category: { type: "string" },
-            index: { type: "integer" },
-            summary: { type: "string" },
-            detail: { type: "string" },
-            chapter: { type: "string" },
-            role: { type: "string", enum: ROLE_VALUES },
-            keywords: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 10 },
-            app: { type: ["string", "null"] },
-          },
-          required: ENRICHMENT_FIELDS,
-          additionalProperties: false,
-        },
+        entry: enrichmentSchema([identity.elementId], [identity.category], [identity.index]),
       },
       required: ["entry"],
       additionalProperties: false,

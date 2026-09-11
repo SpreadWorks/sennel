@@ -154,11 +154,13 @@ function gitStatus(root) {
 
 function snapshotTree(root) {
   const entries = [];
+  const observedPaths = new Set();
   const visit = (directory) => {
     if (!fs.existsSync(directory)) return;
     for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) => codeUnitOrder(left.name, right.name))) {
       const absolute = path.join(directory, entry.name);
       const relative = path.relative(root, absolute).split(path.sep).join("/");
+      observedPaths.add(relative);
       if (entry.isSymbolicLink()) {
         entries.push({ path: relative, type: "symlink", target: fs.readlinkSync(absolute) });
       } else if (entry.isDirectory()) {
@@ -170,7 +172,51 @@ function snapshotTree(root) {
       }
     }
   };
-  for (const directory of [path.join(root, "specs"), path.join(root, ".sennel"), path.join(root, ".tmp")]) visit(directory);
+  const snapshotDirectories = [
+    path.join(root, "specs"),
+    path.join(root, ".sennel"),
+    path.join(root, ".tmp"),
+    path.join(root, ".cache"),
+    path.join(root, "cache"),
+  ];
+  for (const directory of snapshotDirectories) visit(directory);
+
+  // Runtime state is intentionally outside the catalog authority, so keep an
+  // explicit bounded inventory for every canonical Version. Missing markers
+  // are important: a query creating a new lock/cache directory must change
+  // the before/after snapshot just as surely as a query changing its bytes.
+  const transientDirectories = new Set([
+    ".runtime",
+    ".runtime/locks",
+    ".runtime/step-metadata",
+    ".runtime/review-work-units",
+    ".runtime/impl",
+    ".runtime/retry-recovery",
+    ".runtime/test-execute",
+    ".runtime/finalize-cleanup",
+  ]);
+  const specRoot = path.join(root, "specs");
+  if (fs.existsSync(specRoot)) {
+    for (const specEntry of fs.readdirSync(specRoot, { withFileTypes: true })) {
+      if (!specEntry.isDirectory() || specEntry.isSymbolicLink()) continue;
+      const specDirectory = path.join(specRoot, specEntry.name);
+      for (const versionEntry of fs.readdirSync(specDirectory, { withFileTypes: true })) {
+        if (!versionEntry.isDirectory() || versionEntry.isSymbolicLink() || !/^[1-9][0-9]*$/.test(versionEntry.name)) continue;
+        for (const relative of transientDirectories) {
+          const absolute = path.join(specDirectory, versionEntry.name, ...relative.split("/"));
+          const repositoryPath = path.relative(root, absolute).split(path.sep).join("/");
+          if (!observedPaths.has(repositoryPath) && !fs.existsSync(absolute)) {
+            entries.push({ path: repositoryPath, type: "missing" });
+          }
+        }
+      }
+    }
+  }
+  for (const relative of [".sennel/agent-cache", ".cache", "cache"]) {
+    const absolute = path.join(root, ...relative.split("/"));
+    if (!observedPaths.has(relative) && !fs.existsSync(absolute)) entries.push({ path: relative, type: "missing" });
+  }
+  entries.sort((left, right) => codeUnitOrder(left.path, right.path));
   return Object.freeze({
     digest: sha256(Buffer.from(JSON.stringify(entries), "utf8")),
     entries: Object.freeze(entries),

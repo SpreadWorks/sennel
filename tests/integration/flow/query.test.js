@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import { describe, it, afterEach } from "node:test";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,9 +8,50 @@ import path from "node:path";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { createFlowQueryFixture, queryFixtureLimits } from "../../support/builders/flow-query-fixture.js";
-import { Cursor, prepareFlowQueryInput, QueryRequest } from "../../../src/flow/query.js";
+import { FlowQueryConsumer } from "../../support/builders/flow-query-consumer.js";
+import {
+  Cursor,
+  FLOW_QUERY_ERROR_CODES,
+  FLOW_QUERY_SCHEMA_REVISION,
+  prepareFlowQueryInput,
+  QueryRequest,
+} from "../../../src/flow/query.js";
 
 const CLI = path.join(process.cwd(), "src/sennel.js");
+
+function canonicalArtifactIdentity(value) {
+  if (Array.isArray(value)) return value.map(canonicalArtifactIdentity);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalArtifactIdentity(value[key])]));
+  }
+  return value;
+}
+
+function expectedArtifactId(descriptor) {
+  const identity = Object.fromEntries([
+    "logicalKey", "kind", "relativePath", "hash", "size", "mediaType", "authority",
+    "cardinality", "memberId", "publicationStep", "retention", "activityId", "migrationMaterialization",
+  ].map((field) => [field, descriptor[field]]));
+  return crypto.createHash("sha256")
+    .update(JSON.stringify(canonicalArtifactIdentity(identity)), "utf8")
+    .digest("hex");
+}
+
+function assertNoInternalFields(value) {
+  const forbidden = new Set(["relativePath", "recordRevision", "catalog", "body", "checkpoint", "lock", "state"]);
+  const visit = (entry) => {
+    if (Array.isArray(entry)) {
+      for (const child of entry) visit(child);
+      return;
+    }
+    if (entry === null || typeof entry !== "object") return;
+    for (const [key, child] of Object.entries(entry)) {
+      assert.equal(forbidden.has(key), false, `public response leaked internal field: ${key}`);
+      visit(child);
+    }
+  };
+  visit(value);
+}
 
 describe("flow query", () => {
   let tmp = null;
@@ -41,6 +83,7 @@ describe("flow query", () => {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout.trim().split("\n").length, 1);
     const response = JSON.parse(result.stdout);
+    new FlowQueryConsumer().consumeSerialized(result.stdout);
     assert.deepEqual(Object.keys(response).sort(), [
       "availableFlowVersions", "item", "ok", "resource", "schemaRevision", "selectedFlowVersion",
     ].sort());
@@ -52,16 +95,20 @@ describe("flow query", () => {
   }
 
   function assertKnownResourceError(response, resource, code, jsonPath, { pageLimit = null } = {}) {
+    const consumed = new FlowQueryConsumer().consume(response);
     assert.deepEqual(Object.keys(response).sort(), [
       "availableFlowVersions", "error", "ok", "resource", "schemaRevision", "selectedFlowVersion",
       ...(resource === "metadata" ? ["item"] : ["items", "pageInfo"]),
     ].sort());
-    assert.equal(response.schemaRevision, 1);
+    assert.equal(response.schemaRevision, FLOW_QUERY_SCHEMA_REVISION);
     assert.equal(response.ok, false);
     assert.equal(response.resource, resource);
+    assert.equal(consumed.resource, resource);
     assert.deepEqual(Object.keys(response.error).sort(), ["code", "message", "path"]);
     assert.equal(response.error.code, code);
     assert.equal(response.error.path, jsonPath);
+    assert.doesNotMatch(JSON.stringify(response.error), /flow\.json|artifact-catalog|\.runtime|lock/);
+    assertNoInternalFields(response);
     if (resource === "metadata") assert.equal(response.item, null);
     else {
       assert.deepEqual(response.items, []);
@@ -99,11 +146,14 @@ describe("flow query", () => {
   }
 
   function query(env, request) {
-    return JSON.parse(execFileSync("node", [CLI, "flow", "query"], {
+    const serialized = execFileSync("node", [CLI, "flow", "query"], {
       env,
       input: JSON.stringify(request),
       encoding: "utf8",
-    }));
+    });
+    const response = JSON.parse(serialized);
+    new FlowQueryConsumer().consumeSerialized(serialized);
+    return response;
   }
 
   it("projects metadata from the canonical Version without mutating it", () => {
@@ -159,7 +209,8 @@ describe("flow query", () => {
     assert.equal(pages[0].pageInfo.hasNext, true);
     assert.equal(repeat.pageInfo.endCursor, pages[0].pageInfo.endCursor);
     assert.ok(pages.every((page) => page.ok === true));
-    assert.deepEqual(orders, [...new Set(orders)].sort((left, right) => left - right));
+    const expectedOrders = Array.from({ length: fixture.flow.state().confirmationOrder }, (_, index) => index + 1);
+    assert.deepEqual(orders, expectedOrders);
     assert.equal(pages.at(-1).pageInfo.hasNext, false);
   });
 
@@ -257,7 +308,7 @@ describe("flow query", () => {
 
   it("rejects invalid requests and simultaneous stdin/request-file input at the boundary", async () => {
     const invalid = await prepareFlowQueryInput(["--unexpected"]);
-    assert.equal(invalid.error.code, "INVALID_REQUEST");
+    assert.equal(invalid.error.code, FLOW_QUERY_ERROR_CODES.INVALID_REQUEST);
 
     const requestPath = path.join(tmp = createTmpDir(), "request.json");
     fs.writeFileSync(requestPath, JSON.stringify({ resource: "metadata", condition: { specId: "001-query" } }));
@@ -267,7 +318,7 @@ describe("flow query", () => {
       encoding: "utf8",
     });
     assert.equal(both.status, 1);
-    assert.equal(JSON.parse(both.stdout).error.code, "INVALID_REQUEST");
+    assert.equal(JSON.parse(both.stdout).error.code, FLOW_QUERY_ERROR_CODES.INVALID_REQUEST);
   });
 
   it("keeps QueryRequest as the typed input boundary", () => {
@@ -277,16 +328,16 @@ describe("flow query", () => {
     assert.equal(defaultPage.after, null);
     assert.throws(
       () => new QueryRequest({ resource: "metadata", condition: { specId: "001-query" }, page: {} }),
-      (error) => error.code === "INVALID_REQUEST" && error.jsonPath === "/page",
+      (error) => error.code === FLOW_QUERY_ERROR_CODES.INVALID_REQUEST && error.jsonPath === "/page",
     );
     assert.throws(
       () => new QueryRequest({ resource: "activities", condition: { specId: "001-query" }, page: { limit: 1 } }),
-      (error) => error.code === "INVALID_REQUEST" && error.jsonPath === "/page",
+      (error) => error.code === FLOW_QUERY_ERROR_CODES.INVALID_REQUEST && error.jsonPath === "/page",
     );
     for (const limit of [0, 101, 1.5]) {
       assert.throws(
         () => new QueryRequest({ resource: "activities", condition: { specId: "001-query" }, page: { limit, after: null } }),
-        (error) => error.code === "INVALID_REQUEST" && error.jsonPath === "/page/limit",
+        (error) => error.code === FLOW_QUERY_ERROR_CODES.INVALID_REQUEST && error.jsonPath === "/page/limit",
       );
     }
   });
@@ -295,7 +346,7 @@ describe("flow query", () => {
     const request = new QueryRequest({ resource: "activities", condition: { specId: "001-query" } });
     assert.throws(
       () => Cursor.decode("!", request),
-      (error) => error.code === "INVALID_CURSOR" && error.cause instanceof Error,
+      (error) => error.code === FLOW_QUERY_ERROR_CODES.INVALID_CURSOR && error.cause instanceof Error,
     );
   });
 
@@ -314,7 +365,7 @@ describe("flow query", () => {
     const tampered = `${first.pageInfo.endCursor.slice(0, -1)}${first.pageInfo.endCursor.endsWith("A") ? "B" : "A"}`;
     const malformed = query(fixture.env, { ...request, page: { limit: 1, after: tampered } });
     assert.equal(malformed.ok, false);
-    assert.equal(malformed.error.code, "INVALID_CURSOR");
+    assert.equal(malformed.error.code, FLOW_QUERY_ERROR_CODES.INVALID_CURSOR);
     assert.equal(malformed.error.path, "/page/after");
 
     const mismatch = query(fixture.env, {
@@ -323,7 +374,7 @@ describe("flow query", () => {
       page: { limit: 1, after: first.pageInfo.endCursor },
     });
     assert.equal(mismatch.ok, false);
-    assert.equal(mismatch.error.code, "CURSOR_QUERY_MISMATCH");
+    assert.equal(mismatch.error.code, FLOW_QUERY_ERROR_CODES.CURSOR_QUERY_MISMATCH);
     assert.equal(mismatch.error.path, "/page/after");
   });
 
@@ -373,7 +424,17 @@ describe("flow query", () => {
     assert.equal(stateEnvelope.recordRevision, 1);
     assert.equal(stateEnvelope.flowVersion, 2);
     assert.equal(stateEnvelope.state.flowVersion, 2);
+    assert.equal(stateEnvelope.state.schemaRevision, 3);
+    assert.equal(stateEnvelope.state.version, 1);
     assert.equal(specEnvelope.recordRevision, 1);
+    const ledgerActivity = JSON.parse(fs.readFileSync(fixture.locations[2].activitiesFile, "utf8").split("\n")[0]);
+    assert.deepEqual(Object.keys(ledgerActivity).sort(), [
+      "attemptId", "confirmationOrder", "effort", "failure", "id", "metric", "model", "nodeId",
+      "nodeKey", "note", "provider", "references", "result", "reviewPublication", "sequence", "timing",
+      "transition", "type", "usage",
+    ].sort());
+    const catalog = JSON.parse(fs.readFileSync(fixture.locations[2].catalogFile, "utf8"));
+    assert.equal(catalog.schemaRevision, 2);
     const versionOne = queryFixture(fixture, {
       resource: "metadata",
       condition: { specId: fixture.specId, flowVersion: 1 },
@@ -385,9 +446,352 @@ describe("flow query", () => {
     assert.deepEqual(versionTwo.selectedFlowVersion, { specId: fixture.specId, flowVersion: 2 });
     assert.equal(versionOne.item.timestamps.createdAt.availability, "unavailable");
     assert.equal(versionOne.item.timestamps.createdAt.value, null);
+    assert.equal(versionOne.item.timestamps.createdAt.reason.length > 0, true);
     assert.equal(versionOne.item.timestamps.createdAt.provenance, "confirmed-activity-prefix");
+    assert.deepEqual(versionOne.item.timestamps.createdAt, {
+      value: null,
+      availability: "unavailable",
+      reason: versionOne.item.timestamps.createdAt.reason,
+      provenance: "confirmed-activity-prefix",
+    });
     assert.ok(versionTwo.item.artifacts.some((artifact) => artifact.metadata.logicalKey === null));
     assert.deepEqual(fixture.snapshot(), before);
+  });
+
+  it("lets a Workspace/Connector consumer round-trip every public success fixture", () => {
+    const consumer = new FlowQueryConsumer();
+    const cases = [
+      { options: { lifecycle: "active" }, resource: "metadata" },
+      { options: { lifecycle: "parked" }, resource: "metadata" },
+      { options: { lifecycle: "blocked" }, resource: "metadata" },
+      { options: { lifecycle: "finalized" }, resource: "metadata" },
+      { options: { storage: "migrated", selectedVersion: 2 }, resource: "metadata" },
+      { options: { lifecycle: "active" }, resource: "activities" },
+      { options: { lifecycle: "finalized" }, resource: "activities" },
+      { options: { storage: "migrated", selectedVersion: 2 }, resource: "activities" },
+    ];
+
+    for (const testCase of cases) {
+      const fixture = contractFixture(testCase.options);
+      const result = runQuery(fixture, fixture.request(testCase.resource));
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim().split("\n").length, 1);
+      const response = JSON.parse(result.stdout);
+      const consumed = consumer.consumeSerialized(result.stdout);
+      assert.equal(response.schemaRevision, FLOW_QUERY_SCHEMA_REVISION);
+      assert.equal(consumed.resource, testCase.resource);
+      assert.deepEqual(consumed.selectedFlowVersion, response.selectedFlowVersion);
+      assert.deepEqual(consumed.availableFlowVersions, response.availableFlowVersions);
+      if (testCase.resource === "metadata") {
+        assert.notEqual(consumed.item, null);
+        assert.equal(consumed.items, null);
+        assert.equal(consumed.pageInfo, null);
+        assert.equal(Object.hasOwn(response, "items"), false);
+      } else {
+        assert.equal(consumed.item, null);
+        assert.ok(Array.isArray(consumed.items));
+        assert.equal(consumed.pageInfo.limit, 100);
+        assert.equal(Object.hasOwn(response, "item"), false);
+      }
+      assertNoInternalFields(response);
+    }
+  });
+
+  it("rejects a response revision the consumer does not support", () => {
+    const fixture = contractFixture();
+    const response = JSON.parse(runQuery(fixture, fixture.request()).stdout);
+    const consumer = new FlowQueryConsumer();
+    assert.doesNotThrow(() => consumer.consume(response));
+    assert.throws(
+      () => consumer.consume({ ...response, schemaRevision: FLOW_QUERY_SCHEMA_REVISION + 1 }),
+      /unsupported query schema revision/,
+    );
+
+    const activities = JSON.parse(runQuery(fixture, fixture.request("activities")).stdout);
+    assert.throws(
+      () => consumer.consume({
+        ...activities,
+        pageInfo: { ...activities.pageInfo, limit: null },
+      }),
+      /pageInfo is invalid/,
+    );
+  });
+
+  it("round-trips every known-resource error through the shared error enum", () => {
+    const consumer = new FlowQueryConsumer();
+    const cases = [
+      {
+        name: "metadata invalid request",
+        request: (fixture) => null,
+        input: (fixture) => JSON.stringify({ resource: "metadata", condition: { specId: fixture.specId }, extra: true }),
+        code: FLOW_QUERY_ERROR_CODES.INVALID_REQUEST,
+        resource: "metadata",
+        jsonPath: "/extra",
+      },
+      {
+        name: "activities invalid request",
+        request: (fixture) => null,
+        input: (fixture) => JSON.stringify({ resource: "activities", condition: { specId: fixture.specId }, page: {} }),
+        code: FLOW_QUERY_ERROR_CODES.INVALID_REQUEST,
+        resource: "activities",
+        jsonPath: "/page",
+      },
+      {
+        name: "metadata missing Spec",
+        request: (fixture) => ({ resource: "metadata", condition: { specId: "002-query-fixture-missing" } }),
+        code: FLOW_QUERY_ERROR_CODES.SPEC_NOT_FOUND,
+        resource: "metadata",
+        jsonPath: "/condition/specId",
+      },
+      {
+        name: "activities missing Spec",
+        request: (fixture) => ({ resource: "activities", condition: { specId: "002-query-fixture-missing" } }),
+        code: FLOW_QUERY_ERROR_CODES.SPEC_NOT_FOUND,
+        resource: "activities",
+        pageLimit: 100,
+        jsonPath: "/condition/specId",
+      },
+      {
+        name: "metadata missing Version",
+        request: (fixture) => ({ resource: "metadata", condition: { specId: fixture.specId, flowVersion: 2 } }),
+        code: FLOW_QUERY_ERROR_CODES.FLOW_VERSION_NOT_FOUND,
+        resource: "metadata",
+        jsonPath: "/condition/flowVersion",
+      },
+      {
+        name: "activities missing Version",
+        request: (fixture) => ({ resource: "activities", condition: { specId: fixture.specId, flowVersion: 2 } }),
+        code: FLOW_QUERY_ERROR_CODES.FLOW_VERSION_NOT_FOUND,
+        resource: "activities",
+        pageLimit: 100,
+        jsonPath: "/condition/flowVersion",
+      },
+      {
+        name: "metadata unreadable canonical record",
+        request: (fixture) => fixture.request("metadata"),
+        mutate: (fixture) => fs.unlinkSync(fixture.locations[1].specFile),
+        code: FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_UNREADABLE,
+        resource: "metadata",
+        jsonPath: "/canonical",
+      },
+      {
+        name: "activities unreadable canonical record",
+        request: (fixture) => fixture.request("activities"),
+        mutate: (fixture) => fs.unlinkSync(fixture.locations[1].specFile),
+        code: FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_UNREADABLE,
+        resource: "activities",
+        pageLimit: 100,
+        jsonPath: "/canonical",
+      },
+      {
+        name: "metadata inconsistent canonical record",
+        request: (fixture) => fixture.request("metadata"),
+        mutate: (fixture) => {
+          const file = fixture.locations[1].flowStateFile;
+          const state = JSON.parse(fs.readFileSync(file, "utf8"));
+          state.schemaRevision = 4;
+          fs.writeFileSync(file, `${JSON.stringify(state)}\n`);
+        },
+        code: FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT,
+        resource: "metadata",
+        jsonPath: "/canonical",
+      },
+      {
+        name: "activities inconsistent canonical record",
+        request: (fixture) => ({ resource: "activities", condition: { specId: fixture.specId }, page: { limit: 1, after: null } }),
+        mutate: (fixture) => {
+          const file = fixture.locations[1].activitiesFile;
+          const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+          const activity = JSON.parse(lines[0]);
+          activity.confirmationOrder = 2;
+          lines[0] = JSON.stringify(activity);
+          fs.writeFileSync(file, `${lines.join("\n")}\n`);
+        },
+        code: FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT,
+        resource: "activities",
+        pageLimit: 1,
+        jsonPath: "/canonical",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const fixture = contractFixture();
+      testCase.mutate?.(fixture);
+      const request = testCase.request(fixture);
+      const result = runQuery(fixture, request, testCase.input ? { input: testCase.input(fixture) } : {});
+      assert.equal(result.status, 1, testCase.name);
+      const response = JSON.parse(result.stdout);
+      assertKnownResourceError(response, testCase.resource, testCase.code, testCase.jsonPath, {
+        pageLimit: testCase.pageLimit ?? null,
+      });
+      const consumed = consumer.consumeSerialized(result.stdout);
+      assert.equal(consumed.error.code, testCase.code, testCase.name);
+      if ([FLOW_QUERY_ERROR_CODES.INVALID_REQUEST, FLOW_QUERY_ERROR_CODES.SPEC_NOT_FOUND].includes(testCase.code)) {
+        assert.equal(response.selectedFlowVersion, null, testCase.name);
+        assert.deepEqual(response.availableFlowVersions, [], testCase.name);
+      } else if (testCase.code === FLOW_QUERY_ERROR_CODES.FLOW_VERSION_NOT_FOUND) {
+        assert.equal(response.selectedFlowVersion, null, testCase.name);
+        assert.deepEqual(response.availableFlowVersions, [1], testCase.name);
+      } else {
+        assert.deepEqual(response.selectedFlowVersion, { specId: fixture.specId, flowVersion: 1 }, testCase.name);
+        assert.deepEqual(response.availableFlowVersions, [1], testCase.name);
+      }
+    }
+
+    const invalidJson = contractFixture();
+    const invalidJsonResult = runQuery(invalidJson, null, { input: "not-json" });
+    assert.equal(invalidJsonResult.status, 1);
+    const invalidJsonResponse = JSON.parse(invalidJsonResult.stdout);
+    const invalidJsonConsumed = consumer.consumeSerialized(invalidJsonResult.stdout);
+    assert.equal(invalidJsonConsumed.resource, null);
+    assert.equal(invalidJsonConsumed.error.code, FLOW_QUERY_ERROR_CODES.INVALID_JSON);
+    assert.throws(
+      () => consumer.consume({
+        ...invalidJsonResponse,
+        error: { ...invalidJsonResponse.error, path: "/canonical" },
+      }),
+      /query error is invalid/,
+    );
+  });
+
+  it("round-trips cursor errors without exposing cursor internals", () => {
+    const fixture = contractFixture({ lifecycle: "active" });
+    const request = {
+      resource: "activities",
+      condition: { specId: fixture.specId },
+      page: { limit: 1, after: null },
+    };
+    const first = query(fixture.env, request);
+    const tampered = `${first.pageInfo.endCursor.slice(0, -1)}${first.pageInfo.endCursor.endsWith("A") ? "B" : "A"}`;
+    const invalid = runQuery(fixture, { ...request, page: { limit: 1, after: tampered } });
+    assert.equal(invalid.status, 1);
+    const invalidResponse = JSON.parse(invalid.stdout);
+    assertKnownResourceError(invalidResponse, "activities", FLOW_QUERY_ERROR_CODES.INVALID_CURSOR, "/page/after");
+    assert.equal(consumer.consumeSerialized(invalid.stdout).error.code, FLOW_QUERY_ERROR_CODES.INVALID_CURSOR);
+    assert.equal(invalidResponse.selectedFlowVersion, null);
+    assert.deepEqual(invalidResponse.availableFlowVersions, []);
+
+    const mismatch = runQuery(fixture, {
+      ...request,
+      recordedAt: { gte: "2000-01-01T00:00:00Z", lt: null },
+      page: { limit: 1, after: first.pageInfo.endCursor },
+    });
+    assert.equal(mismatch.status, 1);
+    const mismatchResponse = JSON.parse(mismatch.stdout);
+    assertKnownResourceError(mismatchResponse, "activities", FLOW_QUERY_ERROR_CODES.CURSOR_QUERY_MISMATCH, "/page/after", { pageLimit: 1 });
+    assert.equal(consumer.consumeSerialized(mismatch.stdout).error.code, FLOW_QUERY_ERROR_CODES.CURSOR_QUERY_MISMATCH);
+    assert.deepEqual(mismatchResponse.selectedFlowVersion, { specId: fixture.specId, flowVersion: 1 });
+    assert.deepEqual(mismatchResponse.availableFlowVersions, [1]);
+  });
+
+  it("projects exact artifact descriptors and catalog Activity relations", () => {
+    const fixture = createFlow({ withTask: true });
+    fixture.flow.settleBefore("T-1-impl");
+    fixture.flow.activateTask("T-1", { settlePredecessors: false });
+    fixture.flow.settle("T-1-impl");
+
+    const response = query(fixture.env, fixture.request);
+    const catalog = JSON.parse(fs.readFileSync(fixture.flow.location().catalogFile, "utf8"));
+    const activities = fixture.flowManager.activityLedger("001-query");
+    const associated = catalog.artifacts.find((descriptor) => descriptor.activityId !== null && descriptor.logicalKey === "task.mutation.lineage");
+    assert.ok(associated);
+    const activity = activities.find((entry) => entry.id === associated.activityId);
+    assert.ok(activity);
+    const projected = response.item.artifacts.find((artifact) => artifact.artifactId === expectedArtifactId(associated));
+    assert.ok(projected);
+    assert.deepEqual(Object.keys(projected).sort(), ["activityIds", "artifactId", "metadata", "nodeIds", "taskIds"].sort());
+    assert.deepEqual(Object.keys(projected.metadata).sort(), ["logicalKey", "mediaType", "schemaRevision"].sort());
+    assert.equal(projected.metadata.logicalKey, associated.logicalKey);
+    assert.equal(projected.metadata.mediaType, associated.mediaType);
+    assert.equal(projected.metadata.schemaRevision, null);
+    assert.deepEqual(projected.activityIds, [associated.activityId]);
+    assert.deepEqual(projected.nodeIds, [activity.nodeId]);
+    assert.deepEqual(projected.taskIds, ["T-1"]);
+    assert.equal(new Set(projected.activityIds).size, projected.activityIds.length);
+    assert.equal(new Set(projected.nodeIds).size, projected.nodeIds.length);
+    assert.equal(new Set(projected.taskIds).size, projected.taskIds.length);
+  });
+
+  it("rejects every unsupported canonical authority revision", () => {
+    const cases = [
+      {
+        name: "state schema revision",
+        fixture: () => contractFixture(),
+        mutate: (fixture) => {
+          const file = fixture.locations[1].flowStateFile;
+          const state = JSON.parse(fs.readFileSync(file, "utf8"));
+          state.schemaRevision = 4;
+          fs.writeFileSync(file, `${JSON.stringify(state)}\n`);
+        },
+      },
+      {
+        name: "state result version",
+        fixture: () => contractFixture(),
+        mutate: (fixture) => {
+          const file = fixture.locations[1].flowStateFile;
+          const state = JSON.parse(fs.readFileSync(file, "utf8"));
+          state.version = 2;
+          fs.writeFileSync(file, `${JSON.stringify(state)}\n`);
+        },
+      },
+      {
+        name: "Versioned state record envelope",
+        fixture: () => contractFixture({ storage: "migrated", selectedVersion: 2 }),
+        mutate: (fixture) => {
+          const file = fixture.locations[2].flowStateFile;
+          const state = JSON.parse(fs.readFileSync(file, "utf8"));
+          state.recordRevision = 2;
+          fs.writeFileSync(file, `${JSON.stringify(state)}\n`);
+        },
+      },
+      {
+        name: "Versioned Spec record envelope",
+        fixture: () => contractFixture({ storage: "migrated", selectedVersion: 2 }),
+        mutate: (fixture) => {
+          const file = fixture.locations[2].specFile;
+          const spec = JSON.parse(fs.readFileSync(file, "utf8"));
+          spec.recordRevision = 2;
+          fs.writeFileSync(file, `${JSON.stringify(spec)}\n`);
+        },
+      },
+      {
+        name: "FlowActivity ledger format",
+        fixture: () => contractFixture({ storage: "migrated", selectedVersion: 2 }),
+        mutate: (fixture) => {
+          const file = fixture.locations[2].activitiesFile;
+          const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+          const activity = JSON.parse(lines[0]);
+          activity.formatRevision = 2;
+          lines[0] = JSON.stringify(activity);
+          fs.writeFileSync(file, `${lines.join("\n")}\n`);
+        },
+      },
+      {
+        name: "FlowArtifactCatalog schema revision",
+        fixture: () => contractFixture({ storage: "migrated", selectedVersion: 2 }),
+        mutate: (fixture) => {
+          const file = fixture.locations[2].catalogFile;
+          const catalog = JSON.parse(fs.readFileSync(file, "utf8"));
+          catalog.schemaRevision = 3;
+          fs.writeFileSync(file, `${JSON.stringify(catalog)}\n`);
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const fixture = testCase.fixture();
+      testCase.mutate(fixture);
+      const before = fixture.snapshot();
+      const result = runQuery(fixture, fixture.request());
+      assert.equal(result.status, 1, testCase.name);
+      assertKnownResourceError(
+        JSON.parse(result.stdout),
+        "metadata",
+        FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT,
+        "/canonical",
+      );
+      assert.deepEqual(fixture.snapshot(), before, testCase.name);
+    }
   });
 
   it("classifies missing records, identity mismatch, and catalog revision errors as canonical errors", () => {
@@ -396,7 +800,7 @@ describe("flow query", () => {
     const missingBefore = missing.snapshot();
     const missingResult = runQuery(missing, missing.request());
     assert.equal(missingResult.status, 1);
-    assertKnownResourceError(JSON.parse(missingResult.stdout), "metadata", "CANONICAL_RECORD_UNREADABLE", "/canonical");
+    assertKnownResourceError(JSON.parse(missingResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical");
     assert.deepEqual(missing.snapshot(), missingBefore);
 
     const catalog = contractFixture();
@@ -406,7 +810,7 @@ describe("flow query", () => {
     const catalogBefore = catalog.snapshot();
     const catalogResult = runQuery(catalog, catalog.request());
     assert.equal(catalogResult.status, 1);
-    assertKnownResourceError(JSON.parse(catalogResult.stdout), "metadata", "CANONICAL_RECORD_INCONSISTENT", "/canonical");
+    assertKnownResourceError(JSON.parse(catalogResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical");
     assert.deepEqual(catalog.snapshot(), catalogBefore);
 
     const identity = contractFixture({ storage: "fresh", selectedVersion: 2 });
@@ -417,7 +821,7 @@ describe("flow query", () => {
     const identityBefore = identity.snapshot();
     const identityResult = runQuery(identity, identity.request());
     assert.equal(identityResult.status, 1);
-    assertKnownResourceError(JSON.parse(identityResult.stdout), "metadata", "CANONICAL_RECORD_INCONSISTENT", "/canonical");
+    assertKnownResourceError(JSON.parse(identityResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical");
     assert.deepEqual(identity.snapshot(), identityBefore);
 
     const oversized = contractFixture();
@@ -425,7 +829,7 @@ describe("flow query", () => {
     const oversizedBefore = oversized.snapshot();
     const oversizedResult = runQuery(oversized, oversized.request());
     assert.equal(oversizedResult.status, 1);
-    assertKnownResourceError(JSON.parse(oversizedResult.stdout), "metadata", "CANONICAL_RECORD_INCONSISTENT", "/canonical");
+    assertKnownResourceError(JSON.parse(oversizedResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical");
     assert.deepEqual(oversized.snapshot(), oversizedBefore);
   });
 
@@ -446,7 +850,7 @@ describe("flow query", () => {
     });
     assert.equal(result.status, 1);
     const response = JSON.parse(result.stdout);
-    assertKnownResourceError(response, "activities", "CANONICAL_RECORD_INCONSISTENT", "/canonical", { pageLimit: 1 });
+    assertKnownResourceError(response, "activities", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", { pageLimit: 1 });
     assert.equal(result.stderr.trim().split("\n").length, 1);
     assert.deepEqual(fixture.snapshot(), before);
   });
@@ -460,7 +864,7 @@ describe("flow query", () => {
     const versionsBefore = versions.snapshot();
     const versionsResult = runQuery(versions, versions.request());
     assert.equal(versionsResult.status, 1);
-    assertKnownResourceError(JSON.parse(versionsResult.stdout), "metadata", "CANONICAL_RECORD_INCONSISTENT", "/canonical");
+    assertKnownResourceError(JSON.parse(versionsResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical");
     assert.deepEqual(versions.snapshot(), versionsBefore);
 
     const ledger = contractFixture();
@@ -475,7 +879,7 @@ describe("flow query", () => {
       page: { limit: 1, after: null },
     });
     assert.equal(ledgerResult.status, 1);
-    assertKnownResourceError(JSON.parse(ledgerResult.stdout), "activities", "CANONICAL_RECORD_INCONSISTENT", "/canonical", { pageLimit: 1 });
+    assertKnownResourceError(JSON.parse(ledgerResult.stdout), "activities", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", { pageLimit: 1 });
     assert.deepEqual(ledger.snapshot(), ledgerBefore);
   });
 
@@ -491,44 +895,47 @@ describe("flow query", () => {
     const cases = [
       {
         input: JSON.stringify({ resource: "metadata", condition: { specId: fixture.specId }, unexpected: true }),
-        resource: "metadata", code: "INVALID_REQUEST", path: "/unexpected",
+        resource: "metadata", code: FLOW_QUERY_ERROR_CODES.INVALID_REQUEST, path: "/unexpected",
       },
       {
         input: JSON.stringify({ resource: "metadata", condition: { specId: fixture.specId, unexpected: true } }),
-        resource: "metadata", code: "INVALID_REQUEST", path: "/condition/unexpected",
+        resource: "metadata", code: FLOW_QUERY_ERROR_CODES.INVALID_REQUEST, path: "/condition/unexpected",
       },
       {
         input: JSON.stringify({ resource: "metadata", condition: { specId: fixture.specId }, page: {} }),
-        resource: "metadata", code: "INVALID_REQUEST", path: "/page",
+        resource: "metadata", code: FLOW_QUERY_ERROR_CODES.INVALID_REQUEST, path: "/page",
       },
       {
         input: JSON.stringify({ resource: "activities", condition: { specId: fixture.specId }, recordedAt: {} }),
-        resource: "activities", code: "INVALID_REQUEST", path: "/recordedAt",
+        resource: "activities", code: FLOW_QUERY_ERROR_CODES.INVALID_REQUEST, path: "/recordedAt",
       },
       {
         input: JSON.stringify({ resource: "unknown", condition: { specId: fixture.specId } }),
-        resource: null, code: "INVALID_REQUEST", path: "/resource",
+        resource: null, code: FLOW_QUERY_ERROR_CODES.INVALID_REQUEST, path: "/resource",
       },
       {
         input: JSON.stringify({ resource: "metadata", condition: { specId: fixture.specId } }) + " trailing",
-        resource: null, code: "INVALID_JSON", path: "/request",
+        resource: null, code: FLOW_QUERY_ERROR_CODES.INVALID_JSON, path: "/request",
       },
-      { input: "", resource: null, code: "INVALID_REQUEST", path: "/request" },
-      { input: "{} {}", resource: null, code: "INVALID_JSON", path: "/request" },
+      { input: "", resource: null, code: FLOW_QUERY_ERROR_CODES.INVALID_REQUEST, path: "/request" },
+      { input: "{} {}", resource: null, code: FLOW_QUERY_ERROR_CODES.INVALID_JSON, path: "/request" },
     ];
     for (const testCase of cases) {
       const result = runQuery(fixture, null, { input: testCase.input });
       assert.equal(result.status, 1);
       const response = JSON.parse(result.stdout);
+      const consumed = new FlowQueryConsumer().consume(response);
       if (testCase.resource === null) {
         assert.deepEqual(Object.keys(response).sort(), ["error", "ok", "schemaRevision"].sort());
-        assert.equal(response.schemaRevision, 1);
+        assert.equal(response.schemaRevision, FLOW_QUERY_SCHEMA_REVISION);
         assert.equal(response.ok, false);
         assert.deepEqual(Object.keys(response.error).sort(), ["code", "message", "path"]);
         assert.equal(response.error.code, testCase.code);
         assert.equal(response.error.path, testCase.path);
+        assert.equal(consumed.resource, null);
       } else {
         assertKnownResourceError(response, testCase.resource, testCase.code, testCase.path);
+        assert.equal(consumed.resource, testCase.resource);
       }
       assert.equal(result.stderr.trim().split("\n").length, 1);
     }
@@ -542,7 +949,7 @@ describe("flow query", () => {
     });
     assert.equal(oversized.status, 1);
     const oversizedResponse = JSON.parse(oversized.stdout);
-    assert.equal(oversizedResponse.error.code, "INVALID_REQUEST");
+    assert.equal(oversizedResponse.error.code, FLOW_QUERY_ERROR_CODES.INVALID_REQUEST);
     assert.equal(oversizedResponse.error.path, "/request");
     assert.deepEqual(fixture.snapshot(), before);
   });
