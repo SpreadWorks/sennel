@@ -12,7 +12,7 @@
     "reviewAttemptSequenceAtStart": 0,
     "gateAttemptSequenceAtStart": 0
   },
-  "sourceFingerprint": "cc17d7c0dc1b08e9846805acee025cc19e3d8f7cc71f86f982d15ccf16f9d820",
+  "sourceFingerprint": "0b5323f165945740e292c3fcae954d55ac1fdc14e21aa0dcddb1a0f473c12092",
   "manifest": {
     "attempt": {
       "id": "attempt-T-8-repair-6f5b7edb-cd99-40f0-babe-cfba8b0a4f4e",
@@ -25,11 +25,15 @@
         "mutationId": "258d09b6ff04b32d3c7e793891b173c7c6aab1f328cec23488a1f0250aed1be7",
         "path": "tests/integration/flow/query.test.js",
         "changeKind": "content",
+        "beforeKind": "file",
+        "beforeMode": null,
         "beforeDigest": "9802535b5401b4b85ecb2d4868b3974133f31129d9b615b4bc2bca364c7503a1",
+        "afterKind": "file",
+        "afterMode": null,
         "afterDigest": "cfd7bd713f0db4c78945e28b110b6c899be52a5da30c654f1a8bd6db49d10caa"
       }
     ],
-    "digest": "cc17d7c0dc1b08e9846805acee025cc19e3d8f7cc71f86f982d15ccf16f9d820"
+    "digest": "0b5323f165945740e292c3fcae954d55ac1fdc14e21aa0dcddb1a0f473c12092"
   },
   "noChangeReason": null
 }

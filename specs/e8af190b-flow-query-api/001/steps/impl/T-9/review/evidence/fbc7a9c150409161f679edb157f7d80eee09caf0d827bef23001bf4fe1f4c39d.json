@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-9",
+  "treeSha": "7adc8b360972a18bd2fb2ecae4109c79d980f831",
+  "targetStateDigest": "d6276ec2e83e8aaf6a71273bfe26bafc002805bbf3a4387e98a5c30609f6f0f7",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "cbc8615379520d3a7d23698f6c78b38440d39fe070da51ec8cd8af25bbb630c2",
+    "capturedAt": "2026-09-10T00:58:43.063Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+      "summary": "Symlinked canonical records use the wrong error code",
+      "fingerprint": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+      "evidenceRefs": [
+        "impl-review.json#2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "fac4cc70dab5e7db9ab0fd2dd8b7d9285fa387e5995b3a8dbbda3499855fb31a",
+      "summary": "Invalid cursor errors expose selected Version metadata",
+      "fingerprint": "fac4cc70dab5e7db9ab0fd2dd8b7d9285fa387e5995b3a8dbbda3499855fb31a",
+      "evidenceRefs": [
+        "impl-review.json#fac4cc70dab5e7db9ab0fd2dd8b7d9285fa387e5995b3a8dbbda3499855fb31a"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

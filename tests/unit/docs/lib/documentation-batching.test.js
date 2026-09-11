@@ -46,6 +46,84 @@ describe("documentation prompt batching", () => {
     assert.ok(plan.batches.every((batch) => batch.footprint.total <= 5000));
   });
 
+  it("enumerates the exact source identities in each enrichment response schema", () => {
+    const envelope = new DocumentationEnrichPromptEnvelope({
+      chapters: ["overview.md"],
+      lang: "en",
+      fmtFallback: '{"entries":[]}',
+    });
+    const limit = new PromptRequestLimit({ maxCharacters: 5000 });
+    const builder = new PromptInputBuilder({ envelope, limit });
+    for (const [sequence, index] of [12, 19].entries()) {
+      builder.add(new DocumentationAnalysisPromptElement({
+        id: `analysis:modules:${index}`,
+        sourceRevision: documentationSourceRevision(`source-${index}`),
+        sequence,
+        category: "modules",
+        index,
+        file: `src/module-${index}.js`,
+        text: `source-${index}`,
+      }));
+    }
+
+    const plan = PromptBatchPlan.create({
+      collection: builder.build(),
+      envelope,
+      limit,
+      topology: new LinearPromptBatchTopology(),
+    });
+    const itemSchema = plan.batches[0].request.jsonSchema.properties.entries.items;
+
+    assert.deepEqual(itemSchema.properties.elementId.enum, ["analysis:modules:12", "analysis:modules:19"]);
+    assert.deepEqual(itemSchema.properties.category.enum, ["modules"]);
+    assert.deepEqual(itemSchema.properties.index.enum, [12, 19]);
+    for (const element of plan.batches[0].payloadElements) {
+      assert.ok(plan.batches[0].request.userPrompt.includes(JSON.stringify({ elementId: element.id, category: element.category, index: element.index })));
+    }
+  });
+
+  it("publishes ordinary enrichment and exposes rejected identities through executor errors", async () => {
+    const element = new DocumentationAnalysisPromptElement({
+      id: "analysis:modules:297", category: "modules", index: 297,
+      sourceRevision: documentationSourceRevision("source"), sequence: 0,
+      file: "src/example.js", text: "source",
+    });
+    const envelope = new DocumentationEnrichPromptEnvelope({ chapters: ["overview.md"] });
+    const limit = new PromptRequestLimit({ maxCharacters: 5000 });
+    const builder = new PromptInputBuilder({ envelope, limit });
+    builder.add(element);
+    const plan = PromptBatchPlan.create({ collection: builder.build(), envelope, limit, topology: new LinearPromptBatchTopology() });
+    const value = { elementId: element.id, category: element.category, index: element.index,
+      summary: "summary", detail: "detail", chapter: "overview", role: "lib",
+      keywords: ["source", "module", "example"], app: null };
+    for (const identity of [
+      { elementId: "modules:297" }, { category: "analysis" },
+      { category: "analysis:modules" }, { index: 298 },
+    ]) {
+      await assert.rejects(new PromptBatchExecutor().executeCompletions({
+        plan, responseContract: new DocumentationEnrichmentResponseContract(),
+        callAgent: async () => JSON.stringify({ entries: [{ ...value, ...identity }] }),
+      }), (error) => {
+        assert.equal(error.code, "PROMPT_BATCH_EXECUTION_INCOMPLETE");
+        assert.match(error.message, /PROMPT_RESPONSE_COVERAGE_INVALID/);
+        assert.match(error.message, /expected/);
+        assert.match(error.message, /actual/);
+        assert.ok(error.message.includes(String(Object.values(identity)[0])));
+        assert.equal(error.cause.code, "PROMPT_RESPONSE_COVERAGE_INVALID");
+        return true;
+      });
+    }
+    const executor = new PromptBatchExecutor();
+    const completions = await executor.executeCompletions({ plan,
+      responseContract: new DocumentationEnrichmentResponseContract(),
+      callAgent: async () => JSON.stringify({ entries: [value] }),
+    });
+    const result = await reduceDocumentationEnrichment({ completions, executor, limit,
+      agent: { call: async () => assert.fail("Unsplit entries need no synthesis") }, lang: "en" });
+    assert.equal(result.modules[0].index, 297);
+    assert.equal(result.modules[0].summary, "summary");
+  });
+
   it("rejects enrichment entries that do not satisfy the complete typed schema", () => {
     const element = new DocumentationAnalysisPromptElement({
       id: "analysis:modules:0",
@@ -102,6 +180,10 @@ describe("documentation prompt batching", () => {
       async call(prompt, options) {
         prompts.push(prompt);
         if (options.jsonSchema?.properties?.entry) {
+          const properties = options.jsonSchema.properties.entry.properties;
+          assert.deepEqual(properties.elementId.enum, ["analysis:modules:0"]);
+          assert.deepEqual(properties.category.enum, ["modules"]);
+          assert.deepEqual(properties.index.enum, [0]);
           return JSON.stringify({
             entry: {
               elementId: "analysis:modules:0",
@@ -127,6 +209,10 @@ describe("documentation prompt batching", () => {
           keywords: ["fragment", "range", "source"],
           app: null,
         }));
+        assert.deepEqual(options.jsonSchema.properties.entries.items.properties.elementId.enum, entries.map((entry) => entry.elementId));
+        for (const { elementId, category, index } of entries) {
+          assert.ok(prompt.includes(JSON.stringify({ elementId, category, index })));
+        }
         return JSON.stringify({ entries });
       },
     };

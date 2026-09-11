@@ -1,0 +1,476 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "T-9-triage",
+      "outcome": "completed",
+      "result": {
+        "outcome": "passed",
+        "summary": "Worker handoff confirmed for task-triage.",
+        "confirmedAt": "2026-09-10T00:49:33.074Z",
+        "artifactRefs": [
+          {
+            "kind": "worker-handoff",
+            "id": "72beba8ac4152d56ea508b2a89ae7f71cb07394c333daab9fd0ceec876901492"
+          },
+          {
+            "kind": "worker-handoff-request",
+            "id": "a3bee2d732fbe68f67edf5f9520ee5da0a0192df805dbc64b4966ca483dddd80"
+          }
+        ]
+      },
+      "artifact": {
+        "logicalKey": "task.triage",
+        "payload": {
+          "version": 1,
+          "taskId": "T-9",
+          "binding": {
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "flowVersion": 1,
+            "taskId": "T-9",
+            "taskRound": 1,
+            "reviewOrdinal": 1,
+            "specDigest": "edda99f614016395d8dfa8106b6d3695ba167acbac16975ce29005c2ebc2feb7",
+            "contextDigest": "3d73bfa91a844c27e251a0a8befd703f04e52d62ded4a244c7678cfdc2828a29",
+            "sourceFingerprint": "2d1d4c21ee4d7ec605ce154c146477fb2daaea501b1ed6a8a67149ea2a4d2f40",
+            "review": {
+              "logicalKey": "task.review",
+              "digest": "6ad62b0bf64292ee133dfa8d9f21f39813bbee765a481a518d5c422ca0948e91",
+              "payloadDigest": "b5ec7c45311304588685afa9ca9646fe2240cc396c8f233650e9ef3596884f39",
+              "activityId": "task-review-stage-confirmed-da4d5636-b518-4cd3-9d28-6e7b2746bd09",
+              "attemptId": "27c893fc-04b3-48fb-85af-2aeffbb7f879",
+              "sequence": 2
+            },
+            "triage": null
+          },
+          "attempt": {
+            "id": "attempt-T-9-triage-454c0a08-5c70-450a-880a-27b4ac9f2547",
+            "nodeId": "T-9-triage",
+            "sequence": 1
+          },
+          "handoffDigest": "72beba8ac4152d56ea508b2a89ae7f71cb07394c333daab9fd0ceec876901492",
+          "reviewFindings": [
+            {
+              "findingKey": "canonical-json-parse-errors-misclassified",
+              "title": "Canonical JSON parse failures use the wrong error code",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "parseJson() converts malformed canonical state, Spec, and catalog JSON into CANONICAL_RECORD_INCONSISTENT, but canonical parse failures must be reported as CANONICAL_RECORD_UNREADABLE.",
+              "suggestion": "Update parseJson() to emit CANONICAL_RECORD_UNREADABLE for JSON decoding failures while retaining CANONICAL_RECORD_INCONSISTENT for post-parse identity, schema, and integrity validation.",
+              "disposition": "must-fix",
+              "rationale": "R13 mandates UNREADABLE for canonical parse failures; the current implementation emits a contradictory public error code.",
+              "findingId": "3c2b53bafaa61b458b024d20797d9d7b04eb292fc37e65cbc92750bdbf9ce24f",
+              "fingerprint": "3c2b53bafaa61b458b024d20797d9d7b04eb292fc37e65cbc92750bdbf9ce24f",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "ledger-json-parse-errors-misclassified",
+              "title": "Malformed Activity ledger JSON is classified as integrity failure",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "readConfirmedLedger() catches JSON.parse(line) failures together with schema and contiguous-order failures and always emits CANONICAL_RECORD_INCONSISTENT. A malformed ledger line is a canonical parse failure and must use CANONICAL_RECORD_UNREADABLE.",
+              "suggestion": "Separate JSON decoding from FlowActivity validation in readConfirmedLedger(): classify JSON.parse failures as CANONICAL_RECORD_UNREADABLE and retain CANONICAL_RECORD_INCONSISTENT for Activity schema, duplicate-ID, and confirmation-order violations.",
+              "disposition": "must-fix",
+              "rationale": "R13 explicitly separates parse/read failures from ledger integrity failures, so the broad catch produces the wrong externally observable error classification.",
+              "findingId": "b41312a65943981746517e76a949049258c4b3de7ff5958d410acdb3a305ff63",
+              "fingerprint": "b41312a65943981746517e76a949049258c4b3de7ff5958d410acdb3a305ff63",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "success_page_info_accepts_null_limit",
+              "title": "Success consumer accepts null page limit",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R8",
+              "issue": "pageInfo() permits limit: null, and success() uses it for activities responses. R8 requires a successful activities pageInfo.limit to be an integer; null is valid only for known-resource errors.",
+              "suggestion": "Make pageInfo validation context-specific: require a bounded integer for success responses and allow null only in the error branch. Add a rejection assertion for a successful response with limit: null.",
+              "disposition": "must-fix",
+              "rationale": "The compatibility consumer accepts a response that violates the mandatory Schema Revision 1 activities success contract.",
+              "findingId": "c2f43f582d5f7fe90805dbc7149f2321d80d34d0eae658458a0ee18814e1d281",
+              "fingerprint": "c2f43f582d5f7fe90805dbc7149f2321d80d34d0eae658458a0ee18814e1d281",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "consumer_duplicates_page_limit",
+              "title": "Consumer hardcodes the page limit",
+              "failureMode": "duplicate_contract_definition",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R8",
+              "issue": "pageInfo() compares limits against literal 100 instead of the centrally managed production resource limit, despite importing FLOW_QUERY_LIMITS.",
+              "suggestion": "Use the canonical page-limit field from FLOW_QUERY_LIMITS, adding or exporting it from the production contract if necessary, so consumer validation and request validation share one limit.",
+              "disposition": "must-fix",
+              "rationale": "The task implementation notes require resource limits to be shared directly from production; the literal can silently diverge from the public contract.",
+              "findingId": "36c2105497a32158c2383900d3245bda917ff5ee0543ddf4da69526ffe5dda4d",
+              "fingerprint": "36c2105497a32158c2383900d3245bda917ff5ee0543ddf4da69526ffe5dda4d",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "consumer_does_not_validate_error_path_mapping",
+              "title": "Known error codes are not checked against their required paths",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R13",
+              "issue": "error() verifies that error.path is merely a string and that error.code is known, but it never enforces the required code-to-path mapping. For example, INVALID_JSON with /canonical would be accepted.",
+              "suggestion": "Reuse a centrally managed production error-contract mapping or validator in error(), and add a fixture assertion covering a known code with an incorrect path.",
+              "disposition": "must-fix",
+              "rationale": "R13 fixes the public path for every error code; accepting mismatched pairs means the consumer does not verify the required error contract.",
+              "findingId": "149881230fe621ab16c29abaa231bef30fe6a01b0e4ddc0b6f1d54075d5a32b3",
+              "fingerprint": "149881230fe621ab16c29abaa231bef30fe6a01b0e4ddc0b6f1d54075d5a32b3",
+              "repeatCount": 1
+            }
+          ],
+          "dispositions": [
+            {
+              "findingKey": "canonical-json-parse-errors-misclassified",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The supplied source shows parseJson() maps malformed canonical JSON to CANONICAL_RECORD_INCONSISTENT, contradicting R13, which requires CANONICAL_RECORD_UNREADABLE for canonical parse failures."
+            },
+            {
+              "findingKey": "ledger-json-parse-errors-misclassified",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The supplied source shows readConfirmedLedger() combines JSON decoding failures with ledger integrity failures and emits CANONICAL_RECORD_INCONSISTENT, contradicting R13's required UNREADABLE classification for parse failures."
+            },
+            {
+              "findingKey": "success_page_info_accepts_null_limit",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The supplied consumer source permits pageInfo.limit to be null for successful activities responses, while R8 requires a bounded integer on success and permits null only for known-resource errors."
+            },
+            {
+              "findingKey": "consumer_duplicates_page_limit",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The supplied consumer source hardcodes 100 instead of consuming a centrally managed production page limit, violating the task requirement that production limits be shared without duplicate contract definitions."
+            },
+            {
+              "findingKey": "consumer_does_not_validate_error_path_mapping",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The supplied consumer source checks only that error.path is a string and does not enforce R13's required code-to-public-path mapping, allowing invalid code and path combinations."
+            }
+          ],
+          "unreviewedAfterRepair": false
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "T-9-triage",
+      "outcome": "completed",
+      "result": {
+        "outcome": "passed",
+        "summary": "Worker handoff confirmed for task-triage.",
+        "confirmedAt": "2026-09-10T01:00:12.218Z",
+        "artifactRefs": [
+          {
+            "kind": "worker-handoff",
+            "id": "141bc3706b314bea42878bcd4e63efb9db2efa3c60f7130796f2582e5f606be0"
+          },
+          {
+            "kind": "worker-handoff-request",
+            "id": "8cd465265659f074a51a33f819ab0bd4923fe966b9239ba224658ad75f2f07b1"
+          }
+        ]
+      },
+      "artifact": {
+        "logicalKey": "task.triage",
+        "payload": {
+          "version": 1,
+          "taskId": "T-9",
+          "binding": {
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "flowVersion": 1,
+            "taskId": "T-9",
+            "taskRound": 1,
+            "reviewOrdinal": 2,
+            "specDigest": "edda99f614016395d8dfa8106b6d3695ba167acbac16975ce29005c2ebc2feb7",
+            "contextDigest": "13b9ff4c9492bb9b2fd83417ea6700f8086feeabdbb909bc9ea499114486fa55",
+            "sourceFingerprint": "2dda2e545f11cc26b94adcbae249fcfe7f82ab95d09f05e27ef631a9b41c4042",
+            "review": {
+              "logicalKey": "task.review",
+              "digest": "cfc95395a85d87e496c6f97c48a823c98f7c2702c3bc17607fe1c10f174f0d18",
+              "payloadDigest": "e7d3e7f3c95767649ec51dc443a7cd6c930a1d9cdb86909db0d1ff61a2b2cdb6",
+              "activityId": "task-review-stage-confirmed-f803bdc7-7c9e-4b58-be2e-275ddf22096d",
+              "attemptId": "attempt-T-9-review-c4326135-96ab-4b70-b398-f93eb4f2cd64",
+              "sequence": 3
+            },
+            "triage": null
+          },
+          "attempt": {
+            "id": "attempt-T-9-triage-c1948b90-07b5-47f1-a22d-fcb8e7db2118",
+            "nodeId": "T-9-triage",
+            "sequence": 2
+          },
+          "handoffDigest": "141bc3706b314bea42878bcd4e63efb9db2efa3c60f7130796f2582e5f606be0",
+          "reviewFindings": [
+            {
+              "findingKey": "symlink-record-misclassified-as-unreadable",
+              "title": "Symlinked canonical records use the wrong error code",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "readBoundedFile() opens records with O_NOFOLLOW, but an ELOOP failure is caught by the generic branch and converted to CANONICAL_RECORD_UNREADABLE. A symlinked canonical record is an identity/integrity violation and must be reported as CANONICAL_RECORD_INCONSISTENT.",
+              "suggestion": "Handle ELOOP in readBoundedFile() as identityCode before the generic read-error conversion, preserving CANONICAL_RECORD_INCONSISTENT for symlink identity failures.",
+              "disposition": "must-fix",
+              "rationale": "R13 requires identity and integrity failures to use CANONICAL_RECORD_INCONSISTENT; the current O_NOFOLLOW failure path emits the contradictory public error code.",
+              "findingId": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+              "fingerprint": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "invalid-cursor-leaks-selection",
+              "title": "Invalid cursor errors expose selected Version metadata",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R12",
+              "issue": "runFlowQueryCli() includes selectedFlowVersion and availableFlowVersions for every QueryRequest error except SPEC_NOT_FOUND and FLOW_VERSION_NOT_FOUND. Therefore INVALID_CURSOR responses expose the discovered Version, contradicting the required null selection for invalid selection errors and the integration fixture expectation.",
+              "suggestion": "Handle INVALID_CURSOR like other pre-selection errors: emit selectedFlowVersion: null and availableFlowVersions: [] while retaining Version metadata for CURSOR_QUERY_MISMATCH after cursor binding has been validated.",
+              "disposition": "must-fix",
+              "rationale": "R12 requires selected Version metadata only when the requested Version is successfully established; the supplied integration test explicitly requires invalid cursor responses to omit both selection and available Versions.",
+              "findingId": "fac4cc70dab5e7db9ab0fd2dd8b7d9285fa387e5995b3a8dbbda3499855fb31a",
+              "fingerprint": "fac4cc70dab5e7db9ab0fd2dd8b7d9285fa387e5995b3a8dbbda3499855fb31a",
+              "repeatCount": 1
+            }
+          ],
+          "dispositions": [
+            {
+              "findingKey": "symlink-record-misclassified-as-unreadable",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "R13 requires symlink identity violations from O_NOFOLLOW failures to be classified as CANONICAL_RECORD_INCONSISTENT, but the current generic readBoundedFile error path emits CANONICAL_RECORD_UNREADABLE."
+            },
+            {
+              "findingKey": "invalid-cursor-leaks-selection",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "R12 requires invalid selection errors to omit selectedFlowVersion and availableFlowVersions; the current QueryRequest error path exposes discovered Version metadata for INVALID_CURSOR responses."
+            }
+          ],
+          "unreviewedAfterRepair": false
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "T-9-triage",
+      "outcome": "completed",
+      "result": {
+        "outcome": "passed",
+        "summary": "Worker handoff confirmed for task-triage.",
+        "confirmedAt": "2026-09-10T01:10:00.946Z",
+        "artifactRefs": [
+          {
+            "kind": "worker-handoff",
+            "id": "7e454612e715ea3ea391c214eb4e7f67b9b08c8e6843665d8f2c372d304bcf21"
+          },
+          {
+            "kind": "worker-handoff-request",
+            "id": "0e7f0e6e90b084db8489b0b77cb7e6e5704541ba8341abb37fab9520c6cf060f"
+          }
+        ]
+      },
+      "artifact": {
+        "logicalKey": "task.triage",
+        "payload": {
+          "version": 1,
+          "taskId": "T-9",
+          "binding": {
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "flowVersion": 1,
+            "taskId": "T-9",
+            "taskRound": 1,
+            "reviewOrdinal": 3,
+            "specDigest": "edda99f614016395d8dfa8106b6d3695ba167acbac16975ce29005c2ebc2feb7",
+            "contextDigest": "880da80904010f350827940d705529a408f78bcf08d51fc3c7ace50ad7dc6524",
+            "sourceFingerprint": "f27c8222c50324c33a062cea06171ba4007fd25a47ec049e2e4315cbee202148",
+            "review": {
+              "logicalKey": "task.review",
+              "digest": "f55d6336cb4124502fd61fd6abc0a04d30d9b71187f7946fe23da1c51e87ea47",
+              "payloadDigest": "4721229db35a6fbbaca487a3fe9503c0bf5c8264cc69c6ba9e7a4bb5b9e74245",
+              "activityId": "task-review-stage-confirmed-017b0feb-25b7-407b-be38-28358f75f38b",
+              "attemptId": "attempt-T-9-review-e852aa4d-b7ef-4c84-8bc2-f2bf7e4ba098",
+              "sequence": 4
+            },
+            "triage": null
+          },
+          "attempt": {
+            "id": "attempt-T-9-triage-18afbe03-2b3c-46e7-9b3e-47a15c03a507",
+            "nodeId": "T-9-triage",
+            "sequence": 3
+          },
+          "handoffDigest": "7e454612e715ea3ea391c214eb4e7f67b9b08c8e6843665d8f2c372d304bcf21",
+          "reviewFindings": [
+            {
+              "findingKey": "symlink-record-misclassified-as-unreadable",
+              "title": "Symlinked canonical records use the wrong error code",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "readBoundedFile() opens records with O_NOFOLLOW, but ELOOP is converted by the generic catch branch into CANONICAL_RECORD_UNREADABLE. A symlinked canonical record is an identity/integrity violation.",
+              "suggestion": "Handle ELOOP in readBoundedFile() using identityCode so symlink identity failures emit CANONICAL_RECORD_INCONSISTENT.",
+              "disposition": "must-fix",
+              "rationale": "R13 requires identity and integrity failures to use CANONICAL_RECORD_INCONSISTENT; the current O_NOFOLLOW failure path emits the contradictory public code.",
+              "findingId": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+              "fingerprint": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+              "repeatCount": 2
+            },
+            {
+              "findingKey": "catalog-tree-scan-is-unbounded",
+              "title": "Catalog verification scans an unbounded artifact tree",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R8",
+              "issue": "queryCatalogManagedFiles() recursively uses synchronous readdirSync/lstatSync without enforcing MAX_ARTIFACTS or another bounded entry count. A canonical Version containing many unmanaged entries can cause unbounded query work before the catalog limit is applied.",
+              "suggestion": "Bound the recursive catalog-managed entry count at MAX_ARTIFACTS plus one and raise CANONICAL_RECORD_INCONSISTENT immediately when exceeded, while preserving the existing catalog consistency check.",
+              "disposition": "must-fix",
+              "rationale": "R8 requires bounded canonical reading and count limits; the current verification path can traverse an arbitrarily large directory tree.",
+              "findingId": "f2696815571d5ccd9d02b00dfd982f6f4b2ef33a9bf37ebfa0801c35bab43dcb",
+              "fingerprint": "f2696815571d5ccd9d02b00dfd982f6f4b2ef33a9bf37ebfa0801c35bab43dcb",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "ledger-suffix-artifact-read-bypasses-safety",
+              "title": "Ledger-mismatch artifact validation bypasses bounded safe reads",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R8",
+              "issue": "In verifyQueryCatalog(), the ledger-digest-mismatch branch reads associated artifact content with fs.readFileSync(location.resolve(artifact.relativePath)). This bypasses O_NOFOLLOW, regular-real-file checks, and bounded read handling after the artifact has otherwise been verified.",
+              "suggestion": "Reuse a bounded, O_NOFOLLOW-protected read result for contentContract.assertCatalogAssociation(), or route this read through readBoundedFile() with the descriptor size and canonical error classification.",
+              "disposition": "must-fix",
+              "rationale": "R8 requires canonical reads to enforce safe file identity and byte bounds; this branch directly follows the internal path and performs an unbounded synchronous read.",
+              "findingId": "2a357f712bdd9bb56d197b5a8aa4af923a83e3e459e3e0e18d132d1c19ea6a55",
+              "fingerprint": "2a357f712bdd9bb56d197b5a8aa4af923a83e3e459e3e0e18d132d1c19ea6a55",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "response-limit-newline-mismatch",
+              "title": "Consumer and CLI disagree at the response byte limit",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R8",
+              "issue": "runFlowQueryCli() checks MAX_RESPONSE_BYTES against the JSON payload before appending its newline, while consumeSerialized() checks the complete CLI serialization including that newline. A payload exactly at the shared limit is emitted successfully but rejected by the compatibility consumer.",
+              "suggestion": "Align the boundary definition in consumeSerialized() and runFlowQueryCli(); for example, validate the emitted JSON plus newline in the CLI and retain the same framing rule in the consumer, or explicitly exclude one terminal newline before the consumer limit check.",
+              "disposition": "must-fix",
+              "rationale": "R8 requires bounded activity responses and T-9 requires the consumer to share the centrally managed response limit. The current producer/consumer disagreement makes a valid boundary response fail compatibility validation.",
+              "findingId": "d31ff842838bd281143a0d874f1afffc3ea0f21139b732bfd66648421d8c6755",
+              "fingerprint": "d31ff842838bd281143a0d874f1afffc3ea0f21139b732bfd66648421d8c6755",
+              "repeatCount": 1
+            }
+          ],
+          "dispositions": [
+            {
+              "findingKey": "symlink-record-misclassified-as-unreadable",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "R13 requires symlink identity violations to emit CANONICAL_RECORD_INCONSISTENT, but the current ELOOP handling emits CANONICAL_RECORD_UNREADABLE."
+            },
+            {
+              "findingKey": "catalog-tree-scan-is-unbounded",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "R8 requires bounded canonical reads, while recursive catalog verification currently scans unmanaged entries without enforcing a bounded count."
+            },
+            {
+              "findingKey": "ledger-suffix-artifact-read-bypasses-safety",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "R8 requires O_NOFOLLOW, regular-file identity, and bounded reads for canonical artifacts, but this validation branch uses an unbounded synchronous read."
+            },
+            {
+              "findingKey": "response-limit-newline-mismatch",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The CLI checks the JSON payload before its terminal newline while the consumer checks the complete serialization, causing inconsistent behavior at MAX_RESPONSE_BYTES."
+            }
+          ],
+          "unreviewedAfterRepair": false
+        }
+      }
+    },
+    {
+      "attempt": 4,
+      "nodeId": "T-9-triage",
+      "outcome": "completed",
+      "result": {
+        "outcome": "passed",
+        "summary": "Worker handoff confirmed for task-triage.",
+        "confirmedAt": "2026-09-10T01:23:36.577Z",
+        "artifactRefs": [
+          {
+            "kind": "worker-handoff",
+            "id": "830dcbdf728c2eb26842ef1392b281af3f74dd3505c36fdc033e7b73ab22805e"
+          },
+          {
+            "kind": "worker-handoff-request",
+            "id": "673119e8ec15f79cc26baeaf15a301a78fd6dd2028e0bbb52658f1e6b020aaf5"
+          }
+        ]
+      },
+      "artifact": {
+        "logicalKey": "task.triage",
+        "payload": {
+          "version": 1,
+          "taskId": "T-9",
+          "binding": {
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "flowVersion": 1,
+            "taskId": "T-9",
+            "taskRound": 1,
+            "reviewOrdinal": 4,
+            "specDigest": "edda99f614016395d8dfa8106b6d3695ba167acbac16975ce29005c2ebc2feb7",
+            "contextDigest": "61910da43382473ffbbe07a71835467cef7c2380228dc3c3fd5bfe347cef77b0",
+            "sourceFingerprint": "127b4820fbc9cc57da5f4742902ffee8c9c3ad9fe47e7a0e36b5b3d712b5773c",
+            "review": {
+              "logicalKey": "task.review",
+              "digest": "9c2985f435fb28ca7f2d724ed5f104af9000fddefa443733b27170467403bcd1",
+              "payloadDigest": "1f4c56057819c03a5376571b29f5a396f3ec0c63092ab3751fd84ff9b7b3b43a",
+              "activityId": "task-review-stage-confirmed-368ffbec-65d8-4e90-83b8-778d1193de6b",
+              "attemptId": "attempt-T-9-review-e037dcef-20b8-491c-922e-36a79514e65b",
+              "sequence": 5
+            },
+            "triage": null
+          },
+          "attempt": {
+            "id": "attempt-T-9-triage-7fc6da10-7908-4eb6-bc77-4c5514eda19b",
+            "nodeId": "T-9-triage",
+            "sequence": 4
+          },
+          "handoffDigest": "830dcbdf728c2eb26842ef1392b281af3f74dd3505c36fdc033e7b73ab22805e",
+          "reviewFindings": [
+            {
+              "findingKey": "catalog-content-read-error-reclassified",
+              "title": "Catalog content read failures are misclassified",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "In verifyQueryCatalog(), the ledger-digest-mismatch branch uses readBoundedFile(), which throws QueryError with CANONICAL_RECORD_UNREADABLE for missing or permission-denied artifacts. readCatalog() then catches that error, isCanonicalReadError() does not recognize QueryError instances, and the failure is re-emitted as CANONICAL_RECORD_INCONSISTENT.",
+              "suggestion": "Preserve QueryError classification in readCatalog() or extend isCanonicalReadError() to recognize CANONICAL_RECORD_UNREADABLE QueryErrors before wrapping verification failures.",
+              "disposition": "must-fix",
+              "rationale": "R13 requires canonical parse/read/permission failures to emit CANONICAL_RECORD_UNREADABLE, while CANONICAL_RECORD_INCONSISTENT is reserved for identity and integrity failures.",
+              "findingId": "d202d46043a95bba4d996862007fdf3cc0f8ef1213556c686d00e8895e2977fa",
+              "fingerprint": "d202d46043a95bba4d996862007fdf3cc0f8ef1213556c686d00e8895e2977fa",
+              "repeatCount": 1
+            }
+          ],
+          "dispositions": [
+            {
+              "findingKey": "catalog-content-read-error-reclassified",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The finding is valid: readBoundedFile emits CANONICAL_RECORD_UNREADABLE for missing or permission-denied catalog-managed content, but readCatalog can wrap that QueryError as CANONICAL_RECORD_INCONSISTENT because isCanonicalReadError does not recognize it. This contradicts R13 and requires repair."
+            }
+          ],
+          "unreviewedAfterRepair": false
+        }
+      }
+    }
+  ]
+}

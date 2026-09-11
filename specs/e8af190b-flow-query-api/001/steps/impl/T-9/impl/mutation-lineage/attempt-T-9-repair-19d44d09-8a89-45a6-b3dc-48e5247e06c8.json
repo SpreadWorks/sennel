@@ -1,0 +1,39 @@
+{
+  "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+  "specId": "e8af190b-flow-query-api",
+  "taskId": "T-9",
+  "role": "repair",
+  "attempt": {
+    "id": "attempt-T-9-repair-19d44d09-8a89-45a6-b3dc-48e5247e06c8",
+    "sequence": 2
+  },
+  "budget": {
+    "round": 1,
+    "reviewAttemptSequenceAtStart": 0,
+    "gateAttemptSequenceAtStart": 0
+  },
+  "sourceFingerprint": "b0e4d0cd1d3b1b58d9ae521e82db6ad89fcb825f2deb2edf7737cd5d9c5c5a53",
+  "manifest": {
+    "attempt": {
+      "id": "attempt-T-9-repair-19d44d09-8a89-45a6-b3dc-48e5247e06c8",
+      "nodeId": "T-9-repair",
+      "sequence": 2
+    },
+    "baselineDigest": "22c34da17a7ea3bcd0039e60cbbefe28a3f7040f44d5087e9e0cadd09548859d",
+    "mutations": [
+      {
+        "mutationId": "218acecc3b64d1156b230f27963641dd0146bb6131c99de2c0dd529934f737ec",
+        "path": "src/flow/query.js",
+        "changeKind": "content",
+        "beforeKind": "file",
+        "beforeMode": 436,
+        "beforeDigest": "83a670225c445793afe49a9327321d66b0aba9d468d57c49fed5d851bd5709e0",
+        "afterKind": "file",
+        "afterMode": 436,
+        "afterDigest": "2d6c7c56e062f819725beff8b3383beb7c3e4e01c57ae33c2e07242bdfd37af5"
+      }
+    ],
+    "digest": "b0e4d0cd1d3b1b58d9ae521e82db6ad89fcb825f2deb2edf7737cd5d9c5c5a53"
+  },
+  "noChangeReason": null
+}

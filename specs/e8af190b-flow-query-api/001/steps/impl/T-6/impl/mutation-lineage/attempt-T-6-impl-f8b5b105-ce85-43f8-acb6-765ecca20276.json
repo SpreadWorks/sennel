@@ -12,7 +12,7 @@
     "reviewAttemptSequenceAtStart": 3,
     "gateAttemptSequenceAtStart": 5
   },
-  "sourceFingerprint": "645159a8c7bedcfa485c1c9a807b24bc71193d53147cadbc951a4302ca95a551",
+  "sourceFingerprint": "0be046751cd4d052685b905c3211e97712c33c86d424c9c1f3f7e8d1075ae98d",
   "manifest": {
     "attempt": {
       "id": "attempt-T-6-impl-f8b5b105-ce85-43f8-acb6-765ecca20276",
@@ -25,18 +25,26 @@
         "mutationId": "b6c04de6d608fd2a1695c7aa93bcee3405937037d39796d424943a9775d6d65f",
         "path": "src/flow/query.js",
         "changeKind": "content",
+        "beforeKind": "file",
+        "beforeMode": null,
         "beforeDigest": "2d1efc5a666f936a74df12cb6b06cf12ee39d6b39c78cd7c967eb10c23a22ba5",
+        "afterKind": "file",
+        "afterMode": null,
         "afterDigest": "ff19f6ca608c825c3cc15515ccec66234e0e1046bfc9fe6fee30d1d4ea48f4d2"
       },
       {
         "mutationId": "044cf07e025dc554b6999706e08f28e0e55ba08958cf58eacbc5f33b77648c80",
         "path": "tests/integration/flow/query.test.js",
         "changeKind": "content",
+        "beforeKind": "file",
+        "beforeMode": null,
         "beforeDigest": "72479c8d966340d51e8ab8045d8f173a195083b0b947fa3227aac6e55fdc2da8",
+        "afterKind": "file",
+        "afterMode": null,
         "afterDigest": "0e84b748f2067b9b38cf0df34aa36278f037571b2f794fba3edd16dde4285fe0"
       }
     ],
-    "digest": "645159a8c7bedcfa485c1c9a807b24bc71193d53147cadbc951a4302ca95a551"
+    "digest": "0be046751cd4d052685b905c3211e97712c33c86d424c9c1f3f7e8d1075ae98d"
   },
   "noChangeReason": null
 }

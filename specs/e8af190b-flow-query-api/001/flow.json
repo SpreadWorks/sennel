@@ -1111,7 +1111,7 @@
               "key": "task.task-impl",
               "status": "in_progress",
               "result": null,
-              "attemptSequence": 1,
+              "attemptSequence": 2,
               "steps": []
             },
             {
@@ -1120,7 +1120,7 @@
               "key": "task.task-review",
               "status": "invalidated",
               "result": null,
-              "attemptSequence": 0,
+              "attemptSequence": 5,
               "steps": []
             },
             {
@@ -1129,7 +1129,7 @@
               "key": "task.task-triage",
               "status": "invalidated",
               "result": null,
-              "attemptSequence": 0,
+              "attemptSequence": 4,
               "steps": []
             },
             {
@@ -1138,7 +1138,7 @@
               "key": "task.task-repair",
               "status": "invalidated",
               "result": null,
-              "attemptSequence": 0,
+              "attemptSequence": 4,
               "steps": []
             },
             {
@@ -1147,7 +1147,7 @@
               "key": "impl.impl-gate",
               "status": "invalidated",
               "result": null,
-              "attemptSequence": 0,
+              "attemptSequence": 5,
               "steps": []
             }
           ]
@@ -1357,10 +1357,10 @@
   ],
   "current": "T-9-impl",
   "attempt": {
-    "id": "attempt-T-9-impl-4ea7ddae-46a4-4209-9230-4e3179257975",
+    "id": "attempt-T-9-impl-6877ec20-81e1-4f93-8131-0243fc3bddf0",
     "nodeId": "T-9-impl",
-    "sequence": 1,
-    "startedAt": "2026-09-08T13:41:26.309Z",
+    "sequence": 2,
+    "startedAt": "2026-09-10T16:33:49.277Z",
     "consumption": {
       "semantic": 0,
       "tooling": 0
@@ -1379,7 +1379,7 @@
       }
     ]
   },
-  "confirmationOrder": 879,
+  "confirmationOrder": 1076,
   "artifacts": [],
   "outbox": [],
   "context": null,

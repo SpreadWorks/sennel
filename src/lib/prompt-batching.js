@@ -1489,10 +1489,11 @@ export class PromptBatchExecutor {
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
     if (firstFailure !== null) {
       const completed = completions.filter(Boolean);
-      throw new PromptBatchExecutionIncompleteFailure("Prompt batch execution did not complete; no reduced result was produced", {
+      const causeCode = firstFailure.code || firstFailure.failureCode || null;
+      throw new PromptBatchExecutionIncompleteFailure(`Prompt batch execution did not complete; no reduced result was produced: ${causeCode || "ERROR"}: ${firstFailure.message}`, {
         completedBatchDigests: completed.map((entry) => entry.batchDigest),
         expectedBatchDigests: plan.batches.map((batch) => batch.digest),
-        causeCode: firstFailure?.code || firstFailure?.failureCode || null,
+        causeCode,
       }, firstFailure);
     }
     const ordered = plan.assertCompletions(completions);

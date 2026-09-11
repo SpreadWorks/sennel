@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-9",
+  "treeSha": "5a3c565d558f4ec9b35c19e607f830cf6702d604",
+  "targetStateDigest": "1822de339d20eca248ef4112d266361db6b5c1a38d230729dfeb864d49de16eb",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "44bcef05b0c74460e8197d54b2596e9f4834967aa3b4be2a20bf22ab48352b33",
+    "capturedAt": "2026-09-10T01:08:16.625Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+      "summary": "Symlinked canonical records use the wrong error code",
+      "fingerprint": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+      "evidenceRefs": [
+        "impl-review.json#2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "f2696815571d5ccd9d02b00dfd982f6f4b2ef33a9bf37ebfa0801c35bab43dcb",
+      "summary": "Catalog verification scans an unbounded artifact tree",
+      "fingerprint": "f2696815571d5ccd9d02b00dfd982f6f4b2ef33a9bf37ebfa0801c35bab43dcb",
+      "evidenceRefs": [
+        "impl-review.json#f2696815571d5ccd9d02b00dfd982f6f4b2ef33a9bf37ebfa0801c35bab43dcb"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "2a357f712bdd9bb56d197b5a8aa4af923a83e3e459e3e0e18d132d1c19ea6a55",
+      "summary": "Ledger-mismatch artifact validation bypasses bounded safe reads",
+      "fingerprint": "2a357f712bdd9bb56d197b5a8aa4af923a83e3e459e3e0e18d132d1c19ea6a55",
+      "evidenceRefs": [
+        "impl-review.json#2a357f712bdd9bb56d197b5a8aa4af923a83e3e459e3e0e18d132d1c19ea6a55"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "d31ff842838bd281143a0d874f1afffc3ea0f21139b732bfd66648421d8c6755",
+      "summary": "Consumer and CLI disagree at the response byte limit",
+      "fingerprint": "d31ff842838bd281143a0d874f1afffc3ea0f21139b732bfd66648421d8c6755",
+      "evidenceRefs": [
+        "impl-review.json#d31ff842838bd281143a0d874f1afffc3ea0f21139b732bfd66648421d8c6755"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

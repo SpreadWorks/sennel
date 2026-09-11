@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-9",
+  "treeSha": "e7e55efcd0b3cc9d20615e9522a35ef734f97575",
+  "targetStateDigest": "048c82a31e4fc5a72a09de8dfd4f561b71f8b79164392462556625140358b315",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "346880c06c6c7995399037119a463b735f9454e37c3c08a18022ee441f3169f4",
+    "capturedAt": "2026-09-10T01:21:38.923Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "d202d46043a95bba4d996862007fdf3cc0f8ef1213556c686d00e8895e2977fa",
+      "summary": "Catalog content read failures are misclassified",
+      "fingerprint": "d202d46043a95bba4d996862007fdf3cc0f8ef1213556c686d00e8895e2977fa",
+      "evidenceRefs": [
+        "impl-review.json#d202d46043a95bba4d996862007fdf3cc0f8ef1213556c686d00e8895e2977fa"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+  "specId": "e8af190b-flow-query-api",
+  "taskId": "T-9",
+  "nodeId": "T-9-review",
+  "attempt": {
+    "id": "attempt-T-9-review-f4fd1665-33af-4945-812f-e93a2447417d",
+    "nodeId": "T-9-review",
+    "sequence": 1
+  },
+  "manifestDigest": "bf191c7882a5fce1b3ee19d4c7763ae7d9cd54a3c1dd77e0cda607ce619089e3",
+  "taskSourceFingerprint": "2d1d4c21ee4d7ec605ce154c146477fb2daaea501b1ed6a8a67149ea2a4d2f40",
+  "baseline": {
+    "attempt": {
+      "id": "attempt-T-9-review-f4fd1665-33af-4945-812f-e93a2447417d",
+      "nodeId": "T-9-review",
+      "sequence": 1
+    },
+    "snapshot": {
+      "mode": "git",
+      "head": "50df4d1b6ca830c9c411b018157f9e913dc51fe7",
+      "indexDigest": "0fc80a03634d21d797ea7859652ca781cb69e33928b6d3ba8ccd458bba20e5b6",
+      "entries": [
+        {
+          "path": "src/flow/query.js",
+          "kind": "file",
+          "mode": 436,
+          "digest": "92b70ccc4ee5c499aaac8d1590a9726993e76822ae3ff658024e6b8115fb22df"
+        },
+        {
+          "path": "tests/integration/flow/query.test.js",
+          "kind": "file",
+          "mode": 436,
+          "digest": "9a1bee3a01a5ef7c36264c749273b58a65b42a174559f43761b3b5f1961aa121"
+        },
+        {
+          "path": "tests/support/builders/flow-query-consumer.js",
+          "kind": "file",
+          "mode": 436,
+          "digest": "b35c58710a118ad1f634ad7c981894b91ff36634c69b8e41ac9b42c52110357b"
+        },
+        {
+          "path": "tests/support/builders/flow-query-fixture.js",
+          "kind": "file",
+          "mode": 436,
+          "digest": "362548a31965db230c4b9a2c309287069be74e7440b2ae5cc0710b4dee4b6955"
+        }
+      ],
+      "modeEntries": [],
+      "ignoredDirectories": [
+        ".sennel/agent-cache",
+        ".sennel/review-execution-locks",
+        ".sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/2ef05b7eccda6c57ebc9e3c0adf8277a",
+        ".tmp",
+        ".tmp/logs"
+      ]
+    },
+    "digest": "556a6bd75cfe49ce1cb7fff173d5b6942719863328059eabf3538e1fbf7d1798"
+  },
+  "observed": {
+    "mode": "git",
+    "head": "50df4d1b6ca830c9c411b018157f9e913dc51fe7",
+    "indexDigest": "0fc80a03634d21d797ea7859652ca781cb69e33928b6d3ba8ccd458bba20e5b6",
+    "entries": [
+      {
+        "path": "src/flow/query.js",
+        "kind": "file",
+        "mode": 436,
+        "digest": "92b70ccc4ee5c499aaac8d1590a9726993e76822ae3ff658024e6b8115fb22df"
+      },
+      {
+        "path": "tests/integration/flow/query.test.js",
+        "kind": "file",
+        "mode": 436,
+        "digest": "9a1bee3a01a5ef7c36264c749273b58a65b42a174559f43761b3b5f1961aa121"
+      },
+      {
+        "path": "tests/support/builders/flow-query-consumer.js",
+        "kind": "file",
+        "mode": 436,
+        "digest": "b35c58710a118ad1f634ad7c981894b91ff36634c69b8e41ac9b42c52110357b"
+      },
+      {
+        "path": "tests/support/builders/flow-query-fixture.js",
+        "kind": "file",
+        "mode": 436,
+        "digest": "362548a31965db230c4b9a2c309287069be74e7440b2ae5cc0710b4dee4b6955"
+      }
+    ],
+    "modeEntries": [],
+    "ignoredDirectories": [
+      ".sennel/agent-cache",
+      ".sennel/review-execution-locks",
+      ".sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/2ef05b7eccda6c57ebc9e3c0adf8277a",
+      ".tmp",
+      ".tmp/logs"
+    ]
+  },
+  "digest": "c3401bb5cb9bb5d5b19b4478aac0d44e471b0817634a1fe87e6cb5f17a729cfa"
+}

@@ -1,0 +1,714 @@
+{
+  "attempts": [
+    {
+      "attempt": 2,
+      "nodeId": "T-9-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "2f1aec5484d473572e7b0207d85a3df276c8ea14090e5afd54cda8888c04531d",
+          "treeSha": "4eec2b531c835d6e8c91930d25a7b691dffd0fd6",
+          "targetStateDigest": "3c6b257b2dbc42acaaa91937c90e0ea626b51c455fb2a828b447f78a0415fae0",
+          "blockingCount": 5,
+          "nonBlockingCount": 0,
+          "taskId": "T-9",
+          "sourceFingerprint": "2d1d4c21ee4d7ec605ce154c146477fb2daaea501b1ed6a8a67149ea2a4d2f40",
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-10T00:15:29.104Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 5,
+            "nonBlocking": 0,
+            "total": 5
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "canonical-json-parse-errors-misclassified",
+              "title": "Canonical JSON parse failures use the wrong error code",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "parseJson() converts malformed canonical state, Spec, and catalog JSON into CANONICAL_RECORD_INCONSISTENT, but canonical parse failures must be reported as CANONICAL_RECORD_UNREADABLE.",
+              "suggestion": "Update parseJson() to emit CANONICAL_RECORD_UNREADABLE for JSON decoding failures while retaining CANONICAL_RECORD_INCONSISTENT for post-parse identity, schema, and integrity validation.",
+              "disposition": "must-fix",
+              "rationale": "R13 mandates UNREADABLE for canonical parse failures; the current implementation emits a contradictory public error code.",
+              "findingId": "3c2b53bafaa61b458b024d20797d9d7b04eb292fc37e65cbc92750bdbf9ce24f",
+              "fingerprint": "3c2b53bafaa61b458b024d20797d9d7b04eb292fc37e65cbc92750bdbf9ce24f",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "ledger-json-parse-errors-misclassified",
+              "title": "Malformed Activity ledger JSON is classified as integrity failure",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "readConfirmedLedger() catches JSON.parse(line) failures together with schema and contiguous-order failures and always emits CANONICAL_RECORD_INCONSISTENT. A malformed ledger line is a canonical parse failure and must use CANONICAL_RECORD_UNREADABLE.",
+              "suggestion": "Separate JSON decoding from FlowActivity validation in readConfirmedLedger(): classify JSON.parse failures as CANONICAL_RECORD_UNREADABLE and retain CANONICAL_RECORD_INCONSISTENT for Activity schema, duplicate-ID, and confirmation-order violations.",
+              "disposition": "must-fix",
+              "rationale": "R13 explicitly separates parse/read failures from ledger integrity failures, so the broad catch produces the wrong externally observable error classification.",
+              "findingId": "b41312a65943981746517e76a949049258c4b3de7ff5958d410acdb3a305ff63",
+              "fingerprint": "b41312a65943981746517e76a949049258c4b3de7ff5958d410acdb3a305ff63",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "success_page_info_accepts_null_limit",
+              "title": "Success consumer accepts null page limit",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R8",
+              "issue": "pageInfo() permits limit: null, and success() uses it for activities responses. R8 requires a successful activities pageInfo.limit to be an integer; null is valid only for known-resource errors.",
+              "suggestion": "Make pageInfo validation context-specific: require a bounded integer for success responses and allow null only in the error branch. Add a rejection assertion for a successful response with limit: null.",
+              "disposition": "must-fix",
+              "rationale": "The compatibility consumer accepts a response that violates the mandatory Schema Revision 1 activities success contract.",
+              "findingId": "c2f43f582d5f7fe90805dbc7149f2321d80d34d0eae658458a0ee18814e1d281",
+              "fingerprint": "c2f43f582d5f7fe90805dbc7149f2321d80d34d0eae658458a0ee18814e1d281",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "consumer_duplicates_page_limit",
+              "title": "Consumer hardcodes the page limit",
+              "failureMode": "duplicate_contract_definition",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R8",
+              "issue": "pageInfo() compares limits against literal 100 instead of the centrally managed production resource limit, despite importing FLOW_QUERY_LIMITS.",
+              "suggestion": "Use the canonical page-limit field from FLOW_QUERY_LIMITS, adding or exporting it from the production contract if necessary, so consumer validation and request validation share one limit.",
+              "disposition": "must-fix",
+              "rationale": "The task implementation notes require resource limits to be shared directly from production; the literal can silently diverge from the public contract.",
+              "findingId": "36c2105497a32158c2383900d3245bda917ff5ee0543ddf4da69526ffe5dda4d",
+              "fingerprint": "36c2105497a32158c2383900d3245bda917ff5ee0543ddf4da69526ffe5dda4d",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "consumer_does_not_validate_error_path_mapping",
+              "title": "Known error codes are not checked against their required paths",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R13",
+              "issue": "error() verifies that error.path is merely a string and that error.code is known, but it never enforces the required code-to-path mapping. For example, INVALID_JSON with /canonical would be accepted.",
+              "suggestion": "Reuse a centrally managed production error-contract mapping or validator in error(), and add a fixture assertion covering a known code with an incorrect path.",
+              "disposition": "must-fix",
+              "rationale": "R13 fixes the public path for every error code; accepting mismatched pairs means the consumer does not verify the required error contract.",
+              "findingId": "149881230fe621ab16c29abaa231bef30fe6a01b0e4ddc0b6f1d54075d5a32b3",
+              "fingerprint": "149881230fe621ab16c29abaa231bef30fe6a01b0e4ddc0b6f1d54075d5a32b3",
+              "repeatCount": 1
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "3c6b257b2dbc42acaaa91937c90e0ea626b51c455fb2a828b447f78a0415fae0",
+          "reviewedTree": "3c6b257b2dbc42acaaa91937c90e0ea626b51c455fb2a828b447f78a0415fae0",
+          "reviewedHead": "24fa5f43d555f03a44ac6fd3c2da05cd11c461b6",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-9",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-9.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/3f6310c0d2b355d7210adaf3e9ba1c6f/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 5,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "9a92d31e93aad10c4fc118744b8440d0935d95b57fc5eb5c5af2b6069c108c05"
+          },
+          "workerOutput": {
+            "digest": "475b2e7652cb0efca198d0d6cf112502ac966d7e7a95c16695dbe6e98b179058",
+            "byteLength": 6708,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-9",
+            "treeSha": "4eec2b531c835d6e8c91930d25a7b691dffd0fd6",
+            "targetStateDigest": "3c6b257b2dbc42acaaa91937c90e0ea626b51c455fb2a828b447f78a0415fae0",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "a167f63f956a5154552feab522f4a5179e31c5dd4507f5c07a1e9085e88cd244",
+              "capturedAt": "2026-09-10T00:15:29.104Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "3c2b53bafaa61b458b024d20797d9d7b04eb292fc37e65cbc92750bdbf9ce24f",
+                "summary": "Canonical JSON parse failures use the wrong error code",
+                "fingerprint": "3c2b53bafaa61b458b024d20797d9d7b04eb292fc37e65cbc92750bdbf9ce24f",
+                "evidenceRefs": [
+                  "impl-review.json#3c2b53bafaa61b458b024d20797d9d7b04eb292fc37e65cbc92750bdbf9ce24f"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "b41312a65943981746517e76a949049258c4b3de7ff5958d410acdb3a305ff63",
+                "summary": "Malformed Activity ledger JSON is classified as integrity failure",
+                "fingerprint": "b41312a65943981746517e76a949049258c4b3de7ff5958d410acdb3a305ff63",
+                "evidenceRefs": [
+                  "impl-review.json#b41312a65943981746517e76a949049258c4b3de7ff5958d410acdb3a305ff63"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "c2f43f582d5f7fe90805dbc7149f2321d80d34d0eae658458a0ee18814e1d281",
+                "summary": "Success consumer accepts null page limit",
+                "fingerprint": "c2f43f582d5f7fe90805dbc7149f2321d80d34d0eae658458a0ee18814e1d281",
+                "evidenceRefs": [
+                  "impl-review.json#c2f43f582d5f7fe90805dbc7149f2321d80d34d0eae658458a0ee18814e1d281"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "36c2105497a32158c2383900d3245bda917ff5ee0543ddf4da69526ffe5dda4d",
+                "summary": "Consumer hardcodes the page limit",
+                "fingerprint": "36c2105497a32158c2383900d3245bda917ff5ee0543ddf4da69526ffe5dda4d",
+                "evidenceRefs": [
+                  "impl-review.json#36c2105497a32158c2383900d3245bda917ff5ee0543ddf4da69526ffe5dda4d"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "149881230fe621ab16c29abaa231bef30fe6a01b0e4ddc0b6f1d54075d5a32b3",
+                "summary": "Known error codes are not checked against their required paths",
+                "fingerprint": "149881230fe621ab16c29abaa231bef30fe6a01b0e4ddc0b6f1d54075d5a32b3",
+                "evidenceRefs": [
+                  "impl-review.json#149881230fe621ab16c29abaa231bef30fe6a01b0e4ddc0b6f1d54075d5a32b3"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-9",
+              "treeSha": "4eec2b531c835d6e8c91930d25a7b691dffd0fd6",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "a167f63f956a5154552feab522f4a5179e31c5dd4507f5c07a1e9085e88cd244",
+                "capturedAt": "2026-09-10T00:15:29.104Z"
+              },
+              "evidenceDigest": "2f1aec5484d473572e7b0207d85a3df276c8ea14090e5afd54cda8888c04531d"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "4eec2b531c835d6e8c91930d25a7b691dffd0fd6",
+            "targetStateDigest": "3c6b257b2dbc42acaaa91937c90e0ea626b51c455fb2a828b447f78a0415fae0"
+          },
+          "canonicalTaskSource": {
+            "fingerprint": "2d1d4c21ee4d7ec605ce154c146477fb2daaea501b1ed6a8a67149ea2a4d2f40",
+            "lineageFingerprints": [
+              "8615deb6207c8fc37805e8a11d734ef491cb79dfe0df8c226989f7a99a7037ae"
+            ],
+            "specDigest": "edda99f614016395d8dfa8106b6d3695ba167acbac16975ce29005c2ebc2feb7",
+            "contextFingerprint": "3d73bfa91a844c27e251a0a8befd703f04e52d62ded4a244c7678cfdc2828a29"
+          },
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "T-9-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "fbc7a9c150409161f679edb157f7d80eee09caf0d827bef23001bf4fe1f4c39d",
+          "treeSha": "7adc8b360972a18bd2fb2ecae4109c79d980f831",
+          "targetStateDigest": "d6276ec2e83e8aaf6a71273bfe26bafc002805bbf3a4387e98a5c30609f6f0f7",
+          "blockingCount": 2,
+          "nonBlockingCount": 0,
+          "taskId": "T-9",
+          "sourceFingerprint": "2dda2e545f11cc26b94adcbae249fcfe7f82ab95d09f05e27ef631a9b41c4042",
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-10T00:58:43.063Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 2,
+            "nonBlocking": 0,
+            "total": 2
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "symlink-record-misclassified-as-unreadable",
+              "title": "Symlinked canonical records use the wrong error code",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "readBoundedFile() opens records with O_NOFOLLOW, but an ELOOP failure is caught by the generic branch and converted to CANONICAL_RECORD_UNREADABLE. A symlinked canonical record is an identity/integrity violation and must be reported as CANONICAL_RECORD_INCONSISTENT.",
+              "suggestion": "Handle ELOOP in readBoundedFile() as identityCode before the generic read-error conversion, preserving CANONICAL_RECORD_INCONSISTENT for symlink identity failures.",
+              "disposition": "must-fix",
+              "rationale": "R13 requires identity and integrity failures to use CANONICAL_RECORD_INCONSISTENT; the current O_NOFOLLOW failure path emits the contradictory public error code.",
+              "findingId": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+              "fingerprint": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "invalid-cursor-leaks-selection",
+              "title": "Invalid cursor errors expose selected Version metadata",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R12",
+              "issue": "runFlowQueryCli() includes selectedFlowVersion and availableFlowVersions for every QueryRequest error except SPEC_NOT_FOUND and FLOW_VERSION_NOT_FOUND. Therefore INVALID_CURSOR responses expose the discovered Version, contradicting the required null selection for invalid selection errors and the integration fixture expectation.",
+              "suggestion": "Handle INVALID_CURSOR like other pre-selection errors: emit selectedFlowVersion: null and availableFlowVersions: [] while retaining Version metadata for CURSOR_QUERY_MISMATCH after cursor binding has been validated.",
+              "disposition": "must-fix",
+              "rationale": "R12 requires selected Version metadata only when the requested Version is successfully established; the supplied integration test explicitly requires invalid cursor responses to omit both selection and available Versions.",
+              "findingId": "fac4cc70dab5e7db9ab0fd2dd8b7d9285fa387e5995b3a8dbbda3499855fb31a",
+              "fingerprint": "fac4cc70dab5e7db9ab0fd2dd8b7d9285fa387e5995b3a8dbbda3499855fb31a",
+              "repeatCount": 1
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "d6276ec2e83e8aaf6a71273bfe26bafc002805bbf3a4387e98a5c30609f6f0f7",
+          "reviewedTree": "d6276ec2e83e8aaf6a71273bfe26bafc002805bbf3a4387e98a5c30609f6f0f7",
+          "reviewedHead": "24fa5f43d555f03a44ac6fd3c2da05cd11c461b6",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-9",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-9.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/434ce97202777b26e0f5e65efa00a644/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 2,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "f1248404ed4ead97a8842ff584617018ecb9a88943b26566cc79571efd0e607c"
+          },
+          "workerOutput": {
+            "digest": "6ec6d5a807500456fc0eb033ef489f291cd80f88ce34cd22e7407de0e650a6b5",
+            "byteLength": 3663,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-9",
+            "treeSha": "7adc8b360972a18bd2fb2ecae4109c79d980f831",
+            "targetStateDigest": "d6276ec2e83e8aaf6a71273bfe26bafc002805bbf3a4387e98a5c30609f6f0f7",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "cbc8615379520d3a7d23698f6c78b38440d39fe070da51ec8cd8af25bbb630c2",
+              "capturedAt": "2026-09-10T00:58:43.063Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+                "summary": "Symlinked canonical records use the wrong error code",
+                "fingerprint": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+                "evidenceRefs": [
+                  "impl-review.json#2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "fac4cc70dab5e7db9ab0fd2dd8b7d9285fa387e5995b3a8dbbda3499855fb31a",
+                "summary": "Invalid cursor errors expose selected Version metadata",
+                "fingerprint": "fac4cc70dab5e7db9ab0fd2dd8b7d9285fa387e5995b3a8dbbda3499855fb31a",
+                "evidenceRefs": [
+                  "impl-review.json#fac4cc70dab5e7db9ab0fd2dd8b7d9285fa387e5995b3a8dbbda3499855fb31a"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-9",
+              "treeSha": "7adc8b360972a18bd2fb2ecae4109c79d980f831",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "cbc8615379520d3a7d23698f6c78b38440d39fe070da51ec8cd8af25bbb630c2",
+                "capturedAt": "2026-09-10T00:58:43.063Z"
+              },
+              "evidenceDigest": "fbc7a9c150409161f679edb157f7d80eee09caf0d827bef23001bf4fe1f4c39d"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "7adc8b360972a18bd2fb2ecae4109c79d980f831",
+            "targetStateDigest": "d6276ec2e83e8aaf6a71273bfe26bafc002805bbf3a4387e98a5c30609f6f0f7"
+          },
+          "canonicalTaskSource": {
+            "fingerprint": "2dda2e545f11cc26b94adcbae249fcfe7f82ab95d09f05e27ef631a9b41c4042",
+            "lineageFingerprints": [
+              "8615deb6207c8fc37805e8a11d734ef491cb79dfe0df8c226989f7a99a7037ae",
+              "7be8995a64d64c75e97c4a0603e4d402ee1dee69a9da998d4b99c734f2419840"
+            ],
+            "specDigest": "edda99f614016395d8dfa8106b6d3695ba167acbac16975ce29005c2ebc2feb7",
+            "contextFingerprint": "13b9ff4c9492bb9b2fd83417ea6700f8086feeabdbb909bc9ea499114486fa55"
+          },
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      }
+    },
+    {
+      "attempt": 4,
+      "nodeId": "T-9-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "2de3f88915dfa96331fc6f82de388b45826a473e2051317f336d331e80646636",
+          "treeSha": "5a3c565d558f4ec9b35c19e607f830cf6702d604",
+          "targetStateDigest": "1822de339d20eca248ef4112d266361db6b5c1a38d230729dfeb864d49de16eb",
+          "blockingCount": 4,
+          "nonBlockingCount": 0,
+          "taskId": "T-9",
+          "sourceFingerprint": "f27c8222c50324c33a062cea06171ba4007fd25a47ec049e2e4315cbee202148",
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-10T01:08:16.625Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 4,
+            "nonBlocking": 0,
+            "total": 4
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "symlink-record-misclassified-as-unreadable",
+              "title": "Symlinked canonical records use the wrong error code",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "readBoundedFile() opens records with O_NOFOLLOW, but ELOOP is converted by the generic catch branch into CANONICAL_RECORD_UNREADABLE. A symlinked canonical record is an identity/integrity violation.",
+              "suggestion": "Handle ELOOP in readBoundedFile() using identityCode so symlink identity failures emit CANONICAL_RECORD_INCONSISTENT.",
+              "disposition": "must-fix",
+              "rationale": "R13 requires identity and integrity failures to use CANONICAL_RECORD_INCONSISTENT; the current O_NOFOLLOW failure path emits the contradictory public code.",
+              "findingId": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+              "fingerprint": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+              "repeatCount": 2
+            },
+            {
+              "findingKey": "catalog-tree-scan-is-unbounded",
+              "title": "Catalog verification scans an unbounded artifact tree",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R8",
+              "issue": "queryCatalogManagedFiles() recursively uses synchronous readdirSync/lstatSync without enforcing MAX_ARTIFACTS or another bounded entry count. A canonical Version containing many unmanaged entries can cause unbounded query work before the catalog limit is applied.",
+              "suggestion": "Bound the recursive catalog-managed entry count at MAX_ARTIFACTS plus one and raise CANONICAL_RECORD_INCONSISTENT immediately when exceeded, while preserving the existing catalog consistency check.",
+              "disposition": "must-fix",
+              "rationale": "R8 requires bounded canonical reading and count limits; the current verification path can traverse an arbitrarily large directory tree.",
+              "findingId": "f2696815571d5ccd9d02b00dfd982f6f4b2ef33a9bf37ebfa0801c35bab43dcb",
+              "fingerprint": "f2696815571d5ccd9d02b00dfd982f6f4b2ef33a9bf37ebfa0801c35bab43dcb",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "ledger-suffix-artifact-read-bypasses-safety",
+              "title": "Ledger-mismatch artifact validation bypasses bounded safe reads",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R8",
+              "issue": "In verifyQueryCatalog(), the ledger-digest-mismatch branch reads associated artifact content with fs.readFileSync(location.resolve(artifact.relativePath)). This bypasses O_NOFOLLOW, regular-real-file checks, and bounded read handling after the artifact has otherwise been verified.",
+              "suggestion": "Reuse a bounded, O_NOFOLLOW-protected read result for contentContract.assertCatalogAssociation(), or route this read through readBoundedFile() with the descriptor size and canonical error classification.",
+              "disposition": "must-fix",
+              "rationale": "R8 requires canonical reads to enforce safe file identity and byte bounds; this branch directly follows the internal path and performs an unbounded synchronous read.",
+              "findingId": "2a357f712bdd9bb56d197b5a8aa4af923a83e3e459e3e0e18d132d1c19ea6a55",
+              "fingerprint": "2a357f712bdd9bb56d197b5a8aa4af923a83e3e459e3e0e18d132d1c19ea6a55",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "response-limit-newline-mismatch",
+              "title": "Consumer and CLI disagree at the response byte limit",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R8",
+              "issue": "runFlowQueryCli() checks MAX_RESPONSE_BYTES against the JSON payload before appending its newline, while consumeSerialized() checks the complete CLI serialization including that newline. A payload exactly at the shared limit is emitted successfully but rejected by the compatibility consumer.",
+              "suggestion": "Align the boundary definition in consumeSerialized() and runFlowQueryCli(); for example, validate the emitted JSON plus newline in the CLI and retain the same framing rule in the consumer, or explicitly exclude one terminal newline before the consumer limit check.",
+              "disposition": "must-fix",
+              "rationale": "R8 requires bounded activity responses and T-9 requires the consumer to share the centrally managed response limit. The current producer/consumer disagreement makes a valid boundary response fail compatibility validation.",
+              "findingId": "d31ff842838bd281143a0d874f1afffc3ea0f21139b732bfd66648421d8c6755",
+              "fingerprint": "d31ff842838bd281143a0d874f1afffc3ea0f21139b732bfd66648421d8c6755",
+              "repeatCount": 1
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "1822de339d20eca248ef4112d266361db6b5c1a38d230729dfeb864d49de16eb",
+          "reviewedTree": "1822de339d20eca248ef4112d266361db6b5c1a38d230729dfeb864d49de16eb",
+          "reviewedHead": "24fa5f43d555f03a44ac6fd3c2da05cd11c461b6",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-9",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-9.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/520b8f273bdb56e7a64e53d4a3e8663a/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 4,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "a4b314a481f81b678475635bceb8f092c726fdbf2177775da87096f4c1a1d5e6"
+          },
+          "workerOutput": {
+            "digest": "92b4f7ea082c82d20f1cc189c576ad5264958dceb023715a88507000f1039289",
+            "byteLength": 5960,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-9",
+            "treeSha": "5a3c565d558f4ec9b35c19e607f830cf6702d604",
+            "targetStateDigest": "1822de339d20eca248ef4112d266361db6b5c1a38d230729dfeb864d49de16eb",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "44bcef05b0c74460e8197d54b2596e9f4834967aa3b4be2a20bf22ab48352b33",
+              "capturedAt": "2026-09-10T01:08:16.625Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+                "summary": "Symlinked canonical records use the wrong error code",
+                "fingerprint": "2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1",
+                "evidenceRefs": [
+                  "impl-review.json#2573a9b3212b96ea53bb548216612728299594b399014e83b1f608d9f80941f1"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "f2696815571d5ccd9d02b00dfd982f6f4b2ef33a9bf37ebfa0801c35bab43dcb",
+                "summary": "Catalog verification scans an unbounded artifact tree",
+                "fingerprint": "f2696815571d5ccd9d02b00dfd982f6f4b2ef33a9bf37ebfa0801c35bab43dcb",
+                "evidenceRefs": [
+                  "impl-review.json#f2696815571d5ccd9d02b00dfd982f6f4b2ef33a9bf37ebfa0801c35bab43dcb"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "2a357f712bdd9bb56d197b5a8aa4af923a83e3e459e3e0e18d132d1c19ea6a55",
+                "summary": "Ledger-mismatch artifact validation bypasses bounded safe reads",
+                "fingerprint": "2a357f712bdd9bb56d197b5a8aa4af923a83e3e459e3e0e18d132d1c19ea6a55",
+                "evidenceRefs": [
+                  "impl-review.json#2a357f712bdd9bb56d197b5a8aa4af923a83e3e459e3e0e18d132d1c19ea6a55"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "d31ff842838bd281143a0d874f1afffc3ea0f21139b732bfd66648421d8c6755",
+                "summary": "Consumer and CLI disagree at the response byte limit",
+                "fingerprint": "d31ff842838bd281143a0d874f1afffc3ea0f21139b732bfd66648421d8c6755",
+                "evidenceRefs": [
+                  "impl-review.json#d31ff842838bd281143a0d874f1afffc3ea0f21139b732bfd66648421d8c6755"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-9",
+              "treeSha": "5a3c565d558f4ec9b35c19e607f830cf6702d604",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "44bcef05b0c74460e8197d54b2596e9f4834967aa3b4be2a20bf22ab48352b33",
+                "capturedAt": "2026-09-10T01:08:16.625Z"
+              },
+              "evidenceDigest": "2de3f88915dfa96331fc6f82de388b45826a473e2051317f336d331e80646636"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "5a3c565d558f4ec9b35c19e607f830cf6702d604",
+            "targetStateDigest": "1822de339d20eca248ef4112d266361db6b5c1a38d230729dfeb864d49de16eb"
+          },
+          "canonicalTaskSource": {
+            "fingerprint": "f27c8222c50324c33a062cea06171ba4007fd25a47ec049e2e4315cbee202148",
+            "lineageFingerprints": [
+              "8615deb6207c8fc37805e8a11d734ef491cb79dfe0df8c226989f7a99a7037ae",
+              "7be8995a64d64c75e97c4a0603e4d402ee1dee69a9da998d4b99c734f2419840",
+              "acf4547ec926a44cc2d6cb93f0ebb43053e8e548bdb82ca32d71389cf4401356"
+            ],
+            "specDigest": "edda99f614016395d8dfa8106b6d3695ba167acbac16975ce29005c2ebc2feb7",
+            "contextFingerprint": "880da80904010f350827940d705529a408f78bcf08d51fc3c7ace50ad7dc6524"
+          },
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      }
+    },
+    {
+      "attempt": 5,
+      "nodeId": "T-9-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "6ce3a5fda52947e118c2f610e2f385bb89e96efa3835c19e3ca676bcc8e3c3c9",
+          "treeSha": "e7e55efcd0b3cc9d20615e9522a35ef734f97575",
+          "targetStateDigest": "048c82a31e4fc5a72a09de8dfd4f561b71f8b79164392462556625140358b315",
+          "blockingCount": 1,
+          "nonBlockingCount": 0,
+          "taskId": "T-9",
+          "sourceFingerprint": "127b4820fbc9cc57da5f4742902ffee8c9c3ad9fe47e7a0e36b5b3d712b5773c",
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-10T01:21:38.923Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 1,
+            "nonBlocking": 0,
+            "total": 1
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "catalog-content-read-error-reclassified",
+              "title": "Catalog content read failures are misclassified",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "In verifyQueryCatalog(), the ledger-digest-mismatch branch uses readBoundedFile(), which throws QueryError with CANONICAL_RECORD_UNREADABLE for missing or permission-denied artifacts. readCatalog() then catches that error, isCanonicalReadError() does not recognize QueryError instances, and the failure is re-emitted as CANONICAL_RECORD_INCONSISTENT.",
+              "suggestion": "Preserve QueryError classification in readCatalog() or extend isCanonicalReadError() to recognize CANONICAL_RECORD_UNREADABLE QueryErrors before wrapping verification failures.",
+              "disposition": "must-fix",
+              "rationale": "R13 requires canonical parse/read/permission failures to emit CANONICAL_RECORD_UNREADABLE, while CANONICAL_RECORD_INCONSISTENT is reserved for identity and integrity failures.",
+              "findingId": "d202d46043a95bba4d996862007fdf3cc0f8ef1213556c686d00e8895e2977fa",
+              "fingerprint": "d202d46043a95bba4d996862007fdf3cc0f8ef1213556c686d00e8895e2977fa",
+              "repeatCount": 1
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "048c82a31e4fc5a72a09de8dfd4f561b71f8b79164392462556625140358b315",
+          "reviewedTree": "048c82a31e4fc5a72a09de8dfd4f561b71f8b79164392462556625140358b315",
+          "reviewedHead": "24fa5f43d555f03a44ac6fd3c2da05cd11c461b6",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-9",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-9.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/5e65c48a23185c49a33e329d8ce63c71/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 1,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "fe1b7cf93ab161ae4270f4f01294087a2a36db3981dda63779bea4714824a3bd"
+          },
+          "workerOutput": {
+            "digest": "9df8649564b79a88e784a24760865aa9594700cb611a2787225335d62b1a832c",
+            "byteLength": 2446,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-9",
+            "treeSha": "e7e55efcd0b3cc9d20615e9522a35ef734f97575",
+            "targetStateDigest": "048c82a31e4fc5a72a09de8dfd4f561b71f8b79164392462556625140358b315",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "346880c06c6c7995399037119a463b735f9454e37c3c08a18022ee441f3169f4",
+              "capturedAt": "2026-09-10T01:21:38.923Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "d202d46043a95bba4d996862007fdf3cc0f8ef1213556c686d00e8895e2977fa",
+                "summary": "Catalog content read failures are misclassified",
+                "fingerprint": "d202d46043a95bba4d996862007fdf3cc0f8ef1213556c686d00e8895e2977fa",
+                "evidenceRefs": [
+                  "impl-review.json#d202d46043a95bba4d996862007fdf3cc0f8ef1213556c686d00e8895e2977fa"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-9",
+              "treeSha": "e7e55efcd0b3cc9d20615e9522a35ef734f97575",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "346880c06c6c7995399037119a463b735f9454e37c3c08a18022ee441f3169f4",
+                "capturedAt": "2026-09-10T01:21:38.923Z"
+              },
+              "evidenceDigest": "6ce3a5fda52947e118c2f610e2f385bb89e96efa3835c19e3ca676bcc8e3c3c9"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "e7e55efcd0b3cc9d20615e9522a35ef734f97575",
+            "targetStateDigest": "048c82a31e4fc5a72a09de8dfd4f561b71f8b79164392462556625140358b315"
+          },
+          "canonicalTaskSource": {
+            "fingerprint": "127b4820fbc9cc57da5f4742902ffee8c9c3ad9fe47e7a0e36b5b3d712b5773c",
+            "lineageFingerprints": [
+              "8615deb6207c8fc37805e8a11d734ef491cb79dfe0df8c226989f7a99a7037ae",
+              "7be8995a64d64c75e97c4a0603e4d402ee1dee69a9da998d4b99c734f2419840",
+              "acf4547ec926a44cc2d6cb93f0ebb43053e8e548bdb82ca32d71389cf4401356",
+              "b647768fbbf9e368b4559023acabea4f5312b13605b325beabe9ca40c5083717"
+            ],
+            "specDigest": "edda99f614016395d8dfa8106b6d3695ba167acbac16975ce29005c2ebc2feb7",
+            "contextFingerprint": "61910da43382473ffbbe07a71835467cef7c2380228dc3c3fd5bfe347cef77b0"
+          },
+          "noChange": false,
+          "noChangeReasons": []
+        }
+      }
+    }
+  ]
+}

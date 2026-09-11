@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-09T08:39:10.372Z",
+  "analyzedAt": "2026-09-11T00:26:31.202Z",
   "package": {
     "entries": [
       {
@@ -129,7 +129,8 @@
           "src/lib/upgrade-migration.js",
           "src/presets/base/tests/acceptance/fixtures/src/index.js",
           "src/lib/layout-migration.js",
-          "src/lib/flow-recovery-target.js"
+          "src/lib/flow-recovery-target.js",
+          "src/lib/agent.js"
         ],
         "id": "1b9f6fe7",
         "summary": "This command validates the managed configuration file for the `check config` CLI flow. It reports either human-readable errors or structured JSON output depending on the requested format.",
@@ -573,12 +574,11 @@
       },
       {
         "file": "src/docs/commands/agents.js",
-        "hash": "504a626ed1bc1792ca7aff7bee8fdc78",
-        "lines": 231,
-        "mtime": "2026-08-29T23:45:58.002Z",
+        "hash": "e9bdbe9fe0a375cefb1a08336d2c3b09",
+        "lines": 201,
+        "mtime": "2026-09-10T08:54:50.664Z",
         "className": "agents",
         "methods": [
-          "buildAgentsPromptBuilder",
           "resolveAgentsDirectives",
           "replaceProjectContent",
           "runAgents"
@@ -597,8 +597,8 @@
           "../../lib/agents-md.js",
           "../lib/docs-context.js",
           "../../lib/command.js",
-          "../../lib/prompt-builder.js",
-          "../lib/documentation-agent.js"
+          "../lib/documentation-agents-batching.js",
+          "../../lib/atomic-file.js"
         ],
         "exports": [
           "default",
@@ -609,21 +609,20 @@
           "src/docs/commands/build.js"
         ],
         "id": "5684c584",
-        "summary": "The agents command generates or updates a project AGENTS.md file using repository context, documentation content, directives, and an AI documentation agent.",
-        "detail": "It loads project metadata, README content, documentation chapters, full analysis data, and an optional spec-driven development template. Prompt construction includes package scripts and resolved project context, while directive processing supports project-content replacement and block/data resolution. If AGENTS.md is absent, the command creates it from a generated template; otherwise it refines existing content. The command validates analysis and agent configuration, reports failures through localized messages, and writes the final content back to the source root.",
+        "summary": "Generates or updates the project-level AGENTS.md file from documentation analysis and project context.",
+        "detail": "The command loads full analysis, chapter documentation, README content, package scripts, and an optional existing AGENTS.md template. It resolves directives, synthesizes project instructions through the configured documentation agent, writes the result atomically, and exposes a command wrapper for execution.",
         "chapter": "cli_commands",
         "role": "cli",
         "enrich": {
-          "processedAt": "2026-08-30T05:01:20.184Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
           "AGENTS.md",
+          "project instructions",
           "documentation agent",
-          "prompt builder",
-          "directive parsing",
-          "project context",
-          "spec-driven development"
+          "directive resolution",
+          "atomic file write"
         ]
       },
       {
@@ -792,22 +791,20 @@
       },
       {
         "file": "src/docs/commands/enrich.js",
-        "hash": "6e579518916bc09d9602366c48899ed8",
-        "lines": 596,
-        "mtime": "2026-08-29T23:45:58.002Z",
+        "hash": "222bc09c465394e441afcb884d5b8520",
+        "lines": 601,
+        "mtime": "2026-09-10T13:08:56.450Z",
         "className": "enrich",
         "methods": [
           "EnrichmentCheckpointCoordinator",
           "printHelp",
           "collectEntries",
           "entryKey",
-          "splitIntoBatches",
           "buildEnrichPrompt",
           "_buildEnrichPromptBuilder",
           "parseEnrichResponse",
           "mergeEnrichment",
           "buildAttemptsByKey",
-          "formatBatchError",
           "saveAnalysis",
           "runEnrich"
         ],
@@ -815,7 +812,6 @@
           "fs",
           "path",
           "../../lib/cli.js",
-          "../../lib/config.js",
           "../../lib/config.js",
           "../lib/minify.js",
           "../lib/concurrency.js",
@@ -832,7 +828,10 @@
           "../../lib/command.js",
           "../../lib/atomic-json-file.js",
           "../../lib/prompt-builder.js",
-          "../lib/documentation-agent.js"
+          "../lib/documentation-agent.js",
+          "../../lib/prompt-batching.js",
+          "../lib/prompt-elements.js",
+          "../lib/documentation-enrich-batching.js"
         ],
         "exports": [
           "EnrichmentCheckpointCoordinator",
@@ -841,40 +840,38 @@
           "parseEnrichResponse",
           "mergeEnrichment",
           "collectEntries",
-          "filterByDocsExclude",
-          "splitIntoBatches",
-          "DEFAULT_BATCH_TOKEN_LIMIT"
+          "filterByDocsExclude"
         ],
         "extends": "Command",
         "usedBy": [
           "src/docs/commands/build.js"
         ],
         "id": "abb7e5b3",
-        "summary": "The enrich command batches analysis entries, asks an AI agent for structured metadata, merges the results, and checkpoints progress to analysis.json.",
-        "detail": "It collects and tokenizes entries, splits them into bounded batches, and builds prompts from resolved chapter definitions and source code. Responses are repaired and parsed as JSON, grouped by category and index, then merged into the existing analysis while preserving the analysis structure. Concurrency controls, retry attempts, localized logging, and failure dumps support long-running enrichment jobs. An atomic JSON writer saves incremental progress and emits the final enriched analysis.",
-        "chapter": "internal_design",
+        "summary": "Implements the documentation enrichment command.",
+        "detail": "Loads analysis data and source files, builds enrichment prompts, processes batched results with checkpoint support, merges enriched metadata, and writes the resulting analysis.json file. It also exposes the CLI command integration and progress reporting.",
+        "chapter": "cli_commands",
         "role": "cli",
         "enrich": {
-          "processedAt": "2026-08-30T05:01:20.184Z",
+          "processedAt": "2026-09-10T13:54:22.244Z",
           "attempts": 1
         },
         "keywords": [
-          "analysis enrichment",
+          "documentation enrichment",
+          "CLI command",
           "batch processing",
-          "structured JSON",
-          "atomic checkpoint",
-          "concurrency",
-          "metadata merge",
-          "retry handling"
+          "analysis.json",
+          "checkpoints",
+          "prompt building"
         ]
       },
       {
         "file": "src/docs/commands/forge.js",
-        "hash": "c4e04acfac26211b001d0c80b8bf9376",
-        "lines": 454,
-        "mtime": "2026-08-29T23:45:58.002Z",
+        "hash": "2bc6f426b95eb1ffbecc38da96f9be87",
+        "lines": 482,
+        "mtime": "2026-09-10T08:54:50.665Z",
         "className": "forge",
         "methods": [
+          "materializeForgeInputReference",
           "getTargetFiles",
           "estimateRelevantFiles",
           "parseCliOptions",
@@ -887,6 +884,7 @@
         "imports": [
           "fs",
           "path",
+          "crypto",
           "../../lib/process.js",
           "./data.js",
           "./text.js",
@@ -902,39 +900,41 @@
           "../lib/documentation-agent.js",
           "../../lib/constants.js",
           "../../lib/spec-json.js",
+          "../../lib/atomic-file.js",
+          "../lib/prompt-elements.js",
           "../lib/forge-prompts.js",
           "../lib/review-parser.js"
         ],
         "exports": [
+          "materializeForgeInputReference",
           "default",
           "estimateRelevantFiles"
         ],
         "extends": "Command",
         "usedBy": null,
         "id": "ef4fa5d9",
-        "summary": "The forge command generates documentation from a specification or prompt, runs agents per relevant file, and iteratively reviews and repairs the result.",
-        "detail": "It resolves target chapter files, estimates relevant source files from specification text, and supports local, assist, and agent execution modes. Per-file generation runs concurrently and forwards prompts, system instructions, language, round, and review feedback to a DocumentationAgent. The workflow can execute review, README generation, and translation commands between rounds, stopping on success or failing after the configured maximum runs. CLI validation covers run counts and modes, while command failures set the documented error exit code.",
+        "summary": "Runs iterative AI-assisted documentation generation and review across selected project files.",
+        "detail": "The forge workflow parses local, assist, or agent modes; selects relevant target files; builds prompts from specifications and immutable input references; and invokes agents with bounded retries and concurrency. It can run review, README, and translation commands between rounds and fails when the configured maximum run count is exhausted.",
         "chapter": "cli_commands",
         "role": "cli",
         "enrich": {
-          "processedAt": "2026-08-30T05:01:20.184Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
           "documentation forge",
-          "specification-driven generation",
+          "specification input",
           "review loop",
-          "per-file agents",
-          "execution modes",
-          "concurrency",
-          "translation"
+          "agent invocation",
+          "retry control",
+          "target files"
         ]
       },
       {
         "file": "src/docs/commands/init.js",
-        "hash": "22f977692876337d4b51008aecf801fa",
-        "lines": 301,
-        "mtime": "2026-08-29T23:45:58.002Z",
+        "hash": "a41e5486c51166a8bdaf809c886d8a91",
+        "lines": 239,
+        "mtime": "2026-09-10T08:54:50.665Z",
         "className": "init",
         "methods": [
           "aiFilterChapters",
@@ -955,9 +955,8 @@
           "../../lib/container.js",
           "../../lib/product.js",
           "../lib/docs-context.js",
-          "../../lib/prompt-builder.js",
           "../../lib/execution-plan.js",
-          "../lib/documentation-agent.js"
+          "../lib/documentation-init-batching.js"
         ],
         "exports": [
           "default",
@@ -968,22 +967,21 @@
           "src/docs/commands/build.js"
         ],
         "id": "62ef800b",
-        "summary": "The init command creates a documentation set by resolving templates, optionally filtering chapters with AI, translating content, and writing files through an execution plan.",
-        "detail": "It loads configured templates, chapter ordering, package metadata, analysis data, and language settings before constructing output chapters. An AI filter can select chapters according to the project analysis and stated purpose, with JSON cleanup and fallback handling for invalid responses. The command detects existing output conflicts, creates the docs directory, strips block directives, and writes rendered chapter text. Execution is represented as a WritePlan and passed through a dry-run-aware execution mode.",
+        "summary": "Initializes documentation files by selecting chapters and resolving localized templates.",
+        "detail": "The initialization workflow loads templates and analysis, optionally filters chapters through an agent, merges resolved template content, translates templates, and prepares a write plan. It creates the docs directory, detects conflicting output files, supports dry-run execution, and writes selected chapter files.",
         "chapter": "cli_commands",
         "role": "cli",
         "enrich": {
-          "processedAt": "2026-08-30T05:01:20.184Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "docs initialization",
+          "documentation initialization",
+          "chapter selection",
           "template resolution",
-          "chapter filtering",
-          "WritePlan",
+          "write plan",
           "dry run",
-          "chapter conflicts",
-          "template translation"
+          "localized templates"
         ]
       },
       {
@@ -1155,9 +1153,9 @@
       },
       {
         "file": "src/docs/commands/text.js",
-        "hash": "a47d2798cc4c0024bd8d407e2fe86656",
-        "lines": 837,
-        "mtime": "2026-08-29T23:45:58.002Z",
+        "hash": "0e9eda759d3e0a159b9564838f8d7f8a",
+        "lines": 641,
+        "mtime": "2026-09-10T08:54:50.666Z",
         "className": "text",
         "methods": [
           "textFillFromAnalysis",
@@ -1167,14 +1165,9 @@
           "countFilledInBatch",
           "parseBatchJsonResponse",
           "directiveBatchId",
-          "buildBatchJsonSchema",
-          "isValidBatchJsonData",
-          "isValidBatchJsonResponse",
           "resolveBatchContextOptions",
           "applyBatchJsonToFile",
           "processTemplateFileBatch",
-          "invokeAgent",
-          "stripPreamble",
           "processTemplate",
           "allTextDirectivesFilled",
           "detectChangedChapters",
@@ -1188,10 +1181,9 @@
           "../lib/concurrency.js",
           "../../lib/container.js",
           "../lib/docs-context.js",
-          "../../lib/prompt-builder.js",
-          "../lib/documentation-agent.js",
           "../lib/text-prompts.js",
           "../../lib/cli.js",
+          "../../lib/config.js",
           "../../lib/config.js",
           "../../lib/command.js",
           "../../lib/progress.js",
@@ -1200,8 +1192,8 @@
           "../lib/analysis-entry.js",
           "../../lib/json-parse.js",
           "../../lib/constants.js",
-          "../../lib/error-preview.js",
-          "../lib/document-update-plan.js"
+          "../lib/document-update-plan.js",
+          "../lib/documentation-text-batching.js"
         ],
         "exports": [
           "textFillFromAnalysis",
@@ -1223,32 +1215,30 @@
           "src/docs/commands/readme.js"
         ],
         "id": "7c5e7654",
-        "summary": "The text command fills documentation text directives from analysis using batched AI responses and transactional file updates.",
-        "detail": "It discovers text directives, builds prompts and JSON schemas, validates batch responses, and applies generated values while tracking filled and skipped directives. Retry-aware parsing repairs malformed JSON, strips response preambles, and rejects empty or suspiciously shrunk results. Changed chapters are detected from analysis references, and updates preserve original bytes for transactional recovery. A DocumentUpdateTransaction commits planned edits atomically, with concurrency, dry-run, preview, and error reporting support.",
-        "chapter": "internal_design",
+        "summary": "Fills documentation text directives from project analysis using validated batched generation.",
+        "detail": "The text command parses template directives, prepares analysis context, generates directive content through concurrent agent batches, validates response coverage and document shrinkage, and applies changes through document update transactions. It also detects changed chapters and exposes helpers for stripping content, counting fills, parsing responses, and applying batch results.",
+        "chapter": "cli_commands",
         "role": "cli",
         "enrich": {
-          "processedAt": "2026-08-30T05:01:20.184Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
           "text directives",
-          "batch JSON",
-          "template filling",
-          "transactional updates",
-          "response validation",
-          "chapter detection",
-          "AI generation"
+          "documentation generation",
+          "batch validation",
+          "analysis context",
+          "document transaction",
+          "chapter detection"
         ]
       },
       {
         "file": "src/docs/commands/translate.js",
-        "hash": "7e3f913adb8222873a89bfedbe60dba8",
-        "lines": 239,
-        "mtime": "2026-08-29T23:45:58.002Z",
+        "hash": "4aec66f91e109229bee9bf6143173d1f",
+        "lines": 202,
+        "mtime": "2026-09-10T08:54:50.666Z",
         "className": "translate",
         "methods": [
-          "toneInstruction",
           "translateDocument",
           "needsTranslation",
           "buildTranslationTasks",
@@ -1263,36 +1253,36 @@
           "../lib/command-context.js",
           "../lib/concurrency.js",
           "../../lib/container.js",
-          "../../lib/prompt-builder.js",
-          "../lib/documentation-agent.js",
+          "../lib/markdown-prompt-document.js",
           "../lib/docs-context.js",
-          "../../lib/command.js"
+          "../../lib/command.js",
+          "../../lib/atomic-file.js"
         ],
         "exports": [
           "default",
-          "buildTranslationTasks"
+          "buildTranslationTasks",
+          "translateDocument"
         ],
         "extends": "Command",
         "usedBy": [
           "src/docs/commands/build.js"
         ],
         "id": "fd496e07",
-        "summary": "The translate command generates localized documentation and README files from source-language documents, with optional force and concurrency controls.",
-        "detail": "It builds translation tasks for configured target languages and maps source chapter files to language-specific output directories. Existing targets are skipped unless the source file is newer or force mode is enabled. Each document is sent to a DocumentationAgent with tone and style instructions, and response preambles are removed before writing. The command validates agent and docs-directory prerequisites, creates language directories, and logs task completion.",
+        "summary": "Translates documentation files and README content into configured target languages.",
+        "detail": "The translation workflow creates tasks for source chapters and an optional README, skips up-to-date targets unless forced, invokes batched Markdown translation, and writes translated files atomically. It validates the configured documentation directory and requires a configured documentation agent.",
         "chapter": "cli_commands",
         "role": "cli",
         "enrich": {
-          "processedAt": "2026-08-30T05:01:20.184Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
           "documentation translation",
-          "localized docs",
+          "Markdown translation",
           "language targets",
-          "tone instruction",
-          "incremental translation",
-          "force mode",
-          "README localization"
+          "README translation",
+          "atomic write",
+          "force option"
         ]
       },
       {
@@ -1636,18 +1626,18 @@
       },
       {
         "file": "src/docs/lib/directive-parser.js",
-        "hash": "023ee03dcd2149248a2a336c5c2b235e",
+        "hash": "85d351248d64a8979f86a0bb7bcc84d8",
         "lines": 614,
-        "mtime": "2026-07-17T04:31:59.986Z",
+        "mtime": "2026-09-10T08:54:50.667Z",
         "className": "directive-parser",
         "methods": [
+          "extractCommentBlock",
           "parseDirectives",
           "replaceBlockDirective",
           "resolveDataDirectives",
           "stripDataMarkers",
           "stripBlockDirectives",
           "parseBlocks",
-          "extractCommentBlock",
           "parseOptions",
           "buildDataFields",
           "extractUserParams",
@@ -1661,6 +1651,7 @@
           "./renderable.js"
         ],
         "exports": [
+          "extractCommentBlock",
           "parseDirectives",
           "replaceBlockDirective",
           "resolveDataDirectives",
@@ -1674,25 +1665,25 @@
         "extends": null,
         "usedBy": [
           "src/docs/lib/chapter-resolver.js",
+          "src/docs/lib/markdown-prompt-document.js",
           "src/docs/lib/template-merger.js"
         ],
         "id": "bbb893ea",
-        "summary": "This module parses the HTML comment directives that power senti templates. It supports data directives, text directives, block markers, and inheritance markers.",
-        "detail": "The parser uses regular expressions to recognize directive openings, closings, inline forms, and template block syntax. It extracts option objects, separates parser-owned fields from user parameters, and normalizes data and text calls into structured records. Replacement helpers can rewrite block or inline directives after data resolution, while validation helpers detect unclosed or stray markers with line-aware errors. The module also exposes utilities to strip raw directive markers and to parse extends and block sections for template inheritance workflows.",
+        "summary": "Parses and transforms documentation directives embedded in Markdown text.",
+        "detail": "The parser recognizes data, text, block, and extends directives, including inline data forms and directive options. It extracts comment blocks, resolves data directives, replaces block or inline content, strips directive markers, and parses block inheritance while reporting unclosed or malformed structures.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-07-18T08:24:04.521Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
           "directive parser",
-          "template syntax",
-          "HTML comments",
-          "data blocks",
-          "text blocks",
-          "template inheritance",
-          "block parsing"
+          "data directives",
+          "text directives",
+          "block inheritance",
+          "Markdown comments",
+          "template markers"
         ]
       },
       {
@@ -1776,9 +1767,9 @@
       },
       {
         "file": "src/docs/lib/documentation-agent.js",
-        "hash": "1279d066cc652740ebe01b952b469d5a",
-        "lines": 40,
-        "mtime": "2026-08-29T23:45:58.003Z",
+        "hash": "17d147027f7ea78146ce3c277bf48f01",
+        "lines": 54,
+        "mtime": "2026-09-10T08:54:50.667Z",
         "className": "documentation-agent",
         "methods": [
           "DocumentationAgent"
@@ -1791,45 +1782,231 @@
         ],
         "extends": null,
         "usedBy": [
-          "src/docs/lib/template-merger.js",
+          "src/docs/lib/documentation-agents-batching.js",
+          "src/docs/lib/documentation-enrich-batching.js",
+          "src/docs/lib/documentation-init-batching.js",
+          "src/docs/lib/documentation-text-batching.js",
+          "src/docs/lib/markdown-prompt-document.js",
           "src/lib/container.js",
           "src/lib/plugin-registry.js"
         ],
         "id": "f4a5eed3",
-        "summary": "DocumentationAgent is a thin adapter that normalizes configured agent implementations and exposes call and resolve operations.",
-        "detail": "The static `from` method returns existing DocumentationAgent instances unchanged or wraps raw agent configurations. It validates that the wrapped implementation exposes the required call API and, when needed, a resolve API. Calls are delegated with the prompt and flow-attribution options supplied by the caller. This abstraction lets documentation commands use a consistent interface across local and configured AI backends.",
+        "summary": "Provides a typed adapter around documentation-agent call, resolution, and project-invocation APIs.",
+        "detail": "DocumentationAgent normalizes construction of agent instances and delegates call, resolve, projectInvocation, and promptCharacterLimit operations to the wrapped implementation. It raises explicit errors when required capabilities are unavailable and carries flow attribution policy support.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-08-30T05:01:20.184Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "DocumentationAgent",
+          "documentation agent",
           "agent adapter",
-          "AI backend",
-          "call API",
-          "resolve API",
-          "flow attribution",
-          "interface normalization"
+          "project invocation",
+          "prompt limits",
+          "capability validation",
+          "flow attribution"
+        ]
+      },
+      {
+        "file": "src/docs/lib/documentation-agents-batching.js",
+        "hash": "5e2d2f0a6fb60eeaa5f46565dc668b7f",
+        "lines": 177,
+        "mtime": "2026-09-10T08:54:50.667Z",
+        "className": "documentation-agents-batching",
+        "methods": [
+          "synthesizeProjectInstructions",
+          "planFor"
+        ],
+        "imports": [
+          "../../lib/json-parse.js",
+          "../../lib/prompt-builder.js",
+          "../../lib/prompt-batching.js",
+          "./documentation-agent.js",
+          "./prompt-elements.js"
+        ],
+        "exports": [
+          "synthesizeProjectInstructions"
+        ],
+        "extends": "PromptRequestEnvelope",
+        "usedBy": null,
+        "id": "f13c758d",
+        "summary": "Batches and reduces agent requests for synthesizing project instructions from documentation context.",
+        "detail": "The module defines typed prompt envelopes, context-summary contracts, project-section results, and reduction plans. It uses bounded linear prompt batches and recursive reduction levels to combine documentation contexts into final project instructions under character and execution limits.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-10T12:55:19.937Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "project instruction synthesis",
+          "prompt batching",
+          "context summary",
+          "reduction pipeline",
+          "bounded prompts",
+          "documentation context"
+        ]
+      },
+      {
+        "file": "src/docs/lib/documentation-enrich-batching.js",
+        "hash": "68b586fdc896f56708a51bc745870a8c",
+        "lines": 413,
+        "mtime": "2026-09-10T13:08:01.855Z",
+        "className": "documentation-enrich-batching",
+        "methods": [
+          "DocumentationEnrichPromptEnvelope",
+          "DocumentationEnrichmentResult",
+          "DocumentationEnrichmentResponseContract",
+          "DocumentationResultReducer",
+          "reduceDocumentationEnrichment",
+          "enrichmentSchema",
+          "identityMismatch",
+          "validateEnrichmentValue",
+          "groupEnrichmentResults",
+          "assertEnrichmentSourceCoverage",
+          "enrichmentSynthesisPlan"
+        ],
+        "imports": [
+          "../../lib/prompt-builder.js",
+          "../../lib/prompt-batching.js",
+          "../../lib/json-parse.js",
+          "./documentation-agent.js",
+          "./prompt-elements.js"
+        ],
+        "exports": [
+          "DocumentationEnrichPromptEnvelope",
+          "DocumentationEnrichmentResult",
+          "DocumentationEnrichmentResponseContract",
+          "DocumentationResultReducer",
+          "reduceDocumentationEnrichment"
+        ],
+        "extends": "PromptRequestEnvelope",
+        "usedBy": null,
+        "id": "ad1dbc6d",
+        "summary": "Defines validation and reduction for documentation enrichment batches.",
+        "detail": "Builds typed enrichment request envelopes and response contracts, validates identity and metadata fields, groups and synthesizes partial results, verifies source coverage, and reduces prompt-batch completions into final enrichment results.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-10T13:54:22.244Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "enrichment batching",
+          "response validation",
+          "identity coverage",
+          "result reduction",
+          "JSON contract",
+          "prompt synthesis"
+        ]
+      },
+      {
+        "file": "src/docs/lib/documentation-init-batching.js",
+        "hash": "f9e63d00ba3a5b156960b48fc349d512",
+        "lines": 106,
+        "mtime": "2026-09-10T08:54:50.667Z",
+        "className": "documentation-init-batching",
+        "methods": [
+          "selectDocumentationChapters"
+        ],
+        "imports": [
+          "../../lib/json-parse.js",
+          "../../lib/prompt-builder.js",
+          "../../lib/prompt-batching.js",
+          "./documentation-agent.js",
+          "./prompt-elements.js"
+        ],
+        "exports": [
+          "selectDocumentationChapters"
+        ],
+        "extends": "PromptRequestEnvelope",
+        "usedBy": null,
+        "id": "17ee1424",
+        "summary": "Selects documentation chapters through a validated agent-assisted batching workflow.",
+        "detail": "The module builds chapter-selection prompts from available chapter metadata and analysis text, parses repaired JSON responses, rejects invalid chapter names, deduplicates selections, and reduces batched results through a prompt executor.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-10T12:55:19.937Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "chapter selection",
+          "documentation planning",
+          "prompt envelope",
+          "JSON contract",
+          "batch reducer",
+          "analysis text"
+        ]
+      },
+      {
+        "file": "src/docs/lib/documentation-text-batching.js",
+        "hash": "9392acd2510c6e75c81a6578682d9287",
+        "lines": 364,
+        "mtime": "2026-09-10T08:54:50.667Z",
+        "className": "documentation-text-batching",
+        "methods": [
+          "DocumentationTextPromptEnvelope",
+          "DocumentationDirectiveResult",
+          "DocumentationTextResponseContract",
+          "DocumentationDirectiveSynthesisReducer",
+          "DocumentationTextResultReducer",
+          "generateDocumentationDirectives"
+        ],
+        "imports": [
+          "../../lib/json-parse.js",
+          "../../lib/prompt-builder.js",
+          "../../lib/prompt-batching.js",
+          "./documentation-agent.js",
+          "./prompt-elements.js"
+        ],
+        "exports": [
+          "DocumentationTextPromptEnvelope",
+          "DocumentationDirectiveResult",
+          "DocumentationTextResponseContract",
+          "DocumentationDirectiveSynthesisReducer",
+          "DocumentationTextResultReducer",
+          "generateDocumentationDirectives"
+        ],
+        "extends": "PromptRequestEnvelope",
+        "usedBy": null,
+        "id": "743ab7b5",
+        "summary": "Generates text for documentation directives with exact identifier coverage and bounded synthesis.",
+        "detail": "The module defines prompt envelopes and response contracts for directive text, requiring nonblank generated text and exact directive ID coverage. It supports per-directive and whole-document reducers, repeated directive context, analysis context, recursive reduction, and concurrent prompt execution.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-10T12:55:19.937Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "directive generation",
+          "text batching",
+          "directive IDs",
+          "response contract",
+          "text synthesis",
+          "prompt reduction"
         ]
       },
       {
         "file": "src/docs/lib/forge-prompts.js",
-        "hash": "7f26c5c340ab5a1bf86aaef3015bd596",
-        "lines": 176,
-        "mtime": "2026-08-10T16:21:08.654Z",
+        "hash": "deb1c112ed8e47e2285c9b5c5b3b42bd",
+        "lines": 161,
+        "mtime": "2026-09-10T08:54:50.667Z",
         "className": "forge-prompts",
         "methods": [
           "summaryToText",
           "buildForgeSystemPrompt",
           "buildForgeFilePrompt",
           "buildForgePrompt",
+          "requireForgeInputReference",
           "enrichedSummaryToText"
         ],
         "imports": [
           "../../lib/i18n.js",
-          "./analysis-entry.js"
+          "./analysis-entry.js",
+          "./prompt-elements.js"
         ],
         "exports": [
           "summaryToText",
@@ -1840,23 +2017,21 @@
         "extends": null,
         "usedBy": null,
         "id": "42300b03",
-        "summary": "Builds prompt text for the forge workflow that generates or revises documentation files from analysis summaries and specification input. It converts structured analysis into compact narrative context for the model.",
-        "detail": "The module formats analysis entries into plain-text summaries, including enriched variants that preserve categories and key metadata for prompt conditioning. It then assembles system and user prompts for both whole-run and per-file forge stages, passing through language, review feedback, and iteration counters. Separate prompt builders support initial generation, later rounds, and file-focused retries without duplicating formatting logic. This design keeps the higher-level forge command thin while making prompt composition explicit and reusable.",
+        "summary": "Builds system, file, and project prompts for the documentation forge workflow.",
+        "detail": "The module formats analysis and enriched analysis summaries, requires an immutable typed forge input reference, and generates localized system and user prompts for target files and iterative rounds. The prompt builders include target-file, round, maximum-run, language, and input-reference context.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-08-14T01:23:09.262Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "prompt generation",
-          "forge workflow",
+          "forge prompts",
           "analysis summary",
           "system prompt",
           "file prompt",
-          "documentation synthesis",
-          "LLM context",
-          "review feedback"
+          "project prompt",
+          "input reference"
         ]
       },
       {
@@ -2155,6 +2330,70 @@
         ]
       },
       {
+        "file": "src/docs/lib/markdown-prompt-document.js",
+        "hash": "ff4aa752252a8eb9c988e3ad9bb11ffc",
+        "lines": 587,
+        "mtime": "2026-09-10T08:54:50.668Z",
+        "className": "markdown-prompt-document",
+        "methods": [
+          "MarkdownPromptDocument",
+          "MarkdownBlockTranslationResult",
+          "MarkdownTranslationResponseContract",
+          "MarkdownTranslationPromptEnvelope",
+          "MarkdownTranslationReducer",
+          "translateMarkdownWithBatches",
+          "translationToneInstruction",
+          "linesWithEndings",
+          "isTableStart",
+          "advanceIndentColumn",
+          "matchFence",
+          "classify",
+          "consumeBlock",
+          "directiveComments",
+          "maskDirectiveField",
+          "validateTemplateDirective",
+          "maskMermaidLabels",
+          "validateMermaidFence"
+        ],
+        "imports": [
+          "../../lib/json-parse.js",
+          "../../lib/prompt-batching.js",
+          "../../lib/prompt-builder.js",
+          "./documentation-agent.js",
+          "./directive-parser.js",
+          "./prompt-elements.js"
+        ],
+        "exports": [
+          "MarkdownPromptDocument",
+          "MarkdownBlockTranslationResult",
+          "MarkdownTranslationResponseContract",
+          "MarkdownTranslationPromptEnvelope",
+          "MarkdownTranslationReducer",
+          "translateMarkdownWithBatches"
+        ],
+        "extends": "PromptRequestEnvelope",
+        "usedBy": [
+          "src/docs/lib/template-merger.js"
+        ],
+        "id": "8b428e7c",
+        "summary": "Parses Markdown structure and performs safe batched translation while preserving protected syntax.",
+        "detail": "MarkdownPromptDocument classifies blocks such as headings, quotes, lists, tables, directives, and fenced regions, including Mermaid fences, then creates ranged translation elements. Response contracts validate nonblank output, directive integrity, table structure, Mermaid structure, block coverage, and ordering before reduction and reconstruction.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-10T12:55:19.937Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "Markdown translation",
+          "block parsing",
+          "syntax preservation",
+          "Mermaid fences",
+          "table validation",
+          "translation batches"
+        ]
+      },
+      {
         "file": "src/docs/lib/minify.js",
         "hash": "1522063b78916d4efe10d7750b50bf17",
         "lines": 54,
@@ -2231,6 +2470,67 @@
           "key extraction",
           "string extraction",
           "camel to snake"
+        ]
+      },
+      {
+        "file": "src/docs/lib/prompt-elements.js",
+        "hash": "ea423aaf5290812dee989ee9b4eba753",
+        "lines": 166,
+        "mtime": "2026-09-10T13:06:58.765Z",
+        "className": "prompt-elements",
+        "methods": [
+          "documentationSourceRevision",
+          "DocumentationAnalysisPromptElement",
+          "DocumentationDirectivePromptElement",
+          "DocumentationContextPromptElement",
+          "DocumentationChapterPromptElement",
+          "MarkdownBlockPromptElement",
+          "ProjectInstructionPromptElement",
+          "DocumentationRepeatedContextElement",
+          "DocumentationFileReferencePromptElement",
+          "ForgeInputReferencePromptElement"
+        ],
+        "imports": [
+          "node:crypto",
+          "../../lib/prompt-batching.js"
+        ],
+        "exports": [
+          "documentationSourceRevision",
+          "DocumentationAnalysisPromptElement",
+          "DocumentationDirectivePromptElement",
+          "DocumentationContextPromptElement",
+          "DocumentationChapterPromptElement",
+          "MarkdownBlockPromptElement",
+          "ProjectInstructionPromptElement",
+          "DocumentationRepeatedContextElement",
+          "DocumentationFileReferencePromptElement",
+          "ForgeInputReferencePromptElement"
+        ],
+        "extends": "RangedTextPromptElement",
+        "usedBy": [
+          "src/docs/lib/documentation-agents-batching.js",
+          "src/docs/lib/documentation-enrich-batching.js",
+          "src/docs/lib/documentation-init-batching.js",
+          "src/docs/lib/documentation-text-batching.js",
+          "src/docs/lib/forge-prompts.js",
+          "src/docs/lib/markdown-prompt-document.js"
+        ],
+        "id": "1b17e7ac",
+        "summary": "Provides prompt elements for documentation analysis and context rendering.",
+        "detail": "Defines source revision hashing and typed prompt elements for analysis metadata, directives, documentation context, chapters, Markdown blocks, repeated context, project instructions, and file references. Elements render source ranges and serialized identities for prompts.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-10T13:54:22.244Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "prompt elements",
+          "source ranges",
+          "documentation context",
+          "prompt rendering",
+          "source revision",
+          "file references"
         ]
       },
       {
@@ -2562,9 +2862,9 @@
       },
       {
         "file": "src/docs/lib/template-merger.js",
-        "hash": "7b95720571290b0d10413dfcf61a21b7",
-        "lines": 611,
-        "mtime": "2026-08-29T23:45:58.003Z",
+        "hash": "f32873d3abd3ba3e58a0ee4151e5a4be",
+        "lines": 604,
+        "mtime": "2026-09-10T08:54:50.668Z",
         "className": "template-merger",
         "methods": [
           "buildLayers",
@@ -2587,9 +2887,8 @@
           "fs",
           "path",
           "./directive-parser.js",
-          "../../lib/prompt-builder.js",
-          "./documentation-agent.js",
-          "../../lib/presets.js"
+          "../../lib/presets.js",
+          "./markdown-prompt-document.js"
         ],
         "exports": [
           "buildLayers",
@@ -2603,21 +2902,21 @@
           "src/docs/lib/command-context.js"
         ],
         "id": "88243459",
-        "summary": "The template merger resolves preset layers, combines chapter sources, supports fallback languages, and translates merged templates when needed.",
-        "detail": "It constructs layer directories from preset chains, project-local overrides, and language-specific template locations. Files are resolved across one or more chains, with special files and configured chapter order handled explicitly. Additive and block-aware merging combine parent and child content while preserving nested directive structures. Missing language content can fall back to another project-local language, and translation delegates merged text to the DocumentationAgent with graceful failure fallback.",
+        "summary": "Resolves, merges, and translates documentation templates across preset inheritance layers.",
+        "detail": "The template merger builds language-specific layers from preset chains and project-local directories, resolves files with fallbacks, discovers chapter files, and determines chapter order. It merges additive content and named blocks, handles nested inheritance, identifies special files, and delegates template translation to batched Markdown translation.",
         "chapter": "creating_presets",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-08-30T05:01:20.184Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "template inheritance",
-          "preset layers",
-          "chapter merging",
+          "template merger",
+          "preset inheritance",
+          "template layers",
+          "chapter order",
+          "block merging",
           "language fallback",
-          "block directives",
-          "project overrides",
           "template translation"
         ]
       },
@@ -2664,9 +2963,9 @@
       },
       {
         "file": "src/docs/lib/text-prompts.js",
-        "hash": "6b53a902452ce176febbebfce8821e65",
-        "lines": 290,
-        "mtime": "2026-05-16T08:19:57.844Z",
+        "hash": "6b2b89631dacf780afc9a671e32d9bb2",
+        "lines": 283,
+        "mtime": "2026-09-10T08:54:50.669Z",
         "className": "text-prompts",
         "methods": [
           "getAnalysisContext",
@@ -2698,22 +2997,21 @@
         "extends": null,
         "usedBy": null,
         "id": "7ddd8579",
-        "summary": "`text-prompts` builds the contextual and instructional prompt payloads for `{{text}}` filling. It maps analysis categories to sectioned context and enforces concise output rules.",
-        "detail": "The module extracts relevant analysis subsets by directive scope, then optionally enriches context with source code snippets truncated to safe lengths. It provides reusable headers, language mappings, and formatting rules for line limits to keep model output constrained and consistent. Batch prompt builders serialize directive IDs and prompts so responses can be mapped deterministically back into files. System prompt assembly can embed minified JSON context, balancing detail against token limits.",
+        "summary": "Constructs localized prompts and analysis context for filling documentation text directives.",
+        "detail": "The module maps analysis categories to documentation sections, extracts relevant analysis and enriched source context for a chapter file, minifies source code, and formats language-aware system, directive, file, and batch prompts. It also generates concise limit rules for directive output.",
         "chapter": "internal_design",
-        "role": "text fill prompt library",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-05-16T10:53:00.843Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "text prompt",
-          "directive context",
-          "batch prompt format",
-          "output constraints",
-          "language mapping",
-          "context truncation",
-          "analysis-to-prompt"
+          "text prompts",
+          "analysis context",
+          "enriched context",
+          "prompt formatting",
+          "language handling",
+          "source minification"
         ]
       },
       {
@@ -2931,14 +3229,17 @@
       },
       {
         "file": "src/flow/commands/review.js",
-        "hash": "3de28588fb4e4af5aae3bcbf17ba958a",
-        "lines": 4989,
-        "mtime": "2026-09-09T00:00:58.170Z",
+        "hash": "098bd1a2ae73aafce45e9d1203dae74f",
+        "lines": 5783,
+        "mtime": "2026-09-10T08:54:50.670Z",
         "className": "review",
         "methods": [
           "TaskReviewSourceEffectObserver",
           "canonicalLoopReviewCheckpointStore",
+          "DraftReviewCandidateReducer",
           "writeReviewAttemptHistory",
+          "synthesizeReviewFindings",
+          "splitReviewTextAtHeadings",
           "taskReviewProtocolIgnoredDirectories",
           "taskReviewAgentRuntimeDirectories",
           "ensureAgent",
@@ -2986,7 +3287,6 @@
           "buildImplReviewResponseSchema",
           "buildImplReviewFmtFallback",
           "normalizeReviewPath",
-          "truncateReviewMemoryText",
           "parseImplReviewJsonOutput",
           "parseImplReviewFindings",
           "isValidRequirementId",
@@ -2999,6 +3299,12 @@
           "loadPreviousImplReviewMemory",
           "buildImplReviewPrompt",
           "assertTaskReviewPromptWithinLimit",
+          "taskReviewProviderFinding",
+          "mergeTaskReviewParsedResponses",
+          "mergeTaskReviewChunkResponses",
+          "buildTaskReviewSynthesisPrompt",
+          "buildTaskReviewAuthorityElements",
+          "runTaskReviewPromptPlanWithDependencies",
           "runImplReviewAgentWithDependencies",
           "resolveRequirementIds",
           "loadImplReviewPolicyContext",
@@ -3012,10 +3318,12 @@
           "groupByDiffContent",
           "buildPerFileReviewInput",
           "buildCrossCheckInput",
+          "buildChunkRequirementAuthority",
           "buildImplLoopSystemPrompt",
           "buildImplLoopReviewSystemPrompt",
           "buildImplLoopCrossCheckSystemPrompt",
           "expandProposalsToGroup",
+          "expandChunkProposals",
           "invertFileMap",
           "collectPerFileDiffs",
           "buildChunkReviewInput",
@@ -3028,6 +3336,7 @@
           "persistLoopFinalArtifacts",
           "toolingFailureResult",
           "executeWorkUnit",
+          "executeWithProviderAttemptBudget",
           "runLoopReviewWithDependencies",
           "requireImplLoopRequirementId",
           "loopProposalFindingKey",
@@ -3049,10 +3358,11 @@
           "buildTestFixPrompt",
           "normalizeTestReviewText",
           "buildTestReviewPrompt",
+          "buildTestReviewSynthesisPrompt",
           "parseTestReviewJsonOutput",
           "parseTestReviewFindings",
+          "mergeTestReviewFindingBatches",
           "buildHeaderBlockingFindings",
-          "measurePromptChars",
           "assertTestReviewPromptWithinLimit",
           "runTestReviewWithDependencies",
           "classifyReviewCommandError",
@@ -3064,7 +3374,7 @@
           "writeTestCoverageArtifact",
           "buildToolingFailureReview",
           "runTestReview",
-          "summarizeSpecReviewValue",
+          "canonicalSpecReviewValue",
           "formatSpecReviewSimpleList",
           "formatSpecReviewDecision",
           "formatSpecReviewTask",
@@ -3072,6 +3382,7 @@
           "extractGoalAndScope",
           "extractScopePaths",
           "buildSpecReviewPrompt",
+          "buildSpecReviewSynthesisPrompt",
           "extractMarkdownField",
           "specReviewFindingId",
           "extractJsonObjectCandidate",
@@ -3079,6 +3390,7 @@
           "normalizeSpecReviewResponseShape",
           "parseSpecReviewJsonOutput",
           "parseSpecReviewFindings",
+          "mergeSpecReviewFindingBatches",
           "formatSpecReviewDelta",
           "formatPhaseReviewMd",
           "formatSpecReviewMd",
@@ -3095,6 +3407,7 @@
           "buildDraftQuestionReviewPrompt",
           "loadDraftQaRulesPartial",
           "buildDraftReviewPrompt",
+          "buildDraftReviewSynthesisPrompt",
           "buildDraftReviewAuthorityText",
           "buildDraftReviewStage",
           "resolveDraftReviewClassification",
@@ -3139,6 +3452,7 @@
           "../../lib/container.js",
           "../../lib/command.js",
           "../../lib/prompt-builder.js",
+          "../../lib/prompt-batching.js",
           "../lib/acknowledged-rationale.js",
           "../../lib/schema-validate.js",
           "../lib/review-failure.js",
@@ -3154,6 +3468,10 @@
           "../lib/worker-artifact-handoff.js",
           "../lib/task-review-execution-identity.js",
           "../lib/review-protocol.js",
+          "../lib/task-review-prompt-plan.js",
+          "../lib/test-review-prompt-plan.js",
+          "../lib/review-text-prompt-plan.js",
+          "../lib/review-finding-synthesis.js",
           "../../lib/git-helpers.js",
           "../../lib/constants.js",
           "../../lib/constants.js",
@@ -3167,6 +3485,7 @@
         "exports": [
           "TaskReviewSourceEffectObserver",
           "canonicalLoopReviewCheckpointStore",
+          "DraftReviewCandidateReducer",
           "writeReviewAttemptHistory",
           "default",
           "parseProposals",
@@ -3227,37 +3546,38 @@
           "runSingleShotImplReviewWithDependencies",
           "runNonImplReviewWithDependencies",
           "runTaskReviewProtocol",
+          "runTaskReviewPromptPlanWithDependencies",
           "runImplReviewAgentWithDependencies",
+          "synthesizeReviewFindings",
           "assertTaskReviewPromptWithinLimit",
           "canonicalTaskReviewFileMap",
+          "mergeTaskReviewChunkResponses",
           "loopProposalsToImplReviewJson",
           "classifyReviewCommandError",
           "LOOP_REVIEW_THRESHOLD",
           "MAX_LOOP_CALLS",
           "TASK_REVIEW_PROMPT_CHAR_LIMIT"
         ],
-        "extends": "ImplReviewPersistenceStrategy",
+        "extends": "PromptBatchReducer",
         "usedBy": null,
         "id": "331cf497",
-        "summary": "Implements the flow review command and its draft, specification, implementation, task, and test review pipelines. It validates canonical inputs, invokes review agents, filters findings by scope, persists structured artifacts, and maintains review history and retry state.",
-        "detail": "The module uses environment-bound canonical work units, immutable input descriptors, execution identities, and strict path validation to prevent review sources or outputs from escaping the assigned workspace. It supports multiple review phases with phase-specific prompts, guardrails, schemas, parsing and repair logic, finding normalization, disposition policies, and tooling-failure handling. Implementation reviews can run as single-shot or chunked loop reviews, with proposal grouping, prompt-size limits, deduplication, prior-memory tracking, and convergence checks. Test reviews additionally build requirement-to-test coverage artifacts and enforce safe writes beneath the canonical test directory, while draft and specification reviews generate phase-specific JSON, Markdown, delta, and history artifacts.",
+        "summary": "Implements the flow review command and its draft, specification, implementation, task, and test review workflows.",
+        "detail": "This module orchestrates canonical review work units, validates environment-bound inputs and artifact contracts, resolves review targets and exclusions, collects diffs, builds prompts, invokes agents with retry and call budgets, parses schema-constrained findings, filters results by scope, and persists review artifacts and attempt history. It also supports loop-based implementation reviews, test coverage reviews, draft question and coverage reviews, failure classification, and optional fix/review cycles.",
         "chapter": "cli_commands",
         "role": "cli",
         "enrich": {
-          "processedAt": "2026-09-09T05:48:45.739Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "flow review",
-          "CLI command",
+          "flow review command",
           "implementation review",
-          "test coverage",
-          "specification review",
+          "test review",
           "draft review",
-          "agent prompts",
-          "canonical artifacts",
-          "review history",
-          "schema validation"
+          "review artifacts",
+          "diff analysis",
+          "agent retries",
+          "review history"
         ]
       },
       {
@@ -3796,9 +4116,9 @@
       },
       {
         "file": "src/flow/lib/acknowledged-rationale.js",
-        "hash": "eeecad1e05dac9063948d502d7e916dc",
-        "lines": 232,
-        "mtime": "2026-09-08T05:19:00.451Z",
+        "hash": "3a96e32dba06c601ba3fe7a6551733b2",
+        "lines": 213,
+        "mtime": "2026-09-10T08:54:50.670Z",
         "className": "acknowledged-rationale",
         "methods": [
           "ApprovedFindingException",
@@ -3809,7 +4129,6 @@
           "hasGuardrailId",
           "removeMatchedGuardrailIds",
           "qualifies",
-          "truncateText",
           "buildAcknowledgedRationaleSection"
         ],
         "imports": [
@@ -3830,22 +4149,21 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "cc9128a3",
-        "summary": "Implements bounded rationale entries for acknowledged guardrail exceptions and approved findings. It validates, normalizes, truncates, groups, and renders rationale content for prompt inclusion.",
-        "detail": "The module normalizes whitespace and detects guardrail identifiers using boundary-aware matching. It enforces per-entry, per-guardrail, and section-level size limits while removing matched identifiers when checking substantive rationale length. Acknowledged rationale entries are grouped by guardrail and rendered as Markdown, with a warning path for unavailable parent specification context. ApprovedFindingException and its set use a private symbol mint to restrict construction and support validated exception handling.",
+        "summary": "Builds acknowledged rationale sections and approved finding exceptions for guardrail-aware reviews.",
+        "detail": "The module normalizes rationale text, detects and removes matching guardrail identifiers, and accepts entries only when they contain sufficient explanatory content. It provides typed rationale entries and sets with prompt and Markdown renderers, plus a minted approved-exception type that can be safely recognized. The section builder combines spec and guardrail context and reports when parent spec context is unavailable.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-09T05:48:45.776Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "guardrail exceptions",
           "acknowledged rationale",
-          "finding approval",
-          "Markdown rendering",
-          "text normalization",
-          "size limits",
-          "prompt context"
+          "guardrails",
+          "approved exceptions",
+          "finding exemptions",
+          "rationale rendering",
+          "prompt sections"
         ]
       },
       {
@@ -4293,9 +4611,9 @@
       },
       {
         "file": "src/flow/lib/artifact-view-summary.js",
-        "hash": "1557482600e03d2e33d1a3cdca4b73bb",
-        "lines": 778,
-        "mtime": "2026-08-31T00:41:06.924Z",
+        "hash": "7479cf0a06dd995f119e170b0cf6de2a",
+        "lines": 869,
+        "mtime": "2026-09-10T08:54:50.671Z",
         "className": "artifact-view-summary",
         "methods": [
           "ArtifactViewSummaryError",
@@ -4335,6 +4653,7 @@
         ],
         "imports": [
           "../../lib/schema-validate.js",
+          "../../lib/prompt-batching.js",
           "./flow-context-limit.js",
           "./artifact-view-fingerprint.js"
         ],
@@ -4359,22 +4678,23 @@
           "src/flow/lib/get-artifact.js"
         ],
         "id": "7515800b",
-        "summary": "Defines validated artifact-view summary models, contracts, results, fingerprints, and service orchestration for specification and acceptance summaries.",
-        "detail": "The module models semantic units, summary chunks, excerpts, entries, and contract-specific result types with strict validation and uniqueness checks. It generates JSON schemas for specification and acceptance summaries, verifies exact source coverage and ordering, and distinguishes modeled from non-summary unit kinds. The service resolves agent identity, invokes the shared agent surface, validates responses, and supports revisioned cache fingerprints with explicit cache-hit metadata. Errors use dedicated codes for invalid summaries and unavailable agents.",
+        "summary": "Defines typed contracts for generating, validating, caching, and rendering artifact-view summaries.",
+        "detail": "This module models semantic units, summary chunks, prompt envelopes, excerpts, entries, and contract-specific results for specification and acceptance artifacts. It enforces unique identities, exact source references and ordering, required statuses, declared summary kinds, global coverage, and schema validity. The summary service resolves an agent identity, uses contract-specific prompts, computes fingerprints, and returns cached or newly generated Markdown with cache metadata and warnings.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-08-31T13:48:18.793Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "artifact summaries",
-          "schema validation",
+          "artifact view summary",
           "semantic units",
           "summary contracts",
-          "cache fingerprint",
-          "agent service",
-          "source coverage"
+          "source coverage",
+          "schema validation",
+          "summary caching",
+          "fingerprints",
+          "acceptance artifacts"
         ]
       },
       {
@@ -7673,6 +7993,67 @@
         ]
       },
       {
+        "file": "src/flow/lib/gate-prompt-plan.js",
+        "hash": "624f635e90b83fe74f9c3e77dcc8ef35",
+        "lines": 270,
+        "mtime": "2026-09-10T08:54:50.671Z",
+        "className": "gate-prompt-plan",
+        "methods": [
+          "GateResultCollection",
+          "GateResultReducer",
+          "RequirementSourceObservation",
+          "RequirementObservationResponse",
+          "RequirementObservationCollection",
+          "RequirementObservationEnvelope",
+          "RequirementEvidenceInput",
+          "RequirementEvidencePlan",
+          "reduceRequirementEvidence",
+          "gatePromptFits",
+          "executeGatePlan",
+          "digest"
+        ],
+        "imports": [
+          "node:crypto",
+          "../../lib/prompt-builder.js",
+          "../../lib/prompt-batching.js"
+        ],
+        "exports": [
+          "GateResultCollection",
+          "GateResultReducer",
+          "RequirementSourceObservation",
+          "RequirementObservationResponse",
+          "RequirementObservationCollection",
+          "RequirementObservationEnvelope",
+          "RequirementEvidenceInput",
+          "RequirementEvidencePlan",
+          "reduceRequirementEvidence",
+          "gatePromptFits",
+          "executeGatePlan"
+        ],
+        "extends": "PromptBatchReducer",
+        "usedBy": [
+          "src/flow/lib/run-gate.js"
+        ],
+        "id": "a824bced",
+        "summary": "Provides a batched gate-prompt planning and reduction pipeline for requirement evidence.",
+        "detail": "The module creates deterministic prompt digests, typed gate result collections, requirement source observations, evidence inputs, and executable plans. It validates that responses cover every supplied requirement range exactly once, reject foreign references, preserve exact source references, and contain valid text fields. Batch envelopes include indexes and canonical ranges, while reduction combines typed observations and executes through configurable agent, invocation-projection, protocol-policy, and execution-budget dependencies.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-10T12:55:19.937Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "gate prompt plan",
+          "requirement evidence",
+          "prompt batching",
+          "source observations",
+          "coverage validation",
+          "response reduction",
+          "execution budgets"
+        ]
+      },
+      {
         "file": "src/flow/lib/gate-recovery-display.js",
         "hash": "d6ea3978efec2c843aec55e372ba5cb1",
         "lines": 56,
@@ -8053,9 +8434,9 @@
       },
       {
         "file": "src/flow/lib/get-context.js",
-        "hash": "de7ab92f25d7e0d94db42f602b9833f9",
-        "lines": 494,
-        "mtime": "2026-08-10T16:21:08.657Z",
+        "hash": "405de9905096ca87dd1708a2563cd124",
+        "lines": 529,
+        "mtime": "2026-09-10T08:54:50.671Z",
         "className": "get-context",
         "methods": [
           "toSearchResult",
@@ -8077,11 +8458,13 @@
         "imports": [
           "fs",
           "path",
+          "node:crypto",
           "../../lib/config.js",
           "./base-command.js",
           "../../docs/lib/analysis-entry.js",
           "../../lib/container.js",
-          "../../lib/prompt-builder.js"
+          "../../lib/prompt-builder.js",
+          "../../lib/prompt-batching.js"
         ],
         "exports": [
           "default",
@@ -8096,30 +8479,27 @@
           "loadAnalysisEntries",
           "contextSearch"
         ],
-        "extends": "FlowCommand",
+        "extends": "PromptRequestEnvelope",
         "usedBy": [
           "src/docs/commands/build.js",
           "src/docs/commands/forge.js",
           "src/docs/commands/readme.js"
         ],
         "id": "1261e39f",
-        "summary": "Loads analysis metadata and provides keyword, substring, n-gram, and AI-assisted context search over indexed entries. It powers the `get-context` command's retrieval layer and output filtering.",
-        "detail": "The module converts analysis records into lightweight search results, excluding heavy fields and collecting normalized keyword inventories for prompt construction. It implements multiple search strategies, including direct field matching, bigram-based similarity scoring, and optional AI keyword selection with a strict JSON response contract and fallback behavior. Post-processing boosts hub-like entries based on incoming and outgoing link counts to improve centrality-sensitive ranking. It also loads `analysis.json` from the managed output directory, validates file presence and parseability, and can read raw file contents when requested by the command. The exported command class wraps these helpers so users can search indexed documentation context or inspect specific source files from the CLI.",
+        "summary": "Provides analysis-context loading and query search for flow commands.",
+        "detail": "Loads analysis.json from the managed output directory, normalizes entries, filters excluded metadata, collects searchable keywords, and supports keyword, fallback, bigram, n-gram, and AI-assisted search. It also applies result post-processing, hub detection, query filtering, and exposes a FlowCommand for retrieving file-based context.",
         "chapter": "cli_commands",
-        "role": "lib",
+        "role": "cli",
         "enrich": {
-          "processedAt": "2026-08-14T01:23:09.330Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "context search",
-          "analysis index",
+          "analysis context",
           "keyword search",
-          "n-gram similarity",
-          "AI retrieval",
-          "search ranking",
-          "analysis.json",
-          "CLI context"
+          "n-gram search",
+          "AI search",
+          "analysis.json"
         ]
       },
       {
@@ -10750,6 +11130,49 @@
         ]
       },
       {
+        "file": "src/flow/lib/review-finding-synthesis.js",
+        "hash": "1f9e2ef54065cf1cd9f6dd460376d1a9",
+        "lines": 174,
+        "mtime": "2026-09-10T08:54:50.671Z",
+        "className": "review-finding-synthesis",
+        "methods": [
+          "ReviewCanonicalAuthorityElement",
+          "ReviewSynthesisEvidenceElement",
+          "ReviewFindingSynthesisEnvelope",
+          "ReviewFindingSynthesisPlan",
+          "digest",
+          "coverageRefs"
+        ],
+        "imports": [
+          "node:crypto",
+          "../../lib/prompt-batching.js"
+        ],
+        "exports": [
+          "ReviewCanonicalAuthorityElement",
+          "ReviewSynthesisEvidenceElement",
+          "ReviewFindingSynthesisEnvelope",
+          "ReviewFindingSynthesisPlan"
+        ],
+        "extends": "PartitionedPromptPayloadElement",
+        "usedBy": null,
+        "id": "6a6a3730",
+        "summary": "Builds typed evidence plans for review finding synthesis.",
+        "detail": "Defines canonical-authority and synthesis-evidence prompt elements with source coverage references, validated evidence kinds, and deterministic revisions derived from content when needed. It packages these elements into a review finding synthesis envelope and plan that requires typed evidence inputs.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-10T12:55:19.937Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "review synthesis",
+          "finding evidence",
+          "prompt envelope",
+          "source coverage",
+          "evidence hashing"
+        ]
+      },
+      {
         "file": "src/flow/lib/review-protocol.js",
         "hash": "2001d1689d6ae137f561e4df339d5f7c",
         "lines": 365,
@@ -11022,6 +11445,45 @@
         ]
       },
       {
+        "file": "src/flow/lib/review-text-prompt-plan.js",
+        "hash": "cf07e4332a59ecb27a972d208e2114e4",
+        "lines": 127,
+        "mtime": "2026-09-10T08:54:50.672Z",
+        "className": "review-text-prompt-plan",
+        "methods": [
+          "SpecSectionPromptElement",
+          "DraftSectionPromptElement",
+          "ReviewTextPromptPlan"
+        ],
+        "imports": [
+          "node:crypto",
+          "../../lib/prompt-batching.js"
+        ],
+        "exports": [
+          "SpecSectionPromptElement",
+          "DraftSectionPromptElement",
+          "ReviewTextPromptPlan"
+        ],
+        "extends": "PartitionedPromptPayloadElement",
+        "usedBy": null,
+        "id": "4678e8ac",
+        "summary": "Creates ranged prompt plans for specification and draft review text.",
+        "detail": "Defines prompt elements that preserve canonical character ranges and source lengths, then specializes them for specification and draft sections. The envelope renders these ranged sections for review, while the plan validates that semantic sections are supplied before creating a batched prompt plan.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-10T12:55:19.937Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "review text",
+          "prompt plan",
+          "source ranges",
+          "spec sections",
+          "draft sections"
+        ]
+      },
+      {
         "file": "src/flow/lib/review-transition-facts.js",
         "hash": "67efdb0b7be3f5037c02f3e2d365e83c",
         "lines": 318,
@@ -11241,7 +11703,8 @@
           "src/flow/lib/run-review.js",
           "src/flow/lib/task-review-aborted-work-unit.js",
           "src/flow/lib/task-review-reconciliation-record.js",
-          "src/flow/lib/task-review-reconciliation.js"
+          "src/flow/lib/task-review-reconciliation.js",
+          "src/flow/lib/task-review-prompt-plan.js"
         ],
         "id": "0a09ec2b",
         "summary": "Implements secure filesystem-backed review work units with manifests, sealed outputs, canonical receipts, and reconciliation of incomplete or completed workers.",
@@ -11313,9 +11776,9 @@
       },
       {
         "file": "src/flow/lib/run-acceptance-review.js",
-        "hash": "4b5759a03c97c66032c2289acc35df36",
-        "lines": 448,
-        "mtime": "2026-09-08T05:19:00.458Z",
+        "hash": "512a59f1f2af23c96357215db21884ae",
+        "lines": 975,
+        "mtime": "2026-09-10T08:54:50.672Z",
         "className": "run-acceptance-review",
         "methods": [
           "AcceptanceBudgetError",
@@ -11326,7 +11789,17 @@
           "parseAcceptanceResponse",
           "AcceptanceResponseBinding",
           "bindAcceptanceResponse",
+          "AcceptanceEvidenceExecutionPlan",
           "assertAcceptancePromptBudget",
+          "acceptanceDigest",
+          "acceptanceAgentOptions",
+          "acceptanceExecutorOptions",
+          "parseObservations",
+          "acceptanceEvidenceElements",
+          "observationsAsElements",
+          "acceptanceFinalBindings",
+          "scopedAcceptanceResponseSchema",
+          "buildAcceptanceScopedFinalPlan",
           "callAcceptanceAgent",
           "acceptanceAgentFailure",
           "resolveAcceptanceArtifact",
@@ -11334,8 +11807,10 @@
         ],
         "imports": [
           "../../lib/json-parse.js",
+          "node:crypto",
           "../../lib/container.js",
           "../../lib/prompt-builder.js",
+          "../../lib/prompt-batching.js",
           "../../lib/agent-failure.js",
           "../../lib/flow-envelope.js",
           "./base-command.js",
@@ -11351,6 +11826,7 @@
           "parseAcceptanceResponse",
           "AcceptanceResponseBinding",
           "bindAcceptanceResponse",
+          "AcceptanceEvidenceExecutionPlan",
           "default",
           "MAX_ACCEPTANCE_REQUEST_CHARS",
           "MAX_ACCEPTANCE_RESPONSE_CHARS",
@@ -11359,29 +11835,27 @@
         "extends": "Error",
         "usedBy": null,
         "id": "2d93c301",
-        "summary": "Builds, bounds, parses, and executes canonical acceptance reviews with schema-constrained agent responses and deferred finding-disposition repair.",
-        "detail": "The module constructs acceptance prompts from review evidence and enforces request and response size budgets together with bounded schema complexity. Acceptance responses are parsed as JSON, optionally repaired, then bound to requirement judgments and deferred finding dispositions with duplicate and unknown-item checks. Missing deferred dispositions can trigger one controlled repair prompt, while failures are wrapped in flow envelopes and canonical promotion results. The command requires a Version-1 Flow and integrates prompt construction, agent invocation, response validation, and acceptance artifact resolution.",
+        "summary": "Orchestrates acceptance reviews with bounded, repairable AI responses.",
+        "detail": "Defines acceptance schemas, prompt and response size budgets, deferred disposition repair, response parsing and binding, evidence observations, exact source coverage checks, scoped final bindings, and batched execution plans. The command coordinates agent calls, failure handling, canonical acceptance review promotion, and flow-state integration.",
         "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-09T05:48:45.898Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
           "acceptance review",
-          "prompt budget",
-          "JSON schema",
-          "deferred disposition",
           "response binding",
-          "agent invocation",
-          "acceptance artifact"
+          "deferred repair",
+          "prompt batching",
+          "canonical promotion"
         ]
       },
       {
         "file": "src/flow/lib/run-auto-check.js",
-        "hash": "5ad322ad2a6e286dabd49fe9cdf61259",
-        "lines": 361,
-        "mtime": "2026-08-15T04:29:56.940Z",
+        "hash": "aa1824a45916cd040ac93ab1123a9cd3",
+        "lines": 370,
+        "mtime": "2026-09-10T08:54:50.672Z",
         "className": "run-auto-check",
         "methods": [
           "computeScore",
@@ -11402,6 +11876,7 @@
           "./resolve-auto-check-input.js",
           "../../lib/flow-envelope.js",
           "../../lib/prompt-builder.js",
+          "../../lib/prompt-batching.js",
           "../../lib/agent-failure.js"
         ],
         "exports": [
@@ -11417,22 +11892,20 @@
           "src/flow/lib/set-auto.js"
         ],
         "id": "62c43842",
-        "summary": "Evaluates whether a feature request is suitable for Spec-Driven Development auto mode using static gates and weighted AI scoring.",
-        "detail": "The module scores six dimensions with explicit weights, a maximum score, and hard gates for buildability, ambiguity, and verifiability. It sanitizes agent output, handles unavailable agents and malformed responses, detects missing goals, and produces a normalized verdict with diagnostic details. The command resolves the preparing run, invokes the shared auto-check core, and returns structured Flow envelopes for success or failure. Prompt formatting requires JSON-only output with fixed keys and integer scores.",
+        "summary": "Evaluates whether a request is suitable for automated flow execution.",
+        "detail": "Combines static gates with an AI assessment across six weighted dimensions: spec buildability, ambiguity, verifiability, scope boundedness, target specificity, and precedent. It computes a threshold-based score, enforces hard-gate minimums, sanitizes or falls back on malformed responses, and exposes command handling for auto-check verdicts.",
         "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-08-20T10:06:51.135Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
           "auto check",
-          "spec-driven development",
           "static gates",
           "AI scoring",
-          "weighted score",
           "hard gate",
-          "Flow envelope"
+          "flow verdict"
         ]
       },
       {
@@ -11519,9 +11992,9 @@
       },
       {
         "file": "src/flow/lib/run-dispatch.js",
-        "hash": "963b7a7b345afc388f2177271b78d48d",
-        "lines": 2167,
-        "mtime": "2026-09-09T08:37:33.889Z",
+        "hash": "c27ed3d0772017516964e48d611f65c0",
+        "lines": 2174,
+        "mtime": "2026-09-10T08:54:50.672Z",
         "className": "run-dispatch",
         "methods": [
           "DispatcherOwnedFlowCommand",
@@ -11610,23 +12083,20 @@
         "extends": "Error",
         "usedBy": null,
         "id": "6c7fd82a",
-        "summary": "Implements the flow dispatcher that coordinates worker handoffs, approvals, retries, locks, recovery, and registered flow commands.",
-        "detail": "The dispatcher captures target state and repository fingerprints, validates next-action bindings, and executes either dispatcher-owned commands or worker processes. It persists approval receipts only through canonical versioned mutations and protects control files from unauthorized repository changes. Worker failures are normalized into typed handoff errors with retry feedback, deferred metrics, quarantine behavior, and source-failure observations. Dispatch boundaries represent resumable, blocked, failed, or completed states while enforcing process locks, replay constraints, and approval continuation rules.",
-        "chapter": "internal_design",
+        "summary": "Coordinates flow dispatch, approvals, workers, retries, and recovery.",
+        "detail": "Implements dispatcher-owned commands, resumable boundaries, process locking, action binding, repository fingerprinting, approval receipt persistence, registered command execution, and worker artifact handoffs. It captures retry feedback, monitors worker submissions, quarantines rejected handoffs, records failure observations, and returns flow dispatch boundaries or failures through the command controller.",
+        "chapter": "project_structure",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-09T08:39:39.977Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "flow dispatcher",
-          "worker handoff",
+          "flow dispatch",
           "approval receipt",
-          "repository fingerprint",
-          "retry handling",
+          "worker handoff",
           "process lock",
-          "recovery",
-          "command routing"
+          "retry recovery"
         ]
       },
       {
@@ -12107,9 +12577,9 @@
       },
       {
         "file": "src/flow/lib/run-gate.js",
-        "hash": "54966a85b0507e3a02ef945145b81b97",
-        "lines": 4369,
-        "mtime": "2026-09-09T00:00:58.174Z",
+        "hash": "e49c45223a729ab0a0e686d5609447b2",
+        "lines": 4299,
+        "mtime": "2026-09-10T08:54:50.673Z",
         "className": "run-gate",
         "methods": [
           "parsePublicGateArguments",
@@ -12150,6 +12620,7 @@
           "RequirementGateBatch",
           "buildRequirementGateBatches",
           "planRequirementGateCalls",
+          "RequirementGateExecutionPlan",
           "reasonsFromEvaluations",
           "runGateFlow",
           "resolveEffectiveGatePhase",
@@ -12170,9 +12641,6 @@
           "shouldIncludeGateDiffFile",
           "excludeGeneratedSpecArtifactsFromPerFileDiffs",
           "buildGateEvaluationDiff",
-          "summarizeDiffSegment",
-          "appendPromptLine",
-          "compactDiffForGuardrailPrompt",
           "collectPerFileDiffsForGate",
           "taskCursorRequiredGateFailure",
           "isGeneratedSpecArtifactForGate",
@@ -12194,13 +12662,14 @@
           "buildPassEvaluationsForObservedGuardrails",
           "normalizeObservations",
           "callGateAgent",
+          "createGateExecutionBudget",
+          "gateInvocationProjector",
           "requiredGuardrailFailure",
           "requiredGateAgentResolutionFailure",
           "requiredGateEvaluationFailure",
           "checkGuardrail",
           "gateOutputFailure",
           "evaluateGateOutputWithRepair",
-          "evaluateImplRequirementsWithRetry",
           "stableGateEvaluationValue",
           "validatedGateEvaluationScopeIdentity",
           "currentGateEvaluationScope",
@@ -12209,10 +12678,7 @@
           "sameSpecRequirementRecord",
           "sameSpecDecisionRecord",
           "sameSpecClarificationRecord",
-          "selectBoundedRecords",
           "requirementIdIsReferenced",
-          "positiveInteger",
-          "truncateContextItem",
           "escapeRegExp",
           "containsRequirementId",
           "backtickIdentifiers",
@@ -12223,8 +12689,6 @@
           "renderRequirementPromptSection",
           "normalizeRequirementContext",
           "renderRequirementContextSection",
-          "renderRequirementBatchInput",
-          "summarizeDiffForPrompt",
           "buildGuardrailTargetTextForPrompt",
           "requirementEvaluation",
           "evaluateCanonicalRequirements",
@@ -12251,6 +12715,8 @@
           "../../lib/git-state.js",
           "../../lib/container.js",
           "../../lib/prompt-builder.js",
+          "../../lib/prompt-batching.js",
+          "./gate-prompt-plan.js",
           "../../lib/guardrail.js",
           "../../lib/presets.js",
           "../../lib/flow-helpers.js",
@@ -12268,7 +12734,6 @@
           "./flow-judgment-contract.js",
           "./draft-lifecycle.js",
           "./test-artifacts.js",
-          "./flow-context-limit.js",
           "./observation.js",
           "./task-scope.js",
           "./artifact-completion.js",
@@ -12326,6 +12791,7 @@
           "RequirementGateBatch",
           "buildRequirementGateBatches",
           "planRequirementGateCalls",
+          "RequirementGateExecutionPlan",
           "reasonsFromEvaluations",
           "runGateFlow",
           "resolveEffectiveGatePhase",
@@ -12343,18 +12809,13 @@
           "buildGuardrailPrompt",
           "buildImplCheckPrompt",
           "MAX_IMPL_REQUIREMENT_BATCH_CHARS",
-          "MAX_GUARDRAIL_TARGET_CHARS",
           "checkGuardrail",
           "splitDiffByFile",
           "buildGuardrailTargetTextForPrompt",
-          "compactDiffForGuardrailPrompt",
           "collectPerFileDiffsForGate",
           "buildPerRequirementDiffs",
           "renderCanonicalTaskSource",
           "PHASE_TO_LEVEL",
-          "MAX_REQUIREMENT_CONTEXT_ITEMS",
-          "MAX_REQUIREMENT_CONTEXT_ITEM_CHARS",
-          "MAX_REQUIREMENT_CONTEXT_CHARS",
           "IMPL_DIFF_SCOPE_LINES",
           "GUARDRAIL_ARTICLE_EVAL_SCHEMA",
           "IMPL_REQUIREMENT_EVAL_SCHEMA",
@@ -12363,26 +12824,24 @@
         "extends": "Map",
         "usedBy": [
           "src/flow/lib/canonical-acceptance-artifacts.js",
-          "src/flow/lib/gate-recovery-display.js"
+          "src/flow/lib/gate-recovery-display.js",
+          "src/flow/lib/task-review-prompt-plan.js"
         ],
         "id": "b4aa4dad",
-        "summary": "Implements the main Flow gate execution pipeline, including diff collection, guardrail evaluation, requirement checks, retry handling, evidence tracking, and canonical result publication.",
-        "detail": "The module coordinates gate execution across specification, task, implementation, and integration phases while enforcing phase-specific validation and artifact requirements. It parses and bounds Git diffs, excludes generated or lifecycle artifacts, and builds structured prompts for guardrail and requirement agents. AI responses are strictly parsed against schemas, with repair retries, failure classification, reusable evaluation detection, and deterministic pass/fail result construction. It also manages same-spec contract context, canonical task state, gate evidence fingerprints, issue-log settlement, and command-level recovery or promotion behavior.",
-        "chapter": "internal_design",
+        "summary": "Runs specification, implementation, integration, and task gate evaluation.",
+        "detail": "Collects and filters Git evidence, validates phase and level rules, builds guardrail and requirement prompts, parses strictly shaped AI evaluations, retries protocol failures, tracks evaluation scopes, and reuses compatible passed guardrails. It constructs same-spec requirement contexts, batches requirement checks, validates canonical task inputs, promotes gate results, manages canonical flow state, and appends issue-log entries for gate outcomes.",
+        "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-09T05:48:45.916Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "flow gate",
+          "gate evaluation",
           "guardrails",
           "Git diff",
-          "requirement evaluation",
-          "canonical state",
-          "retry handling",
-          "evidence fingerprint",
-          "issue log"
+          "requirement batching",
+          "canonical flow state"
         ]
       },
       {
@@ -15732,7 +16191,8 @@
           "src/flow/lib/definition-lifecycle-failure.js",
           "src/flow/lib/impl-review-proposal.js",
           "src/flow/lib/retry-recovery.js",
-          "src/flow/lib/review-work-unit.js"
+          "src/flow/lib/review-work-unit.js",
+          "src/flow/lib/task-review-prompt-plan.js"
         ],
         "id": "2c84033c",
         "summary": "Archives aborted Task Review work units and admits safe retry recovery from exact tooling failures.",
@@ -15837,6 +16297,58 @@
           "Task binding",
           "schema validation",
           "review attempt"
+        ]
+      },
+      {
+        "file": "src/flow/lib/task-review-prompt-plan.js",
+        "hash": "e9cf410472fd2a83a8f938a48b9fa6ba",
+        "lines": 294,
+        "mtime": "2026-09-10T08:54:50.673Z",
+        "className": "task-review-prompt-plan",
+        "methods": [
+          "TaskReviewSourceElement",
+          "TaskReviewSourceSegment",
+          "TaskReviewPromptChunkContext",
+          "TaskReviewPromptChunk",
+          "TaskReviewPromptPlanningFailure",
+          "TaskReviewPromptPlan",
+          "requiredText",
+          "sourceRevision",
+          "asSegment",
+          "renderSegments"
+        ],
+        "imports": [
+          "node:crypto",
+          "../../lib/prompt-batching.js",
+          "./work-unit.js",
+          "./run-gate.js"
+        ],
+        "exports": [
+          "TaskReviewSourceElement",
+          "TaskReviewSourceSegment",
+          "TaskReviewPromptChunkContext",
+          "TaskReviewPromptChunk",
+          "TaskReviewPromptPlanningFailure",
+          "TaskReviewPromptPlan"
+        ],
+        "extends": "PartitionedPromptPayloadElement",
+        "usedBy": null,
+        "id": "11b0dad3",
+        "summary": "Plans task-review prompt chunks from validated source segments.",
+        "detail": "Defines typed task-review source elements and segments, prompt chunk context, prompt envelopes, chunk validation, planning failures, and plan-level invariants. It also supports canonical or segmented source rendering and verifies ordered, unique, continuous, complete source coverage without duplicate deleted content.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-09-10T12:55:19.937Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "task review",
+          "prompt planning",
+          "source segments",
+          "chunk validation",
+          "coverage tracking",
+          "canonical rendering"
         ]
       },
       {
@@ -16688,6 +17200,54 @@
         ]
       },
       {
+        "file": "src/flow/lib/test-review-prompt-plan.js",
+        "hash": "bbe30f3f4e922b237f9dfcdfa884727a",
+        "lines": 224,
+        "mtime": "2026-09-10T08:54:50.674Z",
+        "className": "test-review-prompt-plan",
+        "methods": [
+          "TestSourcePromptElement",
+          "TestSourcePromptRange",
+          "TestRequirementPromptElement",
+          "TestCoveragePromptElement",
+          "TestReviewPromptEnvelope",
+          "TestReviewPromptPlan",
+          "requiredText",
+          "asRange"
+        ],
+        "imports": [
+          "node:crypto",
+          "../../lib/prompt-batching.js"
+        ],
+        "exports": [
+          "TestSourcePromptElement",
+          "TestSourcePromptRange",
+          "TestRequirementPromptElement",
+          "TestCoveragePromptElement",
+          "TestReviewPromptEnvelope",
+          "TestReviewPromptPlan"
+        ],
+        "extends": "PartitionedPromptPayloadElement",
+        "usedBy": null,
+        "id": "78f0ce37",
+        "summary": "Builds structured prompt plans for test-review analysis.",
+        "detail": "Defines test source elements and ranges, requirement and coverage prompt elements, source-range conversion, review prompt envelopes, and test-review plans. The module also creates coverage metadata and scoped bindings for associating test-review prompts with their analysis context.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-09-10T12:55:19.937Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "test review",
+          "prompt plan",
+          "source ranges",
+          "requirements",
+          "coverage metadata",
+          "scoped bindings"
+        ]
+      },
+      {
         "file": "src/flow/lib/test-review-repair-timeout.js",
         "hash": "20fcc446d6ec41c1d2e4a8524843a22a",
         "lines": 29,
@@ -16942,9 +17502,9 @@
       },
       {
         "file": "src/flow/lib/work-unit.js",
-        "hash": "693f1042922751d9d2d33487c4adf619",
+        "hash": "5706e8392450b38b25f3354bf5d045d3",
         "lines": 518,
-        "mtime": "2026-08-02T16:01:43.082Z",
+        "mtime": "2026-09-10T08:54:50.675Z",
         "className": "work-unit",
         "methods": [
           "WorkUnitInvariantError",
@@ -16997,32 +17557,33 @@
         ],
         "extends": "Error",
         "usedBy": [
-          "src/flow/lib/impl-review-proposal.js"
+          "src/flow/lib/impl-review-proposal.js",
+          "src/flow/lib/task-review-prompt-plan.js"
         ],
         "id": "be554a62",
-        "summary": "Provides resumable work-unit identities, checkpoints, and failure classification for multi-attempt review tooling. It lets impl-review subwork be reused, retried, or split without losing stable identity.",
-        "detail": "The module hashes normalized identity fields such as phase, kind, target files, schema digest, and allowed requirement IDs to create deterministic work-unit IDs. It stores success and failure checkpoints on disk, offers an in-memory variant for tests, and decides whether a planned unit should execute, reuse a prior success, or stop on a non-retryable failure. Helper constructors build loop-chunk and cross-check identities for implementation review pipelines, while normalized failures preserve retry metadata and provider diagnostics. It also detects repeated retryable failures and plans child work units for fallback splitting when a parent chunk should be decomposed.",
+        "summary": "Provides work-unit identity, checkpoint, failure, and fallback infrastructure.",
+        "detail": "Normalizes work-unit inputs, target files, and requirement identifiers; creates stable hashes and identities; persists checkpoints through filesystem and in-memory stores; and models resume decisions. It classifies failures, identifies retryable conditions, determines when review work should be split, creates fallback child work units, and enables work units for implementation loop reviews.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-08-02T16:26:44.563Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "work unit",
+          "work units",
           "checkpoint store",
-          "resume decision",
+          "resume decisions",
           "failure classification",
-          "review retry",
-          "stable identity",
-          "fallback split"
+          "retry handling",
+          "fallback splitting",
+          "stable identities"
         ]
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "ecef067d29deeaef97e6eed79cae593a",
-        "lines": 7592,
-        "mtime": "2026-09-09T08:37:33.892Z",
+        "hash": "bc5c3a6d224879dd18acf8a7fddb6130",
+        "lines": 7655,
+        "mtime": "2026-09-10T14:18:29.146Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "WorkerArtifactHandoffError",
@@ -17059,6 +17620,7 @@
           "WorkerArtifactSemanticInputRevision",
           "sourceHandoffCanonicalGeneration",
           "WorkerArtifactHandoffRequest",
+          "WorkerArtifactHandoffReference",
           "WorkerArtifactManifestEntry",
           "WorkerArtifactHandoffSubmission",
           "assertWorkerUpgradeAllowed",
@@ -17263,6 +17825,7 @@
           "WorkerArtifactSemanticInputRevision",
           "sourceHandoffCanonicalGeneration",
           "WorkerArtifactHandoffRequest",
+          "WorkerArtifactHandoffReference",
           "WorkerArtifactManifestEntry",
           "WorkerArtifactHandoffSubmission",
           "assertWorkerUpgradeAllowed",
@@ -17293,25 +17856,25 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Implements the worker artifact handoff protocol for Flow execution, including typed requests, payload validation, source mutation tracking, publication, recovery, rollback, and cleanup.",
-        "detail": "The module defines step-specific handoff policies, bounded payload contracts, canonical input snapshots, content digests, and strict path and schema validation. It securely captures repository authority snapshots and source mutation manifests, preventing workers from committing, staging, escaping approved directories, or modifying immutable canonical inputs. Source-worker flows use checkpoint-bound identities, event chains, rollback blobs, and recovery guards to distinguish retryable failures from untrusted or unrecoverable states. Artifact submissions are sealed atomically, validated against manifests and policy-specific rules, converted into canonical publications and receipts, quarantined on failure, and cleaned up only after ownership and authority checks succeed.",
+        "summary": "Orchestrates secure worker artifact handoff and recovery for Flow workflows.",
+        "detail": "Defines typed handoff policies, requests, submissions, receipts, progress publications, and execution checkpoints. It validates payloads, canonical input snapshots, source mutation manifests, repository authority snapshots, rollback baselines, and publication journals; binds artifacts to Flow, task, attempt, policy, repository, and canonical source identities; enforces size limits, normalized paths, digest consistency, retry semantics, and protection against unauthorized source or repository mutations. The module rejects stale, corrupt, foreign, or untrusted authority data, detects uncertain worker starts and exits, restores valid execution handoffs, stages upgrade results, atomically persists quarantine receipts, coordinates review and repair, and safely cleans transient handoff directories only within the expected execution root.",
         "chapter": "internal_design",
-        "role": "middleware",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-09T08:39:39.996Z",
+          "processedAt": "2026-09-11T00:26:57.687Z",
           "attempts": 1
         },
         "keywords": [
           "worker handoff",
-          "artifact protocol",
-          "payload validation",
-          "source mutation manifest",
+          "artifact validation",
+          "checkpoint validation",
+          "source mutation",
           "repository authority",
           "rollback recovery",
-          "canonical publication",
-          "checkpoint binding",
-          "atomic sealing",
-          "security"
+          "publication journal",
+          "quarantine",
+          "filesystem cleanup",
+          "upgrade staging"
         ]
       },
       {
@@ -18016,11 +18579,12 @@
       },
       {
         "file": "src/lib/agent.js",
-        "hash": "b05c885ab2ada45c0f549dbb5eef94fa",
-        "lines": 1663,
-        "mtime": "2026-09-09T05:40:43.383Z",
+        "hash": "d9daa0ceba76c3eab8947caecbae4f40",
+        "lines": 1916,
+        "mtime": "2026-09-10T08:54:50.679Z",
         "className": "agent",
         "methods": [
+          "ResolvedAgentInvocationProjection",
           "AgentProviderRetryPolicy",
           "AgentRuntimeDirectorySet",
           "createPluginAgentApi",
@@ -18034,6 +18598,9 @@
           "sha256",
           "cacheFileName",
           "stableStringify",
+          "argvByteLength",
+          "argvMaxElementByteLength",
+          "normalizeProjectionCharacterLimit",
           "matchProfilePrefix",
           "resolveProfileSelection",
           "resolveAgentProfiles",
@@ -18042,6 +18609,7 @@
           "resolveProviderOverrideKey",
           "matchDefaultProfileFallback",
           "substitutePromptToken",
+          "substitutedPromptCharacterCount",
           "stripPromptArgs",
           "injectWorkDirFlag",
           "ensureWorkDir",
@@ -18069,16 +18637,21 @@
           "./file-lock.js",
           "./real-directory-authority.js",
           "./flow-attribution.js",
-          "./agent-failure.js"
+          "./agent-failure.js",
+          "./config.js",
+          "./prompt-batching.js"
         ],
         "exports": [
+          "ResolvedAgentInvocationProjection",
           "AgentProviderRetryPolicy",
           "AgentRuntimeDirectorySet",
           "createPluginAgentApi",
           "Agent",
           "AgentTimeoutError",
           "ChildProcessSupervisor",
-          "filterStreamingEvents"
+          "filterStreamingEvents",
+          "MAX_AGENT_ARGUMENT_BYTES",
+          "MAX_AGENT_ARGV_BYTES"
         ],
         "extends": "AgentTimeoutFailure",
         "usedBy": [
@@ -18086,23 +18659,21 @@
           "src/lib/plugin-registry.js"
         ],
         "id": "13ddf392",
-        "summary": "The agent runtime resolves provider profiles, builds constrained executions, runs child processes, manages retries and prompt caching, and produces structured diagnostics. It also supervises process groups across platforms and enforces timeout cleanup and attribution rules.",
-        "detail": "Agent configuration is normalized through profile and provider-family resolution, bounded environment validation, absolute working-directory checks, and retry backoff policies. Invocation construction supports prompt substitution, JSON schema files, work-directory flags, streaming-event filtering, and provider-specific output parsing. Prompt cache entries are keyed by stable invocation identity, protected by file locks, and stored through atomic writes. Child-process supervision tracks process identities, terminates process groups, polls for surviving members, and reports timeout diagnostics with platform-specific handling.",
-        "chapter": "configuration",
+        "summary": "Provides agent invocation, provider selection, retries, caching, and process supervision.",
+        "detail": "Defines agent execution contexts, invocation projections, provider retry policies, runtime directories, profile resolution, prompt caching, bounded environment handling, child-process timeout supervision, streaming output filtering, and a plugin-facing agent API.",
+        "chapter": "stack_and_ops",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-09T05:48:45.972Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "agent runtime",
-          "provider profiles",
-          "retry policy",
+          "agent execution",
+          "provider retries",
           "prompt cache",
           "process supervision",
-          "timeouts",
-          "JSON schema",
-          "execution environment"
+          "profile resolution",
+          "plugin API"
         ]
       },
       {
@@ -18499,12 +19070,13 @@
       },
       {
         "file": "src/lib/config.js",
-        "hash": "227741d1e8a4b4cf8defc01c28c3625c",
-        "lines": 619,
-        "mtime": "2026-08-10T16:21:08.669Z",
+        "hash": "ce009002db2508f59e2bbb8e4ebdba32",
+        "lines": 640,
+        "mtime": "2026-09-10T08:54:50.679Z",
         "className": "config",
         "methods": [
           "resolveConcurrency",
+          "resolvePromptCharacterLimit",
           "loadJsonFile",
           "loadPackageField",
           "managedDir",
@@ -18537,10 +19109,12 @@
           "./schema-validate.js",
           "./agent-defaults.js",
           "./flow-workspace.js",
-          "./product.js"
+          "./product.js",
+          "./prompt-batching.js"
         ],
         "exports": [
           "resolveConcurrency",
+          "resolvePromptCharacterLimit",
           "loadJsonFile",
           "loadPackageField",
           "managedDir",
@@ -18556,47 +19130,44 @@
           "loadRawConfigFromManagedDirectory",
           "mergeConfigOverlay",
           "DEFAULT_CONCURRENCY",
-          "DEFAULT_LANG"
+          "DEFAULT_LANG",
+          "DEFAULT_PROMPT_CHARACTER_LIMIT"
         ],
         "extends": null,
         "usedBy": [
           "src/help.js",
           "src/lib/active-flow-registry.js",
+          "src/lib/agent.js",
           "src/lib/container.js",
           "src/lib/flow-manager.js",
-          "src/lib/flow-store.js",
+          "src/lib/flow-recovery-target.js",
           "src/lib/flow-target-identity-authority.js",
           "src/lib/guardrail.js",
           "src/lib/hooks.js",
           "src/lib/i18n.js",
+          "src/lib/layout-migration.js",
           "src/lib/plugin-registry.js",
           "src/lib/preparing-flow-store.js",
           "src/lib/presets.js",
-          "src/lib/upgrade-migration.js",
           "src/presets/base/tests/acceptance/fixtures/src/index.js",
           "src/setup.js",
-          "src/upgrade.js",
-          "src/lib/layout-migration.js",
-          "src/lib/flow-recovery-target.js"
+          "src/upgrade.js"
         ],
         "id": "dff6e5b4",
-        "summary": "Configuration utilities load, validate, and merge managed project settings from JSON files and plugin defaults. The module centralizes path resolution, language defaults, and schema-aware overlay behavior.",
-        "detail": "This file defines core configuration constants such as default concurrency and default language, then provides helpers for resolving managed directory paths and working directories. It loads `config.json` and optional `config.local.json`, validates that inputs are non-null objects, and raises explicit errors for malformed or missing data. The implementation merges overlays recursively, including array entries keyed by `id`, so local configuration can selectively override base records without replacing whole collections. Plugin support extends the base schema by loading plugin manifests, additional schemas, and namespaced default values from managed plugin directories. Validation logic also enforces safe plugin source paths, constrained test command syntax, and root-relative test path rules.",
+        "summary": "Loads, validates, and merges project configuration and plugin configuration.",
+        "detail": "Defines configuration defaults, managed paths, work-directory resolution, language loading, schema validation, safe plugin settings, local overlays, plugin-provided schemas, and plugin defaults merged into the project configuration.",
         "chapter": "configuration",
-        "role": "lib",
+        "role": "config",
         "enrich": {
-          "processedAt": "2026-08-14T01:23:09.528Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "configuration",
-          "config schema",
-          "json loading",
-          "settings merge",
-          "plugin defaults",
-          "validation",
-          "overlay merge",
-          "work directory"
+          "configuration loading",
+          "schema validation",
+          "plugin config",
+          "managed directories",
+          "config merging"
         ]
       },
       {
@@ -20254,17 +20825,19 @@
       },
       {
         "file": "src/lib/guardrail.js",
-        "hash": "b9d6b318ff833c9613590f117fc7195f",
-        "lines": 240,
-        "mtime": "2026-09-08T05:19:00.467Z",
+        "hash": "bc23e7542fbd30bdf787938a26f1d411",
+        "lines": 259,
+        "mtime": "2026-09-10T08:54:50.679Z",
         "className": "guardrail",
         "methods": [
+          "GuardrailArticlePromptElement",
           "loadGuardrailFile",
           "filterByPhase",
           "matchScope",
           "guardrailAllowsAcknowledgedException",
           "loadMergedGuardrails",
           "parseLintString",
+          "assertGuardrailBody",
           "hydrate",
           "resolveGuardrailContext",
           "readGuardrailFile",
@@ -20275,12 +20848,15 @@
         "imports": [
           "fs",
           "path",
+          "node:crypto",
+          "./prompt-batching.js",
           "./config.js",
           "./presets.js",
           "../docs/lib/scanner.js",
           "./constants.js"
         ],
         "exports": [
+          "GuardrailArticlePromptElement",
           "loadGuardrailFile",
           "filterByPhase",
           "matchScope",
@@ -20288,28 +20864,25 @@
           "loadMergedGuardrails",
           "ACKNOWLEDGED_EXCEPTION_MARKER"
         ],
-        "extends": null,
+        "extends": "AtomicPromptElement",
         "usedBy": [
           "src/lib/lint.js"
         ],
         "id": "bb462f4e",
-        "summary": "Provides shared guardrail loading, filtering, scope matching, preset resolution, and project-level merging from guardrail JSON files. It also preserves and detects clauses that acknowledge specific exceptions.",
-        "detail": "Guardrail files are parsed from JSON and hydrated with source metadata, including compiled lint patterns and validated entry fields. Guardrails can be filtered by execution phase and matched against file paths using scope rules and filename-aware pattern handling. Preset guardrails are resolved through the preset chain, then merged with project guardrails by identifier so overrides and additions remain deterministic. Special acknowledged-exception clauses and target identifiers are preserved during merging, with a helper exposing whether a guardrail permits such an exception.",
+        "summary": "Loads, filters, matches, and merges guardrails from project and preset files.",
+        "detail": "Implements guardrail JSON parsing and hydration, phase filtering, file-scope matching, preset resolution, identifier-based merging, and preservation of acknowledged-exception clauses.",
         "chapter": "configuration",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-09T05:48:46.008Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
           "guardrails",
-          "JSON configuration",
+          "preset guardrails",
           "phase filtering",
           "scope matching",
-          "preset inheritance",
-          "merge by ID",
-          "lint patterns",
-          "acknowledged exceptions"
+          "guardrail merging"
         ]
       },
       {
@@ -21983,6 +22556,146 @@
         ]
       },
       {
+        "file": "src/lib/prompt-batching.js",
+        "hash": "7fce5749ebaa16717ea59948775fcb95",
+        "lines": 1587,
+        "mtime": "2026-09-10T13:06:58.766Z",
+        "className": "prompt-batching",
+        "methods": [
+          "normalizePromptRequest",
+          "PromptBatchingError",
+          "PromptRequestLimit",
+          "PromptCoverageEntry",
+          "PromptInputElement",
+          "AtomicPromptElement",
+          "RepeatedPromptContextElement",
+          "RangedTextPromptElement",
+          "PartitionedPromptPayloadElement",
+          "PromptReferenceElement",
+          "PromptElementPartition",
+          "PromptLogicalFootprint",
+          "PromptBatchContext",
+          "PromptRequestEnvelope",
+          "PromptInputCollection",
+          "PromptInputBuilder",
+          "PromptBatchGroup",
+          "PromptScopedBinding",
+          "PromptBatchTopology",
+          "LinearPromptBatchTopology",
+          "GroupedPromptBatchTopology",
+          "ScopedCartesianPromptBatchTopology",
+          "PromptBatch",
+          "PromptBatchPlan",
+          "PromptExecutionLimit",
+          "PromptExecutionBudget",
+          "PromptProviderCallAdmission",
+          "PromptBatchCompletion",
+          "PromptBatchReducer",
+          "PromptCompletionReducer",
+          "PromptBatchExecutor",
+          "PromptReductionLevel",
+          "PromptReductionPlan",
+          "requiredText",
+          "safeInteger",
+          "asRequestLimit",
+          "digest",
+          "jsonText",
+          "renderedLength",
+          "safeSliceEnd",
+          "cloneAndFreeze",
+          "failureClass",
+          "assertUniqueElements",
+          "assertElementCoverage",
+          "collectionDigest",
+          "buildEnvelopeRequest",
+          "splitRangedElementToFit",
+          "requestDigest",
+          "replaceWithFittingRanges",
+          "packGroups",
+          "assertPlanPayloadCoverage",
+          "responseCharacterCount",
+          "responseItemCount",
+          "assertProjection"
+        ],
+        "imports": [
+          "node:crypto"
+        ],
+        "exports": [
+          "normalizePromptRequest",
+          "PromptBatchingError",
+          "PromptRequestLimit",
+          "PromptCoverageEntry",
+          "PromptInputElement",
+          "AtomicPromptElement",
+          "RepeatedPromptContextElement",
+          "RangedTextPromptElement",
+          "PartitionedPromptPayloadElement",
+          "PromptReferenceElement",
+          "PromptElementPartition",
+          "PromptLogicalFootprint",
+          "PromptBatchContext",
+          "PromptRequestEnvelope",
+          "PromptInputCollection",
+          "PromptInputBuilder",
+          "PromptBatchGroup",
+          "PromptScopedBinding",
+          "PromptBatchTopology",
+          "LinearPromptBatchTopology",
+          "GroupedPromptBatchTopology",
+          "ScopedCartesianPromptBatchTopology",
+          "PromptBatch",
+          "PromptBatchPlan",
+          "PromptExecutionLimit",
+          "PromptExecutionBudget",
+          "PromptProviderCallAdmission",
+          "PromptBatchCompletion",
+          "PromptBatchReducer",
+          "PromptCompletionReducer",
+          "PromptBatchExecutor",
+          "PromptReductionLevel",
+          "PromptReductionPlan",
+          "GLOBAL_PROMPT_ELEMENT_HARD_MAX",
+          "PromptElementTooLargeFailure",
+          "PromptPartitionNoProgressFailure",
+          "PromptFixedContextTooLargeFailure",
+          "PromptCoverageInvalidFailure",
+          "PromptBatchOverflowFailure",
+          "PromptInvocationProjectionOverflowFailure",
+          "PromptBatchCountExceededFailure",
+          "PromptCallLimitExceededFailure",
+          "PromptResponseTooLargeFailure",
+          "PromptResponseInvalidFailure",
+          "PromptResponseCoverageInvalidFailure",
+          "PromptBatchExecutionIncompleteFailure",
+          "PromptReductionDidNotConvergeFailure"
+        ],
+        "extends": "Error",
+        "usedBy": [
+          "src/lib/agent.js",
+          "src/lib/config.js",
+          "src/lib/guardrail.js",
+          "src/lib/spec-json.js"
+        ],
+        "id": "92459e32",
+        "summary": "Implements the generic prompt batching and execution framework.",
+        "detail": "Provides typed prompt elements, ranged partitioning, coverage tracking, request limits, batch topologies, execution budgets, provider-call admission, response contracts, concurrent execution, and reduction plans. It enforces size, identity, ordering, coverage, and convergence constraints throughout prompt processing.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-10T13:54:22.244Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "prompt batching",
+          "request limits",
+          "range partitioning",
+          "coverage validation",
+          "batch execution",
+          "reduction framework",
+          "execution budgets"
+        ]
+      },
+      {
         "file": "src/lib/prompt-builder.js",
         "hash": "e7a2775afc60d40a9c9ce6a074501339",
         "lines": 75,
@@ -22316,9 +23029,9 @@
       },
       {
         "file": "src/lib/schema-validate.js",
-        "hash": "577f7daf82b72eab99524d1f0653a6cb",
-        "lines": 170,
-        "mtime": "2026-09-07T03:21:29.156Z",
+        "hash": "9c98a15c7a628a1f1c3bd8b270fa727c",
+        "lines": 173,
+        "mtime": "2026-09-10T08:54:50.679Z",
         "className": "schema-validate",
         "methods": [
           "validateSchema",
@@ -22337,23 +23050,20 @@
           "src/lib/spec-json.js"
         ],
         "id": "8bb94bbb",
-        "summary": "Implements lightweight validation for values against JSON-schema-like definitions and accumulates readable validation errors. It includes type handling, recursive checks, and special logic for detecting fully anchored string patterns.",
-        "detail": "The exported validator traverses schema constraints and returns an error collection, stopping deeper checks when a value or schema branch cannot be meaningfully validated. Type matching supports both single schema types and arrays of permitted types, with a helper that maps JavaScript values to schema-compatible type names. Pattern analysis inspects escaped backslashes so anchor detection distinguishes active regular-expression anchors from escaped characters. The design favors defensive, incremental validation and preserves the current path to identify the location of failures.",
+        "summary": "Validates JavaScript values against a compact schema representation.",
+        "detail": "Provides recursive schema validation with error collection, type checks, support for union types, and regular-expression anchor analysis used to assess schema constraints.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-07T11:36:06.785Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
           "schema validation",
-          "JSON Schema",
           "type checking",
-          "recursive validation",
-          "error paths",
+          "union types",
           "regular expressions",
-          "pattern anchors",
-          "JavaScript"
+          "error collection"
         ]
       },
       {
@@ -22517,15 +23227,16 @@
       },
       {
         "file": "src/lib/spec-json.js",
-        "hash": "3bd198476f73791f81cf34160799d8b2",
-        "lines": 229,
-        "mtime": "2026-09-03T02:55:38.472Z",
+        "hash": "a1def4a78e9c0d8d5572c515c3426a08",
+        "lines": 247,
+        "mtime": "2026-09-10T08:54:50.680Z",
         "className": "spec-json",
         "methods": [
           "loadSpecJsonSchema",
           "resolveSpecJsonPath",
           "resolveSpecDir",
           "loadSpecJson",
+          "RequirementPromptElement",
           "validateSpecJsonObject",
           "tryLoadSpecJson",
           "saveSpecJson",
@@ -22536,6 +23247,8 @@
         ],
         "imports": [
           "node:fs",
+          "node:crypto",
+          "./prompt-batching.js",
           "./canonical-task-requirement-map.js",
           "node:path",
           "node:url",
@@ -22546,6 +23259,7 @@
           "resolveSpecJsonPath",
           "resolveSpecDir",
           "loadSpecJson",
+          "RequirementPromptElement",
           "validateSpecJsonObject",
           "tryLoadSpecJson",
           "saveSpecJson",
@@ -22553,25 +23267,23 @@
           "emptySpecStub",
           "specJsonToPromptText"
         ],
-        "extends": null,
+        "extends": "AtomicPromptElement",
         "usedBy": null,
         "id": "e288cfbd",
-        "summary": "spec-json.js provides filesystem utilities for locating, loading, validating, saving, and formatting spec.json documents. It centralizes schema access and requirement-ID normalization for consistent specification handling.",
-        "detail": "Schema loading resolves the bundled schema relative to the module and caches the parsed JSON, while the public loader returns a cloned schema to prevent accidental mutation. Path helpers accept either a spec directory or a spec.json file and normalize both forms to a concrete file or directory path. Loading parses JSON and optionally validates it against the schema, then constructs a CanonicalTaskRequirementMap to enforce canonical task requirements. The module also supports nullable loading, validated persistence, empty specification stubs, usable requirement enumeration, and conversion of specifications into prompt-oriented text.",
-        "chapter": "configuration",
+        "summary": "Loads, validates, saves, and renders project spec.json files.",
+        "detail": "Provides spec schema loading, path and directory resolution, JSON parsing and persistence, schema validation, requirement identifier enumeration, empty spec creation, requirement prompt elements, and conversion of specifications into prompt text.",
+        "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-03T02:57:01.134Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
           "spec.json",
-          "schema validation",
-          "filesystem paths",
-          "canonical requirements",
-          "configuration loading",
-          "JSON persistence",
-          "prompt generation"
+          "spec validation",
+          "requirement enumeration",
+          "prompt rendering",
+          "schema loading"
         ]
       },
       {
@@ -22815,9 +23527,9 @@
       },
       {
         "file": "src/lib/types.js",
-        "hash": "ee5c38d3b7c022649d573809112b091c",
-        "lines": 98,
-        "mtime": "2026-08-10T16:21:08.672Z",
+        "hash": "0cd63c87d07fa1dd8da10ef597ee146a",
+        "lines": 99,
+        "mtime": "2026-09-10T08:54:50.680Z",
         "className": "types",
         "methods": [],
         "imports": [],
@@ -22825,22 +23537,18 @@
         "extends": null,
         "usedBy": null,
         "id": "69d5afb4",
-        "summary": "The provided extract for `src/lib/types.js` contains no visible implementation. No concrete runtime logic, exports, or type definitions can be derived from the snippet alone.",
-        "detail": "Because the code block is empty, there is not enough evidence to describe actual structures, functions, or module behavior. The filename suggests it may define shared type aliases or documentation-oriented type helpers, but that is only an inference from naming and not confirmed by the extract. A precise architectural placement beyond that would be speculative. Metadata for this entry therefore reflects the absence of observable code rather than unstated repository assumptions.",
-        "chapter": "project_structure",
+        "summary": "No source content is supplied for this range.",
+        "detail": "The specified range is empty, so no implementation behavior or type definitions can be determined from the provided extract.",
+        "chapter": "overview",
         "role": "other",
         "enrich": {
-          "processedAt": "2026-08-14T01:23:09.573Z",
+          "processedAt": "2026-09-10T12:55:19.937Z",
           "attempts": 1
         },
         "keywords": [
-          "types module",
-          "shared types",
-          "type definitions",
-          "interfaces",
-          "declarations",
-          "empty extract",
-          "module placeholder"
+          "empty source",
+          "source range",
+          "metadata"
         ]
       },
       {
@@ -23470,7 +24178,8 @@
           "src/lib/flow-target-identity-authority.js",
           "src/lib/upgrade-migration.js",
           "src/lib/layout-migration.js",
-          "src/lib/flow-recovery-target.js"
+          "src/lib/flow-recovery-target.js",
+          "src/lib/agent.js"
         ],
         "id": "4cbf369b"
       },
@@ -23895,10 +24604,10 @@
       }
     ],
     "summary": {
-      "total": 415,
-      "totalMethods": 4442
+      "total": 427,
+      "totalMethods": 4604
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-09T08:39:40.039Z"
+  "enrichedAt": "2026-09-11T00:26:57.687Z"
 }

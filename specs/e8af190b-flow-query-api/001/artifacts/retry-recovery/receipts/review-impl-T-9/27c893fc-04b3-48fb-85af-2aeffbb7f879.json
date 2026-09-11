@@ -1,0 +1,34 @@
+{
+  "previous": {
+    "route": {
+      "kind": "review",
+      "phase": "impl",
+      "taskId": "T-9"
+    },
+    "attemptId": "attempt-T-9-review-f4fd1665-33af-4945-812f-e93a2447417d",
+    "attempt": 1,
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "projectDigest": "4a2c1b090cba0a2d881f7ba9e51bd94cc0ba31e012f130665838a103ae4d6f20",
+    "runtimeDigest": "e922fe0faed7cfa49e6aed2e97504903eecdbaa8ddfa6a8bf98062c59685e81d",
+    "targetDigest": "4a2c1b090cba0a2d881f7ba9e51bd94cc0ba31e012f130665838a103ae4d6f20"
+  },
+  "current": {
+    "route": {
+      "kind": "review",
+      "phase": "impl",
+      "taskId": "T-9"
+    },
+    "attemptId": "27c893fc-04b3-48fb-85af-2aeffbb7f879",
+    "attempt": 2,
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "projectDigest": "3c6b257b2dbc42acaaa91937c90e0ea626b51c455fb2a828b447f78a0415fae0",
+    "runtimeDigest": "b85195d737535b8237da4786df1463d0772fcbd08a25a12bf85d250c0cdcafb3",
+    "targetDigest": "3c6b257b2dbc42acaaa91937c90e0ea626b51c455fb2a828b447f78a0415fae0"
+  },
+  "reason": "Integrated the bounded Task Review prompt planner from main and migrated canonical legacy evidence to the current contracts.",
+  "reevaluationCount": 1
+}

@@ -1,0 +1,61 @@
+{
+  "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+  "specId": "e8af190b-flow-query-api",
+  "taskId": "T-9",
+  "role": "repair",
+  "attempt": {
+    "id": "attempt-T-9-repair-3e1f35eb-8594-42e3-9aa7-f26d1c05de69",
+    "sequence": 1
+  },
+  "budget": {
+    "round": 1,
+    "reviewAttemptSequenceAtStart": 0,
+    "gateAttemptSequenceAtStart": 0
+  },
+  "sourceFingerprint": "2ede5ce1d9b0bc9bc64937498bc3b610c9e98cb43e50dbab9c8a7a903d6197e4",
+  "manifest": {
+    "attempt": {
+      "id": "attempt-T-9-repair-3e1f35eb-8594-42e3-9aa7-f26d1c05de69",
+      "nodeId": "T-9-repair",
+      "sequence": 1
+    },
+    "baselineDigest": "9a01d8d0ae6e97c566e78133af26f7637f36e1cd9f8d58318274ae8a8be3d2a3",
+    "mutations": [
+      {
+        "mutationId": "48478a0f8a42c7dee74ef6af29299fa26d09ba0c32d5194bdedd71c800bd76b6",
+        "path": "src/flow/query.js",
+        "changeKind": "content",
+        "beforeKind": "file",
+        "beforeMode": 436,
+        "beforeDigest": "92b70ccc4ee5c499aaac8d1590a9726993e76822ae3ff658024e6b8115fb22df",
+        "afterKind": "file",
+        "afterMode": 436,
+        "afterDigest": "83a670225c445793afe49a9327321d66b0aba9d468d57c49fed5d851bd5709e0"
+      },
+      {
+        "mutationId": "c2f4d3fc3f7c015cfee8dbab077aefc7e2908e39c3fbc328634682dd26f48847",
+        "path": "tests/integration/flow/query.test.js",
+        "changeKind": "content",
+        "beforeKind": "file",
+        "beforeMode": 436,
+        "beforeDigest": "9a1bee3a01a5ef7c36264c749273b58a65b42a174559f43761b3b5f1961aa121",
+        "afterKind": "file",
+        "afterMode": 436,
+        "afterDigest": "63d1bc26c403ebeb3a26a17ad3da24a6ae99f5dfe5e2d7abfb76da01a7786014"
+      },
+      {
+        "mutationId": "bcaa44c18445c884f4bd5b091704190ee1d85809b91a059d848d227f25cfbd25",
+        "path": "tests/support/builders/flow-query-consumer.js",
+        "changeKind": "content",
+        "beforeKind": "file",
+        "beforeMode": 436,
+        "beforeDigest": "b35c58710a118ad1f634ad7c981894b91ff36634c69b8e41ac9b42c52110357b",
+        "afterKind": "file",
+        "afterMode": 436,
+        "afterDigest": "46ad37feba2653112e3ec8a1c2de2cf39620bec21e651ae7cb605765bc497b10"
+      }
+    ],
+    "digest": "2ede5ce1d9b0bc9bc64937498bc3b610c9e98cb43e50dbab9c8a7a903d6197e4"
+  },
+  "noChangeReason": null
+}

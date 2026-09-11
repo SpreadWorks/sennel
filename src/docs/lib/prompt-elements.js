@@ -25,6 +25,7 @@ export class DocumentationAnalysisPromptElement extends RangedTextPromptElement 
   toPromptText() {
     return [
       `### [${this.id}] entry=${this.category}:${this.index} file=${this.file} range=${this.start}:${this.end}/${this.sourceLength}`,
+      JSON.stringify({ elementId: this.id, category: this.category, index: this.index }),
       "```",
       this.text,
       "```",

@@ -104,7 +104,8 @@ function entryKey(category, index) {
 const ENRICH_FMT_FALLBACK = [
   "## Output format",
   "Return a JSON object with the following structure:",
-  '{"entries": [{"elementId": "analysis:modules:0", "category": "modules", "index": 0, "summary": "...", "detail": "...", "chapter": "...", "role": "...", "keywords": [...], "app": null}]}',
+  '{"entries": [{"elementId": "<copy target elementId>", "category": "<copy target category>", "index": 0, "summary": "...", "detail": "...", "chapter": "...", "role": "other", "keywords": ["...", "...", "..."], "app": null}]}',
+  "Copy the exact elementId, category and numeric index from each target identity; example values are placeholders.",
   "Return ONLY valid JSON, no markdown fences, no explanation text.",
 ].join("\n");
 

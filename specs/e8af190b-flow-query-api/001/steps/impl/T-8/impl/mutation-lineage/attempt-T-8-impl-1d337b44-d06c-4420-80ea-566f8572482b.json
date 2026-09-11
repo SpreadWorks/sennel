@@ -12,7 +12,7 @@
     "reviewAttemptSequenceAtStart": 0,
     "gateAttemptSequenceAtStart": 0
   },
-  "sourceFingerprint": "ce96992f04aae91f9f9147499cf0b73d87bcc7b0383070ebe053df584d26b041",
+  "sourceFingerprint": "d677d758528df02eaefc66b747b6ab93c5faf4ff09aae9866798bb932e2ba833",
   "manifest": {
     "attempt": {
       "id": "attempt-T-8-impl-1d337b44-d06c-4420-80ea-566f8572482b",
@@ -25,25 +25,37 @@
         "mutationId": "9ec0c53a3401d1a2d022167d46920e03647f09551e156ec4b88c57b3fe58a9c9",
         "path": "tests/integration/flow/query.test.js",
         "changeKind": "content",
+        "beforeKind": "file",
+        "beforeMode": null,
         "beforeDigest": "0e84b748f2067b9b38cf0df34aa36278f037571b2f794fba3edd16dde4285fe0",
+        "afterKind": "file",
+        "afterMode": null,
         "afterDigest": "af9aee1d844af0c508b8898550b49d626416e20902b09f5e4b24ff43eeebc4a3"
       },
       {
         "mutationId": "465175a977924146512a7fd6f94236961270a93f5499320adbcde4a3e39679cb",
         "path": "tests/support/builders/flow-query-fixture.js",
         "changeKind": "added",
+        "beforeKind": "missing",
+        "beforeMode": null,
         "beforeDigest": null,
+        "afterKind": "file",
+        "afterMode": null,
         "afterDigest": "93f8ecc124b95fcccf57b8fe75f6f781d62954304fe842d05ee649eb65e70b6f"
       },
       {
         "mutationId": "fa72fbac6b9d9669504a631daafa246d7b78bcb7e880ce6442d2118bd49d4a13",
         "path": "tests/support/infrastructure/flow-setup.js",
         "changeKind": "content",
+        "beforeKind": "file",
+        "beforeMode": null,
         "beforeDigest": "ae3f9e77d4a0d0a7a7e70cb6c3269f204ad83014a4445df94641ecb013541d0a",
+        "afterKind": "file",
+        "afterMode": null,
         "afterDigest": "415b4d282c277d90d71f85334c20ce70a1da4ae4167126a0d605a354ecfe20f5"
       }
     ],
-    "digest": "ce96992f04aae91f9f9147499cf0b73d87bcc7b0383070ebe053df584d26b041"
+    "digest": "d677d758528df02eaefc66b747b6ab93c5faf4ff09aae9866798bb932e2ba833"
   },
   "noChangeReason": null
 }

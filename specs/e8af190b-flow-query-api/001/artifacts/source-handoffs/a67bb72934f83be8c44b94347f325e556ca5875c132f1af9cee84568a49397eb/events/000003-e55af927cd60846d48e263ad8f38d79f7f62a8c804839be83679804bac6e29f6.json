@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "identity": {
+    "flowIdentity": {
+      "flowId": "flow-e8af190b-d8eb-48b7-92f9-414f466f7501",
+      "flowVersionId": "flow-v1-e8af190b-d8eb-48b7-92f9-414f466f7501",
+      "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+      "specId": "e8af190b-flow-query-api",
+      "issue": 517
+    },
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "stepId": "task-repair",
+    "taskId": "T-9",
+    "attempt": {
+      "id": "attempt-T-9-repair-19d44d09-8a89-45a6-b3dc-48e5247e06c8",
+      "nodeId": "T-9-repair",
+      "sequence": 2
+    },
+    "nodeId": "T-9-repair",
+    "dispatchInvocationId": "5e70833e-5a70-4603-8f16-93a05abc6d5f",
+    "actionDigest": "9f02b89a573d15259ee64ed5f2910be5f27938195f24b60eaf25ddab0371fde5",
+    "inputDigest": "916050a0527b60b5e1a867802a437eaeae43ab29acd957ecd7fcad6c91db0c15",
+    "policyRevision": "a6308061594ac66a025dd75e1d25854f7dc311bd91fe6dbf43fc8977813851c8",
+    "canonicalGeneration": "e3deb9ae50a263a22e88a3f30b3341a7bba860f422af637b299b5d613fd6dc9f"
+  },
+  "checkpointDigest": "eeaf2b91977f042035bd1d3551c09df93f2c4f35c174865dbb8c271d6a64eba9",
+  "sequence": 3,
+  "previousDigest": "92057231386b754fd4090a45d5ff1aef3aaba5ab3fdb86aa69b9ecfea54fa1e7",
+  "kind": "worker-exited",
+  "requestDigest": "28ca802af17f806c69c11a6669542b73ad4cfa580bc20720273d7d13f8f93b90",
+  "rollbackPlanDigest": null,
+  "sourceManifest": {
+    "attempt": {
+      "id": "attempt-T-9-repair-19d44d09-8a89-45a6-b3dc-48e5247e06c8",
+      "nodeId": "T-9-repair",
+      "sequence": 2
+    },
+    "baselineDigest": "22c34da17a7ea3bcd0039e60cbbefe28a3f7040f44d5087e9e0cadd09548859d",
+    "mutations": [
+      {
+        "mutationId": "218acecc3b64d1156b230f27963641dd0146bb6131c99de2c0dd529934f737ec",
+        "path": "src/flow/query.js",
+        "changeKind": "content",
+        "beforeKind": "file",
+        "beforeMode": 436,
+        "beforeDigest": "83a670225c445793afe49a9327321d66b0aba9d468d57c49fed5d851bd5709e0",
+        "afterKind": "file",
+        "afterMode": 436,
+        "afterDigest": "2d6c7c56e062f819725beff8b3383beb7c3e4e01c57ae33c2e07242bdfd37af5"
+      }
+    ],
+    "digest": "b0e4d0cd1d3b1b58d9ae521e82db6ad89fcb825f2deb2edf7737cd5d9c5c5a53"
+  },
+  "workerStopped": true,
+  "failureFacts": null,
+  "digest": "e55af927cd60846d48e263ad8f38d79f7f62a8c804839be83679804bac6e29f6"
+}
