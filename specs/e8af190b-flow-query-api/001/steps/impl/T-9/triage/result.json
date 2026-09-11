@@ -471,6 +471,264 @@
           "unreviewedAfterRepair": false
         }
       }
+    },
+    {
+      "attempt": 5,
+      "nodeId": "T-9-triage",
+      "outcome": "completed",
+      "result": {
+        "outcome": "passed",
+        "summary": "Worker handoff confirmed for task-triage.",
+        "confirmedAt": "2026-09-11T05:07:35.780Z",
+        "artifactRefs": [
+          {
+            "kind": "worker-handoff",
+            "id": "b5fce1f513f3a7f9e2e774afd58450fd7e94734840fd3dfb17fce4700dfc79de"
+          },
+          {
+            "kind": "worker-handoff-request",
+            "id": "6d4c5fa1a93beb1c0da3d28ae14b992b8f8d767d992f347a22b1020e559ed355"
+          }
+        ]
+      },
+      "artifact": {
+        "logicalKey": "task.triage",
+        "payload": {
+          "version": 1,
+          "taskId": "T-9",
+          "binding": {
+            "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+            "specId": "e8af190b-flow-query-api",
+            "flowVersion": 1,
+            "taskId": "T-9",
+            "taskRound": 2,
+            "reviewOrdinal": 1,
+            "specDigest": "edda99f614016395d8dfa8106b6d3695ba167acbac16975ce29005c2ebc2feb7",
+            "contextDigest": "f6a277486d7edf416caef9967dd1785af566f94a0c4eb1953ff5f4b530b7a84b",
+            "sourceFingerprint": "d391339ed5300781c649a0b3d73b8530932711e84d5da54baa1b08d2ebf9db7f",
+            "review": {
+              "logicalKey": "task.review",
+              "digest": "78ef76eca09e774ba23b8c82d266e91a88ef03a5c1171a3661ddcfe444df97f3",
+              "payloadDigest": "1dd841dbc223212f4817ccbdfa393254326709eff2ed1c4c2fcbc553a2f2b109",
+              "activityId": "task-review-stage-confirmed-4de57fdf-6934-415f-aa55-ac6702d4d7fd",
+              "attemptId": "bf916346-cbfe-4625-839f-4aaf7c0d91cc",
+              "sequence": 7
+            },
+            "triage": null
+          },
+          "attempt": {
+            "id": "attempt-T-9-triage-a3a863fa-3868-414b-b45d-bf4e90ef2965",
+            "nodeId": "T-9-triage",
+            "sequence": 5
+          },
+          "handoffDigest": "b5fce1f513f3a7f9e2e774afd58450fd7e94734840fd3dfb17fce4700dfc79de",
+          "reviewFindings": [
+            {
+              "findingKey": "artifact-read-failure-code",
+              "title": "Artifact read failures are misclassified",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "Cataloged artifact read, permission, or missing-file failures can be returned as CANONICAL_RECORD_INCONSISTENT instead of CANONICAL_RECORD_UNREADABLE.",
+              "suggestion": "Preserve filesystem/read failures as CANONICAL_RECORD_UNREADABLE and reserve CANONICAL_RECORD_INCONSISTENT for integrity or schema violations.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R13 contradiction violates the canonical-record error contract.",
+              "findingId": "c9da7d00fa10034a01772535f3d91b5192f1f3d10631a07dec44168012bc5da9",
+              "fingerprint": "c9da7d00fa10034a01772535f3d91b5192f1f3d10631a07dec44168012bc5da9",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "artifact-digest-proto-key-loss",
+              "title": "Artifact digest canonicalization loses an own __proto__ key",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R7",
+              "issue": "canonicalJson() does not faithfully serialize an object containing its own __proto__ property, so artifact digests can differ from the artifact bytes.",
+              "suggestion": "Serialize own keys, including an own __proto__ key, without prototype reinterpretation, and add a digest regression assertion.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R7 defect makes artifact integrity verification unfaithful.",
+              "findingId": "314e24661e0c8583de9962ad05365446f8d0e59e9f91b250f7c2965b5fe0fbf2",
+              "fingerprint": "314e24661e0c8583de9962ad05365446f8d0e59e9f91b250f7c2965b5fe0fbf2",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "historical-replay-integrity-gap",
+              "title": "Historical replay skips activity and resulting-state integrity checks",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R8",
+              "issue": "Historical-state validation checks ordering and evidence but may bypass Activity node/transition validation and equality of replayed state with stored state.",
+              "suggestion": "Apply the same FlowActivity node, transition, and resulting-state checks to historical confirmation replay before accepting canonical state.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R8 gap can accept inconsistent canonical history.",
+              "findingId": "2d23b5a69c38f50f4113b5de264f12805b6a29898f96286564c17e5505f0a28a",
+              "fingerprint": "2d23b5a69c38f50f4113b5de264f12805b6a29898f96286564c17e5505f0a28a",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "metadata-issues-cardinality",
+              "title": "Metadata permits too many issues",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R5",
+              "issue": "The metadata projection accepts multiple issues although the public contract permits zero or one issue.",
+              "suggestion": "Enforce zero-or-one cardinality in the metadata projection and reject nonconforming canonical data.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R5 schema contradiction violates the public metadata contract.",
+              "findingId": "1a95e0db47cbef31e0ad7a633dd6c91e31ac6c7b69546c255ee9ad3e8505053a",
+              "fingerprint": "1a95e0db47cbef31e0ad7a633dd6c91e31ac6c7b69546c255ee9ad3e8505053a",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "metadata-blocker-derivation",
+              "title": "Metadata blocker fields are not derived consistently",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R5",
+              "issue": "Metadata does not fully enforce the blocked/blocker/nextAction relationship or blocker:null when unblocked.",
+              "suggestion": "Derive blocked, blocker, and nextAction using the documented precedence, emit blocker:null when unblocked, and reject missing blocker evidence as canonical inconsistency.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R5 violation produces inconsistent lifecycle and blocker metadata.",
+              "findingId": "2db6976082fc5fc4331480cc5598e7d3a8a82442f9613153ff9b733db13a2655",
+              "fingerprint": "2db6976082fc5fc4331480cc5598e7d3a8a82442f9613153ff9b733db13a2655",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "version-discovery-symlink-toctou",
+              "title": "Version discovery follows symlinkable directories",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R8",
+              "issue": "Path-based opendir during version discovery lacks O_NOFOLLOW, leaving a symlink TOCTOU risk while selecting canonical Flow versions.",
+              "suggestion": "Use no-follow descriptor-based directory traversal and reject symlink records before consuming discovered paths.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R8 filesystem-integrity risk can select data outside the canonical version directory.",
+              "findingId": "426adc9ea536e4d529989a3dcb55003d445579c4ff3a8e63b25a58d7bbcbc90d",
+              "fingerprint": "426adc9ea536e4d529989a3dcb55003d445579c4ff3a8e63b25a58d7bbcbc90d",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "unestablished-version-selection",
+              "title": "Errors expose an unestablished Flow Version",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R12",
+              "issue": "An error may report the requested Flow Version as selected before discovery and reader.open() establish that it exists and is valid.",
+              "suggestion": "Keep selected Flow Version null until canonical discovery and reader.open() succeed; clear selection and available-version fields for missing or identity-invalid versions.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R12 envelope defect misrepresents canonical resource identity.",
+              "findingId": "2cb5f635700c99e78581f508d79ec5baf0c3986d5c3f516ddb3408d80fb2051c",
+              "fingerprint": "2cb5f635700c99e78581f508d79ec5baf0c3986d5c3f516ddb3408d80fb2051c",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "metadata-consumer-roundtrip-equality",
+              "title": "Metadata consumer does not verify the full public payload",
+              "failureMode": "missing_acceptance_requirement",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R4",
+              "issue": "The consumer only proves metadata consumption is non-null; it does not assert payload equality or usability of the required public fields without internal paths, raw catalogs, or generic envelopes.",
+              "suggestion": "Consume exactly one metadata item and compare the complete public metadata payload, including required fields, with the success fixture.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R4/T-9 acceptance gap does not establish the required metadata round-trip contract.",
+              "findingId": "c9e5659bcabccebd8ee0f54ed4f021a797b8d566b33922f865dd3a123426ae65",
+              "fingerprint": "c9e5659bcabccebd8ee0f54ed4f021a797b8d566b33922f865dd3a123426ae65",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "activity-consumer-pagination-coverage",
+              "title": "Activity consumer lacks required success-shape scenarios",
+              "failureMode": "missing_acceptance_requirement",
+              "file": "tests/integration/flow/query.test.js",
+              "requirementId": "R8",
+              "issue": "Consumer round-trip coverage omits bounded pages, cursor continuation, recordedAt filtering, and zero-match successful responses.",
+              "suggestion": "Add consumer assertions for bounded pagination, continuation cursors, inclusive/exclusive recordedAt filtering, zero-match success, pageInfo, items, and version fields.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R8/T-9 acceptance gap leaves required activity response branches unverified.",
+              "findingId": "0b236116e4e03be0573efbc4fc7057f5f82d670823bf4ef37d0f7480f4bd20c0",
+              "fingerprint": "0b236116e4e03be0573efbc4fc7057f5f82d670823bf4ef37d0f7480f4bd20c0",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "consumer-pageinfo-integer-limit",
+              "title": "Consumer rejects valid integer page limits",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R12",
+              "issue": "pageInfo(..., allowNullLimit=true) rejects integer limits even though activity error responses permit integer or null limits.",
+              "suggestion": "Allow a nonnegative integer limit in that assertion branch while retaining null acceptance where permitted.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R12/T-9 schema mismatch prevents consuming valid activity error responses.",
+              "findingId": "7b2be9168d2afa979754a0d9e00baa5e04606b6db41db6b46838ed6b42988e25",
+              "fingerprint": "7b2be9168d2afa979754a0d9e00baa5e04606b6db41db6b46838ed6b42988e25",
+              "repeatCount": 1
+            }
+          ],
+          "dispositions": [
+            {
+              "findingKey": "artifact-read-failure-code",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The immutable review identifies a must-fix R13 violation: artifact read, permission, and missing-file failures must remain CANONICAL_RECORD_UNREADABLE."
+            },
+            {
+              "findingKey": "artifact-digest-proto-key-loss",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The immutable review identifies a must-fix R7 integrity defect: canonical artifact digest serialization must preserve an own __proto__ key."
+            },
+            {
+              "findingKey": "historical-replay-integrity-gap",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The immutable review identifies a must-fix R8 integrity gap: historical replay must validate Activities and resulting state before acceptance."
+            },
+            {
+              "findingKey": "metadata-issues-cardinality",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The immutable review identifies a must-fix R5 schema violation: metadata relationships.issues must contain zero or one canonical issue."
+            },
+            {
+              "findingKey": "metadata-blocker-derivation",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The immutable review identifies a must-fix R5 lifecycle violation: blocked, blocker, and nextAction require the specified canonical derivation and consistency checks."
+            },
+            {
+              "findingKey": "version-discovery-symlink-toctou",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The immutable review identifies a must-fix R8 filesystem-integrity risk: version discovery must prevent symlink and TOCTOU substitution."
+            },
+            {
+              "findingKey": "unestablished-version-selection",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The immutable review identifies a must-fix R12 identity violation: selectedFlowVersion must remain null until canonical discovery and opening succeed."
+            },
+            {
+              "findingKey": "metadata-consumer-roundtrip-equality",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The immutable review identifies a must-fix R4 acceptance gap: the compatibility consumer must verify the complete public metadata payload."
+            },
+            {
+              "findingKey": "activity-consumer-pagination-coverage",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The immutable review identifies a must-fix R8 acceptance gap: consumer coverage must exercise pagination, filtering, zero matches, cursors, and version fields."
+            },
+            {
+              "findingKey": "consumer-pageinfo-integer-limit",
+              "disposition": "apply",
+              "basis": "repair-required",
+              "rationale": "The immutable review identifies a must-fix R12 contract mismatch: activity error pageInfo must accept both permitted integer and null limits."
+            }
+          ],
+          "unreviewedAfterRepair": false
+        }
+      }
     }
   ]
 }

@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+  "specId": "e8af190b-flow-query-api",
+  "taskId": "T-9",
+  "nodeId": "T-9-review",
+  "attempt": {
+    "id": "attempt-T-9-review-e673df49-2b7d-4b50-ba33-3a227b5b15ee",
+    "nodeId": "T-9-review",
+    "sequence": 6
+  },
+  "manifestDigest": "1e36da14cc0234177a17cc965c42c6de472bd38bbc55a2216bb4f52cbed0534f",
+  "taskSourceFingerprint": "d391339ed5300781c649a0b3d73b8530932711e84d5da54baa1b08d2ebf9db7f",
+  "baseline": {
+    "attempt": {
+      "id": "attempt-T-9-review-e673df49-2b7d-4b50-ba33-3a227b5b15ee",
+      "nodeId": "T-9-review",
+      "sequence": 6
+    },
+    "snapshot": {
+      "mode": "git",
+      "head": "d4dbf1faeb442a36cfadc307c9e1f3df44eea082",
+      "indexDigest": "1868c00b3e787c8e0f237bf8b76e45fbe3cb649a0bde598766a3707a7b2bf385",
+      "entries": [],
+      "ignoredDirectories": [
+        ".sennel/agent-cache",
+        ".sennel/review-execution-locks",
+        ".sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/b1249b0f2a226168c03bddc53f0c980b",
+        ".tmp/flow-agent",
+        ".tmp/flow-agent/logs"
+      ]
+    },
+    "digest": "952ddcfe544f9ff1f77056f5f32d7acfd63760d8033798263049fcf69aace39d"
+  },
+  "observed": {
+    "mode": "git",
+    "head": "d4dbf1faeb442a36cfadc307c9e1f3df44eea082",
+    "indexDigest": "1868c00b3e787c8e0f237bf8b76e45fbe3cb649a0bde598766a3707a7b2bf385",
+    "entries": [],
+    "ignoredDirectories": [
+      ".sennel/agent-cache",
+      ".sennel/review-execution-locks",
+      ".sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/b1249b0f2a226168c03bddc53f0c980b",
+      ".tmp/flow-agent",
+      ".tmp/flow-agent/logs"
+    ]
+  },
+  "digest": "574894341b2181ca262330f2ca45ae96859e6664b68ad4ed9a8a780d5d0b3baf"
+}

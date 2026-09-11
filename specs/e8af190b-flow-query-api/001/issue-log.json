@@ -11835,6 +11835,25 @@
         "requestedAt": "2026-09-10T16:33:43.432Z"
       },
       "issueLogId": "plan-gate-repair-e932c07445fce73c9e5cda9fa0af7c6ab063fdfd81dd173e76470c2ca83d53b2"
+    },
+    {
+      "step": "T-9-impl",
+      "reason": "The pre-start source handoff request exceeded the 8 MiB runtime request limit, and the main-integrated runtime initially reopened retired Version 3 checkpoint bodies during terminal cleanup.",
+      "trigger": "T-9-impl worker handoff preparation failed before worker execution.",
+      "resolution": "Verified zero source mutations, canonically quarantined the failed handoff, merged main, changed recovery to validate terminal cleanup authority without parsing retired checkpoint snapshot bodies, passed 56 recovery tests, and removed the consumed execution request. The current T-9 attempt was preserved.",
+      "taskId": "T-9",
+      "timestamp": "2026-09-11T03:16:19.718Z",
+      "issueLogId": "set-issue-log-eb9e08fdf5c544795e75124ace011269cce62da3ce79e28a84eb3ac072c09717"
+    },
+    {
+      "step": "T-9-review",
+      "reason": "T-9 review subprocess exceeded the shared 900-second outer timeout and ended with SIGTERM before publishing its canonical result",
+      "trigger": "The multi-call review completed eight provider calls but exceeded the whole-process deadline",
+      "resolution": "Set agent.timeout to 3600 seconds in the active worktree local configuration; review retry remains pending",
+      "guardrailCandidate": "Size the whole-review subprocess timeout separately from the timeout for one provider call",
+      "taskId": "T-9",
+      "timestamp": "2026-09-11T04:06:47.441Z",
+      "issueLogId": "set-issue-log-389a87ee59894cc5b72a3772d960a9095049d2326883ef7d04ed752cdad03d6c"
     }
   ]
 }

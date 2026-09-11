@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-11T00:26:31.202Z",
+  "analyzedAt": "2026-09-11T12:15:36.596Z",
   "package": {
     "entries": [
       {
@@ -3582,9 +3582,9 @@
       },
       {
         "file": "src/flow/definition.js",
-        "hash": "7d8dc75d12e4a13d360c3985ff9c7394",
-        "lines": 4213,
-        "mtime": "2026-09-09T08:37:33.887Z",
+        "hash": "60748a775e120072e2a273c4de74383d",
+        "lines": 4320,
+        "mtime": "2026-09-11T09:45:08.057Z",
         "className": "definition",
         "methods": [
           "SourceHandoffTransitionPlan",
@@ -3724,7 +3724,11 @@
           "getFlowNode",
           "getTaskNode",
           "SourceQualityIssueRecoveryRoute",
+          "SourceQualityIssueRecoveryPlan",
           "sourceQualityIssueRecoveryForStep",
+          "resolveSourceQualityIssueRecoveryPlan",
+          "TaskReviewStageCompletionPlan",
+          "resolveTaskReviewStageCompletion",
           "resolveMaxAttempts",
           "resolveToolingMaxAttempts",
           "resolveSideEffects",
@@ -3954,7 +3958,11 @@
           "getFlowNode",
           "getTaskNode",
           "SourceQualityIssueRecoveryRoute",
+          "SourceQualityIssueRecoveryPlan",
           "sourceQualityIssueRecoveryForStep",
+          "resolveSourceQualityIssueRecoveryPlan",
+          "TaskReviewStageCompletionPlan",
+          "resolveTaskReviewStageCompletion",
           "resolveMaxAttempts",
           "resolveToolingMaxAttempts",
           "resolveSideEffects",
@@ -4032,24 +4040,24 @@
           "src/flow/registry.js"
         ],
         "id": "2cb27b93",
-        "summary": "Defines the flow and task execution state machines, including transition planning, gate decisions, review routing, lifecycle actions, recovery, and immutable evidence handling. It also exposes the canonical flow definitions and helpers for navigating nodes, prerequisites, retries, and active steps.",
-        "detail": "The module uses typed facts, dispositions, plans, decisions, and capability tokens to constrain transitions to resolver-created objects. It models gate, non-gate, review, draft, finalization, publication, and source-handoff outcomes with explicit validation, retry policies, failure ownership, and recovery operations. Lifecycle adapters convert resolved decisions into status updates, metric changes, outbox effects, hooks, issue logs, and step resets. Stable JSON serialization and SHA-256 fingerprints bind non-gate decisions to immutable evidence, while route and node helpers derive ordering, phases, branches, prerequisites, and active execution state from the flow definitions.",
+        "summary": "Defines the flow and task workflow model, including typed transitions, lifecycle actions, recovery decisions, routing, and definition introspection.",
+        "detail": "This module centralizes workflow orchestration for source handoff, reviews, gates, finalization recovery, non-gate steps, draft questions, test-chain execution, and lifecycle planning. It validates inputs and transition ownership with typed facts, dispositions, plans, decisions, symbols, immutable values, fingerprints, and explicit failure policies. It declares the flow and task node definitions, review routes, retry limits, skippable steps, prerequisites, phase mappings, initial step states, active-step resolution, next-action derivation, source-quality recovery, and Task Review reconciliation APIs.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-09T08:39:39.942Z",
+          "processedAt": "2026-09-11T12:16:19.291Z",
           "attempts": 1
         },
+        "app": "senti",
         "keywords": [
-          "flow definition",
-          "state machine",
-          "transition resolver",
-          "gate routing",
+          "workflow orchestration",
+          "state transitions",
           "lifecycle actions",
-          "recovery",
-          "retry policy",
-          "immutable evidence",
-          "step navigation"
+          "recovery planning",
+          "flow definition",
+          "task routing",
+          "retry policies",
+          "typed decisions"
         ]
       },
       {
@@ -5052,9 +5060,9 @@
       },
       {
         "file": "src/flow/lib/canonical-flow-manager-store.js",
-        "hash": "225727d2647c5014b3ca677afbcef586",
-        "lines": 4984,
-        "mtime": "2026-09-09T08:37:33.888Z",
+        "hash": "f9aebf0bc9c3afab368b3c11099e9e06",
+        "lines": 4999,
+        "mtime": "2026-09-11T09:45:08.180Z",
         "className": "canonical-flow-manager-store",
         "methods": [
           "CanonicalRawActivityReplayOnlyError",
@@ -5185,25 +5193,23 @@
           "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "041f2538",
-        "summary": "CanonicalFlowManagerStore provides the authoritative persistence and transition-management layer for Flow executions. It validates state changes, coordinates runtime operations, and exposes canonical projections, artifacts, approvals, retries, recoveries, and review workflows.",
-        "detail": "The module enforces strict invariants around Flow, Task, Step, Attempt, artifact, catalog, and transition identities using typed admissions and conflict checks. It persists canonical state through runtime storage, atomic files, JSON artifacts, issue logs, metrics, notes, outboxes, and source handoff records while preventing stale or conflicting updates. Numerous specialized settlement paths handle gates, test chains, reviews, implementation repairs, draft promotion, source mutations, recovery, and finalization synchronization. Helper functions normalize identifiers, paths, execution modes, timestamps, metrics, activity IDs, and serialized payloads to preserve deterministic and replay-safe behavior.",
+        "summary": "Canonical flow manager store for durable task execution, review, recovery, and artifact state.",
+        "detail": "Implements the canonical persistence and transition boundary for flows. It validates and projects flow state, resolves canonical files and artifacts, manages Tasks, Steps, Attempts, Gates, reviews, metrics, notes, issue logs, source handoffs, draft promotion, upgrades, and outbox operations, and delegates atomic state changes to the runtime. Typed admission records, snapshot checks, stable activity identities, replay-only activity handling, catalog validation, lineage bindings, and conflict detection enforce lifecycle invariants and idempotent recovery across execution, failure, repair, and finalization paths.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-09T08:39:39.961Z",
+          "processedAt": "2026-09-11T12:16:19.291Z",
           "attempts": 1
         },
         "keywords": [
           "canonical flow state",
-          "runtime persistence",
-          "state transitions",
-          "typed admission",
+          "task execution",
+          "review lifecycle",
           "artifact catalog",
-          "idempotency",
-          "recovery workflows",
-          "task review",
-          "outbox synchronization",
-          "invariant validation"
+          "recovery",
+          "source handoff",
+          "outbox persistence",
+          "state invariants"
         ]
       },
       {
@@ -17581,9 +17587,9 @@
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "bc5c3a6d224879dd18acf8a7fddb6130",
-        "lines": 7655,
-        "mtime": "2026-09-10T14:18:29.146Z",
+        "hash": "b2de94e23b0186c5377b765698462dcf",
+        "lines": 7660,
+        "mtime": "2026-09-11T07:46:20.965Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "WorkerArtifactHandoffError",
@@ -17668,10 +17674,9 @@
           "isIgnoredAuthorityPath",
           "boundedGitOutput",
           "exactGitRoot",
-          "nullSeparatedPaths",
+          "gitVisibleAuthorityEntry",
           "digestAuthorityFile",
           "authorityFileEntry",
-          "authorityModeEntry",
           "filteredIndexDigest",
           "gitAuthoritySnapshot",
           "filesystemAuthoritySnapshot",
@@ -17682,6 +17687,7 @@
           "removeSourceRollbackPath",
           "removeEmptySourceRollbackDirectory",
           "indexedSourceRollbackEntry",
+          "gitRollbackFileMode",
           "indexedSourceRollbackOperation",
           "filesystemSourceRollbackOperation",
           "sourceHandoffPolicyRevision",
@@ -17707,6 +17713,7 @@
           "prePublicationArtifactError",
           "requestFromStored",
           "assertCurrentSourceRequestCapability",
+          "canonicalSourceAuthorityForStored",
           "restoredStoredHandoffRequest",
           "reboundRestoredHandoffRequest",
           "restoreExecutionHandoffRequest",
@@ -17788,7 +17795,8 @@
           "./source-triage-contract.js",
           "./acknowledged-rationale.js",
           "../../lib/guardrail.js",
-          "./canonical-file-map.js"
+          "./canonical-file-map.js",
+          "../../lib/git-helpers.js"
         ],
         "exports": [
           "WorkerArtifactHandoffError",
@@ -17856,25 +17864,24 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Orchestrates secure worker artifact handoff and recovery for Flow workflows.",
-        "detail": "Defines typed handoff policies, requests, submissions, receipts, progress publications, and execution checkpoints. It validates payloads, canonical input snapshots, source mutation manifests, repository authority snapshots, rollback baselines, and publication journals; binds artifacts to Flow, task, attempt, policy, repository, and canonical source identities; enforces size limits, normalized paths, digest consistency, retry semantics, and protection against unauthorized source or repository mutations. The module rejects stale, corrupt, foreign, or untrusted authority data, detects uncertain worker starts and exits, restores valid execution handoffs, stages upgrade results, atomically persists quarantine receipts, coordinates review and repair, and safely cleans transient handoff directories only within the expected execution root.",
+        "summary": "Coordinates secure, versioned worker artifact handoffs with source checkpointing, validation, recovery, rollback, reconciliation, and quarantine.",
+        "detail": "Defines typed handoff requests, policies, payloads, submissions, receipts, effects, and publication journals. It validates bounded JSON and file payloads, canonical input snapshots and publications, repository and mutation authority, source mutation manifests, rollback checkpoints, repair and triage results, artifact receipts, mutation-authority snapshots, and sealed handoff integrity. The module materializes source effects, stages upgrade results, seals handoffs, validates publications, detects stale manifests and uncertain worker starts, reconciles and replays canonical or source state, creates quarantine receipts, cleans rejected, transient, orphaned, and unsafe directories within verified real-directory path boundaries, and rolls back failed source mutations. It raises typed recovery errors when event chains, rollback blobs, immutable baselines, or terminal source settlements cannot be verified.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-11T00:26:57.687Z",
+          "processedAt": "2026-09-11T12:16:19.291Z",
           "attempts": 1
         },
+        "app": "flow",
         "keywords": [
           "worker handoff",
           "artifact validation",
-          "checkpoint validation",
-          "source mutation",
-          "repository authority",
-          "rollback recovery",
+          "source checkpointing",
+          "rollback",
+          "reconciliation",
+          "quarantine cleanup",
           "publication journal",
-          "quarantine",
-          "filesystem cleanup",
-          "upgrade staging"
+          "canonical inputs"
         ]
       },
       {
@@ -20544,15 +20551,19 @@
       },
       {
         "file": "src/lib/git-helpers.js",
-        "hash": "8f6f69fe9c1d0f97f2f06c6c3a3bbcae",
-        "lines": 466,
-        "mtime": "2026-08-10T16:21:08.670Z",
+        "hash": "58920cc6f77cc2ebf9c3bcba34ae19d2",
+        "lines": 683,
+        "mtime": "2026-09-11T02:30:46.886Z",
         "className": "git-helpers",
         "methods": [
           "runGit",
           "GitCommitPathProbeError",
           "GitCommitPathSet",
           "GitStatusPathSet",
+          "GitPorcelainV2StatusError",
+          "GitPorcelainV2StatusEntry",
+          "GitPorcelainV2Status",
+          "getPorcelainV2Status",
           "runGitToFile",
           "getWorktreeStatus",
           "getCurrentBranch",
@@ -20569,6 +20580,10 @@
           "listChangedFilesDetailed",
           "commentOnIssue",
           "commentOnIssueOnce",
+          "porcelainV2Path",
+          "porcelainV2Mode",
+          "porcelainV2ObjectIds",
+          "porcelainV2SubmoduleState",
           "normalizeStatus",
           "normalizeGitPath",
           "parsePorcelainLine",
@@ -20588,6 +20603,10 @@
           "GitCommitPathProbeError",
           "GitCommitPathSet",
           "GitStatusPathSet",
+          "GitPorcelainV2StatusError",
+          "GitPorcelainV2StatusEntry",
+          "GitPorcelainV2Status",
+          "getPorcelainV2Status",
           "runGitToFile",
           "getWorktreeStatus",
           "getCurrentBranch",
@@ -20609,29 +20628,27 @@
         "extends": "Error",
         "usedBy": [
           "src/lib/active-flow-registry.js",
-          "src/lib/flow-store.js",
-          "src/lib/lint.js",
-          "src/lib/git-state.js"
+          "src/lib/git-state.js",
+          "src/lib/lint.js"
         ],
         "id": "61b28e9c",
-        "summary": "Provides Git process helpers for status inspection, commit-range queries, rebases, file listings, and issue commenting. It normalizes Git output into safer typed path sets and structured change records.",
-        "detail": "The module wraps Git and GitHub CLI invocations behind small utility functions such as branch lookup, merge-base resolution, ahead counts, commit counting, and worktree dirtiness checks. It introduces `GitCommitPathSet` and `GitStatusPathSet` to validate repository-relative paths and to parse porcelain output without trusting raw command strings. Detailed changed-file listing logic normalizes statuses, handles renames, bounds large outputs, and deduplicates entries before returning a stable sorted result. Additional helpers support writing Git output directly to files, performing rebases with conflict reporting, and posting idempotent issue comments.",
-        "chapter": "development",
+        "summary": "Provides typed Git command helpers, porcelain status parsing, repository inspection, rebase operations, and issue-comment utilities.",
+        "detail": "This module wraps Git and GitHub CLI execution while validating repository-relative paths, treeish values, status entries, modes, object IDs, submodule states, and rename or copy metadata. It parses Git porcelain v1 and v2 output into immutable path and status sets, exposes branch, merge-base, commit, ahead-count, worktree, and changed-file queries with bounded output limits, and provides fetch, rebase, abort, and commit-count helpers. Issue comments include an idempotency-key requirement for safe one-time posting.",
+        "chapter": "stack_and_ops",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-08-14T01:23:09.542Z",
+          "processedAt": "2026-09-11T12:16:19.291Z",
           "attempts": 1
         },
+        "app": "git",
         "keywords": [
-          "git helpers",
-          "porcelain parsing",
+          "Git helpers",
+          "porcelain status",
+          "path validation",
+          "rebase operations",
+          "worktree status",
           "changed files",
-          "rebase handling",
-          "merge base",
-          "branch status",
-          "GitHub CLI",
-          "issue comments",
-          "repository utilities"
+          "issue comments"
         ]
       },
       {
@@ -22402,9 +22419,9 @@
       },
       {
         "file": "src/lib/process.js",
-        "hash": "c030d912129107c179b6fb6378aad01d",
-        "lines": 125,
-        "mtime": "2026-07-28T12:34:33.875Z",
+        "hash": "52522f97affe159f5d093377a1aaad2c",
+        "lines": 133,
+        "mtime": "2026-09-11T02:30:46.887Z",
         "className": "process",
         "methods": [
           "runCmd",
@@ -22426,27 +22443,28 @@
         "usedBy": [
           "src/lib/cli.js",
           "src/lib/git-helpers.js",
+          "src/lib/git-state.js",
           "src/lib/lint.js",
           "src/lib/plugin-registry.js",
-          "src/plugin.js",
-          "src/lib/git-state.js"
+          "src/plugin.js"
         ],
         "id": "6196b26c",
-        "summary": "Provides thin synchronous and asynchronous process execution helpers used across the CLI. It standardizes subprocess options, result formatting, and explicit failure escalation.",
-        "detail": "A shared option builder normalizes cwd, environment variables, encoding, timeout, and stdio-related settings before they are passed to child_process APIs. The synchronous and asynchronous runners return structured result objects instead of throwing immediately, which gives callers control over retries and reporting. formatError assembles status, signal, stderr, and related failure fields into a compact diagnostic string. assertOk is the explicit checkpoint for commands that must succeed and turns failed results into actionable errors.",
+        "summary": "Centralizes synchronous and asynchronous child-process execution with normalized options, error formatting, and success assertions.",
+        "detail": "The process utility builds execution options for child processes, exposes runCmd and runCmdAsync wrappers that return structured results, formats command failures into a combined diagnostic string, and provides assertOk for enforcing successful execution. It is a small runtime-facing foundation used by higher-level command and Git helpers.",
         "chapter": "stack_and_ops",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-08-01T00:27:38.545Z",
+          "processedAt": "2026-09-11T12:16:19.291Z",
           "attempts": 1
         },
+        "app": "process",
         "keywords": [
-          "process execution",
-          "subprocess wrapper",
-          "spawnSync",
-          "execFile",
+          "child process",
+          "command execution",
+          "async execution",
+          "process options",
           "error formatting",
-          "command runner"
+          "assertion"
         ]
       },
       {
@@ -24605,9 +24623,9 @@
     ],
     "summary": {
       "total": 427,
-      "totalMethods": 4604
+      "totalMethods": 4617
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-11T00:26:57.687Z"
+  "enrichedAt": "2026-09-11T12:16:19.291Z"
 }

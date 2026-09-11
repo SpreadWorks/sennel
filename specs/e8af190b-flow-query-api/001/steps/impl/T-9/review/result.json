@@ -709,6 +709,352 @@
           "noChangeReasons": []
         }
       }
+    },
+    {
+      "attempt": 7,
+      "nodeId": "T-9-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "impl",
+          "verdict": "REJECTED",
+          "canonicalVerdict": "REJECTED",
+          "evidenceDigest": "dcaea79da9cb65c5c5705a7a977f144ff4a836d1e54afb4631d84970907a4843",
+          "treeSha": "ffea73f144b131357bb0905fdf7ebf5d140ae51a",
+          "targetStateDigest": "224ae4776d14ce67157ddb25c4bd50ba685dc2b39db44b3ef20d4811ab813405",
+          "blockingCount": 10,
+          "nonBlockingCount": 0,
+          "taskId": "T-9",
+          "sourceFingerprint": "d391339ed5300781c649a0b3d73b8530932711e84d5da54baa1b08d2ebf9db7f",
+          "noChange": false,
+          "noChangeReasons": [
+            "The requested Schema Revision 1 consumer compatibility implementation and fixture coverage are already present in the immutable checkout; syntax and diff checks passed, so no source edit was necessary."
+          ]
+        }
+      },
+      "artifact": {
+        "logicalKey": "task.review",
+        "payload": {
+          "version": 1,
+          "phase": "impl",
+          "generatedAt": "2026-09-11T05:03:41.155Z",
+          "verdict": "REJECTED",
+          "summary": {
+            "blocking": 10,
+            "nonBlocking": 0,
+            "total": 10
+          },
+          "blockingFindings": [
+            {
+              "findingKey": "artifact-read-failure-code",
+              "title": "Artifact read failures are misclassified",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R13",
+              "issue": "Cataloged artifact read, permission, or missing-file failures can be returned as CANONICAL_RECORD_INCONSISTENT instead of CANONICAL_RECORD_UNREADABLE.",
+              "suggestion": "Preserve filesystem/read failures as CANONICAL_RECORD_UNREADABLE and reserve CANONICAL_RECORD_INCONSISTENT for integrity or schema violations.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R13 contradiction violates the canonical-record error contract.",
+              "findingId": "c9da7d00fa10034a01772535f3d91b5192f1f3d10631a07dec44168012bc5da9",
+              "fingerprint": "c9da7d00fa10034a01772535f3d91b5192f1f3d10631a07dec44168012bc5da9",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "artifact-digest-proto-key-loss",
+              "title": "Artifact digest canonicalization loses an own __proto__ key",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R7",
+              "issue": "canonicalJson() does not faithfully serialize an object containing its own __proto__ property, so artifact digests can differ from the artifact bytes.",
+              "suggestion": "Serialize own keys, including an own __proto__ key, without prototype reinterpretation, and add a digest regression assertion.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R7 defect makes artifact integrity verification unfaithful.",
+              "findingId": "314e24661e0c8583de9962ad05365446f8d0e59e9f91b250f7c2965b5fe0fbf2",
+              "fingerprint": "314e24661e0c8583de9962ad05365446f8d0e59e9f91b250f7c2965b5fe0fbf2",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "historical-replay-integrity-gap",
+              "title": "Historical replay skips activity and resulting-state integrity checks",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R8",
+              "issue": "Historical-state validation checks ordering and evidence but may bypass Activity node/transition validation and equality of replayed state with stored state.",
+              "suggestion": "Apply the same FlowActivity node, transition, and resulting-state checks to historical confirmation replay before accepting canonical state.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R8 gap can accept inconsistent canonical history.",
+              "findingId": "2d23b5a69c38f50f4113b5de264f12805b6a29898f96286564c17e5505f0a28a",
+              "fingerprint": "2d23b5a69c38f50f4113b5de264f12805b6a29898f96286564c17e5505f0a28a",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "metadata-issues-cardinality",
+              "title": "Metadata permits too many issues",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R5",
+              "issue": "The metadata projection accepts multiple issues although the public contract permits zero or one issue.",
+              "suggestion": "Enforce zero-or-one cardinality in the metadata projection and reject nonconforming canonical data.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R5 schema contradiction violates the public metadata contract.",
+              "findingId": "1a95e0db47cbef31e0ad7a633dd6c91e31ac6c7b69546c255ee9ad3e8505053a",
+              "fingerprint": "1a95e0db47cbef31e0ad7a633dd6c91e31ac6c7b69546c255ee9ad3e8505053a",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "metadata-blocker-derivation",
+              "title": "Metadata blocker fields are not derived consistently",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "src/flow/query.js",
+              "requirementId": "R5",
+              "issue": "Metadata does not fully enforce the blocked/blocker/nextAction relationship or blocker:null when unblocked.",
+              "suggestion": "Derive blocked, blocker, and nextAction using the documented precedence, emit blocker:null when unblocked, and reject missing blocker evidence as canonical inconsistency.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R5 violation produces inconsistent lifecycle and blocker metadata.",
+              "findingId": "2db6976082fc5fc4331480cc5598e7d3a8a82442f9613153ff9b733db13a2655",
+              "fingerprint": "2db6976082fc5fc4331480cc5598e7d3a8a82442f9613153ff9b733db13a2655",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "version-discovery-symlink-toctou",
+              "title": "Version discovery follows symlinkable directories",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R8",
+              "issue": "Path-based opendir during version discovery lacks O_NOFOLLOW, leaving a symlink TOCTOU risk while selecting canonical Flow versions.",
+              "suggestion": "Use no-follow descriptor-based directory traversal and reject symlink records before consuming discovered paths.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R8 filesystem-integrity risk can select data outside the canonical version directory.",
+              "findingId": "426adc9ea536e4d529989a3dcb55003d445579c4ff3a8e63b25a58d7bbcbc90d",
+              "fingerprint": "426adc9ea536e4d529989a3dcb55003d445579c4ff3a8e63b25a58d7bbcbc90d",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "unestablished-version-selection",
+              "title": "Errors expose an unestablished Flow Version",
+              "failureMode": "security_or_data_integrity_bug",
+              "file": "src/flow/query.js",
+              "requirementId": "R12",
+              "issue": "An error may report the requested Flow Version as selected before discovery and reader.open() establish that it exists and is valid.",
+              "suggestion": "Keep selected Flow Version null until canonical discovery and reader.open() succeed; clear selection and available-version fields for missing or identity-invalid versions.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R12 envelope defect misrepresents canonical resource identity.",
+              "findingId": "2cb5f635700c99e78581f508d79ec5baf0c3986d5c3f516ddb3408d80fb2051c",
+              "fingerprint": "2cb5f635700c99e78581f508d79ec5baf0c3986d5c3f516ddb3408d80fb2051c",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "metadata-consumer-roundtrip-equality",
+              "title": "Metadata consumer does not verify the full public payload",
+              "failureMode": "missing_acceptance_requirement",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R4",
+              "issue": "The consumer only proves metadata consumption is non-null; it does not assert payload equality or usability of the required public fields without internal paths, raw catalogs, or generic envelopes.",
+              "suggestion": "Consume exactly one metadata item and compare the complete public metadata payload, including required fields, with the success fixture.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R4/T-9 acceptance gap does not establish the required metadata round-trip contract.",
+              "findingId": "c9e5659bcabccebd8ee0f54ed4f021a797b8d566b33922f865dd3a123426ae65",
+              "fingerprint": "c9e5659bcabccebd8ee0f54ed4f021a797b8d566b33922f865dd3a123426ae65",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "activity-consumer-pagination-coverage",
+              "title": "Activity consumer lacks required success-shape scenarios",
+              "failureMode": "missing_acceptance_requirement",
+              "file": "tests/integration/flow/query.test.js",
+              "requirementId": "R8",
+              "issue": "Consumer round-trip coverage omits bounded pages, cursor continuation, recordedAt filtering, and zero-match successful responses.",
+              "suggestion": "Add consumer assertions for bounded pagination, continuation cursors, inclusive/exclusive recordedAt filtering, zero-match success, pageInfo, items, and version fields.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R8/T-9 acceptance gap leaves required activity response branches unverified.",
+              "findingId": "0b236116e4e03be0573efbc4fc7057f5f82d670823bf4ef37d0f7480f4bd20c0",
+              "fingerprint": "0b236116e4e03be0573efbc4fc7057f5f82d670823bf4ef37d0f7480f4bd20c0",
+              "repeatCount": 1
+            },
+            {
+              "findingKey": "consumer-pageinfo-integer-limit",
+              "title": "Consumer rejects valid integer page limits",
+              "failureMode": "spec_behavior_contradiction",
+              "file": "tests/support/builders/flow-query-consumer.js",
+              "requirementId": "R12",
+              "issue": "pageInfo(..., allowNullLimit=true) rejects integer limits even though activity error responses permit integer or null limits.",
+              "suggestion": "Allow a nonnegative integer limit in that assertion branch while retaining null acceptance where permitted.",
+              "disposition": "must-fix",
+              "rationale": "This unresolved R12/T-9 schema mismatch prevents consuming valid activity error responses.",
+              "findingId": "7b2be9168d2afa979754a0d9e00baa5e04606b6db41db6b46838ed6b42988e25",
+              "fingerprint": "7b2be9168d2afa979754a0d9e00baa5e04606b6db41db6b46838ed6b42988e25",
+              "repeatCount": 1
+            }
+          ],
+          "nonBlockingImprovements": [],
+          "excluded": {
+            "missingFile": 0,
+            "outOfScope": 0
+          },
+          "repairFingerprint": "224ae4776d14ce67157ddb25c4bd50ba685dc2b39db44b3ef20d4811ab813405",
+          "reviewedTree": "224ae4776d14ce67157ddb25c4bd50ba685dc2b39db44b3ef20d4811ab813405",
+          "reviewedHead": "d4dbf1faeb442a36cfadc307c9e1f3df44eea082",
+          "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+          "planRewindAt": null,
+          "taskId": "T-9",
+          "target": "specs/e8af190b-flow-query-api/001/tasks/T-9.md",
+          "contractSummary": {
+            "targetStep": "impl-review",
+            "artifactPath": ".sennel/worktree/feature-e8af190b-flow-query-api/.sennel/review-work-units/7f877e791bce37bb16540e68/8f7dd03e809f03f69c454496/5463151438c190405455767001952652/impl-review.json",
+            "verdict": "REJECTED",
+            "result": "REJECTED",
+            "blockingCount": 10,
+            "failureKind": null,
+            "completionKind": "normal",
+            "progressSignature": "c6dc761a163ea4c18f85649cd31217ed638490448ebf016ae112e922efa7ace4"
+          },
+          "workerOutput": {
+            "digest": "42c9101dc093727cc101e87764539739271004f4c31c13f0ec228400d45963b7",
+            "byteLength": 10389,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "impl",
+            "taskId": "T-9",
+            "treeSha": "ffea73f144b131357bb0905fdf7ebf5d140ae51a",
+            "targetStateDigest": "224ae4776d14ce67157ddb25c4bd50ba685dc2b39db44b3ef20d4811ab813405",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "6bcf1b52c7f55ee7340df3b83305b71363a64ab2fd39cbdfe4f2957a19bfd728",
+              "capturedAt": "2026-09-11T05:03:41.155Z"
+            },
+            "disposition": "REJECTED",
+            "blockingFindings": [
+              {
+                "findingId": "c9da7d00fa10034a01772535f3d91b5192f1f3d10631a07dec44168012bc5da9",
+                "summary": "Artifact read failures are misclassified",
+                "fingerprint": "c9da7d00fa10034a01772535f3d91b5192f1f3d10631a07dec44168012bc5da9",
+                "evidenceRefs": [
+                  "impl-review.json#c9da7d00fa10034a01772535f3d91b5192f1f3d10631a07dec44168012bc5da9"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "314e24661e0c8583de9962ad05365446f8d0e59e9f91b250f7c2965b5fe0fbf2",
+                "summary": "Artifact digest canonicalization loses an own __proto__ key",
+                "fingerprint": "314e24661e0c8583de9962ad05365446f8d0e59e9f91b250f7c2965b5fe0fbf2",
+                "evidenceRefs": [
+                  "impl-review.json#314e24661e0c8583de9962ad05365446f8d0e59e9f91b250f7c2965b5fe0fbf2"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "2d23b5a69c38f50f4113b5de264f12805b6a29898f96286564c17e5505f0a28a",
+                "summary": "Historical replay skips activity and resulting-state integrity checks",
+                "fingerprint": "2d23b5a69c38f50f4113b5de264f12805b6a29898f96286564c17e5505f0a28a",
+                "evidenceRefs": [
+                  "impl-review.json#2d23b5a69c38f50f4113b5de264f12805b6a29898f96286564c17e5505f0a28a"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "1a95e0db47cbef31e0ad7a633dd6c91e31ac6c7b69546c255ee9ad3e8505053a",
+                "summary": "Metadata permits too many issues",
+                "fingerprint": "1a95e0db47cbef31e0ad7a633dd6c91e31ac6c7b69546c255ee9ad3e8505053a",
+                "evidenceRefs": [
+                  "impl-review.json#1a95e0db47cbef31e0ad7a633dd6c91e31ac6c7b69546c255ee9ad3e8505053a"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "2db6976082fc5fc4331480cc5598e7d3a8a82442f9613153ff9b733db13a2655",
+                "summary": "Metadata blocker fields are not derived consistently",
+                "fingerprint": "2db6976082fc5fc4331480cc5598e7d3a8a82442f9613153ff9b733db13a2655",
+                "evidenceRefs": [
+                  "impl-review.json#2db6976082fc5fc4331480cc5598e7d3a8a82442f9613153ff9b733db13a2655"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "426adc9ea536e4d529989a3dcb55003d445579c4ff3a8e63b25a58d7bbcbc90d",
+                "summary": "Version discovery follows symlinkable directories",
+                "fingerprint": "426adc9ea536e4d529989a3dcb55003d445579c4ff3a8e63b25a58d7bbcbc90d",
+                "evidenceRefs": [
+                  "impl-review.json#426adc9ea536e4d529989a3dcb55003d445579c4ff3a8e63b25a58d7bbcbc90d"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "2cb5f635700c99e78581f508d79ec5baf0c3986d5c3f516ddb3408d80fb2051c",
+                "summary": "Errors expose an unestablished Flow Version",
+                "fingerprint": "2cb5f635700c99e78581f508d79ec5baf0c3986d5c3f516ddb3408d80fb2051c",
+                "evidenceRefs": [
+                  "impl-review.json#2cb5f635700c99e78581f508d79ec5baf0c3986d5c3f516ddb3408d80fb2051c"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "c9e5659bcabccebd8ee0f54ed4f021a797b8d566b33922f865dd3a123426ae65",
+                "summary": "Metadata consumer does not verify the full public payload",
+                "fingerprint": "c9e5659bcabccebd8ee0f54ed4f021a797b8d566b33922f865dd3a123426ae65",
+                "evidenceRefs": [
+                  "impl-review.json#c9e5659bcabccebd8ee0f54ed4f021a797b8d566b33922f865dd3a123426ae65"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "0b236116e4e03be0573efbc4fc7057f5f82d670823bf4ef37d0f7480f4bd20c0",
+                "summary": "Activity consumer lacks required success-shape scenarios",
+                "fingerprint": "0b236116e4e03be0573efbc4fc7057f5f82d670823bf4ef37d0f7480f4bd20c0",
+                "evidenceRefs": [
+                  "impl-review.json#0b236116e4e03be0573efbc4fc7057f5f82d670823bf4ef37d0f7480f4bd20c0"
+                ],
+                "disposition": "must-fix"
+              },
+              {
+                "findingId": "7b2be9168d2afa979754a0d9e00baa5e04606b6db41db6b46838ed6b42988e25",
+                "summary": "Consumer rejects valid integer page limits",
+                "fingerprint": "7b2be9168d2afa979754a0d9e00baa5e04606b6db41db6b46838ed6b42988e25",
+                "evidenceRefs": [
+                  "impl-review.json#7b2be9168d2afa979754a0d9e00baa5e04606b6db41db6b46838ed6b42988e25"
+                ],
+                "disposition": "must-fix"
+              }
+            ],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "impl",
+              "taskId": "T-9",
+              "treeSha": "ffea73f144b131357bb0905fdf7ebf5d140ae51a",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "6bcf1b52c7f55ee7340df3b83305b71363a64ab2fd39cbdfe4f2957a19bfd728",
+                "capturedAt": "2026-09-11T05:03:41.155Z"
+              },
+              "evidenceDigest": "dcaea79da9cb65c5c5705a7a977f144ff4a836d1e54afb4631d84970907a4843"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "ffea73f144b131357bb0905fdf7ebf5d140ae51a",
+            "targetStateDigest": "224ae4776d14ce67157ddb25c4bd50ba685dc2b39db44b3ef20d4811ab813405"
+          },
+          "canonicalTaskSource": {
+            "fingerprint": "d391339ed5300781c649a0b3d73b8530932711e84d5da54baa1b08d2ebf9db7f",
+            "lineageFingerprints": [
+              "8615deb6207c8fc37805e8a11d734ef491cb79dfe0df8c226989f7a99a7037ae",
+              "7be8995a64d64c75e97c4a0603e4d402ee1dee69a9da998d4b99c734f2419840",
+              "acf4547ec926a44cc2d6cb93f0ebb43053e8e548bdb82ca32d71389cf4401356",
+              "b647768fbbf9e368b4559023acabea4f5312b13605b325beabe9ca40c5083717",
+              "e5356dab530053637776892af2ddba525b08c45ec3f2543f215c76e8fb99792d",
+              "04509822d004891704904a1b44e17e17008dea350c86fb873567f4dea4576703"
+            ],
+            "specDigest": "edda99f614016395d8dfa8106b6d3695ba167acbac16975ce29005c2ebc2feb7",
+            "contextFingerprint": "f6a277486d7edf416caef9967dd1785af566f94a0c4eb1953ff5f4b530b7a84b"
+          },
+          "noChange": false,
+          "noChangeReasons": [
+            "The requested Schema Revision 1 consumer compatibility implementation and fixture coverage are already present in the immutable checkout; syntax and diff checks passed, so no source edit was necessary."
+          ]
+        }
+      }
     }
   ]
 }
