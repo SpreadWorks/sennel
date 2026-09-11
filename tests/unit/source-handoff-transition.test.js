@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SourceHandoffFailureFacts } from "../../src/flow/lib/source-handoff-failure.js";
-import { resolveSourceHandoffTransitionPlan, SourceHandoffTransitionPlan } from "../../src/flow/definition.js";
+import {
+  resolveSourceHandoffTransitionPlan,
+  resolveSourceQualityIssueRecoveryPlan,
+  SourceHandoffTransitionPlan,
+} from "../../src/flow/definition.js";
 import { workerArtifactHandoffPolicy } from "../../src/flow/lib/worker-artifact-handoff.js";
 
 // Outcome -> necessary evidence: rollback needs both exclusive mutation
@@ -67,4 +71,12 @@ test("fresh transport retry requires a rollback settlement and cannot retry an u
     const plan = resolveSourceHandoffTransitionPlan({ facts, policy: workerArtifactHandoffPolicy("implement") });
     assert.equal(plan.retryAfterSettlement, expected);
   }
+});
+
+test("static source quality routes retain their Definition checkpoints", () => {
+  assert.equal(resolveSourceQualityIssueRecoveryPlan({ sourceStep: "implement" }).recoveryStep, "impl-review");
+  assert.equal(resolveSourceQualityIssueRecoveryPlan({ sourceStep: "impl-repair" }).recoveryStep, "impl-gate");
+  assert.equal(resolveSourceQualityIssueRecoveryPlan({ sourceStep: "task-impl", taskId: "T-1" }).recoveryStep, "T-1-review");
+  assert.equal(resolveSourceQualityIssueRecoveryPlan({ sourceStep: "impl-triage" }), null);
+  assert.equal(resolveSourceQualityIssueRecoveryPlan({ sourceStep: "task-triage" }), null);
 });

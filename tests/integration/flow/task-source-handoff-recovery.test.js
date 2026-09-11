@@ -11,7 +11,7 @@ import {
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { container } from "../../../src/lib/container.js";
 import { TaskSourceFailureObservation } from "../../../src/flow/lib/task-source-failure.js";
-import { TaskStageArtifact } from "../../../src/flow/lib/task-review-stage-artifacts.js";
+import { TaskReviewEpisodeBinding, TaskStageArtifact } from "../../../src/flow/lib/task-review-stage-artifacts.js";
 import { TaskReviewAccounting } from "../../../src/flow/lib/task-review-accounting.js";
 import { SourceHandoffFailureFacts } from "../../../src/flow/lib/source-handoff-failure.js";
 import { resolveSourceHandoffTransitionPlan } from "../../../src/flow/definition.js";
@@ -43,6 +43,17 @@ function repairEffect() {
     repair: { version: 1, findings: [{ findingKey: "missing-behavior", paths: ["README.md"] }],
       summary: "Implemented the mapped behavior.", recurrenceResolutions: [] },
     noChangeReason: null,
+  };
+}
+
+function repairEffectWithQualityIssue() {
+  return {
+    ...repairEffect(),
+    issues: [{
+      classification: "quality",
+      reason: "The repaired behavior still requires an independent quality review.",
+      remainingRisk: "A later quality checkpoint must verify the repaired behavior end to end.",
+    }],
   };
 }
 
@@ -154,6 +165,92 @@ test("Task sealed repair handoff recovers its bound review and triage lineage ex
   const activityCount = scenario.manager.activityLedger(scenario.specId).length;
   assert.equal(new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() }), null);
   assert.equal(scenario.manager.activityLedger(scenario.specId).length, activityCount);
+});
+
+test("Task sealed repair quality issues recover to Review atomically and exactly once", async (t) => {
+  const { scenario } = await sealedTriage(t);
+  assert.equal(recover(scenario).completed, true);
+  const repair = scenario.stageHandoff("repair");
+  fs.appendFileSync(scenario.sourcePath, "repair requiring quality review\n");
+  scenario.sealHandoff(repair, repairEffectWithQualityIssue());
+  const handoffDigest = JSON.parse(fs.readFileSync(repair.request.submissionPath, "utf8")).handoffDigest;
+  scenario.reload();
+
+  const recovered = new WorkerArtifactHandoffCoordinator({ now: () => new Date("2026-09-08T00:00:00.000Z") })
+    .recoverPending({ ctx: scenario.context() });
+
+  assert.equal(recovered.completed, true);
+  assert.equal(scenario.state().current?.at(-1), "T-1-review");
+  const issueLog = JSON.parse(scenario.manager.readArtifact({
+    specId: scenario.specId, logicalKey: "issue.log", consumerNodeId: "T-1-review",
+  }).bytes.toString("utf8"));
+  assert.equal(issueLog.entries.length, 1);
+  assert.equal(issueLog.entries[0].origin.sourceStep, "task-repair");
+  assert.equal(issueLog.entries[0].recoveryStep, "T-1-review");
+  assert.deepEqual(issueLog.entries[0].evidence, {
+    ref: `worker-handoff:${handoffDigest}#effects.json`,
+    digest: handoffDigest,
+  });
+  const activityCount = scenario.manager.activityLedger(scenario.specId).length;
+  assert.equal(new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() }), null);
+  assert.equal(scenario.manager.activityLedger(scenario.specId).length, activityCount);
+  const reloadedIssueLog = JSON.parse(scenario.manager.readArtifact({
+    specId: scenario.specId, logicalKey: "issue.log", consumerNodeId: "T-1-review",
+  }).bytes.toString("utf8"));
+  assert.equal(reloadedIssueLog.entries.length, 1);
+});
+
+test("Task repair quality publication rejects a stale stage binding without partial settlement", async (t) => {
+  const { scenario } = await sealedTriage(t);
+  assert.equal(recover(scenario).completed, true);
+  const work = scenario.stageHandoff("repair");
+  fs.appendFileSync(scenario.sourcePath, "repair with stale publication binding\n");
+  scenario.finishHandoff(work, repairEffectWithQualityIssue());
+  const before = scenario.snapshot();
+  const canonicalManager = scenario.manager;
+  const staleManager = new Proxy(canonicalManager, {
+    get(target, property) {
+      if (property === "confirmSourceWorkerHandoff") {
+        return (input) => target.confirmSourceWorkerHandoff({
+          ...input,
+          taskStageBinding: new TaskReviewEpisodeBinding({
+            ...input.taskStageBinding.toJSON(),
+            sourceFingerprint: "f".repeat(64),
+          }),
+        });
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  let rejection;
+  try {
+    assert.throws(() => work.coordinator.reconcile({
+      ctx: { ...work.ctx, flowManager: staleManager },
+      request: work.request,
+      mutationAuthority: work.coordinator.sourceMutationAuthority({ ctx: work.ctx, request: work.request }),
+    }), (error) => {
+      rejection = error;
+      return error instanceof WorkerArtifactHandoffError
+        && error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED";
+    });
+  } finally {
+    work.release();
+  }
+
+  assert.equal(rejection.recoveryPossible, false, JSON.stringify({
+    code: rejection.code,
+    causeCode: rejection.cause?.code,
+    causeName: rejection.cause?.name,
+    message: rejection.message,
+  }));
+  assert.equal(scenario.snapshot(), before);
+  assert.equal(scenario.manager.readArtifact({
+    specId: scenario.specId, logicalKey: "issue.log", consumerNodeId: "T-1-repair", optional: true,
+  }), null);
+  assert.equal(scenario.manager.readSourceHandoffAuthority({
+    specId: scenario.specId, identity: work.request.sourceHandoffIdentity,
+  }).settlement, null);
 });
 
 test("Task sealed triage recovery rejects an uncataloged canonical file", async (t) => {

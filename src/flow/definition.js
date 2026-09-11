@@ -3860,9 +3860,9 @@ export function getTaskNode(id) {
 }
 
 /**
- * A source producer may carry an advisory only when the Definition guarantees
- * a later, non-skippable quality checkpoint. This is deliberately a narrow
- * domain route, not a second continuation state machine.
+ * A straight-line source producer may carry an advisory only when Definition
+ * guarantees a later, non-skippable quality checkpoint. Cyclic Task repair
+ * uses the selected Task Review funnel plan below instead of this static map.
  */
 export class SourceQualityIssueRecoveryRoute {
   constructor({ sourceStep, recoveryStep, scope } = {}) {
@@ -3883,6 +3883,43 @@ export class SourceQualityIssueRecoveryRoute {
   toJSON() { return { sourceStep: this.sourceStep, recoveryStep: this.recoveryStep, scope: this.scope }; }
 }
 
+const SOURCE_QUALITY_ISSUE_RECOVERY_PLAN_TOKEN = Symbol("source-quality-issue-recovery-plan");
+
+/** A concrete quality checkpoint selected by Definition for one source result. */
+export class SourceQualityIssueRecoveryPlan {
+  constructor(token, { sourceStep, recoveryStep, scope, taskReviewStagePlan = null } = {}) {
+    if (token !== SOURCE_QUALITY_ISSUE_RECOVERY_PLAN_TOKEN) {
+      throw new Error("source quality issue recovery plans are created only by Definition");
+    }
+    this.sourceStep = requireString(sourceStep, "source quality issue source Step");
+    this.recoveryStep = requireString(recoveryStep, "source quality issue recovery Step");
+    if (!new Set(["flow", "task"]).has(scope)) throw new Error("source quality issue recovery scope is invalid");
+    this.scope = scope;
+    this.taskReviewStagePlan = taskReviewStagePlan;
+    if (sourceStep === "task-repair") {
+      if (!(taskReviewStagePlan instanceof TaskReviewStageTransitionPlan)
+        || taskReviewStagePlan.facts.binding.stage !== "repair"
+        || taskReviewStagePlan.facts.binding.sourceStepId !== `${taskReviewStagePlan.facts.binding.taskId}-repair`
+        || taskReviewStagePlan.targetStepId !== recoveryStep
+        || !new Set(["repair-to-review", "repair-unreviewed-to-gate"]).has(taskReviewStagePlan.operation)) {
+        throw new Error("Task repair quality recovery must use its selected Task Review funnel plan");
+      }
+    } else if (taskReviewStagePlan !== null) {
+      throw new Error("only Task repair quality recovery may carry a Task Review funnel plan");
+    }
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      sourceStep: this.sourceStep,
+      recoveryStep: this.recoveryStep,
+      scope: this.scope,
+      taskReviewStagePlan: this.taskReviewStagePlan?.toJSON() ?? null,
+    };
+  }
+}
+
 const SOURCE_QUALITY_ISSUE_RECOVERY_ROUTES = new Map([
   ["implement", new SourceQualityIssueRecoveryRoute({ sourceStep: "implement", recoveryStep: "impl-review", scope: "flow" })],
   ["impl-repair", new SourceQualityIssueRecoveryRoute({ sourceStep: "impl-repair", recoveryStep: "impl-gate", scope: "flow" })],
@@ -3892,6 +3929,76 @@ const SOURCE_QUALITY_ISSUE_RECOVERY_ROUTES = new Map([
 export function sourceQualityIssueRecoveryForStep(stepId) {
   if (typeof stepId !== "string") return null;
   return SOURCE_QUALITY_ISSUE_RECOVERY_ROUTES.get(stepId) ?? null;
+}
+
+export function resolveSourceQualityIssueRecoveryPlan({ sourceStep, taskId = null, taskReviewStagePlan = null } = {}) {
+  if (sourceStep === "task-repair") {
+    if (!(taskReviewStagePlan instanceof TaskReviewStageTransitionPlan)) {
+      throw new Error("Task repair quality recovery requires its selected Task Review funnel plan");
+    }
+    return new SourceQualityIssueRecoveryPlan(SOURCE_QUALITY_ISSUE_RECOVERY_PLAN_TOKEN, {
+      sourceStep,
+      recoveryStep: taskReviewStagePlan.targetStepId,
+      scope: "task",
+      taskReviewStagePlan,
+    });
+  }
+  const route = sourceQualityIssueRecoveryForStep(sourceStep);
+  if (route === null) return null;
+  const recoveryStep = route.scope === "task"
+    ? `${requireString(taskId, "source quality issue Task")}-${route.recoveryStep.slice("task-".length)}`
+    : route.recoveryStep;
+  return new SourceQualityIssueRecoveryPlan(SOURCE_QUALITY_ISSUE_RECOVERY_PLAN_TOKEN, {
+    sourceStep,
+    recoveryStep,
+    scope: route.scope,
+  });
+}
+
+const TASK_REVIEW_STAGE_COMPLETION_PLAN_TOKEN = Symbol("task-review-stage-completion-plan");
+
+/** One Definition decision binds Task stage advancement and any quality checkpoint. */
+export class TaskReviewStageCompletionPlan {
+  constructor(token, { transition, qualityRecovery = null, sourceQualityIssueCount = 0 } = {}) {
+    if (token !== TASK_REVIEW_STAGE_COMPLETION_PLAN_TOKEN
+      || !(transition instanceof TaskReviewStageTransitionPlan)) {
+      throw new Error("Task Review stage completion plans are created only by Definition");
+    }
+    if (!Number.isSafeInteger(sourceQualityIssueCount) || sourceQualityIssueCount < 0) {
+      throw new Error("Task Review stage source quality issue count is invalid");
+    }
+    if ((sourceQualityIssueCount > 0) !== (qualityRecovery instanceof SourceQualityIssueRecoveryPlan)) {
+      throw new Error("Task Review stage quality issues require exactly one selected recovery plan");
+    }
+    if (qualityRecovery !== null && qualityRecovery.taskReviewStagePlan !== transition) {
+      throw new Error("Task Review stage quality recovery must share its transition decision");
+    }
+    this.transition = transition;
+    this.qualityRecovery = qualityRecovery;
+    this.sourceQualityIssueCount = sourceQualityIssueCount;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      transition: this.transition.toJSON(),
+      qualityRecovery: this.qualityRecovery?.toJSON() ?? null,
+      sourceQualityIssueCount: this.sourceQualityIssueCount,
+    };
+  }
+}
+
+export function resolveTaskReviewStageCompletion({ facts, sourceQualityIssueCount = 0 } = {}) {
+  const transition = resolveTaskReviewStageTransition(facts);
+  const sourceStep = `task-${facts.binding.stage}`;
+  const qualityRecovery = sourceQualityIssueCount === 0
+    ? null
+    : resolveSourceQualityIssueRecoveryPlan({ sourceStep, taskReviewStagePlan: transition });
+  return new TaskReviewStageCompletionPlan(TASK_REVIEW_STAGE_COMPLETION_PLAN_TOKEN, {
+    transition,
+    qualityRecovery,
+    sourceQualityIssueCount,
+  });
 }
 
 export function resolveMaxAttempts({ scope = "flow", stepId, context = {} }) {
