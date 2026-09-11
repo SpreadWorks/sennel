@@ -7631,11 +7631,18 @@ export class WorkerArtifactHandoffCoordinator {
         ...(upgradeResult === null ? {} : { upgradeResult }),
       });
     } catch (cause) {
+      const conflict = cause?.code === "CURRENT_FLOW_STATE_CONFLICT";
       throw new WorkerArtifactHandoffError(
-        cause?.code === "CURRENT_FLOW_STATE_CONFLICT" ? "conflict" : "recovery-required",
-        cause?.code === "CURRENT_FLOW_STATE_CONFLICT" ? "FLOW_ARTIFACT_HANDOFF_CONFLICT" : "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
+        conflict ? "conflict" : "recovery-required",
+        conflict ? "FLOW_ARTIFACT_HANDOFF_CONFLICT" : "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
         `canonical source worker handoff could not commit: ${cause.message}`,
-        { cause, data: { stepId: request.stepId, handoffDirectory: request.directory } },
+        {
+          cause,
+          recoveryPossible: !conflict
+            && cause?.code !== "CURRENT_FLOW_STATE_INVARIANT_INVALID"
+            && cause?.code !== "FLOW_SOURCE_HANDOFF_MANIFEST_STALE",
+          data: { stepId: request.stepId, handoffDirectory: request.directory },
+        },
       );
     }
     const receipt = canonicalHandoffReceipt(request, submission, this.now);

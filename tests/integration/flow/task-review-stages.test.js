@@ -190,7 +190,15 @@ test("the fourth separately published Task repair advances to Gate with bound un
       assert.equal(recurrence.entries[0].previous.at(-1).repair.mutations[0].path, "README.md");
     }
     fs.appendFileSync(scenario.sourcePath, `repair ${ordinal}\n`);
-    scenario.completeHandoff(work, repairEffect(["missing-behavior"], recurrence));
+    const effect = repairEffect(["missing-behavior"], recurrence);
+    if (ordinal === 4) {
+      effect.issues = [{
+        classification: "quality",
+        reason: "The fourth repair remains subject to the final Task quality checkpoint.",
+        remainingRisk: "Acceptance must evaluate this unreviewed repair before Task completion.",
+      }];
+    }
+    scenario.completeHandoff(work, effect);
     scenario.reload();
     const repaired = artifact(scenario, "repair").document;
     assert.equal(repaired.binding.review.payloadDigest, reviewed.payloadDigest);
@@ -211,6 +219,12 @@ test("the fourth separately published Task repair advances to Gate with bound un
   assert.equal(handoffs[0].sourceMutationManifest.attempt.nodeId, "T-1-repair");
   assert.equal(handoffs[0].dispositions[0].disposition, "apply");
   assert.equal(convergence.status()[0].fourthRepairUnreviewed, true);
+  const issueLog = JSON.parse(scenario.manager.readArtifact({
+    specId: scenario.specId, logicalKey: "issue.log", consumerNodeId: "T-1-gate",
+  }).bytes.toString("utf8"));
+  assert.equal(issueLog.entries.length, 1);
+  assert.equal(issueLog.entries[0].origin.sourceStep, "task-repair");
+  assert.equal(issueLog.entries[0].recoveryStep, "T-1-gate");
 });
 
 test("a source change after handoff validation is rejected at Task publication without advancing the Attempt", async (t) => {

@@ -31,8 +31,9 @@ import {
   testExecuteTransitionDefinition,
   testResultReviewTransitionDefinition,
   DraftCoverageRepairCompletionDecision,
-  sourceQualityIssueRecoveryForStep,
+  resolveSourceQualityIssueRecoveryPlan,
   TaskReviewStageBinding, TaskReviewStageFacts, resolveTaskReviewStageTransition,
+  resolveTaskReviewStageCompletion,
   TaskNoChangeContinuationFacts, selectTaskNoChangeContinuation,
 } from "../definition.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
@@ -3499,36 +3500,14 @@ export class CanonicalFlowManagerStore {
       }
       artifactWrites.push({ logicalKey: "file.map", mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(fileMap, null, 2)}\n`, "utf8") });
     }
-    if (effect.issues.length > 0) {
-      const recoveryRoute = sourceQualityIssueRecoveryForStep(effect.stepId);
-      if (recoveryRoute === null) {
+    if (effect.issues.length > 0 && effect.stepId !== "task-repair") {
+      const recoveryPlan = resolveSourceQualityIssueRecoveryPlan({ sourceStep: effect.stepId, taskId: sourceTaskId });
+      if (recoveryPlan === null) {
         throw new CurrentFlowStateInvariantError("source quality issues have no eligible Definition-backed recovery route");
       }
-      const taskId = taskIdForNode(state, nodeId);
-      const recoveryStep = recoveryRoute.scope === "task"
-        ? taskId === null
-          ? null
-          : `${taskId}-${recoveryRoute.recoveryStep.slice("task-".length)}`
-        : recoveryRoute.recoveryStep;
-      if (recoveryStep === null) {
-        throw new CurrentFlowStateInvariantError("Task source quality issues require a concrete Task recovery Step");
-      }
-      const existing = this.readArtifact({ specId: resolved, logicalKey: "issue.log", consumerNodeId: nodeId, optional: true });
-      const issues = new IssueLogDocument(existing === null ? { entries: [] } : JSON.parse(existing.bytes.toString("utf8")));
-      effect.issues.forEach((entry, index) => {
-        issues.append({
-          step: nodeId,
-          classification: entry.classification,
-          reason: entry.reason,
-          origin: { sourceStep: effect.stepId, sourceNodeId: nodeId },
-          evidence: { ref: `worker-handoff:${handoffDigest}#effects.json`, digest: handoffDigest },
-          recoveryStep,
-          remainingRisk: entry.remainingRisk,
-          taskId,
-          timestamp: result.confirmedAt,
-        }, `source-handoff:${handoffDigest}:${index}`);
+      this.#appendSourceQualityIssues({
+        state, effect, handoffDigest, result, artifactWrites, recoveryPlan,
       });
-      artifactWrites.push({ logicalKey: "issue.log", mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(issues.toJSON(), null, 2)}\n`, "utf8") });
     }
     if (["task-triage", "task-repair"].includes(effect.stepId)) {
       return this.#confirmTaskReviewSourceStage({ state, spec, effect, mutationManifest, handoffDigest, result, artifactWrites, taskStageBinding, sourceMutationBaseline, settlementAdmission: acceptanceAdmission });
@@ -3614,7 +3593,12 @@ export class CanonicalFlowManagerStore {
     if (!(taskStageBinding instanceof TaskReviewEpisodeBinding)) throw new CurrentFlowStateInvariantError("Task source stage requires its parent-owned immutable episode binding");
     const taskId = taskIdForNode(state, state.current.at(-1));
     const context = new CanonicalTaskContext({ state: { runId: state.runId, specId: state.specId, currentTaskId: taskId }, spec, sourceFingerprint: taskStageBinding.sourceFingerprint });
-    const inputs = new TaskReviewStageInputs({ flowManager: this, state, taskId, context, stage: effect.stepId });
+    let inputs;
+    try {
+      inputs = new TaskReviewStageInputs({ flowManager: this, state, taskId, context, stage: effect.stepId });
+    } catch (cause) {
+      throw new CurrentFlowStateInvariantError(`Task source stage canonical inputs are invalid: ${cause.message}`);
+    }
     if (!inputs.binding.matches(taskStageBinding)) throw new CurrentFlowStateInvariantError("Task source stage binding changed before publication");
     if (effect.triage !== null) {
       inputs.assertTriage(effect.triage);
@@ -3649,8 +3633,39 @@ export class CanonicalFlowManagerStore {
       sameReviewBinding: true, noChangeContinuation, acceptanceCarryForwardReady: stageResult.unreviewedAfterRepair,
       reason: effect.triage === null ? effect.repair.summary : dispositions.map((entry) => entry.rationale).join("\n"),
     });
-    const plan = resolveTaskReviewStageTransition(facts);
+    const completionPlan = resolveTaskReviewStageCompletion({
+      facts,
+      sourceQualityIssueCount: effect.issues.length,
+    });
+    if (completionPlan.qualityRecovery !== null) {
+      this.#appendSourceQualityIssues({
+        state, effect, handoffDigest, result, artifactWrites,
+        recoveryPlan: completionPlan.qualityRecovery,
+      });
+    }
+    const plan = completionPlan.transition;
     return this.runtime.completeTaskReviewStage({ specId: state.specId, activityId: activityId("task-review-stage-confirmed"), result, artifactWrites, admission: new CombinedAdmission(settlementAdmission, this.#producerCompletionAdmission(state.current.at(-1), artifactWrites)), plan, ...(plan.targetStepId === null ? {} : { targetAttempt: commandContextAttempt(state, plan.targetStepId) }) });
+  }
+
+  #appendSourceQualityIssues({ state, effect, handoffDigest, result, artifactWrites, recoveryPlan }) {
+    const nodeId = state.current.at(-1);
+    const taskId = taskIdForNode(state, nodeId);
+    const existing = this.readArtifact({ specId: state.specId, logicalKey: "issue.log", consumerNodeId: nodeId, optional: true });
+    const issues = new IssueLogDocument(existing === null ? { entries: [] } : JSON.parse(existing.bytes.toString("utf8")));
+    effect.issues.forEach((entry, index) => {
+      issues.append({
+        step: nodeId,
+        classification: entry.classification,
+        reason: entry.reason,
+        origin: { sourceStep: effect.stepId, sourceNodeId: nodeId },
+        evidence: { ref: `worker-handoff:${handoffDigest}#effects.json`, digest: handoffDigest },
+        recoveryStep: recoveryPlan.recoveryStep,
+        remainingRisk: entry.remainingRisk,
+        taskId,
+        timestamp: result.confirmedAt,
+      }, `source-handoff:${handoffDigest}:${index}`);
+    });
+    artifactWrites.push({ logicalKey: "issue.log", mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(issues.toJSON(), null, 2)}\n`, "utf8") });
   }
 
   /** Read only the immutable source lineages belonging to one canonical Task. */

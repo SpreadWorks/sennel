@@ -4,7 +4,9 @@ import { describe, it } from "node:test";
 import {
   TaskNoChangeContinuationFacts,
   TaskReviewStageBinding,
+  TaskReviewStageCompletionPlan,
   TaskReviewStageFacts,
+  resolveTaskReviewStageCompletion,
   resolveTaskReviewStageTransition,
   selectTaskNoChangeContinuation,
 } from "../../../src/flow/definition.js";
@@ -117,6 +119,26 @@ describe("Definition-owned Task Review stage transition", () => {
     assert.equal(fourth.operation, "repair-unreviewed-to-gate");
     assert.equal(fourth.acceptanceUnreviewed, true);
     assert.equal(fourth.targetStepId, "T-1-gate");
+  });
+
+  it("binds Task repair quality recovery to the same selected Review funnel transition", () => {
+    for (const [reviewResultCount, acceptanceCarryForwardReady, expectedStep] of [
+      [3, false, "T-1-review"],
+      [4, true, "T-1-gate"],
+    ]) {
+      const completion = resolveTaskReviewStageCompletion({
+        facts: new TaskReviewStageFacts({
+          binding: binding("repair"), taskRound: 1, reviewResultCount,
+          verdict: "REJECTED", mustFixCount: 1, triageDisposition: "apply",
+          repairChanged: true, sameReviewBinding: true, acceptanceCarryForwardReady,
+        }),
+        sourceQualityIssueCount: 1,
+      });
+      assert.ok(completion instanceof TaskReviewStageCompletionPlan);
+      assert.equal(completion.transition.targetStepId, expectedStep);
+      assert.equal(completion.qualityRecovery.recoveryStep, expectedStep);
+      assert.equal(completion.qualityRecovery.taskReviewStagePlan, completion.transition);
+    }
   });
 
   it("allows one no-change correction round and then stops deterministically", () => {
