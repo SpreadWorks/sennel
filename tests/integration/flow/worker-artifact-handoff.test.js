@@ -929,6 +929,7 @@ describe("worker artifact handoff", () => {
     const modeValue = fixture("implement", { worktree: false, specRecord: validSpec() });
     try {
       initializeGitRepository(modeValue);
+      execFileSync("git", ["config", "core.fileMode", "false"], { cwd: modeValue.mainRoot });
       const product = path.join(modeValue.mainRoot, "product.js");
       fs.chmodSync(product, 0o644);
       const request = modeValue.coordinator.createRequest({
@@ -939,6 +940,162 @@ describe("worker artifact handoff", () => {
       assert.equal(manifest.mutations[0].changeKind, "mode");
     } finally {
       removeTmpDir(modeValue.mainRoot);
+    }
+  });
+
+  it("ignores permission changes that Git cannot represent", () => {
+    for (const { committedMode, changedMode } of [
+      { committedMode: 0o755, changedMode: 0o700 },
+      { committedMode: 0o644, changedMode: 0o600 },
+      { committedMode: 0o644, changedMode: 0o655 },
+    ]) {
+      const value = fixture("implement", { worktree: false, specRecord: validSpec() });
+      try {
+        initializeGitRepository(value);
+        const product = path.join(value.mainRoot, "product.js");
+        fs.chmodSync(product, committedMode);
+        if (committedMode === 0o755) {
+          execFileSync("git", ["add", "product.js"], { cwd: value.mainRoot });
+          execFileSync("git", ["commit", "-q", "-m", "record executable authority"], { cwd: value.mainRoot });
+        }
+        execFileSync("git", ["config", "core.fileMode", "false"], { cwd: value.mainRoot });
+        const request = value.coordinator.createRequest({
+          ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+        });
+        fs.chmodSync(product, changedMode);
+        assert.deepEqual(captureManifest(request).mutations, []);
+      } finally {
+        removeTmpDir(value.mainRoot);
+      }
+    }
+  });
+
+  it("captures and restores Git-visible mode changes for executable pre-untracked files", () => {
+    const value = fixture("implement", { worktree: false, specRecord: validSpec() });
+    try {
+      initializeGitRepository(value);
+      const script = path.join(value.mainRoot, "local-script.sh");
+      fs.writeFileSync(script, "#!/bin/sh\nexit 0\n");
+      fs.chmodSync(script, 0o755);
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      const baselineEntry = request.sourceMutationBaseline.snapshot.entries
+        .find((entry) => entry.path === "local-script.sh");
+      assert.equal(baselineEntry.mode, 0o755);
+      const authority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
+
+      fs.chmodSync(script, 0o644);
+      const manifest = captureManifest(request);
+      assert.deepEqual(manifest.mutations.map((entry) => ({
+        path: entry.path,
+        changeKind: entry.changeKind,
+        beforeMode: entry.beforeMode,
+        afterMode: entry.afterMode,
+      })), [{
+        path: "local-script.sh",
+        changeKind: "mode",
+        beforeMode: 0o755,
+        afterMode: 0o644,
+      }]);
+
+      authority.rollbackRejectedSourceMutation();
+
+      assert.equal(fs.readFileSync(script, "utf8"), "#!/bin/sh\nexit 0\n");
+      assert.equal(fs.statSync(script).mode & 0o777, 0o755);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("preserves Git-invisible permission bits while rolling back tracked content", () => {
+    const value = fixture("implement", { worktree: false, specRecord: validSpec() });
+    try {
+      initializeGitRepository(value);
+      const product = path.join(value.mainRoot, "product.js");
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      const authority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
+
+      fs.writeFileSync(product, "export const value = 2;\n");
+      fs.chmodSync(product, 0o600);
+      const manifest = captureManifest(request);
+      assert.equal(manifest.mutations[0].changeKind, "content");
+
+      authority.rollbackRejectedSourceMutation();
+
+      assert.equal(fs.readFileSync(product, "utf8"), "export const value = 1;\n");
+      assert.equal(fs.statSync(product).mode & 0o777, 0o600);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("preserves 0755 to 0700 permission narrowing while rolling back tracked content", () => {
+    const value = fixture("implement", { worktree: false, specRecord: validSpec() });
+    try {
+      initializeGitRepository(value);
+      const product = path.join(value.mainRoot, "product.js");
+      fs.chmodSync(product, 0o755);
+      execFileSync("git", ["add", "product.js"], { cwd: value.mainRoot });
+      execFileSync("git", ["commit", "-q", "-m", "record executable product"], { cwd: value.mainRoot });
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      const authority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
+
+      fs.writeFileSync(product, "export const value = 2;\n");
+      fs.chmodSync(product, 0o700);
+      assert.equal(captureManifest(request).mutations[0].changeKind, "content");
+
+      authority.rollbackRejectedSourceMutation();
+
+      assert.equal(fs.readFileSync(product, "utf8"), "export const value = 1;\n");
+      assert.equal(fs.statSync(product).mode & 0o777, 0o700);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("keeps a large clean tracked tree out of the source request authority", () => {
+    const value = fixture("implement", { worktree: false, specRecord: validSpec() });
+    try {
+      initializeGitRepository(value);
+      const trackedRoot = path.join(value.mainRoot, "tracked-fixture");
+      fs.mkdirSync(trackedRoot);
+      for (let index = 0; index < 18_763; index += 1) {
+        fs.writeFileSync(path.join(trackedRoot, `${String(index).padStart(5, "0")}.txt`), "x\n");
+      }
+      execFileSync("git", ["add", "tracked-fixture"], { cwd: value.mainRoot });
+      execFileSync("git", ["commit", "-q", "-m", "large tracked fixture"], { cwd: value.mainRoot });
+      fs.writeFileSync(path.join(value.mainRoot, "product.js"), "export const value = 0;\n");
+      fs.writeFileSync(path.join(value.mainRoot, "untracked.txt"), "before\n");
+
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      const stored = JSON.parse(fs.readFileSync(request.requestPath, "utf8"));
+
+      assert.equal(request.sourceMutationBaseline.snapshot.entries.length, 2);
+      assert.deepEqual(request.sourceMutationBaseline.snapshot.entries.map((entry) => entry.path), [
+        "product.js", "untracked.txt",
+      ]);
+      assert.equal(Object.hasOwn(request.sourceMutationBaseline.snapshot.toJSON(), "modeEntries"), false);
+      assert.equal(Object.hasOwn(stored, "sourceMutationBaseline"), false);
+      assert.equal(Object.hasOwn(stored, "sourceHandoffCheckpoint"), false);
+      assert.equal(stored.sourceMutationBaselineDigest, request.sourceMutationBaseline.digest);
+      assert.equal(stored.sourceHandoffCheckpointDigest, request.sourceHandoffCheckpoint.digest);
+      const requestBytes = fs.statSync(request.requestPath).size;
+      assert.ok(Buffer.byteLength(JSON.stringify(request.sourceMutationBaseline.toJSON())) < 10_000);
+      assert.ok(requestBytes < 512 * 1024);
+      assert.ok(requestBytes < 8 * 1024 * 1024);
+      assert.equal(value.flowManager.readSourceHandoffAuthority({
+        specId: value.specId,
+        identity: request.sourceHandoffIdentity,
+      }).event.kind, "start-intent");
+    } finally {
+      removeTmpDir(value.mainRoot);
     }
   });
 
@@ -1030,6 +1187,50 @@ describe("worker artifact handoff", () => {
         (error) => error instanceof WorkerArtifactHandoffError
           && error.code === "FLOW_ARTIFACT_HANDOFF_AUTHORITY_UNAVAILABLE"
           && error.data.paths.includes("product.js"),
+      );
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("does not fall back to a filesystem scan when a valid Git root cannot read its index", () => {
+    const value = fixture("implement", { worktree: false, specRecord: validSpec() });
+    try {
+      initializeGitRepository(value);
+      fs.writeFileSync(path.join(value.mainRoot, ".git", "index"), "not a Git index\n");
+
+      assert.throws(
+        () => WorkerArtifactMutationAuthoritySnapshot.capture(
+          value.coordinator.createRequest({
+            ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+          }),
+        ),
+        (error) => error instanceof WorkerArtifactHandoffError
+          && error.code === "FLOW_ARTIFACT_HANDOFF_AUTHORITY_UNAVAILABLE",
+      );
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("fails closed when Git status contains an invalid UTF-8 path", () => {
+    const value = fixture("implement", { worktree: false, specRecord: validSpec() });
+    try {
+      initializeGitRepository(value);
+      const invalidPath = Buffer.concat([
+        Buffer.from(`${value.mainRoot}${path.sep}invalid-`, "utf8"),
+        Buffer.from([0xff]),
+        Buffer.from(".txt", "utf8"),
+      ]);
+      fs.writeFileSync(invalidPath, "invalid path bytes\n");
+
+      assert.throws(
+        () => value.coordinator.createRequest({
+          ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+        }),
+        (error) => error instanceof WorkerArtifactHandoffError
+          && error.code === "FLOW_ARTIFACT_HANDOFF_AUTHORITY_UNAVAILABLE"
+          && error.cause?.code === "GIT_STATUS_PORCELAIN_V2_INVALID",
       );
     } finally {
       removeTmpDir(value.mainRoot);
@@ -2712,7 +2913,7 @@ describe("worker artifact handoff", () => {
         state: value.flowManager.load(),
         invocation: value.invocation,
       });
-      assert.equal(request.version, 3);
+      assert.equal(request.version, 4);
       fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
       fs.writeFileSync(request.payloadPath("effects.json"), json(implementationEffect(request, ["product.js"]).toJSON()));
       seal(request);

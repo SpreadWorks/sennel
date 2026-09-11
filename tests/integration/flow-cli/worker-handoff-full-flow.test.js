@@ -589,7 +589,7 @@ describe("deterministic full Flow worker handoff", () => {
                 assert.equal(pending.length, 1, "worker start must have exactly one unsettled canonical checkpoint");
                 const authority = pending[0];
                 assert.equal(authority.checkpoint.identity.dispatchInvocationId, request.dispatchInvocationId);
-                assert.equal(authority.checkpoint.digest, request.sourceHandoffCheckpoint.digest);
+                assert.equal(authority.checkpoint.digest, request.sourceHandoffCheckpointDigest);
                 assert.equal(authority.event.kind, "start-intent", "worker must start after durable request binding");
                 assert.equal(authority.event.requestDigest, coordinator.request.requestDigest);
                 assert.equal(authority.settlement, null);

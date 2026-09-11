@@ -18,6 +18,9 @@ import os from "node:os";
 
 import {
   GitCommitPathSet,
+  GitPorcelainV2Status,
+  GitPorcelainV2StatusError,
+  getPorcelainV2Status,
   runGit,
 } from "../../../src/lib/git-helpers.js";
 import { runCmd } from "../../../src/lib/process.js";
@@ -197,5 +200,112 @@ describe("runCmd no longer logs git commands", () => {
       const gitLines = lines.filter((l) => l.type === "git");
       assert.equal(gitLines.length, 0);
     }
+  });
+});
+
+describe("Git porcelain v2 difference authority", () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-status-v2-"));
+    initRepo(tmpDir);
+    container.reset();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    container.reset();
+  });
+
+  it("parses ordinary, deleted, untracked, type-changed, and special-character paths", () => {
+    const ordinary = "ordinary file.txt";
+    const deleted = "deleted.txt";
+    const typeChanged = "type-change.txt";
+    for (const relativePath of [ordinary, deleted, typeChanged]) {
+      fs.writeFileSync(path.join(tmpDir, relativePath), `${relativePath}\n`);
+    }
+    runCmd("git", ["-C", tmpDir, "add", "--", ordinary, deleted, typeChanged]);
+    runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "status fixtures"]);
+    fs.writeFileSync(path.join(tmpDir, ordinary), "changed\n");
+    fs.unlinkSync(path.join(tmpDir, deleted));
+    fs.unlinkSync(path.join(tmpDir, typeChanged));
+    fs.symlinkSync("README.md", path.join(tmpDir, typeChanged));
+    const special = "untracked\tline\nbreak.txt";
+    fs.writeFileSync(path.join(tmpDir, special), "untracked\n");
+
+    const status = getPorcelainV2Status(tmpDir);
+    assert.ok(status instanceof GitPorcelainV2Status);
+    assert.deepEqual(new Set(status.pathSet.toArray()), new Set([
+      ordinary, deleted, typeChanged, special,
+    ]));
+    assert.equal(status.entries.find((entry) => entry.path === deleted).worktreeMode, 0);
+    assert.equal(status.entries.find((entry) => entry.path === typeChanged).worktreeMode, 0o120000);
+    assert.equal(status.entries.find((entry) => entry.path === special).kind, "untracked");
+  });
+
+  it("forces executable-bit observation when repository core.fileMode is false", () => {
+    runCmd("git", ["-C", tmpDir, "config", "core.fileMode", "false"]);
+    const readme = path.join(tmpDir, "README.md");
+    fs.chmodSync(readme, 0o755);
+
+    const status = getPorcelainV2Status(tmpDir);
+
+    const entry = status.entries.find((candidate) => candidate.path === "README.md");
+    assert.equal(entry.worktreeMode, 0o100755);
+    assert.equal(entry.worktreeStatus, "M");
+  });
+
+  it("rejects malformed boundary data and Git command failure", () => {
+    const oid = "a".repeat(40);
+    for (const malformed of [
+      "1 .M N... 100644 100644 100644 abc def missing-terminator",
+      "2 R. N... 100644 100644 100644 abc def R100 renamed.txt\0",
+      "? ../escape.txt\0",
+      "x unsupported.txt\0",
+      Buffer.from([0x3f, 0x20, 0xff, 0x00]),
+      `1 .M N..X 100644 100644 100644 ${oid} ${oid} invalid-submodule.txt\0`,
+      `1 .M N... 100644 100644 777777 ${oid} ${oid} invalid-mode.txt\0`,
+      `1 .M N... 100644 100644 100644 ${"a".repeat(39)} ${oid} short-object.txt\0`,
+      `1 R. N... 100644 100644 100644 ${oid} ${oid} wrong-record.txt\0`,
+      `2 .M N... 100644 100644 100644 ${oid} ${oid} R100 renamed.txt\0original.txt\0`,
+      `2 R. N... 100644 100644 100644 ${oid} ${oid} R101 renamed.txt\0original.txt\0`,
+      `u .M N... 100644 100644 100644 100644 ${oid} ${oid} ${oid} unmerged.txt\0`,
+      "? duplicate.txt\0? duplicate.txt\0",
+      `2 R. N... 100644 100644 100644 ${oid} ${oid} R100 same.txt\0same.txt\0`,
+    ]) {
+      assert.throws(
+        () => GitPorcelainV2Status.from(malformed),
+        (error) => error instanceof GitPorcelainV2StatusError
+          && error.code === "GIT_STATUS_PORCELAIN_V2_INVALID",
+      );
+    }
+    const rename = GitPorcelainV2Status.from(
+      `2 R. N... 100644 100644 100644 ${oid} ${oid} R100 renamed.txt\0original.txt\0`,
+    );
+    assert.deepEqual(rename.pathSet.toArray(), ["renamed.txt", "original.txt"]);
+    const nonRepository = fs.mkdtempSync(path.join(os.tmpdir(), "git-status-v2-nonrepo-"));
+    try {
+      assert.throws(
+        () => getPorcelainV2Status(nonRepository),
+        (error) => error.code === "GIT_STATUS_PORCELAIN_V2_FAILED",
+      );
+    } finally {
+      fs.rmSync(nonRepository, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves raw Git status bytes and rejects an invalid UTF-8 repository path", () => {
+    const invalidPath = Buffer.concat([
+      Buffer.from(`${tmpDir}${path.sep}invalid-`, "utf8"),
+      Buffer.from([0xff]),
+      Buffer.from(".txt", "utf8"),
+    ]);
+    fs.writeFileSync(invalidPath, "invalid path bytes\n");
+
+    assert.throws(
+      () => getPorcelainV2Status(tmpDir),
+      (error) => error instanceof GitPorcelainV2StatusError
+        && error.code === "GIT_STATUS_PORCELAIN_V2_INVALID",
+    );
   });
 });

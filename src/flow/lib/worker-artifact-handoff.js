@@ -101,12 +101,12 @@ export { SourceTriageEffect } from "./source-triage-contract.js";
 import { ApprovedFindingExceptionSet } from "./acknowledged-rationale.js";
 import { loadMergedGuardrails } from "../../lib/guardrail.js";
 import { CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
+import { getPorcelainV2Status } from "../../lib/git-helpers.js";
 
 export const WORKER_ARTIFACT_HANDOFF_REQUEST_ENV = PRODUCT.env("FLOW_HANDOFF_REQUEST");
-// Artifact-only requests retain Version 3.  Source workers additionally bind
-// a canonical checkpoint and intentionally reject legacy pending requests:
-// they cannot prove the pre-worker authority after a parent restart.
-export const WORKER_ARTIFACT_HANDOFF_VERSION = 3;
+// Source requests store only canonical checkpoint references. Version 4
+// intentionally rejects request documents that duplicated baseline authority.
+export const WORKER_ARTIFACT_HANDOFF_VERSION = 4;
 export const WORKER_ARTIFACT_HANDOFF_ROOT = PRODUCT.managedPath("handoffs");
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -1478,9 +1478,12 @@ function authorityRuntimeLocks(runtimeLocks = []) {
 
 function isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks = []) {
   if (isWorkerRuntimePath(relativePath)) return true;
-  const repositoryPath = path.relative(runtimeLocks[0]?.repositoryRoot ?? root, path.resolve(root, relativePath))
-    .split(path.sep).join("/");
-  if (FLOW_REPOSITORY_RUNTIME_ARTIFACTS.owns(repositoryPath, { runtimeLocks })) return true;
+  const absolutePath = path.resolve(root, relativePath);
+  const runtimeRepositoryRoot = runtimeLocks[0]?.repositoryRoot ?? null;
+  if (runtimeRepositoryRoot !== null && isWithin(runtimeRepositoryRoot, absolutePath)) {
+    const repositoryPath = path.relative(runtimeRepositoryRoot, absolutePath).split(path.sep).join("/");
+    if (FLOW_REPOSITORY_RUNTIME_ARTIFACTS.owns(repositoryPath, { runtimeLocks })) return true;
+  }
   return ignoredDirectories.some((directory) => (
     relativePath === directory || relativePath.startsWith(`${directory}/`)
   ));
@@ -1512,19 +1515,16 @@ function exactGitRoot(root) {
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
     return fs.realpathSync(output) === fs.realpathSync(root);
-  } catch {
+  } catch (cause) {
+    if (fs.existsSync(path.join(path.resolve(root), ".git"))) {
+      throw authoritySnapshotError(
+        `worker artifact authority could not resolve its Git root: ${cause.message}`,
+        cause,
+        { root: path.resolve(root), label: "Git root" },
+      );
+    }
     return false;
   }
-}
-
-function nullSeparatedPaths(bytes, label) {
-  const paths = bytes.toString("utf8").split("\u0000").filter(Boolean);
-  if (paths.length > MAX_AUTHORITY_DIRTY_PATHS) {
-    throw authoritySnapshotError(
-      `worker artifact authority ${label} exceeds ${MAX_AUTHORITY_DIRTY_PATHS} paths`,
-    );
-  }
-  return paths;
 }
 
 class WorkerArtifactRepositoryEntry {
@@ -1550,6 +1550,26 @@ class WorkerArtifactRepositoryEntry {
   toJSON() {
     return { path: this.path, kind: this.kind, mode: this.mode, digest: this.digest };
   }
+}
+
+function gitVisibleAuthorityEntry(entry, workingTreeMode = null) {
+  if (!(entry instanceof WorkerArtifactRepositoryEntry)) {
+    throw new Error("Git-visible authority entry must be typed");
+  }
+  if (entry.kind === "missing") return entry;
+  const modeKind = workingTreeMode === 0o120000 ? "symlink"
+    : workingTreeMode !== null && workingTreeMode !== 0 && (workingTreeMode & 0o170000) === 0o100000
+      ? "file" : null;
+  if (modeKind !== null && entry.kind !== modeKind) {
+    throw authoritySnapshotError(`worker artifact authority Git status changed while inspecting ${entry.path}`);
+  }
+  const kind = entry.kind;
+  const visibleMode = workingTreeMode === null || workingTreeMode === 0 ? entry.mode : workingTreeMode;
+  const mode = kind === "file"
+    ? ((visibleMode & 0o100) === 0 ? 0o644 : 0o755)
+    : kind === "symlink" ? 0o777
+      : kind === "directory" ? 0o755 : null;
+  return new WorkerArtifactRepositoryEntry({ ...entry.toJSON(), kind, mode });
 }
 
 function digestAuthorityFile(filePath, visible, relativePath, budget) {
@@ -1659,26 +1679,6 @@ function authorityFileEntry(root, relativePath, budget) {
   });
 }
 
-/** Fingerprint a tracked path's filesystem kind and exact permission bits. */
-function authorityModeEntry(root, relativePath) {
-  const normalized = normalizedRelativePath(relativePath, "worker artifact tracked mode path");
-  const filePath = path.resolve(root, ...normalized.split("/"));
-  if (!isWithin(root, filePath)) throw authoritySnapshotError(`worker artifact tracked mode escapes its repository: ${normalized}`);
-  let stat;
-  try {
-    stat = fs.lstatSync(filePath);
-  } catch (cause) {
-    if (cause.code === "ENOENT") {
-      return new WorkerArtifactRepositoryEntry({ path: normalized, kind: "missing", mode: null, digest: null });
-    }
-    throw authoritySnapshotError(`worker artifact authority could not inspect tracked mode ${normalized}: ${cause.message}`, cause);
-  }
-  const kind = stat.isSymbolicLink() ? "symlink"
-    : stat.isDirectory() ? "directory"
-      : stat.isFile() ? "file" : "other";
-  return new WorkerArtifactRepositoryEntry({ path: normalized, kind, mode: stat.mode & 0o7777, digest: null });
-}
-
 function filteredIndexDigest(root, bytes, ignoredDirectories, runtimeLocks) {
   const hash = crypto.createHash("sha256");
   for (const record of bytes.toString("utf8").split("\u0000").filter(Boolean)) {
@@ -1700,23 +1700,22 @@ function gitAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = []
     ignoredDirectories,
     runtimeLocks,
   );
-  const dirtyTracked = nullSeparatedPaths(
-    boundedGitOutput(
-      root,
-      ["diff", "--name-only", "-z", "--no-renames", "HEAD", "--"],
-      "changed paths",
-    ),
-    "changed path set",
-  );
-  const untracked = nullSeparatedPaths(
-    boundedGitOutput(
-      root,
-      ["ls-files", "--others", "--exclude-standard", "-z"],
-      "untracked paths",
-    ),
-    "untracked path set",
-  );
-  const paths = [...new Set([...dirtyTracked, ...untracked])]
+  let status;
+  try {
+    status = getPorcelainV2Status(root);
+  } catch (cause) {
+    throw authoritySnapshotError(
+      `worker artifact authority could not read Git status: ${cause.message}`,
+      cause,
+      { root: path.resolve(root), label: "Git status" },
+    );
+  }
+  const statusByPath = new Map();
+  for (const entry of status.entries) {
+    statusByPath.set(entry.path, entry);
+    if (entry.originalPath !== null) statusByPath.set(entry.originalPath, entry);
+  }
+  const paths = status.pathSet.toArray()
     .filter((relativePath) => !isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks))
     .sort((left, right) => left.localeCompare(right));
   if (paths.length > MAX_AUTHORITY_DIRTY_PATHS) {
@@ -1725,20 +1724,17 @@ function gitAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = []
     );
   }
   const budget = { bytes: 0 };
-  const trackedPaths = nullSeparatedPaths(
-    boundedGitOutput(root, ["ls-files", "-z"], "tracked path set"),
-    "tracked path set",
-  ).filter((relativePath) => !isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks))
-    .sort((left, right) => left.localeCompare(right));
   return {
     mode: "git",
     head,
     indexDigest,
-    entries: paths.map((relativePath) => authorityFileEntry(root, relativePath, budget)),
-    // Git's executable bit cannot represent the full filesystem mode, and
-    // core.filemode can suppress even that diff. Record exact lstat metadata
-    // for tracked paths without copying their content into the checkpoint.
-    modeEntries: trackedPaths.map((relativePath) => authorityModeEntry(root, relativePath)),
+    entries: paths.map((relativePath) => {
+      const observation = statusByPath.get(relativePath);
+      return gitVisibleAuthorityEntry(
+        authorityFileEntry(root, relativePath, budget),
+        observation?.path === relativePath ? observation.worktreeMode : observation?.headMode,
+      );
+    }),
   };
 }
 
@@ -1774,12 +1770,11 @@ function filesystemAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLoc
     entries: relativePaths
       .sort((left, right) => left.localeCompare(right))
       .map((relativePath) => authorityFileEntry(root, relativePath, budget)),
-    modeEntries: [],
   };
 }
 
 export class WorkerArtifactRepositoryMutationSnapshot {
-  constructor({ root, authorities, ignoredDirectories = [], runtimeLocks = [], mode, head, indexDigest, entries, modeEntries = [] }) {
+  constructor({ root, authorities, ignoredDirectories = [], runtimeLocks = [], mode, head, indexDigest, entries }) {
     this.root = path.resolve(root);
     this.authorities = Object.freeze(authorities.map((entry) => requiredString(
       entry,
@@ -1798,19 +1793,14 @@ export class WorkerArtifactRepositoryMutationSnapshot {
         ? entry
         : new WorkerArtifactRepositoryEntry(entry)
     )));
-    if (!Array.isArray(modeEntries)) throw new Error("worker artifact repository mode entries must be an array");
-    this.modeEntries = Object.freeze(modeEntries.map((entry) => (
-      entry instanceof WorkerArtifactRepositoryEntry ? entry : new WorkerArtifactRepositoryEntry(entry)
-    )));
-    if (new Set(this.modeEntries.map((entry) => entry.path)).size !== this.modeEntries.length) {
-      throw new Error("worker artifact repository mode entries must be unique");
+    if (new Set(this.entries.map((entry) => entry.path)).size !== this.entries.length) {
+      throw new Error("worker artifact repository entries must be unique");
     }
     this.digest = digest(stableStringify({
       mode,
       head,
       indexDigest,
       entries: this.entries.map((entry) => entry.toJSON()),
-      modeEntries: this.modeEntries.map((entry) => entry.toJSON()),
     }));
     Object.freeze(this);
   }
@@ -1840,8 +1830,8 @@ export class WorkerArtifactRepositoryMutationSnapshot {
   }
 
   static fromStored(value, { root, authorities = ["execution"], runtimeLocks = [] } = {}) {
-    exactObjectKeys(value, ["mode", "head", "indexDigest", "entries", "modeEntries", "ignoredDirectories"], "source mutation baseline snapshot");
-    if (!Array.isArray(value.entries) || !Array.isArray(value.modeEntries)) throw new Error("source mutation baseline snapshot entries must be arrays");
+    exactObjectKeys(value, ["mode", "head", "indexDigest", "entries", "ignoredDirectories"], "source mutation baseline snapshot");
+    if (!Array.isArray(value.entries)) throw new Error("source mutation baseline snapshot entries must be an array");
     return new WorkerArtifactRepositoryMutationSnapshot({
       root,
       authorities,
@@ -1851,7 +1841,6 @@ export class WorkerArtifactRepositoryMutationSnapshot {
       head: value.head,
       indexDigest: value.indexDigest,
       entries: value.entries,
-      modeEntries: value.modeEntries,
     });
   }
 
@@ -1861,7 +1850,6 @@ export class WorkerArtifactRepositoryMutationSnapshot {
       head: this.head,
       indexDigest: this.indexDigest,
       entries: this.entries.map((entry) => entry.toJSON()),
-      modeEntries: this.modeEntries.map((entry) => entry.toJSON()),
       ignoredDirectories: [...this.ignoredDirectories],
     };
   }
@@ -1879,11 +1867,8 @@ export class WorkerArtifactRepositoryMutationSnapshot {
     const afterEntries = new Map(current.entries.map((entry) => [entry.path, entry]));
     const before = new Map(this.entries.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
     const after = new Map(current.entries.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
-    const beforeModes = new Map(this.modeEntries.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
-    const afterModes = new Map(current.modeEntries.map((entry) => [entry.path, stableStringify(entry.toJSON())]));
-    for (const relativePath of new Set([...before.keys(), ...after.keys(), ...beforeModes.keys(), ...afterModes.keys()])) {
-      if (before.get(relativePath) !== after.get(relativePath)
-        || beforeModes.get(relativePath) !== afterModes.get(relativePath)) {
+    for (const relativePath of new Set([...before.keys(), ...after.keys()])) {
+      if (before.get(relativePath) !== after.get(relativePath)) {
         // A transient handoff subtree can be created after baseline capture.
         // Its previously absent ancestor directories are bookkeeping, not
         // source changes; sibling entries remain independently fingerprinted.
@@ -2031,8 +2016,6 @@ export class SourceMutationManifest {
     }
     const before = new Map(baseline.snapshot.entries.map((entry) => [entry.path, entry]));
     const after = new Map(current.entries.map((entry) => [entry.path, entry]));
-    const beforeModes = new Map(baseline.snapshot.modeEntries.map((entry) => [entry.path, entry]));
-    const afterModes = new Map(current.modeEntries.map((entry) => [entry.path, entry]));
     const indexBudget = { bytes: 0 };
     const mutations = changed.map((relativePath) => {
       // Git snapshots intentionally record only dirty paths. With HEAD and
@@ -2049,28 +2032,20 @@ export class SourceMutationManifest {
       const recordedRight = recordedAfter === undefined
         ? indexedAfter || new WorkerArtifactRepositoryEntry({ path: relativePath, kind: "missing", mode: null, digest: null })
         : recordedAfter;
-      const leftMode = beforeModes.get(relativePath) ?? null;
-      const rightMode = afterModes.get(relativePath) ?? null;
-      const left = leftMode === null ? recordedBefore : new WorkerArtifactRepositoryEntry({
-        ...recordedBefore.toJSON(), kind: leftMode.kind, mode: leftMode.mode,
-      });
-      const right = rightMode === null ? recordedRight : new WorkerArtifactRepositoryEntry({
-        ...recordedRight.toJSON(), kind: rightMode.kind, mode: rightMode.mode,
-      });
-      const changeKind = left.kind === "missing" ? "added"
-        : right.kind === "missing" ? "deleted"
-          : left.kind !== right.kind ? "type"
-            : left.mode !== right.mode ? "mode" : "content";
+      const changeKind = recordedBefore.kind === "missing" ? "added"
+        : recordedRight.kind === "missing" ? "deleted"
+          : recordedBefore.kind !== recordedRight.kind ? "type"
+            : recordedBefore.mode !== recordedRight.mode ? "mode" : "content";
       return new SourceMutationEntry({
         mutationId: SourceMutationManifest.mutationId(baseline.attempt, relativePath),
         path: relativePath,
         changeKind,
-        beforeKind: left.kind,
-        beforeMode: left.mode,
-        beforeDigest: left.digest,
-        afterKind: right.kind,
-        afterMode: right.mode,
-        afterDigest: right.digest,
+        beforeKind: recordedBefore.kind,
+        beforeMode: recordedBefore.mode,
+        beforeDigest: recordedBefore.digest,
+        afterKind: recordedRight.kind,
+        afterMode: recordedRight.mode,
+        afterDigest: recordedRight.digest,
       });
     }).filter((entry) => entry !== null);
     return new SourceMutationManifest({ attempt: baseline.attempt, baselineDigest: baseline.digest, mutations });
@@ -2150,10 +2125,9 @@ function indexedSourceMutationBaselineEntry(root, relativePath, budget) {
   return new WorkerArtifactRepositoryEntry({
     path: relativePath,
     kind: mode === 0o120000 ? "symlink" : "file",
-    // Git reports a file-type prefix (100644/100755/120000), while the
-    // filesystem authority records only lstat permission bits. Normalize the
-    // recovered clean baseline to that authority representation before
-    // deriving the change kind.
+    // Git reports a file-type prefix (100644/100755/120000). Normalize the
+    // recovered clean baseline to the snapshot's Git-visible permission
+    // representation before deriving the change kind.
     mode: mode === 0o120000 ? 0o777 : mode & 0o7777,
     digest: digest(bytes),
   });
@@ -2161,7 +2135,7 @@ function indexedSourceMutationBaselineEntry(root, relativePath, budget) {
 
 function indexedSourceMutationCurrentEntry(root, relativePath, budget) {
   if (indexedSourceRollbackEntry(root, relativePath) === null) return null;
-  return authorityFileEntry(root, relativePath, budget);
+  return gitVisibleAuthorityEntry(authorityFileEntry(root, relativePath, budget));
 }
 
 /**
@@ -2830,7 +2804,7 @@ class WorkerArtifactSourceRollbackEntry {
     return new WorkerArtifactSourceRollbackEntry({ entry, bytes: file.bytes });
   }
 
-  operation(root, { gitMode }) {
+  operation(root, { gitMode, currentMode = null }) {
     const absolute = path.join(root, this.entry.path);
     if (this.entry.kind === "directory") {
       if (gitMode) throw new Error(`source rollback cannot restore Git directory path ${this.entry.path}`);
@@ -2843,7 +2817,7 @@ class WorkerArtifactSourceRollbackEntry {
       kind: "file",
       root,
       bytes: this.#bytes,
-      mode: this.entry.mode,
+      mode: gitMode ? gitRollbackFileMode(this.entry.mode, currentMode) : this.entry.mode,
     });
     throw new Error(`source rollback cannot restore ${this.entry.kind} path ${this.entry.path}`);
   }
@@ -2955,7 +2929,13 @@ function indexedSourceRollbackEntry(root, relativePath) {
   return Number.parseInt(match[1], 8);
 }
 
-function indexedSourceRollbackOperation(root, relativePath, budget, { baselineMode = null } = {}) {
+function gitRollbackFileMode(baselineMode, currentMode) {
+  if (currentMode === null) return baselineMode;
+  const currentGitMode = (currentMode & 0o100) === 0 ? 0o644 : 0o755;
+  return currentGitMode === baselineMode ? currentMode : baselineMode;
+}
+
+function indexedSourceRollbackOperation(root, relativePath, budget, { currentMode = null } = {}) {
   const mode = indexedSourceRollbackEntry(root, relativePath);
   const absolute = path.join(root, relativePath);
   if (mode === null) return new WorkerArtifactSourceRollbackOperation({ absolute, kind: "remove", root });
@@ -2977,7 +2957,7 @@ function indexedSourceRollbackOperation(root, relativePath, budget, { baselineMo
     kind: "file",
     root,
     bytes,
-    mode: baselineMode ?? (mode & 0o777),
+    mode: gitRollbackFileMode(mode & 0o777, currentMode),
   });
 }
 
@@ -3043,14 +3023,17 @@ class WorkerArtifactSourceRollbackRepositoryCheckpoint {
     const currentEntries = new Map(current.entries.map((entry) => [entry.path, entry]));
     const budget = { bytes: 0 };
     const currentStates = new Map();
+    const currentModes = new Map();
     const restoreBudget = { bytes: 0 };
     for (const relativePath of paths) {
-      const actual = authorityFileEntry(this.snapshot.root, relativePath, budget);
+      const captured = authorityFileEntry(this.snapshot.root, relativePath, budget);
+      const actual = this.snapshot.mode === "git" ? gitVisibleAuthorityEntry(captured) : captured;
       const listed = currentEntries.get(relativePath);
       if (listed !== undefined && stableStringify(actual.toJSON()) !== stableStringify(listed.toJSON())) {
         throw new Error(`source rollback cannot prove ownership of ${relativePath}`);
       }
       currentStates.set(relativePath, actual);
+      currentModes.set(relativePath, captured.kind === "file" ? captured.mode : null);
     }
     const operations = [];
     for (const relativePath of paths) {
@@ -3062,10 +3045,11 @@ class WorkerArtifactSourceRollbackRepositoryCheckpoint {
               })
             : checkpoint.operation(this.snapshot.root, {
                 gitMode: this.snapshot.mode === "git",
+                currentMode: currentModes.get(relativePath),
               }))
         : this.snapshot.mode === "git"
           ? indexedSourceRollbackOperation(this.snapshot.root, relativePath, restoreBudget, {
-              baselineMode: this.snapshot.modeEntries.find((entry) => entry.path === relativePath)?.mode ?? null,
+              currentMode: currentModes.get(relativePath),
             })
           : filesystemSourceRollbackOperation(
             this.snapshot.root,
@@ -3080,7 +3064,8 @@ class WorkerArtifactSourceRollbackRepositoryCheckpoint {
     }
     const verifiedBudget = { bytes: 0 };
     for (const relativePath of paths) {
-      const actual = authorityFileEntry(this.snapshot.root, relativePath, verifiedBudget);
+      const captured = authorityFileEntry(this.snapshot.root, relativePath, verifiedBudget);
+      const actual = this.snapshot.mode === "git" ? gitVisibleAuthorityEntry(captured) : captured;
       if (stableStringify(actual.toJSON()) !== stableStringify(currentStates.get(relativePath).toJSON())) {
         throw new Error(`source rollback cannot prove ownership of ${relativePath}`);
       }
@@ -4060,9 +4045,9 @@ export class WorkerArtifactHandoffRequest {
         .map((input) => input.toJSON()),
       testReviewRepair: visibleRepair?.toJSON?.() ?? visibleRepair,
       contextSnapshot: this.contextSnapshot?.toJSON() ?? null,
-      sourceMutationBaseline: this.sourceMutationBaseline?.toJSON() ?? null,
+      sourceMutationBaselineDigest: this.sourceMutationBaseline?.digest ?? null,
       sourceHandoffIdentity: this.sourceHandoffIdentity?.toJSON() ?? null,
-      sourceHandoffCheckpoint: this.sourceHandoffCheckpoint?.toJSON() ?? null,
+      sourceHandoffCheckpointDigest: this.sourceHandoffCheckpoint?.digest ?? null,
       payloads: this.payloads.map(({ rule, baselineDigest, baselineByteLength }) => ({
         logicalName: rule.logicalName,
         kind: rule.kind,
@@ -4748,7 +4733,7 @@ function requestFromStored(filePath) {
   exactObjectKeys(document, [
     "version", "runId", "specId", "issue", "stepId", "taskId", "actionDigest", "dispatchInvocationId",
       "targetAuthority", "inputDigest", "inputRevision", "inputs", "testReviewRepair", "contextSnapshot",
-    "payloads", "generatedAt", "sourceMutationBaseline", "sourceHandoffIdentity", "sourceHandoffCheckpoint",
+    "payloads", "generatedAt", "sourceMutationBaselineDigest", "sourceHandoffIdentity", "sourceHandoffCheckpointDigest",
   ], "worker artifact handoff request");
   if (document.version !== WORKER_ARTIFACT_HANDOFF_VERSION) {
     throw new Error(`worker artifact handoff version must be ${WORKER_ARTIFACT_HANDOFF_VERSION}`);
@@ -4840,14 +4825,15 @@ function requestFromStored(filePath) {
       : document.contextSnapshot.kind === "task"
         ? TaskWorkerContextSnapshot.fromStored(document.contextSnapshot)
         : DraftWorkerContextSnapshot.fromStored(document.contextSnapshot),
-    sourceMutationBaseline: document.sourceMutationBaseline === null
+    // Runtime storage carries only content-addressed references. The baseline
+    // and checkpoint bodies are reconstructed from the canonical store before
+    // any parent-owned comparison or recovery action.
+    sourceMutationBaselineDigest: document.sourceMutationBaselineDigest === null
       ? null
-      : SourceMutationBaseline.fromStored(document.sourceMutationBaseline, { root: executionRoot }),
-    // The canonical observation is rehydrated only after a manager has been
-    // supplied by recovery.  This runtime document is not authority by itself.
-    sourceHandoffCheckpoint: document.sourceHandoffCheckpoint === null
+      : requiredDigest(document.sourceMutationBaselineDigest, "handoff request source baseline digest"),
+    sourceHandoffCheckpointDigest: document.sourceHandoffCheckpointDigest === null
       ? null
-      : Object.freeze(structuredClone(document.sourceHandoffCheckpoint)),
+      : requiredDigest(document.sourceHandoffCheckpointDigest, "handoff request source checkpoint digest"),
     sourceHandoffIdentity: document.sourceHandoffIdentity === null
       ? null
       : Object.freeze(structuredClone(document.sourceHandoffIdentity)),
@@ -4868,14 +4854,11 @@ function requestFromStored(filePath) {
     || (request.contextSnapshot !== null && request.contextSnapshot.kind !== workerContextKind(policy))) {
     throw new Error("handoff request context snapshot does not match its step contract");
   }
-  if ((policy.kind === "source") !== (request.sourceMutationBaseline instanceof SourceMutationBaseline)) {
-    throw new Error("handoff request source mutation baseline does not match its step policy");
-  }
-  if (policy.kind === "source" && request.sourceHandoffCheckpoint === null) {
-    throw new Error("source handoff request lacks its canonical checkpoint reference");
-  }
-  if (policy.kind === "source" && request.sourceHandoffIdentity === null) {
-    throw new Error("source handoff request lacks its canonical identity");
+  const hasSourceReferences = request.sourceMutationBaselineDigest !== null
+    && request.sourceHandoffCheckpointDigest !== null
+    && request.sourceHandoffIdentity !== null;
+  if ((policy.kind === "source") !== hasSourceReferences) {
+    throw new Error("handoff request source authority references do not match its step policy");
   }
   request.requestDigest = digest(stableStringify(document));
   if (!isWithin(handoffRoot, request.requestPath) || !isWithin(handoffRoot, payloadDirectory)) {
@@ -4897,9 +4880,9 @@ function assertCurrentSourceRequestCapability(request) {
   const { document } = boundedJson(request.requestPath, "worker artifact handoff request");
   if (stored.requestDigest !== request.requestDigest
     || stableStringify(document) !== stableStringify(request.toJSON())
-    || stableStringify(stored.sourceMutationBaseline.toJSON()) !== stableStringify(request.sourceMutationBaseline.toJSON())
+    || stored.sourceMutationBaselineDigest !== request.sourceMutationBaseline.digest
     || stableStringify(stored.sourceHandoffIdentity) !== stableStringify(request.sourceHandoffIdentity.toJSON())
-    || stableStringify(stored.sourceHandoffCheckpoint) !== stableStringify(request.sourceHandoffCheckpoint.toJSON())) {
+    || stored.sourceHandoffCheckpointDigest !== request.sourceHandoffCheckpoint.digest) {
     throw new WorkerArtifactHandoffError(
       "recovery-required",
       "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
@@ -4910,7 +4893,27 @@ function assertCurrentSourceRequestCapability(request) {
   return stored;
 }
 
+function canonicalSourceAuthorityForStored({ stored, flowManager }) {
+  if (stored.policy.kind !== "source") return null;
+  if (typeof flowManager?.readSourceHandoffAuthority !== "function") {
+    throw new Error("canonical handoff restore requires source handoff authority readback");
+  }
+  const identity = new SourceWorkerHandoffIdentity(stored.sourceHandoffIdentity);
+  const authority = flowManager.readSourceHandoffAuthority({
+    specId: stored.specId,
+    identity,
+  });
+  if (!(authority?.checkpoint instanceof CanonicalSourceHandoffCheckpoint)
+    || !authority.checkpoint.identity.matches(identity)
+    || authority.checkpoint.digest !== stored.sourceHandoffCheckpointDigest
+    || authority.checkpoint.baseline.digest !== stored.sourceMutationBaselineDigest) {
+    throw new Error("source handoff request references do not match canonical authority");
+  }
+  return authority;
+}
+
 function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, policy, payloads, canonicalLocation, flowManager }) {
+  const sourceAuthority = canonicalSourceAuthorityForStored({ stored, flowManager });
   return new WorkerArtifactHandoffRequest({
     mainRoot,
     executionRoot,
@@ -4933,19 +4936,17 @@ function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, 
     inputRevision: stored.inputRevision,
     generatedAt: stored.generatedAt,
     workerVisibleTestReviewRepair: stored.testReviewRepair,
-    sourceMutationBaseline: stored.sourceMutationBaseline,
-    sourceHandoffIdentity: stored.sourceHandoffIdentity,
+    sourceMutationBaseline: sourceAuthority?.checkpoint.baseline ?? null,
+    sourceHandoffIdentity: sourceAuthority?.checkpoint.identity ?? null,
     canonicalGeneration: stored.sourceHandoffIdentity?.canonicalGeneration ?? null,
-    sourceHandoffCheckpoint: stored.sourceHandoffCheckpoint === null ? null : CanonicalSourceHandoffCheckpoint.fromStored(
-      stored.sourceHandoffCheckpoint,
-      { root: executionRoot, canonicalLocation },
-    ),
+    sourceHandoffCheckpoint: sourceAuthority?.checkpoint ?? null,
     canonicalLocation,
     flowManager,
   });
 }
 
 function reboundRestoredHandoffRequest({ identityRequest, mainRoot, executionRoot, state, stored, policy, payloads, canonicalLocation, flowManager }) {
+  const sourceAuthority = canonicalSourceAuthorityForStored({ stored, flowManager });
   const { testReviewRepair, testReviewRepairProgress } = restoredTestReviewRepairContext({
     flowManager, state, stepId: policy.stepId, workerVisibleTestReviewRepair: stored.testReviewRepair,
   });
@@ -4975,13 +4976,10 @@ function reboundRestoredHandoffRequest({ identityRequest, mainRoot, executionRoo
     testReviewRepair,
     testReviewRepairProgress,
     workerVisibleTestReviewRepair: stored.testReviewRepair,
-    sourceMutationBaseline: stored.sourceMutationBaseline,
-    sourceHandoffIdentity: stored.sourceHandoffIdentity,
+    sourceMutationBaseline: sourceAuthority?.checkpoint.baseline ?? null,
+    sourceHandoffIdentity: sourceAuthority?.checkpoint.identity ?? null,
     canonicalGeneration: stored.sourceHandoffIdentity?.canonicalGeneration ?? null,
-    sourceHandoffCheckpoint: stored.sourceHandoffCheckpoint === null ? null : CanonicalSourceHandoffCheckpoint.fromStored(
-      stored.sourceHandoffCheckpoint,
-      { root: executionRoot, canonicalLocation },
-    ),
+    sourceHandoffCheckpoint: sourceAuthority?.checkpoint ?? null,
     canonicalLocation,
     flowManager,
   });
@@ -7230,7 +7228,7 @@ export class WorkerArtifactHandoffCoordinator {
         );
       }
       if (stored.policy.kind === "source") {
-        if (stored.sourceHandoffCheckpoint === null) {
+        if (stored.sourceHandoffCheckpointDigest === null) {
           throw new WorkerArtifactHandoffError(
             "recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
             "source worker runtime lacks a canonical checkpoint and cannot be trusted", { retryable: false, recoveryPossible: false },

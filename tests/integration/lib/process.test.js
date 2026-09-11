@@ -34,6 +34,15 @@ describe("runCmd", () => {
     assert.equal(typeof result.stderr, "string");
   });
 
+  it("preserves stdout and stderr bytes when buffer encoding is requested", () => {
+    const result = runCmd("node", ["-e", "process.stdout.write(Buffer.from([0xff])); process.stderr.write(Buffer.from([0xfe]))"], {
+      encoding: "buffer",
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.stdout, Buffer.from([0xff]));
+    assert.deepEqual(result.stderr, Buffer.from([0xfe]));
+  });
+
   it("handles non-existent command gracefully", () => {
     const result = runCmd("nonexistent_command_xyz_12345", []);
     assert.equal(result.ok, false);
