@@ -887,7 +887,8 @@ describe("durable source handoff checkpoints", () => {
       ["spec", (value) => { value.specId = "foreign-spec"; }],
       ["step", (value) => { value.stepId = "impl-repair"; }],
       ["task", (value) => { value.taskId = "foreign-task"; }],
-      ["Attempt", (value) => { value.sourceMutationBaseline.attempt.id = crypto.randomUUID(); }],
+      ["baseline digest", (value) => { value.sourceMutationBaselineDigest = "0".repeat(64); }],
+      ["checkpoint digest", (value) => { value.sourceHandoffCheckpointDigest = "0".repeat(64); }],
       ["invocation", (value) => { value.dispatchInvocationId = "foreign-invocation"; }],
       ["Action", (value) => { value.actionDigest = "1".repeat(64); }],
       ["input", (value) => { value.inputDigest = "2".repeat(64); }],
@@ -968,7 +969,7 @@ describe("durable source handoff checkpoints", () => {
     assert.match(fs.readFileSync(product, "utf8"), /concurrent settlement writer/);
   });
 
-  it("rejects a different post-seal chmod even when file contents are unchanged", (t) => {
+  it("accepts a post-seal chmod that preserves Git-visible executable authority", (t) => {
     const scenario = new SourceCheckpointScenario(t, "implement");
     const sourcePath = path.join(scenario.executionRoot, "product.js");
     const request = withSourceHandoffLease({ root: scenario.executionRoot, mainRoot: scenario.mainRoot }, () => {
@@ -986,15 +987,13 @@ describe("durable source handoff checkpoints", () => {
     fs.chmodSync(sourcePath, 0o700);
     scenario.reload();
 
-    assert.throws(
-      () => new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() }),
-      (error) => error instanceof WorkerArtifactHandoffError
-        && error.code === "FLOW_SOURCE_HANDOFF_MANIFEST_STALE",
-    );
+    const recovered = new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() });
+
+    assert.equal(recovered?.completed, true);
     assert.equal(fs.statSync(sourcePath).mode & 0o777, 0o700);
     assert.equal(scenario.manager.readSourceHandoffAuthority({
       specId: scenario.specId, identity: request.sourceHandoffIdentity,
-    }).settlement, null);
+    }).settlement.kind, "accepted");
   });
 
   it("resumes rollback settlement after restart and preserves every pre-worker source shape", async (t) => {
@@ -1054,7 +1053,9 @@ describe("durable source handoff checkpoints", () => {
     });
     assert.equal(fs.readFileSync(product, "utf8"), "user dirty content\n");
     assert.equal(fs.existsSync(deleted), false);
-    assert.equal(fs.statSync(executable).mode & 0o777, 0o755);
+    // Git represents only the executable bit. The worker's 0755 -> 0700
+    // chmod is therefore outside source mutation and rollback authority.
+    assert.equal(fs.statSync(executable).mode & 0o777, 0o700);
     assert.equal(fs.readlinkSync(link), "notes.txt");
     assert.equal(fs.readFileSync(untracked, "utf8"), "user untracked content\n");
     assert.equal(fs.existsSync(path.join(scenario.executionRoot, "worker-only.js")), false);

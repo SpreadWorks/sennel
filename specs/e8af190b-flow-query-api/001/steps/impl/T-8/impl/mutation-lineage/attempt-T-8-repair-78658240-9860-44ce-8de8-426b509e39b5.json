@@ -12,7 +12,7 @@
     "reviewAttemptSequenceAtStart": 0,
     "gateAttemptSequenceAtStart": 0
   },
-  "sourceFingerprint": "f3d91cb9ee872ad76fa4da8551963adaefc1d75bf745013d825118f172e45730",
+  "sourceFingerprint": "e39ceeddc73bf2a5970f0de129d6add4dc3d343661fd0564e77f3e9cef58bcce",
   "manifest": {
     "attempt": {
       "id": "attempt-T-8-repair-78658240-9860-44ce-8de8-426b509e39b5",
@@ -25,11 +25,15 @@
         "mutationId": "0aec9a9f21466dd2622f708cc308035d34d4cd52bb453d773cfafc8136f7873b",
         "path": "tests/support/builders/flow-query-fixture.js",
         "changeKind": "content",
+        "beforeKind": "file",
+        "beforeMode": null,
         "beforeDigest": "93f8ecc124b95fcccf57b8fe75f6f781d62954304fe842d05ee649eb65e70b6f",
+        "afterKind": "file",
+        "afterMode": null,
         "afterDigest": "362548a31965db230c4b9a2c309287069be74e7440b2ae5cc0710b4dee4b6955"
       }
     ],
-    "digest": "f3d91cb9ee872ad76fa4da8551963adaefc1d75bf745013d825118f172e45730"
+    "digest": "e39ceeddc73bf2a5970f0de129d6add4dc3d343661fd0564e77f3e9cef58bcce"
   },
   "noChangeReason": null
 }

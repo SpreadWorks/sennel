@@ -27,19 +27,27 @@ function buildProcessOptions(opts) {
  * @param {string[]} args - Argument array
  * @param {Object}   [opts]
  * @param {string}   [opts.cwd]       - Working directory
- * @param {string}   [opts.encoding]  - Encoding (default: "utf8")
+ * @param {string}   [opts.encoding]  - Encoding (default: "utf8"); use "buffer" to preserve raw bytes
  * @param {number}   [opts.timeout]   - Timeout in ms
  * @param {number}   [opts.maxBuffer] - Max stdout/stderr buffer size in bytes
  * @param {Object}   [opts.env]       - Environment variables
- * @returns {{ ok: boolean, status: number, stdout: string, stderr: string, signal: string|null, killed: boolean, errorCode: string|null }}
+ * @returns {{ ok: boolean, status: number, stdout: string|Buffer, stderr: string|Buffer, signal: string|null, killed: boolean, errorCode: string|null }}
  */
 export function runCmd(cmd, args, opts = {}) {
   const res = spawnSync(cmd, args, buildProcessOptions(opts));
+  const preserveBytes = opts.encoding === "buffer";
+  const stdout = preserveBytes
+    ? (Buffer.isBuffer(res.stdout) ? res.stdout : Buffer.alloc(0))
+    : String(res.stdout || "");
+  const stderrSource = res.stderr && res.stderr.length > 0 ? res.stderr : res.error?.message || "";
+  const stderr = preserveBytes
+    ? (Buffer.isBuffer(stderrSource) ? stderrSource : Buffer.from(String(stderrSource), "utf8"))
+    : String(stderrSource);
   return {
     ok: res.status === 0 && !res.signal,
     status: res.status ?? 1,
-    stdout: String(res.stdout || ""),
-    stderr: String(res.stderr || res.error?.message || ""),
+    stdout,
+    stderr,
     signal: res.signal ?? null,
     killed: Boolean(res.error && res.error.code === "ETIMEDOUT"),
     errorCode: typeof res.error?.code === "string" ? res.error.code : null,

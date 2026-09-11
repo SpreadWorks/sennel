@@ -34,12 +34,16 @@ export function captureGitSnapshot(root) {
  *
  * @param {string[]} args - git argument array (without the leading "git")
  * @param {Object}   [opts] - same shape as runCmd opts
- * @returns {{ ok: boolean, status: number, stdout: string, stderr: string, signal: string|null, killed: boolean }}
+ * @returns {{ ok: boolean, status: number, stdout: string|Buffer, stderr: string|Buffer, signal: string|null, killed: boolean }}
  */
 export function runGit(args, opts = {}) {
   const result = runCmd("git", args, opts);
   if (container.has("logger")) {
-    container.get("logger").git({ cmd: ["git", ...args], exitCode: result.status, stderr: result.stderr });
+    container.get("logger").git({
+      cmd: ["git", ...args],
+      exitCode: result.status,
+      stderr: Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : result.stderr,
+    });
   }
   return result;
 }
@@ -143,6 +147,10 @@ export class GitStatusPathSet {
     return new GitStatusPathSet(paths);
   }
 
+  static fromPorcelainV2Z(output) {
+    return GitPorcelainV2Status.from(output).pathSet;
+  }
+
   get size() {
     return this.paths.length;
   }
@@ -155,6 +163,215 @@ export class GitStatusPathSet {
   toArray() {
     return [...this.paths];
   }
+}
+
+export class GitPorcelainV2StatusError extends Error {
+  constructor(message) {
+    super(message);
+    this.code = "GIT_STATUS_PORCELAIN_V2_INVALID";
+  }
+}
+
+const GIT_PORCELAIN_V2_MODES = new Set(["000000", "100644", "100755", "120000", "160000"]);
+
+function porcelainV2Path(value, label) {
+  if (
+    typeof value !== "string"
+    || value === ""
+    || value.includes("\0")
+    || path.posix.isAbsolute(value)
+    || path.posix.normalize(value) !== value
+    || value === ".."
+    || value.startsWith("../")
+  ) {
+    throw new GitPorcelainV2StatusError(`${label} is invalid`);
+  }
+  return value;
+}
+
+function porcelainV2Mode(value, label) {
+  if (!GIT_PORCELAIN_V2_MODES.has(value)) {
+    throw new GitPorcelainV2StatusError(`${label} is invalid`);
+  }
+  return Number.parseInt(value, 8);
+}
+
+function porcelainV2ObjectIds(values) {
+  if (values.some((value) => !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value))
+    || new Set(values.map((value) => value.length)).size !== 1) {
+    throw new GitPorcelainV2StatusError("git porcelain v2 object id is invalid");
+  }
+}
+
+function porcelainV2SubmoduleState(value) {
+  if (!/^(?:N\.\.\.|S[.C][.M][.U])$/.test(value)) {
+    throw new GitPorcelainV2StatusError("git porcelain v2 submodule state is invalid");
+  }
+  return value;
+}
+
+/** One typed path observation from `git status --porcelain=v2 -z`. */
+export class GitPorcelainV2StatusEntry {
+  constructor({
+    kind,
+    path: relativePath,
+    originalPath = null,
+    indexStatus = ".",
+    worktreeStatus = ".",
+    submoduleState = "N...",
+    renameScore = null,
+    headMode = 0,
+    indexMode = 0,
+    worktreeMode = 0,
+  } = {}) {
+    if (!new Set(["ordinary", "renamed", "unmerged", "untracked"]).has(kind)) {
+      throw new GitPorcelainV2StatusError("git porcelain v2 entry kind is invalid");
+    }
+    this.kind = kind;
+    this.path = porcelainV2Path(relativePath, "git porcelain v2 path");
+    this.originalPath = originalPath === null
+      ? null
+      : porcelainV2Path(originalPath, "git porcelain v2 original path");
+    if ((kind === "renamed") !== (this.originalPath !== null)) {
+      throw new GitPorcelainV2StatusError("git porcelain v2 rename path is invalid");
+    }
+    const xy = `${indexStatus}${worktreeStatus}`;
+    if (kind === "ordinary" && (!/^[.MTAD]{2}$/.test(xy) || xy === "..")) {
+      throw new GitPorcelainV2StatusError("git porcelain v2 ordinary status is invalid");
+    }
+    if (kind === "renamed") {
+      const markers = [...xy].filter((status) => status === "R" || status === "C");
+      const score = typeof renameScore === "string" ? /^([RC])([0-9]{1,3})$/.exec(renameScore) : null;
+      if (!/^[.MTADRC]{2}$/.test(xy) || markers.length !== 1 || score === null
+        || score[1] !== markers[0] || Number.parseInt(score[2], 10) > 100) {
+        throw new GitPorcelainV2StatusError("git porcelain v2 rename/copy status is invalid");
+      }
+    }
+    if (kind === "unmerged" && !new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]).has(xy)) {
+      throw new GitPorcelainV2StatusError("git porcelain v2 unmerged status is invalid");
+    }
+    if (kind === "untracked" && xy !== "??") {
+      throw new GitPorcelainV2StatusError("git porcelain v2 untracked status is invalid");
+    }
+    this.indexStatus = indexStatus;
+    this.worktreeStatus = worktreeStatus;
+    this.submoduleState = porcelainV2SubmoduleState(submoduleState);
+    this.renameScore = renameScore;
+    for (const [label, mode] of [["head", headMode], ["index", indexMode], ["worktree", worktreeMode]]) {
+      if (!Number.isSafeInteger(mode) || mode < 0) throw new GitPorcelainV2StatusError(`git porcelain v2 ${label} mode is invalid`);
+    }
+    this.headMode = headMode;
+    this.indexMode = indexMode;
+    this.worktreeMode = worktreeMode;
+    if (kind === "untracked" && (headMode !== 0 || indexMode !== 0 || worktreeMode !== 0
+      || submoduleState !== "N..." || renameScore !== null)) {
+      throw new GitPorcelainV2StatusError("git porcelain v2 untracked metadata is invalid");
+    }
+    Object.freeze(this);
+  }
+
+  paths() {
+    return this.originalPath === null ? [this.path] : [this.path, this.originalPath];
+  }
+}
+
+/** Complete typed parser result for the NUL-delimited porcelain v2 boundary. */
+export class GitPorcelainV2Status {
+  constructor(entries) {
+    if (!Array.isArray(entries) || entries.some((entry) => !(entry instanceof GitPorcelainV2StatusEntry))) {
+      throw new GitPorcelainV2StatusError("git porcelain v2 status entries are invalid");
+    }
+    const paths = entries.flatMap((entry) => entry.paths());
+    if (new Set(paths).size !== paths.length) {
+      throw new GitPorcelainV2StatusError("git porcelain v2 status paths are duplicate or ambiguous");
+    }
+    this.entries = Object.freeze([...entries]);
+    this.pathSet = new GitStatusPathSet(paths);
+    Object.freeze(this);
+  }
+
+  static from(output) {
+    const bytes = Buffer.isBuffer(output) ? output : Buffer.from(String(output ?? ""), "utf8");
+    if (bytes.length === 0) return new GitPorcelainV2Status([]);
+    if (bytes.at(-1) !== 0) throw new GitPorcelainV2StatusError("git porcelain v2 -z output is not NUL terminated");
+    const decoded = bytes.toString("utf8");
+    if (!Buffer.from(decoded, "utf8").equals(bytes)) {
+      throw new GitPorcelainV2StatusError("git porcelain v2 -z output is not valid UTF-8");
+    }
+    const records = decoded.slice(0, -1).split("\0");
+    const entries = [];
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index];
+      let match;
+      if ((match = /^1 ([^ ])([^ ]) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([\s\S]+)$/.exec(record)) !== null) {
+        porcelainV2ObjectIds([match[7], match[8]]);
+        entries.push(new GitPorcelainV2StatusEntry({
+          kind: "ordinary", path: match[9], indexStatus: match[1], worktreeStatus: match[2],
+          submoduleState: match[3],
+          headMode: porcelainV2Mode(match[4], "git porcelain v2 head mode"),
+          indexMode: porcelainV2Mode(match[5], "git porcelain v2 index mode"),
+          worktreeMode: porcelainV2Mode(match[6], "git porcelain v2 worktree mode"),
+        }));
+        continue;
+      }
+      if ((match = /^2 ([^ ])([^ ]) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([\s\S]+)$/.exec(record)) !== null) {
+        const originalPath = records[++index];
+        if (originalPath === undefined || originalPath === "") {
+          throw new GitPorcelainV2StatusError("git porcelain v2 rename/copy entry is incomplete");
+        }
+        porcelainV2ObjectIds([match[7], match[8]]);
+        entries.push(new GitPorcelainV2StatusEntry({
+          kind: "renamed", path: match[10], originalPath,
+          indexStatus: match[1], worktreeStatus: match[2],
+          submoduleState: match[3], renameScore: match[9],
+          headMode: porcelainV2Mode(match[4], "git porcelain v2 head mode"),
+          indexMode: porcelainV2Mode(match[5], "git porcelain v2 index mode"),
+          worktreeMode: porcelainV2Mode(match[6], "git porcelain v2 worktree mode"),
+        }));
+        continue;
+      }
+      if ((match = /^u ([^ ])([^ ]) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([\s\S]+)$/.exec(record)) !== null) {
+        porcelainV2ObjectIds([match[8], match[9], match[10]]);
+        entries.push(new GitPorcelainV2StatusEntry({
+          kind: "unmerged", path: match[11], indexStatus: match[1], worktreeStatus: match[2],
+          submoduleState: match[3],
+          headMode: porcelainV2Mode(match[4], "git porcelain v2 head mode"),
+          indexMode: porcelainV2Mode(match[5], "git porcelain v2 index mode"),
+          worktreeMode: porcelainV2Mode(match[7], "git porcelain v2 worktree mode"),
+        }));
+        continue;
+      }
+      if (record.startsWith("? ")) {
+        entries.push(new GitPorcelainV2StatusEntry({
+          kind: "untracked", path: record.slice(2), indexStatus: "?", worktreeStatus: "?",
+        }));
+        continue;
+      }
+      throw new GitPorcelainV2StatusError("git porcelain v2 -z entry is malformed");
+    }
+    return new GitPorcelainV2Status(entries);
+  }
+}
+
+/** Read the repository difference authority with executable-bit observation enabled. */
+export function getPorcelainV2Status(cwd) {
+  const result = runGit([
+    "--no-optional-locks",
+    "-c",
+    "core.fileMode=true",
+    "status",
+    "--porcelain=v2",
+    "-z",
+    "--untracked-files=all",
+    "--no-renames",
+  ], { cwd, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
+  if (!result.ok) {
+    const error = new Error(`git porcelain v2 status failed: ${result.stderr || result.stdout || "unknown git error"}`);
+    error.code = "GIT_STATUS_PORCELAIN_V2_FAILED";
+    error.result = result;
+    throw error;
+  }
+  return GitPorcelainV2Status.from(result.stdout);
 }
 
 /**

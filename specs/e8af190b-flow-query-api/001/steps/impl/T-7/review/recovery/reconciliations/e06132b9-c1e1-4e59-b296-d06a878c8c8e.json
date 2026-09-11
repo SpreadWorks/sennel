@@ -380,6 +380,7 @@
             "digest": "f71d473b05ffd447f2a65142190ddddfdba3ed5d1a27728ec7224d15b8c3d7b4"
           }
         ],
+        "modeEntries": [],
         "ignoredDirectories": [
           ".sennel/agent-cache",
           ".sennel/review-execution-locks",
@@ -387,7 +388,7 @@
           ".tmp"
         ]
       },
-      "digest": "5dc88b80b2cdb7aa34bbaa0025456e656f94b2e569e159246a1e550c5cccd41e"
+      "digest": "0fd1b172fc87b5456c132552cd15985bd5fd2f51f55d466cc940e67f1c4dfaf7"
     },
     "baseline": {
       "route": {
@@ -503,7 +504,7 @@
         ]
       }
     ],
-    "digest": "98cb679447a83851440828678e0d92dce8195fb853ad93d1bd10ce29f1784add"
+    "digest": "c6b1dcbdbd790e8914670f9af67a02e3a42222b7092fe7aaa117f986a599f4ba"
   },
   "currentAttempt": {
     "id": "e06132b9-c1e1-4e59-b296-d06a878c8c8e",
@@ -511,5 +512,5 @@
     "sequence": 2
   },
   "reason": "Adopt the inspected current unreviewed input after recovery omitted its parent baseline; preserve the failed Attempt and retained work unit.",
-  "digest": "b9805f52e5de759a706da35dce8e2a0946bd9d32c30dd96fcc5b130a0d66d6ec"
+  "digest": "be65f13f83873c1d2dad26158d877522ab2728ac96e52b7c2d694729fa5f78b0"
 }

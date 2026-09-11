@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "identity": {
+    "flowIdentity": {
+      "flowId": "flow-e8af190b-d8eb-48b7-92f9-414f466f7501",
+      "flowVersionId": "flow-v1-e8af190b-d8eb-48b7-92f9-414f466f7501",
+      "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+      "specId": "e8af190b-flow-query-api",
+      "issue": 517
+    },
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "stepId": "task-repair",
+    "taskId": "T-9",
+    "attempt": {
+      "id": "attempt-T-9-repair-3e1f35eb-8594-42e3-9aa7-f26d1c05de69",
+      "nodeId": "T-9-repair",
+      "sequence": 1
+    },
+    "nodeId": "T-9-repair",
+    "dispatchInvocationId": "5e70833e-5a70-4603-8f16-93a05abc6d5f",
+    "actionDigest": "6b5e4bf94a9d001d44f91dde81e7712e82c5ba9a4390557019f9002c9d0a8166",
+    "inputDigest": "5a138fe88200becdccf644425b9ea43c0aa70b3f3ed07f062c0f7b4e70b8331e",
+    "policyRevision": "a6308061594ac66a025dd75e1d25854f7dc311bd91fe6dbf43fc8977813851c8",
+    "canonicalGeneration": "d68c44233a8490b7476b4a1e59860d64dc0fff4257dae2de1a4737fdc746b7d7"
+  },
+  "checkpointDigest": "edb5e8d210807a142d634d34a1eb9a9e612f8a9e030b826f1e434993d8507d98",
+  "handoffDigest": "b6989398098b3d6bf9b43354bb99aa5b242c336be8b23c48e9c508cd92523050",
+  "eventDigest": "54947c245fc5f14479a1d4334fdec8672cac4652593dac048e610a8fa8045391",
+  "kind": "accepted",
+  "digest": "748b2c21aac58729d21f3736d3c626fc0838f6841070559d049054bae89e8d6e"
+}

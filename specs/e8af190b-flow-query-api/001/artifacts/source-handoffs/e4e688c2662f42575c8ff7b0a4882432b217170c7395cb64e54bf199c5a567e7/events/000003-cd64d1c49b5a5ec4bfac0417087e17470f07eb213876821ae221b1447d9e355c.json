@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "identity": {
+    "flowIdentity": {
+      "flowId": "flow-e8af190b-d8eb-48b7-92f9-414f466f7501",
+      "flowVersionId": "flow-v1-e8af190b-d8eb-48b7-92f9-414f466f7501",
+      "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+      "specId": "e8af190b-flow-query-api",
+      "issue": 517
+    },
+    "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+    "specId": "e8af190b-flow-query-api",
+    "issue": 517,
+    "stepId": "task-triage",
+    "taskId": "T-9",
+    "attempt": {
+      "id": "attempt-T-9-triage-18afbe03-2b3c-46e7-9b3e-47a15c03a507",
+      "nodeId": "T-9-triage",
+      "sequence": 3
+    },
+    "nodeId": "T-9-triage",
+    "dispatchInvocationId": "5e70833e-5a70-4603-8f16-93a05abc6d5f",
+    "actionDigest": "f890ab55c3c5663c9d944b942ee21b272938f71dbc83e09e524c6755b57b6e0b",
+    "inputDigest": "8d5e5e8e4a2a67ce344e7ac9ff067a2a030d1c03b9af4619c50ea6bb4f40d233",
+    "policyRevision": "e244740dc45212542a4e77c8a4f5e5416182416b41cc2dbd156082c5c611e74b",
+    "canonicalGeneration": "fab7ac60f10801230291cc6b32cb17be91863ae5b9f8cada2933d7fab2c17676"
+  },
+  "checkpointDigest": "d3ba595ccdf21afcaaadba29edb4051aafe8f78889c660d6ded7f93c7c77df99",
+  "sequence": 3,
+  "previousDigest": "d716e71383a799d9ffd4eef5d4122bb7f5d8fc9345b9e95453fe75aaf76ff681",
+  "kind": "worker-exited",
+  "requestDigest": "0e7f0e6e90b084db8489b0b77cb7e6e5704541ba8341abb37fab9520c6cf060f",
+  "rollbackPlanDigest": null,
+  "sourceManifest": {
+    "attempt": {
+      "id": "attempt-T-9-triage-18afbe03-2b3c-46e7-9b3e-47a15c03a507",
+      "nodeId": "T-9-triage",
+      "sequence": 3
+    },
+    "baselineDigest": "0a1407c1eb49a2e3a1ee8fef810e27841dbc7efcfad9e4e9d1c206d96c490568",
+    "mutations": [],
+    "digest": "b711a7f20ac1d64fc8ddc50b31f8b51f3a8661c6ab50c202d4820865e04f1e18"
+  },
+  "workerStopped": true,
+  "failureFacts": null,
+  "digest": "cd64d1c49b5a5ec4bfac0417087e17470f07eb213876821ae221b1447d9e355c"
+}

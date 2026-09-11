@@ -11094,6 +11094,747 @@
       "taskId": null,
       "timestamp": "2026-09-09T00:44:49.058Z",
       "issueLogId": "worker-handoff-6de58f9458160158c26117450257ad5f359f7f0529d795dfa06f3dc64a43c498-recovery-required"
+    },
+    {
+      "step": "T-9-impl",
+      "classification": "quality",
+      "reason": "Freshness check reports source is newer than generated docs; docs build was not run because this source-worker action permits only source and formal test edits.",
+      "origin": {
+        "sourceStep": "task-impl",
+        "sourceNodeId": "T-9-impl"
+      },
+      "evidence": {
+        "ref": "worker-handoff:f721198417f632a4d49c49e96ba0d4bec149a4de26b0e7f734475ae44dbe1da5#effects.json",
+        "digest": "f721198417f632a4d49c49e96ba0d4bec149a4de26b0e7f734475ae44dbe1da5"
+      },
+      "recoveryStep": "T-9-review",
+      "remainingRisk": "Generated documentation may not reflect the centralized query schema export until a later docs build is scheduled.",
+      "taskId": "T-9",
+      "timestamp": "2026-09-09T10:58:35.200Z",
+      "issueLogId": "source-handoff:f721198417f632a4d49c49e96ba0d4bec149a4de26b0e7f734475ae44dbe1da5:0"
+    },
+    {
+      "step": "T-9-triage",
+      "reason": "Issue-bearing source handoff identity converted the numeric issue number to a string and then rejected its own Flow-node binding.",
+      "trigger": "T-9 triage dispatch after a canonical rejected review result.",
+      "resolution": "Used a temporary CLI copy with issue identity kept numeric; tracked Task source remains unchanged.",
+      "guardrailCandidate": "Add source-handoff tests for non-null numeric issue identities across dispatch, recovery, and publish paths.",
+      "taskId": "T-9",
+      "timestamp": "2026-09-10T00:24:38.554Z",
+      "issueLogId": "set-issue-log-56028d9e5c78b4a1e71eef15da79079b0d95995b561e46f60ef1c3566a8bcb45"
+    },
+    {
+      "step": "T-9-gate",
+      "level": "task",
+      "phase": "task-impl",
+      "reason": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]; [REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.; [REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]; [REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]; [REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-10T16:15:29.730Z",
+      "passedGuardrails": [
+        "R4",
+        "R13"
+      ],
+      "taskId": "T-9",
+      "gateReceipt": {
+        "attempt": {
+          "id": "attempt-T-9-gate-7fb00467-c468-403b-b029-628e815c8f28",
+          "sequence": 1
+        },
+        "catalogFingerprint": "237119a346fe13329f829a9e069c57bf57035934b3260ed58fef8eb3fc10a82c",
+        "lineage": {
+          "sourceAttempt": {
+            "id": "attempt-T-9-gate-7fb00467-c468-403b-b029-628e815c8f28",
+            "sequence": 1
+          },
+          "canonicalAttempt": {
+            "id": "attempt-T-9-gate-7fb00467-c468-403b-b029-628e815c8f28",
+            "sequence": 1
+          },
+          "sourceFingerprint": "eef196aa3747f23def8c14f0aa656dcc7299397d5adb0dfa716d7d411c544e95",
+          "canonicalFingerprint": "237119a346fe13329f829a9e069c57bf57035934b3260ed58fef8eb3fc10a82c",
+          "sourceRevisionFingerprint": "d89efe1c281cb006b6d1da236a7787533ecd6bd14a3c9dc9a5ad7546cdbe1208",
+          "canonicalRevisionFingerprint": "d89efe1c281cb006b6d1da236a7787533ecd6bd14a3c9dc9a5ad7546cdbe1208"
+        }
+      },
+      "issueLogId": "task-gate-2ed05ef51af02ca1ddee268b35a9f04106fe9ac0c28bba73f046c3893f28f77b",
+      "headSha": "fe57ec8039ed821ff74e5c0b3bc331bd7efdef91",
+      "worktreeHash": "2c55b6f15f5873b5d530586b921ff1e99449d77bc548a35a4d749c0a90d7148a",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R5",
+          "where": null,
+          "observed": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]",
+          "severity": "blocking",
+          "refs": [
+            "R5"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R7",
+          "where": null,
+          "observed": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.",
+          "severity": "blocking",
+          "refs": [
+            "R7"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R8",
+          "where": null,
+          "observed": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]",
+          "severity": "blocking",
+          "refs": [
+            "R8"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R11",
+          "where": null,
+          "observed": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]",
+          "severity": "blocking",
+          "refs": [
+            "R11"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R12",
+          "where": null,
+          "observed": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+          "severity": "blocking",
+          "refs": [
+            "R12"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "R5",
+          "reason": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]"
+        },
+        {
+          "guardrail_id": "R7",
+          "reason": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule."
+        },
+        {
+          "guardrail_id": "R8",
+          "reason": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]"
+        },
+        {
+          "guardrail_id": "R11",
+          "reason": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]"
+        },
+        {
+          "guardrail_id": "R12",
+          "reason": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]]."
+        }
+      ]
+    },
+    {
+      "step": "T-9-gate",
+      "level": "task",
+      "phase": "task-impl",
+      "reason": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]; [REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.; [REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]; [REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]; [REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-10T16:19:57.831Z",
+      "passedGuardrails": [
+        "R4",
+        "R13"
+      ],
+      "taskId": "T-9",
+      "gateReceipt": {
+        "attempt": {
+          "id": "attempt-T-9-gate-gate-retry-1f0bc70b-e7ec-4e3f-a745-aa5756f1529c",
+          "sequence": 2
+        },
+        "catalogFingerprint": "fce4a26cbe928b1fcc8c3c13a66b867d195d32891b7f78ca767b251084ae0d14",
+        "lineage": {
+          "sourceAttempt": {
+            "id": "attempt-T-9-gate-gate-retry-1f0bc70b-e7ec-4e3f-a745-aa5756f1529c",
+            "sequence": 2
+          },
+          "canonicalAttempt": {
+            "id": "attempt-T-9-gate-gate-retry-1f0bc70b-e7ec-4e3f-a745-aa5756f1529c",
+            "sequence": 2
+          },
+          "sourceFingerprint": "38e867824a47d6bf120d7106e2ddb3efdc380da19d840c8697722d051bb69976",
+          "canonicalFingerprint": "fce4a26cbe928b1fcc8c3c13a66b867d195d32891b7f78ca767b251084ae0d14",
+          "sourceRevisionFingerprint": "25072fa811d96fa21e5e47e7dbadc90982fe9e3c4d35e6b0ed4ff813d568ee52",
+          "canonicalRevisionFingerprint": "25072fa811d96fa21e5e47e7dbadc90982fe9e3c4d35e6b0ed4ff813d568ee52"
+        }
+      },
+      "issueLogId": "task-gate-27abd9ce1a02012543a1287016a0cbfc307871b10966da97165603640ede3a39",
+      "headSha": "fe57ec8039ed821ff74e5c0b3bc331bd7efdef91",
+      "worktreeHash": "2c55b6f15f5873b5d530586b921ff1e99449d77bc548a35a4d749c0a90d7148a",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R5",
+          "where": null,
+          "observed": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]",
+          "severity": "blocking",
+          "refs": [
+            "R5"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R7",
+          "where": null,
+          "observed": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.",
+          "severity": "blocking",
+          "refs": [
+            "R7"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R8",
+          "where": null,
+          "observed": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]",
+          "severity": "blocking",
+          "refs": [
+            "R8"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R11",
+          "where": null,
+          "observed": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]",
+          "severity": "blocking",
+          "refs": [
+            "R11"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R12",
+          "where": null,
+          "observed": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+          "severity": "blocking",
+          "refs": [
+            "R12"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "R5",
+          "reason": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]"
+        },
+        {
+          "guardrail_id": "R7",
+          "reason": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule."
+        },
+        {
+          "guardrail_id": "R8",
+          "reason": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]"
+        },
+        {
+          "guardrail_id": "R11",
+          "reason": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]"
+        },
+        {
+          "guardrail_id": "R12",
+          "reason": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]]."
+        }
+      ]
+    },
+    {
+      "step": "T-9-gate",
+      "level": "task",
+      "phase": "task-impl",
+      "reason": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]; [REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.; [REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]; [REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]; [REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-10T16:24:24.874Z",
+      "passedGuardrails": [
+        "R4",
+        "R13"
+      ],
+      "taskId": "T-9",
+      "gateReceipt": {
+        "attempt": {
+          "id": "attempt-T-9-gate-gate-retry-337f90e9-6422-4a3c-b1ae-43bd5f37d9d8",
+          "sequence": 3
+        },
+        "catalogFingerprint": "1cd57ea129fe421dba1a99c56089ecd91331b897e5a050356406694c9f16b149",
+        "lineage": {
+          "sourceAttempt": {
+            "id": "attempt-T-9-gate-gate-retry-337f90e9-6422-4a3c-b1ae-43bd5f37d9d8",
+            "sequence": 3
+          },
+          "canonicalAttempt": {
+            "id": "attempt-T-9-gate-gate-retry-337f90e9-6422-4a3c-b1ae-43bd5f37d9d8",
+            "sequence": 3
+          },
+          "sourceFingerprint": "1aa2eebbc0449bf33c3e535f7360b618cfcdfbdb71fbb7b8530cf3b0d0b61f25",
+          "canonicalFingerprint": "1cd57ea129fe421dba1a99c56089ecd91331b897e5a050356406694c9f16b149",
+          "sourceRevisionFingerprint": "ef2804aff4896e85c48aaaaf96ddfaf6065971978afb36624b35280a8347de80",
+          "canonicalRevisionFingerprint": "ef2804aff4896e85c48aaaaf96ddfaf6065971978afb36624b35280a8347de80"
+        }
+      },
+      "issueLogId": "task-gate-11f2020eff208e7cdc252ab8d31a6a33a07774a091f2f6fe0dc20b94f85b1b9a",
+      "headSha": "fe57ec8039ed821ff74e5c0b3bc331bd7efdef91",
+      "worktreeHash": "2c55b6f15f5873b5d530586b921ff1e99449d77bc548a35a4d749c0a90d7148a",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R5",
+          "where": null,
+          "observed": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]",
+          "severity": "blocking",
+          "refs": [
+            "R5"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R7",
+          "where": null,
+          "observed": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.",
+          "severity": "blocking",
+          "refs": [
+            "R7"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R8",
+          "where": null,
+          "observed": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]",
+          "severity": "blocking",
+          "refs": [
+            "R8"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R11",
+          "where": null,
+          "observed": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]",
+          "severity": "blocking",
+          "refs": [
+            "R11"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R12",
+          "where": null,
+          "observed": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+          "severity": "blocking",
+          "refs": [
+            "R12"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "R5",
+          "reason": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]"
+        },
+        {
+          "guardrail_id": "R7",
+          "reason": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule."
+        },
+        {
+          "guardrail_id": "R8",
+          "reason": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]"
+        },
+        {
+          "guardrail_id": "R11",
+          "reason": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]"
+        },
+        {
+          "guardrail_id": "R12",
+          "reason": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]]."
+        }
+      ]
+    },
+    {
+      "step": "T-9-gate",
+      "level": "task",
+      "phase": "task-impl",
+      "reason": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]; [REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.; [REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]; [REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]; [REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-10T16:28:53.159Z",
+      "passedGuardrails": [
+        "R4",
+        "R13"
+      ],
+      "taskId": "T-9",
+      "gateReceipt": {
+        "attempt": {
+          "id": "attempt-T-9-gate-gate-retry-dec2a16e-96f0-4259-9404-0f5843cdf56a",
+          "sequence": 4
+        },
+        "catalogFingerprint": "cda32bfa3f606fee25c43b9a132e682c28c1aa1258187b5adc30d1c79c31af4b",
+        "lineage": {
+          "sourceAttempt": {
+            "id": "attempt-T-9-gate-gate-retry-dec2a16e-96f0-4259-9404-0f5843cdf56a",
+            "sequence": 4
+          },
+          "canonicalAttempt": {
+            "id": "attempt-T-9-gate-gate-retry-dec2a16e-96f0-4259-9404-0f5843cdf56a",
+            "sequence": 4
+          },
+          "sourceFingerprint": "4a30c95132fd12029dbc775902abf2730f834c0b10ffd4b5c3d06bfc518f203a",
+          "canonicalFingerprint": "cda32bfa3f606fee25c43b9a132e682c28c1aa1258187b5adc30d1c79c31af4b",
+          "sourceRevisionFingerprint": "458a5c0c01dcfa319c22b3e5dddcb78f0d8a10c78e141fc8abfdfecc87f93608",
+          "canonicalRevisionFingerprint": "458a5c0c01dcfa319c22b3e5dddcb78f0d8a10c78e141fc8abfdfecc87f93608"
+        }
+      },
+      "issueLogId": "task-gate-a84840af5bb3e864e1865faa700efb822483daf7a86d80ac159c79ae39cf09da",
+      "headSha": "fe57ec8039ed821ff74e5c0b3bc331bd7efdef91",
+      "worktreeHash": "2c55b6f15f5873b5d530586b921ff1e99449d77bc548a35a4d749c0a90d7148a",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R5",
+          "where": null,
+          "observed": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]",
+          "severity": "blocking",
+          "refs": [
+            "R5"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R7",
+          "where": null,
+          "observed": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.",
+          "severity": "blocking",
+          "refs": [
+            "R7"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R8",
+          "where": null,
+          "observed": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]",
+          "severity": "blocking",
+          "refs": [
+            "R8"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R11",
+          "where": null,
+          "observed": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]",
+          "severity": "blocking",
+          "refs": [
+            "R11"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R12",
+          "where": null,
+          "observed": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+          "severity": "blocking",
+          "refs": [
+            "R12"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "R5",
+          "reason": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]"
+        },
+        {
+          "guardrail_id": "R7",
+          "reason": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule."
+        },
+        {
+          "guardrail_id": "R8",
+          "reason": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]"
+        },
+        {
+          "guardrail_id": "R11",
+          "reason": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]"
+        },
+        {
+          "guardrail_id": "R12",
+          "reason": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]]."
+        }
+      ]
+    },
+    {
+      "step": "T-9-gate",
+      "level": "task",
+      "phase": "task-impl",
+      "reason": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]; [REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.; [REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]; [REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]; [REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-10T16:33:01.961Z",
+      "passedGuardrails": [
+        "R4",
+        "R13"
+      ],
+      "taskId": "T-9",
+      "gateReceipt": {
+        "attempt": {
+          "id": "attempt-T-9-gate-gate-retry-af641bb7-b1cf-4db4-923f-fce736fc81bb",
+          "sequence": 5
+        },
+        "catalogFingerprint": "da1072964080078e8a8992ed3a48e8899503d2b364fd6b80aec67c3e74ac1f5f",
+        "lineage": {
+          "sourceAttempt": {
+            "id": "attempt-T-9-gate-gate-retry-af641bb7-b1cf-4db4-923f-fce736fc81bb",
+            "sequence": 5
+          },
+          "canonicalAttempt": {
+            "id": "attempt-T-9-gate-gate-retry-af641bb7-b1cf-4db4-923f-fce736fc81bb",
+            "sequence": 5
+          },
+          "sourceFingerprint": "3bc0bcf0a33589e043d7439af2f789ee9d1a83ebad19cab4467b567fafb151c1",
+          "canonicalFingerprint": "da1072964080078e8a8992ed3a48e8899503d2b364fd6b80aec67c3e74ac1f5f",
+          "sourceRevisionFingerprint": "f2581688dab803a6033c91b44366d08ebf1a5068de34c4715cab7982a42f646a",
+          "canonicalRevisionFingerprint": "f2581688dab803a6033c91b44366d08ebf1a5068de34c4715cab7982a42f646a"
+        }
+      },
+      "issueLogId": "task-gate-ac7ba410f4f634cdbe8ba0dfee3a5bf780749a6ef914136312e8d7125b863ec7",
+      "headSha": "fe57ec8039ed821ff74e5c0b3bc331bd7efdef91",
+      "worktreeHash": "2c55b6f15f5873b5d530586b921ff1e99449d77bc548a35a4d749c0a90d7148a",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R5",
+          "where": null,
+          "observed": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]",
+          "severity": "blocking",
+          "refs": [
+            "R5"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R7",
+          "where": null,
+          "observed": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.",
+          "severity": "blocking",
+          "refs": [
+            "R7"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R8",
+          "where": null,
+          "observed": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]",
+          "severity": "blocking",
+          "refs": [
+            "R8"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R11",
+          "where": null,
+          "observed": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]",
+          "severity": "blocking",
+          "refs": [
+            "R11"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R12",
+          "where": null,
+          "observed": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+          "severity": "blocking",
+          "refs": [
+            "R12"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "R5",
+          "reason": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]"
+        },
+        {
+          "guardrail_id": "R7",
+          "reason": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule."
+        },
+        {
+          "guardrail_id": "R8",
+          "reason": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]"
+        },
+        {
+          "guardrail_id": "R11",
+          "reason": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]"
+        },
+        {
+          "guardrail_id": "R12",
+          "reason": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]]."
+        }
+      ]
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "T-9-gate",
+      "phase": "task-impl",
+      "reason": "Guarded task-impl gate repair rewound to T-9-impl.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R5",
+          "where": null,
+          "observed": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]",
+          "severity": "blocking",
+          "refs": [
+            "R5"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R7",
+          "where": null,
+          "observed": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.",
+          "severity": "blocking",
+          "refs": [
+            "R7"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R8",
+          "where": null,
+          "observed": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]",
+          "severity": "blocking",
+          "refs": [
+            "R8"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R11",
+          "where": null,
+          "observed": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]",
+          "severity": "blocking",
+          "refs": [
+            "R11"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "spec-impl-mismatch",
+          "requirementRef": "R12",
+          "where": null,
+          "observed": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+          "severity": "blocking",
+          "refs": [
+            "R12"
+          ]
+        }
+      ],
+      "timestamp": "2026-09-10T16:33:43.432Z",
+      "planGateRepair": {
+        "version": 1,
+        "runId": "e8af190b-d8eb-48b7-92f9-414f466f7501",
+        "specId": "e8af190b-flow-query-api",
+        "issue": 517,
+        "phase": "task-impl",
+        "targetStepId": "T-9-impl",
+        "sourceIssueLogId": "task-gate-ac7ba410f4f634cdbe8ba0dfee3a5bf780749a6ef914136312e8d7125b863ec7",
+        "sourceEntryDigest": "5338c419cdf77f9c24619f888863c16672052a4dc55b4880009cad41ea786970",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "spec-impl-mismatch",
+            "requirementRef": "R5",
+            "where": null,
+            "observed": "[REQ:R5] requires positive-safe-integer metadata.flowVersion, blocked derived from current Attempt failure plus nextAction, and capabilities sourced from canonical content.capabilities. The mapped implementation evidence contradicts these requirements: MetadataItem accepts flowVersion 0, derives blocked only from nextAction, and reads spec.document.capabilities. [R5:source:preamble@0:110943]",
+            "severity": "blocking",
+            "refs": [
+              "R5"
+            ]
+          },
+          {
+            "kind": "violation",
+            "failureMode": "spec-impl-mismatch",
+            "requirementRef": "R7",
+            "where": null,
+            "observed": "[REQ:R7] requires non-path/non-logical references to resolve only by the validated (descriptor.kind, descriptor.relativePath) pair. [R7:context:0:[REQ:R7]] [R7:source:preamble@0:111380] report that ReferenceResolver additionally accepts 64-character hash matches, contradicting the required lookup rule.",
+            "severity": "blocking",
+            "refs": [
+              "R7"
+            ]
+          },
+          {
+            "kind": "violation",
+            "failureMode": "spec-impl-mismatch",
+            "requirementRef": "R8",
+            "where": null,
+            "observed": "[REQ:R8] The implementation contradicts required bounded-reader behavior: readConfirmedLedgerPrefix reads the entire ledger file before selecting the confirmed prefix; version-directory enumeration does not use the required O_RDONLY|O_NOFOLLOW regular-real-file/stat validation and ignores nonnumeric symlinks; catalog traversal bypasses the bounded reader; and no aggregate nested-reference count limit is enforced. [R8:source:preamble@0:111879]",
+            "severity": "blocking",
+            "refs": [
+              "R8"
+            ]
+          },
+          {
+            "kind": "violation",
+            "failureMode": "spec-impl-mismatch",
+            "requirementRef": "R11",
+            "where": null,
+            "observed": "[REQ:R11] implementation evidence contradicts the required behavior: `activities()` validates `incomplete` claims only after pagination/timing filtering, so multiple claims outside the selected page or range do not fail the Activity projection; and `publicArtifactIds()` silently omits all unresolved references without distinguishing optional references from canonical relations that must raise `CANONICAL_RECORD_INCONSISTENT`. [R11:source:preamble@0:110221]",
+            "severity": "blocking",
+            "refs": [
+              "R11"
+            ]
+          },
+          {
+            "kind": "violation",
+            "failureMode": "spec-impl-mismatch",
+            "requirementRef": "R12",
+            "where": null,
+            "observed": "[REQ:R12] requires selectedFlowVersion to be null unless the canonical identity was successfully discovered and opened. [R12:source:preamble@0:112342] states that canonical unreadable/inconsistent failures can still return a non-null selectedFlowVersion, and permission failures during Spec-directory access can be misclassified as SPEC_NOT_FOUND instead of CANONICAL_RECORD_UNREADABLE. This contradicts [R12:context:0:[REQ:R12]].",
+            "severity": "blocking",
+            "refs": [
+              "R12"
+            ]
+          }
+        ],
+        "requestedAt": "2026-09-10T16:33:43.432Z"
+      },
+      "issueLogId": "plan-gate-repair-e932c07445fce73c9e5cda9fa0af7c6ab063fdfd81dd173e76470c2ca83d53b2"
     }
   ]
 }

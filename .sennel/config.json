@@ -90,7 +90,8 @@
     "default": "codex",
     "workDir": ".tmp",
     "retryCount": 2,
-    "useProfile": "codex-only"
+    "useProfile": "codex-only",
+    "promptCharacterLimit": 60000
   },
   "plugin": {
     "packages": [

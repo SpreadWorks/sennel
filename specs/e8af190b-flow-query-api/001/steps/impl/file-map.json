@@ -21,7 +21,9 @@
   ],
   "R4": [
     "src/flow/query.js",
-    "src/sennel.js"
+    "src/sennel.js",
+    "tests/integration/flow/query.test.js",
+    "tests/support/builders/flow-query-consumer.js"
   ],
   "R5": [
     "src/flow/query.js",
@@ -31,7 +33,8 @@
     "src/lib/git-helpers.js",
     "tests/integration/flow/query.test.js",
     "tests/support/builders/flow-query-fixture.js",
-    "tests/support/infrastructure/flow-setup.js"
+    "tests/support/infrastructure/flow-setup.js",
+    "tests/support/builders/flow-query-consumer.js"
   ],
   "R6": [
     "src/flow/query.js",
@@ -44,14 +47,16 @@
     "src/sennel.js",
     "src/lib/flow-version.js",
     "tests/integration/flow/query.test.js",
-    "tests/support/builders/flow-query-fixture.js"
+    "tests/support/builders/flow-query-fixture.js",
+    "tests/support/builders/flow-query-consumer.js"
   ],
   "R8": [
     "src/flow/query.js",
     "src/flow/lib/canonical-flow-version-reader.js",
     "src/sennel.js",
     "tests/integration/flow/query.test.js",
-    "tests/support/builders/flow-query-fixture.js"
+    "tests/support/builders/flow-query-fixture.js",
+    "tests/support/builders/flow-query-consumer.js"
   ],
   "R9": [
     "src/flow/query.js",
@@ -65,20 +70,23 @@
     "src/flow/query.js",
     "src/sennel.js",
     "src/flow/lib/worker-artifact-handoff.js",
-    "tests/integration/flow/query.test.js"
+    "tests/integration/flow/query.test.js",
+    "tests/support/builders/flow-query-consumer.js"
   ],
   "R12": [
     "src/flow/query.js",
     "src/sennel.js",
     "src/flow/lib/current-flow-state.js",
     "src/flow.js",
-    "tests/integration/flow/query.test.js"
+    "tests/integration/flow/query.test.js",
+    "tests/support/builders/flow-query-consumer.js"
   ],
   "R13": [
     "src/flow/query.js",
     "src/sennel.js",
     "tests/integration/flow/query.test.js",
-    "src/flow.js"
+    "src/flow.js",
+    "tests/support/builders/flow-query-consumer.js"
   ],
   "R14": [
     "src/flow/query.js",
