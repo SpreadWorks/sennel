@@ -14,6 +14,10 @@ import {
   AuthoritativeSpecRecord,
   FlowArtifactCatalog,
   FlowArtifactActivityAssociation,
+  FlowArtifactActivityIndex,
+  FlowArtifactCatalogCommittedSnapshot,
+  FlowArtifactCatalogSnapshotEvidence,
+  FlowArtifactCatalogSnapshotReader,
   FlowArtifactCatalogStore,
   FlowArtifactDescriptor,
   FlowActivityId,
@@ -132,6 +136,15 @@ function descriptor({ file, kind, authority = "canonical-flow-artifacts", member
 }
 function saveCatalog(location, descriptors) {
   return new FlowArtifactCatalogStore({ location }).initialize(new FlowArtifactCatalog({ artifacts: descriptors }));
+}
+async function captureCommittedCatalogEvidence({ catalog, readArtifact }, value = null) {
+  const ledger = catalog.resolve("activities.jsonl");
+  const ledgerBytes = await readArtifact(ledger);
+  return new FlowArtifactCatalogSnapshotEvidence({
+    value,
+    activityIndex: FlowArtifactActivityIndex.fromBytes(ledgerBytes),
+    confirmedLedgerBytes: ledgerBytes,
+  });
 }
 function spawnCatalogLockOwner(location, holdMs) {
   const runtimeLock = location.runtimeLock("runtime.lock.artifact-catalog");
@@ -1148,6 +1161,154 @@ describe("Flow Version migration classification", () => {
 });
 
 describe("Current Flow Version storage", () => {
+  it("captures a lock-free catalog-bound snapshot without creating runtime state", async () => {
+    const location = canonicalLocation();
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    const flow = boundary.openVersionStore({ location });
+    flow.create(freshState(boundary, location), { specRecord: specRecord() });
+    fs.rmSync(location.resolve(".runtime"), { recursive: true, force: true });
+    const before = fs.readdirSync(location.directory, { recursive: true }).sort();
+
+    const snapshot = await new FlowArtifactCatalogSnapshotReader({ location }).readCommittedSnapshot({
+      capture: async (context) => captureCommittedCatalogEvidence(context, { source: "read-only" }),
+    });
+
+    assert.ok(snapshot instanceof FlowArtifactCatalogCommittedSnapshot);
+    assert.deepEqual(snapshot.value, { source: "read-only" });
+    assert.equal(snapshot.catalog.resolve("flow.json").logicalKey, "flow.state");
+    assert.equal(fs.existsSync(location.resolve(".runtime")), false);
+    assert.deepEqual(fs.readdirSync(location.directory, { recursive: true }).sort(), before);
+  });
+
+  it("retries a failed C0 capture when a later catalog commit makes the evidence coherent", async () => {
+    const location = canonicalLocation();
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    const flow = boundary.openVersionStore({ location });
+    flow.create(freshState(boundary, location), { specRecord: specRecord() });
+    const next = startActivity(flow.load(), { id: "snapshot-retry-activity" });
+    let changed = false;
+    const snapshot = await new FlowArtifactCatalogSnapshotReader({ location }).readCommittedSnapshot({
+      capture: async (context) => {
+        if (!changed) {
+          changed = true;
+          flow.apply({ activity: next });
+        }
+        return captureCommittedCatalogEvidence(context, { attempt: context.attempt });
+      },
+    });
+
+    assert.equal(changed, true);
+    assert.equal(snapshot.value.attempt, 2);
+    assert.equal(snapshot.catalog.resolve("flow.json").hash, hash(fs.readFileSync(location.flowStateFile)));
+    assert.equal(snapshot.catalog.resolve("activities.jsonl").hash, hash(fs.readFileSync(location.activitiesFile)));
+  });
+
+  it("keeps a successful C0 snapshot when publication commits after capture", async () => {
+    const location = canonicalLocation();
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    const flow = boundary.openVersionStore({ location });
+    flow.create(freshState(boundary, location), { specRecord: specRecord() });
+    const prior = new FlowArtifactCatalogStore({ location }).require();
+    let changed = false;
+
+    const snapshot = await new FlowArtifactCatalogSnapshotReader({ location }).readCommittedSnapshot({
+      capture: async (context) => {
+        const evidence = await captureCommittedCatalogEvidence(context, { attempt: context.attempt });
+        if (!changed) {
+          changed = true;
+          const descriptors = prior.artifacts.map((descriptor, index) => new FlowArtifactDescriptor({
+            ...descriptor.toJSON(), mediaType: index === 0 ? "application/octet-stream" : descriptor.mediaType,
+          }));
+          fs.writeFileSync(location.catalogFile, `${JSON.stringify(new FlowArtifactCatalog({ artifacts: descriptors }).toJSON())}\n`);
+        }
+        return evidence;
+      },
+    });
+
+    assert.equal(changed, true);
+    assert.equal(snapshot.value.attempt, 1);
+    assert.equal(snapshot.catalog.hash, prior.hash);
+    assert.notEqual(snapshot.catalog.hash, new FlowArtifactCatalogStore({ location }).require().hash);
+  });
+
+  it("requires a catalog descriptor to match the exact confirmed ledger prefix", async () => {
+    const location = canonicalLocation();
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    const flow = boundary.openVersionStore({ location });
+    flow.create(freshState(boundary, location), { specRecord: specRecord() });
+    const catalog = new FlowArtifactCatalogSnapshotReader({ location });
+
+    await assert.rejects(
+      catalog.readCommittedSnapshot({
+        limits: { maxAttempts: 1 },
+        capture: async ({ catalog: current, readArtifact }) => {
+          const ledger = current.resolve("activities.jsonl");
+          const ledgerBytes = await readArtifact(ledger);
+          return new FlowArtifactCatalogSnapshotEvidence({
+            value: null,
+            activityIndex: FlowArtifactActivityIndex.fromBytes(ledgerBytes),
+            confirmedLedgerBytes: Buffer.from("tampered\n", "utf8"),
+          });
+        },
+      }),
+      /artifact content does not match the catalog: activities\.jsonl/,
+    );
+  });
+
+  it("accepts the cataloged confirmed prefix while a journal-first suffix is incomplete", async () => {
+    const location = canonicalLocation();
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    boundary.openVersionStore({ location }).create(freshState(boundary, location), { specRecord: specRecord() });
+    const confirmedLedger = fs.readFileSync(location.activitiesFile);
+    fs.appendFileSync(location.activitiesFile, "{\"incomplete\":");
+
+    const snapshot = await new FlowArtifactCatalogSnapshotReader({ location }).readCommittedSnapshot({
+      capture: async ({ catalog, readArtifact }) => {
+        const ledgerBytes = await readArtifact(catalog.resolve("activities.jsonl"));
+        const prefixEnd = ledgerBytes.indexOf(0x0a) + 1;
+        const confirmedPrefix = ledgerBytes.subarray(0, prefixEnd);
+        return new FlowArtifactCatalogSnapshotEvidence({
+          value: { confirmedBytes: confirmedPrefix.length },
+          activityIndex: FlowArtifactActivityIndex.fromBytes(confirmedPrefix),
+          confirmedLedgerBytes: confirmedPrefix,
+        });
+      },
+    });
+
+    assert.equal(snapshot.value.confirmedBytes < fs.statSync(location.activitiesFile).size, true);
+    assert.equal(snapshot.catalog.resolve("activities.jsonl").hash, hash(confirmedLedger));
+  });
+
+  it("strictly parses bounded catalog snapshots before capture", async () => {
+    const location = canonicalLocation();
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    boundary.openVersionStore({ location }).create(freshState(boundary, location), { specRecord: specRecord() });
+    const serialized = JSON.parse(fs.readFileSync(location.catalogFile, "utf8"));
+    serialized.unexpected = true;
+    fs.writeFileSync(location.catalogFile, `${JSON.stringify(serialized)}\n`);
+
+    await assert.rejects(
+      new FlowArtifactCatalogSnapshotReader({ location }).readCommittedSnapshot({
+        capture: async (context) => captureCommittedCatalogEvidence(context),
+      }),
+      /catalog snapshot cannot parse the committed catalog: artifact catalog serialized form is invalid/,
+    );
+  });
+
+  it("rejects a snapshot before reading beyond its aggregate artifact budget", async () => {
+    const location = canonicalLocation();
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    boundary.openVersionStore({ location }).create(freshState(boundary, location), { specRecord: specRecord() });
+
+    await assert.rejects(
+      new FlowArtifactCatalogSnapshotReader({ location }).readCommittedSnapshot({
+        limits: { maxAttempts: 1, maxTotalArtifactBytes: 1 },
+        capture: async (context) => captureCommittedCatalogEvidence(context),
+      }),
+      /catalog snapshot aggregate artifact bytes exceed the limit/,
+    );
+  });
+
   it("rejects reentrant catalog reads while a transaction owns the coherent view", () => {
     const location = canonicalLocation();
     const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });

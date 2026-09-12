@@ -63,6 +63,7 @@ import {
   CanonicalSourceWorkerSpecCompletion,
   CanonicalSourceWorkerUpgradeResult,
   CurrentFlowNonBlockingPolicy,
+  CurrentFlowContext,
   CurrentFlowState,
   CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
@@ -134,7 +135,6 @@ import {
 import {
   assertSourceHandoffEventTransition,
   readSourceHandoffAuthorityFromView,
-  readSettledSourceHandoffAuthoritiesFromView,
   SourceHandoffPersistenceAdmission,
   sourceHandoffArtifactWrites,
 } from "./source-handoff-persistence.js";
@@ -1157,7 +1157,7 @@ export class CanonicalFlowCreateRequest {
       );
     }
     this.issueSnapshot = issueSnapshot;
-    this.context = context;
+    this.context = new CurrentFlowContext(context).toJSON();
     if (!Array.isArray(tasks)) throw new CurrentFlowStateInvariantError("fresh Tasks must be an array");
     const ids = new Set();
     this.tasks = Object.freeze(tasks.map((task, index) => {
@@ -2511,8 +2511,6 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) return Object.freeze([]);
     return this.runtime.readCanonicalTransitionView(resolved, (view) => {
-      const settled = readSettledSourceHandoffAuthoritiesFromView({ view });
-      const settledIds = new Set(settled.map((entry) => entry.identity.storageId));
       const identities = view.catalog.artifacts
         .filter((entry) => entry.logicalKey === "source.handoff.checkpoint")
         .map((descriptor) => {
@@ -2521,21 +2519,12 @@ export class CanonicalFlowManagerStore {
             throw new CurrentFlowStateInvariantError(`canonical source handoff checkpoint is invalid: ${cause.message}`);
           }
           return new SourceWorkerHandoffIdentity(document.identity);
-        })
-        .filter((identity) => !unsettledOnly || !settledIds.has(identity.storageId));
+        });
       const authorities = identities.map((entry) => readSourceHandoffAuthorityFromView({
         view, identity: entry, root: this.root, canonicalLocation: this.location(resolved),
       }));
       return Object.freeze(authorities.filter((entry) => !unsettledOnly || !entry.settled));
     });
-  }
-
-  settledSourceHandoffAuthorities({ specId = null } = {}) {
-    const resolved = this.#resolveSpecId(specId);
-    if (resolved === null) return Object.freeze([]);
-    return this.runtime.readCanonicalTransitionView(resolved, (view) => (
-      readSettledSourceHandoffAuthoritiesFromView({ view })
-    ));
   }
 
   promoteDraftQuestionAndKeepRefineActive({

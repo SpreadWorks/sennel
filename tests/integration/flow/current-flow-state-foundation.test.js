@@ -24,6 +24,7 @@ import {
   ActivityTask,
   ActivityTransition,
   CurrentAttempt,
+  CurrentFlowContext,
   CurrentFlowDefinition,
   CurrentFlowState,
   CurrentFlowStateAdoptionBoundary,
@@ -2434,5 +2435,40 @@ describe("Current Flow state foundation", () => {
       }),
       /resources requires an operation/,
     );
+  });
+
+  it("classifies state-changing Activity operations for derived timestamp authority", () => {
+    for (const operation of [
+      "complete_task_review_stage",
+      "settle_test_review_repair_timeout",
+      "recover_task_execution_overrun",
+      "advance_task_review_stage",
+    ]) {
+      assert.equal(ActivityTransition.isStateChangingOperation(operation), true, operation);
+    }
+    assert.equal(ActivityTransition.isStateChangingOperation("continue_nonblocking"), true);
+    for (const operation of ["record_metric", "record_note", "record_nonblocking"]) {
+      assert.equal(ActivityTransition.isStateChangingOperation(operation), false, operation);
+    }
+  });
+
+  it("validates and serializes creation-time Git snapshot context", () => {
+    const commit = "a".repeat(40);
+    assert.deepEqual(
+      new CurrentFlowContext({ gitSnapshot: { available: true, commit } }).toJSON(),
+      { gitSnapshot: { available: true, commit } },
+    );
+    assert.deepEqual(
+      new CurrentFlowContext({ gitSnapshot: { available: false, commit: null } }).toJSON(),
+      { gitSnapshot: { available: false, commit: null } },
+    );
+    for (const context of [
+      {},
+      { gitSnapshot: { available: false, commit } },
+      { gitSnapshot: { available: true, commit: "not-an-object-id" } },
+      { gitSnapshot: { available: true, commit, extra: true } },
+    ]) {
+      assert.throws(() => new CurrentFlowContext(context), CurrentFlowStateInvariantError);
+    }
   });
 });

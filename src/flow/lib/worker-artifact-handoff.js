@@ -13,7 +13,6 @@ import {
   CanonicalWorkerSpecPublication,
   CurrentAttemptIdentity,
   CurrentFlowIdentity,
-  FlowActivity,
 } from "./current-flow-state.js";
 import {
   captureRegularFile,
@@ -2143,11 +2142,10 @@ function indexedSourceMutationCurrentEntry(root, relativePath, budget) {
  * The only canonical Version advance that a source worker may coexist with.
  *
  * A worker can invoke the regular CLI while it is writing source files. The
- * CLI can record ordinary notes or non-decision telemetry while it writes
- * source files.  Those append-only observations change Version bytes but not
- * the handoff's semantic inputs.  This value captures the already-validated
- * Activity prefix at worker start and proves the later Version advances only
- * through those observations.
+ * CLI records its usage as an append-only metric Activity, which changes the
+ * Version bytes but not the source handoff's semantic inputs. This value
+ * captures the already-validated Activity prefix at worker start and proves
+ * that the later Version is exactly that prefix plus metric observations.
  */
 export class SourceWorkerCanonicalObservationAdvance {
   constructor({ activityPrefix, activityBytes, mutablePaths, canonicalSnapshot, addedActivities = [], allowedPublications = [], allowedActivityIds = [] }) {
@@ -2331,9 +2329,8 @@ export class SourceWorkerCanonicalObservationAdvance {
       || view.location === null || typeof view.location.activitiesFile !== "string") {
       throw new Error("source worker canonical observation requires a transition view");
     }
-    const currentActivities = view.activities;
-    const current = currentActivities.map((activity) => {
-      if (!(activity instanceof FlowActivity)) {
+    const current = view.activities.map((activity) => {
+      if (typeof activity?.toJSON !== "function") {
         throw new Error("source worker canonical observation requires typed Activities");
       }
       return activity.toJSON();
@@ -2353,7 +2350,6 @@ export class SourceWorkerCanonicalObservationAdvance {
     const addedActivities = assertCanonicalObservationAdvance({
       observation: this,
       current,
-      currentActivities,
       activityBytes,
       currentSnapshot,
       allowedPublications: this.allowedPublications,
@@ -2380,7 +2376,6 @@ export class SourceWorkerCanonicalObservationAdvance {
 function assertCanonicalObservationAdvance({
   observation,
   current,
-  currentActivities,
   activityBytes,
   currentSnapshot,
   allowedPublications = [],
@@ -2406,16 +2401,15 @@ function assertCanonicalObservationAdvance({
     );
   }
   const addedActivities = current.slice(observation.activityPrefix.length);
-  const addedTypedActivities = currentActivities.slice(observation.activityPrefix.length);
-  if (addedTypedActivities.some((activity) => (
-    !activity.isNonDecisionObservation()
+  if (addedActivities.some((activity) => (
+    activity.transition?.operation !== "record_metric"
       && !allowedPublications.some((publication) => publication.activityId === activity.id)
       && !allowedActivityIds.includes(activity.id)
   ))) {
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-      "canonical source handoff permits only appended non-decision observations",
+      "canonical source handoff permits only appended record_metric Activities",
       { retryable: false },
     );
   }
@@ -2444,7 +2438,7 @@ function assertCanonicalObservationAdvance({
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-      "canonical source handoff contains a direct Version mutation outside non-decision observation publication",
+      "canonical source handoff contains a direct Version mutation outside record_metric publication",
       {
         retryable: false,
         data: {
@@ -6989,33 +6983,17 @@ export class WorkerArtifactHandoffCoordinator {
   }
 
   #recoverPendingSource({ ctx, state }) {
-    if (typeof ctx.flowManager.sourceHandoffAuthorities !== "function"
-      || typeof ctx.flowManager.settledSourceHandoffAuthorities !== "function") {
+    if (typeof ctx.flowManager.sourceHandoffAuthorities !== "function") {
       throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "canonical store does not provide source handoff recovery", { retryable: false, recoveryPossible: false });
     }
     let authorities;
-    let settledAuthorities;
     try {
-      settledAuthorities = ctx.flowManager.settledSourceHandoffAuthorities({ specId: state.specId });
-      authorities = ctx.flowManager.sourceHandoffAuthorities({ specId: state.specId, unsettledOnly: true });
+      authorities = ctx.flowManager.sourceHandoffAuthorities({ specId: state.specId, unsettledOnly: false });
     } catch (cause) {
       throw sourceHandoffReadError(cause, "canonical source handoff authorities cannot be read");
     }
       let cleaned = 0;
       let completedRecovery = false;
-      for (const authority of settledAuthorities) {
-        const identity = authority.identity;
-        const requestPath = path.join(
-          handoffActionDirectory(executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId), identity.runId, identity.dispatchInvocationId, identity.actionDigest),
-          "request.json",
-        );
-        if (cleanupTransientExecutionHandoffDirectory(
-          executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId), path.dirname(requestPath),
-        )) {
-          cleaned += 1;
-          completedRecovery = true;
-        }
-      }
       for (const authority of authorities) {
         const checkpoint = authority?.checkpoint;
         if (!(checkpoint instanceof CanonicalSourceHandoffCheckpoint)
@@ -7028,6 +7006,18 @@ export class WorkerArtifactHandoffCoordinator {
           handoffActionDirectory(executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId), identity.runId, identity.dispatchInvocationId, identity.actionDigest),
           "request.json",
         );
+        if (authority.settled) {
+          // Settlement is canonical authority for cleanup. The derived path is
+          // identity-bound; no runtime request enumeration or source read is
+          // needed to remove its now-consumed capability directory.
+          if (cleanupTransientExecutionHandoffDirectory(
+            executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId), path.dirname(requestPath),
+          )) {
+            cleaned += 1;
+            completedRecovery = true;
+          }
+          continue;
+        }
         if (authority.event.kind === "prepared") {
           // No start intent proves that no worker could have been launched.
           const settlement = new SourceHandoffSettlement({

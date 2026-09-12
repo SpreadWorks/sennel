@@ -12,7 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { AtomicFile } from "../../lib/atomic-file.js";
-import { isGitSnapshot } from "../../lib/git-snapshot.js";
+import { GitSnapshot } from "../../lib/git-snapshot.js";
 import { FileLock } from "../../lib/file-lock.js";
 import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { AuthoritativeSpecRecord, FlowActivityId, FlowArtifactCatalog, FlowArtifactCatalogStore, FlowArtifactDescriptor, FlowId, FlowRunId, FlowSpecIdentity, FlowSpecRevision, FlowVersionId, FlowVersionLocation, FlowVersionMigrationOutput, FlowVersionMigrationOutputBuilder, FlowVersionMigrationOutputSet, FlowVersionRuntimeLockLocation, FlowVersionSemanticValidator } from "../../lib/flow-version.js";
@@ -35,7 +35,6 @@ import {
   TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION,
   TaskGateClassificationRecoveryIdentity,
 } from "./task-gate-classification-recovery.js";
-import { BroadModeLedgerEntry } from "./activity-note-semantics.js";
 import {
   TaskReviewStageTransitionPlan,
   taskReviewStagePlanFromJSON,
@@ -187,18 +186,20 @@ const OBSERVATION_TRANSITION_OPERATIONS = new Set(["record_metric", "record_note
 const NONBLOCKING_TRANSITION_OPERATIONS = new Set(["record_nonblocking", "continue_nonblocking"]);
 const FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS = new Set(["skip_finalize_downstream", "reset_finalize_downstream"]);
 const STATE_CHANGING_TRANSITION_OPERATIONS = new Set([
-  "create_flow", "complete_draft_completion", "add_task", "add_approval_task", "start_attempt",
-  "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", "fail_attempt",
-  "record_failure", "confirm_attempt", "complete_acceptance_decision_noop", "rewind", "rewind_test_evidence",
-  "repair_test_review", "repair_scenario_validity", "repair_implementation", "triage_implementation_for_repair",
-  "triage_implementation_no_repair", "repair_acceptance_review", "preimplementation_bootstrap",
-  "recover_existing_implementation", "reopen_draft_preimplementation", "reopen_draft_task_addition",
-  "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact",
-  "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "recover_interrupted_finalize_sync",
-  "park_flow", "resume_flow", "finalize_flow", "set_policy", "publish_artifacts", "publish_plugin_artifacts",
-  "publish_upgrade_result", "update_spec_record", "begin_outbox", "reopen_outbox", "complete_outbox",
-  "fail_outbox", "record_dispatch_approval", "skip_finalize_downstream", "reset_finalize_downstream",
+  FLOW_CREATION_TRANSITION_OPERATION,
+  DRAFT_COMPLETION_TRANSITION_OPERATION,
+  TASK_REVIEW_STAGE_TRANSITION_OPERATION,
+  "add_task", "add_approval_task", "confirm_attempt", "fail_attempt", "record_failure",
+  "complete_acceptance_decision_noop",
+  ...TRANSITION_ATTEMPT_OPERATIONS,
+  ...LIFECYCLE_TRANSITION_OPERATIONS,
+  ...POLICY_TRANSITION_OPERATIONS,
+  ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS,
+  ...OUTBOX_TRANSITION_OPERATIONS,
+  ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS,
+  ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS,
   "continue_nonblocking",
+  "advance_task_review_stage",
 ]);
 export const AGGREGATE_METRIC_PROVENANCE = Object.freeze({
   activityCount: "confirmed-activity-prefix",
@@ -1478,17 +1479,21 @@ export class ActivityDispatchApproval {
 }
 
 /**
- * Context is intentionally bounded to resumable command authority.  It is
- * nullable so a fresh Flow does not invent an execution context.
+ * Context is intentionally bounded to resumable command authority and the
+ * creation-time Git snapshot. It is nullable when neither fact is available.
  */
 export class CurrentFlowContext {
   constructor(value) {
+    let gitSnapshot = null;
     if (value !== null) {
       const fields = new Set(["operation", "resumeToken", "gitSnapshot"]);
       if (!isPlainObject(value)) throw new CurrentFlowStateInvariantError("context must be an object");
       const hasResumeContext = Object.hasOwn(value, "operation") || Object.hasOwn(value, "resumeToken");
       if (hasResumeContext && (!Object.hasOwn(value, "operation") || !Object.hasOwn(value, "resumeToken"))) {
         throw new CurrentFlowStateInvariantError("context.operation and context.resumeToken are required together");
+      }
+      if (!hasResumeContext && !Object.hasOwn(value, "gitSnapshot")) {
+        throw new CurrentFlowStateInvariantError("context must contain resumable command authority or a Git snapshot");
       }
       for (const field of Object.keys(value)) {
         if (!fields.has(field)) throw new CurrentFlowStateInvariantError(`context contains unsupported field: ${field}`);
@@ -1498,14 +1503,16 @@ export class CurrentFlowContext {
         requireString(value.resumeToken, "context.resumeToken");
       }
       if (Object.hasOwn(value, "gitSnapshot")) {
-        if (!isGitSnapshot(value.gitSnapshot)) {
+        try {
+          gitSnapshot = GitSnapshot.from(value.gitSnapshot);
+        } catch {
           throw new CurrentFlowStateInvariantError("context.gitSnapshot must contain a valid Git availability and object id pair");
         }
       }
     }
     this.value = value === null ? null : Object.freeze({
       ...(Object.hasOwn(value, "operation") ? { operation: value.operation, resumeToken: value.resumeToken } : {}),
-      ...(Object.hasOwn(value, "gitSnapshot") ? { gitSnapshot: Object.freeze({ ...value.gitSnapshot }) } : {}),
+      ...(gitSnapshot === null ? {} : { gitSnapshot: Object.freeze(gitSnapshot.toJSON()) }),
     });
     Object.freeze(this);
   }
@@ -5955,34 +5962,6 @@ export class ActivityMetric {
     };
   }
 
-  /**
-   * True only for the telemetry contracts that cannot alter a worker's
-   * captured inputs, retry route, or completion decision.  New metric kinds
-   * and counter shapes intentionally default to false until their consumer
-   * contract has been reviewed.
-   */
-  isNonDecisionTelemetry() {
-    if (this.counter !== null) {
-      return ["docsRead", "srcRead"].includes(this.counter)
-        && this.kind === null
-        && this.delta !== null
-        && !this.reset
-        && this.provider === null
-        && this.profileKey === null
-        && this.callCount === null
-        && this.responseChars === null
-        && this.durationMs === null
-        && this.model === null
-        && this.tokens === null
-        && this.cost === null
-        && !this.cachedResponse
-        && !this.costIncomplete;
-    }
-    if (this.delta !== null || this.reset) return false;
-    return (this.kind === "agent" && this.callCount === 1 && !this.cachedResponse)
-      || (this.kind === "agent-cache" && this.callCount === 0 && this.cachedResponse);
-  }
-
   /** Rehydrate the historical command-view shape from its canonical ledger value. */
   toMetricEntry({ taskId, timestamp }) {
     return {
@@ -6015,11 +5994,6 @@ export class ActivityNote {
   }
 
   toJSON() { return { text: this.text }; }
-
-  /** True only for note encodings that later participate in Flow control. */
-  isDecisionAffecting() {
-    return BroadModeLedgerEntry.isEncodedActivityNote(this);
-  }
 
   toNoteEntry({ taskId, timestamp }) {
     return { text: this.text, taskId, ts: timestamp };
@@ -6596,6 +6570,14 @@ export class ActivityTransition {
     });
   }
 
+  static isStateChangingOperation(operation) {
+    return STATE_CHANGING_TRANSITION_OPERATIONS.has(operation);
+  }
+
+  isStateChanging() {
+    return ActivityTransition.isStateChangingOperation(this.operation);
+  }
+
   toJSON() {
     return {
       operation: this.operation,
@@ -6841,17 +6823,6 @@ export class FlowActivity {
       && (this.nodeId === nodeId || this.transition.taskReviewStagePlan?.targetStepId === nodeId);
   }
 
-  /**
-   * Telemetry can advance the ledger across a sealed worker boundary without
-   * changing its captured inputs or completion decision. Control-note
-   * encodings remain deliberately excluded even though they share the note
-   * Activity transport.
-   */
-  isNonDecisionObservation() {
-    return (this.transition.operation === "record_metric" && this.metric.isNonDecisionTelemetry())
-      || (this.transition.operation === "record_note" && !this.note.isDecisionAffecting());
-  }
-
   static canonical(value) {
     const serialized = value instanceof FlowActivity
       ? FlowActivity.prototype.toJSON.call(value)
@@ -7086,7 +7057,7 @@ export class CurrentFlowActivitySummary {
       && entry.type === FLOW_CREATION_ACTIVITY_TYPE
     )) ?? null;
     const updated = this.activities
-      .filter((entry) => STATE_CHANGING_TRANSITION_OPERATIONS.has(entry.transition.operation))
+      .filter((entry) => entry.transition.isStateChanging())
       .at(-1) ?? null;
     const finalized = this.activities
       .filter((entry) => entry.transition.operation === "finalize_flow")
@@ -7099,23 +7070,6 @@ export class CurrentFlowActivitySummary {
       updatedAt: timestamp(updated?.timing?.finishedAt ?? null, "state-changing Activity evidence is unavailable"),
       finalizedAt: timestamp(finalized?.timing?.finishedAt ?? null, "finalize_flow Activity evidence is unavailable"),
     };
-  }
-
-  metricCounterTotals() {
-    const totals = new Map();
-    for (const activity of this.activities) {
-      const metric = activity.metric;
-      if (metric === null || metric.counter === null) continue;
-      const key = [metric.phase, metric.counter, metric.provider, metric.profileKey].join("\u0000");
-      if (metric.reset) totals.set(key, 0);
-      const previous = totals.get(key) ?? 0;
-      const next = previous + metric.delta;
-      if (!Number.isSafeInteger(next)) {
-        throw new CurrentFlowStateInvariantError("Activity metric counter aggregate exceeds its numeric limit");
-      }
-      totals.set(key, next);
-    }
-    return Object.freeze(Object.fromEntries(totals));
   }
 
   metrics({ artifactCount, stepCount, taskCount } = {}) {
@@ -7161,13 +7115,6 @@ export class CurrentFlowActivitySummary {
       cost: sum(totals.cost, "cost"),
       provenance: AGGREGATE_METRIC_PROVENANCE,
     };
-    // Counter observations are a separate reset-aware stream. Keep their
-    // accounting available to canonical consumers without widening the exact
-    // AggregateMetrics response or mixing them into usage totals.
-    Object.defineProperty(result, "metricCounters", {
-      value: this.metricCounterTotals(),
-      enumerable: false,
-    });
     return result;
   }
 }

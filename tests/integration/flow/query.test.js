@@ -5,7 +5,7 @@ import { describe, it, afterEach } from "node:test";
 import fs from "node:fs";
 import path from "node:path";
 
-import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { CanonicalFlowFixture, makeFlowManager, setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { createFlowQueryFixture, queryFixtureLimits } from "../../support/builders/flow-query-fixture.js";
 import { FlowQueryConsumer } from "../../support/builders/flow-query-consumer.js";
@@ -16,8 +16,10 @@ import {
   prepareFlowQueryInput,
   QueryRequest,
 } from "../../../src/flow/query.js";
+import { FlowArtifactCatalog } from "../../../src/lib/flow-version.js";
 
 const CLI = path.join(process.cwd(), "src/sennel.js");
+const DIRECT_FLOW_CLI = path.join(process.cwd(), "src/flow.js");
 
 function canonicalArtifactIdentity(value) {
   if (Array.isArray(value)) return value.map(canonicalArtifactIdentity);
@@ -116,14 +118,21 @@ describe("flow query", () => {
     }
   }
 
-  function createFlow({ withTask = false } = {}) {
+  function createFlow({ withTask = false, capabilities = null } = {}) {
     tmp = createTmpDir();
+    setupFlowConfig(tmp, "en");
     const flowManager = makeFlowManager(tmp);
     const flow = new CanonicalFlowFixture({
       flowManager,
       specId: "001-query",
       runId: "run-query",
-      specRecord: { goal: "query fixture" },
+      specRecord: {
+        goal: "query fixture",
+        ...(capabilities === null ? {} : { capabilities }),
+        ...(withTask ? {
+          requirements: [{ id: "R-1", desc: "Exercise the query fixture Task.", task_ids: ["T-1"] }],
+        } : {}),
+      },
     }).create();
     if (withTask) {
       flow.addTask({
@@ -156,6 +165,39 @@ describe("flow query", () => {
     return response;
   }
 
+  function rewriteTaskResultReferenceKind(fixture, kind) {
+    const location = fixture.flow.location();
+    const state = JSON.parse(fs.readFileSync(location.flowStateFile, "utf8"));
+    const locate = (node) => {
+      if (node.id === "T-1-impl") return node;
+      for (const child of node.steps ?? []) {
+        const found = locate(child);
+        if (found !== null) return found;
+      }
+      return null;
+    };
+    const taskStep = locate(state);
+    assert.ok(taskStep?.result?.artifactRefs?.length > 0);
+    taskStep.result.artifactRefs[0].kind = kind;
+    fs.writeFileSync(location.flowStateFile, `${JSON.stringify(state)}\n`);
+
+    const activities = fs.readFileSync(location.activitiesFile, "utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+    const activity = activities.find((entry) => entry.nodeId === "T-1-impl" && entry.result?.artifactRefs?.length > 0);
+    assert.ok(activity);
+    activity.result.artifactRefs[0].kind = kind;
+    fs.writeFileSync(location.activitiesFile, `${activities.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+    const catalog = JSON.parse(fs.readFileSync(location.catalogFile, "utf8"));
+    for (const relativePath of ["flow.json", "activities.jsonl"]) {
+      const descriptor = catalog.artifacts.find((entry) => entry.relativePath === relativePath);
+      assert.ok(descriptor);
+      const bytes = fs.readFileSync(location.resolve(relativePath));
+      descriptor.hash = crypto.createHash("sha256").update(bytes).digest("hex");
+      descriptor.size = bytes.length;
+    }
+    fs.writeFileSync(location.catalogFile, `${JSON.stringify(new FlowArtifactCatalog({ artifacts: catalog.artifacts }).toJSON())}\n`);
+  }
+
   it("projects metadata from the canonical Version without mutating it", () => {
     const fixture = createFlow();
     const before = fs.readFileSync(path.join(tmp, "specs", "001-query", "001", "flow.json"));
@@ -168,7 +210,81 @@ describe("flow query", () => {
     assert.equal(response.ok, true);
     assert.equal(response.resource, "metadata");
     assert.equal(response.item.identity.specId, "001-query");
+    const directResponse = JSON.parse(execFileSync("node", [DIRECT_FLOW_CLI, "query"], {
+      env: fixture.env,
+      input: JSON.stringify(fixture.request),
+      encoding: "utf8",
+    }));
+    assert.deepEqual(directResponse, response);
     assert.deepEqual(fs.readFileSync(path.join(tmp, "specs", "001-query", "001", "flow.json")), before);
+  });
+
+  it("flushes metadata responses larger than a stdout pipe buffer before exiting", () => {
+    const capabilities = Object.fromEntries(Array.from(
+      { length: 5_000 },
+      (_, index) => [`Capability${String(index).padStart(4, "0")}`, index % 2 === 0],
+    ));
+    const fixture = createFlow({ capabilities });
+
+    const result = spawnSync(process.execPath, [CLI, "flow", "query"], {
+      env: fixture.env,
+      input: JSON.stringify(fixture.request),
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(Buffer.byteLength(result.stdout) > 64 * 1024);
+    const response = JSON.parse(result.stdout);
+    new FlowQueryConsumer().consume(response);
+    assert.deepEqual(response.item.capabilities, capabilities);
+  });
+
+  it("reads an unbound query root without Git or worktree discovery", () => {
+    const fixture = contractFixture();
+    const bin = path.join(fixture.root, ".fixture-bin");
+    const marker = path.join(fixture.root, "git-called");
+    fs.mkdirSync(bin);
+    const fakeGit = path.join(bin, "git");
+    fs.writeFileSync(fakeGit, "#!/usr/bin/env node\nimport { writeFileSync } from \"node:fs\";\nwriteFileSync(process.env.SENNEL_QUERY_GIT_MARKER, \"called\\n\");\nprocess.stderr.write(\"unexpected git invocation\\n\");\nprocess.exit(1);\n");
+    fs.chmodSync(fakeGit, 0o755);
+    const env = { ...fixture.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, SENNEL_QUERY_GIT_MARKER: marker };
+    delete env.SENNEL_WORK_ROOT;
+    delete env.SENNEL_SOURCE_ROOT;
+
+    const result = spawnSync(process.execPath, [CLI, "flow", "query"], {
+      cwd: fixture.root,
+      env,
+      input: JSON.stringify(fixture.request()),
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).ok, true);
+    assert.equal(fs.existsSync(marker), false);
+    assert.doesNotMatch(result.stderr, /git|not a git repository/i);
+  });
+
+  it("honors the bound work root and its configured Spec directory independently of cwd", () => {
+    const fixture = contractFixture();
+    const configuredSpecRoot = "canonical-flow-versions";
+    fs.renameSync(path.join(fixture.root, "specs"), path.join(fixture.root, configuredSpecRoot));
+    const configFile = path.join(fixture.root, ".sennel", "config.json");
+    const config = JSON.parse(fs.readFileSync(configFile, "utf8"));
+    fs.writeFileSync(configFile, `${JSON.stringify({ ...config, flow: { specDir: configuredSpecRoot } })}\n`);
+    const unrelatedCwd = createTmpDir("flow-query-unrelated-cwd-");
+    fixtureRoots.push(unrelatedCwd);
+
+    const result = spawnSync(process.execPath, [CLI, "flow", "query"], {
+      cwd: unrelatedCwd,
+      env: { ...fixture.env, SENNEL_WORK_ROOT: fixture.root },
+      input: JSON.stringify(fixture.request()),
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const response = JSON.parse(result.stdout);
+    assert.equal(response.ok, true);
+    assert.equal(response.item.identity.specId, fixture.specId);
   });
 
   it("returns confirmed Activities with a bounded page", () => {
@@ -209,7 +325,7 @@ describe("flow query", () => {
     assert.equal(pages[0].pageInfo.hasNext, true);
     assert.equal(repeat.pageInfo.endCursor, pages[0].pageInfo.endCursor);
     assert.ok(pages.every((page) => page.ok === true));
-    const expectedOrders = Array.from({ length: fixture.flow.state().confirmationOrder }, (_, index) => index + 1);
+    const expectedOrders = Array.from({ length: fixture.flowManager.canonicalState("001-query").confirmationOrder }, (_, index) => index + 1);
     assert.deepEqual(orders, expectedOrders);
     assert.equal(pages.at(-1).pageInfo.hasNext, false);
   });
@@ -238,12 +354,37 @@ describe("flow query", () => {
     assert.equal(next.items[0].confirmationOrder, 2);
   });
 
+  it("keeps previously read Activity positions stable after a confirmed active append", () => {
+    const fixture = createFlow({ withTask: true });
+    const request = {
+      resource: "activities",
+      condition: { specId: "001-query" },
+      page: { limit: 100, after: null },
+    };
+    const before = query(fixture.env, request);
+    assert.equal(before.pageInfo.hasNext, false);
+    assert.notEqual(before.pageInfo.endCursor, null);
+
+    fixture.flow.settleBefore("T-1-impl");
+    const after = query(fixture.env, request);
+    const continuation = query(fixture.env, {
+      ...request,
+      page: { limit: 100, after: before.pageInfo.endCursor },
+    });
+
+    assert.deepEqual(after.items.slice(0, before.items.length), before.items);
+    assert.ok(continuation.items.length > 0);
+    assert.equal(continuation.items[0].confirmationOrder, before.items.at(-1).confirmationOrder + 1);
+    assert.equal(new Set([...before.items, ...continuation.items].map((item) => item.activity.id)).size, before.items.length + continuation.items.length);
+  });
+
   it("projects the exact Activity shape and filters by timing.finishedAt", () => {
     const fixture = createFlow();
     const finishedAt = fixture.flowManager.activityLedger("001-query")[0].timing.finishedAt;
     const response = query(fixture.env, {
       resource: "activities",
       condition: { specId: "001-query" },
+      page: { limit: 100, after: null },
       recordedAt: {
         gte: finishedAt,
         lt: new Date(Date.parse(finishedAt) + 1).toISOString(),
@@ -256,7 +397,8 @@ describe("flow query", () => {
       "sequence", "task", "timing", "transition", "usage",
     ].sort());
     assert.deepEqual(item.activity, { id: fixture.flowManager.activityLedger("001-query")[0].id, type: "flow_created" });
-    assert.deepEqual(item.node, { id: "flow-run-query", key: "flow" });
+    const activity = fixture.flowManager.activityLedger("001-query")[0];
+    assert.deepEqual(item.node, { id: activity.nodeId, key: activity.nodeKey });
     assert.equal(item.task, null);
     assert.equal(item.attempt, null);
     assert.equal(item.sequence, null);
@@ -278,7 +420,8 @@ describe("flow query", () => {
     const zeroMatch = query(fixture.env, {
       resource: "activities",
       condition: { specId: "001-query" },
-      recordedAt: { gte: new Date(Date.parse(finishedAt) + 1).toISOString(), lt: null },
+      page: { limit: 100, after: null },
+      recordedAt: { gte: new Date(Date.parse(finishedAt) + 1).toISOString() },
     });
     assert.equal(zeroMatch.ok, true);
     assert.deepEqual(zeroMatch.items, []);
@@ -294,16 +437,57 @@ describe("flow query", () => {
     const response = query(fixture.env, {
       resource: "activities",
       condition: { specId: "001-query" },
+      page: { limit: 100, after: null },
     });
-    const item = response.items.find((entry) => entry.activity.type === "result_confirmed");
+    const item = response.items.find((entry) => entry.activity.type === "result_confirmed" && entry.task?.id === "T-1");
     assert.ok(item);
     assert.deepEqual(item.task, { id: "T-1", key: "T-1" });
     assert.equal(item.outcome.outcome, "passed");
-    assert.equal(item.outcome.summary, "Fixture Task implementation completed without source mutation.");
+    assert.equal(item.outcome.summary, "Worker handoff confirmed for task-impl; no source change: The fixture Task requires no source mutation..");
     assert.deepEqual(item.outcome.artifactRefs, []);
     assert.equal(item.failure, null);
     assert.equal(item.blocker, null);
     assert.equal(item.incomplete, null);
+  });
+
+  it("omits an unresolved opaque result receipt without exposing its stored ID", () => {
+    const fixture = createFlow({ withTask: true });
+    fixture.flow.settleBefore("T-1-impl");
+    fixture.flow.activateTask("T-1", { settlePredecessors: false });
+    fixture.flow.settle("T-1-impl");
+    rewriteTaskResultReferenceKind(fixture, "unknown-result-artifact");
+
+    const response = query(fixture.env, {
+      resource: "activities",
+      condition: { specId: "001-query" },
+      page: { limit: 100, after: null },
+    });
+    const item = response.items.find((entry) => entry.activity.type === "result_confirmed" && entry.task?.id === "T-1");
+    assert.ok(item);
+    assert.deepEqual(item.outcome.artifactRefs, []);
+    assert.doesNotMatch(JSON.stringify(response), /unknown-result-artifact/);
+  });
+
+  it("rejects an unresolved result reference that claims a catalog relation", () => {
+    const fixture = createFlow({ withTask: true });
+    fixture.flow.settleBefore("T-1-impl");
+    fixture.flow.activateTask("T-1", { settlePredecessors: false });
+    fixture.flow.settle("T-1-impl");
+    rewriteTaskResultReferenceKind(fixture, "path");
+
+    const result = spawnSync("node", [CLI, "flow", "query"], {
+      env: fixture.env,
+      input: JSON.stringify({ resource: "activities", condition: { specId: "001-query" }, page: { limit: 100, after: null } }),
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1);
+    assertKnownResourceError(
+      JSON.parse(result.stdout),
+      "activities",
+      FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT,
+      "/canonical",
+      { pageLimit: 100 },
+    );
   });
 
   it("rejects invalid requests and simultaneous stdin/request-file input at the boundary", async () => {
@@ -319,20 +503,35 @@ describe("flow query", () => {
     });
     assert.equal(both.status, 1);
     assert.equal(JSON.parse(both.stdout).error.code, FLOW_QUERY_ERROR_CODES.INVALID_REQUEST);
+
+    const oversizedField = spawnSync("node", [CLI, "flow", "query"], {
+      env: { ...process.env, SENNEL_WORK_ROOT: tmp },
+      input: JSON.stringify({
+        resource: "metadata",
+        condition: { specId: "001-query" },
+        ["x".repeat(5_000)]: true,
+      }),
+      encoding: "utf8",
+    });
+    assert.equal(oversizedField.status, 1);
+    const oversizedFieldResponse = JSON.parse(oversizedField.stdout);
+    assert.equal(oversizedFieldResponse.error.code, FLOW_QUERY_ERROR_CODES.INVALID_REQUEST);
+    assert.equal(oversizedFieldResponse.error.path, "/request");
   });
 
   it("keeps QueryRequest as the typed input boundary", () => {
     assert.equal(new QueryRequest({ resource: "metadata", condition: { specId: "001-query" } }).resource, "metadata");
-    const defaultPage = new QueryRequest({ resource: "activities", condition: { specId: "001-query" } }).page;
-    assert.equal(defaultPage.limit, 100);
-    assert.equal(defaultPage.after, null);
+    assert.throws(
+      () => new QueryRequest({ resource: "activities", condition: { specId: "001-query" } }),
+      (error) => error.code === FLOW_QUERY_ERROR_CODES.INVALID_REQUEST && error.jsonPath === "/page",
+    );
     assert.throws(
       () => new QueryRequest({ resource: "metadata", condition: { specId: "001-query" }, page: {} }),
       (error) => error.code === FLOW_QUERY_ERROR_CODES.INVALID_REQUEST && error.jsonPath === "/page",
     );
     assert.throws(
       () => new QueryRequest({ resource: "activities", condition: { specId: "001-query" }, page: { limit: 1 } }),
-      (error) => error.code === FLOW_QUERY_ERROR_CODES.INVALID_REQUEST && error.jsonPath === "/page",
+      (error) => error.code === FLOW_QUERY_ERROR_CODES.INVALID_REQUEST && error.jsonPath === "/page/after",
     );
     for (const limit of [0, 101, 1.5]) {
       assert.throws(
@@ -342,8 +541,49 @@ describe("flow query", () => {
     }
   });
 
+  it("requires an exact Activity page and a non-empty timezone-bearing recordedAt range", () => {
+    const request = (overrides = {}) => new QueryRequest({
+      resource: "activities",
+      condition: { specId: "001-query" },
+      page: { limit: 1, after: null },
+      ...overrides,
+    });
+
+    const lowerBound = request({ recordedAt: { gte: "2026-01-02T00:00:00Z" } }).recordedAt;
+    assert.equal(lowerBound.gte, "2026-01-02T00:00:00Z");
+    assert.equal(lowerBound.lt, null);
+    const upperBound = request({ recordedAt: { lt: "2026-01-03T00:00:00+09:00" } }).recordedAt;
+    assert.equal(upperBound.gte, null);
+    assert.equal(upperBound.lt, "2026-01-03T00:00:00+09:00");
+    assert.equal(request({ recordedAt: { gte: "2026-01-02T00:00:00+14:00" } }).recordedAt.gte, "2026-01-02T00:00:00+14:00");
+    const boundedRange = request({ recordedAt: { gte: "2026-01-02T00:00:00Z", lt: "2026-01-03T00:00:00Z" } }).recordedAt;
+    assert.equal(boundedRange.gte, "2026-01-02T00:00:00Z");
+    assert.equal(boundedRange.lt, "2026-01-03T00:00:00Z");
+
+    for (const recordedAt of [
+      {},
+      { gte: "2026-01-02T00:00:00Z", unexpected: true },
+      { gte: null },
+      { gte: "2026-01-02T00:00:00" },
+      { gte: "2026-02-30T00:00:00Z" },
+      { gte: "2026-01-02T00:00:00+24:00" },
+      { gte: "2026-01-02T00:00:00+14:01" },
+      { gte: "2026-01-02T00:00:00+00:60" },
+      { gte: "2026-01-03T00:00:00Z", lt: "2026-01-02T00:00:00Z" },
+    ]) {
+      assert.throws(
+        () => request({ recordedAt }),
+        (error) => error.code === FLOW_QUERY_ERROR_CODES.INVALID_REQUEST,
+      );
+    }
+    assert.throws(
+      () => request({ page: { limit: 1, after: null, unexpected: true } }),
+      (error) => error.code === FLOW_QUERY_ERROR_CODES.INVALID_REQUEST && error.jsonPath === "/page/unexpected",
+    );
+  });
+
   it("preserves the decoding cause when rejecting a malformed cursor", () => {
-    const request = new QueryRequest({ resource: "activities", condition: { specId: "001-query" } });
+    const request = new QueryRequest({ resource: "activities", condition: { specId: "001-query" }, page: { limit: 1, after: null } });
     assert.throws(
       () => Cursor.decode("!", request),
       (error) => error.code === FLOW_QUERY_ERROR_CODES.INVALID_CURSOR && error.cause instanceof Error,
@@ -375,16 +615,16 @@ describe("flow query", () => {
     };
     const first = query(fixture.env, request);
     const tampered = `${first.pageInfo.endCursor.slice(0, -1)}${first.pageInfo.endCursor.endsWith("A") ? "B" : "A"}`;
-    const malformed = query(fixture.env, { ...request, page: { limit: 1, after: tampered } });
+    const malformed = JSON.parse(runQuery(fixture, { ...request, page: { limit: 1, after: tampered } }).stdout);
     assert.equal(malformed.ok, false);
     assert.equal(malformed.error.code, FLOW_QUERY_ERROR_CODES.INVALID_CURSOR);
     assert.equal(malformed.error.path, "/page/after");
 
-    const mismatch = query(fixture.env, {
+    const mismatch = JSON.parse(runQuery(fixture, {
       ...request,
-      recordedAt: { gte: "2000-01-01T00:00:00Z", lt: null },
+      recordedAt: { gte: "2000-01-01T00:00:00Z" },
       page: { limit: 1, after: first.pageInfo.endCursor },
-    });
+    }).stdout);
     assert.equal(mismatch.ok, false);
     assert.equal(mismatch.error.code, FLOW_QUERY_ERROR_CODES.CURSOR_QUERY_MISMATCH);
     assert.equal(mismatch.error.path, "/page/after");
@@ -439,12 +679,8 @@ describe("flow query", () => {
     assert.equal(stateEnvelope.state.schemaRevision, 3);
     assert.equal(stateEnvelope.state.version, 1);
     assert.equal(specEnvelope.recordRevision, 1);
-    const ledgerActivity = JSON.parse(fs.readFileSync(fixture.locations[2].activitiesFile, "utf8").split("\n")[0]);
-    assert.deepEqual(Object.keys(ledgerActivity).sort(), [
-      "attemptId", "confirmationOrder", "effort", "failure", "id", "metric", "model", "nodeId",
-      "nodeKey", "note", "provider", "references", "result", "reviewPublication", "sequence", "timing",
-      "transition", "type", "usage",
-    ].sort());
+    assert.equal(fs.readFileSync(fixture.locations[2].activitiesFile, "utf8"), "");
+    assert.equal(stateEnvelope.state.confirmationOrder, 0);
     const catalog = JSON.parse(fs.readFileSync(fixture.locations[2].catalogFile, "utf8"));
     assert.equal(catalog.schemaRevision, 2);
     const versionOne = queryFixture(fixture, {
@@ -556,7 +792,8 @@ describe("flow query", () => {
     const inclusiveResult = runQuery(fixture, {
       resource: "activities",
       condition: { specId: "001-query" },
-      recordedAt: { gte: firstFinishedAt, lt: null },
+      page: { limit: 100, after: null },
+      recordedAt: { gte: firstFinishedAt },
     });
     assert.equal(inclusiveResult.status, 0, inclusiveResult.stderr);
     const inclusiveConsumed = consumer.consumeSerialized(inclusiveResult.stdout);
@@ -565,7 +802,8 @@ describe("flow query", () => {
     const exclusiveResult = runQuery(fixture, {
       resource: "activities",
       condition: { specId: "001-query" },
-      recordedAt: { gte: null, lt: firstFinishedAt },
+      page: { limit: 100, after: null },
+      recordedAt: { lt: firstFinishedAt },
     });
     assert.equal(exclusiveResult.status, 0, exclusiveResult.stderr);
     const exclusiveConsumed = consumer.consumeSerialized(exclusiveResult.stdout);
@@ -574,7 +812,8 @@ describe("flow query", () => {
     const zeroMatchResult = runQuery(fixture, {
       resource: "activities",
       condition: { specId: "001-query" },
-      recordedAt: { gte: new Date(Date.parse(firstFinishedAt) + 1).toISOString(), lt: null },
+      page: { limit: 100, after: null },
+      recordedAt: { gte: new Date(Date.parse(firstFinishedAt) + 1).toISOString() },
     });
     assert.equal(zeroMatchResult.status, 0, zeroMatchResult.stderr);
     const zeroMatchConsumed = consumer.consumeSerialized(zeroMatchResult.stdout);
@@ -598,7 +837,7 @@ describe("flow query", () => {
         ...activities,
         pageInfo: { ...activities.pageInfo, limit: null },
       }),
-      /pageInfo is invalid/,
+      /query response does not match the query contract/,
     );
 
     assert.throws(
@@ -612,7 +851,17 @@ describe("flow query", () => {
           },
         },
       }),
-      /zero or one issue/,
+      /query response does not match the query contract/,
+    );
+    assert.throws(
+      () => consumer.consume({
+        ...response,
+        item: {
+          ...response.item,
+          identity: { ...response.item.identity, unexpected: true },
+        },
+      }),
+      /query response does not match the query contract/,
     );
   });
 
@@ -633,7 +882,7 @@ describe("flow query", () => {
         input: (fixture) => JSON.stringify({ resource: "activities", condition: { specId: fixture.specId }, page: {} }),
         code: FLOW_QUERY_ERROR_CODES.INVALID_REQUEST,
         resource: "activities",
-        jsonPath: "/page",
+        jsonPath: "/page/limit",
       },
       {
         name: "metadata missing Spec",
@@ -644,7 +893,7 @@ describe("flow query", () => {
       },
       {
         name: "activities missing Spec",
-        request: (fixture) => ({ resource: "activities", condition: { specId: "002-query-fixture-missing" } }),
+        request: (fixture) => ({ resource: "activities", condition: { specId: "002-query-fixture-missing" }, page: { limit: 100, after: null } }),
         code: FLOW_QUERY_ERROR_CODES.SPEC_NOT_FOUND,
         resource: "activities",
         pageLimit: 100,
@@ -659,7 +908,7 @@ describe("flow query", () => {
       },
       {
         name: "activities missing Version",
-        request: (fixture) => ({ resource: "activities", condition: { specId: fixture.specId, flowVersion: 2 } }),
+        request: (fixture) => ({ resource: "activities", condition: { specId: fixture.specId, flowVersion: 2 }, page: { limit: 100, after: null } }),
         code: FLOW_QUERY_ERROR_CODES.FLOW_VERSION_NOT_FOUND,
         resource: "activities",
         pageLimit: 100,
@@ -752,11 +1001,12 @@ describe("flow query", () => {
         ...invalidJsonResponse,
         error: { ...invalidJsonResponse.error, path: "/canonical" },
       }),
-      /query error is invalid/,
+      /query response does not match the query contract/,
     );
   });
 
   it("round-trips cursor errors without exposing cursor internals", () => {
+    const consumer = new FlowQueryConsumer();
     const fixture = contractFixture({ lifecycle: "active" });
     const request = {
       resource: "activities",
@@ -768,14 +1018,14 @@ describe("flow query", () => {
     const invalid = runQuery(fixture, { ...request, page: { limit: 1, after: tampered } });
     assert.equal(invalid.status, 1);
     const invalidResponse = JSON.parse(invalid.stdout);
-    assertKnownResourceError(invalidResponse, "activities", FLOW_QUERY_ERROR_CODES.INVALID_CURSOR, "/page/after");
+    assertKnownResourceError(invalidResponse, "activities", FLOW_QUERY_ERROR_CODES.INVALID_CURSOR, "/page/after", { pageLimit: 1 });
     assert.equal(consumer.consumeSerialized(invalid.stdout).error.code, FLOW_QUERY_ERROR_CODES.INVALID_CURSOR);
     assert.equal(invalidResponse.selectedFlowVersion, null);
     assert.deepEqual(invalidResponse.availableFlowVersions, []);
 
     const mismatch = runQuery(fixture, {
       ...request,
-      recordedAt: { gte: "2000-01-01T00:00:00Z", lt: null },
+      recordedAt: { gte: "2000-01-01T00:00:00Z" },
       page: { limit: 1, after: first.pageInfo.endCursor },
     });
     assert.equal(mismatch.status, 1);
@@ -838,7 +1088,7 @@ describe("flow query", () => {
       },
       {
         name: "Versioned state record envelope",
-        fixture: () => contractFixture({ storage: "migrated", selectedVersion: 2 }),
+        fixture: () => contractFixture({ selectedVersion: 2 }),
         mutate: (fixture) => {
           const file = fixture.locations[2].flowStateFile;
           const state = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -848,7 +1098,7 @@ describe("flow query", () => {
       },
       {
         name: "Versioned Spec record envelope",
-        fixture: () => contractFixture({ storage: "migrated", selectedVersion: 2 }),
+        fixture: () => contractFixture({ selectedVersion: 2 }),
         mutate: (fixture) => {
           const file = fixture.locations[2].specFile;
           const spec = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -858,7 +1108,7 @@ describe("flow query", () => {
       },
       {
         name: "FlowActivity ledger format",
-        fixture: () => contractFixture({ storage: "migrated", selectedVersion: 2 }),
+        fixture: () => contractFixture({ selectedVersion: 2 }),
         mutate: (fixture) => {
           const file = fixture.locations[2].activitiesFile;
           const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
@@ -870,7 +1120,7 @@ describe("flow query", () => {
       },
       {
         name: "FlowArtifactCatalog schema revision",
-        fixture: () => contractFixture({ storage: "migrated", selectedVersion: 2 }),
+        fixture: () => contractFixture({ selectedVersion: 2 }),
         mutate: (fixture) => {
           const file = fixture.locations[2].catalogFile;
           const catalog = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -1032,7 +1282,7 @@ describe("flow query", () => {
         resource: "metadata", code: FLOW_QUERY_ERROR_CODES.INVALID_REQUEST, path: "/page",
       },
       {
-        input: JSON.stringify({ resource: "activities", condition: { specId: fixture.specId }, recordedAt: {} }),
+        input: JSON.stringify({ resource: "activities", condition: { specId: fixture.specId }, page: { limit: 1, after: null }, recordedAt: {} }),
         resource: "activities", code: FLOW_QUERY_ERROR_CODES.INVALID_REQUEST, path: "/recordedAt",
       },
       {

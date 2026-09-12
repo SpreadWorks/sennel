@@ -615,7 +615,7 @@ function taskReviewAgentRuntimeDirectories(executionRoot, agent = null) {
   });
 }
 
-function taskReviewValidatedObservationMetadataPaths(executionRoot, workUnit) {
+function taskReviewValidatedMetricMetadataPaths(executionRoot, workUnit) {
   const versionDirectory = path.relative(
     executionRoot,
     workUnit.flowManager.specLocation(workUnit.state.specId).directory,
@@ -623,12 +623,12 @@ function taskReviewValidatedObservationMetadataPaths(executionRoot, workUnit) {
   if (versionDirectory === "" || versionDirectory.startsWith("../") || path.posix.isAbsolute(versionDirectory)) {
     return [];
   }
-  // Deferred agent telemetry settles only after child source comparison. The
-  // Store records an append-only non-decision observation atomically,
-  // rewriting its state, ledger, and catalog metadata together. Callers must
-  // pair this narrow exclusion with TaskReviewCanonicalObservationBoundary:
-  // it proves the complete advance cannot turn a provider's direct canonical
-  // mutation into a repair.
+  // Deferred Agent metrics settle only after child source comparison. The
+  // Store records that one observation atomically, rewriting its state,
+  // ledger, and catalog metadata together. Callers must pair this narrow
+  // exclusion with TaskReviewCanonicalObservationBoundary: it proves the
+  // complete advance is an append-only record_metric transaction, so this
+  // list can never turn a provider's direct canonical mutation into a repair.
   return ["flow.state", "flow.activities", "artifact.catalog"].map((logicalKey) => (
     path.posix.join(
       versionDirectory,
@@ -648,7 +648,7 @@ function taskReviewPublicationRuntimeLocks(flowManager, specId, root = null) {
 
 /**
  * Parent-owned proof for the one canonical advance permitted while a Task
- * Review child is running.  The child may settle a deferred telemetry record
+ * Review child is running.  The child settles its deferred Agent metric only
  * after its own before/after source observation.  That settlement rewrites
  * the Version's three root metadata files.  We validate the Store-level
  * transaction before excluding those exact paths from the Task repair
@@ -695,7 +695,7 @@ export class TaskReviewCanonicalObservationBoundary {
     });
   }
 
-  assertNonDecisionObservationSettlementOnly() {
+  assertMetricSettlementOnly() {
     return this.observationAdvance.assertAllowed({
       flowManager: this.flowManager,
       specId: this.specId,
@@ -711,7 +711,7 @@ export function taskReviewSourceObservationIgnoredDirectories(executionRoot, wor
     path.posix.join(PRODUCT.managedDirName, "agent-cache"),
     path.posix.join(PRODUCT.managedDirName, "review-execution-locks"),
     ...taskReviewAgentRuntimeDirectories(executionRoot, agent),
-    ...taskReviewValidatedObservationMetadataPaths(executionRoot, workUnit),
+    ...taskReviewValidatedMetricMetadataPaths(executionRoot, workUnit),
   ])];
 }
 
@@ -1460,7 +1460,7 @@ export class RunReviewCommand extends FlowCommand {
         );
       } catch (error) {
         try {
-          taskCanonicalObservationBoundary?.assertNonDecisionObservationSettlementOnly();
+          taskCanonicalObservationBoundary?.assertMetricSettlementOnly();
         } catch (observationError) {
           return this.#canonicalFailure(ctx, persistedPhase, observationError);
         }
@@ -1468,7 +1468,7 @@ export class RunReviewCommand extends FlowCommand {
         return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, { taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint });
       }
       try {
-        taskCanonicalObservationBoundary?.assertNonDecisionObservationSettlementOnly();
+        taskCanonicalObservationBoundary?.assertMetricSettlementOnly();
       } catch (error) {
         return this.#canonicalFailure(ctx, persistedPhase, error);
       }

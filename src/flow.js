@@ -16,9 +16,8 @@ import { dispatch } from "./lib/dispatcher.js";
 
 const args = process.argv.slice(2);
 if (args[0] === "query") {
-  const { prepareFlowQueryInput, runFlowQueryCli } = await import("./flow/query.js");
-  const prepared = await prepareFlowQueryInput(args.slice(1));
-  process.exit(await runFlowQueryCli(args.slice(1), { prepared }));
+  const { bootstrapFlowQueryCli } = await import("./flow/query.js");
+  process.exit(await bootstrapFlowQueryCli(args.slice(1)));
 }
 initContainer({
   flowAttribution: args[0] === "run" && args[1] === "abort" ? "none" : "ambient",

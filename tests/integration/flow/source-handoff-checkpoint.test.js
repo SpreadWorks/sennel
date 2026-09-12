@@ -32,7 +32,6 @@ import {
   withSourceHandoffLease,
 } from "../../support/builders/source-handoff-scenario.js";
 import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
-import { BroadModeLedgerEntry } from "../../../src/flow/lib/task-scope.js";
 
 const NOW = "2026-09-09T00:00:00.000Z";
 const SOURCE_POLICIES = Object.freeze([
@@ -577,7 +576,7 @@ describe("durable source handoff checkpoints", () => {
     });
   });
 
-  it("rejects a control note between start-intent and launch", (t) => {
+  it("rejects a non-metric canonical writer between start-intent and launch", (t) => {
     const scenario = new SourceCheckpointScenario(t, "implement");
     const coordinator = new WorkerArtifactHandoffCoordinator({ now: () => new Date(NOW) });
     const ctx = scenario.context();
@@ -590,11 +589,7 @@ describe("durable source handoff checkpoints", () => {
       scenario.manager.appendSourceHandoffEvent = (input) => {
         const appended = append(input);
         if (input.event.kind === "start-intent") {
-          scenario.manager.addNote(new BroadModeLedgerEntry({
-            step: "implement",
-            reason: "This control note changes later task-scope admission.",
-            ts: NOW,
-          }).toActivityText());
+          scenario.manager.addNote("canonical writer racing source worker launch");
         }
         return appended;
       };
@@ -644,54 +639,6 @@ describe("durable source handoff checkpoints", () => {
         specId: scenario.specId, identity: request.sourceHandoffIdentity,
       }).event.kind, "start-intent");
       assert.equal(scenario.manager.activityLedger(scenario.specId).at(-1).transition.operation, "record_metric");
-    });
-  });
-
-  it("allows an ordinary note between start-intent and launch", (t) => {
-    const scenario = new SourceCheckpointScenario(t, "implement");
-    const coordinator = new WorkerArtifactHandoffCoordinator({ now: () => new Date(NOW) });
-    const ctx = scenario.context();
-    const invocation = scenario.invocation("implement");
-    const note = "The source worker may continue after this annotation.";
-    withSourceHandoffLease({ root: scenario.executionRoot, mainRoot: scenario.mainRoot }, () => {
-      const request = coordinator.createRequest({ ctx, state: scenario.manager.loadReadOnly(scenario.specId), invocation });
-      const append = scenario.manager.appendSourceHandoffEvent.bind(scenario.manager);
-      scenario.manager.appendSourceHandoffEvent = (input) => {
-        const appended = append(input);
-        if (input.event.kind === "start-intent") scenario.manager.addNote(note);
-        return appended;
-      };
-      coordinator.startSourceWorker({ ctx, request, invocation });
-      assert.equal(scenario.manager.readSourceHandoffAuthority({
-        specId: scenario.specId, identity: request.sourceHandoffIdentity,
-      }).event.kind, "start-intent");
-      assert.ok(scenario.manager.load(scenario.specId).notes.some((entry) => entry.text === note));
-    });
-  });
-
-  it("rejects a retry decision metric between start-intent and launch", (t) => {
-    const scenario = new SourceCheckpointScenario(t, "implement");
-    const coordinator = new WorkerArtifactHandoffCoordinator({ now: () => new Date(NOW) });
-    const ctx = scenario.context();
-    const invocation = scenario.invocation("implement");
-    withSourceHandoffLease({ root: scenario.executionRoot, mainRoot: scenario.mainRoot }, () => {
-      const request = coordinator.createRequest({ ctx, state: scenario.manager.loadReadOnly(scenario.specId), invocation });
-      const append = scenario.manager.appendSourceHandoffEvent.bind(scenario.manager);
-      scenario.manager.appendSourceHandoffEvent = (input) => {
-        const appended = append(input);
-        if (input.event.kind === "start-intent") {
-          scenario.manager.appendMetric({ phase: "impl", counter: "reviewRetry", delta: 1 }, { taskId: null });
-        }
-        return appended;
-      };
-      assert.throws(
-        () => coordinator.startSourceWorker({ ctx, request, invocation }),
-        (error) => error instanceof WorkerArtifactHandoffError
-          && error.code === "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-      );
-      assert.equal(scenario.manager.readSourceHandoffAuthority({
-        specId: scenario.specId, identity: request.sourceHandoffIdentity,
-      }).event.kind, "start-intent");
     });
   });
 

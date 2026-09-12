@@ -23,31 +23,12 @@ import { executeWorktreeLocalCli } from "./lib/worktree-cli-execution.js";
 
 const rawArgs = process.argv.slice(2);
 const isFlowQuery = rawArgs[0] === "flow" && rawArgs[1] === "query";
-function queryArgsForStdin(argv) {
-  const result = [];
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === "--request-file") {
-      index += 1;
-      continue;
-    }
-    result.push(argv[index]);
-  }
-  return result;
-}
 if (isFlowQuery) {
   // Query input is the only bootstrap boundary allowed before worktree
-  // resolution. A valid request is handed to a worktree-local re-exec via
-  // stdin; invalid input is rendered without touching the ambient container.
-  const { prepareFlowQueryInput, runFlowQueryCli } = await import("./flow/query.js");
-  const prepared = await prepareFlowQueryInput(rawArgs.slice(2));
-  if (prepared.error === null) {
-    const worktreeCliExitCode = executeWorktreeLocalCli({
-      argv: rawArgs.includes("--request-file") ? queryArgsForStdin(rawArgs) : rawArgs,
-      queryInput: prepared.bytes,
-    });
-    if (worktreeCliExitCode != null) process.exit(worktreeCliExitCode);
-  }
-  process.exit(await runFlowQueryCli(rawArgs.slice(2), { prepared }));
+  // resolution. Query is read-only and executes against the caller-selected
+  // root without resolving or re-executing another worktree's CLI source.
+  const { bootstrapFlowQueryCli } = await import("./flow/query.js");
+  process.exit(await bootstrapFlowQueryCli(rawArgs.slice(2)));
 }
 const worktreeCliExitCode = executeWorktreeLocalCli({ argv: rawArgs });
 if (worktreeCliExitCode != null) process.exit(worktreeCliExitCode);

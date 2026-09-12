@@ -105,7 +105,7 @@ function failClosed(target, argv) {
  * Re-execute using the current worktree's CLI if this process was launched
  * from a different checkout. Returns null when normal dispatch should proceed.
  */
-export function executeWorktreeLocalCli({ argv, cwd = process.cwd(), queryInput = null } = {}) {
+export function executeWorktreeLocalCli({ argv, cwd = process.cwd() } = {}) {
   new WorktreeCliInvocation(argv || []);
   const executionPath = fs.realpathSync(path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
@@ -126,7 +126,7 @@ export function executeWorktreeLocalCli({ argv, cwd = process.cwd(), queryInput 
       [PRODUCT.env("WORK_ROOT")]: target.worktreeRoot,
       [PRODUCT.env("SOURCE_ROOT")]: target.worktreeRoot,
     },
-    ...(queryInput === null ? { stdio: "inherit" } : { input: queryInput, stdio: ["pipe", "inherit", "inherit"] }),
+    stdio: "inherit",
   });
   if (result.error) {
     process.stderr.write(`sennel: failed to execute worktree-local CLI ${target.localCliPath}: ${result.error.message}\n`);

@@ -5,8 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildCurrentFlowDefinition } from "../../../src/flow/definition.js";
-import { FLOW_QUERY_LIMITS } from "../../../src/flow/query.js";
-import { CanonicalFlowFixture, makeFlowManager } from "../infrastructure/flow-setup.js";
+import { FLOW_QUERY_LIMITS } from "../../../src/flow/query-contract.js";
+import { CanonicalFlowFixture, makeFlowManager, setupFlowConfig } from "../infrastructure/flow-setup.js";
 import { captureGitSnapshot } from "../../../src/lib/git-helpers.js";
 import {
   FlowArtifactCatalog,
@@ -130,7 +130,7 @@ function failUntilBlocked(flowManager, specId) {
     },
   });
   fail();
-  for (let count = 0; flowManager.loadReadOnly(specId).failureDisposition().operation === "retry"; count += 1) {
+  for (let count = 0; flowManager.canonicalState(specId).failureDisposition().operation === "retry"; count += 1) {
     if (count >= 10) throw new Error("query blocked fixture exceeded its retry bound");
     flowManager.retryCurrentAttempt({ specId });
     fail();
@@ -146,6 +146,7 @@ function gitStatus(root) {
     return execFileSync("git", ["status", "--short", "--untracked-files=all"], {
       cwd: root,
       encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
     });
   } catch {
     return null;
@@ -242,6 +243,7 @@ class FlowQueryFixture {
     return {
       resource,
       condition: { specId: this.specId, ...(this.selectedVersion === 1 ? {} : { flowVersion: this.selectedVersion }) },
+      ...(resource === "activities" ? { page: { limit: FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT, after: null } } : {}),
       ...overrides,
     };
   }
@@ -274,6 +276,7 @@ export function createFlowQueryFixture({
   if (storage === "migrated" && git) throw new TypeError("migrated query fixture does not synthesize a Git snapshot");
 
   const root = createTmpDir("flow-query-fixture-");
+  setupFlowConfig(root, "en");
   if (git) {
     initGitRepo(root);
     commitAll(root, "query fixture baseline");
@@ -305,6 +308,9 @@ export function createFlowQueryFixture({
     specRecord: {
       goal: "Exercise the canonical Flow query contract.",
       capabilities: { query: true, fixture: true },
+      ...(lifecycle === "blocked" ? {
+        requirements: [{ id: "R-1", desc: "Exercise the query fixture Task.", task_ids: [DEFAULT_TASK.id] }],
+      } : {}),
     },
   }).create();
   if (lifecycle === "blocked") flow.addTask({ ...DEFAULT_TASK });

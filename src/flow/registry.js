@@ -11,6 +11,7 @@
 import { derivePhase } from "../lib/flow-helpers.js";
 import { Envelope } from "../lib/flow-envelope.js";
 import { hasExplicitOption } from "../lib/flow-options.js";
+import { FLOW_QUERY_HELP } from "./query-contract.js";
 import fs from "fs";
 import path from "path";
 import {
@@ -1046,12 +1047,7 @@ export const FLOW_COMMANDS = {
     targetGuard: false,
     command: () => import("./query.js"),
     args: { options: ["--request-file"] },
-    help: [
-      "Usage: sennel flow query [--request-file <path>]",
-      "",
-      "Read canonical Flow Version metadata or confirmed Activities as one JSON response.",
-      "Input is a single JSON request from stdin or --request-file.",
-    ].join("\n"),
+    help: FLOW_QUERY_HELP,
   },
   resume: {
     helpKey: "flow.resume",

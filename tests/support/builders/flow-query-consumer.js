@@ -4,15 +4,13 @@ import {
   ActivityItem,
   AggregateMetrics,
   ArtifactDescriptorView,
-  FLOW_QUERY_ERROR_CODES,
-  FLOW_QUERY_ERROR_PATHS,
-  FLOW_QUERY_LIMITS,
-  FLOW_QUERY_SCHEMA_REVISION,
   MetadataItem,
 } from "../../../src/flow/query.js";
-
-const RESOURCES = new Set(["metadata", "activities"]);
-const ERROR_CODES = new Set(Object.values(FLOW_QUERY_ERROR_CODES));
+import {
+  FLOW_QUERY_LIMITS,
+  FLOW_QUERY_SCHEMA_REVISION,
+  validateFlowQueryResponse,
+} from "../../../src/flow/query-contract.js";
 
 function exactKeys(value, fields, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -43,19 +41,6 @@ function availableVersions(value) {
     }
   }
   return Object.freeze([...value]);
-}
-
-function pageInfo(value, { allowNullLimit = false } = {}) {
-  exactKeys(value, ["limit", "endCursor", "hasNext"], "pageInfo");
-  const validLimit = value.limit === null
-    ? allowNullLimit
-    : Number.isSafeInteger(value.limit) && value.limit >= 1 && value.limit <= FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT;
-  if (!validLimit
-    || (value.endCursor !== null && typeof value.endCursor !== "string")
-    || typeof value.hasNext !== "boolean") {
-    throw new Error("pageInfo is invalid");
-  }
-  return Object.freeze({ limit: value.limit, endCursor: value.endCursor, hasNext: value.hasNext });
 }
 
 function metadataItem(value) {
@@ -116,52 +101,36 @@ export class FlowQueryConsumer {
     if (response.schemaRevision !== this.supportedSchemaRevision) {
       throw new Error(`unsupported query schema revision: ${response.schemaRevision}`);
     }
+    const errors = validateFlowQueryResponse(response);
+    if (errors.length > 0) throw new Error(`query response does not match the query contract: ${errors[0]}`);
     if (response.ok === true) return this.success(response);
     if (response.ok === false) return this.error(response);
     throw new Error("query response status is invalid");
   }
 
   success(response) {
-    if (!RESOURCES.has(response.resource)) throw new Error("successful query response has an unknown resource");
     const selected = selectedVersion(response.selectedFlowVersion);
     const available = availableVersions(response.availableFlowVersions);
     if (response.resource === "metadata") {
-      exactKeys(response, ["schemaRevision", "ok", "resource", "selectedFlowVersion", "availableFlowVersions", "item"], "metadata response");
-      if (response.item === null || typeof response.item !== "object" || Array.isArray(response.item)) {
-        throw new Error("metadata response must contain exactly one item");
-      }
       return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, item: metadataItem(response.item) });
     }
-    exactKeys(response, ["schemaRevision", "ok", "resource", "selectedFlowVersion", "availableFlowVersions", "items", "pageInfo"], "activities response");
-    if (!Array.isArray(response.items) || response.items.length > FLOW_QUERY_LIMITS.MAX_CONFIRMED_ACTIVITIES) {
+    if (!Array.isArray(response.items)
+      || response.items.length > FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT
+      || response.items.length > response.pageInfo.limit) {
       throw new Error("activities response items are invalid");
     }
-    return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, items: Object.freeze(activityItems(response.items)), page: pageInfo(response.pageInfo) });
+    return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, items: Object.freeze(activityItems(response.items)), page: Object.freeze({ ...response.pageInfo }) });
   }
 
   error(response) {
-    exactKeys(response.error, ["code", "path", "message"], "query error");
-    const expectedPath = FLOW_QUERY_ERROR_PATHS[response.error.code];
-    if (!ERROR_CODES.has(response.error.code) || typeof response.error.path !== "string"
-      || response.error.path === ""
-      || (expectedPath !== null && response.error.path !== expectedPath)
-      || (expectedPath === null && !response.error.path.startsWith("/"))
-      || typeof response.error.message !== "string") {
-      throw new Error("query error is invalid");
-    }
-    if (!RESOURCES.has(response.resource)) {
-      exactKeys(response, ["schemaRevision", "ok", "error"], "query error response");
+    if (!Object.hasOwn(response, "resource")) {
       return new FlowQueryCompatibilityResult({ resource: null, selectedFlowVersion: null, availableFlowVersions: Object.freeze([]), error: response.error });
     }
     const selected = response.selectedFlowVersion === null ? null : selectedVersion(response.selectedFlowVersion);
     const available = availableVersions(response.availableFlowVersions);
     if (response.resource === "metadata") {
-      exactKeys(response, ["schemaRevision", "ok", "resource", "selectedFlowVersion", "availableFlowVersions", "error", "item"], "metadata error response");
-      if (response.item !== null) throw new Error("metadata error response must have a null item");
       return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, error: response.error });
     }
-    exactKeys(response, ["schemaRevision", "ok", "resource", "selectedFlowVersion", "availableFlowVersions", "error", "items", "pageInfo"], "activities error response");
-    if (!Array.isArray(response.items) || response.items.length !== 0) throw new Error("activities error response must have empty items");
-    return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, items: Object.freeze([]), page: pageInfo(response.pageInfo, { allowNullLimit: true }), error: response.error });
+    return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, items: Object.freeze([]), page: Object.freeze({ ...response.pageInfo }), error: response.error });
   }
 }

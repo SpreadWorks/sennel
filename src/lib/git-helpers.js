@@ -10,16 +10,16 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { runCmd, formatError, assertOk } from "./process.js";
 import { container } from "./container.js";
-import { GIT_OBJECT_ID, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
-export { GIT_OBJECT_ID, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
+import { GIT_OBJECT_ID, GitSnapshot, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
+export { GIT_OBJECT_ID, GitSnapshot, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
 
 export function captureGitSnapshot(root) {
   const result = runGit(["-C", root, "rev-parse", "HEAD"]);
   assertOk(result, "git rev-parse HEAD failed while capturing Git snapshot");
   const commit = result.stdout.trim();
-  if (commit === "") return { available: false, commit: null };
+  if (commit === "") return new GitSnapshot({ available: false, commit: null });
   if (!isGitObjectId(commit)) throw new Error("git rev-parse HEAD returned an invalid Git object id");
-  return { available: true, commit };
+  return new GitSnapshot({ available: true, commit });
 }
 
 /**
