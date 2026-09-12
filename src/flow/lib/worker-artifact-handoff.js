@@ -13,6 +13,7 @@ import {
   CanonicalWorkerSpecPublication,
   CurrentAttemptIdentity,
   CurrentFlowIdentity,
+  FlowActivity,
 } from "./current-flow-state.js";
 import {
   captureRegularFile,
@@ -2142,10 +2143,11 @@ function indexedSourceMutationCurrentEntry(root, relativePath, budget) {
  * The only canonical Version advance that a source worker may coexist with.
  *
  * A worker can invoke the regular CLI while it is writing source files. The
- * CLI records its usage as an append-only metric Activity, which changes the
- * Version bytes but not the source handoff's semantic inputs. This value
- * captures the already-validated Activity prefix at worker start and proves
- * that the later Version is exactly that prefix plus metric observations.
+ * CLI can record ordinary notes or non-decision telemetry while it writes
+ * source files.  Those append-only observations change Version bytes but not
+ * the handoff's semantic inputs.  This value captures the already-validated
+ * Activity prefix at worker start and proves the later Version advances only
+ * through those observations.
  */
 export class SourceWorkerCanonicalObservationAdvance {
   constructor({ activityPrefix, activityBytes, mutablePaths, canonicalSnapshot, addedActivities = [], allowedPublications = [], allowedActivityIds = [] }) {
@@ -2329,8 +2331,9 @@ export class SourceWorkerCanonicalObservationAdvance {
       || view.location === null || typeof view.location.activitiesFile !== "string") {
       throw new Error("source worker canonical observation requires a transition view");
     }
-    const current = view.activities.map((activity) => {
-      if (typeof activity?.toJSON !== "function") {
+    const currentActivities = view.activities;
+    const current = currentActivities.map((activity) => {
+      if (!(activity instanceof FlowActivity)) {
         throw new Error("source worker canonical observation requires typed Activities");
       }
       return activity.toJSON();
@@ -2350,6 +2353,7 @@ export class SourceWorkerCanonicalObservationAdvance {
     const addedActivities = assertCanonicalObservationAdvance({
       observation: this,
       current,
+      currentActivities,
       activityBytes,
       currentSnapshot,
       allowedPublications: this.allowedPublications,
@@ -2376,6 +2380,7 @@ export class SourceWorkerCanonicalObservationAdvance {
 function assertCanonicalObservationAdvance({
   observation,
   current,
+  currentActivities,
   activityBytes,
   currentSnapshot,
   allowedPublications = [],
@@ -2401,15 +2406,16 @@ function assertCanonicalObservationAdvance({
     );
   }
   const addedActivities = current.slice(observation.activityPrefix.length);
-  if (addedActivities.some((activity) => (
-    activity.transition?.operation !== "record_metric"
+  const addedTypedActivities = currentActivities.slice(observation.activityPrefix.length);
+  if (addedTypedActivities.some((activity) => (
+    !activity.isNonDecisionObservation()
       && !allowedPublications.some((publication) => publication.activityId === activity.id)
       && !allowedActivityIds.includes(activity.id)
   ))) {
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-      "canonical source handoff permits only appended record_metric Activities",
+      "canonical source handoff permits only appended non-decision observations",
       { retryable: false },
     );
   }
@@ -2438,7 +2444,7 @@ function assertCanonicalObservationAdvance({
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-      "canonical source handoff contains a direct Version mutation outside record_metric publication",
+      "canonical source handoff contains a direct Version mutation outside non-decision observation publication",
       {
         retryable: false,
         data: {

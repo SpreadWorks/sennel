@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import {
   ActivityItem,
   AggregateMetrics,
@@ -45,8 +47,10 @@ function availableVersions(value) {
 
 function pageInfo(value, { allowNullLimit = false } = {}) {
   exactKeys(value, ["limit", "endCursor", "hasNext"], "pageInfo");
-  if ((allowNullLimit ? value.limit !== null : !Number.isSafeInteger(value.limit))
-    || (value.limit !== null && (!Number.isSafeInteger(value.limit) || value.limit < 1 || value.limit > FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT))
+  const validLimit = value.limit === null
+    ? allowNullLimit
+    : Number.isSafeInteger(value.limit) && value.limit >= 1 && value.limit <= FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT;
+  if (!validLimit
     || (value.endCursor !== null && typeof value.endCursor !== "string")
     || typeof value.hasNext !== "boolean") {
     throw new Error("pageInfo is invalid");
@@ -60,7 +64,9 @@ function metadataItem(value) {
     ? value.artifacts.map((artifact) => new ArtifactDescriptorView(artifact))
     : value.artifacts;
   const metrics = value.metrics === null || value.metrics === undefined ? value.metrics : new AggregateMetrics(value.metrics);
-  return new MetadataItem({ ...value, artifacts, metrics }).toJSON();
+  const normalized = new MetadataItem({ ...value, artifacts, metrics }).toJSON();
+  if (!isDeepStrictEqual(normalized, value)) throw new Error("metadata item changed during compatibility round-trip");
+  return normalized;
 }
 
 function activityItems(values) {
@@ -134,7 +140,6 @@ export class FlowQueryConsumer {
   }
 
   error(response) {
-    exactKeys(response, ["schemaRevision", "ok", "error", ...(RESOURCES.has(response.resource) ? ["resource", "selectedFlowVersion", "availableFlowVersions"] : [])], "query error response");
     exactKeys(response.error, ["code", "path", "message"], "query error");
     const expectedPath = FLOW_QUERY_ERROR_PATHS[response.error.code];
     if (!ERROR_CODES.has(response.error.code) || typeof response.error.path !== "string"
@@ -145,6 +150,7 @@ export class FlowQueryConsumer {
       throw new Error("query error is invalid");
     }
     if (!RESOURCES.has(response.resource)) {
+      exactKeys(response, ["schemaRevision", "ok", "error"], "query error response");
       return new FlowQueryCompatibilityResult({ resource: null, selectedFlowVersion: null, availableFlowVersions: Object.freeze([]), error: response.error });
     }
     const selected = response.selectedFlowVersion === null ? null : selectedVersion(response.selectedFlowVersion);

@@ -81,6 +81,7 @@ import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authorit
 import { ApprovedFindingExceptionSet } from "../../../src/flow/lib/acknowledged-rationale.js";
 import { CanonicalTaskContext } from "../../../src/flow/lib/task-canonical-context.js";
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
+import { BroadModeLedgerEntry } from "../../../src/flow/lib/task-scope.js";
 import {
   CanonicalFlowFixture,
   TaskLifecycleFixture,
@@ -819,7 +820,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("confirms a source handoff after regular flow set metric docsRead commands", () => {
+  it("confirms a source handoff after read and agent telemetry observations", () => {
     const value = fixture("implement", { specRecord: validSpec() });
     try {
       initializeGitRepository(value);
@@ -834,6 +835,27 @@ describe("worker artifact handoff", () => {
         phase: "impl",
         counter: "docsRead",
       }), { phase: "impl", counter: "docsRead" });
+      value.flowManager.accumulateAgentMetrics("impl", {
+        provider: "test-provider",
+        profileKey: "default",
+        responseChars: 12,
+        durationMs: 4,
+        usage: {
+          input_tokens: 3,
+          output_tokens: 5,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
+        },
+      });
+      value.flowManager.appendMetric({
+        phase: "impl",
+        kind: "agent-cache",
+        provider: "test-provider",
+        profileKey: "default",
+        callCount: 0,
+        cachedResponse: true,
+        responseChars: 12,
+      });
       assert.deepEqual(new SetMetricCommand().execute({
         ...value.ctx,
         phase: "impl",
@@ -1316,7 +1338,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("rejects a non-metric canonical Activity during a source handoff", () => {
+  it("confirms a source handoff after an ordinary note and preserves it after reload", () => {
     const value = fixture("implement", { specRecord: validSpec() });
     try {
       initializeGitRepository(value);
@@ -1329,12 +1351,76 @@ describe("worker artifact handoff", () => {
       fs.writeFileSync(request.payloadPath("effects.json"), json(implementationEffect(request, ["product.js"]).toJSON()));
       fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
       seal(request);
-      value.flowManager.addNote("source worker must not alter canonical observations");
+      const note = "source worker annotation retained without changing its work";
+      value.flowManager.addNote(note);
+      const noteActivity = value.flowManager.activityLedger(value.specId).at(-1);
+
+      const result = value.coordinator.reconcile({ ctx: value.ctx, request, mutationAuthority: authority });
+
+      assert.equal(result.completed, true);
+      assert.ok(result.canonicalObservationAdvance.addedActivityIds.includes(noteActivity.id));
+      const reloaded = new FlowManager({
+        root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+      });
+      assert.equal(findStepById(reloaded.load().steps, "implement").status, "done");
+      assert.ok(reloaded.load().notes.some((entry) => entry.text === note));
+      assert.equal(reloaded.readSourceHandoffAuthority({
+        specId: value.specId, identity: request.sourceHandoffIdentity,
+      }).settlement.kind, "accepted");
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("rejects a control note during a source handoff", () => {
+    const value = fixture("implement", { specRecord: validSpec() });
+    try {
+      initializeGitRepository(value);
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      const authority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
+      fs.writeFileSync(request.payloadPath("effects.json"), json(implementationEffect(request, ["product.js"]).toJSON()));
+      fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
+      seal(request);
+      value.flowManager.addNote(new BroadModeLedgerEntry({
+        step: "implement",
+        reason: "This control note changes later task-scope admission.",
+        ts: "2026-09-12T00:00:00.000Z",
+      }).toActivityText());
 
       assert.throws(
         () => value.coordinator.reconcile({ ctx: value.ctx, request, mutationAuthority: authority }),
         (error) => error instanceof WorkerArtifactHandoffError
           && error.classification === "invalid"
+          && error.code === "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
+      );
+      assert.equal(findStepById(value.flowManager.load().steps, "implement").status, "in_progress");
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("rejects a retry decision metric during a source handoff", () => {
+    const value = fixture("implement", { specRecord: validSpec() });
+    try {
+      initializeGitRepository(value);
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      const authority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
+      fs.writeFileSync(request.payloadPath("effects.json"), json(implementationEffect(request, ["product.js"]).toJSON()));
+      fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
+      seal(request);
+      value.flowManager.appendMetric({ phase: "impl", counter: "reviewRetry", delta: 1 }, { taskId: null });
+
+      assert.throws(
+        () => value.coordinator.reconcile({ ctx: value.ctx, request, mutationAuthority: authority }),
+        (error) => error instanceof WorkerArtifactHandoffError
           && error.code === "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
       );
       assert.equal(findStepById(value.flowManager.load().steps, "implement").status, "in_progress");

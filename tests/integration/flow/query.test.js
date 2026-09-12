@@ -350,6 +350,18 @@ describe("flow query", () => {
     );
   });
 
+  it("preserves an own __proto__ key in canonical digest input", () => {
+    const value = Object.create(null);
+    Object.defineProperty(value, "__proto__", { value: "kept", enumerable: true, writable: true, configurable: true });
+    value.resource = "activities";
+    const canonical = Cursor.canonicalJson(value);
+    assert.equal(canonical, '{"__proto__":"kept","resource":"activities"}');
+    assert.equal(
+      Cursor.digest(value),
+      crypto.createHash("sha256").update(canonical, "utf8").digest("hex"),
+    );
+  });
+
   it("distinguishes cursor tampering from query binding mismatch", () => {
     const fixture = createFlow({ withTask: true });
     fixture.flow.settleBefore("T-1-impl");
@@ -484,6 +496,7 @@ describe("flow query", () => {
       assert.deepEqual(consumed.availableFlowVersions, response.availableFlowVersions);
       if (testCase.resource === "metadata") {
         assert.notEqual(consumed.item, null);
+        assert.deepEqual(consumed.item, response.item);
         assert.equal(consumed.items, null);
         assert.equal(consumed.pageInfo, null);
         assert.equal(Object.hasOwn(response, "items"), false);
@@ -495,6 +508,78 @@ describe("flow query", () => {
       }
       assertNoInternalFields(response);
     }
+  });
+
+  it("lets a Workspace/Connector consumer round-trip bounded Activity pages and filters", () => {
+    const fixture = createFlow({ withTask: true });
+    fixture.flow.settleBefore("T-1-impl");
+    fixture.flow.activateTask("T-1", { settlePredecessors: false });
+    fixture.flow.settle("T-1-impl");
+
+    const consumer = new FlowQueryConsumer();
+    const request = {
+      resource: "activities",
+      condition: { specId: "001-query" },
+      page: { limit: 1, after: null },
+    };
+    const firstResult = runQuery(fixture, request);
+    assert.equal(firstResult.status, 0, firstResult.stderr);
+    const firstResponse = JSON.parse(firstResult.stdout);
+    const firstConsumed = consumer.consumeSerialized(firstResult.stdout);
+    assert.deepEqual(firstConsumed.selectedFlowVersion, firstResponse.selectedFlowVersion);
+    assert.deepEqual(firstConsumed.availableFlowVersions, firstResponse.availableFlowVersions);
+    assert.deepEqual(firstConsumed.items, firstResponse.items);
+    assert.deepEqual(firstConsumed.pageInfo, firstResponse.pageInfo);
+    assert.equal(firstConsumed.pageInfo.limit, 1);
+    assert.equal(firstConsumed.pageInfo.hasNext, true);
+
+    const continuationResult = runQuery(fixture, {
+      ...request,
+      page: { limit: 1, after: firstResponse.pageInfo.endCursor },
+    });
+    assert.equal(continuationResult.status, 0, continuationResult.stderr);
+    const continuationResponse = JSON.parse(continuationResult.stdout);
+    const continuationConsumed = consumer.consumeSerialized(continuationResult.stdout);
+    assert.deepEqual(continuationConsumed.items, continuationResponse.items);
+    assert.deepEqual(continuationConsumed.pageInfo, continuationResponse.pageInfo);
+    assert.equal(continuationConsumed.items[0].confirmationOrder, firstConsumed.items[0].confirmationOrder + 1);
+
+    const fullResponse = JSON.parse(runQuery(fixture, {
+      resource: "activities",
+      condition: { specId: "001-query" },
+      page: { limit: 100, after: null },
+    }).stdout);
+    assert.equal(fullResponse.ok, true);
+    assert.equal(fullResponse.selectedFlowVersion.flowVersion, 1);
+    assert.deepEqual(fullResponse.availableFlowVersions, [1]);
+    const firstFinishedAt = fullResponse.items[0].timing.finishedAt;
+    const inclusiveResult = runQuery(fixture, {
+      resource: "activities",
+      condition: { specId: "001-query" },
+      recordedAt: { gte: firstFinishedAt, lt: null },
+    });
+    assert.equal(inclusiveResult.status, 0, inclusiveResult.stderr);
+    const inclusiveConsumed = consumer.consumeSerialized(inclusiveResult.stdout);
+    assert.equal(inclusiveConsumed.items[0].confirmationOrder, 1);
+
+    const exclusiveResult = runQuery(fixture, {
+      resource: "activities",
+      condition: { specId: "001-query" },
+      recordedAt: { gte: null, lt: firstFinishedAt },
+    });
+    assert.equal(exclusiveResult.status, 0, exclusiveResult.stderr);
+    const exclusiveConsumed = consumer.consumeSerialized(exclusiveResult.stdout);
+    assert.equal(exclusiveConsumed.items.some((item) => item.confirmationOrder === 1), false);
+
+    const zeroMatchResult = runQuery(fixture, {
+      resource: "activities",
+      condition: { specId: "001-query" },
+      recordedAt: { gte: new Date(Date.parse(firstFinishedAt) + 1).toISOString(), lt: null },
+    });
+    assert.equal(zeroMatchResult.status, 0, zeroMatchResult.stderr);
+    const zeroMatchConsumed = consumer.consumeSerialized(zeroMatchResult.stdout);
+    assert.deepEqual(zeroMatchConsumed.items, []);
+    assert.deepEqual(zeroMatchConsumed.pageInfo, JSON.parse(zeroMatchResult.stdout).pageInfo);
   });
 
   it("rejects a response revision the consumer does not support", () => {
@@ -514,6 +599,20 @@ describe("flow query", () => {
         pageInfo: { ...activities.pageInfo, limit: null },
       }),
       /pageInfo is invalid/,
+    );
+
+    assert.throws(
+      () => consumer.consume({
+        ...response,
+        item: {
+          ...response.item,
+          relationships: {
+            ...response.item.relationships,
+            issues: [{ number: 1, relationship: "tracks" }, { number: 2, relationship: "tracks" }],
+          },
+        },
+      }),
+      /zero or one issue/,
     );
   });
 
@@ -632,6 +731,9 @@ describe("flow query", () => {
       } else if (testCase.code === FLOW_QUERY_ERROR_CODES.FLOW_VERSION_NOT_FOUND) {
         assert.equal(response.selectedFlowVersion, null, testCase.name);
         assert.deepEqual(response.availableFlowVersions, [1], testCase.name);
+      } else if ([FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_UNREADABLE, FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT].includes(testCase.code)) {
+        assert.equal(response.selectedFlowVersion, null, testCase.name);
+        assert.deepEqual(response.availableFlowVersions, [], testCase.name);
       } else {
         assert.deepEqual(response.selectedFlowVersion, { specId: fixture.specId, flowVersion: 1 }, testCase.name);
         assert.deepEqual(response.availableFlowVersions, [1], testCase.name);
@@ -680,8 +782,8 @@ describe("flow query", () => {
     const mismatchResponse = JSON.parse(mismatch.stdout);
     assertKnownResourceError(mismatchResponse, "activities", FLOW_QUERY_ERROR_CODES.CURSOR_QUERY_MISMATCH, "/page/after", { pageLimit: 1 });
     assert.equal(consumer.consumeSerialized(mismatch.stdout).error.code, FLOW_QUERY_ERROR_CODES.CURSOR_QUERY_MISMATCH);
-    assert.deepEqual(mismatchResponse.selectedFlowVersion, { specId: fixture.specId, flowVersion: 1 });
-    assert.deepEqual(mismatchResponse.availableFlowVersions, [1]);
+    assert.equal(mismatchResponse.selectedFlowVersion, null);
+    assert.deepEqual(mismatchResponse.availableFlowVersions, []);
   });
 
   it("projects exact artifact descriptors and catalog Activity relations", () => {
@@ -803,6 +905,17 @@ describe("flow query", () => {
     assertKnownResourceError(JSON.parse(missingResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical");
     assert.deepEqual(missing.snapshot(), missingBefore);
 
+    const missingArtifact = contractFixture();
+    const artifactCatalog = JSON.parse(fs.readFileSync(missingArtifact.locations[1].catalogFile, "utf8"));
+    const catalogedArtifact = artifactCatalog.artifacts.find((artifact) => artifact.relativePath === "revisions/001/spec.json");
+    assert.ok(catalogedArtifact);
+    fs.unlinkSync(missingArtifact.locations[1].resolve(catalogedArtifact.relativePath));
+    const missingArtifactBefore = missingArtifact.snapshot();
+    const missingArtifactResult = runQuery(missingArtifact, missingArtifact.request());
+    assert.equal(missingArtifactResult.status, 1);
+    assertKnownResourceError(JSON.parse(missingArtifactResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical");
+    assert.deepEqual(missingArtifact.snapshot(), missingArtifactBefore);
+
     const catalog = contractFixture();
     const catalogValue = JSON.parse(fs.readFileSync(catalog.locations[1].catalogFile, "utf8"));
     catalogValue.schemaRevision = 1;
@@ -821,7 +934,10 @@ describe("flow query", () => {
     const identityBefore = identity.snapshot();
     const identityResult = runQuery(identity, identity.request());
     assert.equal(identityResult.status, 1);
-    assertKnownResourceError(JSON.parse(identityResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical");
+    const identityResponse = JSON.parse(identityResult.stdout);
+    assertKnownResourceError(identityResponse, "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical");
+    assert.equal(identityResponse.selectedFlowVersion, null);
+    assert.deepEqual(identityResponse.availableFlowVersions, []);
     assert.deepEqual(identity.snapshot(), identityBefore);
 
     const oversized = contractFixture();
@@ -866,6 +982,16 @@ describe("flow query", () => {
     assert.equal(versionsResult.status, 1);
     assertKnownResourceError(JSON.parse(versionsResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical");
     assert.deepEqual(versions.snapshot(), versionsBefore);
+
+    const symlinkVersion = contractFixture();
+    const symlinkVersionRoot = path.dirname(symlinkVersion.locations[1].directory);
+    fs.symlinkSync(symlinkVersion.locations[1].directory, path.join(symlinkVersionRoot, "2"), "dir");
+    const symlinkResult = runQuery(symlinkVersion, symlinkVersion.request());
+    assert.equal(symlinkResult.status, 1);
+    const symlinkResponse = JSON.parse(symlinkResult.stdout);
+    assertKnownResourceError(symlinkResponse, "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical");
+    assert.equal(symlinkResponse.selectedFlowVersion, null);
+    assert.deepEqual(symlinkResponse.availableFlowVersions, []);
 
     const ledger = contractFixture();
     fs.writeFileSync(

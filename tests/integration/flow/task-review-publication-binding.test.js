@@ -11,6 +11,7 @@ import { TaskReviewExecutionIdentity } from "../../../src/flow/lib/task-review-e
 import { ReviewWorkUnit, reconcileCompletedReviewWorkUnits } from "../../../src/flow/lib/review-work-unit.js";
 import { DefinitionLifecycleAttemptBinding } from "../../../src/flow/lib/definition-lifecycle-failure.js";
 import { TASK_REVIEW_ABORTED_WORK_UNIT_KEY } from "../../../src/flow/lib/task-review-aborted-work-unit.js";
+import { BroadModeLedgerEntry } from "../../../src/flow/lib/task-scope.js";
 import {
   formatImplReviewJson,
   parseImplReviewFindings,
@@ -291,20 +292,51 @@ test("retry reset retains a sealed source-integrity failure without inventing an
   }), null);
 });
 
-test("Task Review permits a metric-only canonical append before final publication", async (t) => {
+test("Task Review permits a telemetry canonical append before final publication", async (t) => {
   const scenario = scenarioFor(t);
   const result = await executeReview(scenario);
-  scenario.manager.incrementMetric("impl", "review", { specId: scenario.specId });
+  scenario.manager.incrementMetric("impl", "docsRead", { specId: scenario.specId });
   await FLOW_COMMANDS.run.review.post(scenario.context(), result);
   scenario.reload();
   assert.equal(scenario.state().current?.at(-1), "T-1-gate");
   assert.equal(taskReviewCatalog(scenario).length, 1);
 });
 
-test("Task Review refuses a legal non-metric canonical context append before publication", async (t) => {
+test("Task Review permits an ordinary note before final publication and preserves it after reload", async (t) => {
   const scenario = scenarioFor(t);
   const result = await executeReview(scenario);
-  scenario.manager.addNote("A later canonical context observation.", { specId: scenario.specId });
+  const note = "A later Task Review annotation that does not change its sealed work unit.";
+  scenario.manager.addNote(note, { specId: scenario.specId });
+  await FLOW_COMMANDS.run.review.post(scenario.context(), result);
+  scenario.reload();
+  assert.equal(scenario.state().current?.at(-1), "T-1-gate");
+  assert.equal(taskReviewCatalog(scenario).length, 1);
+  assert.ok(scenario.manager.load(scenario.specId).notes.some((entry) => entry.text === note));
+});
+
+test("Task Review refuses a control note before final publication", async (t) => {
+  const scenario = scenarioFor(t);
+  const result = await executeReview(scenario);
+  scenario.manager.addNote(new BroadModeLedgerEntry({
+    step: "implement",
+    reason: "This control note changes later task-scope admission.",
+    ts: "2026-09-12T00:00:00.000Z",
+  }).toActivityText(), { specId: scenario.specId });
+  const before = taskReviewCatalog(scenario);
+  await assert.rejects(
+    () => FLOW_COMMANDS.run.review.post(scenario.context(), result),
+    /canonical|publication|stage/i,
+  );
+  assert.equal(scenario.state().current?.at(-1), "T-1-review");
+  assert.deepEqual(taskReviewCatalog(scenario), before);
+});
+
+test("Task Review refuses a retry decision metric before final publication", async (t) => {
+  const scenario = scenarioFor(t);
+  const result = await executeReview(scenario);
+  scenario.manager.appendMetric({ phase: "impl", counter: "reviewRetry", delta: 1 }, {
+    specId: scenario.specId, taskId: null,
+  });
   const before = taskReviewCatalog(scenario);
   await assert.rejects(
     () => FLOW_COMMANDS.run.review.post(scenario.context(), result),

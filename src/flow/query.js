@@ -198,7 +198,7 @@ function canonicalJson(value, depth = 0) {
     return value;
   }
   if (Array.isArray(value)) return value.map((entry) => canonicalJson(entry, depth + 1));
-  const output = {};
+  const output = Object.create(null);
   for (const key of Object.keys(value).sort()) output[key] = canonicalJson(value[key], depth + 1);
   return output;
 }
@@ -307,8 +307,15 @@ function parseJson(bytes, label) {
 }
 
 function isCanonicalReadError(error) {
-  return ["EACCES", "EISDIR", "ENOENT", "ENOTDIR", "EPERM"].includes(error?.code)
-    || error?.message?.startsWith("Version authority path does not exist:");
+  const seen = new Set();
+  let current = error;
+  while (current !== null && typeof current === "object" && !seen.has(current)) {
+    if (["EACCES", "EISDIR", "ENOENT", "ENOTDIR", "EPERM"].includes(current.code)
+      || current.message?.startsWith("Version authority path does not exist:")) return true;
+    seen.add(current);
+    current = current.cause;
+  }
+  return false;
 }
 
 const FLOW_ACTIVITIES_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("flow.activities").relativePath;
@@ -414,7 +421,22 @@ function replayCanonicalState(state, activities) {
     } else if (activities.some((activity) => activity.transition.operation === "create_flow" || activity.type === "flow_created")) {
       throw new Error("historical Flow without creation authority cannot claim a create_flow Activity");
     }
-    return state;
+    if (state.history.resumed) {
+      const continuation = state.history.continuation;
+      const boundary = activities[continuation.confirmationOrder - 1] ?? null;
+      if (!boundary?.startsAttempt({
+        nodeId: continuation.nodeId,
+        id: continuation.attemptId,
+        sequence: continuation.attemptSequence,
+      })) {
+        throw new Error("historical continuation boundary does not match its Activity prefix");
+      }
+    }
+    // A dormant import with no confirmed ledger prefix has no replayable
+    // execution history. Once a historical record does claim confirmed
+    // Activities, however, validate that prefix through the same transition
+    // reducer and resulting-state comparison used by native Flows.
+    if (activities.length === 0) return state;
   }
   let replayed = CurrentFlowState.create({
     definition: state.definition,
@@ -438,7 +460,9 @@ function replayCanonicalState(state, activities) {
       .withConfirmationOrder(activity.confirmationOrder);
     priorActivities.push(activity);
   }
-  if (JSON.stringify(replayed.toJSON()) !== JSON.stringify(state.toJSON())) {
+  const expectedState = state.toJSON();
+  if (state.history !== null) expectedState.history = null;
+  if (JSON.stringify(replayed.toJSON()) !== JSON.stringify(expectedState)) {
     throw new Error("flow state content conflicts with its Activity prefix");
   }
   return state;
@@ -639,6 +663,12 @@ class MetadataItem {
     if (!["active", "parked", "finalized"].includes(value.lifecycle.lifecycle) || typeof value.lifecycle.blocked !== "boolean") throw new Error("MetadataItem.lifecycle has invalid values");
     validateBlocker(value.lifecycle.blocker, "MetadataItem.lifecycle.blocker");
     validateNextAction(value.lifecycle.nextAction);
+    const blockedByNextAction = value.lifecycle.nextAction?.operation === "blocked";
+    if (value.lifecycle.blocked !== blockedByNextAction
+      || (blockedByNextAction && (value.lifecycle.blocker === null || value.lifecycle.nextAction === null))
+      || (!blockedByNextAction && value.lifecycle.blocker !== null)) {
+      throw new Error("MetadataItem.lifecycle blocked fields are inconsistent");
+    }
     requireExactObject(value.location, ["phase", "stepId", "taskId", "git"], "MetadataItem.location");
     for (const field of ["phase", "stepId", "taskId"]) requirePublicString(value.location[field], `MetadataItem.location.${field}`, { nullable: true });
     requireExactObject(value.location.git, ["available", "commit"], "MetadataItem.location.git");
@@ -653,7 +683,7 @@ class MetadataItem {
     requireExactObject(value.relationships, ["stepTasks", "taskNodes", "issues"], "MetadataItem.relationships");
     validatePairList(value.relationships.stepTasks, "MetadataItem.relationships.stepTasks", "stepId", "taskId");
     validatePairList(value.relationships.taskNodes, "MetadataItem.relationships.taskNodes", "taskId", "nodeId");
-    if (!Array.isArray(value.relationships.issues) || value.relationships.issues.length > FLOW_QUERY_LIMITS.MAX_PUBLIC_COLLECTION_ITEMS) throw new Error("MetadataItem.relationships.issues is invalid");
+    if (!Array.isArray(value.relationships.issues) || value.relationships.issues.length > 1) throw new Error("MetadataItem.relationships.issues must contain zero or one issue");
     for (const issue of value.relationships.issues) {
       requireExactObject(issue, ["number", "relationship"], "MetadataItem.relationships.issue");
       if (!Number.isSafeInteger(issue.number) || issue.number < 1 || issue.relationship !== "tracks") throw new Error("MetadataItem.relationships.issue is invalid");
@@ -800,13 +830,54 @@ async function requireRealDirectory(directory, {
   message = "canonical directory could not be read",
   inconsistentMessage = "canonical directory is not a real directory",
 } = {}) {
+  let handle;
   try {
-    const stat = await fs.promises.lstat(directory);
+    handle = await fs.promises.open(
+      directory,
+      fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0) | (fs.constants.O_NOFOLLOW || 0),
+    );
+    const stat = await handle.stat();
     if (!stat.isDirectory() || stat.isSymbolicLink() || await fs.promises.realpath(directory) !== directory) {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, jsonPath, inconsistentMessage);
     }
   } catch (error) {
     if (error instanceof QueryError) throw error;
+    if (error?.code === "ELOOP") {
+      throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, jsonPath, inconsistentMessage, { cause: error });
+    }
+    throw new QueryError(code, jsonPath, message, { cause: error });
+  } finally {
+    if (handle !== undefined) await handle.close();
+  }
+}
+
+async function openRealDirectory(directory, {
+  code = ERROR_CODES.CANONICAL_RECORD_UNREADABLE,
+  missingCode = null,
+  jsonPath = "/canonical",
+  message = "canonical directory could not be read",
+  inconsistentMessage = "canonical directory is not a real directory",
+} = {}) {
+  let handle;
+  try {
+    handle = await fs.promises.open(
+      directory,
+      fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0) | (fs.constants.O_NOFOLLOW || 0),
+    );
+    const stat = await handle.stat();
+    if (!stat.isDirectory() || stat.isSymbolicLink() || await fs.promises.realpath(directory) !== directory) {
+      throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, jsonPath, inconsistentMessage);
+    }
+    return handle;
+  } catch (error) {
+    if (handle !== undefined) await handle.close();
+    if (error instanceof QueryError) throw error;
+    if (error?.code === "ELOOP") {
+      throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, jsonPath, inconsistentMessage, { cause: error });
+    }
+    if (missingCode !== null && ["ENOENT", "ENOTDIR"].includes(error?.code)) {
+      throw new QueryError(missingCode, jsonPath, message, { cause: error });
+    }
     throw new QueryError(code, jsonPath, message, { cause: error });
   }
 }
@@ -833,19 +904,19 @@ class CanonicalFlowVersionReader {
 
   async readVersionDirectoryEntries(specId) {
     const directory = this.specDirectory(specId);
-    await requireRealDirectory(directory, {
-      code: ERROR_CODES.SPEC_NOT_FOUND,
-      jsonPath: "/condition/specId",
-      message: "requested Spec was not found",
-      inconsistentMessage: "canonical Spec directory is not a real directory",
-    });
-
     const entries = [];
     let enumeratedEntries = 0;
     let directoryHandle;
     try {
-      directoryHandle = await fs.promises.opendir(directory);
-      for await (const entry of directoryHandle) {
+      directoryHandle = await openRealDirectory(directory, {
+        code: ERROR_CODES.CANONICAL_RECORD_UNREADABLE,
+        missingCode: ERROR_CODES.SPEC_NOT_FOUND,
+        jsonPath: "/condition/specId",
+        message: "requested Spec was not found",
+        inconsistentMessage: "canonical Spec directory is not a real directory",
+      });
+      const directoryEntries = await fs.promises.readdir(`/proc/self/fd/${directoryHandle.fd}`, { withFileTypes: true });
+      for (const entry of directoryEntries) {
         enumeratedEntries += 1;
         if (enumeratedEntries > FLOW_QUERY_LIMITS.MAX_AVAILABLE_FLOW_VERSIONS) {
           throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "available Version directory entries exceed the limit");
@@ -863,6 +934,8 @@ class CanonicalFlowVersionReader {
     } catch (error) {
       if (error instanceof QueryError) throw error;
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical", "canonical Version directory could not be read", { cause: error });
+    } finally {
+      if (directoryHandle !== undefined) await directoryHandle.close();
     }
     return Object.freeze(entries);
   }
@@ -1414,6 +1487,7 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
   let requestedResource = null;
   let reader = null;
   let available = [];
+  let selectionEstablished = false;
   try {
     if (prepared?.error) {
       requestedResource = prepared.requestedResource ?? null;
@@ -1431,6 +1505,7 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
     if (available.length === 0) throw new QueryError(ERROR_CODES.SPEC_NOT_FOUND, "/condition/specId", "requested Spec was not found");
     if (!available.includes(request.flowVersion)) throw new QueryError(ERROR_CODES.FLOW_VERSION_NOT_FOUND, "/condition/flowVersion", "requested Flow Version was not found");
     const version = await reader.open(request.specId, request.flowVersion);
+    selectionEstablished = true;
     const response = await new QueryProjector(reader).project(request, version);
     const output = `${JSON.stringify(response)}\n`;
     if (Buffer.byteLength(output, "utf8") > FLOW_QUERY_LIMITS.MAX_RESPONSE_BYTES) throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "query response exceeds the maximum size");
@@ -1440,12 +1515,15 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
     const error = publicError(cause);
     let response;
     if (request instanceof QueryRequest) {
-      const selectionUnavailable = [
-        ERROR_CODES.SPEC_NOT_FOUND,
-        ERROR_CODES.FLOW_VERSION_NOT_FOUND,
-        ERROR_CODES.INVALID_CURSOR,
-      ].includes(error.code);
-      response = knownResourceError({ resource: request.resource, pageLimit: request.page?.limit ?? null }, error.code, error.jsonPath, error.message, selectionUnavailable ? [] : available, selectionUnavailable ? null : new SelectedFlowVersion(request.specId, request.flowVersion).toJSON());
+      const versionDiscovered = error.code === ERROR_CODES.FLOW_VERSION_NOT_FOUND;
+      response = knownResourceError(
+        { resource: request.resource, pageLimit: request.page?.limit ?? null },
+        error.code,
+        error.jsonPath,
+        error.message,
+        selectionEstablished || versionDiscovered ? available : [],
+        selectionEstablished ? new SelectedFlowVersion(request.specId, request.flowVersion).toJSON() : null,
+      );
     } else if (["metadata", "activities"].includes(requestedResource)) {
       response = knownResourceError({ resource: requestedResource }, error.code, error.jsonPath, error.message);
     } else {

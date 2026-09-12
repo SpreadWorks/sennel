@@ -35,6 +35,7 @@ import RunReviewCommand, {
   TaskReviewCanonicalObservationBoundary,
   taskReviewRecoveryIgnoredDirectories,
 } from "../../../src/flow/lib/run-review.js";
+import { BroadModeLedgerEntry } from "../../../src/flow/lib/task-scope.js";
 import GetStatusCommand from "../../../src/flow/lib/get-status.js";
 import FlowReviewCommand from "../../../src/flow/commands/review.js";
 import {
@@ -8450,7 +8451,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.deepEqual(reloaded.taskMutationLineages({ specId, taskId: "T-1" }).map((entry) => entry.toJSON()), before);
   });
 
-  it("permits only an append-only metric settlement in Task Review canonical metadata", () => {
+  it("permits append-only non-decision observations in Task Review canonical metadata", () => {
     const repository = root();
     const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     const specId = "001-task-review-canonical-observation";
@@ -8458,16 +8459,48 @@ describe("FlowManager canonical Version-1 runtime", () => {
     manager.addActiveFlow(created.specId, "direct");
 
     const metricBoundary = TaskReviewCanonicalObservationBoundary.capture({ flowManager: manager, specId });
-    manager.appendMetric({ phase: "impl", counter: "taskReview", delta: 1 }, { specId, taskId: null });
-    assert.doesNotThrow(() => metricBoundary.assertMetricSettlementOnly());
+    manager.appendMetric({ phase: "impl", counter: "docsRead", delta: 1 }, { specId, taskId: null });
+    assert.doesNotThrow(() => metricBoundary.assertNonDecisionObservationSettlementOnly());
 
-    const providerMutationBoundary = TaskReviewCanonicalObservationBoundary.capture({ flowManager: manager, specId });
-    manager.addNote("a Task Review provider must not mutate canonical state", { specId });
-    assert.throws(
-      () => providerMutationBoundary.assertMetricSettlementOnly(),
-      (error) => error.code === "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID"
-        && /record_metric Activities/.test(error.message),
-    );
+    const note = "A Task Review annotation that does not change its sealed work unit.";
+    const noteBoundary = TaskReviewCanonicalObservationBoundary.capture({ flowManager: manager, specId });
+    manager.addNote(note, { specId });
+    assert.doesNotThrow(() => noteBoundary.assertNonDecisionObservationSettlementOnly());
+    const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false, specId });
+    assert.ok(reloaded.load().notes.some((entry) => entry.text === note));
+
+    for (const text of [
+      new BroadModeLedgerEntry({
+        step: "implement",
+        reason: "This control note changes later task-scope admission.",
+        ts: "2026-09-12T00:00:00.000Z",
+      }).toActivityText(),
+      "sennel.broad-mode.v1:{",
+    ]) {
+      const controlNoteBoundary = TaskReviewCanonicalObservationBoundary.capture({ flowManager: manager, specId });
+      manager.addNote(text, { specId });
+      assert.throws(
+        () => controlNoteBoundary.assertNonDecisionObservationSettlementOnly(),
+        (error) => error.code === "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID"
+          && /non-decision observations/.test(error.message),
+      );
+    }
+
+    for (const payload of [
+      { phase: "impl", counter: "question", delta: 1 },
+      { phase: "impl", counter: "reviewRetry", delta: 1 },
+      { phase: "impl", counter: "gateRetry", delta: 1 },
+      { phase: "impl", counter: "unknown", delta: 1 },
+      { phase: "impl", counter: "docsRead", kind: "agent", delta: 1 },
+      { phase: "impl", kind: "unknown", callCount: 1 },
+    ]) {
+      const decisionMetricBoundary = TaskReviewCanonicalObservationBoundary.capture({ flowManager: manager, specId });
+      manager.appendMetric(payload, { specId, taskId: null });
+      assert.throws(
+        () => decisionMetricBoundary.assertNonDecisionObservationSettlementOnly(),
+        (error) => error.code === "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
+      );
+    }
   });
 
   it("rejects stale projected Task Review scope before creating a worker", async () => {

@@ -35,6 +35,7 @@ import {
   TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION,
   TaskGateClassificationRecoveryIdentity,
 } from "./task-gate-classification-recovery.js";
+import { BroadModeLedgerEntry } from "./activity-note-semantics.js";
 import {
   TaskReviewStageTransitionPlan,
   taskReviewStagePlanFromJSON,
@@ -5954,6 +5955,34 @@ export class ActivityMetric {
     };
   }
 
+  /**
+   * True only for the telemetry contracts that cannot alter a worker's
+   * captured inputs, retry route, or completion decision.  New metric kinds
+   * and counter shapes intentionally default to false until their consumer
+   * contract has been reviewed.
+   */
+  isNonDecisionTelemetry() {
+    if (this.counter !== null) {
+      return ["docsRead", "srcRead"].includes(this.counter)
+        && this.kind === null
+        && this.delta !== null
+        && !this.reset
+        && this.provider === null
+        && this.profileKey === null
+        && this.callCount === null
+        && this.responseChars === null
+        && this.durationMs === null
+        && this.model === null
+        && this.tokens === null
+        && this.cost === null
+        && !this.cachedResponse
+        && !this.costIncomplete;
+    }
+    if (this.delta !== null || this.reset) return false;
+    return (this.kind === "agent" && this.callCount === 1 && !this.cachedResponse)
+      || (this.kind === "agent-cache" && this.callCount === 0 && this.cachedResponse);
+  }
+
   /** Rehydrate the historical command-view shape from its canonical ledger value. */
   toMetricEntry({ taskId, timestamp }) {
     return {
@@ -5986,6 +6015,11 @@ export class ActivityNote {
   }
 
   toJSON() { return { text: this.text }; }
+
+  /** True only for note encodings that later participate in Flow control. */
+  isDecisionAffecting() {
+    return BroadModeLedgerEntry.isEncodedActivityNote(this);
+  }
 
   toNoteEntry({ taskId, timestamp }) {
     return { text: this.text, taskId, ts: timestamp };
@@ -6805,6 +6839,17 @@ export class FlowActivity {
     return ATTEMPT_INTRODUCTION_OPERATIONS.has(this.transition.operation)
       && attempt?.nodeId === nodeId && attempt.id === id && attempt.sequence === sequence
       && (this.nodeId === nodeId || this.transition.taskReviewStagePlan?.targetStepId === nodeId);
+  }
+
+  /**
+   * Telemetry can advance the ledger across a sealed worker boundary without
+   * changing its captured inputs or completion decision. Control-note
+   * encodings remain deliberately excluded even though they share the note
+   * Activity transport.
+   */
+  isNonDecisionObservation() {
+    return (this.transition.operation === "record_metric" && this.metric.isNonDecisionTelemetry())
+      || (this.transition.operation === "record_note" && !this.note.isDecisionAffecting());
   }
 
   static canonical(value) {

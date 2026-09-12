@@ -45,7 +45,7 @@ function canonicalSpecFromView(view) {
 /**
  * Parent-owned Task Review identity retained from execution until the catalog
  * transaction.  It binds the exact child Attempt, source baseline, and the
- * metric-only canonical observation that may occur while that child runs.
+ * non-decision canonical observation that may occur while that child runs.
  */
 export class TaskReviewPublicationBinding {
   constructor({ executionIdentity, source, context, specDigest, baseline, manifest, canonicalObservation } = {}) {
