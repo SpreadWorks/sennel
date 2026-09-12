@@ -89,6 +89,40 @@ describe("init CLI", () => {
     assert.deepEqual(files.sort(), ["overview.md", "project_structure.md", "stack_and_ops.md"]);
   });
 
+  it("publishes no translated template when its provider batch fails", () => {
+    tmp = createTmpDir();
+    writeJson(tmp, ".sennel/config.json", {
+      lang: "fr",
+      type: "sample-preset",
+      chapters: [{ chapter: "overview.md" }],
+      docs: { languages: ["fr"], defaultLanguage: "fr" },
+      agent: {
+        default: "failing",
+        providers: {
+          failing: {
+            command: "node",
+            args: ["-e", "process.stderr.write('translation failed');process.exit(1)", "{{PROMPT}}"],
+          },
+        },
+      },
+    });
+    writeJson(tmp, "package.json", { name: "test-proj" });
+    const docsDir = join(tmp, "docs");
+    fs.mkdirSync(docsDir, { recursive: true });
+    fs.writeFileSync(join(docsDir, "overview.md"), "existing chapter\n", "utf8");
+
+    assert.throws(() => execFileSync("node", [CMD, ...CMD_ARGS, "--type", "sample-preset", "--force"], {
+      encoding: "utf8",
+      env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
+    }), (error) => {
+      assert.notEqual(error.status, 0);
+      assert.match(error.stderr, /translation failed/);
+      return true;
+    });
+
+    assert.equal(fs.readFileSync(join(docsDir, "overview.md"), "utf8"), "existing chapter\n");
+  });
+
   it("generates all sample-preset chapters with single lang en (en templates exist)", () => {
     tmp = createTmpDir();
     writeJson(tmp, ".sennel/config.json", {

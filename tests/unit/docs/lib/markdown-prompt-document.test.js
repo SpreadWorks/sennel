@@ -319,6 +319,7 @@ describe("Markdown protected translation boundaries", () => {
   it("keeps inline directives byte-identical in otherwise translatable blocks", () => {
     const source = '# <!-- {{data("base.project.name")}} -->Project<!-- {{/data}} -->\n';
     const element = new MarkdownPromptDocument({ id: "inline", content: source }).elements[0];
+    assert.equal(element.isPartitionable(), false);
     assert.doesNotThrow(() => new MarkdownBlockTranslationResult({
       element,
       text: '# <!-- {{data("base.project.name")}} -->プロジェクト<!-- {{/data}} -->\n',
@@ -351,5 +352,46 @@ describe("Markdown protected translation boundaries", () => {
       }),
       (error) => error.code === "PROMPT_RESPONSE_INVALID",
     );
+  });
+
+  it("keeps multiline setext headings in one indivisible heading block", () => {
+    const source = "First heading line\nSecond heading line\n===================\n\nParagraph.\n";
+    const document = new MarkdownPromptDocument({ id: "setext", content: source });
+    const heading = document.elements[0];
+
+    assert.equal(heading.blockKind, "heading");
+    assert.equal(heading.text, "First heading line\nSecond heading line\n===================\n");
+    assert.equal(heading.isPartitionable(), false);
+    assert.doesNotThrow(() => new MarkdownBlockTranslationResult({
+      element: heading,
+      text: "見出しの1行目\n見出しの2行目\n===================\n",
+    }));
+    assert.throws(() => new MarkdownBlockTranslationResult({
+      element: heading,
+      text: "見出しの1行目\n見出しの2行目\n-------------------\n",
+    }), (error) => error.code === "PROMPT_RESPONSE_INVALID");
+  });
+
+  it("rejects heading responses that add or remove structural lines", () => {
+    const atx = new MarkdownPromptDocument({ id: "atx-boundary", content: "# Heading\n" }).elements[0];
+    assert.throws(() => new MarkdownBlockTranslationResult({
+      element: atx,
+      text: "# 見出し\n追加された行\n",
+    }), (error) => error.code === "PROMPT_RESPONSE_INVALID");
+
+    const setext = new MarkdownPromptDocument({ id: "setext-boundary", content: "Heading\n=======\n" }).elements[0];
+    assert.throws(() => new MarkdownBlockTranslationResult({
+      element: setext,
+      text: "見出し\n追加された行\n=======\n",
+    }), (error) => error.code === "PROMPT_RESPONSE_INVALID");
+
+    const multilineSetext = new MarkdownPromptDocument({
+      id: "multiline-setext-boundary",
+      content: "First line\nSecond line\n=======\n",
+    }).elements[0];
+    assert.throws(() => new MarkdownBlockTranslationResult({
+      element: multilineSetext,
+      text: "最初の行\n```js\n=======\n",
+    }), (error) => error.code === "PROMPT_RESPONSE_INVALID");
   });
 });

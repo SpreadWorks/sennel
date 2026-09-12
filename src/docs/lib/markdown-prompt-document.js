@@ -19,6 +19,8 @@ import { MarkdownBlockPromptElement, documentationSourceRevision } from "./promp
 
 const DIRECTIVE_RE = /^(?:\{\{|\{%)/;
 const HEADING_RE = /^(\s{0,3}#{1,6})(?:\s+|$)/;
+const SETEXT_HEADING_RE = /^\s{0,3}(?:=+|-+)[ \t]*$/;
+const SETEXT_HEADING_TEXT_RE = /^ {0,3}\S.*$/;
 const QUOTE_PREFIX_RE = /^\s{0,3}>[ \t]?/;
 const LIST_PREFIX_RE = /^\s{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/;
 const TABLE_SEPARATOR_RE = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
@@ -37,10 +39,47 @@ function linesWithEndings(text) {
   return text.match(/[^\n]*(?:\n|$)/g).filter((line) => line !== "");
 }
 
+function lineWithoutEnding(line) {
+  return line.replace(/\r?\n$/, "");
+}
+
 function isTableStart(lines, index) {
   return index + 1 < lines.length
     && lines[index].includes("|")
-    && TABLE_SEPARATOR_RE.test(lines[index + 1].replace(/\n$/, ""));
+    && TABLE_SEPARATOR_RE.test(lineWithoutEnding(lines[index + 1]));
+}
+
+function setextHeadingEnd(lines, index, listContext) {
+  if (index + 1 >= lines.length) return null;
+  const firstLine = lineWithoutEnding(lines[index]);
+  if (!SETEXT_HEADING_TEXT_RE.test(firstLine)
+    || SETEXT_HEADING_RE.test(firstLine)
+    || QUOTE_PREFIX_RE.test(firstLine)
+    || LIST_PREFIX_RE.test(firstLine)) return null;
+  for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+    const line = lineWithoutEnding(lines[cursor]);
+    if (SETEXT_HEADING_RE.test(line)) return cursor + 1;
+    if (!SETEXT_HEADING_TEXT_RE.test(line)
+      || QUOTE_PREFIX_RE.test(line)
+      || LIST_PREFIX_RE.test(line)
+      || MarkdownFence.opening(line, listContext)
+      || HEADING_RE.test(line)
+      || isTableStart(lines, cursor)) return null;
+    const comment = extractCommentBlock(line, lines, cursor);
+    if (comment && DIRECTIVE_RE.test(comment.content)) return null;
+  }
+  return null;
+}
+
+function isSetextHeadingBodyLine(lines, index, listContext) {
+  const line = lineWithoutEnding(lines[index]);
+  return SETEXT_HEADING_TEXT_RE.test(line)
+    && !SETEXT_HEADING_RE.test(line)
+    && !QUOTE_PREFIX_RE.test(line)
+    && !LIST_PREFIX_RE.test(line)
+    && !MarkdownFence.opening(line, listContext)
+    && !HEADING_RE.test(line)
+    && !isTableStart(lines, index);
 }
 
 class MarkdownQuoteFencePrefix {
@@ -243,12 +282,12 @@ class MarkdownFence {
 }
 
 function classify(lines, index, listContext) {
-  const line = lines[index].replace(/\n$/, "");
+  const line = lineWithoutEnding(lines[index]);
   const opening = MarkdownFence.opening(line, listContext);
   if (opening) return opening.isMermaid() ? "mermaid-fence" : "code-fence";
   const comment = extractCommentBlock(line, lines, index);
   if (comment && DIRECTIVE_RE.test(comment.content)) return "directive";
-  if (HEADING_RE.test(line)) return "heading";
+  if (HEADING_RE.test(line) || setextHeadingEnd(lines, index, listContext) !== null) return "heading";
   if (isTableStart(lines, index)) return "table";
   if (line.trim() === "") return "blank";
   return "paragraph";
@@ -256,11 +295,11 @@ function classify(lines, index, listContext) {
 
 function consumeBlock(lines, index, kind, listContext) {
   if (kind === "code-fence" || kind === "mermaid-fence") {
-    const opening = MarkdownFence.opening(lines[index].replace(/\n$/, ""), listContext);
+    const opening = MarkdownFence.opening(lineWithoutEnding(lines[index]), listContext);
     let end = index + 1;
     while (end < lines.length) {
-      if (opening.matchesClosing(lines[end].replace(/\n$/, ""))) return end + 1;
-      if (!opening.continues(lines[end].replace(/\n$/, ""))) return end;
+      if (opening.matchesClosing(lineWithoutEnding(lines[end]))) return end + 1;
+      if (!opening.continues(lineWithoutEnding(lines[end]))) return end;
       end += 1;
     }
     return lines.length;
@@ -276,6 +315,7 @@ function consumeBlock(lines, index, kind, listContext) {
     while (end < lines.length && lines[end].trim() === "") end += 1;
     return end;
   }
+  if (kind === "heading") return setextHeadingEnd(lines, index, listContext) ?? index + 1;
   if (kind !== "paragraph") return index + 1;
   let paragraphContext = MarkdownListFenceContext.advance(listContext, [lines[index]]);
   let end = index + 1;
@@ -313,7 +353,10 @@ export class MarkdownPromptDocument {
       const text = lines.slice(index, end).join("");
       const blockKind = this.template && kind === "directive" ? "template-directive" : kind;
       const protectedBlock = kind === "code-fence" || (kind === "directive" && !this.template) || kind === "blank";
-      const partitionable = kind === "paragraph";
+      // A paragraph containing an inline directive cannot be split safely:
+      // a range cut through its HTML comment would turn a protected token
+      // into two ordinary prose fragments.
+      const partitionable = kind === "paragraph" && directiveComments(text).length === 0;
       elements.push(new MarkdownBlockPromptElement({
         id: `${this.id}:block:${sequence}`,
         originId: `${this.id}:block:${sequence}`,
@@ -389,6 +432,40 @@ function validateMermaidFence(before, after, elementId) {
   }
 }
 
+function validateHeadingBoundary(before, after, elementId) {
+  const beforeLines = linesWithEndings(before);
+  const afterLines = linesWithEndings(after);
+  if (beforeLines.length !== afterLines.length) {
+    throw new PromptResponseInvalidFailure(`Markdown heading line boundary changed: ${elementId}`, { elementId });
+  }
+
+  const beforeAtx = lineWithoutEnding(beforeLines[0]).match(HEADING_RE);
+  const afterAtx = lineWithoutEnding(afterLines[0]).match(HEADING_RE);
+  if (beforeAtx || afterAtx) {
+    if (!beforeAtx || !afterAtx || beforeAtx[1] !== afterAtx[1]) {
+      throw new PromptResponseInvalidFailure(`Markdown heading boundary changed: ${elementId}`, { elementId });
+    }
+    return;
+  }
+
+  const beforeUnderline = lineWithoutEnding(beforeLines.at(-1));
+  const afterUnderline = lineWithoutEnding(afterLines.at(-1));
+  if (!SETEXT_HEADING_RE.test(beforeUnderline)
+    || beforeUnderline !== afterUnderline
+    || !SETEXT_HEADING_RE.test(afterUnderline)) {
+    throw new PromptResponseInvalidFailure(`Markdown heading boundary changed: ${elementId}`, { elementId });
+  }
+  for (let index = 0; index < afterLines.length - 1; index += 1) {
+    if (!isSetextHeadingBodyLine(afterLines, index, null)) {
+      throw new PromptResponseInvalidFailure(`Markdown setext heading structure changed: ${elementId}`, { elementId });
+    }
+    const comment = extractCommentBlock(afterLines[index], afterLines, index);
+    if (comment && DIRECTIVE_RE.test(comment.content)) {
+      throw new PromptResponseInvalidFailure(`Markdown heading directive boundary changed: ${elementId}`, { elementId });
+    }
+  }
+}
+
 export class MarkdownBlockTranslationResult {
   constructor({ element, text } = {}) {
     if (!(element instanceof MarkdownBlockPromptElement)) throw new TypeError("Markdown translation result requires its source element");
@@ -409,18 +486,15 @@ export class MarkdownBlockTranslationResult {
         throw new PromptResponseInvalidFailure(`Inline Markdown directive changed: ${element.id}`, { elementId: element.id });
       }
     }
-    if (element.blockKind === "heading") {
-      const before = element.text.match(HEADING_RE)?.[1];
-      const after = text.match(HEADING_RE)?.[1];
-      if (!before || before !== after) throw new PromptResponseInvalidFailure(`Markdown heading boundary changed: ${element.id}`, { elementId: element.id });
-    }
+    if (element.blockKind === "heading") validateHeadingBoundary(element.text, text, element.id);
     if (element.blockKind === "table") {
       const before = element.text.split("\n");
       const after = text.split("\n");
       if (before.length !== after.length || after.some((line, index) => (line.match(/\|/g) || []).length !== (before[index].match(/\|/g) || []).length)) {
         throw new PromptResponseInvalidFailure(`Markdown table structure changed: ${element.id}`, { elementId: element.id });
       }
-      if (before.some((line, index) => TABLE_SEPARATOR_RE.test(line) && line !== after[index])) {
+      if (before.some((line, index) => TABLE_SEPARATOR_RE.test(lineWithoutEnding(line))
+        && lineWithoutEnding(line) !== lineWithoutEnding(after[index]))) {
         throw new PromptResponseInvalidFailure(`Markdown table separator changed: ${element.id}`, { elementId: element.id });
       }
     }

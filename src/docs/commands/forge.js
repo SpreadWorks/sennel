@@ -19,14 +19,12 @@ import { populateFromAnalysis } from "./data.js";
 import { textFillFromAnalysis } from "./text.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { PKG_DIR, parseArgs } from "../../lib/cli.js";
-import { resolveConcurrency, resolveWorkDir } from "../../lib/config.js";
+import { resolveConcurrency, resolvePromptCharacterLimit, resolveWorkDir } from "../../lib/config.js";
 import { Command } from "../../lib/command.js";
 import { loadFullAnalysis, loadAnalysisData, getChapterFiles, readText } from "../lib/command-context.js";
 import { createResolver } from "../lib/resolver-factory.js";
 import { container } from "../../lib/container.js";
 import { translate } from "../../lib/i18n.js";
-import { PromptBuilder } from "../../lib/prompt-builder.js";
-import { DocumentationAgent } from "../lib/documentation-agent.js";
 import { EXIT_ERROR } from "../../lib/constants.js";
 import { loadSpecJson, specJsonToPromptText } from "../../lib/spec-json.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
@@ -41,6 +39,7 @@ import {
   summarizeReview,
   parseFileResults,
 } from "../lib/review-parser.js";
+import { executeForgeAgentPrompt } from "../lib/documentation-forge-batching.js";
 
 const DEFAULT_WAIT_LOG_SEC = 1;
 const DEFAULT_MAX_RUNS = 3;
@@ -138,7 +137,7 @@ function runCommand(cmdString, cwd) {
  * Thin wrapper around callAgentAsync that adds forge-specific UI:
  * label logging and a progress ticker.
  */
-async function invokeAgent(agent, prompt, { systemPrompt, verbose, label }) {
+async function invokeAgent(agent, prompt, { systemPrompt, verbose, label, maxCharacters }) {
   const displayLabel = label || "agent";
   console.log(`[agent] ${displayLabel} started`);
 
@@ -146,15 +145,12 @@ async function invokeAgent(agent, prompt, { systemPrompt, verbose, label }) {
     ? setInterval(() => process.stderr.write("."), DEFAULT_WAIT_LOG_SEC * 1000)
     : null;
 
-  const pb = new PromptBuilder();
-  if (systemPrompt) pb.setRole(systemPrompt);
-  pb.addUserPrompt("## Content", prompt);
-  const built = pb.build();
-
   try {
-    return await DocumentationAgent.from(agent).call(built.userPrompt, {
-      commandId: "docs.forge",
-      systemPrompt: built.systemPrompt,
+    return await executeForgeAgentPrompt({
+      agent,
+      prompt,
+      systemPrompt,
+      maxCharacters,
       onStdout: verbose ? (chunk) => process.stderr.write(chunk) : undefined,
       onStderr: verbose ? (chunk) => process.stderr.write(chunk) : undefined,
     });
@@ -190,7 +186,7 @@ export function materializeForgeInputReference(root, config, input) {
  * Run agent for each file with concurrency control.
  * Returns an array of { file, ok, error? } results.
  */
-async function runPerFile({ agent, targetFiles, systemPrompt, inputReference, round, maxRuns, concurrency, verbose }) {
+async function runPerFile({ agent, targetFiles, systemPrompt, inputReference, round, maxRuns, concurrency, verbose, maxCharacters }) {
   const raw = await mapWithConcurrency(targetFiles, concurrency, async (file) => {
     const filePrompt = buildForgeFilePrompt({
       targetFile: file,
@@ -205,6 +201,7 @@ async function runPerFile({ agent, targetFiles, systemPrompt, inputReference, ro
       label: `forge:${path.basename(file)}`,
       verbose,
       systemPrompt,
+      maxCharacters,
     });
 
     console.log(`[forge] done: ${file}`);
@@ -313,6 +310,7 @@ async function runForge(rawArgs, container) {
   }
 
   const concurrency = resolveConcurrency(config);
+  const promptCharacterLimit = resolvePromptCharacterLimit(config);
 
   // Spec-based file estimation: narrow target files if spec is provided
   const allTargetFiles = getTargetFiles(root, type, config.chapters);
@@ -374,6 +372,7 @@ async function runForge(rawArgs, container) {
             maxRuns: effectiveMaxRuns,
             concurrency,
             verbose: cli.verbose,
+            maxCharacters: promptCharacterLimit,
           });
 
           const succeeded = results.filter((r) => r.ok).length;
@@ -395,6 +394,7 @@ async function runForge(rawArgs, container) {
             await invokeAgent(agent, prompt, {
               label: "forge.generate",
               verbose: cli.verbose,
+              maxCharacters: promptCharacterLimit,
             });
             usedAgent = true;
           } catch (e) {

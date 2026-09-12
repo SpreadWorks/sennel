@@ -8,6 +8,7 @@ import {
   resolveTemplates,
   mergeResolved,
   resolveChaptersOrder,
+  translateTemplate,
 } from "../../../../src/docs/lib/template-merger.js";
 import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../../../support/builders/tmp-dir.js";
 
@@ -61,6 +62,18 @@ function withPluginPresets(presets, { type = presets[0]?.key } = {}) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = path.resolve(__dirname, "../../../../src");
 const PRESETS_DIR = path.join(SRC_DIR, "presets");
+
+describe("translateTemplate", () => {
+  it("fails closed when a bounded translation response is invalid", async () => {
+    await assert.rejects(
+      translateTemplate("# Heading\n", "en", "ja", {
+        async call() { return "not-json"; },
+      }, "project", { maxCharacters: 4000 }),
+      (error) => error.code === "PROMPT_BATCH_EXECUTION_INCOMPLETE"
+        && error.details.causeCode === "PROMPT_RESPONSE_INVALID",
+    );
+  });
+});
 
 // ---------------------------------------------------------------------------
 // buildLayers

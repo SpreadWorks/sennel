@@ -419,21 +419,16 @@ export function resolveChaptersOrder(presetKeys, configChapters, projectRoot) {
  * @returns {string}
  */
 export async function translateTemplate(content, fromLang, toLang, agent, root, { maxCharacters } = {}) {
-  try {
-    return await translateMarkdownWithBatches({
-      content,
-      documentId: `template:${fromLang}:${toLang}:${root || "project"}`,
-      fromLang,
-      toLang,
-      agent,
-      commandId: "docs.init",
-      template: true,
-      maxCharacters,
-    });
-  } catch (err) {
-    process.stderr.write(`[sennel] template translation failed: ${err.message}\n`);
-    return content;
-  }
+  return translateMarkdownWithBatches({
+    content,
+    documentId: `template:${fromLang}:${toLang}:${root || "project"}`,
+    fromLang,
+    toLang,
+    agent,
+    commandId: "docs.init",
+    template: true,
+    maxCharacters,
+  });
 }
 
 // ---------------------------------------------------------------------------
