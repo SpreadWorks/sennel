@@ -2,7 +2,7 @@
 /**
  * src/flow.js
  *
- * Flow dispatcher. Top-level command routing (prepare / resume / get /
+ * Flow dispatcher. Top-level command routing (query / prepare / resume / get /
  * set / run) feeds the shared dispatcher (src/lib/dispatcher.js), which handles
  * argument parsing, lifecycle hooks, and envelope output uniformly across
  * every domain.
@@ -15,6 +15,10 @@ import { coreCommandRegistry } from "./lib/command-registry.js";
 import { dispatch } from "./lib/dispatcher.js";
 
 const args = process.argv.slice(2);
+if (args[0] === "query") {
+  const { bootstrapFlowQueryCli } = await import("./flow/query.js");
+  process.exit(await bootstrapFlowQueryCli(args.slice(1)));
+}
 initContainer({
   flowAttribution: args[0] === "run" && args[1] === "abort" ? "none" : "ambient",
 });

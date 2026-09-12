@@ -90,6 +90,21 @@ const FLOW_STATE_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("flow.state").r
 const FLOW_ACTIVITIES_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("flow.activities").relativePath;
 const SPEC_RECORD_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("spec.record").relativePath;
 const ARTIFACT_CATALOG_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("artifact.catalog").relativePath;
+const CATALOG_SERIALIZED_FIELDS = new Set(["schemaRevision", "artifacts", "hash"]);
+const CATALOG_DESCRIPTOR_SERIALIZED_FIELDS = new Set([
+  "logicalKey", "kind", "relativePath", "hash", "size", "mediaType", "authority",
+  "cardinality", "memberId", "publicationStep", "retention", "activityId",
+  "migrationMaterialization",
+]);
+const DEFAULT_CATALOG_SNAPSHOT_LIMITS = Object.freeze({
+  maxAttempts: 3,
+  maxCatalogBytes: 16 * 1024 * 1024,
+  maxArtifacts: 10_000,
+  maxManagedEntries: 10_000,
+  maxArtifactBytes: 16 * 1024 * 1024,
+  maxConfirmedLedgerBytes: 32 * 1024 * 1024,
+  maxTotalArtifactBytes: 64 * 1024 * 1024,
+});
 
 function artifactCatalogLockError(status, message, { lockPath, cause } = {}) {
   const error = new Error(message, { cause });
@@ -228,9 +243,16 @@ function knownNoncatalogedPath(value) {
   try { return FLOW_ARTIFACT_CONTRACTS.classify(value).cataloged === false; } catch { return false; }
 }
 
-function managedFiles(location, current = location.directory, result = []) {
+function managedFiles(location, {
+  current = location.directory,
+  result = [],
+  scan = { count: 0 },
+  maxEntries = Infinity,
+} = {}) {
   location.assertAuthority(null, { mustExist: true });
   for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+    scan.count += 1;
+    if (scan.count > maxEntries) throw new Error("Version storage entry count exceeds the managed artifact limit");
     const absolute = path.join(current, entry.name);
     const rel = path.relative(location.directory, absolute).split(path.sep).join("/");
     // `.runtime/` is the sole explicitly transient subtree. Its contents
@@ -246,7 +268,7 @@ function managedFiles(location, current = location.directory, result = []) {
     }
     if (entry.isSymbolicLink()) throw new Error(`Version storage must not contain symbolic links: ${rel}`);
     if (entry.isDirectory()) {
-      managedFiles(location, absolute, result);
+      managedFiles(location, { current: absolute, result, scan, maxEntries });
       continue;
     }
     if (!entry.isFile()) throw new Error(`Version storage contains an unsupported entry: ${rel}`);
@@ -257,6 +279,36 @@ function managedFiles(location, current = location.directory, result = []) {
     result.push(rel);
   }
   return result.sort(codeUnitOrder);
+}
+
+function requireBoundedLimit(value, field, { minimum = 0, allowInfinity = true } = {}) {
+  if (value === Infinity && allowInfinity) return value;
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`${field} must be a ${minimum === 0 ? "non-negative" : "positive"} safe integer`);
+  }
+  return value;
+}
+
+async function readBoundedRealFile(location, file, maxBytes) {
+  const safePath = relativePath(file, "Version snapshot artifact path");
+  const target = location.resolve(safePath);
+  location.assertAuthority(safePath, { mustExist: true });
+  let handle;
+  try {
+    handle = await fs.promises.open(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.nlink !== 1 || await fs.promises.realpath(target) !== target) {
+      throw new Error(`Version snapshot artifact is not a single-link real regular file: ${safePath}`);
+    }
+    if (!Number.isSafeInteger(stat.size) || stat.size > maxBytes) {
+      throw new Error(`Version snapshot artifact exceeds the bounded size: ${safePath}`);
+    }
+    const bytes = await handle.readFile();
+    if (bytes.length > maxBytes) throw new Error(`Version snapshot artifact exceeds the bounded size: ${safePath}`);
+    return bytes;
+  } finally {
+    if (handle !== undefined) await handle.close();
+  }
 }
 
 class VersionTreeSnapshot {
@@ -960,6 +1012,13 @@ export class FlowArtifactDescriptor {
     if (actual.hash !== this.hash || actual.size !== this.size) throw new Error(`artifact content does not match the catalog: ${this.relativePath}`);
     return actual;
   }
+  verifyBytes(bytes) {
+    if (!Buffer.isBuffer(bytes)) throw new Error("artifact verification requires Buffer bytes");
+    if (bytes.length !== this.size || sha256(bytes) !== this.hash) {
+      throw new Error(`artifact content does not match the catalog: ${this.relativePath}`);
+    }
+    return this;
+  }
   authorityKey() { return this.slot.claimKey(); }
   toJSON() {
     return {
@@ -1156,6 +1215,30 @@ export class FlowArtifactCatalog {
   }
   content() { return { schemaRevision: this.schemaRevision, artifacts: this.artifacts.map((artifact) => artifact.toJSON()) }; }
   static regenerate(descriptors) { return new FlowArtifactCatalog({ artifacts: descriptors }); }
+  static fromSerialized(value, { maxArtifacts = Infinity } = {}) {
+    requireBoundedLimit(maxArtifacts, "catalog maxArtifacts");
+    if (!isPlainObject(value) || Object.keys(value).length !== CATALOG_SERIALIZED_FIELDS.size
+      || Object.keys(value).some((field) => !CATALOG_SERIALIZED_FIELDS.has(field))
+      || !Array.isArray(value.artifacts) || value.artifacts.length > maxArtifacts) {
+      throw new Error("artifact catalog serialized form is invalid");
+    }
+    for (const descriptor of value.artifacts) {
+      if (!isPlainObject(descriptor)
+        || Object.keys(descriptor).length !== CATALOG_DESCRIPTOR_SERIALIZED_FIELDS.size
+        || Object.keys(descriptor).some((field) => !CATALOG_DESCRIPTOR_SERIALIZED_FIELDS.has(field))) {
+        throw new Error("artifact catalog descriptor serialized form is invalid");
+      }
+    }
+    const catalog = new FlowArtifactCatalog(value);
+    if (value.hash !== catalog.hash) throw new Error("artifact catalog hash does not match its canonical content");
+    return catalog;
+  }
+  static managedFiles(location, { maxEntries = Infinity } = {}) {
+    if (!(location instanceof FlowVersionLocation)) throw new Error("FlowVersionLocation is required to inspect managed artifacts");
+    requireBoundedLimit(maxEntries, "managed artifact maxEntries");
+    location.requireScope("canonical");
+    return Object.freeze(managedFiles(location, { maxEntries }));
+  }
   resolve(file) {
     const result = this.artifacts.find((artifact) => artifact.relativePath === relativePath(file, "artifact relativePath"));
     if (!result) throw new Error(`artifact is not cataloged: ${file}`);
@@ -1179,7 +1262,7 @@ export class FlowArtifactCatalog {
       throw new Error("FlowArtifactActivityIndexFile is required to verify an artifact catalog");
     }
     location.requireScope("canonical");
-    const actual = new Set(managedFiles(location));
+    const actual = new Set(FlowArtifactCatalog.managedFiles(location));
     const cataloged = new Set(this.artifacts.map((artifact) => artifact.relativePath));
     for (const file of actual) if (!cataloged.has(file)) throw new Error(`catalog-managed artifact is missing from the catalog: ${file}`);
     for (const artifact of this.artifacts) artifact.verify(location);
@@ -1202,7 +1285,183 @@ export class FlowArtifactCatalog {
     }
     return this;
   }
+  async verifySnapshot({
+    location,
+    activityIndex,
+    confirmedLedgerBytes,
+    readArtifact,
+    maxManagedEntries = Infinity,
+  } = {}) {
+    if (!(location instanceof FlowVersionLocation)) throw new Error("FlowVersionLocation is required to verify an artifact catalog snapshot");
+    if (activityIndex !== null && !(activityIndex instanceof FlowArtifactActivityIndex)) {
+      throw new Error("FlowArtifactActivityIndex or null is required to verify an artifact catalog snapshot");
+    }
+    if (!Buffer.isBuffer(confirmedLedgerBytes)) throw new Error("catalog snapshot requires confirmed Activity ledger bytes");
+    if (typeof readArtifact !== "function") throw new Error("catalog snapshot requires an artifact reader");
+    const actual = new Set(FlowArtifactCatalog.managedFiles(location, { maxEntries: maxManagedEntries }));
+    const cataloged = new Set(this.artifacts.map((artifact) => artifact.relativePath));
+    for (const file of actual) if (!cataloged.has(file)) throw new Error(`catalog-managed artifact is missing from the catalog: ${file}`);
+    const ledger = this.artifacts.find((artifact) => artifact.relativePath === FLOW_ACTIVITIES_RELATIVE_PATH) ?? null;
+    if (ledger !== null) ledger.verifyBytes(confirmedLedgerBytes);
+    for (const artifact of this.artifacts) {
+      if (artifact === ledger) continue;
+      artifact.verifyBytes(await readArtifact(artifact));
+    }
+    const associated = this.artifacts.filter((artifact) => artifact.activityId !== null);
+    if (ledger || associated.length > 0) {
+      if (ledger === null) throw new Error(`cataloged Activity associations require ${FLOW_ACTIVITIES_RELATIVE_PATH}`);
+      if (!(activityIndex instanceof FlowArtifactActivityIndex)) throw new Error("catalog snapshot requires an Activity index for cataloged Activity associations");
+      for (const artifact of associated) {
+        const activity = activityIndex.require(artifact.activityId).assertRelatedArtifact(artifact);
+        if (artifact.logicalKey !== null) {
+          const contract = FLOW_ARTIFACT_CONTRACTS.require(artifact.logicalKey);
+          const bytes = artifact === ledger ? confirmedLedgerBytes : await readArtifact(artifact);
+          contract.contentContract?.assertCatalogAssociation({ bytes, descriptor: artifact, activity });
+        }
+      }
+    }
+    return this;
+  }
   toJSON() { return { ...this.content(), hash: this.hash }; }
+}
+
+/** Typed evidence captured by one lock-free committed catalog observation. */
+export class FlowArtifactCatalogSnapshotEvidence {
+  constructor({ value, activityIndex, confirmedLedgerBytes } = {}) {
+    if (!(activityIndex instanceof FlowArtifactActivityIndex)) {
+      throw new Error("catalog snapshot evidence requires a FlowArtifactActivityIndex");
+    }
+    if (!Buffer.isBuffer(confirmedLedgerBytes)) {
+      throw new Error("catalog snapshot evidence requires confirmed Activity ledger bytes");
+    }
+    this.value = value;
+    this.activityIndex = activityIndex;
+    this.confirmedLedgerBytes = Buffer.from(confirmedLedgerBytes);
+    Object.freeze(this);
+  }
+}
+
+/** One coherent catalog-bound value returned by the lock-free read boundary. */
+export class FlowArtifactCatalogCommittedSnapshot {
+  constructor({ catalog, value } = {}) {
+    if (!(catalog instanceof FlowArtifactCatalog)) throw new Error("committed catalog snapshot requires a FlowArtifactCatalog");
+    this.catalog = catalog;
+    this.value = value;
+    Object.freeze(this);
+  }
+}
+
+/** Bounded work budget for a lock-free catalog snapshot. */
+export class FlowArtifactCatalogSnapshotLimits {
+  constructor(value = {}) {
+    if (!isPlainObject(value)) throw new Error("catalog snapshot limits must be an object");
+    const allowed = new Set(Object.keys(DEFAULT_CATALOG_SNAPSHOT_LIMITS));
+    if (Object.keys(value).some((key) => !allowed.has(key))) throw new Error("catalog snapshot limits contain an unknown field");
+    const resolved = { ...DEFAULT_CATALOG_SNAPSHOT_LIMITS, ...value };
+    this.maxAttempts = requireBoundedLimit(resolved.maxAttempts, "catalog snapshot maxAttempts", { minimum: 1, allowInfinity: false });
+    this.maxCatalogBytes = requireBoundedLimit(resolved.maxCatalogBytes, "catalog snapshot maxCatalogBytes", { allowInfinity: false });
+    this.maxArtifacts = requireBoundedLimit(resolved.maxArtifacts, "catalog snapshot maxArtifacts", { allowInfinity: false });
+    this.maxManagedEntries = requireBoundedLimit(resolved.maxManagedEntries, "catalog snapshot maxManagedEntries", { allowInfinity: false });
+    this.maxArtifactBytes = requireBoundedLimit(resolved.maxArtifactBytes, "catalog snapshot maxArtifactBytes", { allowInfinity: false });
+    this.maxConfirmedLedgerBytes = requireBoundedLimit(resolved.maxConfirmedLedgerBytes, "catalog snapshot maxConfirmedLedgerBytes", { allowInfinity: false });
+    this.maxTotalArtifactBytes = requireBoundedLimit(resolved.maxTotalArtifactBytes, "catalog snapshot maxTotalArtifactBytes", { allowInfinity: false });
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Read-only C0 catalog boundary for consumers that must not participate in
+ * catalog publication, locking, recovery, or writer caching.
+ */
+export class FlowArtifactCatalogSnapshotReader {
+  constructor({ location } = {}) {
+    if (!(location instanceof FlowVersionLocation)) throw new Error("FlowVersionLocation is required for catalog snapshot reads");
+    location.requireScope("canonical");
+    location.assertAuthority();
+    this.location = location;
+    Object.freeze(this);
+  }
+
+  async readCommittedSnapshot({ capture, limits = {} } = {}) {
+    if (typeof capture !== "function") throw new Error("committed catalog snapshot requires a capture function");
+    const snapshotLimits = new FlowArtifactCatalogSnapshotLimits(limits);
+    this.location.assertAuthority(null, { mustExist: true });
+    for (let attempt = 1; attempt <= snapshotLimits.maxAttempts; attempt += 1) {
+      const startingCatalogBytes = await readBoundedRealFile(
+        this.location,
+        ARTIFACT_CATALOG_RELATIVE_PATH,
+        snapshotLimits.maxCatalogBytes,
+      );
+      let catalog;
+      try {
+        catalog = FlowArtifactCatalog.fromSerialized(JSON.parse(startingCatalogBytes.toString("utf8")), {
+          maxArtifacts: snapshotLimits.maxArtifacts,
+        });
+      } catch (error) {
+        throw new Error(`catalog snapshot cannot parse the committed catalog: ${error.message}`, { cause: error });
+      }
+      const artifactBytes = new Map();
+      let totalArtifactBytes = 0;
+      const readArtifact = async (artifact) => {
+        if (!(artifact instanceof FlowArtifactDescriptor)) throw new Error("catalog snapshot reader requires a FlowArtifactDescriptor");
+        const cached = artifactBytes.get(artifact.relativePath);
+        if (cached !== undefined) return Buffer.from(cached);
+        const maximumBytes = artifact.relativePath === FLOW_ACTIVITIES_RELATIVE_PATH
+          ? snapshotLimits.maxConfirmedLedgerBytes
+          : snapshotLimits.maxArtifactBytes;
+        if (artifact.size > maximumBytes) {
+          throw new Error(`catalog snapshot artifact exceeds the bounded size: ${artifact.relativePath}`);
+        }
+        if (totalArtifactBytes + artifact.size > snapshotLimits.maxTotalArtifactBytes) {
+          throw new Error("catalog snapshot aggregate artifact bytes exceed the limit");
+        }
+        const bytes = await readBoundedRealFile(this.location, artifact.relativePath, maximumBytes);
+        if (totalArtifactBytes + bytes.length > snapshotLimits.maxTotalArtifactBytes) {
+          throw new Error("catalog snapshot aggregate artifact bytes exceed the limit");
+        }
+        totalArtifactBytes += bytes.length;
+        artifactBytes.set(artifact.relativePath, Buffer.from(bytes));
+        return Buffer.from(bytes);
+      };
+      let failure = null;
+      let evidence = null;
+      try {
+        evidence = await capture(Object.freeze({ catalog, readArtifact, attempt }));
+        if (!(evidence instanceof FlowArtifactCatalogSnapshotEvidence)) {
+          throw new Error("committed catalog snapshot capture must return FlowArtifactCatalogSnapshotEvidence");
+        }
+        await catalog.verifySnapshot({
+          location: this.location,
+          activityIndex: evidence.activityIndex,
+          confirmedLedgerBytes: evidence.confirmedLedgerBytes,
+          readArtifact,
+          maxManagedEntries: snapshotLimits.maxManagedEntries,
+        });
+      } catch (error) {
+        failure = error;
+      }
+      // C0 is the query-start commit marker. Once every artifact referenced by
+      // that catalog was captured and verified, later publication must not
+      // silently advance this read to C1.
+      if (failure === null) return new FlowArtifactCatalogCommittedSnapshot({ catalog, value: evidence.value });
+      let endingCatalogBytes;
+      try {
+        endingCatalogBytes = await readBoundedRealFile(
+          this.location,
+          ARTIFACT_CATALOG_RELATIVE_PATH,
+          snapshotLimits.maxCatalogBytes,
+        );
+      } catch (error) {
+        if (attempt === snapshotLimits.maxAttempts) throw error;
+        continue;
+      }
+      if (startingCatalogBytes.equals(endingCatalogBytes)) throw failure;
+      if (attempt === snapshotLimits.maxAttempts) {
+        throw new Error("catalog commit changed during the bounded snapshot read", { cause: failure });
+      }
+    }
+    throw new Error("catalog snapshot retry limit was exhausted");
+  }
 }
 
 export class FlowArtifactCatalogStore {

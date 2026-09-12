@@ -485,6 +485,7 @@ export class CanonicalFlowFixture {
     flowId = null,
     flowVersionId = null,
     specRecord = null,
+    context = null,
   } = {}) {
     if (flowManager === null || typeof flowManager?.createFresh !== "function") {
       throw new TypeError("CanonicalFlowFixture requires a FlowManager");
@@ -500,6 +501,7 @@ export class CanonicalFlowFixture {
     this.flowId = flowId;
     this.flowVersionId = flowVersionId;
     this.specRecord = specRecord;
+    this.context = context;
     this.created = false;
   }
 
@@ -526,6 +528,7 @@ export class CanonicalFlowFixture {
       ...(this.issue === null ? {} : {
         issueSnapshot: this.issueSnapshot ?? `# Issue #${this.issue}\n`,
       }),
+      context: this.context,
       flowId: this.flowId ?? `flow-${this.runId}`,
       flowVersionId: this.flowVersionId ?? `flow-v1-${this.runId}`,
       specRecord,
@@ -658,7 +661,7 @@ function assertFixtureFields(input, allowed, fixtureName) {
 
 const FRESH_FLOW_FIXTURE_FIELDS = new Set([
   "flowManager", "specId", "runId", "request", "execution", "autoApprove",
-  "issue", "issueSnapshot", "flowId", "flowVersionId", "specRecord",
+  "issue", "issueSnapshot", "flowId", "flowVersionId", "specRecord", "context",
 ]);
 
 /** A fresh canonical Flow with no mutable state import or state replacement API. */

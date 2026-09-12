@@ -155,7 +155,7 @@ export class CanonicalFlowRuntime {
     return this.store(key);
   }
 
-  createFresh({ specId, flowId, flowVersionId, runId, request, issue = null, execution, lifecycle, policy, specRecord, issueSnapshot = null } = {}) {
+  createFresh({ specId, flowId, flowVersionId, runId, request, issue = null, execution, lifecycle, policy, specRecord, issueSnapshot = null, context = null } = {}) {
     return this.#freshStore(specId).createFresh({
       flowId,
       flowVersionId,
@@ -167,6 +167,7 @@ export class CanonicalFlowRuntime {
       policy,
       specRecord,
       issueSnapshot,
+      context,
     });
   }
 

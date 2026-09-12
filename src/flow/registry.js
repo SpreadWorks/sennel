@@ -11,6 +11,7 @@
 import { derivePhase } from "../lib/flow-helpers.js";
 import { Envelope } from "../lib/flow-envelope.js";
 import { hasExplicitOption } from "../lib/flow-options.js";
+import { FLOW_QUERY_HELP } from "./query-contract.js";
 import fs from "fs";
 import path from "path";
 import {
@@ -1040,6 +1041,14 @@ function pluginCommandName(command) {
 
 
 export const FLOW_COMMANDS = {
+  query: {
+    helpKey: "flow.query",
+    requiresFlow: false,
+    targetGuard: false,
+    command: () => import("./query.js"),
+    args: { options: ["--request-file"] },
+    help: FLOW_QUERY_HELP,
+  },
   resume: {
     helpKey: "flow.resume",
     helpPath: "sennel flow resume --help",

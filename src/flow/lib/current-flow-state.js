@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { GitSnapshot } from "../../lib/git-snapshot.js";
 import { FileLock } from "../../lib/file-lock.js";
 import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { AuthoritativeSpecRecord, FlowActivityId, FlowArtifactCatalog, FlowArtifactCatalogStore, FlowArtifactDescriptor, FlowId, FlowRunId, FlowSpecIdentity, FlowSpecRevision, FlowVersionId, FlowVersionLocation, FlowVersionMigrationOutput, FlowVersionMigrationOutputBuilder, FlowVersionMigrationOutputSet, FlowVersionRuntimeLockLocation, FlowVersionSemanticValidator } from "../../lib/flow-version.js";
@@ -184,6 +185,33 @@ const OBSERVATION_TRANSITION_OPERATIONS = new Set(["record_metric", "record_note
 // observation/decision history rather than a mutable side-channel.
 const NONBLOCKING_TRANSITION_OPERATIONS = new Set(["record_nonblocking", "continue_nonblocking"]);
 const FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS = new Set(["skip_finalize_downstream", "reset_finalize_downstream"]);
+const STATE_CHANGING_TRANSITION_OPERATIONS = new Set([
+  FLOW_CREATION_TRANSITION_OPERATION,
+  DRAFT_COMPLETION_TRANSITION_OPERATION,
+  TASK_REVIEW_STAGE_TRANSITION_OPERATION,
+  "add_task", "add_approval_task", "confirm_attempt", "fail_attempt", "record_failure",
+  "complete_acceptance_decision_noop",
+  ...TRANSITION_ATTEMPT_OPERATIONS,
+  ...LIFECYCLE_TRANSITION_OPERATIONS,
+  ...POLICY_TRANSITION_OPERATIONS,
+  ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS,
+  ...OUTBOX_TRANSITION_OPERATIONS,
+  ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS,
+  ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS,
+  "continue_nonblocking",
+  "advance_task_review_stage",
+]);
+export const AGGREGATE_METRIC_PROVENANCE = Object.freeze({
+  activityCount: "confirmed-activity-prefix",
+  artifactCount: "canonical-artifact-catalog",
+  stepCount: "canonical-state",
+  taskCount: "canonical-state",
+  durationMs: "activity-timing-durationMs",
+  inputTokens: "activity-usage-inputTokens",
+  outputTokens: "activity-usage-outputTokens",
+  cacheReadTokens: "activity-usage-cacheReadTokens",
+  cost: "activity-usage-cost",
+});
 
 function resolvedArtifact(logicalKey, parameters = {}) {
   return FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
@@ -1451,17 +1479,41 @@ export class ActivityDispatchApproval {
 }
 
 /**
- * Context is intentionally bounded to resumable command authority.  It is
- * nullable so a fresh Flow does not invent an execution context.
+ * Context is intentionally bounded to resumable command authority and the
+ * creation-time Git snapshot. It is nullable when neither fact is available.
  */
 export class CurrentFlowContext {
   constructor(value) {
+    let gitSnapshot = null;
     if (value !== null) {
-      requireExactFields(value, new Set(["operation", "resumeToken"]), "context");
-      requireString(value.operation, "context.operation");
-      requireString(value.resumeToken, "context.resumeToken");
+      const fields = new Set(["operation", "resumeToken", "gitSnapshot"]);
+      if (!isPlainObject(value)) throw new CurrentFlowStateInvariantError("context must be an object");
+      const hasResumeContext = Object.hasOwn(value, "operation") || Object.hasOwn(value, "resumeToken");
+      if (hasResumeContext && (!Object.hasOwn(value, "operation") || !Object.hasOwn(value, "resumeToken"))) {
+        throw new CurrentFlowStateInvariantError("context.operation and context.resumeToken are required together");
+      }
+      if (!hasResumeContext && !Object.hasOwn(value, "gitSnapshot")) {
+        throw new CurrentFlowStateInvariantError("context must contain resumable command authority or a Git snapshot");
+      }
+      for (const field of Object.keys(value)) {
+        if (!fields.has(field)) throw new CurrentFlowStateInvariantError(`context contains unsupported field: ${field}`);
+      }
+      if (hasResumeContext) {
+        requireString(value.operation, "context.operation");
+        requireString(value.resumeToken, "context.resumeToken");
+      }
+      if (Object.hasOwn(value, "gitSnapshot")) {
+        try {
+          gitSnapshot = GitSnapshot.from(value.gitSnapshot);
+        } catch {
+          throw new CurrentFlowStateInvariantError("context.gitSnapshot must contain a valid Git availability and object id pair");
+        }
+      }
     }
-    this.value = value === null ? null : Object.freeze({ operation: value.operation, resumeToken: value.resumeToken });
+    this.value = value === null ? null : Object.freeze({
+      ...(Object.hasOwn(value, "operation") ? { operation: value.operation, resumeToken: value.resumeToken } : {}),
+      ...(gitSnapshot === null ? {} : { gitSnapshot: Object.freeze(gitSnapshot.toJSON()) }),
+    });
     Object.freeze(this);
   }
 
@@ -6518,6 +6570,14 @@ export class ActivityTransition {
     });
   }
 
+  static isStateChangingOperation(operation) {
+    return STATE_CHANGING_TRANSITION_OPERATIONS.has(operation);
+  }
+
+  isStateChanging() {
+    return ActivityTransition.isStateChangingOperation(this.operation);
+  }
+
   toJSON() {
     return {
       operation: this.operation,
@@ -6975,6 +7035,88 @@ export class ActivityUsage {
   }
 
   toJSON() { return { inputTokens: this.inputTokens, outputTokens: this.outputTokens, cacheReadTokens: this.cacheReadTokens, cost: this.cost }; }
+}
+
+/**
+ * Derived read views owned by the canonical state and Activity model.
+ * Consumers may choose their own public projection, but timestamp and metric
+ * authority must remain defined here beside the records that carry the facts.
+ */
+export class CurrentFlowActivitySummary {
+  constructor(activities) {
+    if (!Array.isArray(activities) || activities.some((entry) => !(entry instanceof FlowActivity))) {
+      throw new CurrentFlowStateInvariantError("Activity summary requires typed Activities");
+    }
+    this.activities = Object.freeze([...activities]);
+    Object.freeze(this);
+  }
+
+  timestamps() {
+    const created = this.activities.find((entry) => (
+      entry.transition.operation === FLOW_CREATION_TRANSITION_OPERATION
+      && entry.type === FLOW_CREATION_ACTIVITY_TYPE
+    )) ?? null;
+    const updated = this.activities
+      .filter((entry) => entry.transition.isStateChanging())
+      .at(-1) ?? null;
+    const finalized = this.activities
+      .filter((entry) => entry.transition.operation === "finalize_flow")
+      .at(-1) ?? null;
+    const timestamp = (value, reason) => value === null
+      ? { value: null, availability: "unavailable", reason, provenance: "confirmed-activity-prefix" }
+      : { value, availability: "available", reason: null, provenance: "activity-timing.finishedAt" };
+    return {
+      createdAt: timestamp(created?.timing?.finishedAt ?? null, "creation evidence is unavailable"),
+      updatedAt: timestamp(updated?.timing?.finishedAt ?? null, "state-changing Activity evidence is unavailable"),
+      finalizedAt: timestamp(finalized?.timing?.finishedAt ?? null, "finalize_flow Activity evidence is unavailable"),
+    };
+  }
+
+  metrics({ artifactCount, stepCount, taskCount } = {}) {
+    for (const [field, value] of Object.entries({ artifactCount, stepCount, taskCount })) {
+      requirePositiveInteger(value, `Activity summary.${field}`, { allowZero: true });
+    }
+    const totals = { durationMs: [], inputTokens: [], outputTokens: [], cacheReadTokens: [], cost: [] };
+    const add = (field, value) => {
+      if (value !== null && value !== undefined) totals[field].push(value);
+    };
+    for (const activity of this.activities) {
+      // Aggregate metrics are sourced only from confirmed Activity timing and
+      // ActivityUsage. record_metric observations are a separate ledger view,
+      // not another usage authority.
+      add("durationMs", activity.timing?.durationMs);
+      if (activity.usage !== null && activity.usage !== undefined) {
+        add("inputTokens", activity.usage.inputTokens);
+        add("outputTokens", activity.usage.outputTokens);
+        add("cacheReadTokens", activity.usage.cacheReadTokens);
+        add("cost", activity.usage.cost);
+      }
+    }
+    const sum = (values, field) => {
+      if (values.length === 0) return null;
+      const total = values.reduce((current, value) => {
+        const next = current + value;
+        if (!Number.isFinite(next) || (field !== "cost" && !Number.isSafeInteger(next))) {
+          throw new CurrentFlowStateInvariantError(`Activity summary metric ${field} exceeds its numeric limit`);
+        }
+        return next;
+      }, 0);
+      return total;
+    };
+    const result = {
+      activityCount: this.activities.length,
+      artifactCount,
+      stepCount,
+      taskCount,
+      durationMs: sum(totals.durationMs, "durationMs"),
+      inputTokens: sum(totals.inputTokens, "inputTokens"),
+      outputTokens: sum(totals.outputTokens, "outputTokens"),
+      cacheReadTokens: sum(totals.cacheReadTokens, "cacheReadTokens"),
+      cost: sum(totals.cost, "cost"),
+      provenance: AGGREGATE_METRIC_PROVENANCE,
+    };
+    return result;
+  }
 }
 
 function assertJournalAttemptIdentities(entries) {
@@ -7981,6 +8123,7 @@ export class CurrentFlowVersionStore {
     policy = { autoApprove: false, nonblocking: null },
     specRecord,
     issueSnapshot = null,
+    context = null,
   } = {}) {
     return this.create(CurrentFlowState.create({
       definition: this.definition,
@@ -7993,6 +8136,7 @@ export class CurrentFlowVersionStore {
       execution,
       lifecycle,
       policy,
+      context,
     }), { specRecord, issueSnapshot });
   }
 

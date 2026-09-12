@@ -63,6 +63,7 @@ import {
   CanonicalSourceWorkerSpecCompletion,
   CanonicalSourceWorkerUpgradeResult,
   CurrentFlowNonBlockingPolicy,
+  CurrentFlowContext,
   CurrentFlowState,
   CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
@@ -1108,6 +1109,7 @@ export class CanonicalFlowCreateRequest {
     flowVersionId = null,
     specRecord,
     issueSnapshot = null,
+    context = null,
     tasks = [],
   } = {}) {
     this.specId = canonicalSpecId(specId);
@@ -1155,6 +1157,7 @@ export class CanonicalFlowCreateRequest {
       );
     }
     this.issueSnapshot = issueSnapshot;
+    this.context = new CurrentFlowContext(context).toJSON();
     if (!Array.isArray(tasks)) throw new CurrentFlowStateInvariantError("fresh Tasks must be an array");
     const ids = new Set();
     this.tasks = Object.freeze(tasks.map((task, index) => {
@@ -1432,6 +1435,7 @@ export class CanonicalFlowManagerStore {
       policy: input.policy,
       specRecord: input.specRecord,
       issueSnapshot: input.issueSnapshot,
+      context: input.context,
     });
     for (const task of input.tasks) {
       this.runtime.addTask({
