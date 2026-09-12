@@ -17,9 +17,9 @@ describe("AgentTimeout", () => {
   it("keeps the canonical default in seconds and converts only at the API boundary", () => {
     const timeout = AgentTimeout.fromConfig();
 
-    assert.equal(DEFAULT_AGENT_TIMEOUT_SECONDS, 900);
-    assert.equal(timeout.seconds, 900);
-    assert.equal(timeout.toMilliseconds(), 900_000);
+    assert.equal(DEFAULT_AGENT_TIMEOUT_SECONDS, 1_800);
+    assert.equal(timeout.seconds, 1_800);
+    assert.equal(timeout.toMilliseconds(), 1_800_000);
   });
 
   it("uses configured seconds", () => {

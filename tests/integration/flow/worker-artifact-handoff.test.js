@@ -5608,7 +5608,7 @@ describe("worker artifact handoff", () => {
         _envelopeType: "run", _envelopeKey: "dispatch",
       });
       assert.equal(result.dispatch.boundary, "completed", JSON.stringify(result));
-      assert.equal(inactivityTimeoutMs, 900_000);
+      assert.equal(inactivityTimeoutMs, 1_800_000);
     } finally {
       removeTmpDir(value.mainRoot);
     }

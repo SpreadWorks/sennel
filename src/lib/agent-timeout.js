@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const DEFAULT_AGENT_TIMEOUT_SECONDS = 900;
+export const DEFAULT_AGENT_TIMEOUT_SECONDS = 1_800;
 export const TEST_REVIEW_REPAIR_WORKER_MAX_LIFETIME_SECONDS = 7_200;
 // An outer process that hosts an Agent must stay alive through the Agent's
 // SIGTERM/SIGKILL cleanup sequence.  This includes two default grace windows
