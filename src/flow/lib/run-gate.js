@@ -204,7 +204,6 @@ const UNTRACKED_DEFAULT_MAX_FILES = 500;
 const UNTRACKED_DEFAULT_MAX_FILE_SIZE = 1024 * 1024; // 1 MiB
 const TASK_IMPL_GATE_DIFF_MAX_BYTES = 1024 * 1024; // 1 MiB
 const MAX_IMPL_REQUIREMENT_BATCH_CHARS = GLOBAL_PROMPT_ELEMENT_HARD_MAX;
-const MAX_AGENT_PROMPT_INPUT_CHARS = 900000;
 const GATE_SOURCE_ARTIFACT_BY_PHASE = Object.freeze({
   draft: "draft-gate-source.json",
   spec: "spec-gate-source.json",
@@ -858,7 +857,9 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
   if (filtered.length === 0) return null;
 
   const articleList = filtered
-    .map((g) => `- id: ${g.id}\n  title: ${g.title}\n  body: ${g.body.trim()}`)
+    .map((g) => options.completeEvidence
+      ? `- id: ${g.id}\n  title: ${g.title}`
+      : `- id: ${g.id}\n  title: ${g.title}\n  body: ${g.body.trim()}`)
     .join("\n");
 
   const checkerRole = role || `You are a ${phase} compliance checker.`;
@@ -3001,19 +3002,32 @@ export class RequirementGateExecutionPlan {
     }
     return batch.requirements.map((requirement) => {
       const inputs = [];
+      const currentContractRecord = batch.sameSpecContractContext?.requirements.records.find((record) => (
+        record.current && record.requirementId === requirement.id
+      ));
+      const canonicalInput = currentContractRecord
+        ? new RequirementEvidenceInput({
+          id: `${requirement.id}:contract:${currentContractRecord.locator}`,
+          text: currentContractRecord.toPromptText(),
+        })
+        : null;
       const context = batch.contexts?.find((entry) => entry.requirementId === requirement.id);
       if (context) {
         inputs.push(new RequirementEvidenceInput({
           id: `${requirement.id}:obligation`, text: context.obligation.toPromptText(),
         }));
-        context.entries.forEach((entry, index) => inputs.push(new RequirementEvidenceInput({
-          id: `${requirement.id}:context:${index}:${entry.reference}`, text: entry.toPromptText(),
-        })));
+        context.entries.forEach((entry, index) => {
+          if (entry.section === "requirement") return;
+          inputs.push(new RequirementEvidenceInput({
+            id: `${requirement.id}:context:${index}:${entry.reference}`, text: entry.toPromptText(),
+          }));
+        });
       } else if (batch.usesFullSpec) {
         inputs.push(new RequirementEvidenceInput({ id: `${requirement.id}:spec`, text: batch.fullSpecText }));
       }
       for (const section of [batch.sameSpecContractContext?.requirements, batch.sameSpecContractContext?.decisions, batch.sameSpecContractContext?.clarifications]) {
         for (const record of section?.records || []) {
+          if (record === currentContractRecord) continue;
           inputs.push(new RequirementEvidenceInput({ id: `${requirement.id}:contract:${record.locator}`, text: record.toPromptText() }));
         }
       }
@@ -3031,7 +3045,7 @@ export class RequirementGateExecutionPlan {
       }
       return new RequirementGateExecutionPlan({
         batch, limit, requirement,
-        evidence: new RequirementEvidencePlan({ requirement, inputs, limit }),
+        evidence: new RequirementEvidencePlan({ requirement, inputs, canonicalInput, limit }),
       });
     });
   }
@@ -3043,10 +3057,11 @@ export class RequirementGateExecutionPlan {
   }
 
   async execute({ agent, phase, projectInvocation, executionBudget }) {
+    const invocationProjector = projectInvocation ?? gateInvocationProjector(agent);
     const callAgent = (request, _batch, _index, attempt, providerCallAdmission) => callGateAgent(agent, request, attempt, providerCallAdmission);
     if (this.direct) {
       const result = await executeGatePlan({
-        plan: this.direct, projectInvocation, callAgent, executionBudget,
+        plan: this.direct, projectInvocation: invocationProjector, callAgent, executionBudget,
         protocolPolicy: new GateOutputProtocolPolicy({
           phase, parseResponse: (raw) => parseImplRequirementEvaluation(raw, this.batch.requirementIds),
         }),
@@ -3058,16 +3073,16 @@ export class RequirementGateExecutionPlan {
       phase,
       parseResponse: (raw, batch) => new RequirementObservationResponse(parseJsonObject(raw), this.requirement.id, batch),
     });
-    const evidence = await this.evidence.execute({ projectInvocation, callAgent, protocolPolicy, executionBudget });
+    const evidence = await this.evidence.execute({ projectInvocation: invocationProjector, callAgent, protocolPolicy, executionBudget });
     const built = await reduceRequirementEvidence({
-      evidence, requirement: this.requirement, limit: this.limit, projectInvocation, protocolPolicy, executionBudget,
+      evidence, requirement: this.requirement, limit: this.limit, projectInvocation: invocationProjector, protocolPolicy, executionBudget,
       buildFinalRequest: (observationEvidence) => buildImplCheckPrompt({
         requirements: [this.requirement], knownIds: [this.requirement.id], observationEvidence,
       }).build(),
       evaluateBatch: callAgent,
     });
     const result = await executeGatePlan({
-      plan: PromptBatchPlan.fromRequest({ request: built, limit: this.limit, id: "requirement-gate-judgment" }), projectInvocation, callAgent, executionBudget,
+      plan: PromptBatchPlan.fromRequest({ request: built, limit: this.limit, id: "requirement-gate-judgment" }), projectInvocation: invocationProjector, callAgent, executionBudget,
       protocolPolicy: new GateOutputProtocolPolicy({
         phase, parseResponse: (raw) => parseImplRequirementEvaluation(raw, [this.requirement.id]),
       }),
@@ -3199,17 +3214,19 @@ function buildImplCheckPrompt(specTextOrOptions, diffArg, knownIdsArg) {
   pb.setFmtFallback(exactIdFallback(IMPL_REQUIREMENT_FMT_FALLBACK, "<id>", knownIds));
 
   pb.addUserPrompt("## Requirement IDs", knownIds.map((id) => `- ${id}`).join("\n"));
-  if (Array.isArray(contexts)) {
-    pb.addUserPrompt("## Requirement Contexts", renderRequirementContextSection(contexts));
-  } else if (Array.isArray(requirements)) {
-    pb.addUserPrompt("## Requirements", renderRequirementPromptSection(requirements));
-  } else {
-    pb.addUserPrompt("## Spec", requirements || "");
+  if (options.observationEvidence === undefined) {
+    if (Array.isArray(contexts)) {
+      pb.addUserPrompt("## Requirement Contexts", renderRequirementContextSection(contexts));
+    } else if (Array.isArray(requirements)) {
+      pb.addUserPrompt("## Requirements", renderRequirementPromptSection(requirements));
+    } else {
+      pb.addUserPrompt("## Spec", requirements || "");
+    }
   }
-  if (sameSpecContractContext) {
+  if (sameSpecContractContext && options.observationEvidence === undefined) {
     pb.addUserPrompt("## Same-Spec Contract Context", sameSpecContractContext.toPromptText());
   }
-  if (sourceScope) {
+  if (sourceScope && options.observationEvidence === undefined) {
     pb.addUserPrompt("## Canonical Requirement-Source Mapping", sourceScope.toPromptText());
   }
   if (options.observationEvidence !== undefined) {

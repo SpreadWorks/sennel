@@ -5486,22 +5486,31 @@ describe("FlowManager canonical Version-1 runtime", () => {
       const current = { value: structuredClone(action) };
       let workerPrompt = null;
       let workerOptions = null;
+      let workerRequest = null;
+      let workerAction = null;
       const dispatcher = new RunDispatchCommand({
         nextAction: { async run() { return structuredClone(current.value); } },
         agent: {
           async call(prompt, options) {
             workerPrompt = prompt;
             workerOptions = options;
-            manager.confirmCurrentAttempt({ specId: created.specId });
+            const requestPath = options.executionEnvironment[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV];
+            workerRequest = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+            const dispatchContract = JSON.parse(options.executionEnvironment[FLOW_DISPATCH_INVOCATION_ENV]);
+            workerAction = JSON.parse(fs.readFileSync(dispatchContract.actionFilePath, "utf8"));
+            fs.writeFileSync(
+              workerRequest.payloads.find((payload) => payload.logicalName === "draft.json").payloadPath,
+              canonicalDraftBytes("Approved canonical draft"),
+            );
+            sealWorkerArtifactHandoff({
+              requestPath,
+              invocationId: options.executionEnvironment[FLOW_DISPATCH_INVOCATION_ID_ENV],
+            });
             current.value = completed;
           },
         },
         repositoryFingerprint: () => "canonical-dispatch-r0",
         leaseFactory: () => ({ acquire() {}, release() {} }),
-        handoffCoordinator: {
-          recoverPending() {},
-          createRequest() { return null; },
-        },
       });
       dispatcher.container = {};
       const context = {
@@ -5527,31 +5536,27 @@ describe("FlowManager canonical Version-1 runtime", () => {
         .trim().split("\n").map((line) => JSON.parse(line));
       assert.equal(activities.some((entry) => entry.type === "dispatch_approval_recorded"), true);
       assert.equal(manager.canonicalState(created.specId).findNode("draft").status, "done");
-      return { prompt: workerPrompt, environment: workerOptions.executionEnvironment };
-    };
-
-    const parseWorkerPrompt = (prompt) => {
-      const invocationMarker = "\n\nMachine-readable dispatch invocation contract:\n";
-      const actionMarker = "\n\nGuarded next action:\n";
-      const reportMarker = "\n\nYour response is only a worker report.";
-      const [instructions, invocationAndAction] = prompt.split(invocationMarker);
-      const [invocationJson, actionAndReport] = invocationAndAction.split(actionMarker);
-      const [actionJson] = actionAndReport.split(reportMarker);
       return {
-        instructions,
-        invocation: JSON.parse(invocationJson),
-        actionJson,
+        prompt: workerPrompt,
+        environment: workerOptions.executionEnvironment,
+        request: workerRequest,
+        action: workerAction,
       };
     };
+
     const normalizeInvocation = (invocation) => {
-      const { id: _id, action, authorization, ...stable } = invocation;
+      const {
+        dispatchInvocationId: _dispatchInvocationId,
+        requestPath: _requestPath,
+        requestDigest: _requestDigest,
+        actionFilePath: _actionFilePath,
+        authorization,
+        ...stable
+      } = invocation;
       return {
         ...stable,
-        action: { ...action, digest: "<authorization-bound>" },
         authorization: {
           ...authorization,
-          actionDigest: "<authorization-bound>",
-          approvalToken: "<authorization-bound>",
           approvedAt: "<authorization-bound>",
         },
       };
@@ -5559,6 +5564,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const normalizeEnvironment = (environment) => ({
       ...environment,
       [FLOW_DISPATCH_INVOCATION_ID_ENV]: "<invocation-id>",
+      [WORKER_ARTIFACT_HANDOFF_REQUEST_ENV]: "<request-path>",
       [FLOW_DISPATCH_INVOCATION_ENV]: normalizeInvocation(
         JSON.parse(environment[FLOW_DISPATCH_INVOCATION_ENV]),
       ),
@@ -5569,20 +5575,23 @@ describe("FlowManager canonical Version-1 runtime", () => {
     );
 
     const beforeInput = await captureWorkerInput(legacyAction);
-    const before = parseWorkerPrompt(beforeInput.prompt);
     const afterInput = await captureWorkerInput(boundaryPromptAction);
-    const after = parseWorkerPrompt(afterInput.prompt);
 
-    assert.equal(before.actionJson, JSON.stringify(legacyAction, null, 2));
-    assert.equal(after.actionJson, JSON.stringify(legacyAction, null, 2));
-    assert.equal(redactAuthorizationInstruction(after.instructions), redactAuthorizationInstruction(before.instructions));
-    assert.deepEqual(normalizeInvocation(after.invocation), normalizeInvocation(before.invocation));
+    assert.deepEqual(beforeInput.action, legacyAction);
+    assert.deepEqual(afterInput.action, legacyAction);
+    assert.equal(
+      redactAuthorizationInstruction(afterInput.prompt),
+      redactAuthorizationInstruction(beforeInput.prompt),
+    );
     assert.deepEqual(
       normalizeEnvironment(afterInput.environment),
       normalizeEnvironment(beforeInput.environment),
     );
+    assert.deepEqual(afterInput.request.inputs, beforeInput.request.inputs);
+    assert.deepEqual(afterInput.request.workerInstructions, beforeInput.request.workerInstructions);
     assert.doesNotMatch(afterInput.prompt, /Review or approve the specification/);
     assert.doesNotMatch(afterInput.environment[FLOW_DISPATCH_INVOCATION_ENV], /actionPrompt/);
+    assert.doesNotMatch(JSON.stringify(afterInput.request), /actionPrompt/);
   });
 
   it("journals policy changes and rewinds through the same canonical state machine", () => {

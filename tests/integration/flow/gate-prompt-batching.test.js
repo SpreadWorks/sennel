@@ -11,6 +11,111 @@ const article = Object.freeze({
 });
 
 describe("Guardrail complete evidence batching", () => {
+  it("partitions a 133,813-character Requirement body with exact canonical coverage", async () => {
+    const description = `REQ_HEAD ${"r".repeat(133795)} REQ_TAIL`;
+    assert.equal(description.length, 133813);
+    const requirement = { id: "R-LARGE", desc: description };
+    const [execution] = RequirementGateExecutionPlan.create(
+      new RequirementGateBatch({ requirements: [requirement], diff: "+implemented source" }),
+      new PromptRequestLimit(),
+    );
+    const ranges = [];
+    const projectedPrompts = new Set();
+    const providerPrompts = [];
+    let finalCalls = 0;
+    const agent = {
+      projectInvocation: (userPrompt) => {
+        projectedPrompts.add(userPrompt);
+        return { assertWithinLimit: () => {} };
+      },
+      call: async (userPrompt, options) => {
+        providerPrompts.push(userPrompt);
+        assert.ok(PromptLogicalFootprint.measure({ userPrompt, ...options }).total <= 120000);
+        if (userPrompt.includes("## Canonical input ranges\n")) {
+          const supplied = JSON.parse(userPrompt.split("## Canonical input ranges\n")[1]);
+          ranges.push(...supplied.filter((range) => range.sourceRef.startsWith("R-LARGE:canonical-obligation")));
+          return JSON.stringify({ observations: supplied.map((range) => ({
+            requirementId: requirement.id,
+            sourceRef: range.sourceRef,
+            support: ["REQ_HEAD", "REQ_TAIL"].filter((marker) => range.content.includes(marker)),
+            contradictions: [],
+            unresolved: [],
+          })) });
+        }
+        finalCalls += 1;
+        assert.match(userPrompt, /REQ_HEAD/);
+        assert.match(userPrompt, /REQ_TAIL/);
+        return JSON.stringify({ evaluations: [{
+          guardrail_id: requirement.id,
+          result: "pass",
+          reason: "[REQ:R-LARGE] complete canonical evidence is implemented",
+        }] });
+      },
+    };
+
+    const result = await execution.execute({
+      agent,
+      phase: "task-impl",
+      executionBudget: new PromptExecutionBudget(new PromptExecutionLimit()),
+    });
+
+    const reconstructed = ranges
+      .sort((left, right) => left.start - right.start)
+      .map((range) => range.content)
+      .join("");
+    assert.equal(reconstructed, `- R-LARGE: ${description}`);
+    assert.ok(ranges.length > 1);
+    assert.equal(finalCalls, 1);
+    assert.equal(result[0].result, "pass");
+    for (const userPrompt of providerPrompts) assert.ok(projectedPrompts.has(userPrompt));
+  });
+
+  it("partitions an oversized Guardrail body instead of repeating it as fixed context", async () => {
+    const largeArticle = Object.freeze({
+      id: "large-rule",
+      title: "Large rule",
+      body: `RULE_HEAD ${"g".repeat(133790)} RULE_TAIL`,
+      meta: { phase: ["spec"], category: "testing" },
+    });
+    const ranges = [];
+    let finalCalls = 0;
+    const agent = {
+      resolve: () => true,
+      call: async (userPrompt, options) => {
+        assert.ok(PromptLogicalFootprint.measure({ userPrompt, ...options }).total <= 120000);
+        if (userPrompt.includes("## Canonical input ranges\n")) {
+          const supplied = JSON.parse(userPrompt.split("## Canonical input ranges\n")[1]);
+          ranges.push(...supplied.filter((range) => range.sourceRef.startsWith("large-rule:canonical-obligation")));
+          return JSON.stringify({ observations: supplied.map((range) => ({
+            requirementId: largeArticle.id,
+            sourceRef: range.sourceRef,
+            support: ["RULE_HEAD", "RULE_TAIL"].filter((marker) => range.content.includes(marker)),
+            contradictions: [],
+            unresolved: [],
+          })) });
+        }
+        finalCalls += 1;
+        assert.match(userPrompt, /RULE_HEAD/);
+        assert.match(userPrompt, /RULE_TAIL/);
+        return JSON.stringify({ observations: [] });
+      },
+    };
+
+    const result = await checkGuardrail(".", "small source", "spec", undefined, [], {
+      agent,
+      loadGuardrails: () => [largeArticle],
+    });
+
+    const reconstructed = ranges
+      .sort((left, right) => left.start - right.start)
+      .map((range) => range.content)
+      .join("");
+    assert.equal(reconstructed, `Guardrail ${largeArticle.id}: ${largeArticle.title}\n${largeArticle.body}`);
+    assert.ok(ranges.length > 1);
+    assert.equal(finalCalls, 1);
+    assert.equal(result.passed, true, JSON.stringify(result));
+  });
+
   it("retains distinct blocking occurrences at the beginning, middle and end of oversized source", async () => {
     const markers = ["HEAD_VIOLATION", "MIDDLE_VIOLATION", "TAIL_VIOLATION"];
     const source = markers.join(`\n${"x".repeat(70000)}\n`);

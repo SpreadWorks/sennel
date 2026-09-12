@@ -146,7 +146,7 @@ export class RequirementObservationEnvelope extends PromptRequestEnvelope {
         } } },
       })
       .setFmtFallback('Return JSON {"observations":[{"requirementId":"...","sourceRef":"...","support":[],"contradictions":[],"unresolved":[]}]} only.')
-      .addUserPrompt("## Requirement", this.requirement.toPromptText())
+      .addUserPrompt("## Obligation identity", this.requirement.id)
       .addUserPrompt("## Batch", JSON.stringify({ index: context.index, count: context.count }))
       .addUserPrompt("## Canonical input ranges", JSON.stringify(elements.map((entry) => ({
         sourceRef: entry.id, revision: entry.sourceRevision, start: entry.start, end: entry.end,
@@ -168,10 +168,17 @@ export class RequirementEvidenceInput {
 }
 
 export class RequirementEvidencePlan {
-  constructor({ requirement, inputs, limit = new PromptRequestLimit() }) {
+  constructor({ requirement, inputs, canonicalInput = null, limit = new PromptRequestLimit() }) {
     const envelope = new RequirementObservationEnvelope(requirement);
     const builder = new PromptInputBuilder({ envelope, limit });
-    inputs.forEach((input, sequence) => {
+    const canonicalInputs = [
+      canonicalInput ?? new RequirementEvidenceInput({
+        id: `${requirement.id}:canonical-obligation`,
+        text: requirement.toPromptText(),
+      }),
+      ...inputs,
+    ];
+    canonicalInputs.forEach((input, sequence) => {
       if (!(input instanceof RequirementEvidenceInput)) throw new Error("Requirement evidence plan requires typed inputs");
       builder.add(new RangedTextPromptElement({
         id: input.id, text: input.text, sourceRevision: digest(input.text), sequence,

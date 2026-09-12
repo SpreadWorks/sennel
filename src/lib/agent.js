@@ -42,13 +42,24 @@ import {
   EmptyAgentResponseFailure,
 } from "./agent-failure.js";
 import { resolvePromptCharacterLimit } from "./config.js";
-import { PromptInvocationProjectionOverflowFailure } from "./prompt-batching.js";
+import {
+  MAX_AGENT_ARGUMENT_BYTES,
+  MAX_AGENT_ARGV_BYTES,
+  ResolvedAgentInvocationProjection,
+} from "./prompt-batching.js";
+
+// Keep the invocation projection at the Agent boundary for callers that need
+// to inspect the exact transport selected by Agent. The implementation lives
+// with the shared prompt execution value types.
+export {
+  MAX_AGENT_ARGUMENT_BYTES,
+  MAX_AGENT_ARGV_BYTES,
+  ResolvedAgentInvocationProjection,
+};
 
 const DEFAULT_DIRECT_CHILD_EXIT_DRAIN_MS = 250;
 const PROCESS_DEATH_POLL_MS = 10;
 const DEFAULT_STDIN_FALLBACK_THRESHOLD = 100_000;
-export const MAX_AGENT_ARGUMENT_BYTES = (128 * 1024) - 1;
-export const MAX_AGENT_ARGV_BYTES = 256 * 1024;
 const MAX_EXECUTION_ENVIRONMENT_VARIABLES = 64;
 const MAX_EXECUTION_ENVIRONMENT_BYTES = 64 * 1024;
 const MAX_RETRY = 5;
@@ -97,93 +108,6 @@ class AgentExecutionContext {
     this.providerWorkDir = providerWorkDir;
     this.spawnCwd = spawnCwd;
     Object.freeze(this);
-  }
-}
-
-/**
- * Side-effect-free description of the provider/profile-specific request which
- * Agent would send. Character accounting is deliberately independent from the
- * UTF-8 byte accounting used to select argv or stdin transport.
- */
-export class ResolvedAgentInvocationProjection {
-  constructor({
-    providerKey,
-    profileKey,
-    command,
-    promptCharacterCount,
-    systemPromptCharacterCount,
-    schemaCharacterCount,
-    finalArgs,
-    inlineArgvByteCount,
-    schemaMode,
-    usesStdin,
-  }) {
-    for (const [field, value] of Object.entries({
-      promptCharacterCount,
-      systemPromptCharacterCount,
-      schemaCharacterCount,
-      inlineArgvByteCount,
-    })) {
-      if (!Number.isSafeInteger(value) || value < 0) {
-        throw new Error(`agent invocation projection ${field} must be a non-negative integer`);
-      }
-    }
-    if (!Array.isArray(finalArgs)) throw new Error("agent invocation projection finalArgs must be an array");
-    if (!["none", "inline", "file", "fallback"].includes(schemaMode)) {
-      throw new Error(`unsupported agent invocation projection schemaMode: ${schemaMode}`);
-    }
-    this.providerKey = providerKey;
-    this.profileKey = profileKey;
-    this.command = command;
-    this.promptCharacterCount = promptCharacterCount;
-    this.systemPromptCharacterCount = systemPromptCharacterCount;
-    this.schemaCharacterCount = schemaCharacterCount;
-    this.finalArgs = Object.freeze([...finalArgs]);
-    this.inlineArgvByteCount = inlineArgvByteCount;
-    this.argvByteCount = argvByteLength(this.finalArgs);
-    this.maxArgumentByteCount = argvMaxElementByteLength(this.finalArgs);
-    this.schemaMode = schemaMode;
-    this.usesStdin = usesStdin === true;
-    Object.freeze(this);
-  }
-
-  fits(limit) {
-    return this.promptCharacterCount <= normalizeProjectionCharacterLimit(limit)
-      && this.argvByteCount <= MAX_AGENT_ARGV_BYTES
-      && this.maxArgumentByteCount <= MAX_AGENT_ARGUMENT_BYTES;
-  }
-
-  assertWithinLimit(limit) {
-    const maximum = normalizeProjectionCharacterLimit(limit);
-    if (this.promptCharacterCount > maximum) {
-      throw new PromptInvocationProjectionOverflowFailure(
-        `resolved agent invocation prompt has ${this.promptCharacterCount} characters; limit is ${maximum}`,
-        {
-          actualCharacters: this.promptCharacterCount,
-          maximumCharacters: maximum,
-          providerKey: this.providerKey,
-          profileKey: this.profileKey,
-          schemaMode: this.schemaMode,
-          usesStdin: this.usesStdin,
-        },
-      );
-    }
-    if (this.argvByteCount > MAX_AGENT_ARGV_BYTES || this.maxArgumentByteCount > MAX_AGENT_ARGUMENT_BYTES) {
-      throw new PromptInvocationProjectionOverflowFailure(
-        `resolved agent invocation argv exceeds its safe byte limit; argv=${this.argvByteCount}, maxArgument=${this.maxArgumentByteCount}`,
-        {
-          actualArgvBytes: this.argvByteCount,
-          maximumArgvBytes: MAX_AGENT_ARGV_BYTES,
-          actualArgumentBytes: this.maxArgumentByteCount,
-          maximumArgumentBytes: MAX_AGENT_ARGUMENT_BYTES,
-          providerKey: this.providerKey,
-          profileKey: this.profileKey,
-          schemaMode: this.schemaMode,
-          usesStdin: this.usesStdin,
-        },
-      );
-    }
-    return this;
   }
 }
 
@@ -704,6 +628,11 @@ class Agent {
     const maxAttempts = retry.retryCount + 1;
     let lastFailure = null;
     for (let attempt = 0; attempt <= retry.retryCount; attempt++) {
+      const materializedInvocation = blueprint.materialize({
+        agentWorkDir: this._paths.agentWorkDir,
+        commandId: options.commandId,
+      });
+      blueprint.projection.assertMaterializedArgvWithinLimit(materializedInvocation.finalArgs);
       await options.providerCallAdmission?.beforeProviderAttempt({
         attempt: attempt + 1,
         index: attempt,
@@ -712,7 +641,7 @@ class Agent {
         profileKey: resolved.profileKey,
       });
       try {
-        const result = await this._callOnce(resolved, prompt, options, blueprint);
+        const result = await this._callOnce(resolved, prompt, options, materializedInvocation);
         if (result.text) return result;
         lastFailure = new EmptyAgentResponseFailure()
           .recordAttempts(attempt + 1, maxAttempts);
@@ -731,14 +660,11 @@ class Agent {
     throw lastFailure;
   }
 
-  async _callOnce(resolved, prompt, options, blueprint) {
+  async _callOnce(resolved, prompt, options, materializedInvocation) {
     const { provider, profile, providerKey, profileKey, timeoutMs: configuredTimeoutMs } = resolved;
     const timeoutMs = options.timeoutMs ?? configuredTimeoutMs;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("agent per-call timeoutMs must be a positive number");
-    const { finalArgs, env, stdinContent, pendingSchemaWrite } = blueprint.materialize({
-      agentWorkDir: this._paths.agentWorkDir,
-      commandId: options.commandId,
-    });
+    const { finalArgs, env, stdinContent, pendingSchemaWrite } = materializedInvocation;
     // A provider work-directory flag is an optional provider optimization,
     // not the execution-boundary mechanism.  An explicit per-call directory
     // is always the child cwd too, so flagless providers cannot fall back to
@@ -1534,14 +1460,6 @@ function argvByteLength(args) {
 
 function argvMaxElementByteLength(args) {
   return args.reduce((maximum, argument) => Math.max(maximum, Buffer.byteLength(String(argument))), 0);
-}
-
-function normalizeProjectionCharacterLimit(limit) {
-  const normalized = Number(limit);
-  if (!Number.isSafeInteger(normalized) || normalized < 1) {
-    throw new Error("agent invocation projection limit must be a positive integer");
-  }
-  return normalized;
 }
 
 class AgentResolutionAttempt {

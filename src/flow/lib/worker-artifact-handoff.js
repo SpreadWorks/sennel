@@ -3690,6 +3690,106 @@ function handoffInputDigest(inputs, contextSnapshot) {
   }));
 }
 
+export class WorkerArtifactRetryInstruction {
+  constructor({ code, classification, message, remainingCalls = null } = {}) {
+    this.code = requiredString(code, "worker retry instruction code");
+    this.classification = requiredString(classification, "worker retry instruction classification");
+    this.message = requiredString(message, "worker retry instruction message");
+    if (remainingCalls !== null && (!Number.isSafeInteger(remainingCalls) || remainingCalls < 0)) {
+      throw new Error("worker retry instruction remainingCalls must be a non-negative integer or null");
+    }
+    this.remainingCalls = remainingCalls;
+    Object.freeze(this);
+  }
+
+  static fromJSON(value) {
+    exactObjectKeys(value, ["code", "classification", "message", "remainingCalls"], "worker retry instruction");
+    return new WorkerArtifactRetryInstruction(value);
+  }
+
+  toJSON() {
+    return {
+      code: this.code,
+      classification: this.classification,
+      message: this.message,
+      remainingCalls: this.remainingCalls,
+    };
+  }
+}
+
+/** Immutable per-attempt worker guidance carried by request.json, never argv or env. */
+export class WorkerArtifactWorkerInstructions {
+  constructor({ retryFeedback = null, schemaGuidance = null } = {}) {
+    this.retryFeedback = retryFeedback === null
+      ? null
+      : retryFeedback instanceof WorkerArtifactRetryInstruction
+        ? retryFeedback
+        : new WorkerArtifactRetryInstruction(retryFeedback);
+    if (schemaGuidance !== null && (typeof schemaGuidance !== "string" || schemaGuidance.trim() === "")) {
+      throw new Error("worker schema guidance must be a non-empty string or null");
+    }
+    this.schemaGuidance = schemaGuidance;
+    Object.freeze(this);
+  }
+
+  static fromJSON(value) {
+    exactObjectKeys(value, ["retryFeedback", "schemaGuidance"], "worker instructions");
+    return new WorkerArtifactWorkerInstructions({
+      retryFeedback: value.retryFeedback === null
+        ? null
+        : WorkerArtifactRetryInstruction.fromJSON(value.retryFeedback),
+      schemaGuidance: value.schemaGuidance,
+    });
+  }
+
+  toJSON() {
+    return {
+      retryFeedback: this.retryFeedback?.toJSON() ?? null,
+      schemaGuidance: this.schemaGuidance,
+    };
+  }
+
+  appendSchemaGuidance(guidance) {
+    if (guidance === null) return this;
+    if (this.schemaGuidance === guidance || this.schemaGuidance?.endsWith(`\n${guidance}`)) return this;
+    return new WorkerArtifactWorkerInstructions({
+      retryFeedback: this.retryFeedback,
+      schemaGuidance: [this.schemaGuidance, guidance].filter(Boolean).join("\n"),
+    });
+  }
+}
+
+function requestBoundWorkerGuidance(stepId, inputs) {
+  if (stepId === "task-triage") {
+    const review = inputs.find((input) => input.name === "task-review.json").document;
+    const findingKeys = [
+      ...review.blockingFindings,
+      ...review.nonBlockingImprovements,
+    ].map((finding) => finding.findingKey);
+    return [
+      "The parent-derived canonical task-triage findingKey sequence is:",
+      JSON.stringify(findingKeys),
+      `triage.dispositions must contain exactly ${findingKeys.length} entries with this exact key set.`,
+    ].join("\n");
+  }
+  if (stepId === "task-repair") {
+    const triage = inputs.find((input) => input.name === "task-triage.json").document;
+    const authority = inputs.find((input) => input.name === "task-source-authority.json").document;
+    const findingKeys = triage.dispositions
+      .filter((entry) => entry.disposition === "apply")
+      .map((entry) => entry.findingKey);
+    return [
+      "The parent-derived task-repair apply findingKey sequence is:",
+      JSON.stringify(findingKeys),
+      "The exact project-source allow-list for repair.findings paths is:",
+      JSON.stringify(authority.allowedPaths),
+      "Report only source paths from that allow-list which this worker actually edits.",
+      "Never report request.json, action.json, .sennel handoff runtime, or any other dispatcher-owned path as a repair mutation.",
+    ].join("\n");
+  }
+  return null;
+}
+
 export class WorkerArtifactHandoffRequest {
   constructor({
     mainRoot,
@@ -3712,6 +3812,7 @@ export class WorkerArtifactHandoffRequest {
     canonicalGeneration = null,
     canonicalLocation = null,
     flowManager = null,
+    workerInstructions = new WorkerArtifactWorkerInstructions(),
   }) {
     this.mainRoot = path.resolve(mainRoot);
     this.executionRoot = path.resolve(executionRoot);
@@ -3802,6 +3903,12 @@ export class WorkerArtifactHandoffRequest {
     });
     this.contextSnapshot = contextSnapshot;
     this.payloads = Object.freeze(payloads);
+    if (!(workerInstructions instanceof WorkerArtifactWorkerInstructions)) {
+      throw new Error("worker handoff requires typed worker instructions");
+    }
+    this.workerInstructions = workerInstructions.appendSchemaGuidance(
+      requestBoundWorkerGuidance(this.stepId, this.inputs),
+    );
     this.generatedAt = requiredString(generatedAt, "handoff generatedAt");
     this.handoffRoot = executionHandoffRoot(this.executionRoot, this.specId);
     if (typeof canonicalLocation?.runtimeLock !== "function") {
@@ -3824,11 +3931,27 @@ export class WorkerArtifactHandoffRequest {
     this.submissionPath = path.join(this.directory, "handoff.json");
     this.sourceMutationManifestPath = path.join(this.directory, "source-mutation-manifest.json");
     this.quarantinePath = path.join(this.directory, "quarantine.json");
+    this.specTestTopology = this.stepId === "test"
+      ? CanonicalSpecTestTopology.fromWorkerTestTree({
+          flowManager: this.flowManager,
+          specId: this.specId,
+          repositoryRoot: this.mainRoot,
+        })
+      : null;
+    this.sealCommand = this.policy.kind === "source" ? null : "sennel flow run seal-handoff";
     if (!isWithin(this.handoffRoot, this.directory)) throw new Error("handoff directory escapes its runtime authority");
     Object.freeze(this);
   }
 
-  static create({ mainRoot, executionRoot, state, invocation, flowManager = null, now = () => new Date() }) {
+  static create({
+    mainRoot,
+    executionRoot,
+    state,
+    invocation,
+    flowManager = null,
+    now = () => new Date(),
+    workerInstructions = new WorkerArtifactWorkerInstructions(),
+  }) {
     const policy = workerArtifactHandoffPolicy(invocation?.action?.nextAction?.step);
     if (!policy) return null;
     if (state?.schemaRevision !== 3) {
@@ -3973,6 +4096,7 @@ export class WorkerArtifactHandoffRequest {
       canonicalGeneration: policy.kind === "source" ? canonicalSourceHandoffGeneration({ flowManager, state }) : null,
       canonicalLocation: flowManager.specLocation(state.specId),
       flowManager,
+      workerInstructions,
     });
   }
 
@@ -4059,6 +4183,10 @@ export class WorkerArtifactHandoffRequest {
         baselineDigest,
         baselineByteLength,
       })),
+      workerInstructions: this.workerInstructions.toJSON(),
+      specTestTopology: this.specTestTopology?.toJSON() ?? null,
+      sealCommand: this.sealCommand,
+      completionOwner: "parent-dispatcher",
       generatedAt: this.generatedAt,
     };
   }
@@ -4112,6 +4240,7 @@ export class WorkerArtifactHandoffRequest {
       inputDigest: this.inputDigest, inputRevision: this.inputRevision, generatedAt: this.generatedAt,
       testReviewRepair: this.testReviewRepair, testReviewRepairProgress: this.testReviewRepairProgress,
       workerVisibleTestReviewRepair: this.workerVisibleTestReviewRepair,
+      workerInstructions: this.workerInstructions,
       sourceMutationBaseline: this.sourceMutationBaseline, sourceHandoffCheckpoint,
       sourceHandoffIdentity: this.sourceHandoffIdentity, canonicalGeneration: this.canonicalGeneration,
       canonicalLocation: this.flowManager.specLocation(this.specId), flowManager: this.flowManager,
@@ -4175,14 +4304,9 @@ export class WorkerArtifactHandoffRequest {
         .filter((input) => !(this.testReviewRepair && input.name === "test-review.json"))
         .map((input) => input.toJSON()),
       contextSnapshot: this.contextSnapshot?.toJSON() ?? null,
-      ...(this.stepId === "test" && {
-        specTestTopology: CanonicalSpecTestTopology.fromWorkerTestTree({
-          flowManager: this.flowManager,
-          specId: this.specId,
-          repositoryRoot: this.mainRoot,
-        }).toJSON(),
-      }),
-      ...(this.policy.kind !== "source" && { sealCommand: "sennel flow run seal-handoff" }),
+      workerInstructions: this.workerInstructions.toJSON(),
+      ...(this.specTestTopology && { specTestTopology: this.specTestTopology.toJSON() }),
+      ...(this.sealCommand && { sealCommand: this.sealCommand }),
       completionOwner: "parent-dispatcher",
     };
   }
@@ -4358,36 +4482,25 @@ export class WorkerArtifactHandoffRequest {
   }
 }
 
-/** Bounded prompt projection; immutable request.json retains the full capability. */
+/** Minimal worker reference; immutable request.json retains the full capability. */
 export class WorkerArtifactHandoffReference {
   constructor(request) {
     if (!(request instanceof WorkerArtifactHandoffRequest)) throw new Error("worker input reference requires a handoff request");
-    const contract = request.toWorkerJSON();
     this.requestPath = request.requestPath;
     this.requestDigest = request.requestDigest;
-    this.actionRequestPath = request.actionRequestPath;
-    this.actionRequestDigest = request.actionRequestDigest;
+    this.actionFilePath = request.actionRequestPath;
+    this.actionFileDigest = request.actionRequestDigest;
     this.actionDigest = request.actionDigest;
     this.dispatchInvocationId = request.dispatchInvocationId;
-    this.inputDigest = request.inputDigest;
-    this.inputRevision = request.inputRevision;
-    this.inputs = Object.freeze(contract.inputs.map(({ name, targetRelativePath, digest: inputDigest, byteLength }) =>
-      Object.freeze({ name, targetRelativePath, digest: inputDigest, byteLength })));
-    this.payloads = Object.freeze(contract.payloads.map((payload) => Object.freeze(payload)));
-    this.specTestTopology = contract.specTestTopology ? Object.freeze(contract.specTestTopology) : null;
-    this.sealCommand = contract.sealCommand ?? null;
     Object.freeze(this);
   }
 
   toJSON() {
-    return {
+    return Object.freeze({
       requestPath: this.requestPath, requestDigest: this.requestDigest,
-      actionRequestPath: this.actionRequestPath, actionRequestDigest: this.actionRequestDigest,
+      actionFilePath: this.actionFilePath, actionFileDigest: this.actionFileDigest,
       actionDigest: this.actionDigest, dispatchInvocationId: this.dispatchInvocationId,
-      inputDigest: this.inputDigest, inputRevision: this.inputRevision,
-      inputs: this.inputs, payloads: this.payloads, specTestTopology: this.specTestTopology,
-      sealCommand: this.sealCommand, completionOwner: "parent-dispatcher",
-    };
+    });
   }
 }
 
@@ -4733,7 +4846,8 @@ function requestFromStored(filePath) {
   exactObjectKeys(document, [
     "version", "runId", "specId", "issue", "stepId", "taskId", "actionDigest", "dispatchInvocationId",
       "targetAuthority", "inputDigest", "inputRevision", "inputs", "testReviewRepair", "contextSnapshot",
-    "payloads", "generatedAt", "sourceMutationBaselineDigest", "sourceHandoffIdentity", "sourceHandoffCheckpointDigest",
+    "payloads", "workerInstructions", "specTestTopology", "sealCommand", "completionOwner", "generatedAt",
+    "sourceMutationBaselineDigest", "sourceHandoffIdentity", "sourceHandoffCheckpointDigest",
   ], "worker artifact handoff request");
   if (document.version !== WORKER_ARTIFACT_HANDOFF_VERSION) {
     throw new Error(`worker artifact handoff version must be ${WORKER_ARTIFACT_HANDOFF_VERSION}`);
@@ -4757,6 +4871,18 @@ function requestFromStored(filePath) {
     || path.basename(actionDirectory) !== actionDigest
   ) {
     throw new Error("handoff request path does not match its guarded identities");
+  }
+  if (document.completionOwner !== "parent-dispatcher") {
+    throw new Error("handoff request completion owner is invalid");
+  }
+  const expectedSealCommand = policy.kind === "source" ? null : "sennel flow run seal-handoff";
+  if (document.sealCommand !== expectedSealCommand) {
+    throw new Error("handoff request seal command does not match its step policy");
+  }
+  if (document.stepId === "test") {
+    CanonicalSpecTestTopology.fromJSON(document.specTestTopology, { repositoryRoot: executionRoot });
+  } else if (document.specTestTopology !== null) {
+    throw new Error("handoff request spec-test topology does not match its step policy");
   }
   const storedPayloads = Array.isArray(document.payloads) ? document.payloads : [];
   if (storedPayloads.length !== policy.payloads.length) {
@@ -4825,6 +4951,7 @@ function requestFromStored(filePath) {
       : document.contextSnapshot.kind === "task"
         ? TaskWorkerContextSnapshot.fromStored(document.contextSnapshot)
         : DraftWorkerContextSnapshot.fromStored(document.contextSnapshot),
+    workerInstructions: WorkerArtifactWorkerInstructions.fromJSON(document.workerInstructions),
     // Runtime storage carries only content-addressed references. The baseline
     // and checkpoint bodies are reconstructed from the canonical store before
     // any parent-owned comparison or recovery action.
@@ -4936,6 +5063,7 @@ function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, 
     inputRevision: stored.inputRevision,
     generatedAt: stored.generatedAt,
     workerVisibleTestReviewRepair: stored.testReviewRepair,
+    workerInstructions: stored.workerInstructions,
     sourceMutationBaseline: sourceAuthority?.checkpoint.baseline ?? null,
     sourceHandoffIdentity: sourceAuthority?.checkpoint.identity ?? null,
     canonicalGeneration: stored.sourceHandoffIdentity?.canonicalGeneration ?? null,
@@ -4976,6 +5104,7 @@ function reboundRestoredHandoffRequest({ identityRequest, mainRoot, executionRoo
     testReviewRepair,
     testReviewRepairProgress,
     workerVisibleTestReviewRepair: stored.testReviewRepair,
+    workerInstructions: stored.workerInstructions,
     sourceMutationBaseline: sourceAuthority?.checkpoint.baseline ?? null,
     sourceHandoffIdentity: sourceAuthority?.checkpoint.identity ?? null,
     canonicalGeneration: stored.sourceHandoffIdentity?.canonicalGeneration ?? null,
@@ -6586,7 +6715,7 @@ export class WorkerArtifactHandoffCoordinator {
     this.now = now;
   }
 
-  createRequest({ ctx, state, invocation }) {
+  createRequest({ ctx, state, invocation, workerInstructions = new WorkerArtifactWorkerInstructions() }) {
     const request = WorkerArtifactHandoffRequest.create({
       mainRoot: ctx.mainRoot || ctx.root,
       executionRoot: ctx.executionRoot || ctx.root,
@@ -6594,6 +6723,7 @@ export class WorkerArtifactHandoffCoordinator {
       invocation,
       flowManager: ctx.flowManager,
       now: this.now,
+      workerInstructions,
     });
     if (request === null) return null;
     if (request.policy.kind !== "source") return request.prepare();

@@ -47,6 +47,7 @@ import {
   WorkerArtifactHandoffError,
   WorkerArtifactRetryExhaustedError,
   WorkerArtifactHandoffRequest,
+  WorkerArtifactWorkerInstructions,
   SpecTestBootstrapObservationAuthority,
   materializeSourceWorkerEffect,
   sealParentMaterializedSourceWorkerEffect,
@@ -59,6 +60,7 @@ import {
   AutoApprovedFlowDispatchAuthorization,
   ExplicitFlowDispatchAuthorization,
   FlowDispatchInvocation,
+  FlowDispatchWorkerInvocation,
   FlowDispatchSession,
   FlowDispatchTarget,
   UnapprovedFlowDispatchAuthorization,
@@ -220,10 +222,21 @@ function workerArtifactAgentOptions(stepId, outputSchema) {
     if (JSON.stringify(outputSchema) !== JSON.stringify(sourceSchema)) {
       throw new Error(`guarded source worker output schema is not the canonical effect schema: ${stepId}`);
     }
+    const workerRequestGuidance = stepId === "task-triage"
+      ? [
+          "For task-triage, read task-review.json before constructing the source effect.",
+          "The canonical finding set is every findingKey from blockingFindings followed by every findingKey from nonBlockingImprovements.",
+          "Copy each canonical findingKey into triage.dispositions exactly once; do not omit, rename, duplicate, or add keys.",
+          "Before returning, verify that the disposition count and exact key set equal the canonical finding count and key set.",
+        ].join("\n")
+      : null;
     // Schema-capable providers receive this directly through their native
     // structured-output flag. No prompt copy is permitted: the parent uses
     // the same schema again before materializing its owned effects.json.
-    return { jsonSchema: sourceSchema };
+    return {
+      jsonSchema: sourceSchema,
+      ...(workerRequestGuidance && { workerRequestGuidance }),
+    };
   }
   let payloadName;
   let schema;
@@ -252,10 +265,10 @@ function workerArtifactAgentOptions(stepId, outputSchema) {
   ].join("\n");
   return {
     // The provider response is still the sealed-handoff report. The complete
-    // payload schema is prompt guidance for the file the worker must write.
+    // payload schema stays in request.json for the file the worker must write.
     jsonSchema: outputSchema,
-    fmtFallback: schemaGuidance,
-    promptGuidance: schemaGuidance,
+    fmtFallback: "Return only the sealed handoff report as valid JSON matching output_schema in action.json.",
+    workerRequestGuidance: schemaGuidance,
   };
 }
 
@@ -722,34 +735,42 @@ export function workerFacingNextAction(nextAction) {
 }
 
 export class FlowDispatchWork {
-  constructor(invocation, handoffRequest = null, retryFeedback = null) {
+  constructor(invocation, handoffRequest) {
     if (!(invocation instanceof FlowDispatchInvocation)) {
       throw new Error("FlowDispatchWork requires a FlowDispatchInvocation");
     }
-    if (handoffRequest != null && !(handoffRequest instanceof WorkerArtifactHandoffRequest)) {
+    if (!(handoffRequest instanceof WorkerArtifactHandoffRequest)) {
       throw new Error("FlowDispatchWork handoff requires a WorkerArtifactHandoffRequest");
-    }
-    if (retryFeedback != null && !(retryFeedback instanceof WorkerArtifactRetryFeedback)) {
-      throw new Error("FlowDispatchWork retry feedback requires a WorkerArtifactRetryFeedback");
     }
     this.invocation = invocation;
     this.handoffRequest = handoffRequest;
-    this.retryFeedback = retryFeedback;
     Object.freeze(this);
   }
 
-  executionEnvironment() {
+  workerInvocation() {
+    return new FlowDispatchWorkerInvocation({
+      invocation: this.invocation,
+      handoffReference: this.handoffRequest.toPromptReference(),
+    });
+  }
+
+  executionEnvironment(workerInvocation) {
+    if (!(workerInvocation instanceof FlowDispatchWorkerInvocation)) {
+      throw new Error("handoff execution environment requires its verified worker invocation");
+    }
     return {
-      ...this.invocation.executionEnvironment(),
-      ...(this.handoffRequest?.executionEnvironment() || {}),
+      ...workerInvocation.executionEnvironment(),
+      ...this.handoffRequest.executionEnvironment(),
     };
   }
 
-  prompt(promptGuidance = "") {
+  prompt(workerInvocation) {
     const { action, authorization, target } = this.invocation;
     const nextAction = workerFacingNextAction(action.nextAction);
     const authorizationInstruction = authorization.workerInstruction();
-    const handoffContract = this.handoffRequest?.toPromptReference().toJSON() ?? null;
+    if (!(workerInvocation instanceof FlowDispatchWorkerInvocation)) {
+      throw new Error("handoff prompt requires its verified worker invocation");
+    }
     const nonblockingRule = nextAction.nonblockingDecision
       ? [
           "",
@@ -758,13 +779,12 @@ export class FlowDispatchWork {
           "parent dispatcher refresh authority. Do not ask the user.",
         ].join("\n")
       : "";
-    const handoffInstruction = this.handoffRequest
-      ? this.handoffRequest.policy.kind === "source"
+    const handoffInstruction = this.handoffRequest.policy.kind === "source"
         ? [
           "",
-          "This action uses the source-worker handoff contract below.",
+          "This action uses the source-worker handoff contract in request.json.",
           "Treat its input snapshots as the immutable source for this action.",
-          "Read requestPath in full before acting; it contains the input documents, context, selected repair capability, and source authority.",
+          "Read requestPath from the dispatch invocation contract in full before acting; it contains the input documents, context, selected repair capability, and source authority.",
           this.handoffRequest.policy.sourceMutation.mode === "forbidden"
             ? "Read the supplied source without editing any project files."
             : this.handoffRequest.policy.preservesRejectedSource
@@ -774,73 +794,40 @@ export class FlowDispatchWork {
           "Do not write effects.json, do not write a handoff submission, and do not run a seal command.",
           "Return only the structured source effect required by the guarded action output_schema.",
           "The parent dispatcher validates, materializes, seals, publishes, and completes the step.",
-          "",
-          "Source-worker handoff contract:",
-          JSON.stringify(handoffContract, null, 2),
         ].join("\n")
         : [
           "",
-          "This action uses the worker artifact handoff contract below.",
+          "This action uses the worker artifact handoff contract in request.json.",
           "Treat its input snapshots as the immutable source for this action.",
-          "Read requestPath in full before acting; it contains the input documents, context, selected repair capability, and output authority.",
+          "Read requestPath from the dispatch invocation contract in full before acting; it contains the input documents, context, selected repair capability, output authority, spec-test topology when applicable, and the seal command.",
           "Write every declared payload only to its exact payloadPath. Existing",
           "instructions naming canonical artifact paths are overridden for outputs.",
           "Do not mark the Flow step done. After writing all payloads, run the exact",
-          "sealCommand once. The parent dispatcher alone validates, publishes, records",
+          "sealCommand from request.json once. The parent dispatcher alone validates, publishes, records",
           "revisions, and completes the step under canonical repository authority.",
           "Return the successful seal command data object as the worker report; it must",
           "match the guarded action output_schema but is never a completion signal.",
-          "",
-          "Worker artifact handoff contract:",
-          JSON.stringify(handoffContract, null, 2),
-        ].join("\n")
-      : "";
-    const retryInstruction = this.retryFeedback
-      ? [
-          "",
-          "Fresh worker handoff retry feedback (non-authoritative):",
-          "The parent dispatcher rejected the previous sealed payload before publication.",
-          "Correct this exact validation failure in a new payload. This feedback does not",
-          "change the guarded action, approval, input revision, or Flow state.",
-          JSON.stringify(this.retryFeedback.toJSON(), null, 2),
-        ].join("\n")
-      : "";
-    const specTestTopologyInstruction = handoffContract?.specTestTopology
+        ].join("\n");
+    const specTestTopologyInstruction = this.handoffRequest.stepId === "test"
       ? [
           "",
           "Spec-test topology:",
           "The logical `tests` payload is published below the canonical test root shown",
-          "in the handoff contract; it is not a repository-root test directory.",
+          "in request.json; it is not a repository-root test directory.",
           "Resolve every static relative import from each final canonical test file, not",
           "from the transient payload directory or an assumed ordinary `tests/` layout.",
           "Use a caught dynamic import for a module that implementation must create later.",
       ].join("\n")
       : "";
-    const sourceHandoff = this.handoffRequest?.policy?.kind === "source";
-    const schemaPayload = handoffContract?.payloads?.some(({ logicalName }) => logicalName === "review.delta.json")
-      ? "review.delta.json"
-      : "spec.json";
-    const schemaLabel = nextAction.step === "spec-repair"
-      ? "spec-repair review delta"
-      : nextAction.step === "spec-triage"
-        ? "spec-triage review delta"
-        : "spec artifact";
-    const schemaInstruction = promptGuidance
-      ? [
-          "",
-          "The provider may receive a separate response schema for this worker report.",
-          `Use the following canonical ${schemaLabel} guidance when writing ${schemaPayload}:`,
-          promptGuidance,
-        ].join("\n")
-      : "";
+    const sourceHandoff = this.handoffRequest.policy.kind === "source";
     return [
       "You are a worker owned by the sennel Flow CLI dispatcher.",
       "Execute exactly one supplied non-terminal Flow action in the current repository.",
       "Do not invoke a sennel.flow skill and do not run `sennel flow run dispatch`.",
       "Do not merely describe the work. Perform the edits and commands required by",
       sourceHandoff
-        ? "the action, but do not perform a durable Flow transition: the sealed source handoff is the only completion input."
-        : "the action, including its durable Flow transition or guarded refresh.",
+        ? "the action, but do not perform a durable Flow transition; your structured source effect is only a parent completion input."
+        : "the action through its handoff payloads and seal command; do not perform a separate Flow transition.",
       "Run every command in the foreground and wait for it to finish. Never start",
       "a review, gate, test, or other Flow command in parallel or in the background.",
       "Never choose a user decision. If a genuine user decision appears unexpectedly,",
@@ -856,23 +843,18 @@ export class FlowDispatchWork {
       "When the directive includes nextAction, execute that exact CLI-generated",
       "command; do not infer completion from pre-existing artifacts.",
       nonblockingRule,
-      schemaInstruction,
       "",
       "Machine-readable dispatch invocation contract:",
-      this.handoffRequest
-        ? `Read the JSON in environment variable ${FLOW_DISPATCH_INVOCATION_ENV}. Invocation identity: ${this.invocation.id}.`
-        : JSON.stringify(this.invocation.toJSON(), null, 2),
+      `Read the bounded JSON in environment variable ${FLOW_DISPATCH_INVOCATION_ENV}. It contains only action identity, immutable request/action file references, authorization, and target binding. Verify both file digests before using their full contents.`,
+      "Follow workerInstructions in request.json, including any payload schema guidance or retry correction.",
       "",
       "Guarded next action:",
-      this.handoffRequest
-        ? `Read and execute the full guarded action at ${this.handoffRequest.actionRequestPath}. Its canonical JSON digest is ${this.handoffRequest.actionRequestDigest}. The invocation actionDigest is ${this.handoffRequest.actionDigest}.`
-        : JSON.stringify(nextAction, null, 2),
+      "Read and execute the full guarded action from actionFilePath in the dispatch invocation contract. Its canonical JSON digest must equal actionFileDigest and its identity must equal actionDigest.",
       "",
       "Your response is only a worker report. The CLI ignores it as a completion",
       "signal and independently verifies the refreshed Flow and repository state.",
       handoffInstruction,
       specTestTopologyInstruction,
-      retryInstruction,
     ].join("\n");
   }
 }
@@ -1246,24 +1228,42 @@ export default class RunDispatchCommand extends FlowCommand {
     let handoffAuthority = null;
     let handoffPolicy = null;
     let handoffAuthorityAcquired = false;
+    let agentOptions = {};
     try {
       handoffPolicy = workerArtifactHandoffPolicy(action.nextAction.step);
-      if (handoffPolicy !== null) {
-        handoffAuthority = new FlowHandoffAuthorityLease({
-          mainRoot: ctx.mainRoot || ctx.root,
-          executionRoot: ctx.executionRoot || ctx.root,
-        });
-        // The authority is acquired before parent input capture. External
-        // upgrades therefore cannot alter immutable handoff inputs between
-        // request construction and its mutation snapshot.
-        handoffAuthority.acquire();
-        handoffAuthorityAcquired = true;
+      if (handoffPolicy === null) {
+        throw new WorkerArtifactHandoffError(
+          "invalid",
+          "FLOW_ARTIFACT_HANDOFF_REQUIRED",
+          `dispatcher worker action requires a handoff policy: ${action.nextAction.step}`,
+          { retryable: false, data: { stepId: action.nextAction.step } },
+        );
       }
+      const workerOptions = workerArtifactAgentOptions(
+        action.nextAction.step,
+        action.nextAction.output_schema,
+      );
+      const { workerRequestGuidance = null, ...providerOptions } = workerOptions;
+      agentOptions = providerOptions;
+      const workerInstructions = new WorkerArtifactWorkerInstructions({
+        retryFeedback: retryFeedback?.toJSON() ?? null,
+        schemaGuidance: workerRequestGuidance,
+      });
+      handoffAuthority = new FlowHandoffAuthorityLease({
+        mainRoot: ctx.mainRoot || ctx.root,
+        executionRoot: ctx.executionRoot || ctx.root,
+      });
+      // The authority is acquired before parent input capture. External
+      // upgrades therefore cannot alter immutable handoff inputs between
+      // request construction and its mutation snapshot.
+      handoffAuthority.acquire();
+      handoffAuthorityAcquired = true;
       const state = readFlowState(ctx);
       handoffRequest = this.handoffCoordinator.createRequest({
         ctx,
         state,
         invocation,
+        workerInstructions,
       });
     } catch (error) {
       handoffAuthority?.release();
@@ -1299,7 +1299,7 @@ export default class RunDispatchCommand extends FlowCommand {
         return { error, handoffRequest, agentError: null };
       }
 
-      const work = new FlowDispatchWork(invocation, handoffRequest, retryFeedback);
+      const work = new FlowDispatchWork(invocation, handoffRequest);
       const holdsSpecRepairMetric = action.nextAction.step === "spec-repair";
       const deferredMetric = handoffRequest
         ? new DeferredAgentInvocationMetric({ flowManager: ctx.flowManager })
@@ -1315,25 +1315,25 @@ export default class RunDispatchCommand extends FlowCommand {
       );
       try {
         const agent = this.agent || (this.agent = this.container.get("agent"));
-        const workerOptions = workerArtifactAgentOptions(
-          action.nextAction.step,
-          action.nextAction.output_schema,
-        );
-        const { promptGuidance, ...agentOptions } = workerOptions;
-        const prompt = work.prompt(promptGuidance);
-        if (handoffRequest?.policy.kind === "source") {
-          this.handoffCoordinator.startSourceWorker({ ctx, request: handoffRequest, invocation });
-        }
         let responseText;
         let processError = null;
+        let sourceWorkerStarted = false;
         try {
+          // Verify both immutable worker files before source start intent or
+          // any provider-visible effect is recorded.
+          const workerInvocation = work.workerInvocation();
+          const prompt = work.prompt(workerInvocation);
+          if (handoffRequest?.policy.kind === "source") {
+            this.handoffCoordinator.startSourceWorker({ ctx, request: handoffRequest, invocation });
+            sourceWorkerStarted = true;
+          }
           responseText = await agent.call(prompt, {
             commandId: handoffRequest?.policy.preservesRejectedSource ? `flow.dispatch.${handoffRequest.stepId}` : "flow.dispatch",
             executionWorkDir: ctx.executionRoot || ctx.root,
             cacheMode: "bypass",
             retryCount: 0,
             waitForProcessTree: true,
-            executionEnvironment: work.executionEnvironment(),
+            executionEnvironment: work.executionEnvironment(workerInvocation),
             deferredMetric,
             ...(activityMonitor && {
               timeoutMs: activityMonitor.maximumLifetimeMs,
@@ -1352,7 +1352,7 @@ export default class RunDispatchCommand extends FlowCommand {
           processError = error;
           throw error;
         } finally {
-          if (handoffRequest?.policy.kind === "source") {
+          if (handoffRequest?.policy.kind === "source" && sourceWorkerStarted) {
             if (processError?.unterminatedMembers?.length > 0) {
               throw new WorkerArtifactHandoffError(
                 "recovery-required", "FLOW_SOURCE_HANDOFF_START_UNCERTAIN",
@@ -1387,11 +1387,10 @@ export default class RunDispatchCommand extends FlowCommand {
         }
       }
 
-      if (!handoffRequest) return { error: null, handoffRequest: null, agentError };
-
       let reconciliation = null;
       try {
         if (fs.existsSync(handoffRequest.submissionPath)) activityMonitor?.observeSubmission();
+        if (agentError instanceof WorkerArtifactHandoffError) throw agentError;
         if (sourceResponseError !== null) throw sourceResponseError;
         reconciliation = this.handoffCoordinator.reconcile({
           ctx,

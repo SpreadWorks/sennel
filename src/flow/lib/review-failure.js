@@ -6,6 +6,7 @@
 
 import { reviewPhaseForFlowStepId } from "./review-route.js";
 import { AgentFailure } from "../../lib/agent-failure.js";
+import { PromptBatchingError } from "../../lib/prompt-batching.js";
 import { PRODUCT } from "../../lib/product.js";
 
 export const REVIEW_FAILURE_MARKER_PREFIX = `${PRODUCT.env("REVIEW_FAILURE")} `;
@@ -25,6 +26,14 @@ const MARKER_CLASSIFICATIONS = Object.freeze([
   "schema_failure",
 ]);
 const DEFAULT_SCHEMA_FAILURE_MAX_ATTEMPTS = 2;
+const INPUT_SIZE_PROMPT_FAILURE_CODES = Object.freeze([
+  "PROMPT_ELEMENT_TOO_LARGE",
+  "PROMPT_PARTITION_NO_PROGRESS",
+  "PROMPT_FIXED_CONTEXT_TOO_LARGE",
+  "PROMPT_BATCH_OVERFLOW",
+  "PROMPT_INVOCATION_PROJECTION_OVERFLOW",
+  "PROMPT_BATCH_COUNT_EXCEEDED",
+]);
 
 function requireString(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -53,7 +62,7 @@ export function reviewPhaseForStepId(stepId) {
 }
 
 function matchesInputSizeFailure(text) {
-  return /TEST_REVIEW_PROMPT_TOO_LARGE|prompt.*too large|input.*too large|context.*length|maximum context|token limit/i.test(text);
+  return /prompt.*too large|input.*too large|context.*length|maximum context|token limit/i.test(text);
 }
 
 function matchesProviderFailure(text) {
@@ -183,7 +192,7 @@ export class ReviewFailure {
     });
   }
 
-  static inputSizeFailure({ phase, reason, recoveryHint, recoveryCommand } = {}) {
+  static inputSizeFailure({ phase, reason, recoveryHint, recoveryCommand, failureCode = null } = {}) {
     return new ReviewFailure({
       phase,
       classification: "input_size_failure",
@@ -191,6 +200,21 @@ export class ReviewFailure {
       retryBudgetConsumed: false,
       recoveryHint: requireString(recoveryHint, "recoveryHint"),
       recoveryCommand: requireString(recoveryCommand, "recoveryCommand"),
+      failureCode,
+    });
+  }
+
+  static fromPromptBatchingFailure({ phase = "impl", failure, recoveryCommand = null } = {}) {
+    if (!(failure instanceof PromptBatchingError)) {
+      throw new Error("PromptBatchingError is required");
+    }
+    if (!INPUT_SIZE_PROMPT_FAILURE_CODES.includes(failure.code)) return null;
+    return ReviewFailure.inputSizeFailure({
+      phase,
+      reason: cleanReason(failure.message, "review input is too large"),
+      recoveryHint: "Reduce or partition the canonical review input before retrying.",
+      recoveryCommand: recoveryCommand || retryReviewCommand(phase),
+      failureCode: failure.code,
     });
   }
 
@@ -265,7 +289,7 @@ export class ReviewFailure {
     if (matchesInputSizeFailure(text)) {
       return ReviewFailure.inputSizeFailure({
         phase,
-        reason: text.includes("TEST_REVIEW_PROMPT_TOO_LARGE") ? "input-length" : cleanReason(text.split(/\r?\n/)[0], "review input is too large"),
+        reason: cleanReason(text.split(/\r?\n/)[0], "review input is too large"),
         recoveryHint: "Reduce review input before retrying.",
         recoveryCommand: command,
       });

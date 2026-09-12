@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import { PRODUCT } from "../../lib/product.js";
 
 import {
@@ -20,6 +21,18 @@ function requireString(value, field) {
     throw new Error(`${field} is required`);
   }
   return value.trim();
+}
+
+function requireDigest(value, field) {
+  const digest = requireString(value, field);
+  if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error(`${field} must be a SHA-256 digest`);
+  return digest;
+}
+
+function requireAbsolutePath(value, field) {
+  const filePath = requireString(value, field);
+  if (!path.isAbsolute(filePath)) throw new Error(`${field} must be absolute`);
+  return path.resolve(filePath);
 }
 
 function stableStringify(value) {
@@ -400,6 +413,62 @@ export class FlowDispatchInvocationStaleError extends Error {
       activeActionDigest: activeAction.digest,
       authorization: authorization.toJSON(),
     });
+  }
+}
+
+/**
+ * Minimal execution-boundary projection for a handoff worker.
+ *
+ * The complete action and worker capability stay in their content-addressed
+ * files. This value carries only enough authority to identify and verify those
+ * files without copying action inputs into the provider prompt or environment.
+ */
+export class FlowDispatchWorkerInvocation {
+  constructor({ invocation, handoffReference }) {
+    if (!(invocation instanceof FlowDispatchInvocation)) {
+      throw new Error("FlowDispatchWorkerInvocation requires a FlowDispatchInvocation");
+    }
+    if (!handoffReference || typeof handoffReference !== "object" || Array.isArray(handoffReference)) {
+      throw new Error("FlowDispatchWorkerInvocation requires a handoff reference");
+    }
+    this.version = DISPATCH_INVOCATION_VERSION;
+    this.dispatchInvocationId = requireString(
+      handoffReference.dispatchInvocationId,
+      "worker dispatchInvocationId",
+    );
+    this.actionDigest = requireDigest(handoffReference.actionDigest, "worker actionDigest");
+    if (this.dispatchInvocationId !== invocation.id || this.actionDigest !== invocation.action.digest) {
+      throw new Error("worker handoff reference does not match its dispatch invocation");
+    }
+    this.requestPath = requireAbsolutePath(handoffReference.requestPath, "worker requestPath");
+    this.requestDigest = requireDigest(handoffReference.requestDigest, "worker requestDigest");
+    this.actionFilePath = requireAbsolutePath(handoffReference.actionFilePath, "worker actionFilePath");
+    this.actionFileDigest = requireDigest(handoffReference.actionFileDigest, "worker actionFileDigest");
+    this.authorization = invocation.authorization;
+    this.targetBinding = invocation.target.bindingToken;
+    Object.freeze(this);
+  }
+
+  executionEnvironment() {
+    return {
+      ...(this.targetBinding && { [FLOW_TARGET_BINDING_ENV]: this.targetBinding }),
+      [FLOW_DISPATCH_INVOCATION_ID_ENV]: this.dispatchInvocationId,
+      [FLOW_DISPATCH_INVOCATION_ENV]: JSON.stringify(this.toJSON()),
+    };
+  }
+
+  toJSON() {
+    return {
+      version: this.version,
+      dispatchInvocationId: this.dispatchInvocationId,
+      actionDigest: this.actionDigest,
+      requestPath: this.requestPath,
+      requestDigest: this.requestDigest,
+      actionFilePath: this.actionFilePath,
+      actionFileDigest: this.actionFileDigest,
+      authorization: this.authorization.toJSON(),
+      targetBinding: this.targetBinding,
+    };
   }
 }
 

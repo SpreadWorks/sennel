@@ -21,7 +21,6 @@ import {
 import { ArtifactViewService } from "../../../../src/flow/lib/artifact-view-service.js";
 import { splitArtifactViewSummary } from "../../../../src/flow/lib/artifact-view-summary.js";
 import {
-  FlowDispatchActionIdentity,
   FlowDispatchSession,
   FlowDispatchTarget,
 } from "../../../../src/flow/lib/dispatch-invocation.js";
@@ -478,18 +477,6 @@ function parsedViewChoice(choice) {
     binding: match[3],
     expectsNoIssue: choice.nextAction.endsWith(" --expect-no-issue"),
   };
-}
-
-function legacyApprovalActionIdentity({ binding, invocation, nextAction }) {
-  const expectation = new FlowTargetExpectation({ expectBinding: binding });
-  const target = new FlowDispatchTarget({ expectation, binding: expectation.binding });
-  assert.deepEqual(target.toJSON(), invocation.target);
-  const session = new FlowDispatchSession({ id: invocation.id, target });
-  return new FlowDispatchActionIdentity({
-    session,
-    nextAction,
-    repositoryFingerprint: invocation.action.repositoryFingerprint,
-  });
 }
 
 function invokeViewChoice(root, choice, { binding = null } = {}) {
@@ -1130,13 +1117,19 @@ describe("flow dispatch CLI", () => {
     assert.equal(fs.existsSync(worker.invocation), true);
     const prompt = fs.readFileSync(worker.prompt, "utf8");
     const invocation = JSON.parse(fs.readFileSync(worker.invocation, "utf8"));
-    const actionMarker = "\n\nGuarded next action:\n";
-    const reportMarker = "\n\nYour response is only a worker report.";
-    const [, actionAndReport] = prompt.split(actionMarker);
-    const [actionReference] = actionAndReport.split(reportMarker);
-    const actionPath = actionReference.match(/^Read and execute the full guarded action at (.+)\. Its canonical JSON digest is /)?.[1];
-    assert.ok(actionPath, "the worker receives the full action through an immutable file reference");
-    const workerAction = JSON.parse(fs.readFileSync(actionPath, "utf8"));
+    assert.deepEqual(Object.keys(invocation), [
+      "version",
+      "dispatchInvocationId",
+      "actionDigest",
+      "requestPath",
+      "requestDigest",
+      "actionFilePath",
+      "actionFileDigest",
+      "authorization",
+      "targetBinding",
+    ]);
+    const workerAction = JSON.parse(fs.readFileSync(invocation.actionFilePath, "utf8"));
+    const workerRequest = JSON.parse(fs.readFileSync(invocation.requestPath, "utf8"));
     const boundaryAction = boundary.envelope.data.nextAction;
     assert.equal(resumed.envelope.data.nextAction, null, "the deliberately failed worker must not advance the handoff step");
     assert.deepEqual(Object.keys(workerAction), [
@@ -1153,21 +1146,21 @@ describe("flow dispatch CLI", () => {
     assert.equal(workerAction.step, "test");
     assert.equal(workerAction.action, "write-tests");
     assert.equal(workerAction.context.workerArtifactHandoff.required, true);
-    assert.equal(invocation.action.step, "test");
-    assert.equal(invocation.action.directive.kind, "execute_step");
-    assert.equal(invocation.action.directive.action, "write-tests");
-    const legacyIdentity = legacyApprovalActionIdentity({
-      binding,
-      invocation,
-      nextAction: workerAction,
-    });
-    assert.equal(invocation.action.digest, legacyIdentity.digest);
-    assert.equal(invocation.action.progressDigest, legacyIdentity.progressDigest);
-    assert.equal(invocation.authorization.actionDigest, legacyIdentity.digest);
+    assert.equal(invocation.actionDigest, workerRequest.actionDigest);
+    assert.match(invocation.requestDigest, /^[a-f0-9]{64}$/);
+    assert.match(invocation.actionFileDigest, /^[a-f0-9]{64}$/);
+    assert.equal(invocation.authorization.actionDigest, invocation.actionDigest);
+    assert.equal(invocation.authorization.source, "unapproved");
+    assert.equal(invocation.targetBinding, binding);
     assert.equal(Object.hasOwn(invocation.authorization, "approvalToken"), false);
+    assert.equal(Object.hasOwn(invocation, "action"), false);
+    assert.equal(Object.hasOwn(invocation, "target"), false);
+    assert.equal(Object.hasOwn(invocation, "inputs"), false);
+    assert.equal(Object.hasOwn(invocation, "payloads"), false);
     assert.doesNotMatch(prompt, /"actionPrompt"/);
     assert.doesNotMatch(JSON.stringify(workerAction), /"actionPrompt"/);
     assert.doesNotMatch(JSON.stringify(invocation), /actionPrompt/);
+    assert.doesNotMatch(prompt, /"inputs"|"payloads"|"specTestTopology"|"sealCommand"/);
     assert.notDeepEqual(resumed.envelope.data.nextAction, boundaryAction);
     assert.deepEqual(
       decisionSnapshot(scenario.fixture.location()).approvalReceipts.map((receipt) => receipt.approvalToken),

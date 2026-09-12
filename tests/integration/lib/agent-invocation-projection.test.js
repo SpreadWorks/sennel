@@ -7,12 +7,16 @@ import { EventEmitter } from "node:events";
 import {
   Agent,
   MAX_AGENT_ARGUMENT_BYTES,
+  MAX_AGENT_ARGV_BYTES,
   ResolvedAgentInvocationProjection,
 } from "../../../src/lib/agent.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
 import {
   PromptInvocationProjectionOverflowFailure,
+  PromptExecutionBudget,
+  PromptExecutionLimit,
+  PromptProviderCallAdmission,
   PromptRequestLimit,
 } from "../../../src/lib/prompt-batching.js";
 
@@ -223,6 +227,46 @@ describe("Agent.projectInvocation()", () => {
       (error) => error.code === "PROMPT_INVOCATION_PROJECTION_OVERFLOW",
     );
     assert.equal(spawnCount, 0);
+  });
+
+  it("preserves a typed materialized argv overflow before admission or spawn", async () => {
+    let spawnCount = 0;
+    const { agent } = makeAgent(
+      { command: "worker", args: ["{{PROMPT}}"] },
+      {},
+      { spawn() { spawnCount += 1; } },
+    );
+    const createBlueprint = agent._createInvocationBlueprint.bind(agent);
+    agent._createInvocationBlueprint = (...args) => {
+      const blueprint = createBlueprint(...args);
+      return {
+        projection: blueprint.projection,
+        materialize(options) {
+          const invocation = blueprint.materialize(options);
+          return {
+            ...invocation,
+            finalArgs: [
+              ...invocation.finalArgs,
+              "x".repeat(MAX_AGENT_ARGUMENT_BYTES),
+              "y".repeat(MAX_AGENT_ARGUMENT_BYTES),
+            ],
+          };
+        },
+      };
+    };
+    const budget = new PromptExecutionBudget(new PromptExecutionLimit({ maxProviderCallCount: 1 }));
+    const admission = new PromptProviderCallAdmission(budget);
+
+    await assert.rejects(
+      agent.call("small", { commandId: "test", retryCount: 0, providerCallAdmission: admission }),
+      (error) => error instanceof PromptInvocationProjectionOverflowFailure
+        && error.code === "PROMPT_INVOCATION_PROJECTION_OVERFLOW"
+        && error.details.actualArgvBytes > MAX_AGENT_ARGV_BYTES,
+    );
+    assert.equal(spawnCount, 0);
+    assert.equal(admission.attemptCount, 0);
+    assert.equal(admission.settled, true);
+    assert.equal(budget.snapshot().providerCallCount, 0);
   });
 
   it("resolves a relative execution directory identically for projection and materialization", () => {

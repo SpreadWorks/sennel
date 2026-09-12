@@ -38,6 +38,7 @@ import {
   WorkerArtifactHandoffCoordinator,
   WorkerArtifactHandoffError,
   WorkerArtifactMutationAuthoritySnapshot,
+  WorkerArtifactWorkerInstructions,
   SourceMutationManifest,
   SourceHandoffSettlement,
   SourceRepairEffect,
@@ -652,6 +653,14 @@ function specRepairSnapshot(value) {
 }
 
 describe("worker artifact handoff", () => {
+  it("keeps request-bound worker guidance stable when a stored request is reconstructed", () => {
+    const initial = new WorkerArtifactWorkerInstructions({ schemaGuidance: "payload schema" });
+    const guided = initial.appendSchemaGuidance("exact canonical identities");
+    const restored = WorkerArtifactWorkerInstructions.fromJSON(guided.toJSON())
+      .appendSchemaGuidance("exact canonical identities");
+    assert.deepEqual(restored.toJSON(), guided.toJSON());
+  });
+
   it("references complete large worker inputs without changing the handoff digest or input authority", () => {
     const input = `Complete worker request ${"x".repeat(133_813)} END_OF_WORKER_REQUEST`;
     const value = fixture("draft", { request: input });
@@ -664,17 +673,47 @@ describe("worker artifact handoff", () => {
       const prompt = JSON.stringify(reference);
       assert.ok(prompt.length < 20_000);
       assert.equal(prompt.includes("END_OF_WORKER_REQUEST"), false);
+      assert.deepEqual(Object.keys(reference), [
+        "requestPath",
+        "requestDigest",
+        "actionFilePath",
+        "actionFileDigest",
+        "actionDigest",
+        "dispatchInvocationId",
+      ]);
       assert.equal(reference.requestDigest, before);
       assert.equal(request.requestDigest, before);
       const stored = JSON.parse(fs.readFileSync(reference.requestPath, "utf8"));
       assert.ok(JSON.stringify(stored).includes(input));
-      assert.deepEqual(reference.inputs, stored.inputs.map(({ name, targetRelativePath, digest, byteLength }) => ({
-        name, targetRelativePath, digest, byteLength,
-      })));
-      assert.equal(reference.inputDigest, stored.inputDigest);
       assert.equal(reference.actionDigest, stored.actionDigest);
-      assert.deepEqual(JSON.parse(fs.readFileSync(reference.actionRequestPath, "utf8")), value.invocation.action.nextAction);
-      assert.throws(() => { reference.payloads[0].required = !reference.payloads[0].required; }, TypeError);
+      assert.equal(stored.sealCommand, "sennel flow run seal-handoff");
+      assert.equal(stored.completionOwner, "parent-dispatcher");
+      assert.equal(stored.specTestTopology, null);
+      assert.ok(Array.isArray(stored.inputs));
+      assert.ok(stored.payloads.length > 0);
+      assert.deepEqual(JSON.parse(fs.readFileSync(reference.actionFilePath, "utf8")), value.invocation.action.nextAction);
+      assert.throws(() => { reference.requestPath = "changed"; }, TypeError);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("stores spec-test topology and the seal command only in the immutable request file", () => {
+    const value = fixture("test", { specRecord: validSpec() });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      const reference = request.toPromptReference().toJSON();
+      const stored = JSON.parse(fs.readFileSync(reference.requestPath, "utf8"));
+
+      assert.equal(stored.sealCommand, "sennel flow run seal-handoff");
+      assert.equal(stored.completionOwner, "parent-dispatcher");
+      assert.deepEqual(stored.specTestTopology, request.specTestTopology.toJSON());
+      assert.equal(Object.hasOwn(reference, "specTestTopology"), false);
+      assert.equal(Object.hasOwn(reference, "sealCommand"), false);
+      assert.equal(Object.hasOwn(reference, "inputs"), false);
+      assert.equal(Object.hasOwn(reference, "payloads"), false);
     } finally {
       removeTmpDir(value.mainRoot);
     }
@@ -713,6 +752,96 @@ describe("worker artifact handoff", () => {
       removeTmpDir(value.mainRoot);
     }
   });
+
+  for (const tamperedFile of ["request", "action"]) {
+    it(`rejects a tampered ${tamperedFile} file before the dispatcher starts its worker`, async () => {
+      const value = fixture("draft");
+      try {
+        let calls = 0;
+        const coordinator = new WorkerArtifactHandoffCoordinator();
+        const createRequest = coordinator.createRequest.bind(coordinator);
+        coordinator.createRequest = (input) => {
+          const request = createRequest(input);
+          const filePath = tamperedFile === "request" ? request.requestPath : request.actionRequestPath;
+          fs.writeFileSync(filePath, JSON.stringify({ tampered: true }));
+          return request;
+        };
+        const dispatcher = new RunDispatchCommand({
+          nextAction: { async run() { return draftWorkerAction(); } },
+          agent: { async call() { calls += 1; } },
+          handoffCoordinator: coordinator,
+          repositoryFingerprint: () => "stable-fixture",
+          leaseFactory: () => ({ acquire() {}, release() {} }),
+        });
+        dispatcher.container = {};
+
+        const result = await dispatcher.execute({
+          ...value.ctx,
+          flowState: value.flowManager.load(),
+          expectRunId: "run-worker-handoff",
+          expectSpec: value.specId,
+          _envelopeType: "run",
+          _envelopeKey: "dispatch",
+        });
+
+        assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_STALE");
+        assert.equal(result.data.classification, "stale");
+        assert.equal(result.data.retryable, false);
+        assert.equal(calls, 0);
+        assert.equal(findStepById(value.flowManager.load().steps, "draft").status, "in_progress");
+      } finally {
+        removeTmpDir(value.mainRoot);
+      }
+    });
+  }
+
+  for (const tamperedFile of ["request", "action"]) {
+    it(`rejects a tampered source ${tamperedFile} before durable worker start intent`, async () => {
+      const value = fixture("implement", { specRecord: validSpec() });
+      try {
+        let calls = 0;
+        let starts = 0;
+        const coordinator = new WorkerArtifactHandoffCoordinator();
+        const createRequest = coordinator.createRequest.bind(coordinator);
+        coordinator.createRequest = (input) => {
+          const request = createRequest(input);
+          fs.writeFileSync(
+            tamperedFile === "request" ? request.requestPath : request.actionRequestPath,
+            JSON.stringify({ tampered: true }),
+          );
+          return request;
+        };
+        coordinator.startSourceWorker = () => { starts += 1; };
+        const action = {
+          ...draftWorkerAction("implement"),
+          output_schema: sourceWorkerEffectJsonSchema("implement"),
+        };
+        const dispatcher = new RunDispatchCommand({
+          nextAction: { async run() { return action; } },
+          agent: { async call() { calls += 1; } },
+          handoffCoordinator: coordinator,
+          repositoryFingerprint: () => "stable-fixture",
+          leaseFactory: () => ({ acquire() {}, release() {} }),
+        });
+        dispatcher.container = {};
+
+        const result = await dispatcher.execute({
+          ...value.ctx,
+          flowState: value.flowManager.load(),
+          expectRunId: value.flowManager.load().runId,
+          expectSpec: value.specId,
+          _envelopeType: "run",
+          _envelopeKey: "dispatch",
+        });
+
+        assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_STALE");
+        assert.equal(starts, 0);
+        assert.equal(calls, 0);
+      } finally {
+        removeTmpDir(value.mainRoot);
+      }
+    });
+  }
 
   it("does not expose the retired spec-repair exhaustion diagnostic", () => {
     assert.equal(Object.hasOwn(runDispatchModule, "SpecRepairExhaustedDiagnostic"), false);
@@ -3143,6 +3272,35 @@ describe("worker artifact handoff", () => {
     }
   });
 
+  it("fails closed when a non-terminal worker action has no handoff policy", async () => {
+    const value = fixture("draft");
+    try {
+      let calls = 0;
+      const unsupported = { ...draftWorkerAction(), step: "unsupported-worker-step" };
+      const dispatcher = new RunDispatchCommand({
+        nextAction: { async run() { return unsupported; } },
+        agent: { async call() { calls += 1; } },
+        repositoryFingerprint: () => "stable-fixture",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+      });
+      dispatcher.container = {};
+
+      const result = await dispatcher.execute({
+        ...value.ctx,
+        flowState: value.flowManager.load(),
+        expectRunId: value.flowManager.load().runId,
+        expectSpec: value.specId,
+        _envelopeType: "run",
+        _envelopeKey: "dispatch",
+      });
+
+      assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_REQUIRED");
+      assert.equal(calls, 0);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
   it("publishes a sealed draft and completes the step only in the parent transaction", () => {
     const value = fixture();
     try {
@@ -4607,7 +4765,8 @@ describe("worker artifact handoff", () => {
                 }
                 return;
               }
-              assert.match(prompt, /Fresh worker handoff retry feedback/);
+              assert.doesNotMatch(prompt, /Fresh worker handoff retry feedback/);
+              assert.match(request.workerInstructions.retryFeedback.message, /malformed JSON/);
               fs.writeFileSync(payloadPath, scenario.secondPayload);
               if (scenario.expectedCode === null) {
                 sealWorkerArtifactHandoff({
@@ -4675,14 +4834,11 @@ describe("worker artifact handoff", () => {
           async call(prompt, options) {
             calls += 1;
             assert.deepEqual(options.jsonSchema, action.output_schema);
-            assert.match(options.fmtFallback, /Spec triage review delta schema:/);
-            assert.ok(options.fmtFallback.includes(JSON.stringify(schema, null, 2)));
-            assert.match(prompt, /canonical spec-triage review delta guidance when writing review\.delta\.json:/);
-            assert.doesNotMatch(prompt, /canonical spec artifact guidance when writing spec\.json:/);
-            assert.match(prompt, /Spec triage review delta schema:/);
-            assert.ok(prompt.includes(JSON.stringify(schema, null, 2)));
+            assert.doesNotMatch(options.fmtFallback, /Spec triage review delta schema:/);
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+            assert.doesNotMatch(prompt, /Spec triage review delta schema:/);
+            assert.ok(request.workerInstructions.schemaGuidance.includes(JSON.stringify(schema, null, 2)));
             const payloadPath = request.payloads.find((entry) => entry.logicalName === "review.delta.json").payloadPath;
             if (calls === 1) {
               const missingFields = validSpecTriagePayload(request);
@@ -4700,7 +4856,8 @@ describe("worker artifact handoff", () => {
               );
               return;
             }
-            assert.match(prompt, /Fresh worker handoff retry feedback/);
+            assert.doesNotMatch(prompt, /Fresh worker handoff retry feedback/);
+            assert.ok(request.workerInstructions.retryFeedback);
             fs.writeFileSync(payloadPath, json(validSpecTriagePayload(request)));
             sealWorkerArtifactHandoff({
               requestPath,
@@ -4755,14 +4912,12 @@ describe("worker artifact handoff", () => {
           async call(prompt, options) {
             calls += 1;
             assert.deepEqual(options.jsonSchema, action.output_schema);
-            assert.match(options.fmtFallback, /Spec repair review delta schema:/);
+            assert.doesNotMatch(options.fmtFallback, /Spec repair review delta schema:/);
             assert.doesNotMatch(options.fmtFallback, /Spec triage review delta schema:/);
-            assert.ok(options.fmtFallback.includes(JSON.stringify(schema, null, 2)));
-            assert.match(prompt, /canonical spec-repair review delta guidance when writing review\.delta\.json:/);
-            assert.doesNotMatch(prompt, /canonical spec-triage review delta guidance/i);
-            assert.ok(prompt.includes(JSON.stringify(schema, null, 2)));
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+            assert.doesNotMatch(prompt, /Spec repair review delta schema:/);
+            assert.ok(request.workerInstructions.schemaGuidance.includes(JSON.stringify(schema, null, 2)));
             const payloadPath = request.payloads.find((entry) => entry.logicalName === "review.delta.json").payloadPath;
             if (calls === 1) {
               const invalid = validSpecRepairPayload(request);
@@ -4778,7 +4933,8 @@ describe("worker artifact handoff", () => {
               );
               return;
             }
-            assert.match(prompt, /Fresh worker handoff retry feedback/);
+            assert.doesNotMatch(prompt, /Fresh worker handoff retry feedback/);
+            assert.ok(request.workerInstructions.retryFeedback);
             fs.writeFileSync(payloadPath, json(validSpecRepairPayload(request)));
             sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
           },
@@ -6176,8 +6332,13 @@ describe("worker artifact handoff", () => {
             );
             if (calls === 1) {
               assert.match(prompt, /Spec-test topology:/);
-              assert.ok(prompt.includes(`"canonicalTestRoot": ${JSON.stringify(path.relative(value.mainRoot, canonicalTestRoot).split(path.sep).join("/"))}`));
+              assert.deepEqual(request.specTestTopology, {
+                canonicalTestRoot: path.relative(value.mainRoot, canonicalTestRoot).split(path.sep).join("/"),
+                staticRelativeImportBase: "each canonical test file",
+              });
+              assert.doesNotMatch(prompt, /"canonicalTestRoot"/);
               assert.doesNotMatch(prompt, /Fresh worker handoff retry feedback/);
+              assert.equal(request.workerInstructions.retryFeedback, null);
               fs.writeFileSync(testPath, [
                 "// spec: R1",
                 "import test from 'node:test';",
@@ -6187,8 +6348,8 @@ describe("worker artifact handoff", () => {
               ].join("\n"));
               firstPayload = fs.readFileSync(testPath);
             } else {
-              assert.match(prompt, /Fresh worker handoff retry feedback/);
-              assert.match(prompt, /missing pre-implementation module/);
+              assert.doesNotMatch(prompt, /Fresh worker handoff retry feedback/);
+              assert.match(request.workerInstructions.retryFeedback.message, /missing pre-implementation module/);
               fs.writeFileSync(testPath, [
                 "// spec: R1",
                 "import test from 'node:test';",
@@ -6248,6 +6409,7 @@ describe("worker artifact handoff", () => {
       let guardedOutputSchema = null;
       let workerOptions = null;
       let workerPrompt = null;
+      let workerRequest = null;
       let calls = 0;
       const dispatcher = new RunDispatchCommand({
         nextAction: {
@@ -6266,6 +6428,7 @@ describe("worker artifact handoff", () => {
             workerPrompt = prompt;
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+            workerRequest = request;
             fs.writeFileSync(
               request.payloads.find((entry) => entry.logicalName === "spec.json").payloadPath,
               json(validWorkerHandoffTaskSpec()),
@@ -6294,8 +6457,9 @@ describe("worker artifact handoff", () => {
       assert.deepEqual(workerOptions.jsonSchema, loadWorkerArtifactHandoffSchema());
       assert.notDeepEqual(workerOptions.jsonSchema, loadSpecJsonSchema());
       assert.ok(workerOptions.jsonSchema.properties.runtimeLog);
-      assert.match(workerOptions.fmtFallback, /Spec artifact schema:/);
-      assert.match(workerPrompt, /Spec artifact schema:/);
+      assert.doesNotMatch(workerOptions.fmtFallback, /Spec artifact schema:/);
+      assert.doesNotMatch(workerPrompt, /Spec artifact schema:/);
+      assert.match(workerRequest.workerInstructions.schemaGuidance, /Spec artifact schema:/);
       assert.equal(result.dispatch.boundary, "completed", JSON.stringify(result, null, 2));
       assert.equal(result.dispatch.dispatchCount, 1);
       assert.equal(calls, 1);

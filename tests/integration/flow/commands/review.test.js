@@ -33,6 +33,11 @@ import { ProviderRegistry } from "../../../../src/lib/provider.js";
 import { adaptJsonSchemaForProvider } from "../../../../src/lib/provider-schema.js";
 import { Logger } from "../../../../src/lib/log.js";
 import { AgentAuthenticationFailure } from "../../../../src/lib/agent-failure.js";
+import {
+  PromptBatchExecutionIncompleteFailure,
+  PromptElementTooLargeFailure,
+  PromptFixedContextTooLargeFailure,
+} from "../../../../src/lib/prompt-batching.js";
 import { FLOW_COMMANDS } from "../../../../src/flow/registry.js";
 import {
   createMemoryWorkUnitCheckpointStore,
@@ -83,7 +88,6 @@ import FlowReviewCommand, {
   buildTestFixPrompt,
   parseTestReviewFindings,
   TEST_REVIEW_PROMPT_CHAR_LIMIT,
-  assertTestReviewPromptWithinLimit,
   runTestReviewWithDependencies,
   runLoopReviewWithDependencies,
   canonicalLoopReviewCheckpointStore,
@@ -182,6 +186,30 @@ describe("review command error classification", () => {
     assert.match(unavailable.reason, /could not verify whether the provider changed source/);
     assert.equal(effect.failureCode, "TASK_REVIEW_SOURCE_EFFECT_OBSERVED");
     assert.match(effect.reason, /observed source effects/);
+  });
+
+  it("preserves typed prompt input-size failures across the review subprocess marker boundary", () => {
+    for (const sourceFailure of [
+      new PromptElementTooLargeFailure("Prompt element reaches the global hard maximum"),
+      new PromptFixedContextTooLargeFailure("Prompt fixed context exceeds its request limit"),
+    ]) {
+      const wrapped = new PromptBatchExecutionIncompleteFailure(
+        "Prompt batch execution did not complete",
+        {},
+        sourceFailure,
+      );
+      const classified = classifyReviewCommandError(wrapped, "test");
+
+      assert.equal(classified.classification, "input_size_failure");
+      assert.equal(classified.failureCode, sourceFailure.code);
+      assert.equal(classified.requiresImmediateBlock(), true);
+      const restored = ReviewFailure.fromSubprocessResult({
+        phase: "test",
+        result: { status: 1, stderr: `${classified.toMarkerLine()}\n${wrapped.stack}` },
+      });
+      assert.equal(restored.classification, "input_size_failure");
+      assert.equal(restored.failureCode, sourceFailure.code);
+    }
   });
 });
 
@@ -1468,28 +1496,18 @@ describe("test-review spec-local file scope", () => {
     }
   });
 
-  it("enforces the test-review prompt limit before calling the agent", async () => {
+  it("requires Test Review to use typed planner inputs before calling the agent", async () => {
     assert.equal(TEST_REVIEW_PROMPT_CHAR_LIMIT, 120_000);
-    const overLimitPrompt = {
-      systemPrompt: "x".repeat(TEST_REVIEW_PROMPT_CHAR_LIMIT),
-      userPrompt: "y",
-      fmtFallback: "",
-    };
     let agentCalled = false;
-
-    assert.throws(
-      () => assertTestReviewPromptWithinLimit(overLimitPrompt, "test review"),
-      /TEST_REVIEW_PROMPT_TOO_LARGE/,
-    );
     await assert.rejects(
       () => runTestReviewWithDependencies({
-        buildReviewPrompt: () => overLimitPrompt,
+        buildReviewPrompt: () => ({ systemPrompt: "review", userPrompt: "source" }),
         callAgent: async () => {
           agentCalled = true;
           return "{}";
         },
       }),
-      /TEST_REVIEW_PROMPT_TOO_LARGE/,
+      /Test Review requires typed planner inputs/,
     );
     assert.equal(agentCalled, false);
   });
@@ -2566,15 +2584,15 @@ describe("impl review structured artifact helpers", () => {
     );
   });
 
-  it("rejects an oversized Task Review prompt before resolving or calling the agent", async () => {
+  it("requires Task Review to use its typed prompt plan before calling the agent", async () => {
     let calls = 0;
     await assert.rejects(
       () => runImplReviewAgentWithDependencies({
-        prompt: { systemPrompt: "review", userPrompt: "x".repeat(TASK_REVIEW_PROMPT_CHAR_LIMIT) },
+        prompt: { systemPrompt: "review", userPrompt: "source" },
         taskReview: true,
         callAgent: async () => { calls += 1; return "unreachable"; },
       }),
-      /TASK_REVIEW_PROMPT_TOO_LARGE/,
+      /Task Review requires its typed prompt plan/,
     );
     assert.equal(calls, 0);
   });

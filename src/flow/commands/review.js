@@ -73,7 +73,6 @@ import {
   PromptReductionLevel,
   PromptReductionPlan,
   PromptProviderCallAdmission,
-  PromptLogicalFootprint,
 } from "../../lib/prompt-batching.js";
 import { buildAcknowledgedRationaleSection } from "../lib/acknowledged-rationale.js";
 import { validateSchema } from "../../lib/schema-validate.js";
@@ -1677,17 +1676,7 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementSourceScope
   return pb.build();
 }
 
-const TASK_REVIEW_PROMPT_TOO_LARGE_CODE = "TASK_REVIEW_PROMPT_TOO_LARGE";
 export const TASK_REVIEW_PROMPT_CHAR_LIMIT = MAX_IMPL_REQUIREMENT_BATCH_CHARS;
-
-function assertTaskReviewPromptWithinLimit(prompt) {
-  const chars = PromptLogicalFootprint.measure(prompt).total;
-  if (chars <= TASK_REVIEW_PROMPT_CHAR_LIMIT) return;
-  throw new Error(
-    `${TASK_REVIEW_PROMPT_TOO_LARGE_CODE}: Task Review prompt is ${chars} chars; `
-    + `limit is ${TASK_REVIEW_PROMPT_CHAR_LIMIT}. Split the Task source scope before calling the agent.`,
-  );
-}
 
 function taskReviewProviderFinding(finding) {
   return {
@@ -1804,12 +1793,14 @@ async function runTaskReviewPromptPlanWithDependencies({
   }
   const executionBudget = new PromptExecutionBudget(new PromptExecutionLimit({
       maxRequestCharacters: plan.maxChars,
-      maxBatchCount: Math.max(plan.chunks.length, 16),
-      maxProviderCallCount: (plan.chunks.length + 16) * protocolAttemptCount,
+      maxBatchCount: MAX_LOOP_CALLS,
+      maxProviderCallCount: MAX_LOOP_CALLS,
       maxProtocolRetryCount: protocolAttemptCount - 1,
-      maxSynthesisCallCount: 16,
+      maxSynthesisCallCount: MAX_LOOP_CALLS,
       maxAggregateCharacters: 1_000_000,
     }));
+  const requiresSynthesis = (plan.chunks.length > 1 || synthesizeWhenSingle) && synthesize !== null;
+  executionBudget.assertCanExecute(plan.chunks.length + (requiresSynthesis ? 1 : 0));
   const executor = new PromptBatchExecutor({ executionBudget });
   let completions;
   try {
@@ -1846,7 +1837,7 @@ async function runImplReviewAgentWithDependencies({ prompt, taskReview = false, 
     if (!(taskReviewPlan instanceof TaskReviewPromptPlan)) throw new Error("Task Review requires its typed prompt plan");
     return runTaskReviewPromptPlanWithDependencies({ plan: taskReviewPlan, requirementIds, callAgent, projectInvocation, protocolPolicy, synthesize, synthesizeWhenSingle });
   }
-  if (taskReview) assertTaskReviewPromptWithinLimit(prompt);
+  if (taskReview) throw new Error("Task Review requires its typed prompt plan");
   return callAgent(prompt);
 }
 
@@ -2987,7 +2978,6 @@ function extractRequirements(spec) {
     .join("\n");
 }
 
-const TEST_REVIEW_PROMPT_TOO_LARGE_CODE = "TEST_REVIEW_PROMPT_TOO_LARGE";
 const TEST_REVIEW_PROMPT_CHAR_LIMIT = MAX_IMPL_REQUIREMENT_BATCH_CHARS;
 
 /**
@@ -3653,19 +3643,9 @@ function buildHeaderBlockingFindings(headerResult) {
   return findings;
 }
 
-function assertTestReviewPromptWithinLimit(prompt, label) {
-  const chars = PromptLogicalFootprint.measure(prompt).total;
-  if (chars <= TEST_REVIEW_PROMPT_CHAR_LIMIT) return;
-  throw new Error(
-    `${TEST_REVIEW_PROMPT_TOO_LARGE_CODE}: ${label} prompt is ${chars} chars; `
-    + `limit is ${TEST_REVIEW_PROMPT_CHAR_LIMIT}. Narrow test-review inputs before calling the agent.`,
-  );
-}
-
 async function runTestReviewWithDependencies({
   buildReviewPrompt,
   callAgent,
-  promptLabel = "test review",
   testFiles = null,
   requirementEntries = null,
   coverageSummary = null,
@@ -3674,8 +3654,8 @@ async function runTestReviewWithDependencies({
   projectInvocation = null,
   synthesize = null,
 }) {
-  if (testFiles !== null) {
-    const plan = TestReviewPromptPlan.create({
+  if (!Array.isArray(testFiles)) throw new Error("Test Review requires typed planner inputs");
+  const plan = TestReviewPromptPlan.create({
       testFiles,
       buildPrompt: buildReviewPrompt,
       maxChars,
@@ -3700,17 +3680,20 @@ async function runTestReviewWithDependencies({
       ...(projectInvocation === null ? {} : { projectInvocation }),
     });
     const merged = new TestReviewFindingReducer().reduce(completions);
-    return completions.length > 1 && synthesize
-      ? synthesize({ completions, merged, executionBudget, plan })
-      : merged;
-  }
-  const reviewPrompt = buildReviewPrompt();
-  assertTestReviewPromptWithinLimit(reviewPrompt, promptLabel);
-  return callAgent(reviewPrompt);
+  return completions.length > 1 && synthesize
+    ? synthesize({ completions, merged, executionBudget, plan })
+    : merged;
 }
 
 function classifyReviewCommandError(err, phase) {
   while (err instanceof PromptBatchingError && err.cause) err = err.cause;
+  if (err instanceof PromptBatchingError) {
+    const promptFailure = ReviewFailure.fromPromptBatchingFailure({
+      phase: phase || "impl",
+      failure: err,
+    });
+    if (promptFailure) return promptFailure;
+  }
   if (err instanceof ReviewProtocolFailure) {
     const resolvedPhase = phase || "impl";
     const sourceEffect = err.kind === "effect_observed";
@@ -5732,7 +5715,7 @@ export {
   getReviewMaxAttempts, REVIEW_PHASES, extractRequirements, collectTestFiles, parseGaps,
   applyTestFixes, formatTestReviewMd, runReviewLoop,
   buildTestReviewPrompt, parseTestReviewFindings,
-  TEST_REVIEW_PROMPT_CHAR_LIMIT, assertTestReviewPromptWithinLimit, runTestReviewWithDependencies,
+  TEST_REVIEW_PROMPT_CHAR_LIMIT, runTestReviewWithDependencies,
   extractGoalAndScope, buildSpecSummaryMarkdown, buildSpecReviewPrompt,
   formatSpecReviewMd, formatSpecReviewDelta, parseSpecReviewFindings,
   buildImplReviewPrompt, parseImplReviewFindings, filterImplReviewFindingsByScope,
@@ -5751,7 +5734,6 @@ export {
   runTaskReviewPromptPlanWithDependencies,
   runImplReviewAgentWithDependencies,
   synthesizeReviewFindings,
-  assertTaskReviewPromptWithinLimit,
   canonicalTaskReviewFileMap,
   mergeTaskReviewChunkResponses,
   loopProposalsToImplReviewJson,

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
 export const GLOBAL_PROMPT_ELEMENT_HARD_MAX = 120_000;
+export const MAX_AGENT_ARGUMENT_BYTES = (128 * 1024) - 1;
+export const MAX_AGENT_ARGV_BYTES = 256 * 1024;
 
 function requiredText(value, name) {
   if (typeof value !== "string" || value.trim() === "") throw new TypeError(`${name} must be non-empty text`);
@@ -99,6 +101,112 @@ export const PromptResponseInvalidFailure = failureClass("PromptResponseInvalidF
 export const PromptResponseCoverageInvalidFailure = failureClass("PromptResponseCoverageInvalidFailure", "PROMPT_RESPONSE_COVERAGE_INVALID");
 export const PromptBatchExecutionIncompleteFailure = failureClass("PromptBatchExecutionIncompleteFailure", "PROMPT_BATCH_EXECUTION_INCOMPLETE");
 export const PromptReductionDidNotConvergeFailure = failureClass("PromptReductionDidNotConvergeFailure", "PROMPT_REDUCTION_DID_NOT_CONVERGE");
+
+function argvByteLength(args) {
+  return args.reduce((sum, argument) => sum + Buffer.byteLength(String(argument)), 0);
+}
+
+function argvMaxElementByteLength(args) {
+  return args.reduce((maximum, argument) => Math.max(maximum, Buffer.byteLength(String(argument))), 0);
+}
+
+function normalizeProjectionCharacterLimit(limit) {
+  const normalized = Number(limit);
+  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+    throw new Error("agent invocation projection limit must be a positive integer");
+  }
+  return normalized;
+}
+
+/** Immutable provider-visible request projection, including transport byte limits. */
+export class ResolvedAgentInvocationProjection {
+  constructor({
+    providerKey,
+    profileKey,
+    command,
+    promptCharacterCount,
+    systemPromptCharacterCount,
+    schemaCharacterCount,
+    finalArgs,
+    inlineArgvByteCount,
+    schemaMode,
+    usesStdin,
+  }) {
+    for (const [field, value] of Object.entries({
+      promptCharacterCount,
+      systemPromptCharacterCount,
+      schemaCharacterCount,
+      inlineArgvByteCount,
+    })) {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new Error(`agent invocation projection ${field} must be a non-negative integer`);
+      }
+    }
+    if (!Array.isArray(finalArgs)) throw new Error("agent invocation projection finalArgs must be an array");
+    if (!["none", "inline", "file", "fallback"].includes(schemaMode)) {
+      throw new Error(`unsupported agent invocation projection schemaMode: ${schemaMode}`);
+    }
+    this.providerKey = providerKey;
+    this.profileKey = profileKey;
+    this.command = command;
+    this.promptCharacterCount = promptCharacterCount;
+    this.systemPromptCharacterCount = systemPromptCharacterCount;
+    this.schemaCharacterCount = schemaCharacterCount;
+    this.finalArgs = Object.freeze([...finalArgs]);
+    this.inlineArgvByteCount = inlineArgvByteCount;
+    this.argvByteCount = argvByteLength(this.finalArgs);
+    this.maxArgumentByteCount = argvMaxElementByteLength(this.finalArgs);
+    this.schemaMode = schemaMode;
+    this.usesStdin = usesStdin === true;
+    Object.freeze(this);
+  }
+
+  fits(limit) {
+    return this.promptCharacterCount <= normalizeProjectionCharacterLimit(limit)
+      && this.argvByteCount <= MAX_AGENT_ARGV_BYTES
+      && this.maxArgumentByteCount <= MAX_AGENT_ARGUMENT_BYTES;
+  }
+
+  assertWithinLimit(limit) {
+    const maximum = normalizeProjectionCharacterLimit(limit);
+    if (this.promptCharacterCount > maximum) {
+      throw new PromptInvocationProjectionOverflowFailure(
+        `resolved agent invocation prompt has ${this.promptCharacterCount} characters; limit is ${maximum}`,
+        {
+          actualCharacters: this.promptCharacterCount,
+          maximumCharacters: maximum,
+          providerKey: this.providerKey,
+          profileKey: this.profileKey,
+          schemaMode: this.schemaMode,
+          usesStdin: this.usesStdin,
+        },
+      );
+    }
+    return this.assertMaterializedArgvWithinLimit(this.finalArgs);
+  }
+
+  assertMaterializedArgvWithinLimit(finalArgs) {
+    if (!Array.isArray(finalArgs)) throw new TypeError("materialized agent argv must be an array");
+    const actualArgvBytes = argvByteLength(finalArgs);
+    const actualArgumentBytes = argvMaxElementByteLength(finalArgs);
+    if (actualArgvBytes > MAX_AGENT_ARGV_BYTES || actualArgumentBytes > MAX_AGENT_ARGUMENT_BYTES) {
+      throw new PromptInvocationProjectionOverflowFailure(
+        `resolved agent invocation argv exceeds its safe byte limit; argv=${actualArgvBytes}, maxArgument=${actualArgumentBytes}`,
+        {
+          actualArgvBytes,
+          maximumArgvBytes: MAX_AGENT_ARGV_BYTES,
+          actualArgumentBytes,
+          maximumArgumentBytes: MAX_AGENT_ARGUMENT_BYTES,
+          providerKey: this.providerKey,
+          profileKey: this.profileKey,
+          schemaMode: this.schemaMode,
+          usesStdin: this.usesStdin,
+        },
+      );
+    }
+    return this;
+  }
+}
 
 export class PromptRequestLimit {
   constructor({ maxCharacters = GLOBAL_PROMPT_ELEMENT_HARD_MAX } = {}) {

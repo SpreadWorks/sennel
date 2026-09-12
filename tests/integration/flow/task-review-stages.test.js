@@ -57,6 +57,8 @@ test("Task review publishes immutable findings before triage; only repair edits 
   assert.equal(accounting(scenario).completedReviewCount, 1);
   assert.equal(scenario.state().nextAction().action.action, "write-task-triage");
   const triage = scenario.stageHandoff("triage");
+  assert.match(triage.request.workerInstructions.schemaGuidance, /\["missing-behavior","missing-validation"\]/);
+  assert.match(triage.request.workerInstructions.schemaGuidance, /exactly 2 entries/);
   assert.equal(scenario.completeHandoff(triage, triageEffect(keys)).completed, true);
   scenario.reload();
   assert.equal(artifact(scenario, "triage").document.binding.review.digest, reviewRef.digest);
@@ -64,6 +66,9 @@ test("Task review publishes immutable findings before triage; only repair edits 
   assert.equal(accounting(scenario).completedReviewCount, 1);
   assert.equal(scenario.state().nextAction().action.action, "run-task-repair");
   const repair = scenario.stageHandoff("repair");
+  assert.match(repair.request.workerInstructions.schemaGuidance, /\["missing-behavior","missing-validation"\]/);
+  assert.match(repair.request.workerInstructions.schemaGuidance, /\["README.md"\]/);
+  assert.match(repair.request.workerInstructions.schemaGuidance, /Never report request\.json, action\.json/);
   fs.appendFileSync(scenario.sourcePath, "required behavior and validation\n");
   assert.equal(scenario.completeHandoff(repair, repairEffect(keys)).completed, true);
   scenario.reload();

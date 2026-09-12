@@ -36,7 +36,14 @@ import {
 } from "./resolve-auto-check-input.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
-import { PromptBatchPlan, PromptRequestLimit, PromptBatchingError } from "../../lib/prompt-batching.js";
+import {
+  PromptBatchExecutor,
+  PromptBatchPlan,
+  PromptCompletionReducer,
+  PromptExecutionLimit,
+  PromptRequestLimit,
+  PromptBatchingError,
+} from "../../lib/prompt-batching.js";
 import {
   AgentFailure,
   AgentPermissionConfigurationFailure,
@@ -125,12 +132,35 @@ export function hardGateFailed(breakdown) {
   return computeHardGateSum(breakdown) < HARD_GATE_MIN_SUM;
 }
 
+class AutoCheckResponse {
+  constructor(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("auto-check response must be a JSON object");
+    }
+    this.value = Object.freeze({ ...value });
+    Object.freeze(this);
+  }
+
+  get goal() { return this.value.goal; }
+  get reason() { return this.value.reason; }
+
+  breakdown() {
+    return sanitizeBreakdown(this.value);
+  }
+}
+
+class AutoCheckResponseContract {
+  parse(raw) {
+    return parseAiResponse(raw);
+  }
+}
+
 function parseAiResponse(text) {
   const cleaned = String(text || "").trim().replace(/^```(?:json)?|```$/g, "").trim();
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   if (start < 0 || end < 0) throw new Error("no JSON object in AI response");
-  return JSON.parse(cleaned.slice(start, end + 1));
+  return new AutoCheckResponse(JSON.parse(cleaned.slice(start, end + 1)));
 }
 
 function emptyBreakdown() {
@@ -182,39 +212,59 @@ async function scoreWithAi(container, inputText) {
   pb.addUserPrompt("## Input text (request / Issue body)", inputText);
   const built = pb.build();
 
-  let responseText;
+  let response;
   try {
-    const limit = new PromptRequestLimit({ maxCharacters: agent.promptCharacterLimit ?? 120_000 });
-    PromptBatchPlan.fromRequest({ request: built, limit, id: "auto-check-input" });
-    responseText = await agent.call(built.userPrompt, {
-      commandId: "flow.auto-check",
-      systemPrompt: built.systemPrompt,
-      jsonSchema: built.jsonSchema,
-      fmtFallback: built.fmtFallback,
+    const maxCharacters = Math.min(agent.promptCharacterLimit ?? 120_000, 120_000);
+    const limit = new PromptRequestLimit({ maxCharacters });
+    const plan = PromptBatchPlan.fromRequest({ request: built, limit, id: "auto-check-input" });
+    const executionLimit = new PromptExecutionLimit({
+      maxRequestCharacters: maxCharacters,
+      maxResponseCharacters: 120_000,
+      maxBatchCount: 1,
+      maxProviderCallCount: 1,
+      maxProtocolRetryCount: 0,
+      maxSynthesisCallCount: 1,
+      maxAggregateItemCount: 1,
+      maxAggregateCharacters: 120_000,
+    });
+    response = await new PromptBatchExecutor({ executionLimit }).execute({
+      plan,
+      callAgent: (request, _batch, _retryIndex, _attemptContext, providerCallAdmission) => agent.call(
+        request.userPrompt,
+        {
+          ...request,
+          commandId: "flow.auto-check",
+          providerCallAdmission,
+        },
+      ),
+      projectInvocation: typeof agent.projectInvocation === "function"
+        ? (request) => agent.projectInvocation(request.userPrompt, {
+          ...request,
+          commandId: "flow.auto-check",
+        })
+        : undefined,
+      responseContract: new AutoCheckResponseContract(),
+      reducer: new PromptCompletionReducer(),
     });
   } catch (err) {
-    if (err instanceof PromptBatchingError) {
+    const failure = err instanceof PromptBatchingError && err.cause instanceof Error ? err.cause : err;
+    if (failure instanceof PromptBatchingError) {
       return {
-        breakdown: emptyBreakdown(), reason: err.message,
-        failure: { code: err.code, message: err.message, details: err.details }, ok: false,
+        breakdown: emptyBreakdown(), reason: failure.message,
+        failure: { code: failure.code, message: failure.message, details: failure.details }, ok: false,
       };
     }
-    const failure = err instanceof AgentFailure ? err : AgentFailure.from(err);
+    const agentFailure = failure instanceof AgentFailure ? failure : AgentFailure.from(failure);
     return {
       breakdown: emptyBreakdown(),
-      reason: `agent call failed: ${failure.message}`,
-      failure: failure.toJSON(),
+      reason: `agent call failed: ${agentFailure.message}`,
+      failure: agentFailure.toJSON(),
       ok: false,
     };
   }
-  let parsed;
-  try {
-    parsed = parseAiResponse(responseText);
-  } catch (err) {
-    return { breakdown: emptyBreakdown(), reason: `parse error: ${err.message}`, ok: false };
-  }
+  const parsed = response[0].response;
   return {
-    breakdown: sanitizeBreakdown(parsed),
+    breakdown: parsed.breakdown(),
     goal: parsed.goal,
     reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 300) : "",
     ok: true,

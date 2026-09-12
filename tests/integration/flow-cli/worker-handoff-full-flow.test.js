@@ -558,7 +558,8 @@ describe("deterministic full Flow worker handoff", () => {
         agent: {
           async call(_prompt, options) {
             const invocation = JSON.parse(options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION);
-            const stepId = invocation.action.step;
+            const action = JSON.parse(fs.readFileSync(invocation.actionFilePath, "utf8"));
+            const stepId = action.step;
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             assert.equal(typeof requestPath, "string", `${stepId} must have a sealed handoff request`);
             const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
