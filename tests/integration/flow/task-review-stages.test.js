@@ -4,6 +4,8 @@ import path from "node:path";
 import { test } from "node:test";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { container } from "../../../src/lib/container.js";
+import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { TaskStageArtifact } from "../../../src/flow/lib/task-review-stage-artifacts.js";
 import { TaskReviewAccounting } from "../../../src/flow/lib/task-review-accounting.js";
 import { ReviewFindingCycle } from "../../../src/flow/lib/finding-disposition-policy.js";
@@ -69,6 +71,16 @@ test("Task review publishes immutable findings before triage; only repair edits 
   assert.match(repair.request.workerInstructions.schemaGuidance, /\["missing-behavior","missing-validation"\]/);
   assert.match(repair.request.workerInstructions.schemaGuidance, /\["README.md"\]/);
   assert.match(repair.request.workerInstructions.schemaGuidance, /Never report request\.json, action\.json/);
+  assert.deepEqual(repair.request.sourceResponseContract.toJSON(), {
+    version: 1,
+    findingKeys: keys,
+    allowedPaths: ["README.md"],
+  });
+  const responseSchema = repair.request.sourceResponseSchema();
+  assert.deepEqual(responseSchema.properties.repair.properties.findings.items.properties.findingKey.enum, keys);
+  assert.deepEqual(responseSchema.properties.repair.properties.findings.items.properties.paths.items.enum, ["README.md"]);
+  assert.equal(responseSchema.properties.repair.properties.findings.minItems, keys.length);
+  assert.equal(responseSchema.properties.repair.properties.findings.maxItems, keys.length);
   fs.appendFileSync(scenario.sourcePath, "required behavior and validation\n");
   assert.equal(scenario.completeHandoff(repair, repairEffect(keys)).completed, true);
   scenario.reload();
@@ -81,6 +93,97 @@ test("Task review publishes immutable findings before triage; only repair edits 
   assert.deepEqual(scenario.manager.taskMutationLineages({ specId: scenario.specId, taskId: scenario.taskId }).map((entry) => entry.role), ["implementation", "repair"]);
   assert.equal(accounting(scenario).completedReviewCount, 1);
   assert.equal(scenario.state().current?.at(-1), "T-1-review");
+});
+
+test("Task repair rejects runtime path claims without materializing or publishing an effect", async (t) => {
+  const scenario = scenarioFor(t);
+  const keys = ["missing-behavior", "missing-validation"];
+  await review(scenario, keys.map(finding));
+  scenario.completeHandoff(scenario.stageHandoff("triage"), triageEffect(keys));
+  const repair = scenario.stageHandoff("repair");
+  const before = scenario.snapshot();
+  const runtimePathClaim = repairEffect(keys);
+  runtimePathClaim.repair.findings[0].paths = ["request.json"];
+  runtimePathClaim.repair.findings[1].paths = ["action.json"];
+  try {
+    assert.throws(
+      () => materializeSourceWorkerEffect({ request: repair.request, responseText: JSON.stringify(runtimePathClaim) }),
+      (error) => error.code === "FLOW_SOURCE_HANDOFF_RESPONSE_INVALID"
+        && /must be one of enum/.test(error.message),
+    );
+    assert.equal(fs.existsSync(repair.request.payloadPath("effects.json")), false, "invalid response cannot materialize a parent effect");
+    assert.equal(scenario.snapshot(), before, "invalid response cannot publish a Task repair result");
+  } finally {
+    repair.release();
+  }
+});
+
+test("Task repair forwards its request-bound source response schema to the provider", async (t) => {
+  const scenario = scenarioFor(t);
+  const keys = ["missing-behavior", "missing-validation"];
+  await review(scenario, keys.map(finding));
+  scenario.completeHandoff(scenario.stageHandoff("triage"), triageEffect(keys));
+
+  let receivedSchema = null;
+  let receivedRequest = null;
+  const nextAction = new GetNextActionCommand();
+  const dispatcher = new RunDispatchCommand({
+    nextAction: {
+      async run(_container, input) {
+        const action = await nextAction.execute({
+          ...input,
+          ...scenario.context(),
+          flowState: scenario.manager.loadReadOnly(scenario.specId),
+        });
+        return action.step === "task-repair"
+          ? action
+          : {
+              taskId: null,
+              step: null,
+              action: "completed",
+              instructions: null,
+              context: null,
+              output_schema: null,
+              requires_approval: false,
+              directive: { kind: "completed", terminal: true, requiresUserAction: false },
+            };
+      },
+    },
+    agent: {
+      async call(_prompt, options) {
+        receivedSchema = options.jsonSchema;
+        receivedRequest = JSON.parse(fs.readFileSync(
+          options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST,
+          "utf8",
+        ));
+        fs.appendFileSync(scenario.sourcePath, "provider-bound repair\n");
+        return JSON.stringify(repairEffect(keys));
+      },
+    },
+    repositoryFingerprint: () => "task-repair-request-bound-schema",
+    leaseFactory: () => ({ acquire() {}, release() {} }),
+  });
+  dispatcher.container = container;
+  const result = await dispatcher.execute({
+    ...scenario.context(),
+    expectRunId: scenario.manager.loadReadOnly(scenario.specId).runId,
+    expectSpec: scenario.specId,
+    _envelopeType: "run",
+    _envelopeKey: "dispatch",
+  });
+
+  assert.equal(result.dispatch?.boundary, "completed", JSON.stringify(result));
+  assert.deepEqual(receivedRequest.sourceResponseContract, {
+    version: 1,
+    findingKeys: keys,
+    allowedPaths: ["README.md"],
+  });
+  const findings = receivedSchema.properties.repair.properties.findings;
+  assert.deepEqual(findings.items.properties.findingKey.enum, keys);
+  assert.deepEqual(findings.items.properties.paths.items.enum, ["README.md"]);
+  assert.equal(findings.minItems, keys.length);
+  assert.equal(findings.maxItems, keys.length);
+  assert.equal(scenario.state().current.at(-1), "T-1-review");
 });
 
 test("Task all-reject triage preserves the rejected review and skips repair", async (t) => {
@@ -169,9 +272,16 @@ test("Task repair refuses a mapped finding that changes a path outside its imple
   fs.writeFileSync(path.join(scenario.root, "unrelated.js"), "export const unrelated = true;\n");
   const effect = repairEffect(["missing-behavior"]);
   effect.repair.findings[0].paths = ["unrelated.js"];
-  scenario.finishHandoff(work, effect);
   const before = scenario.snapshot();
-  assert.throws(() => scenario.reconcileHandoff(work), /authorized Task lineage/);
+  try {
+    assert.throws(
+      () => materializeSourceWorkerEffect({ request: work.request, responseText: JSON.stringify(effect) }),
+      (error) => error.code === "FLOW_SOURCE_HANDOFF_RESPONSE_INVALID",
+    );
+    assert.equal(fs.existsSync(work.request.payloadPath("effects.json")), false, "invalid repair response cannot materialize a parent effect");
+  } finally {
+    work.release();
+  }
   assert.equal(scenario.snapshot(), before);
   scenario.reload();
   assert.equal(scenario.manager.taskMutationLineages({ specId: scenario.specId, taskId: scenario.taskId }).length, 1);

@@ -222,20 +222,8 @@ function workerArtifactAgentOptions(stepId, outputSchema) {
     if (JSON.stringify(outputSchema) !== JSON.stringify(sourceSchema)) {
       throw new Error(`guarded source worker output schema is not the canonical effect schema: ${stepId}`);
     }
-    const workerRequestGuidance = stepId === "task-triage"
-      ? [
-          "For task-triage, read task-review.json before constructing the source effect.",
-          "The canonical finding set is every findingKey from blockingFindings followed by every findingKey from nonBlockingImprovements.",
-          "Copy each canonical findingKey into triage.dispositions exactly once; do not omit, rename, duplicate, or add keys.",
-          "Before returning, verify that the disposition count and exact key set equal the canonical finding count and key set.",
-        ].join("\n")
-      : null;
-    // Schema-capable providers receive this directly through their native
-    // structured-output flag. No prompt copy is permitted: the parent uses
-    // the same schema again before materializing its owned effects.json.
     return {
       jsonSchema: sourceSchema,
-      ...(workerRequestGuidance && { workerRequestGuidance }),
     };
   }
   let payloadName;
@@ -1265,6 +1253,16 @@ export default class RunDispatchCommand extends FlowCommand {
         invocation,
         workerInstructions,
       });
+      if (handoffRequest.policy.kind === "source") {
+        // The Definition-owned action schema remains the canonical base. A
+        // source request may refine only response values it owns immutably
+        // (for example, Task repair keys and source authority paths) before
+        // the existing Agent/provider projection adapts it for the CLI.
+        agentOptions = {
+          ...agentOptions,
+          jsonSchema: handoffRequest.sourceResponseSchema(),
+        };
+      }
     } catch (error) {
       handoffAuthority?.release();
       if (handoffPolicy !== null && !handoffAuthorityAcquired && !(error instanceof WorkerArtifactHandoffError)) {

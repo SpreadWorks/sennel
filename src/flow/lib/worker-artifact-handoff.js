@@ -1111,7 +1111,7 @@ function sourceEffectDocumentFromResponse(responseText, request, manifest) {
       { cause, retryable: false, data: { stepId: request.stepId } },
     );
   }
-  const schemaErrors = validateSchema(document, sourceWorkerEffectJsonSchema(request.stepId));
+  const schemaErrors = validateSchema(document, request.sourceResponseSchema());
   if (schemaErrors.length > 0) {
     throw new WorkerArtifactHandoffError(
       "invalid",
@@ -3717,6 +3717,107 @@ export class WorkerArtifactRetryInstruction {
   }
 }
 
+/**
+ * Immutable provider-response capability derived from one Task repair request.
+ * The canonical action schema is intentionally Task-neutral; this contract
+ * binds its repair claims to the request's selected findings and source scope.
+ */
+export class TaskRepairSourceResponseContract {
+  constructor({ findingKeys, allowedPaths } = {}) {
+    if (!Array.isArray(findingKeys) || findingKeys.length === 0 || findingKeys.length > MAX_PAYLOAD_FILES) {
+      throw new Error("Task repair response contract requires bounded apply finding keys");
+    }
+    this.findingKeys = Object.freeze(findingKeys.map((key) => requiredString(key, "Task repair response findingKey")));
+    if (new Set(this.findingKeys).size !== this.findingKeys.length) {
+      throw new Error("Task repair response contract finding keys must be unique");
+    }
+    if (!Array.isArray(allowedPaths) || allowedPaths.length === 0) {
+      throw new Error("Task repair response contract requires allowed source paths");
+    }
+    this.allowedPaths = Object.freeze(allowedPaths.map((entry) => (
+      normalizedRelativePath(entry, "Task repair response allowed source path")
+    )));
+    if (new Set(this.allowedPaths).size !== this.allowedPaths.length) {
+      throw new Error("Task repair response contract allowed source paths must be unique");
+    }
+    Object.freeze(this);
+  }
+
+  static fromHandoffInputs(inputs) {
+    const triageInput = inputs.find((input) => input.name === "task-triage.json");
+    const authorityInput = inputs.find((input) => input.name === "task-source-authority.json");
+    if (!(triageInput instanceof WorkerArtifactInputSnapshot)
+      || !(authorityInput instanceof WorkerArtifactInputSnapshot)) {
+      throw new Error("Task repair response contract requires canonical triage and source authority inputs");
+    }
+    const triage = new SourceTriageEffect({
+      version: triageInput.document.version,
+      dispositions: triageInput.document.dispositions,
+    });
+    const authority = authorityInput.document;
+    exactObjectKeys(authority, [
+      "taskId",
+      "sourceFingerprint",
+      "allowedPaths",
+      "lineageFingerprints",
+    ], "Task repair source authority");
+    return new TaskRepairSourceResponseContract({
+      findingKeys: triage.dispositions
+        .filter((entry) => entry.disposition === "apply")
+        .map((entry) => entry.findingKey),
+      allowedPaths: authority.allowedPaths,
+    });
+  }
+
+  static fromJSON(value, inputs) {
+    exactObjectKeys(value, ["version", "findingKeys", "allowedPaths"], "Task repair response contract");
+    if (value.version !== 1) throw new Error("Task repair response contract version must be 1");
+    const stored = new TaskRepairSourceResponseContract(value);
+    const derived = TaskRepairSourceResponseContract.fromHandoffInputs(inputs);
+    if (stableStringify(stored.toJSON()) !== stableStringify(derived.toJSON())) {
+      throw new Error("Task repair response contract does not match immutable handoff inputs");
+    }
+    return stored;
+  }
+
+  toJSON() {
+    return {
+      version: 1,
+      findingKeys: [...this.findingKeys],
+      allowedPaths: [...this.allowedPaths],
+    };
+  }
+
+  responseSchema() {
+    const schema = structuredClone(sourceWorkerEffectJsonSchema("task-repair"));
+    const findings = schema.properties.repair.properties.findings;
+    findings.minItems = this.findingKeys.length;
+    findings.maxItems = this.findingKeys.length;
+    findings.items.properties.findingKey = {
+      type: "string",
+      enum: [...this.findingKeys],
+    };
+    findings.items.properties.paths.items = {
+      type: "string",
+      enum: [...this.allowedPaths],
+    };
+    return schema;
+  }
+
+  workerGuidance() {
+    return [
+      "The structured source response schema is bound to this immutable Task repair request.",
+      "Its repair finding keys and source paths are constrained by the parent; do not substitute handoff runtime paths for source paths.",
+      "Canonical Task repair apply findingKey sequence:",
+      JSON.stringify(this.findingKeys),
+      "Authorized project-source path allow-list for repair.findings paths:",
+      JSON.stringify(this.allowedPaths),
+      "For every selected finding, report only the authorized source paths that this worker actually edits.",
+      "Never report request.json, action.json, .sennel handoff runtime, or another dispatcher-owned path as a repair mutation.",
+    ].join("\n");
+  }
+}
+
 /** Immutable per-attempt worker guidance carried by request.json, never argv or env. */
 export class WorkerArtifactWorkerInstructions {
   constructor({ retryFeedback = null, schemaGuidance = null } = {}) {
@@ -3759,7 +3860,7 @@ export class WorkerArtifactWorkerInstructions {
   }
 }
 
-function requestBoundWorkerGuidance(stepId, inputs) {
+function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
   if (stepId === "task-triage") {
     const review = inputs.find((input) => input.name === "task-review.json").document;
     const findingKeys = [
@@ -3773,19 +3874,10 @@ function requestBoundWorkerGuidance(stepId, inputs) {
     ].join("\n");
   }
   if (stepId === "task-repair") {
-    const triage = inputs.find((input) => input.name === "task-triage.json").document;
-    const authority = inputs.find((input) => input.name === "task-source-authority.json").document;
-    const findingKeys = triage.dispositions
-      .filter((entry) => entry.disposition === "apply")
-      .map((entry) => entry.findingKey);
-    return [
-      "The parent-derived task-repair apply findingKey sequence is:",
-      JSON.stringify(findingKeys),
-      "The exact project-source allow-list for repair.findings paths is:",
-      JSON.stringify(authority.allowedPaths),
-      "Report only source paths from that allow-list which this worker actually edits.",
-      "Never report request.json, action.json, .sennel handoff runtime, or any other dispatcher-owned path as a repair mutation.",
-    ].join("\n");
+    if (!(sourceResponseContract instanceof TaskRepairSourceResponseContract)) {
+      throw new Error("Task repair request lacks its typed source response contract");
+    }
+    return sourceResponseContract.workerGuidance();
   }
   return null;
 }
@@ -3813,6 +3905,7 @@ export class WorkerArtifactHandoffRequest {
     canonicalLocation = null,
     flowManager = null,
     workerInstructions = new WorkerArtifactWorkerInstructions(),
+    sourceResponseContract = null,
   }) {
     this.mainRoot = path.resolve(mainRoot);
     this.executionRoot = path.resolve(executionRoot);
@@ -3903,11 +3996,21 @@ export class WorkerArtifactHandoffRequest {
     });
     this.contextSnapshot = contextSnapshot;
     this.payloads = Object.freeze(payloads);
+    const derivedSourceResponseContract = this.stepId === "task-repair"
+      ? TaskRepairSourceResponseContract.fromHandoffInputs(this.inputs)
+      : null;
+    if (sourceResponseContract !== null
+      && (!(sourceResponseContract instanceof TaskRepairSourceResponseContract)
+        || derivedSourceResponseContract === null
+        || stableStringify(sourceResponseContract.toJSON()) !== stableStringify(derivedSourceResponseContract.toJSON()))) {
+      throw new Error("source response contract does not match immutable handoff inputs");
+    }
+    this.sourceResponseContract = derivedSourceResponseContract;
     if (!(workerInstructions instanceof WorkerArtifactWorkerInstructions)) {
       throw new Error("worker handoff requires typed worker instructions");
     }
     this.workerInstructions = workerInstructions.appendSchemaGuidance(
-      requestBoundWorkerGuidance(this.stepId, this.inputs),
+      requestBoundWorkerGuidance(this.stepId, this.inputs, this.sourceResponseContract),
     );
     this.generatedAt = requiredString(generatedAt, "handoff generatedAt");
     this.handoffRoot = executionHandoffRoot(this.executionRoot, this.specId);
@@ -4184,6 +4287,7 @@ export class WorkerArtifactHandoffRequest {
         baselineByteLength,
       })),
       workerInstructions: this.workerInstructions.toJSON(),
+      sourceResponseContract: this.sourceResponseContract?.toJSON() ?? null,
       specTestTopology: this.specTestTopology?.toJSON() ?? null,
       sealCommand: this.sealCommand,
       completionOwner: "parent-dispatcher",
@@ -4241,6 +4345,7 @@ export class WorkerArtifactHandoffRequest {
       testReviewRepair: this.testReviewRepair, testReviewRepairProgress: this.testReviewRepairProgress,
       workerVisibleTestReviewRepair: this.workerVisibleTestReviewRepair,
       workerInstructions: this.workerInstructions,
+      sourceResponseContract: this.sourceResponseContract,
       sourceMutationBaseline: this.sourceMutationBaseline, sourceHandoffCheckpoint,
       sourceHandoffIdentity: this.sourceHandoffIdentity, canonicalGeneration: this.canonicalGeneration,
       canonicalLocation: this.flowManager.specLocation(this.specId), flowManager: this.flowManager,
@@ -4305,6 +4410,7 @@ export class WorkerArtifactHandoffRequest {
         .map((input) => input.toJSON()),
       contextSnapshot: this.contextSnapshot?.toJSON() ?? null,
       workerInstructions: this.workerInstructions.toJSON(),
+      sourceResponseContract: this.sourceResponseContract?.toJSON() ?? null,
       ...(this.specTestTopology && { specTestTopology: this.specTestTopology.toJSON() }),
       ...(this.sealCommand && { sealCommand: this.sealCommand }),
       completionOwner: "parent-dispatcher",
@@ -4329,6 +4435,14 @@ export class WorkerArtifactHandoffRequest {
 
   executionEnvironment() {
     return { [WORKER_ARTIFACT_HANDOFF_REQUEST_ENV]: this.requestPath };
+  }
+
+  sourceResponseSchema() {
+    if (this.policy.kind !== "source") {
+      throw new Error("only source handoffs have a source response schema");
+    }
+    return this.sourceResponseContract?.responseSchema()
+      ?? sourceWorkerEffectJsonSchema(this.stepId);
   }
 
   assertCurrent(state) {
@@ -4846,7 +4960,7 @@ function requestFromStored(filePath) {
   exactObjectKeys(document, [
     "version", "runId", "specId", "issue", "stepId", "taskId", "actionDigest", "dispatchInvocationId",
       "targetAuthority", "inputDigest", "inputRevision", "inputs", "testReviewRepair", "contextSnapshot",
-    "payloads", "workerInstructions", "specTestTopology", "sealCommand", "completionOwner", "generatedAt",
+    "payloads", "workerInstructions", "sourceResponseContract", "specTestTopology", "sealCommand", "completionOwner", "generatedAt",
     "sourceMutationBaselineDigest", "sourceHandoffIdentity", "sourceHandoffCheckpointDigest",
   ], "worker artifact handoff request");
   if (document.version !== WORKER_ARTIFACT_HANDOFF_VERSION) {
@@ -4901,6 +5015,17 @@ function requestFromStored(filePath) {
     }
   }
   const payloadDirectory = path.join(actionDirectory, "payload");
+  const inputSnapshots = (Array.isArray(document.inputs) ? document.inputs : []).map((input) => (
+    new WorkerArtifactInputSnapshot({
+      name: input?.name,
+      targetRelativePath: input?.targetRelativePath,
+      snapshot: {
+        digest: input?.digest,
+        byteLength: input?.byteLength,
+      },
+      document: input?.document,
+    })
+  ));
   const request = {
     policy,
     version: document.version,
@@ -4934,17 +5059,7 @@ function requestFromStored(filePath) {
         baselineEntries: null,
       });
     }),
-    inputs: (Array.isArray(document.inputs) ? document.inputs : []).map((input) => (
-      new WorkerArtifactInputSnapshot({
-        name: input?.name,
-        targetRelativePath: input?.targetRelativePath,
-        snapshot: {
-          digest: input?.digest,
-          byteLength: input?.byteLength,
-        },
-        document: input?.document,
-      })
-    )),
+    inputs: inputSnapshots,
     testReviewRepair: document.testReviewRepair === null ? null : parseWorkerVisibleTestReviewRepair(document.testReviewRepair),
     contextSnapshot: document.contextSnapshot == null
       ? null
@@ -4952,6 +5067,9 @@ function requestFromStored(filePath) {
         ? TaskWorkerContextSnapshot.fromStored(document.contextSnapshot)
         : DraftWorkerContextSnapshot.fromStored(document.contextSnapshot),
     workerInstructions: WorkerArtifactWorkerInstructions.fromJSON(document.workerInstructions),
+    sourceResponseContract: document.sourceResponseContract === null
+      ? null
+      : TaskRepairSourceResponseContract.fromJSON(document.sourceResponseContract, inputSnapshots),
     // Runtime storage carries only content-addressed references. The baseline
     // and checkpoint bodies are reconstructed from the canonical store before
     // any parent-owned comparison or recovery action.
@@ -4980,6 +5098,9 @@ function requestFromStored(filePath) {
   if ((workerContextKind(policy) !== null) !== (request.contextSnapshot != null)
     || (request.contextSnapshot !== null && request.contextSnapshot.kind !== workerContextKind(policy))) {
     throw new Error("handoff request context snapshot does not match its step contract");
+  }
+  if ((request.stepId === "task-repair") !== (request.sourceResponseContract !== null)) {
+    throw new Error("handoff request source response contract does not match its step policy");
   }
   const hasSourceReferences = request.sourceMutationBaselineDigest !== null
     && request.sourceHandoffCheckpointDigest !== null
@@ -5064,6 +5185,7 @@ function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, 
     generatedAt: stored.generatedAt,
     workerVisibleTestReviewRepair: stored.testReviewRepair,
     workerInstructions: stored.workerInstructions,
+    sourceResponseContract: stored.sourceResponseContract,
     sourceMutationBaseline: sourceAuthority?.checkpoint.baseline ?? null,
     sourceHandoffIdentity: sourceAuthority?.checkpoint.identity ?? null,
     canonicalGeneration: stored.sourceHandoffIdentity?.canonicalGeneration ?? null,
@@ -5105,6 +5227,7 @@ function reboundRestoredHandoffRequest({ identityRequest, mainRoot, executionRoo
     testReviewRepairProgress,
     workerVisibleTestReviewRepair: stored.testReviewRepair,
     workerInstructions: stored.workerInstructions,
+    sourceResponseContract: stored.sourceResponseContract,
     sourceMutationBaseline: sourceAuthority?.checkpoint.baseline ?? null,
     sourceHandoffIdentity: sourceAuthority?.checkpoint.identity ?? null,
     canonicalGeneration: stored.sourceHandoffIdentity?.canonicalGeneration ?? null,
