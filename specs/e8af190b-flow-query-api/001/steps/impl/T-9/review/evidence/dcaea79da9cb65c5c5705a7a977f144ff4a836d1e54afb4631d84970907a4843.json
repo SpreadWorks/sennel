@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "phase": "impl",
+  "taskId": "T-9",
+  "treeSha": "ffea73f144b131357bb0905fdf7ebf5d140ae51a",
+  "targetStateDigest": "224ae4776d14ce67157ddb25c4bd50ba685dc2b39db44b3ef20d4811ab813405",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "6bcf1b52c7f55ee7340df3b83305b71363a64ab2fd39cbdfe4f2957a19bfd728",
+    "capturedAt": "2026-09-11T05:03:41.155Z"
+  },
+  "disposition": "REJECTED",
+  "blockingFindings": [
+    {
+      "findingId": "c9da7d00fa10034a01772535f3d91b5192f1f3d10631a07dec44168012bc5da9",
+      "summary": "Artifact read failures are misclassified",
+      "fingerprint": "c9da7d00fa10034a01772535f3d91b5192f1f3d10631a07dec44168012bc5da9",
+      "evidenceRefs": [
+        "impl-review.json#c9da7d00fa10034a01772535f3d91b5192f1f3d10631a07dec44168012bc5da9"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "314e24661e0c8583de9962ad05365446f8d0e59e9f91b250f7c2965b5fe0fbf2",
+      "summary": "Artifact digest canonicalization loses an own __proto__ key",
+      "fingerprint": "314e24661e0c8583de9962ad05365446f8d0e59e9f91b250f7c2965b5fe0fbf2",
+      "evidenceRefs": [
+        "impl-review.json#314e24661e0c8583de9962ad05365446f8d0e59e9f91b250f7c2965b5fe0fbf2"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "2d23b5a69c38f50f4113b5de264f12805b6a29898f96286564c17e5505f0a28a",
+      "summary": "Historical replay skips activity and resulting-state integrity checks",
+      "fingerprint": "2d23b5a69c38f50f4113b5de264f12805b6a29898f96286564c17e5505f0a28a",
+      "evidenceRefs": [
+        "impl-review.json#2d23b5a69c38f50f4113b5de264f12805b6a29898f96286564c17e5505f0a28a"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "1a95e0db47cbef31e0ad7a633dd6c91e31ac6c7b69546c255ee9ad3e8505053a",
+      "summary": "Metadata permits too many issues",
+      "fingerprint": "1a95e0db47cbef31e0ad7a633dd6c91e31ac6c7b69546c255ee9ad3e8505053a",
+      "evidenceRefs": [
+        "impl-review.json#1a95e0db47cbef31e0ad7a633dd6c91e31ac6c7b69546c255ee9ad3e8505053a"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "2db6976082fc5fc4331480cc5598e7d3a8a82442f9613153ff9b733db13a2655",
+      "summary": "Metadata blocker fields are not derived consistently",
+      "fingerprint": "2db6976082fc5fc4331480cc5598e7d3a8a82442f9613153ff9b733db13a2655",
+      "evidenceRefs": [
+        "impl-review.json#2db6976082fc5fc4331480cc5598e7d3a8a82442f9613153ff9b733db13a2655"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "426adc9ea536e4d529989a3dcb55003d445579c4ff3a8e63b25a58d7bbcbc90d",
+      "summary": "Version discovery follows symlinkable directories",
+      "fingerprint": "426adc9ea536e4d529989a3dcb55003d445579c4ff3a8e63b25a58d7bbcbc90d",
+      "evidenceRefs": [
+        "impl-review.json#426adc9ea536e4d529989a3dcb55003d445579c4ff3a8e63b25a58d7bbcbc90d"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "2cb5f635700c99e78581f508d79ec5baf0c3986d5c3f516ddb3408d80fb2051c",
+      "summary": "Errors expose an unestablished Flow Version",
+      "fingerprint": "2cb5f635700c99e78581f508d79ec5baf0c3986d5c3f516ddb3408d80fb2051c",
+      "evidenceRefs": [
+        "impl-review.json#2cb5f635700c99e78581f508d79ec5baf0c3986d5c3f516ddb3408d80fb2051c"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "c9e5659bcabccebd8ee0f54ed4f021a797b8d566b33922f865dd3a123426ae65",
+      "summary": "Metadata consumer does not verify the full public payload",
+      "fingerprint": "c9e5659bcabccebd8ee0f54ed4f021a797b8d566b33922f865dd3a123426ae65",
+      "evidenceRefs": [
+        "impl-review.json#c9e5659bcabccebd8ee0f54ed4f021a797b8d566b33922f865dd3a123426ae65"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "0b236116e4e03be0573efbc4fc7057f5f82d670823bf4ef37d0f7480f4bd20c0",
+      "summary": "Activity consumer lacks required success-shape scenarios",
+      "fingerprint": "0b236116e4e03be0573efbc4fc7057f5f82d670823bf4ef37d0f7480f4bd20c0",
+      "evidenceRefs": [
+        "impl-review.json#0b236116e4e03be0573efbc4fc7057f5f82d670823bf4ef37d0f7480f4bd20c0"
+      ],
+      "disposition": "must-fix"
+    },
+    {
+      "findingId": "7b2be9168d2afa979754a0d9e00baa5e04606b6db41db6b46838ed6b42988e25",
+      "summary": "Consumer rejects valid integer page limits",
+      "fingerprint": "7b2be9168d2afa979754a0d9e00baa5e04606b6db41db6b46838ed6b42988e25",
+      "evidenceRefs": [
+        "impl-review.json#7b2be9168d2afa979754a0d9e00baa5e04606b6db41db6b46838ed6b42988e25"
+      ],
+      "disposition": "must-fix"
+    }
+  ],
+  "advisoryFindings": []
+}

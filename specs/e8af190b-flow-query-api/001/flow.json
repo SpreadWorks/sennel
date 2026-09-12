@@ -1109,8 +1109,22 @@
               "kind": "step",
               "id": "T-9-impl",
               "key": "task.task-impl",
-              "status": "in_progress",
-              "result": null,
+              "status": "done",
+              "result": {
+                "outcome": "passed",
+                "summary": "Worker handoff confirmed for task-impl; no source change: The requested Schema Revision 1 consumer compatibility implementation and fixture coverage are already present in the immutable checkout; syntax and diff checks passed, so no source edit was necessary..",
+                "confirmedAt": "2026-09-11T03:28:05.036Z",
+                "artifactRefs": [
+                  {
+                    "kind": "worker-handoff",
+                    "id": "e0dffcee09240a2266f7093047d936073032dfee98811fa9c58fa86f7c66deb9"
+                  },
+                  {
+                    "kind": "worker-handoff-request",
+                    "id": "9d709673bea2d82fa7284f3eea868e5ba973b15b1d56fcd3c50c488a371ed847"
+                  }
+                ]
+              },
               "attemptSequence": 2,
               "steps": []
             },
@@ -1118,27 +1132,46 @@
               "kind": "step",
               "id": "T-9-review",
               "key": "task.task-review",
-              "status": "invalidated",
-              "result": null,
-              "attemptSequence": 5,
+              "status": "done",
+              "result": {
+                "outcome": "passed",
+                "summary": "canonical runtime transition for T-9-review",
+                "confirmedAt": "2026-09-11T05:04:04.878Z",
+                "artifactRefs": []
+              },
+              "attemptSequence": 7,
               "steps": []
             },
             {
               "kind": "step",
               "id": "T-9-triage",
               "key": "task.task-triage",
-              "status": "invalidated",
-              "result": null,
-              "attemptSequence": 4,
+              "status": "done",
+              "result": {
+                "outcome": "passed",
+                "summary": "Worker handoff confirmed for task-triage.",
+                "confirmedAt": "2026-09-11T05:07:35.780Z",
+                "artifactRefs": [
+                  {
+                    "kind": "worker-handoff",
+                    "id": "b5fce1f513f3a7f9e2e774afd58450fd7e94734840fd3dfb17fce4700dfc79de"
+                  },
+                  {
+                    "kind": "worker-handoff-request",
+                    "id": "6d4c5fa1a93beb1c0da3d28ae14b992b8f8d767d992f347a22b1020e559ed355"
+                  }
+                ]
+              },
+              "attemptSequence": 5,
               "steps": []
             },
             {
               "kind": "step",
               "id": "T-9-repair",
               "key": "task.task-repair",
-              "status": "invalidated",
+              "status": "in_progress",
               "result": null,
-              "attemptSequence": 4,
+              "attemptSequence": 5,
               "steps": []
             },
             {
@@ -1355,12 +1388,12 @@
       ]
     }
   ],
-  "current": "T-9-impl",
+  "current": "T-9-repair",
   "attempt": {
-    "id": "attempt-T-9-impl-6877ec20-81e1-4f93-8131-0243fc3bddf0",
-    "nodeId": "T-9-impl",
-    "sequence": 2,
-    "startedAt": "2026-09-10T16:33:49.277Z",
+    "id": "attempt-T-9-repair-4e4478b6-35f7-4b9f-a957-df2e1a931182",
+    "nodeId": "T-9-repair",
+    "sequence": 5,
+    "startedAt": "2026-09-11T05:07:39.514Z",
     "consumption": {
       "semantic": 0,
       "tooling": 0
@@ -1374,12 +1407,12 @@
         "resources": [
           "task_spec",
           "requirements",
-          "overview"
+          "source"
         ]
       }
     ]
   },
-  "confirmationOrder": 1076,
+  "confirmationOrder": 1137,
   "artifacts": [],
   "outbox": [],
   "context": null,
