@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-12T02:48:52.226Z",
+  "analyzedAt": "2026-09-12T11:30:33.093Z",
   "package": {
     "entries": [
       {
@@ -3049,9 +3049,9 @@
       },
       {
         "file": "src/flow.js",
-        "hash": "1c7fb40ac9addff97458ec8a8715a7b7",
-        "lines": 139,
-        "mtime": "2026-08-30T00:45:02.960Z",
+        "hash": "fd1abe0ad9d3605be69a6469bf27bf71",
+        "lines": 143,
+        "mtime": "2026-09-12T10:39:45.443Z",
         "className": "flow",
         "methods": [
           "isolatedArtifactHookContext",
@@ -3070,22 +3070,20 @@
         "extends": null,
         "usedBy": null,
         "id": "1ab08f2b",
-        "summary": "The flow entry point dispatches flow lifecycle commands and artifact commands while constructing isolated or resolved hook contexts.",
-        "detail": "It parses process arguments, initializes the shared container, and routes commands through the core registry and dispatcher. Resume and prepare-spec lifecycle entries are handled specially before normal flow command dispatch. Hook context creation distinguishes resolved flow entries from isolated artifact contexts, including structured read-failure information. Invalid commands and dispatch failures terminate with the configured error code, while successful help or command paths exit cleanly.",
+        "summary": "Flow command-line entry point that bootstraps arguments and dispatches flow operations.",
+        "detail": "Reads process arguments, initializes the flow query CLI, builds isolated hook contexts, resolves flow definitions, and dispatches commands such as resume and prepare. It converts failures into controlled process exits and supports command groups through the central dispatcher.",
         "chapter": "cli_commands",
-        "role": "route",
+        "role": "controller",
         "enrich": {
-          "processedAt": "2026-08-30T05:01:20.184Z",
+          "processedAt": "2026-09-12T10:46:27.865Z",
           "attempts": 1
         },
         "keywords": [
-          "flow CLI",
-          "command dispatcher",
-          "lifecycle commands",
-          "resume",
-          "prepare-spec",
+          "CLI bootstrap",
+          "flow dispatch",
+          "command groups",
           "hook context",
-          "exit codes"
+          "process exit"
         ]
       },
       {
@@ -4037,7 +4035,8 @@
         ],
         "extends": "GateTransitionDisposition",
         "usedBy": [
-          "src/flow/registry.js"
+          "src/flow/registry.js",
+          "src/flow/query.js"
         ],
         "id": "2cb27b93",
         "summary": "Defines the flow and task workflow model, including typed transitions, lifecycle actions, recovery decisions, routing, and definition introspection.",
@@ -5060,9 +5059,9 @@
       },
       {
         "file": "src/flow/lib/canonical-flow-manager-store.js",
-        "hash": "f9aebf0bc9c3afab368b3c11099e9e06",
-        "lines": 4999,
-        "mtime": "2026-09-11T09:45:08.180Z",
+        "hash": "48fc681a25b12f6144b3d681a85ada90",
+        "lines": 5003,
+        "mtime": "2026-09-12T10:39:45.444Z",
         "className": "canonical-flow-manager-store",
         "methods": [
           "CanonicalRawActivityReplayOnlyError",
@@ -5193,30 +5192,28 @@
           "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "041f2538",
-        "summary": "Canonical flow manager store for durable task execution, review, recovery, and artifact state.",
-        "detail": "Implements the canonical persistence and transition boundary for flows. It validates and projects flow state, resolves canonical files and artifacts, manages Tasks, Steps, Attempts, Gates, reviews, metrics, notes, issue logs, source handoffs, draft promotion, upgrades, and outbox operations, and delegates atomic state changes to the runtime. Typed admission records, snapshot checks, stable activity identities, replay-only activity handling, catalog validation, lineage bindings, and conflict detection enforce lifecycle invariants and idempotent recovery across execution, failure, repair, and finalization paths.",
+        "summary": "Canonical persistence manager for flow state, tasks, activities, artifacts, transitions, and recovery.",
+        "detail": "Defines the canonical flow store and its validation, projection, admission, and persistence logic. It coordinates flow creation and loading, task and step execution, retries, gates, reviews, source handoffs, artifact publication, metrics, notes, issue logs, outbox operations, approvals, recovery, and consistency checks through typed state transitions and conflict detection.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-11T12:16:19.291Z",
+          "processedAt": "2026-09-12T10:46:27.865Z",
           "attempts": 1
         },
         "keywords": [
-          "canonical flow state",
-          "task execution",
-          "review lifecycle",
+          "canonical state store",
+          "flow persistence",
+          "task transitions",
           "artifact catalog",
-          "recovery",
-          "source handoff",
-          "outbox persistence",
-          "state invariants"
+          "recovery admissions",
+          "outbox"
         ]
       },
       {
         "file": "src/flow/lib/canonical-flow-runtime.js",
-        "hash": "17a76c6596caeb50cf03374d30b676e8",
-        "lines": 1339,
-        "mtime": "2026-09-08T10:34:20.527Z",
+        "hash": "1f37b86507b68d5b77635a498ed1e3a3",
+        "lines": 1340,
+        "mtime": "2026-09-12T10:39:45.444Z",
         "className": "canonical-flow-runtime",
         "methods": [
           "CanonicalFlowRuntime",
@@ -5241,23 +5238,21 @@
           "src/flow/lib/issue-log-store.js"
         ],
         "id": "8d606675",
-        "summary": "Defines the canonical runtime facade for managing versioned Flow state, activities, attempts, artifacts, outbox transitions, observations, and recovery publications.",
-        "detail": "CanonicalFlowRuntime validates required inputs and enforces CurrentFlowDefinition and Attempt invariants before delegating persistence to FlowWorkspace-backed stores. It exposes read and write operations for canonical specifications, reviews, transition snapshots, runtime artifacts, activities, catalogs, and writable-state checks. Attempt transitions are normalized into typed FlowActivity records, with specialized handling for artifact publication, upgrades, plugin artifacts, outbox lifecycle, dispatch approval, metrics, notes, review deferral, and gate settlement. Recovery and finalization paths validate publication types, producer attempts, downstream operations, and required payloads before applying state changes.",
+        "summary": "Runtime facade that applies canonical flow activities and state transitions through the versioned store.",
+        "detail": "Provides the runtime API for loading canonical flow data, creating and applying activities, publishing artifacts, handling outbox operations, recording observations, managing approvals, and settling review or gate outcomes. It validates required identifiers, attempts, versions, operation types, and transition prerequisites before delegating persistence to the store.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-09T05:48:45.821Z",
+          "processedAt": "2026-09-12T10:46:27.865Z",
           "attempts": 1
         },
         "keywords": [
-          "canonical flow runtime",
+          "flow runtime",
+          "activity application",
           "state transitions",
-          "attempt management",
           "artifact publication",
-          "outbox lifecycle",
-          "recovery",
-          "FlowActivity",
-          "invariant validation"
+          "outbox operations",
+          "versioned store"
         ]
       },
       {
@@ -5802,9 +5797,9 @@
       },
       {
         "file": "src/flow/lib/current-flow-state.js",
-        "hash": "412c5edbc8e9faf400f987d20466f1ed",
-        "lines": 8962,
-        "mtime": "2026-09-09T05:40:43.381Z",
+        "hash": "4fe43f66aa36b5e951620685acdb24e4",
+        "lines": 9106,
+        "mtime": "2026-09-12T10:39:45.461Z",
         "className": "current-flow-state",
         "methods": [
           "CanonicalFlowArtifactWrite",
@@ -5895,6 +5890,7 @@
           "ActivityReviewPublication",
           "ActivityTiming",
           "ActivityUsage",
+          "CurrentFlowActivitySummary",
           "FlowActivityJournal",
           "CurrentFlowStateSnapshot",
           "CurrentFlowStateStore",
@@ -5952,6 +5948,7 @@
           "node:path",
           "node:util",
           "../../lib/atomic-file.js",
+          "../../lib/git-snapshot.js",
           "../../lib/file-lock.js",
           "../../lib/real-directory-authority.js",
           "../../lib/flow-version.js",
@@ -6056,6 +6053,7 @@
           "ActivityReviewPublication",
           "ActivityTiming",
           "ActivityUsage",
+          "CurrentFlowActivitySummary",
           "FlowActivityJournal",
           "CurrentFlowStateSnapshot",
           "CurrentFlowStateStore",
@@ -6064,7 +6062,8 @@
           "CurrentFlowVersionSemanticValidator",
           "CurrentFlowVersionMigrationOutputBuilder",
           "CURRENT_FLOW_SCHEMA_REVISION",
-          "CURRENT_FLOW_RESULT_VERSION"
+          "CURRENT_FLOW_RESULT_VERSION",
+          "AGGREGATE_METRIC_PROVENANCE"
         ],
         "extends": "Error",
         "usedBy": [
@@ -6083,6 +6082,7 @@
           "src/flow/lib/run-finalize-cleanup.js",
           "src/flow/lib/run-prepare-spec.js",
           "src/flow/lib/run-recover-finalization.js",
+          "src/flow/lib/source-handoff-persistence.js",
           "src/flow/lib/task-execution-overrun.js",
           "src/flow/lib/task-review-aborted-work-unit.js",
           "src/flow/lib/task-review-accounting.js",
@@ -6091,27 +6091,28 @@
           "src/flow/lib/task-review-reconciliation.js",
           "src/flow/lib/task-review-recovery-checkpoint.js",
           "src/flow/lib/worker-artifact-handoff.js",
-          "src/flow/registry.js",
-          "src/flow/lib/source-handoff-persistence.js"
+          "src/flow/query.js",
+          "src/flow/registry.js"
         ],
         "id": "42607a0e",
-        "summary": "Implements the authoritative current-flow state model, transition engine, activity journal, and version store for durable Flow execution.",
-        "detail": "The module defines strongly validated immutable value objects for Flow identities, policies, nodes, attempts, results, artifacts, failures, reviews, and lifecycle state. It enforces canonical state transitions through typed Activities, retry and recovery policies, dynamic Task admission, artifact publication, outbox settlement, historical continuation, and finalization rules. Persistence uses atomic files, append-only JSONL journaling, SHA-256 revisions, filesystem authority checks, directory locks, and snapshot validation to detect conflicts or tampering. The Version Store coordinates canonical specifications, artifact catalogs, review evidence, runtime artifacts, migration validation, and atomic Version creation.",
+        "summary": "Defines the immutable current-flow state model, activity protocol, canonical artifact handling, validation rules, persistence, and recovery logic.",
+        "detail": "This module models flow identity, lifecycle policies, nodes, definitions, attempts, failures, canonical and runtime artifacts, outbox entries, approvals, review dispositions, execution cursors, retry accounting, and recovery targets. It provides controlled transitions for flow creation, parking, resumption, finalization, task admission and insertion, attempt execution, retries, failure recording, repairs, confirmations, review settlement, nonblocking continuation, rewinds, test repair, and historical or interrupted-flow recovery. Typed serializers and invariant checks enforce definition ownership, stable identities, lifecycle and attempt consistency, execution-frontier correctness, artifact authority, filesystem protection, and consistency between persisted state and activity history. The module also supplies append-only activity journaling, snapshot and cache consistency checks, runtime locking, atomic Version creation, canonical specification and artifact publication, migration helpers, and persistence-safe state transitions.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-09T05:48:45.841Z",
+          "processedAt": "2026-09-12T10:46:27.865Z",
           "attempts": 1
         },
+        "app": "sennel",
         "keywords": [
-          "current flow state",
-          "state machine",
+          "flow state model",
           "activity journal",
-          "retry recovery",
-          "artifact catalog",
+          "state transitions",
+          "canonical artifacts",
+          "invariant validation",
+          "attempt lifecycle",
           "atomic persistence",
-          "version store",
-          "invariant validation"
+          "recovery"
         ]
       },
       {
@@ -12939,9 +12940,9 @@
       },
       {
         "file": "src/flow/lib/run-prepare-spec.js",
-        "hash": "583983f45fd26232d5da55b4e3ed0ab6",
+        "hash": "dc69e20f499a3457dcf1761f53a7bdc4",
         "lines": 1266,
-        "mtime": "2026-08-28T16:05:42.270Z",
+        "mtime": "2026-09-12T10:39:45.462Z",
         "className": "run-prepare-spec",
         "methods": [
           "buildDraftTemplate",
@@ -13012,24 +13013,21 @@
         "extends": "FlowCommand",
         "usedBy": null,
         "id": "59eeacc6",
-        "summary": "Implements the prepare-spec Flow command, creating a new specification either in the current repository or an isolated Git worktree. It performs documentation analysis, initializes Flow metadata, synchronizes plugin runtime files, and uses journaled recovery to make preparation safe and repeatable.",
-        "detail": "The command derives a deterministic spec identity from the run ID, validates the base branch, checks required branch files, and rejects unsafe dirty-worktree conditions unless isolation is requested. It runs the documentation scan and validates the resulting analysis artifact before creating the draft and Flow state records. Isolated preparation creates and verifies a worktree, branch, managed configuration, plugin runtime snapshot, ignore entries, and flow identity binding. A versioned atomic journal records ownership, file contents, Git object IDs, and process identity so failures can roll back only resources proven to belong to the exact preparation attempt.",
+        "summary": "Prepares a flow specification with validated worktree isolation and rollback support.",
+        "detail": "Implements the prepare-spec flow command. It scans and validates documentation, derives deterministic specification identities, checks branch and worktree prerequisites, synchronizes plugin runtime files, records an atomic preparation journal, manages flow bindings and state, invokes lifecycle hooks, and rolls back partially published work when authority or integrity checks fail.",
         "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-08-28T16:08:35.833Z",
+          "processedAt": "2026-09-12T10:46:27.865Z",
           "attempts": 1
         },
         "keywords": [
-          "prepare-spec",
-          "Flow command",
-          "Git worktree",
-          "spec identity",
-          "docs scan",
-          "plugin runtime",
-          "atomic journal",
-          "rollback",
-          "branch validation"
+          "spec preparation",
+          "worktree isolation",
+          "flow command",
+          "rollback journal",
+          "plugin synchronization",
+          "lifecycle hooks"
         ]
       },
       {
@@ -17989,10 +17987,176 @@
         ]
       },
       {
+        "file": "src/flow/query-contract.js",
+        "hash": "885f0a89aed3047d3be6d1fca08706d9",
+        "lines": 323,
+        "mtime": "2026-09-12T10:39:45.463Z",
+        "className": "query-contract",
+        "methods": [
+          "isFlowQueryDatetime",
+          "validateFlowQueryRequest",
+          "validateFlowQueryResponse",
+          "commonResponseProperties",
+          "knownResponseProperties",
+          "responseVariant"
+        ],
+        "imports": [
+          "../lib/schema-validate.js"
+        ],
+        "exports": [
+          "isFlowQueryDatetime",
+          "validateFlowQueryRequest",
+          "validateFlowQueryResponse",
+          "FLOW_QUERY_SCHEMA_REVISION",
+          "FLOW_QUERY_HELP",
+          "FLOW_QUERY_LIMITS",
+          "FLOW_QUERY_RESOURCES",
+          "FLOW_QUERY_ERROR_CODES",
+          "FLOW_QUERY_ERROR_PATHS",
+          "FLOW_QUERY_REQUEST_SCHEMAS",
+          "FLOW_QUERY_REQUEST_SCHEMA",
+          "FLOW_QUERY_RESPONSE_SCHEMA"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/query.js",
+          "src/flow/registry.js"
+        ],
+        "id": "48d12fa9",
+        "summary": "Defines and validates the flow query request and response contract.",
+        "detail": "Provides schema revisions, help text, resource names, limits, error codes, JSON path mappings, request variants, and response schemas for flow queries. It also validates timezone-aware timestamps, request payloads, and response payloads against the declared schemas.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-12T10:46:27.865Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "query contract",
+          "JSON schema",
+          "request validation",
+          "response validation",
+          "flow metadata",
+          "activities"
+        ]
+      },
+      {
+        "file": "src/flow/query.js",
+        "hash": "17d16434c9d9c0907794ec6e2d035584",
+        "lines": 1493,
+        "mtime": "2026-09-12T10:39:45.463Z",
+        "className": "query",
+        "methods": [
+          "prepareFlowQueryInput",
+          "bootstrapFlowQueryCli",
+          "runFlowQueryCli",
+          "canonicalJson",
+          "canonicalDigest",
+          "isPlainObject",
+          "schemaErrorPath",
+          "assertRequestSchema",
+          "requireExactObject",
+          "requirePublicString",
+          "requirePublicInteger",
+          "requirePublicStringList",
+          "readBoundedFile",
+          "parseJson",
+          "isCanonicalReadError",
+          "isJsonParseError",
+          "stateCreatedActivityId",
+          "replayCanonicalState",
+          "publicString",
+          "uniqueLimited",
+          "uniqueObjectList",
+          "publicArtifactId",
+          "boundedPublic",
+          "validateIdKey",
+          "validateBlocker",
+          "validateNextAction",
+          "validateTimestamp",
+          "validatePairList",
+          "validateTiming",
+          "validateCost",
+          "validateUsage",
+          "validateOutcome",
+          "validateFailure",
+          "validateIncomplete",
+          "validateMetric",
+          "artifactIdentity",
+          "isoTimestamp",
+          "isQueryDatetime",
+          "pageInfo",
+          "requireRealDirectory",
+          "knownResourceError",
+          "unknownResourceError",
+          "publicError",
+          "serializeQueryResponse",
+          "parseRequestBytes",
+          "readStdin",
+          "readInput",
+          "repositoryRoot",
+          "specRoot",
+          "writeStream"
+        ],
+        "imports": [
+          "node:crypto",
+          "node:fs",
+          "node:path",
+          "../lib/flow-spec-id.js",
+          "../lib/product.js",
+          "../lib/flow-workspace.js",
+          "../lib/flow-version.js",
+          "../lib/flow-artifact-contract.js",
+          "./definition.js",
+          "../lib/git-snapshot.js",
+          "./query-contract.js",
+          "./lib/current-flow-state.js"
+        ],
+        "exports": [
+          "prepareFlowQueryInput",
+          "bootstrapFlowQueryCli",
+          "runFlowQueryCli",
+          "AggregateMetrics",
+          "ActivityItem",
+          "ArtifactDescriptorView",
+          "CanonicalFlowVersionReader",
+          "Cursor",
+          "FLOW_QUERY_ERROR_CODES",
+          "FLOW_QUERY_ERROR_PATHS",
+          "FLOW_QUERY_LIMITS",
+          "FLOW_QUERY_RESOURCES",
+          "FLOW_QUERY_SCHEMA_REVISION",
+          "MetadataItem",
+          "QueryError",
+          "QueryProjector",
+          "QueryRequest",
+          "SelectedFlowVersion"
+        ],
+        "extends": "Error",
+        "usedBy": null,
+        "id": "0927d65f",
+        "summary": "Implements canonical flow querying, projection, pagination, and CLI execution.",
+        "detail": "Reads bounded canonical flow records from trusted directories and files, validates state and activity consistency, reconstructs historical state, resolves artifact references, projects metadata or activity results, and applies bounded cursor pagination. It exposes request preparation and a command-line runner with structured errors and serialized responses.",
+        "chapter": "cli_commands",
+        "role": "controller",
+        "enrich": {
+          "processedAt": "2026-09-12T10:46:27.865Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "flow query",
+          "canonical records",
+          "artifact catalog",
+          "cursor pagination",
+          "activity ledger",
+          "CLI"
+        ]
+      },
+      {
         "file": "src/flow/registry.js",
-        "hash": "4cedc7874c23963e468f42a919b593ed",
-        "lines": 2523,
-        "mtime": "2026-09-09T05:40:43.383Z",
+        "hash": "888ff7544d1eb5450ba6a092ca5fd4ad",
+        "lines": 2532,
+        "mtime": "2026-09-12T10:39:45.471Z",
         "className": "registry",
         "methods": [
           "assertDraftReviewRegistryHookBoundary",
@@ -18028,6 +18192,7 @@
           "../lib/flow-helpers.js",
           "../lib/flow-envelope.js",
           "../lib/flow-options.js",
+          "./query-contract.js",
           "fs",
           "path",
           "../lib/constants.js",
@@ -18062,23 +18227,21 @@
         "extends": null,
         "usedBy": null,
         "id": "d64f4095",
-        "summary": "The flow registry coordinates CLI flow commands, lifecycle hooks, gate and review transitions, and canonical state finalization. It centralizes task, test-chain, plugin, retry, and artifact-publication behavior while enforcing definition-owned decisions and flow-state invariants.",
-        "detail": "This module dispatches flow commands through a registry and applies lifecycle actions around command execution, errors, retries, and non-terminal results. It resolves active phases, scoped gate and review step identities, transition facts, and canonical result provenance before updating step status or persisting artifacts. Gate settlement and test-chain transitions are delegated to explicit coordinators, while finalize operations use repository locks and a canonical flow-state owner. Hook boundaries, target guards, task lineage, runtime logs, and plugin diagnostics are validated to prevent publication from stale or non-canonical state.",
+        "summary": "Registers flow commands and coordinates lifecycle actions across reviews, gates, tests, and finalization.",
+        "detail": "Defines command options, target guards, retry help, review and gate responsibility boundaries, runtime step resolution, lifecycle adapters, settlement coordination, plugin hook execution, state updates, and canonical result publication. It dispatches flow operations while applying transition-specific actions and failure handling.",
         "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-09T05:48:45.972Z",
+          "processedAt": "2026-09-12T10:46:27.865Z",
           "attempts": 1
         },
         "keywords": [
           "flow registry",
-          "lifecycle hooks",
-          "gate transitions",
-          "review workflow",
-          "task state",
-          "plugin hooks",
-          "finalization",
-          "CLI dispatch"
+          "lifecycle orchestration",
+          "target guards",
+          "gate settlement",
+          "review routing",
+          "plugin hooks"
         ]
       },
       {
@@ -18536,9 +18699,9 @@
       },
       {
         "file": "src/lib/agent-timeout.js",
-        "hash": "4db48394d5019fb21e201e63836128bd",
+        "hash": "3b5e5e7e1202591baf769455aafe5bc9",
         "lines": 222,
-        "mtime": "2026-09-03T23:58:16.686Z",
+        "mtime": "2026-09-12T07:24:57.951Z",
         "className": "agent-timeout",
         "methods": [
           "AgentTimeout",
@@ -18565,23 +18728,21 @@
           "src/lib/agent.js"
         ],
         "id": "8e43fef0",
-        "summary": "Defines agent timeout values and monitors repair-worker handoff activity. It combines validated duration settings with monotonic timing and filesystem snapshots to detect inactivity or stalled worker processes.",
-        "detail": "AgentTimeout converts positive second-based configuration into process and outer-tree millisecond deadlines using shared grace allowances. AgentTimeoutDiagnostic validates diagnostic reasons and thresholds, while MonotonicMilliseconds provides stable elapsed-time measurement independent of wall-clock changes. TestReviewRepairWorkerMonitor requires an absolute handoff directory, bounded polling intervals, and injectable timer and snapshot functions for deterministic supervision. HandoffTreeSnapshot recursively records filesystem identity and metadata so the monitor can distinguish genuine worker activity from an unchanged or unavailable handoff tree.",
-        "chapter": "internal_design",
-        "role": "middleware",
+        "summary": "Provides agent timeout values, diagnostics, and repair-worker inactivity monitoring.",
+        "detail": "Defines default timeout and grace-period constants, validates timeout configuration, converts timeout seconds to milliseconds, and models diagnostic reasons and thresholds. It also snapshots handoff-directory trees and monitors test-review repair workers using monotonic time, polling intervals, and inactivity checks.",
+        "chapter": "stack_and_ops",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-04T00:25:44.717Z",
+          "processedAt": "2026-09-12T10:46:27.865Z",
           "attempts": 1
         },
         "keywords": [
           "agent timeout",
+          "process grace period",
           "repair worker",
-          "handoff monitor",
-          "monotonic clock",
-          "filesystem snapshot",
-          "polling",
-          "inactivity detection",
-          "process supervision"
+          "handoff directory",
+          "inactivity monitoring",
+          "monotonic time"
         ]
       },
       {
@@ -20290,9 +20451,9 @@
       },
       {
         "file": "src/lib/flow-version.js",
-        "hash": "a83fe6f705dab6c5f9560b392bd50a06",
-        "lines": 2369,
-        "mtime": "2026-09-09T08:37:33.893Z",
+        "hash": "58822960835a3cc5dc49636f335357d2",
+        "lines": 2628,
+        "mtime": "2026-09-12T10:39:45.476Z",
         "className": "flow-version",
         "methods": [
           "FlowId",
@@ -20319,6 +20480,10 @@
           "FlowArtifactActivityAssociation",
           "FlowArtifactActivityIndex",
           "FlowArtifactCatalog",
+          "FlowArtifactCatalogSnapshotEvidence",
+          "FlowArtifactCatalogCommittedSnapshot",
+          "FlowArtifactCatalogSnapshotLimits",
+          "FlowArtifactCatalogSnapshotReader",
           "FlowArtifactCatalogStore",
           "FlowVersionMigrationClassification",
           "FlowVersionMigrationBlocker",
@@ -20349,6 +20514,8 @@
           "catalogManagedPath",
           "knownNoncatalogedPath",
           "managedFiles",
+          "requireBoundedLimit",
+          "readBoundedRealFile",
           "sameMigrationAuthoritySlot",
           "sameMigrationOutputContract",
           "sameMigrationAggregate",
@@ -20396,6 +20563,10 @@
           "FlowArtifactActivityAssociation",
           "FlowArtifactActivityIndex",
           "FlowArtifactCatalog",
+          "FlowArtifactCatalogSnapshotEvidence",
+          "FlowArtifactCatalogCommittedSnapshot",
+          "FlowArtifactCatalogSnapshotLimits",
+          "FlowArtifactCatalogSnapshotReader",
           "FlowArtifactCatalogStore",
           "FlowVersionMigrationClassification",
           "FlowVersionMigrationBlocker",
@@ -20426,24 +20597,23 @@
           "src/lib/specs-migration.js"
         ],
         "id": "4204645d",
-        "summary": "Implements authoritative flow-version storage, artifact cataloging, migration, and transactional filesystem publication. It enforces canonical paths, typed artifact contracts, locking, integrity checks, rollback, and legacy-version migration safety.",
-        "detail": "The module defines typed identities, version locations, runtime and task artifact paths, authority scopes, retention rules, and canonical artifact contracts. It uses real-directory validation, normalized POSIX paths, atomic JSON/file helpers, process and file locks, snapshots, before-images, and transaction journals to protect filesystem state and support rollback. Flow artifact catalogs and Activity indexes verify ownership, updater relationships, hashes, content contracts, publication claims, and controlled publication or removal operations. Migration inspection classifies legacy files through explicit mapping policies, detects forbidden or conflicting artifacts, validates source inventories and target identity, and materializes isolated migration fixtures with generated or transformed outputs.",
+        "summary": "Defines flow version identity, storage, artifact authority, catalog transactions, and migration workflows.",
+        "detail": "This module provides the core version-management model and persistence layer. It validates canonical repository locations and normalized artifact paths, represents flow/version/spec/run/activity identities, manages runtime and task artifact locations, tracks artifact ownership and activity associations, verifies catalog contents and bounded snapshots, performs locked transactional publication with rollback journals, and classifies, inspects, plans, materializes, and validates migrations from legacy layouts.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-09T08:39:40.039Z",
+          "processedAt": "2026-09-12T10:46:27.865Z",
           "attempts": 1
         },
         "keywords": [
-          "flow versioning",
+          "flow versions",
           "artifact catalog",
-          "filesystem transactions",
+          "transaction journal",
+          "repository authority",
           "migration",
-          "locking",
-          "rollback",
-          "integrity validation",
           "activity ledger",
-          "canonical paths"
+          "file locking",
+          "snapshot validation"
         ]
       },
       {
@@ -20551,11 +20721,12 @@
       },
       {
         "file": "src/lib/git-helpers.js",
-        "hash": "58920cc6f77cc2ebf9c3bcba34ae19d2",
-        "lines": 683,
-        "mtime": "2026-09-11T02:30:46.886Z",
+        "hash": "d07d480103a38d4c0533ea0d2d522eca",
+        "lines": 694,
+        "mtime": "2026-09-12T10:39:45.476Z",
         "className": "git-helpers",
         "methods": [
+          "captureGitSnapshot",
           "runGit",
           "GitCommitPathProbeError",
           "GitCommitPathSet",
@@ -20596,9 +20767,11 @@
           "node:child_process",
           "node:path",
           "./process.js",
-          "./container.js"
+          "./container.js",
+          "./git-snapshot.js"
         ],
         "exports": [
+          "captureGitSnapshot",
           "runGit",
           "GitCommitPathProbeError",
           "GitCommitPathSet",
@@ -20623,6 +20796,10 @@
           "listChangedFilesDetailed",
           "commentOnIssue",
           "commentOnIssueOnce",
+          "GIT_OBJECT_ID",
+          "GitSnapshot",
+          "isGitObjectId",
+          "isGitSnapshot",
           "DEFAULT_MAX_CHANGED_FILE_ENTRIES"
         ],
         "extends": "Error",
@@ -20632,21 +20809,21 @@
           "src/lib/lint.js"
         ],
         "id": "61b28e9c",
-        "summary": "Provides typed Git command helpers, porcelain status parsing, repository inspection, rebase operations, and issue-comment utilities.",
-        "detail": "This module wraps Git and GitHub CLI execution while validating repository-relative paths, treeish values, status entries, modes, object IDs, submodule states, and rename or copy metadata. It parses Git porcelain v1 and v2 output into immutable path and status sets, exposes branch, merge-base, commit, ahead-count, worktree, and changed-file queries with bounded output limits, and provides fetch, rebase, abort, and commit-count helpers. Issue comments include an idempotency-key requirement for safe one-time posting.",
+        "summary": "Provides Git command helpers, repository status parsing, change discovery, branch operations, and issue commenting.",
+        "detail": "This utility module captures Git snapshots and executes Git or GitHub CLI commands with structured results. It defines validated path collections and Git porcelain v2 status models, parses null-delimited status output including renames, lists changed and uncommitted files with bounded limits, resolves branches and merge bases, counts commits, summarizes repository changes, performs fetch and rebase operations with conflict handling, and posts idempotent issue comments.",
         "chapter": "stack_and_ops",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-11T12:16:19.291Z",
+          "processedAt": "2026-09-12T10:46:27.865Z",
           "attempts": 1
         },
-        "app": "git",
         "keywords": [
           "Git helpers",
-          "porcelain status",
-          "path validation",
-          "rebase operations",
+          "porcelain v2",
           "worktree status",
+          "branch operations",
+          "merge base",
+          "rebase",
           "changed files",
           "issue comments"
         ]
@@ -20687,6 +20864,46 @@
           "sanitization",
           "process environment",
           "security"
+        ]
+      },
+      {
+        "file": "src/lib/git-snapshot.js",
+        "hash": "e8af2520a56983b6970d39dd3ddcf159",
+        "lines": 41,
+        "mtime": "2026-09-12T10:39:45.476Z",
+        "className": "git-snapshot",
+        "methods": [
+          "isGitObjectId",
+          "GitSnapshot",
+          "isGitSnapshot"
+        ],
+        "imports": [],
+        "exports": [
+          "isGitObjectId",
+          "GitSnapshot",
+          "isGitSnapshot",
+          "GIT_OBJECT_ID"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/lib/git-helpers.js"
+        ],
+        "id": "f8fef3be",
+        "summary": "Defines validated Git snapshot values and Git object identifier recognition.",
+        "detail": "The module exports a regular expression accepting 40- or 64-character lowercase hexadecimal Git object IDs, a predicate for checking them, and the immutable GitSnapshot value object. GitSnapshot enforces a valid availability/object-id pairing, supports normalization from existing instances or plain values, exposes serialized data, and provides a type guard for snapshot values.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-09-12T10:46:27.865Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "Git snapshot",
+          "object ID",
+          "commit hash",
+          "validation",
+          "availability",
+          "value object"
         ]
       },
       {
@@ -24275,9 +24492,9 @@
       },
       {
         "file": "src/sennel.js",
-        "hash": "273c314dca977576cbef82c85bb9d667",
-        "lines": 130,
-        "mtime": "2026-08-30T00:45:02.961Z",
+        "hash": "1c0936f5ac4e820ec6d53611c63bb3f0",
+        "lines": 138,
+        "mtime": "2026-09-12T10:39:45.476Z",
         "className": "sennel",
         "methods": [
           "isHelpRequest",
@@ -24294,22 +24511,23 @@
         "extends": null,
         "usedBy": null,
         "id": "b80ea67f",
-        "summary": "The sennel entrypoint dispatches CLI commands, handles worktree-local execution, renders shared help, and maps command results to process exit codes.",
-        "detail": "It parses raw process arguments and first delegates eligible worktree invocations to a dedicated local executor. Help requests are recognized across short and long flags, with topic arguments normalized before shared help rendering. Command definitions are resolved through the core registry and their entrypoints receive the remaining arguments. Successful handlers can emit JSON results, while failures and unsuccessful command outcomes terminate with the configured error code.",
+        "summary": "Bootstraps the command-line interface and routes flow queries, worktree commands, help, and exit handling.",
+        "detail": "This executable entrypoint reads process arguments, delegates flow-query and worktree-local CLI execution, renders shared help for help requests and command errors, dispatches registered subcommands, serializes handled results as JSON, and terminates with success or error exit codes. It also recognizes short and long help flags and preserves command-specific arguments when generating help topics.",
         "chapter": "cli_commands",
         "role": "cli",
         "enrich": {
-          "processedAt": "2026-08-30T05:01:20.235Z",
+          "processedAt": "2026-09-12T10:46:27.865Z",
           "attempts": 1
         },
+        "app": "sennel",
         "keywords": [
-          "CLI entrypoint",
+          "CLI bootstrap",
           "command dispatch",
-          "help rendering",
-          "worktree execution",
-          "argument parsing",
+          "help",
+          "flow query",
+          "worktree commands",
           "exit codes",
-          "JSON output"
+          "argument parsing"
         ]
       },
       {
@@ -24622,10 +24840,10 @@
       }
     ],
     "summary": {
-      "total": 427,
-      "totalMethods": 4617
+      "total": 430,
+      "totalMethods": 4684
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-11T12:16:19.291Z"
+  "enrichedAt": "2026-09-12T10:46:27.865Z"
 }
