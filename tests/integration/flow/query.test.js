@@ -17,6 +17,7 @@ import {
   QueryRequest,
 } from "../../../src/flow/query.js";
 import { FlowArtifactCatalog } from "../../../src/lib/flow-version.js";
+import { AgentProcessStopEvidence } from "../../../src/lib/agent-failure.js";
 
 const CLI = path.join(process.cwd(), "src/sennel.js");
 const DIRECT_FLOW_CLI = path.join(process.cwd(), "src/flow.js");
@@ -426,6 +427,40 @@ describe("flow query", () => {
     assert.equal(zeroMatch.ok, true);
     assert.deepEqual(zeroMatch.items, []);
     assert.equal(zeroMatch.pageInfo.endCursor, null);
+  });
+
+  it("keeps canonical Review stop evidence out of the public Activity failure contract", () => {
+    const fixture = createFlow();
+    fixture.flow.activate("test-review");
+    fixture.flowManager.failCurrentAttempt({
+      specId: "001-query",
+      failure: {
+        category: "tooling",
+        code: "AGENT_TIMEOUT",
+        message: "The Review provider stopped after its deadline.",
+        retryable: true,
+        retryKind: "tooling",
+        agentStopEvidence: AgentProcessStopEvidence.confirmed(),
+      },
+    });
+
+    const response = query(fixture.env, {
+      resource: "activities",
+      condition: { specId: "001-query" },
+      page: { limit: 100, after: null },
+    });
+    const item = response.items.find((entry) => entry.failure?.code === "AGENT_TIMEOUT");
+
+    assert.ok(item, JSON.stringify(response));
+    assert.deepEqual(item.failure, {
+      category: "tooling",
+      code: "AGENT_TIMEOUT",
+      message: "The Review provider stopped after its deadline.",
+      retryable: true,
+      retryKind: "tooling",
+    });
+    assert.equal(Object.hasOwn(item.failure, "agentStopEvidence"), false);
+    assertNoInternalFields(response);
   });
 
   it("projects a confirmed Task Activity outcome using the canonical prefix", () => {

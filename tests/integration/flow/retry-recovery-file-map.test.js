@@ -5,6 +5,7 @@ import {
   buildStateRetryRecoveryView,
   resolveRecoveryMaxAttempts,
 } from "../../../src/flow/lib/retry-recovery.js";
+import { RetryRecoveryBasis, RetryRecoveryPlan } from "../../../src/flow/definition.js";
 
 const canonicalState = Object.freeze({ schemaRevision: 3, specId: "001-retry" });
 
@@ -36,9 +37,27 @@ describe("Version-1 retry recovery view", () => {
       max: 2,
       recoveryPossible: false,
       recoveryReason: "definition-owned-retry-budget-exhausted",
-      changedEvidence: null,
+      observation: null,
       recoveryCommand: null,
     });
+  });
+
+  it("projects unchanged confirmed-timeout evidence through the definition-owned recovery view", () => {
+    const view = buildStateRetryRecoveryView({
+      flowState: canonicalState,
+      kind: "review",
+      phase: "test",
+      attempts: 2,
+      max: 2,
+      recoveryPlan: RetryRecoveryPlan.available(
+        RetryRecoveryBasis.confirmedTimeout(),
+        "Confirmed provider timeout stopped before publishing a Review artifact.",
+      ),
+    });
+
+    assert.equal(view.recoveryPossible, true);
+    assert.equal(view.observation, null);
+    assert.match(view.recoveryCommand, /set retry reset review test/);
   });
 
   it("rejects legacy state replay instead of inspecting a root-side evidence map", () => {

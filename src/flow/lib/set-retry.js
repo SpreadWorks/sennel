@@ -6,6 +6,7 @@ import {
   CanonicalRetryRecovery,
   captureRetryRecoveryBaseline,
   readRetryBaseline,
+  RetryRecoveryInputError,
   RetryRecoveryInput,
 } from "./retry-recovery.js";
 
@@ -20,7 +21,7 @@ export default class SetRetryCommand extends FlowCommand {
     try {
       request = new RetryRecoveryInput({
         ...ctx,
-        changedEvidence: null,
+        observation: null,
         target: explicitTarget,
       });
       const nodeId = ctx.flowState?.current?.at(-1) ?? ctx.flowState?.currentNodeId ?? null;
@@ -36,7 +37,7 @@ export default class SetRetryCommand extends FlowCommand {
         if (exhausted && previous === null) throw new Error("exhausted retry recovery requires a durable parent-derived baseline");
         request = new RetryRecoveryInput({
           ...ctx,
-          changedEvidence: {
+          observation: {
             digest: derived.digest,
             projectDigest: derived.projectDigest,
             runtimeDigest: derived.runtimeDigest,
@@ -65,7 +66,12 @@ export default class SetRetryCommand extends FlowCommand {
         grants: [grant.toJSON()],
       };
     } catch (error) {
-      return Envelope.fail("set", "retry", "RETRY_NOT_AVAILABLE", error.message);
+      return Envelope.fail(
+        "set",
+        "retry",
+        error instanceof RetryRecoveryInputError ? "INVALID_RECOVERY_INPUT" : "RETRY_NOT_AVAILABLE",
+        error.message,
+      );
     }
   }
 }
@@ -80,7 +86,7 @@ function deriveCurrentEvidence(ctx, kind, phase, nodeId) {
     nodeId,
     attempt: canonical?.attempt,
   });
-  if (baseline === null) throw new Error("recovery is supported only for review or gate Attempts");
+  if (baseline === null) throw new Error("current retry recovery observation is unavailable");
   return {
     digest: baseline.digest,
     projectDigest: baseline.projectDigest,

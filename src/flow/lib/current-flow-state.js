@@ -11,6 +11,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { AgentProcessStopEvidence } from "../../lib/agent-failure.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { GitSnapshot } from "../../lib/git-snapshot.js";
 import { FileLock } from "../../lib/file-lock.js";
@@ -1985,7 +1986,11 @@ export class AttemptOperationClaim {
 
 export class ActivityFailure {
   constructor(value) {
-    requireExactFields(value, new Set(["category", "code", "message", "retryable", "retryKind"]), "activity.failure");
+    const fields = new Set(["category", "code", "message", "retryable", "retryKind"]);
+    if (value !== null && typeof value === "object" && Object.hasOwn(value, "agentStopEvidence")) {
+      fields.add("agentStopEvidence");
+    }
+    requireExactFields(value, fields, "activity.failure");
     const { category, code, message, retryable, retryKind } = value;
     this.category = requireString(category, "activity.failure.category");
     this.code = requireString(code, "activity.failure.code");
@@ -1999,6 +2004,17 @@ export class ActivityFailure {
     }
     this.retryable = retryable;
     this.retryKind = retryKind;
+    this.agentStopEvidence = value.agentStopEvidence == null
+      ? null
+      : AgentProcessStopEvidence.from(value.agentStopEvidence);
+    if (this.agentStopEvidence !== null && this.code !== "AGENT_TIMEOUT") {
+      throw new CurrentFlowStateInvariantError("agent stop evidence belongs only to AGENT_TIMEOUT failures");
+    }
+    if (this.code === "AGENT_TIMEOUT" && this.agentStopEvidence !== null
+      && (this.retryable !== this.agentStopEvidence.confirmed
+        || this.retryKind !== (this.agentStopEvidence.confirmed ? "tooling" : null))) {
+      throw new CurrentFlowStateInvariantError("AGENT_TIMEOUT retry policy must match its process stop evidence");
+    }
     Object.freeze(this);
   }
 
@@ -2009,7 +2025,18 @@ export class ActivityFailure {
       message: this.message,
       retryable: this.retryable,
       retryKind: this.retryKind,
+      ...(this.agentStopEvidence === null ? {} : { agentStopEvidence: this.agentStopEvidence.toJSON() }),
     };
+  }
+}
+
+/** Canonical failure facts admitted only by the Review provider boundary. */
+export class ReviewProviderTimeoutFailure extends ActivityFailure {
+  constructor(value) {
+    super(value);
+    if (this.code !== "AGENT_TIMEOUT" || this.agentStopEvidence === null) {
+      throw new CurrentFlowStateInvariantError("Review provider timeout requires typed process stop evidence");
+    }
   }
 }
 
@@ -2317,12 +2344,15 @@ export class DefinitionFailurePolicy {
     Object.freeze(this);
   }
 
-  decide({ failure, consumption, contract }) {
+  decide({ failure, consumption, contract, action }) {
     if (!(failure instanceof ActivityFailure)) {
       throw new CurrentFlowStateInvariantError("failure policy decision requires a typed failure");
     }
     if (!(consumption instanceof AttemptConsumption) || !(contract instanceof NodeContract)) {
       throw new CurrentFlowStateInvariantError("failure policy decision requires typed retry accounting");
+    }
+    if (!(action instanceof DefinitionAction)) {
+      throw new CurrentFlowStateInvariantError("failure policy decision requires a typed Definition action");
     }
     const remaining = failure.retryKind === null
       ? 0
@@ -2334,6 +2364,30 @@ export class DefinitionFailurePolicy {
       return new DefinitionFailureDecision({
         policy: this, operation: "blocked", retryKind: null, remaining: 0, targetNodeId: null,
         reason: "unaccepted source effects require explicit reconciliation before execution can continue",
+      });
+    }
+    // A Review worker is allowed to retry its own deadline only after its
+    // supervisor has durably established that the complete provider process
+    // tree stopped.  The action identity comes from the Definition, so a
+    // missing observation fails closed for every Review route without
+    // changing timeout semantics of unrelated worker and Gate actions.
+    if (action.action === "run-review"
+      && failure.code === "AGENT_TIMEOUT"
+      && failure.agentStopEvidence?.confirmed !== true) {
+      return new DefinitionFailureDecision({
+        policy: this, operation: "blocked", retryKind: null, remaining: 0, targetNodeId: null,
+        reason: "the Review provider process tree stop is uncertain and cannot authorize retry or settlement",
+      });
+    }
+    // Preserve the existing non-Review safety rule for explicit uncertain
+    // stop observations.  A non-Review timeout without this Review-specific
+    // evidence remains governed by its Definition failure policy.
+    if (failure.code === "AGENT_TIMEOUT"
+      && failure.agentStopEvidence instanceof AgentProcessStopEvidence
+      && !failure.agentStopEvidence.confirmed) {
+      return new DefinitionFailureDecision({
+        policy: this, operation: "blocked", retryKind: null, remaining: 0, targetNodeId: null,
+        reason: "the provider process tree stop is uncertain and cannot authorize retry or settlement",
       });
     }
     // This marker deliberately selects no lifecycle route.  Some Steps need
@@ -5527,6 +5581,7 @@ export class CurrentFlowState {
       failure,
       consumption: this.attempt.consumption,
       contract: this.definition.contractForNode(leaf),
+      action,
     });
     const targetPath = decision.targetNodeId === null
       ? null
@@ -5557,6 +5612,7 @@ export class CurrentFlowState {
         failure,
         consumption: this.attempt.consumption,
         contract,
+        action: this.definition.actionFor(leaf.id, this.root),
       });
     return new CurrentRetryEligibility({
       path: this.current,

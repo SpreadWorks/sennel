@@ -63,6 +63,84 @@ function copyDiagnostics(target, source) {
   }
 }
 
+function restoreStableAgentFailure(error) {
+  const constructors = new Map([
+    ["AGENT_TEMPORARY_RATE_LIMIT", TemporaryRateLimitFailure],
+    ["AGENT_TEMPORARY_NETWORK", TemporaryNetworkFailure],
+    ["AGENT_TIMEOUT", AgentTimeoutFailure],
+    ["AGENT_AUTHENTICATION_FAILED", AgentAuthenticationFailure],
+    ["AGENT_PERMISSION_CONFIGURATION_FAILED", AgentPermissionConfigurationFailure],
+    ["AGENT_USAGE_LIMIT_REACHED", AgentUsageLimitFailure],
+    ["AGENT_PERMANENT_NETWORK_FAILURE", PermanentNetworkFailure],
+    ["AGENT_UNKNOWN_PROVIDER_FAILURE", UnknownProviderFailure],
+    ["AGENT_EMPTY_RESPONSE", EmptyAgentResponseFailure],
+  ]);
+  const Failure = constructors.get(error?.code);
+  if (Failure === undefined) return null;
+  return new Failure({
+    message: error.message,
+    attemptCount: error.attemptCount ?? 1,
+    maxAttempts: error.maxAttempts ?? 1,
+    cause: error,
+    ...(error.code === "AGENT_TIMEOUT" ? { stopEvidence: error.stopEvidence ?? null } : {}),
+  });
+}
+
+const PROCESS_STOP_STATUSES = new Set(["confirmed", "uncertain"]);
+
+/**
+ * Provider-process termination evidence produced by the process supervisor.
+ * An empty member list is diagnostic data only; it is never termination proof.
+ */
+export class AgentProcessStopEvidence {
+  constructor({ status, reason, unterminatedMembers = [] } = {}) {
+    this.status = requireString(status, "agent process stop status");
+    if (!PROCESS_STOP_STATUSES.has(this.status)) {
+      throw new Error("agent process stop status must be confirmed or uncertain");
+    }
+    this.reason = requireString(reason, "agent process stop reason");
+    if (!Array.isArray(unterminatedMembers)) {
+      throw new Error("agent process unterminatedMembers must be an array");
+    }
+    this.unterminatedMembers = Object.freeze(unterminatedMembers.map((member) => {
+      if (member === null || typeof member !== "object" || Array.isArray(member)) {
+        throw new Error("agent process unterminated member must be an object");
+      }
+      const value = typeof member.toJSON === "function" ? member.toJSON() : member;
+      if (!Number.isSafeInteger(value.pid) || value.pid < 1) {
+        throw new Error("agent process unterminated member pid is invalid");
+      }
+      return Object.freeze({ ...value });
+    }));
+    if (this.status === "confirmed" && this.unterminatedMembers.length > 0) {
+      throw new Error("confirmed agent process stop cannot retain unterminated members");
+    }
+    Object.freeze(this);
+  }
+
+  static confirmed() {
+    return new AgentProcessStopEvidence({ status: "confirmed", reason: "process-tree-death-observed" });
+  }
+
+  static uncertain(reason = "process-tree-death-not-observed", unterminatedMembers = []) {
+    return new AgentProcessStopEvidence({ status: "uncertain", reason, unterminatedMembers });
+  }
+
+  static from(value) {
+    return value instanceof AgentProcessStopEvidence ? value : new AgentProcessStopEvidence(value);
+  }
+
+  get confirmed() { return this.status === "confirmed"; }
+
+  toJSON() {
+    return {
+      status: this.status,
+      reason: this.reason,
+      unterminatedMembers: this.unterminatedMembers.map((member) => ({ ...member })),
+    };
+  }
+}
+
 export class AgentFailure extends Error {
   constructor({
     message,
@@ -124,6 +202,9 @@ export class AgentFailure extends Error {
       ...(timeoutDiagnostics && this.stderr == null ? { stderrUnavailable: "provider produced no capturable stderr" } : {}),
       ...(timeoutDiagnostics && this.diagnosticLog != null ? { diagnosticLog: this.diagnosticLog } : {}),
       ...(timeoutDiagnostics && Array.isArray(this.supervisorEvents) ? { supervisorEvents: this.supervisorEvents } : {}),
+      ...(timeoutDiagnostics && this.stopEvidence instanceof AgentProcessStopEvidence
+        ? { stopEvidence: this.stopEvidence.toJSON() }
+        : {}),
       ...(timeoutDiagnostics && this.cause?.message ? {
         cause: {
           message: String(this.cause.message),
@@ -135,6 +216,8 @@ export class AgentFailure extends Error {
 
   static from(error) {
     if (error instanceof AgentFailure) return error;
+    const stable = restoreStableAgentFailure(error);
+    if (stable !== null) return stable;
     const text = failureText(error);
     const codes = errorCodeText(error);
     const input = { message: text || "unknown agent provider failure", cause: error };
@@ -167,7 +250,7 @@ export class AgentFailure extends Error {
       || error?.signal === "SIGTERM"
       || error?.killed === true
       || /\btimed? out\b|\btimeout\b/i.test(text)
-    ) return new AgentTimeoutFailure(input);
+    ) return new AgentTimeoutFailure({ ...input, stopEvidence: error?.stopEvidence ?? null });
 
     if (/\bENOTFOUND\b/.test(codes) || /could not resolve (?:host|hostname)|name or service not known/i.test(text)) {
       return new PermanentNetworkFailure(input);
@@ -210,13 +293,19 @@ export class TemporaryNetworkFailure extends AgentFailure {
 
 export class AgentTimeoutFailure extends AgentFailure {
   constructor(input = {}) {
+    const stopEvidence = input.stopEvidence == null
+      ? AgentProcessStopEvidence.uncertain()
+      : AgentProcessStopEvidence.from(input.stopEvidence);
     super({
       ...input,
       kind: "timeout",
       code: "AGENT_TIMEOUT",
-      retryable: true,
-      recoveryHint: "Retry the same input after the timed-out provider process has terminated.",
+      retryable: stopEvidence.confirmed,
+      recoveryHint: stopEvidence.confirmed
+        ? "Retry the same input after the timed-out provider process has terminated."
+        : "Verify that the timed-out provider process tree has terminated before retrying.",
     });
+    this.stopEvidence = stopEvidence;
   }
 }
 

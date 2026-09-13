@@ -147,6 +147,7 @@ import { DefinitionLifecycleTransition } from "./step-transition-policy.js";
 import {
   captureRetryRecoveryBaseline,
   containsRetryRecoveryArtifactWrite,
+  ExhaustedReviewRetryRecoveryAdmission,
   retryEvidenceRouteForNode,
   RetryRecoveryArtifactPublication,
   RetryRecoveryReceipt,
@@ -2292,7 +2293,7 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  retryExhaustedAttempt({ specId = null, receipt, taskReviewRecoveryAuthorization = null, taskReviewAbortedWorkUnits = [] } = {}) {
+  retryExhaustedAttempt({ specId = null, receipt, recoveryAdmission = null, taskReviewRecoveryAuthorization = null, taskReviewAbortedWorkUnits = [] } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const typed = receipt instanceof RetryRecoveryReceipt ? receipt : new RetryRecoveryReceipt(receipt);
@@ -2307,6 +2308,9 @@ export class CanonicalFlowManagerStore {
     const route = retryEvidenceRouteForNode(state, nodeId);
     if (route === null || !typed.previous.route.equals(route)) {
       throw new CurrentFlowStateInvariantError("exhausted recovery receipt route does not match the active leaf");
+    }
+    if (route.kind === "review" && !(recoveryAdmission instanceof ExhaustedReviewRetryRecoveryAdmission)) {
+      throw new CurrentFlowStateInvariantError("exhausted Review recovery requires its typed lock-scoped admission");
     }
     if (
       typed.previous.attemptId !== state.attempt.id
@@ -2329,7 +2333,10 @@ export class CanonicalFlowManagerStore {
       attempt: nextAttempt,
       retryRecoveryPublication: RetryRecoveryArtifactPublication.receipt(typed, taskReviewRecoveryAuthorization, taskReviewArchiveAdmission?.archives ?? []),
       references: { evaluations: [], findings: [], repairs: [], artifacts: [] },
-      admission: taskReviewArchiveAdmission,
+      admission: new CombinedAdmission(
+        recoveryAdmission?.bindPublication(typed, taskReviewRecoveryAuthorization) ?? null,
+        taskReviewArchiveAdmission,
+      ),
     });
   }
 

@@ -8,7 +8,7 @@
 import { derivePhase } from "../../lib/flow-helpers.js";
 import { normalizeAgentMetricDimension } from "../../lib/agent-metrics.js";
 import { BROAD_MODE_HISTORY_MAX_ENTRIES } from "../../lib/constants.js";
-import { findLatestInProgressLeaf, resolveMaxAttempts } from "../definition.js";
+import { findLatestInProgressLeaf, resolveMaxAttempts, resolveToolingMaxAttempts } from "../definition.js";
 import { flattenSteps } from "./step-tree.js";
 import { FlowCommand } from "./base-command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
@@ -18,7 +18,11 @@ import {
   targetMismatchEnvelopeForInput,
 } from "../../lib/flow-target-guard.js";
 import { resolveGateRecoveryDisplayPhase } from "./gate-recovery-display.js";
-import { buildStateRetryRecoveryView, captureRetryRecoveryBaseline, readRetryBaseline, retryEvidenceRouteForNode } from "./retry-recovery.js";
+import {
+  buildStateRetryRecoveryView,
+  inspectRetryRecoveryPlan,
+  retryEvidenceRouteForNode,
+} from "./retry-recovery.js";
 import { buildBoundedBroadModeHistory } from "./task-scope.js";
 import { FlowFindingsArtifact } from "./flow-findings.js";
 import { validateFinalRegressionResult } from "./test-artifacts.js";
@@ -157,34 +161,39 @@ function resolveActiveStepMaxAttempts(state, active) {
   return Number.isSafeInteger(maxAttempts) && maxAttempts >= 1 ? maxAttempts : null;
 }
 
+function resolveReviewRetryWindow(state, active, route) {
+  const scope = route.taskId === null ? "flow" : "task";
+  const stepId = route.taskId === null ? active.id : "task-review";
+  if (state.attempt?.failure?.retryKind === "tooling") {
+    const retryLimit = resolveToolingMaxAttempts({ scope, stepId, context: state });
+    if (!Number.isSafeInteger(retryLimit) || retryLimit < 0) return null;
+    return Object.freeze({
+      attempts: (state.attempt.consumption?.tooling ?? 0) + 1,
+      max: retryLimit + 1,
+    });
+  }
+  const max = resolveMaxAttempts({ scope, stepId, context: state });
+  return Number.isSafeInteger(max) && max >= 1
+    ? Object.freeze({ attempts: state.attempt?.sequence ?? 0, max })
+    : null;
+}
+
 function buildStatusRetryRecoveryView(root, flowState, input, options = {}) {
-  let baselineAvailable = false;
-  let currentChanged = false;
-  const nodeId = flowState?.attempt?.nodeId ?? null;
-  const route = nodeId === null ? null : retryEvidenceRouteForNode(flowState, nodeId);
-  if (route !== null && options.flowManager) {
-    try {
-      const baseline = readRetryBaseline(options.flowManager, flowState, route);
-      const current = baseline === null ? null : captureRetryRecoveryBaseline({
-        flowState,
-        flowManager: options.flowManager,
-        executionRoot: options.executionRoot || root,
-        artifactRoot: options.artifactRoot || options.flowManager.mainRoot || root,
-        nodeId,
-      });
-      baselineAvailable = baseline !== null;
-      currentChanged = current !== null
-        && ["projectDigest", "runtimeDigest", "targetDigest"].some((field) => current[field] !== baseline[field]);
-    } catch {
-      baselineAvailable = false;
-      currentChanged = false;
-    }
+  let recoveryPlan;
+  try {
+    recoveryPlan = inspectRetryRecoveryPlan({
+      flowManager: options.flowManager,
+      state: flowState,
+      executionRoot: options.executionRoot || root,
+      artifactRoot: options.artifactRoot || options.flowManager?.mainRoot || root,
+    });
+  } catch {
+    recoveryPlan = null;
   }
   return buildStateRetryRecoveryView({
     root,
     flowState,
-    baselineAvailable,
-    currentChanged,
+    recoveryPlan,
     ...input,
   });
 }
@@ -319,15 +328,18 @@ function buildStatusGateViews(state, active, root, options = {}) {
 }
 
 function buildStatusReviewViews(state, active, root, options = {}) {
-  if (!active || !active.id.endsWith("-review") || state.attempt?.failure == null) return null;
-  const route = retryEvidenceRouteForNode(state, active.id);
-  const resolvedMaxAttempts = resolveActiveStepMaxAttempts(state, active);
-  if (route === null || resolvedMaxAttempts == null) return null;
-  const retryRecovery = buildStatusRetryRecoveryView(root, state, {
+  if (!active || !active.id.endsWith("-review") || typeof options.flowManager?.canonicalState !== "function") return null;
+  const canonical = options.flowManager.canonicalState(state.specId);
+  if (canonical?.attempt?.failure == null || canonical.attempt.nodeId !== active.id) return null;
+  const route = retryEvidenceRouteForNode(canonical, active.id);
+  if (route === null) return null;
+  const retryWindow = resolveReviewRetryWindow(canonical, active, route);
+  if (retryWindow === null) return null;
+  const retryRecovery = buildStatusRetryRecoveryView(root, canonical, {
     kind: "review",
     phase: route.phase,
-    attempts: state.attempt?.sequence ?? 0,
-    max: resolvedMaxAttempts,
+    attempts: retryWindow.attempts,
+    max: retryWindow.max,
   }, options);
   return retryRecovery === null ? null : { retryRecovery };
 }

@@ -518,6 +518,8 @@ describe("Agent.call() — basic invocation", () => {
     );
     await assert.rejects(agent.call("", { commandId: "test", retryCount: 0, waitForProcessTree: true }), (error) => {
       assert.equal(error.code, "AGENT_TIMEOUT");
+      assert.equal(error.retryable, true);
+      assert.equal(error.stopEvidence.status, "confirmed");
       assert.equal(error.stdout, "timeout stdout");
       assert.equal(error.stderr, "timeout stderr");
       return true;
@@ -628,6 +630,90 @@ describe("ChildProcessSupervisor", () => {
     assert.deepEqual(await completion, { code: 0, signal: null });
     assert.equal(child.listenerCount("close"), 0);
     assert.equal(child.listenerCount("exit"), 0);
+  });
+
+  it("reports uncertain termination when process-tree membership cannot be observed", async () => {
+    const child = new EventEmitter();
+    child.kill = () => true;
+    const supervisor = new ChildProcessSupervisor({
+      child,
+      timeoutMs: 1,
+      graceMs: 1,
+      platform: "linux",
+    });
+
+    await assert.rejects(supervisor.wait(), (error) => {
+      assert.equal(error.code, "AGENT_TIMEOUT");
+      assert.equal(error.retryable, false);
+      assert.equal(error.stopEvidence.status, "uncertain");
+      assert.equal(error.stopEvidence.reason, "process-tree-members-unavailable");
+      assert.deepEqual(error.stopEvidence.unterminatedMembers, []);
+      return true;
+    });
+  });
+
+  it("reports an uncertain timeout when Windows taskkill cannot confirm tree termination", async () => {
+    const child = new EventEmitter();
+    child.pid = 12345;
+    child.kill = () => true;
+    const failure = Object.assign(new Error("taskkill failed"), { code: "EPERM" });
+    const supervisor = new ChildProcessSupervisor({
+      child,
+      timeoutMs: 1,
+      graceMs: 1,
+      platform: "win32",
+      runTaskkill: async () => { throw failure; },
+    });
+
+    await assert.rejects(supervisor.wait(), (error) => {
+      assert.equal(error.code, "AGENT_TIMEOUT");
+      assert.equal(error.retryable, false);
+      assert.equal(error.stopEvidence.status, "uncertain");
+      assert.equal(error.stopEvidence.reason, "process-tree-members-unavailable");
+      return true;
+    });
+  });
+
+  it("bounds an incomplete Windows taskkill observation as an uncertain timeout", async () => {
+    const child = new EventEmitter();
+    child.pid = 12345;
+    child.kill = () => true;
+    const supervisor = new ChildProcessSupervisor({
+      child,
+      timeoutMs: 1,
+      graceMs: 1,
+      platform: "win32",
+      runTaskkill: async () => ({ completed: false }),
+    });
+
+    await assert.rejects(supervisor.wait(), (error) => {
+      assert.equal(error.code, "AGENT_TIMEOUT");
+      assert.equal(error.retryable, false);
+      assert.equal(error.stopEvidence.status, "uncertain");
+      assert.equal(error.stopEvidence.reason, "process-tree-death-deadline-reached");
+      return true;
+    });
+  });
+
+  it("records a completed Windows taskkill tree observation as confirmed timeout evidence", async () => {
+    const child = new EventEmitter();
+    child.pid = 12345;
+    child.kill = () => true;
+    const supervisor = new ChildProcessSupervisor({
+      child,
+      timeoutMs: 1,
+      graceMs: 1,
+      platform: "win32",
+      runTaskkill: async () => ({ completed: true }),
+    });
+
+    await assert.rejects(supervisor.wait(), (error) => {
+      assert.equal(error.code, "AGENT_TIMEOUT");
+      assert.equal(error.retryable, true);
+      assert.equal(error.stopEvidence.status, "confirmed");
+      assert.deepEqual(error.stopEvidence.unterminatedMembers, []);
+      return true;
+    });
   });
 });
 

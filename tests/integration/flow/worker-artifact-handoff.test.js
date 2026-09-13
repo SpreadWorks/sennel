@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import { Container } from "../../../src/lib/container.js";
-import { AgentTimeoutFailure } from "../../../src/lib/agent-failure.js";
+import { AgentProcessStopEvidence, AgentTimeoutFailure } from "../../../src/lib/agent-failure.js";
 import { AgentTimeoutError } from "../../../src/lib/agent.js";
 import { AgentTimeoutDiagnostic } from "../../../src/lib/agent-timeout.js";
 import { dispatch } from "../../../src/lib/dispatcher.js";
@@ -1823,7 +1823,10 @@ describe("worker artifact handoff", () => {
             calls += 1;
             fs.writeFileSync(path.join(value.mainRoot, "product.js"), "export const value = 2;\n");
             if (calls === 1) {
-              throw new AgentTimeoutFailure({ message: "provider timed out before structured response" });
+              throw new AgentTimeoutFailure({
+                message: "provider timed out before structured response",
+                stopEvidence: AgentProcessStopEvidence.confirmed(),
+              });
             }
             return json(sourceWorkerReport("implement"));
           },
@@ -4761,7 +4764,11 @@ describe("worker artifact handoff", () => {
                 fs.writeFileSync(payloadPath, "{ malformed\n");
                 if (scenario.expectedCode !== null) {
                   options.onSupervisorEvent({ type: "timeout", attempt: "first" });
-                  throw new AgentTimeoutFailure({ message: "first retryable producer timeout", cause: Object.assign(new Error("first timeout"), { stdout: "first stdout", stderr: "first stderr" }) });
+                  throw new AgentTimeoutFailure({
+                    message: "first retryable producer timeout",
+                    cause: Object.assign(new Error("first timeout"), { stdout: "first stdout", stderr: "first stderr" }),
+                    stopEvidence: AgentProcessStopEvidence.confirmed(),
+                  });
                 }
                 return;
               }
@@ -4775,7 +4782,11 @@ describe("worker artifact handoff", () => {
                 });
               } else {
                 options.onSupervisorEvent({ type: "timeout", attempt: "second" });
-                throw new AgentTimeoutFailure({ message: "second retryable producer timeout", cause: Object.assign(new Error("second timeout"), { stdout: "second stdout", stderr: "second stderr" }) });
+                throw new AgentTimeoutFailure({
+                  message: "second retryable producer timeout",
+                  cause: Object.assign(new Error("second timeout"), { stdout: "second stdout", stderr: "second stderr" }),
+                  stopEvidence: AgentProcessStopEvidence.confirmed(),
+                });
               }
             },
           },

@@ -59,7 +59,7 @@ function publicationActivity({ flowManager, state, source, logicalKey }) {
 
 /** Parent-observed zero-effect boundary for one stopped Task Review worker. */
 export class TaskReviewUnsealedCheckpoint {
-  constructor(value, { root } = {}) {
+  constructor(value, { root, runtimeLocks = [] } = {}) {
     exact(value, ["version", "runId", "specId", "taskId", "nodeId", "attempt", "manifestDigest", "taskSourceFingerprint", "baseline", "observed", "digest"], "Task Review unsealed checkpoint");
     if (value.version !== 1) throw new Error("Task Review unsealed checkpoint version is invalid");
     this.version = 1;
@@ -74,9 +74,9 @@ export class TaskReviewUnsealedCheckpoint {
     this.manifestDigest = digest(value.manifestDigest, "Task Review checkpoint manifestDigest");
     this.taskSourceFingerprint = digest(value.taskSourceFingerprint, "Task Review checkpoint taskSourceFingerprint");
     this.baseline = value.baseline instanceof SourceMutationBaseline
-      ? value.baseline : SourceMutationBaseline.fromStored(value.baseline, { root });
+      ? value.baseline : SourceMutationBaseline.fromStored(value.baseline, { root, runtimeLocks });
     this.observed = value.observed instanceof WorkerArtifactRepositoryMutationSnapshot
-      ? value.observed : WorkerArtifactRepositoryMutationSnapshot.fromStored(value.observed, { root });
+      ? value.observed : WorkerArtifactRepositoryMutationSnapshot.fromStored(value.observed, { root, runtimeLocks });
     if (!sameAttempt(this.attempt, this.baseline.attempt) || !sameTaskReviewRepositorySnapshot(this.baseline.snapshot, this.observed)) {
       throw new Error("Task Review checkpoint does not prove a zero-effect worker boundary");
     }
@@ -107,7 +107,10 @@ export class TaskReviewUnsealedCheckpoint {
       baseline: baseline.toJSON(),
       observed: observed.toJSON(),
     };
-    return new TaskReviewUnsealedCheckpoint({ ...unsigned, digest: sha(unsigned) }, { root: baseline.snapshot.root });
+    return new TaskReviewUnsealedCheckpoint({ ...unsigned, digest: sha(unsigned) }, {
+      root: baseline.snapshot.root,
+      runtimeLocks: baseline.snapshot.runtimeLocks,
+    });
   }
 
   unsignedJSON() {
@@ -150,7 +153,7 @@ export class TaskReviewUnsealedCheckpoint {
 
 /** Canonical recovery-time checkout observation, tied to receipt and checkpoint. */
 export class TaskReviewRecoveryAuthorization {
-  constructor(value, { root } = {}) {
+  constructor(value, { root, runtimeLocks = [] } = {}) {
     exact(value, ["version", "checkpointDigest", "previousAttempt", "currentAttempt", "receiptDigest", "targetDigest", "snapshot", "digest"], "Task Review recovery authorization");
     if (value.version !== 1) throw new Error("Task Review recovery authorization version is invalid");
     this.version = 1;
@@ -165,7 +168,7 @@ export class TaskReviewRecoveryAuthorization {
     this.receiptDigest = digest(value.receiptDigest, "Task Review authorization receiptDigest");
     this.targetDigest = digest(value.targetDigest, "Task Review authorization targetDigest");
     this.snapshot = value.snapshot instanceof WorkerArtifactRepositoryMutationSnapshot
-      ? value.snapshot : WorkerArtifactRepositoryMutationSnapshot.fromStored(value.snapshot, { root });
+      ? value.snapshot : WorkerArtifactRepositoryMutationSnapshot.fromStored(value.snapshot, { root, runtimeLocks });
     const unsigned = this.unsignedJSON();
     this.digest = sha(unsigned);
     if (this.digest !== digest(value.digest, "Task Review authorization digest")) throw new Error("Task Review recovery authorization digest does not match its content");
@@ -188,7 +191,10 @@ export class TaskReviewRecoveryAuthorization {
       targetDigest: digest(targetDigest, "Task Review authorization targetDigest"),
       snapshot: snapshot.toJSON(),
     };
-    return new TaskReviewRecoveryAuthorization({ ...unsigned, digest: sha(unsigned) }, { root: checkpoint.baseline.snapshot.root });
+    return new TaskReviewRecoveryAuthorization({ ...unsigned, digest: sha(unsigned) }, {
+      root: checkpoint.baseline.snapshot.root,
+      runtimeLocks: snapshot.runtimeLocks,
+    });
   }
   unsignedJSON() {
     return {
@@ -218,7 +224,12 @@ export function readTaskReviewUnsealedCheckpoint({ flowManager, state, taskId, r
   const requestedAttemptId = attemptId === null ? state.attempt.id : text(attemptId, "Task Review checkpoint requested attemptId");
   const source = flowManager.readArtifact({ specId: state.specId, logicalKey: "task.review.unsealed.checkpoint", parameters: { taskId, attemptId: requestedAttemptId }, consumerNodeId: `${taskId}-review`, optional: true });
   if (source === null) return null;
-  const checkpoint = new TaskReviewUnsealedCheckpoint(JSON.parse(source.bytes.toString("utf8")), { root });
+  const location = flowManager.specLocation(state.specId);
+  const runtimeLocks = [
+    location.runtimeLock("runtime.lock.artifact-catalog"),
+    location.runtimeLock("runtime.lock.current-flow-state"),
+  ];
+  const checkpoint = new TaskReviewUnsealedCheckpoint(JSON.parse(source.bytes.toString("utf8")), { root, runtimeLocks });
   if (checkpoint.runId !== state.runId || checkpoint.specId !== state.specId
     || checkpoint.taskId !== taskId || checkpoint.nodeId !== `${taskId}-review`
     || checkpoint.attempt.id !== requestedAttemptId) {
@@ -241,7 +252,12 @@ export function readTaskReviewUnsealedCheckpoint({ flowManager, state, taskId, r
 export function readTaskReviewRecoveryAuthorization({ flowManager, state, taskId, root } = {}) {
   const source = flowManager.readArtifact({ specId: state.specId, logicalKey: "task.review.recovery.authorization", parameters: { taskId, attemptId: state.attempt.id }, consumerNodeId: state.attempt.nodeId, optional: true });
   if (source === null) return null;
-  const authorization = new TaskReviewRecoveryAuthorization(JSON.parse(source.bytes.toString("utf8")), { root });
+  const location = flowManager.specLocation(state.specId);
+  const runtimeLocks = [
+    location.runtimeLock("runtime.lock.artifact-catalog"),
+    location.runtimeLock("runtime.lock.current-flow-state"),
+  ];
+  const authorization = new TaskReviewRecoveryAuthorization(JSON.parse(source.bytes.toString("utf8")), { root, runtimeLocks });
   if (!authorization.currentAttempt.matches(state)
     || authorization.currentAttempt.nodeId !== `${taskId}-review`) {
     throw new Error("Task Review recovery authorization does not match the active Attempt");

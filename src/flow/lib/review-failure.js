@@ -5,7 +5,7 @@
  */
 
 import { reviewPhaseForFlowStepId } from "./review-route.js";
-import { AgentFailure } from "../../lib/agent-failure.js";
+import { AgentFailure, AgentProcessStopEvidence } from "../../lib/agent-failure.js";
 import { PromptBatchingError } from "../../lib/prompt-batching.js";
 import { PRODUCT } from "../../lib/product.js";
 
@@ -87,6 +87,18 @@ export class ReviewFailure {
     }
     this.retryable = input.retryable === true;
     this.agentFailureKind = input.agentFailureKind ? requireString(input.agentFailureKind, "agentFailureKind") : null;
+    this.agentStopEvidence = input.agentStopEvidence == null
+      ? null
+      : AgentProcessStopEvidence.from(input.agentStopEvidence);
+    if (this.agentStopEvidence !== null && this.failureCode !== "AGENT_TIMEOUT") {
+      throw new Error("review agent stop evidence belongs only to AGENT_TIMEOUT failures");
+    }
+    if (this.failureCode === "AGENT_TIMEOUT" && this.agentStopEvidence === null) {
+      throw new Error("review AGENT_TIMEOUT failure requires process stop evidence");
+    }
+    if (this.failureCode === "AGENT_TIMEOUT" && this.retryable !== this.agentStopEvidence.confirmed) {
+      throw new Error("review AGENT_TIMEOUT retry policy must match its process stop evidence");
+    }
     this.attemptCount = input.attemptCount ?? null;
     this.maxAttempts = input.maxAttempts ?? null;
     if ((this.attemptCount == null) !== (this.maxAttempts == null)) {
@@ -159,6 +171,7 @@ export class ReviewFailure {
     failureCode = "AGENT_UNKNOWN_PROVIDER_FAILURE",
     retryable = false,
     agentFailureKind = "unknown_provider",
+    agentStopEvidence = null,
     attemptCount = null,
     maxAttempts = null,
   } = {}) {
@@ -172,6 +185,7 @@ export class ReviewFailure {
       failureCode,
       retryable,
       agentFailureKind,
+      agentStopEvidence,
       attemptCount,
       maxAttempts,
     });
@@ -187,6 +201,7 @@ export class ReviewFailure {
       failureCode: failure.code,
       retryable: failure.retryable,
       agentFailureKind: failure.kind,
+      agentStopEvidence: failure.stopEvidence ?? null,
       attemptCount: failure.attemptCount,
       maxAttempts: failure.maxAttempts,
     });
@@ -275,6 +290,7 @@ export class ReviewFailure {
         failureCode: data.failureCode,
         retryable: data.retryable,
         agentFailureKind: data.agentFailureKind,
+        agentStopEvidence: data.agentStopEvidence,
         attemptCount: data.attemptCount,
         maxAttempts: data.maxAttempts,
       });
@@ -369,6 +385,7 @@ export class ReviewFailure {
       ...(this.failureCode && { failureCode: this.failureCode }),
       retryable: this.retryable,
       ...(this.agentFailureKind && { agentFailureKind: this.agentFailureKind }),
+      ...(this.agentStopEvidence !== null && { agentStopEvidence: this.agentStopEvidence.toJSON() }),
       ...(this.attemptCount != null && { attemptCount: this.attemptCount }),
       ...(this.maxAttempts != null && { maxAttempts: this.maxAttempts }),
     };
@@ -404,6 +421,7 @@ export class ReviewFailure {
         ...(this.failureCode && { failureCode: this.failureCode }),
         retryable: this.retryable,
         ...(this.agentFailureKind && { agentFailureKind: this.agentFailureKind }),
+        ...(this.agentStopEvidence !== null && { agentStopEvidence: this.agentStopEvidence.toJSON() }),
         ...(this.attemptCount != null && { attemptCount: this.attemptCount }),
         ...(this.maxAttempts != null && { maxAttempts: this.maxAttempts }),
       }),

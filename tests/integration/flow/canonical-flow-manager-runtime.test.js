@@ -7,7 +7,6 @@ import { execFileSync } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { AgentTimeout } from "../../../src/lib/agent-timeout.js";
 import { GIT_REPOSITORY_LOCATION_ENVIRONMENT } from "../../../src/lib/git-repository-environment.js";
 import { container } from "../../../src/lib/container.js";
 import {
@@ -201,6 +200,24 @@ function initializeReviewSource(rootPath) {
   commitAll(rootPath, "review source");
 }
 
+const SYNTHETIC_PROVIDER_TIMEOUT_MS = 500;
+const SYNTHETIC_PROVIDER_CALL_DURATIONS_MS = Object.freeze([400, 400, 400, 400]);
+
+function assertAggregateReviewProviderCallsComplete(options, route) {
+  let elapsed = 0;
+  let completed = 0;
+  for (const duration of SYNTHETIC_PROVIDER_CALL_DURATIONS_MS) {
+    assert.ok(duration < SYNTHETIC_PROVIDER_TIMEOUT_MS, `${route} provider call must remain within its Agent timeout`);
+    elapsed += duration;
+    if (Object.hasOwn(options, "timeout") && elapsed > options.timeout) {
+      throw new Error(`${route} worker was cut off by its aggregate outer timeout after ${completed} provider calls`);
+    }
+    completed += 1;
+  }
+  assert.equal(completed, SYNTHETIC_PROVIDER_CALL_DURATIONS_MS.length);
+  assert.ok(elapsed > SYNTHETIC_PROVIDER_TIMEOUT_MS + 1_000);
+}
+
 function canonicalTaskReviewFinding(finding) {
   const fingerprint = ReviewFindingFingerprint.fromFinding({
     ...finding,
@@ -240,6 +257,7 @@ async function publishTaskReview({ repository, manager, specId, blockingFindings
     resolveTreeSha: () => "a".repeat(40),
     resolveTargetStateDigest: () => "b".repeat(64),
     runCommand(_command, _args, options) {
+      assertAggregateReviewProviderCallsComplete(options, "Task Review");
       const outputDirectory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
       fs.writeFileSync(path.join(outputDirectory, "impl-review.json"), `${JSON.stringify({
         version: 1,
@@ -262,7 +280,7 @@ async function publishTaskReview({ repository, manager, specId, blockingFindings
     specId,
     flowManager: manager,
     flowState: manager.load(specId),
-    config: {},
+    config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
   };
   const result = await review.execute(ctx);
   if (result.ok !== false) await FLOW_COMMANDS.run.review.post(ctx, result);
@@ -369,6 +387,7 @@ function rejectedTestReviewCommand(onOutputDirectory) {
     resolveTreeSha: () => "a".repeat(40),
     resolveTargetStateDigest: () => "b".repeat(64),
     runCommand(_command, _args, options) {
+      assertAggregateReviewProviderCallsComplete(options, "Test Review");
       const outputDirectory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
       onOutputDirectory(outputDirectory, options.env);
       fs.writeFileSync(path.join(outputDirectory, "test-review.json"), `${JSON.stringify({
@@ -3340,6 +3359,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       resolveTreeSha: () => "a".repeat(40),
       resolveTargetStateDigest: () => "b".repeat(64),
       runCommand(command, args, options) {
+        assertAggregateReviewProviderCallsComplete(options, "Spec Review");
         invocation = { command, args, options };
         const outputDirectory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
         const specSource = JSON.parse(options.env.SENNEL_REVIEW_SPEC_SOURCE);
@@ -3394,7 +3414,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       phase: "spec",
       flowManager: manager,
       flowState: manager.load(created.specId),
-      config: {},
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
     };
 
     const foreignRoot = root();
@@ -3437,9 +3457,9 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(invocation.options.cwd, repository);
     assert.equal(invocation.options.env.SENNEL_REVIEW_WORK_UNIT_CHECKOUT, undefined);
     assert.equal(
-      invocation.options.timeout,
-      AgentTimeout.fromConfig().toOuterProcessMilliseconds(),
-      "the outer review worker survives the inner Agent's process-tree cleanup window",
+      Object.hasOwn(invocation.options, "timeout"),
+      false,
+      "the shared Review launcher leaves aggregate provider calls and process-tree cleanup to their inner deadlines",
     );
     assert.equal(invocation.options.env.SENNEL_REVIEW_OUTPUT_DIR.startsWith(
       path.join(repository, ".sennel", "review-work-units"),
@@ -3883,6 +3903,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       let outputDirectory = null;
       let childCwd = null;
       const runActualDraftWriter = async (_command, _args, options) => {
+          assertAggregateReviewProviderCallsComplete(options, `${reviewPhase} Review`);
           outputDirectory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
           childCwd = options.cwd;
           const keys = Object.keys(options.env).filter((key) => key.startsWith("SENNEL_REVIEW_"));
@@ -3949,7 +3970,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
       });
       const ctx = {
         root: repository, mainRoot: repository, executionRoot, specId: created.specId,
-        phase: "draft", flowManager: manager, flowState: manager.load(created.specId), config: {},
+        phase: "draft", flowManager: manager, flowState: manager.load(created.specId),
+        config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
       };
       const result = await review.execute(ctx);
       assert.equal(agentCalls, reviewPhase === "draft-coverage" ? 3 : 1,
@@ -4136,6 +4158,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       resolveTargetStateDigest: () => "b".repeat(64),
       runCommand(command, args, options) {
         invocation = { command, args, options };
+        assertAggregateReviewProviderCallsComplete(options, "Impl Review");
         const outputDirectory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
         const specSource = JSON.parse(options.env.SENNEL_REVIEW_SPEC_SOURCE);
         const fileMapSource = JSON.parse(options.env.SENNEL_REVIEW_FILE_MAP_SOURCE);
@@ -4167,7 +4190,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       specId,
       flowManager: manager,
       flowState: manager.load(specId),
-      config: {},
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
     });
 
     assert.equal(invocation.command, "node");
@@ -5222,7 +5245,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       flowManager: manager,
       flowState: manager.load(created.specId),
       flowCommandBoundary: true,
-      config: {},
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
     };
     const result = await review.execute(ctx);
     assert.equal(attachedCanonicalCommandResultArtifact(result).logicalKey, "test.review");

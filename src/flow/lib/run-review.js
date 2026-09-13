@@ -9,9 +9,10 @@ import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 import { PKG_DIR } from "../../lib/cli.js";
 import { runCmd } from "../../lib/process.js";
 import { VALID_REVIEW_PHASES } from "../../lib/constants.js";
-import { AgentTimeout } from "../../lib/agent-timeout.js";
+import { AgentProcessStopEvidence } from "../../lib/agent-failure.js";
 import { AgentRuntimeDirectorySet } from "../../lib/agent.js";
 import { FlowCommand } from "./base-command.js";
+import { ReviewProviderTimeoutFailure } from "./current-flow-state.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import {
   flowLeafIdsBetween,
@@ -898,13 +899,39 @@ class TaskReviewPartialEffectEvidence {
   }
 }
 
-/** Failure-only projection; success artifact contracts remain untouched. */
-class ReviewExecutionFailureEnvelopeData {
+/**
+ * The Review boundary determines its durable failure facts once, before
+ * projecting them to either canonical state or the CLI Envelope.  Keeping
+ * this at the producer boundary prevents the two outputs from silently
+ * disagreeing about retry eligibility after reload.
+ */
+class ReviewExecutionFailureFacts {
   constructor({ error, executionRoot } = {}) {
     this.failureCode = typeof error?.code === "string" && error.code !== ""
       ? error.code
       : "REVIEW_EXECUTION_FAILED";
-    this.retryable = error?.retryable ?? true;
+    this.message = String(error?.message || error);
+    this.sourceIntegrityFailure = error instanceof TaskReviewSourceEffectRejection
+      || error?.code === "TASK_REVIEW_SOURCE_EFFECT_OBSERVED"
+      || error?.code === "TASK_REVIEW_PARTIAL_EFFECT";
+    this.agentStopEvidence = error?.stopEvidence == null
+      ? null
+      : AgentProcessStopEvidence.from(error.stopEvidence);
+    this.retryable = this.sourceIntegrityFailure
+      ? false
+      : this.failureCode === "AGENT_TIMEOUT"
+        ? this.agentStopEvidence?.confirmed === true
+        : error?.retryable ?? true;
+    // Non-timeout Review failures retain the legacy tooling accounting kind,
+    // including terminal provider failures.  An observed uncertain timeout is
+    // the sole exception because ActivityFailure binds its retry kind to the
+    // supervisor evidence; a timeout with no observation remains fail-closed
+    // by the Definition rather than being silently reclassified here.
+    this.retryKind = this.sourceIntegrityFailure
+      ? null
+      : this.failureCode === "AGENT_TIMEOUT" && this.agentStopEvidence !== null && !this.agentStopEvidence.confirmed
+        ? null
+        : "tooling";
     const evidence = error?.data instanceof TaskReviewPartialEffectEvidence ? error.data : null;
     const root = typeof executionRoot === "string" && path.isAbsolute(executionRoot)
       ? path.resolve(executionRoot)
@@ -923,10 +950,28 @@ class ReviewExecutionFailureEnvelopeData {
     Object.freeze(this);
   }
 
-  toJSON() {
+  toCanonicalFailure() {
+    const failure = {
+      category: this.sourceIntegrityFailure ? "source-integrity" : "tooling",
+      code: this.failureCode,
+      message: this.message,
+      retryable: this.retryable,
+      retryKind: this.retryKind,
+      ...(this.agentStopEvidence === null ? {} : { agentStopEvidence: this.agentStopEvidence }),
+    };
+    // A confirmed or explicitly uncertain supervisor observation is validated
+    // at the Review boundary.  Missing evidence is still retained as a
+    // canonical timeout fact so Definition can fail it closed after reload.
+    return this.failureCode === "AGENT_TIMEOUT" && this.agentStopEvidence !== null
+      ? new ReviewProviderTimeoutFailure(failure).toJSON()
+      : failure;
+  }
+
+  toEnvelopeData() {
     return {
       failureCode: this.failureCode,
       retryable: this.retryable,
+      ...(this.agentStopEvidence === null ? {} : { agentStopEvidence: this.agentStopEvidence.toJSON() }),
       workUnit: this.workUnit,
       checkpointSourceFingerprint: this.checkpointSourceFingerprint,
       currentSourceFingerprint: this.currentSourceFingerprint,
@@ -1412,10 +1457,6 @@ export class RunReviewCommand extends FlowCommand {
       if (phase && phase !== IMPL_REVIEW_PHASE) args.push("--phase", phase);
       if (taskSpec !== null) args.push("--task-spec", taskSpec.logicalPath);
       if (ctx.skipConfirm) args.push("--skip-confirm");
-      // The worker's Agent owns a provider process tree.  Leave it enough
-      // time to terminate that tree before this outer subprocess timeout can
-      // kill the worker and release its review-execution lease prematurely.
-      const timeoutMs = AgentTimeout.fromConfig(ctx.config?.agent).toOuterProcessMilliseconds();
       const env = {
         ...process.env,
         [PRODUCT.env("REVIEW_OUTPUT_DIR")]: surface.directory,
@@ -1449,7 +1490,7 @@ export class RunReviewCommand extends FlowCommand {
       let res;
       try {
         res = await runCmdWithRetry(
-          () => this.runCommand("node", [scriptPath, ...args], { cwd: executionRoot, timeout: timeoutMs, env }),
+          () => this.runCommand("node", [scriptPath, ...args], { cwd: executionRoot, env }),
           {
             phase: persistedPhase,
             retryCount: 0,
@@ -1477,6 +1518,7 @@ export class RunReviewCommand extends FlowCommand {
         const error = new Error(failure.reason || "review subprocess failed");
         error.code = failure.toEnvelopeCode();
         error.retryable = failure.retryable;
+        if (failure.agentStopEvidence !== null) error.stopEvidence = failure.agentStopEvidence;
         const stoppedFailure = stoppedTaskReviewFailure({ error, state, taskId, workUnit, baseline: taskRecoveryBaseline });
         return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, { taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint });
       }
@@ -1575,11 +1617,7 @@ export class RunReviewCommand extends FlowCommand {
   }
 
   #canonicalFailure(ctx, phase, error, { taskReviewUnsealedCheckpoint = null } = {}) {
-    const message = String(error?.message || error);
-    const sourceIntegrityFailure = error instanceof TaskReviewSourceEffectRejection
-      || error?.code === "TASK_REVIEW_SOURCE_EFFECT_OBSERVED"
-      || error?.code === "TASK_REVIEW_PARTIAL_EFFECT";
-    const failureData = new ReviewExecutionFailureEnvelopeData({
+    const failureFacts = new ReviewExecutionFailureFacts({
       error,
       executionRoot: ctx.executionRoot || ctx.root,
     });
@@ -1587,16 +1625,10 @@ export class RunReviewCommand extends FlowCommand {
       ctx.flowManager.failCurrentAttempt({
         specId: ctx.specId ?? ctx.flowState.specId,
         taskReviewUnsealedCheckpoint,
-        failure: {
-          category: sourceIntegrityFailure ? "source-integrity" : "tooling",
-          code: error?.code || "REVIEW_EXECUTION_FAILED",
-          message,
-          retryable: sourceIntegrityFailure ? false : error?.retryable ?? true,
-          retryKind: sourceIntegrityFailure ? null : "tooling",
-        },
+        failure: failureFacts.toCanonicalFailure(),
         result: {
           outcome: "failed",
-          summary: message,
+          summary: failureFacts.message,
           confirmedAt: new Date().toISOString(),
           artifactRefs: [],
         },
@@ -1606,15 +1638,15 @@ export class RunReviewCommand extends FlowCommand {
         "run",
         "review",
         "REVIEW_FAILURE_RECORDING_FAILED",
-        `${message}; unable to record the canonical Attempt failure: ${failureError.message}`,
+        `${failureFacts.message}; unable to record the canonical Attempt failure: ${failureError.message}`,
       );
     }
     return Envelope.fail(
       "run",
       "review",
       "REVIEW_TOOLING_ERROR",
-      `review tooling error for ${phase}: ${message}`,
-      failureData.toJSON(),
+      `review tooling error for ${phase}: ${failureFacts.message}`,
+      failureFacts.toEnvelopeData(),
     );
   }
 

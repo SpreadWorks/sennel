@@ -103,6 +103,145 @@ import {
   FinalRegressionStepFacts,
 } from "./lib/final-regression-transition.js";
 
+export class RetryRecoveryBasis {
+  constructor(value) {
+    if (!["changed-input", "confirmed-timeout"].includes(value)) {
+      throw new Error("retry recovery basis is invalid");
+    }
+    this.value = value;
+    Object.freeze(this);
+  }
+
+  static changedInput() { return new RetryRecoveryBasis("changed-input"); }
+  static confirmedTimeout() { return new RetryRecoveryBasis("confirmed-timeout"); }
+  static from(value) { return value instanceof RetryRecoveryBasis ? value : new RetryRecoveryBasis(value); }
+  get changedInput() { return this.value === "changed-input"; }
+  get confirmedTimeout() { return this.value === "confirmed-timeout"; }
+  equals(other) { return other instanceof RetryRecoveryBasis && other.value === this.value; }
+  toString() { return this.value; }
+  toJSON() { return this.value; }
+}
+
+export class RetryRecoveryDecisionFacts {
+  constructor({
+    failure,
+    disposition,
+    routeKind,
+    baselineAvailable,
+    currentObservationAvailable,
+    evidenceChanged,
+    currentArtifactPresent,
+    confirmedTimeoutConsumed,
+    taskSourceAvailable,
+  } = {}) {
+    if (!(failure instanceof ActivityFailure)) throw new Error("retry recovery facts require a typed failure");
+    if (disposition === null || typeof disposition !== "object" || typeof disposition.operation !== "string") {
+      throw new Error("retry recovery facts require a Definition disposition");
+    }
+    if (!["review", "gate"].includes(routeKind)) throw new Error("retry recovery facts route kind is invalid");
+    for (const [field, value] of Object.entries({
+      baselineAvailable,
+      currentObservationAvailable,
+      evidenceChanged,
+      currentArtifactPresent,
+      confirmedTimeoutConsumed,
+      taskSourceAvailable,
+    })) {
+      if (typeof value !== "boolean") throw new Error(`retry recovery facts ${field} must be boolean`);
+    }
+    this.failure = failure;
+    this.disposition = disposition;
+    this.routeKind = routeKind;
+    this.baselineAvailable = baselineAvailable;
+    this.currentObservationAvailable = currentObservationAvailable;
+    this.evidenceChanged = evidenceChanged;
+    this.currentArtifactPresent = currentArtifactPresent;
+    this.confirmedTimeoutConsumed = confirmedTimeoutConsumed;
+    this.taskSourceAvailable = taskSourceAvailable;
+    Object.freeze(this);
+  }
+}
+
+export class RetryRecoveryPlan {
+  constructor({ basis = null, reason, inputInvalid = false } = {}) {
+    this.basis = basis === null ? null : RetryRecoveryBasis.from(basis);
+    if (typeof reason !== "string" || reason.trim() === "") throw new Error("retry recovery plan reason is required");
+    if (typeof inputInvalid !== "boolean") throw new Error("retry recovery plan inputInvalid must be boolean");
+    if (this.basis !== null && inputInvalid) throw new Error("available retry recovery plan cannot reject its input");
+    this.reason = reason.trim();
+    this.inputInvalid = inputInvalid;
+    Object.freeze(this);
+  }
+
+  static blocked(reason) { return new RetryRecoveryPlan({ reason }); }
+  static invalidInput(reason) { return new RetryRecoveryPlan({ reason, inputInvalid: true }); }
+  static available(basis, reason) { return new RetryRecoveryPlan({ basis, reason }); }
+  get available() { return this.basis !== null; }
+}
+
+/** The Definition's sole selection of exhausted retry recovery. */
+export function resolveRetryRecovery(facts) {
+  if (!(facts instanceof RetryRecoveryDecisionFacts)) {
+    throw new Error("retry recovery resolver requires typed facts");
+  }
+  if (!facts.baselineAvailable) return RetryRecoveryPlan.blocked("durable retry baseline is unavailable");
+  if (facts.failure.category === "semantic") {
+    return RetryRecoveryPlan.blocked(
+      "exhausted retry recovery is limited to tooling failures with changed evidence",
+    );
+  }
+  const recordableToolingFailure = facts.disposition.operation === "record"
+    && facts.disposition.remaining === 0
+    && ["tooling", "provider"].includes(facts.failure.category);
+  if (!facts.currentObservationAvailable) {
+    return RetryRecoveryPlan.blocked("current retry recovery observation is unavailable");
+  }
+  if (facts.evidenceChanged && recordableToolingFailure) {
+    return RetryRecoveryPlan.available(
+      RetryRecoveryBasis.changedInput(),
+      "Parent-derived canonical evidence changed.",
+    );
+  }
+  // Unchanged-input timeout recovery is only for a provider that stopped
+  // before it published its current canonical result.  Changed-input recovery
+  // deliberately retains its pre-existing semantics: a user may explicitly
+  // reevaluate new evidence even when the failed Attempt had an artifact.
+  if (facts.currentArtifactPresent && facts.failure.code === "AGENT_TIMEOUT") {
+    return RetryRecoveryPlan.blocked("current Attempt canonical Review artifact is already present");
+  }
+  if (!facts.evidenceChanged
+    && facts.routeKind === "review"
+    && facts.failure.code === "AGENT_TIMEOUT"
+    && facts.failure.agentStopEvidence?.confirmed !== true) {
+    return RetryRecoveryPlan.invalidInput(
+      "changed evidence must differ unless unchanged Review input has a trusted confirmed timeout with an observed provider stop",
+    );
+  }
+  if (!recordableToolingFailure) {
+    return RetryRecoveryPlan.blocked(
+      "the Definition disposition does not authorize exhausted tooling recovery; trusted confirmed timeout evidence is required for unchanged Review input",
+    );
+  }
+  const confirmedTimeout = facts.routeKind === "review"
+    && facts.failure.code === "AGENT_TIMEOUT"
+    && facts.failure.retryable === true
+    && facts.failure.retryKind === "tooling"
+    && facts.failure.agentStopEvidence?.confirmed === true;
+  if (!confirmedTimeout) {
+    return RetryRecoveryPlan.invalidInput(
+      "changed evidence must differ unless unchanged Review input has a trusted confirmed timeout with an observed provider stop",
+    );
+  }
+  if (facts.confirmedTimeoutConsumed) {
+    return RetryRecoveryPlan.blocked("confirmed timeout recovery already consumed this evidence lineage");
+  }
+  if (!facts.taskSourceAvailable) return RetryRecoveryPlan.blocked("Task Review source observation is unavailable");
+  return RetryRecoveryPlan.available(
+    RetryRecoveryBasis.confirmedTimeout(),
+    "Confirmed provider timeout stopped before publishing a Review artifact.",
+  );
+}
+
 // Facts are read by a focused boundary, but every Gate policy value and the
 // only resolver live in this definition module. Commands, registry hooks,
 // persistence, and next-action must consume this API instead of selecting a

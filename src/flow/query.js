@@ -1204,6 +1204,25 @@ class QueryProjector {
     return { code: publicString(source.code, "blocker.code"), message: publicString(source.message, "blocker.message") };
   }
 
+  /**
+   * ActivityFailure is the canonical, durable diagnostic record.  Its process
+   * stop evidence is deliberately not a Flow query field: it can contain
+   * supervisor-only process observations, while the public Activity contract
+   * has a stable five-field failure summary.  Project rather than serialize
+   * the canonical value wholesale so new internal diagnostics cannot widen
+   * the query API accidentally.
+   */
+  publicFailure(failure) {
+    if (failure === null || failure === undefined) return null;
+    return {
+      category: failure.category,
+      code: failure.code,
+      message: failure.message,
+      retryable: failure.retryable,
+      retryKind: failure.retryKind,
+    };
+  }
+
   artifactDescriptor(descriptor, activities, catalog, version) {
     const activity = descriptor.activityId === null ? null : activities.find((entry) => entry.id === descriptor.activityId) ?? null;
     const taskId = activity === null ? null : this.taskIdForActivity(version.state, activity);
@@ -1277,7 +1296,7 @@ class QueryProjector {
       timing: activity.timing?.toJSON() ?? null,
       usage: activity.usage?.toJSON() ?? null,
       outcome: activity.result ? { outcome: activity.result.outcome, summary: publicString(activity.result.summary, "result.summary"), confirmedAt: activity.result.confirmedAt, artifactRefs: uniqueObjectList(activity.result.artifactRefs.map((entry) => ({ kind: entry.kind, id: resolvePublicArtifactId(entry, "Activity result artifact reference") })).filter((entry) => entry.id !== null), "activity.artifactRefs") } : null,
-      failure: activity.failure?.toJSON() ?? null,
+      failure: this.publicFailure(activity.failure),
       blocker: attempt?.blocker ? { code: attempt.blocker.code, message: attempt.blocker.message } : null,
       incomplete: incomplete.length === 0 ? null : incomplete[0].toJSON(),
       metric: activity.metric?.toJSON() ?? null,

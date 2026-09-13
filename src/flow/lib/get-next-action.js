@@ -73,7 +73,7 @@ import {
   canonicalTestReviewRepairProgress,
   inspectCanonicalTestReviewRepair,
 } from "./test-review-repair.js";
-import { captureRetryRecoveryBaseline, readRetryBaseline, retryEvidenceRouteForNode } from "./retry-recovery.js";
+import { inspectRetryRecoveryPlan, retryEvidenceRouteForNode } from "./retry-recovery.js";
 import { resolveCurrentReviewTransition } from "./review-transition-persistence.js";
 import {
   DraftTransitionFactsError,
@@ -566,25 +566,23 @@ function canonicalWorkerContext(ctx, derived, target, state, typedState) {
 
 function retryRecoveryCommandFor({ ctx, state, descriptor, target, binding }) {
   const disposition = descriptor.failureDisposition;
-  const failure = state?.attempt?.failure;
+  const canonical = typeof ctx.flowManager?.canonicalState === "function"
+    ? ctx.flowManager.canonicalState(state.specId)
+    : state;
+  const failure = canonical?.attempt?.failure;
   const toolingFailure = failure?.retryKind === "tooling"
     || failure?.category === "tooling"
     || failure?.category === "provider";
   if (disposition?.operation !== "record" || disposition.remaining !== 0 || !toolingFailure || failure?.category === "semantic") return null;
-  const route = retryEvidenceRouteForNode(state, target.nodeId);
+  const route = retryEvidenceRouteForNode(canonical, target.nodeId);
   if (route === null || !ctx.flowManager) return null;
-  const baseline = readRetryBaseline(ctx.flowManager, state, route);
-  if (baseline === null) return null;
-  const current = captureRetryRecoveryBaseline({
-    flowState: state,
+  const recoveryPlan = inspectRetryRecoveryPlan({
     flowManager: ctx.flowManager,
+    state: canonical,
     executionRoot: ctx.executionRoot || ctx.root,
     artifactRoot: ctx.mainRoot || ctx.root,
-    nodeId: target.nodeId,
   });
-  if (current === null) return null;
-  const changed = ["projectDigest", "runtimeDigest", "targetDigest"].some((field) => current[field] !== baseline[field]);
-  if (!changed) return null;
+  if (!recoveryPlan.available) return null;
   return guardedCommand(
     `sennel flow set retry reset ${route.kind} ${route.phase} --reason "${disposition.reason.replaceAll('"', "'")}" --yes`,
     state,

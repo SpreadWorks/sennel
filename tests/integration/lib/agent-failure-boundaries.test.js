@@ -5,6 +5,8 @@ import {
   AgentAuthenticationFailure,
   AgentFailure,
   AgentPermissionConfigurationFailure,
+  AgentProcessStopEvidence,
+  AgentTimeoutFailure,
   AgentUsageLimitFailure,
   EmptyAgentResponseFailure,
   PermanentNetworkFailure,
@@ -23,6 +25,7 @@ import {
 } from "../../../src/flow/lib/work-unit.js";
 import { ReviewFailure } from "../../../src/flow/lib/review-failure.js";
 import { runCmdWithRetry } from "../../../src/flow/lib/run-review.js";
+import { ActivityFailure } from "../../../src/flow/lib/current-flow-state.js";
 import {
   ExternalBlockedOutcome,
   StepOutcome,
@@ -97,6 +100,67 @@ describe("typed agent failure boundaries", () => {
       maxAttempts: 3,
       message: "HTTP 429 rate limited",
     });
+  });
+
+  it("round-trips confirmed and uncertain timeout stop evidence without inferring from an empty member list", () => {
+    for (const [stopEvidence, retryable] of [
+      [AgentProcessStopEvidence.confirmed(), true],
+      [AgentProcessStopEvidence.uncertain("process-tree-members-unavailable"), false],
+    ]) {
+      const source = new AgentTimeoutFailure({ message: "provider timed out", stopEvidence });
+      const restoredAgent = AgentFailure.from(source.toJSON());
+      assert.equal(restoredAgent.retryable, retryable);
+      assert.deepEqual(restoredAgent.stopEvidence.toJSON(), stopEvidence.toJSON());
+
+      const marker = ReviewFailure.fromAgentFailure({ phase: "test", failure: restoredAgent }).toMarkerLine();
+      const restoredReview = ReviewFailure.fromMarkerLine(marker);
+      assert.equal(restoredReview.retryable, retryable);
+      assert.deepEqual(restoredReview.agentStopEvidence.toJSON(), stopEvidence.toJSON());
+
+      const canonical = new ActivityFailure({
+        category: "tooling",
+        code: restoredReview.failureCode,
+        message: restoredReview.reason,
+        retryable: restoredReview.retryable,
+        retryKind: retryable ? "tooling" : null,
+        agentStopEvidence: restoredReview.agentStopEvidence,
+      });
+      assert.deepEqual(canonical.agentStopEvidence.toJSON(), stopEvidence.toJSON());
+    }
+  });
+
+  it("keeps non-Review AGENT_TIMEOUT canonical failures valid without Review stop evidence", () => {
+    const failure = new ActivityFailure({
+      category: "tooling",
+      code: "AGENT_TIMEOUT",
+      message: "A non-Review command reached its existing Agent deadline.",
+      retryable: true,
+      retryKind: "tooling",
+    });
+    const restored = new ActivityFailure(JSON.parse(JSON.stringify(failure)));
+
+    assert.equal(restored.code, "AGENT_TIMEOUT");
+    assert.equal(restored.retryable, true);
+    assert.equal(restored.retryKind, "tooling");
+    assert.equal(restored.agentStopEvidence, null);
+  });
+
+  it("restores stable timeout JSON before classifying conflicting provider text", () => {
+    for (const conflict of ["HTTP 429 rate limited", "OAuth login required", "usage quota exhausted"]) {
+      const source = new AgentTimeoutFailure({
+        message: `provider timed out: ${conflict}`,
+        stopEvidence: AgentProcessStopEvidence.confirmed(),
+      }).toJSON();
+      source.stdout = conflict;
+      source.stderr = conflict;
+
+      const restored = AgentFailure.from(source);
+
+      assert.ok(restored instanceof AgentTimeoutFailure);
+      assert.equal(restored.code, "AGENT_TIMEOUT");
+      assert.equal(restored.retryable, true);
+      assert.deepEqual(restored.stopEvidence.toJSON(), source.stopEvidence);
+    }
   });
 });
 

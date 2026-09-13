@@ -38,6 +38,7 @@ import { FlowAttributionPolicy } from "./flow-attribution.js";
 import {
   AgentFailure,
   AgentPermissionConfigurationFailure,
+  AgentProcessStopEvidence,
   AgentTimeoutFailure,
   EmptyAgentResponseFailure,
 } from "./agent-failure.js";
@@ -782,7 +783,7 @@ class Agent {
 }
 
 class AgentTimeoutError extends AgentTimeoutFailure {
-  constructor({ timeoutMs, graceMs, finalAction, timeoutDiagnostic = null, unterminatedMembers = [] }) {
+  constructor({ timeoutMs, graceMs, finalAction, timeoutDiagnostic = null, unterminatedMembers = [], stopEvidence = null }) {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive number");
     if (!Number.isFinite(graceMs) || graceMs <= 0) throw new Error("graceMs must be a positive number");
     if (!Array.isArray(unterminatedMembers) || !unterminatedMembers.every((member) => member instanceof UnterminatedProcessMember)) {
@@ -792,9 +793,13 @@ class AgentTimeoutError extends AgentTimeoutFailure {
       throw new Error("timeout diagnostic is invalid");
     }
     const triggeringTimeoutMs = timeoutDiagnostic?.timeoutMs ?? timeoutMs;
+    const evidence = stopEvidence == null
+      ? AgentProcessStopEvidence.uncertain("process-tree-death-not-observed", unterminatedMembers)
+      : AgentProcessStopEvidence.from(stopEvidence);
     super({ message: timeoutDiagnostic === null
       ? `Agent timed out after ${timeoutMs}ms; final action=${finalAction}`
-      : `Agent timed out after ${triggeringTimeoutMs}ms; reason=${timeoutDiagnostic.reason}; final action=${finalAction}` });
+      : `Agent timed out after ${triggeringTimeoutMs}ms; reason=${timeoutDiagnostic.reason}; final action=${finalAction}`,
+    stopEvidence: evidence });
     this.name = "AgentTimeoutError";
     this.timeoutMs = triggeringTimeoutMs;
     this.graceMs = graceMs;
@@ -878,6 +883,8 @@ class ChildProcessSupervisor {
     this.timeoutOwned = false;
     this.directChildClosed = false;
     this.treeDeadObserved = false;
+    this.treeMembersUnavailable = false;
+    this.finalDeadlineReached = false;
     this.settled = false;
     this.finalAction = null;
     this.timeoutDiagnostic = null;
@@ -974,6 +981,7 @@ class ChildProcessSupervisor {
     if (this.settled || !this.timeoutOwned) return;
     this._emit({ type: "grace-expiry" });
     if (this.platform === "win32") {
+      this._beginFinalDeathDeadline();
       this._forceWindowsTree();
       return;
     }
@@ -1005,7 +1013,11 @@ class ChildProcessSupervisor {
       if (this.treeDeadObserved) this._emit({ type: "tree-dead", probe: "taskkill-complete" });
       this._trySettleTimedOutChild();
     } catch (error) {
-      if (!this.settled) this._settleError(error);
+      if (!this.settled) {
+        this.treeMembersUnavailable = true;
+        this._emit({ type: "taskkill-error", code: error?.code || "UNKNOWN" });
+        this._settleTimeout();
+      }
     }
   }
 
@@ -1022,7 +1034,11 @@ class ChildProcessSupervisor {
   }
 
   _isPosixTreeDead() {
-    if (!this.child.pid) return true;
+    if (!this.child.pid) {
+      this.treeMembersUnavailable = true;
+      this._emit({ type: "tree-members-unavailable", code: "MISSING_CHILD_PID" });
+      return false;
+    }
     try {
       process.kill(-this.child.pid, 0);
       return processGroupHasNoLiveMembers(
@@ -1032,7 +1048,7 @@ class ChildProcessSupervisor {
       );
     } catch (error) {
       if (error?.code !== "ESRCH") {
-        this._emit({ type: "tree-members-unavailable", code: error?.code || "UNKNOWN" });
+        this._reportTreeMembersUnavailable(error);
       }
       return error?.code === "ESRCH";
     }
@@ -1059,6 +1075,7 @@ class ChildProcessSupervisor {
   }
 
   _reportTreeMembersUnavailable(error) {
+    this.treeMembersUnavailable = true;
     this._emit({ type: "tree-members-unavailable", code: error?.code || "UNKNOWN" });
   }
 
@@ -1069,9 +1086,7 @@ class ChildProcessSupervisor {
   }
 
   _waitForPosixTreeDeath() {
-    this.finalDeadlineTimer = setTimeout(() => {
-      if (!this.settled) this._settleTimeout();
-    }, this.graceMs);
+    this._beginFinalDeathDeadline();
     const poll = () => {
       if (this.settled) return;
       if (this._isPosixTreeDead()) {
@@ -1082,6 +1097,16 @@ class ChildProcessSupervisor {
       this.treeDeathPollTimer = setTimeout(poll, PROCESS_DEATH_POLL_MS);
     };
     poll();
+  }
+
+  _beginFinalDeathDeadline() {
+    if (this.finalDeadlineTimer !== null) return;
+    this.finalDeadlineTimer = setTimeout(() => {
+      if (!this.settled) {
+        this.finalDeadlineReached = true;
+        this._settleTimeout();
+      }
+    }, this.graceMs);
   }
 
   _waitForSuccessfulPosixTreeDeath(code, signal) {
@@ -1112,6 +1137,19 @@ class ChildProcessSupervisor {
   }
 
   _settleTimeout() {
+    const unterminatedMembers = this._collectOriginalUnterminatedPosixMembers();
+    const stopEvidence = this.treeDeadObserved
+      ? AgentProcessStopEvidence.confirmed()
+      : AgentProcessStopEvidence.uncertain(
+          unterminatedMembers.length > 0
+            ? "unterminated-process-members"
+            : this.treeMembersUnavailable
+              ? "process-tree-members-unavailable"
+              : this.finalDeadlineReached
+                ? "process-tree-death-deadline-reached"
+                : "process-tree-death-not-observed",
+          unterminatedMembers,
+        );
     this._cleanup();
     this._emit({ type: "settled", outcome: "timeout" });
     this.reject(new AgentTimeoutError({
@@ -1119,7 +1157,8 @@ class ChildProcessSupervisor {
       graceMs: this.graceMs,
       finalAction: this.finalAction || "SIGTERM",
       timeoutDiagnostic: this.timeoutDiagnostic,
-      unterminatedMembers: this._collectOriginalUnterminatedPosixMembers(),
+      unterminatedMembers,
+      stopEvidence,
     }));
   }
 
