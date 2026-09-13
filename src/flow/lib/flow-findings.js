@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
+import { RequirementTestFailureArtifact } from "./requirement-test-artifacts.js";
 import {
   CanonicalFlowArtifactBaseline,
   CanonicalFlowArtifactWrite,
@@ -272,11 +273,10 @@ function sourcePayloads({ logicalKey, bytes }) {
     }];
   }
   try {
-    return CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes })
-      .attempts.map((attempt) => attempt.payload);
-  } catch {
-    return [jsonFromArtifact(bytes, `canonical ${logicalKey}`)];
-  }
+    const attempts = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes }).attempts;
+    if (attempts.length > 0) return attempts.map((attempt) => attempt.payload);
+  } catch {}
+  return [jsonFromArtifact(bytes, `canonical ${logicalKey}`)];
 }
 
 /** Cataloged finding source retaining every immutable producer Attempt. */
@@ -391,12 +391,17 @@ export class CanonicalFlowFindingsStore {
     const taskArtifact = new Set(["task.review", "task.gate"]).has(logicalKey);
     const parameters = taskArtifact
       ? { taskId: this.flowState.currentTaskId }
-      : {};
+      : logicalKey === "test.requirement.failure"
+        ? RequirementTestFailureArtifact.fromRelativePath(sourceArtifact).parameters
+        : {};
     const taskRole = logicalKey === "task.review" ? "review" : logicalKey === "task.gate" ? "gate" : null;
     const ownsTaskProducer = taskRole !== null
       && this.nodeId === `${this.flowState.currentTaskId}-${taskRole}`
       && contract.ownership.producers.includes(`task-${taskRole}`);
-    const resolved = (contract.ownership.producers.includes(this.nodeId) || ownsTaskProducer)
+    const activeNodeId = this.flowState.currentNodeId ?? this.flowState.current?.at(-1) ?? null;
+    const ownsFlowProducer = activeNodeId === this.nodeId
+      && contract.ownership.producers.includes(this.nodeId);
+    const resolved = (ownsFlowProducer || ownsTaskProducer)
       ? this.flowManager.readProducerArtifact({
         specId: this.flowState.specId,
         nodeId: this.nodeId,

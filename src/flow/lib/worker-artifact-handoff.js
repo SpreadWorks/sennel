@@ -44,8 +44,6 @@ import {
   formatValidationMessages,
 } from "./test-headers.js";
 import {
-  SpecTestBootstrapObservation,
-  SpecTestBootstrapValidationError,
   SpecTestBootstrapValidator,
 } from "./spec-test-bootstrap-validator.js";
 import {
@@ -71,6 +69,7 @@ import { canonicalPlanGateRepairForTarget } from "./plan-gate-repair.js";
 import {
   canonicalTestReviewRepairForTarget,
   canonicalTestReviewRepairProgress,
+  TestReviewRepairFinding,
   TestReviewRepairProgress,
   parseWorkerVisibleTestReviewRepair,
   testReviewRepairProgressReceiptForSelectedContract,
@@ -79,6 +78,7 @@ import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
 import {
   RequirementTestCandidateBundle,
   RequirementTestCandidateSource,
+  RequirementTestSupportArtifact,
 } from "./requirement-test-artifacts.js";
 import {
   RequirementTestBundleLineage,
@@ -122,6 +122,7 @@ import { CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
 import { getPorcelainV2Status } from "../../lib/git-helpers.js";
 
 export const WORKER_ARTIFACT_HANDOFF_REQUEST_ENV = PRODUCT.env("FLOW_HANDOFF_REQUEST");
+const REQUIREMENT_TEST_WORKER_STEPS = new Set(["test-generate", "test-repair"]);
 // Source requests store only canonical checkpoint references. Version 4
 // intentionally rejects request documents that duplicated baseline authority.
 export const WORKER_ARTIFACT_HANDOFF_VERSION = 5;
@@ -142,6 +143,7 @@ const FLOW_REPOSITORY_RUNTIME_ARTIFACTS = new FlowRepositoryRuntimeArtifactRegis
 const AUTHORITY_ENTRY_KINDS = new Set(["missing", "symlink", "directory", "file", "other"]);
 const TEMPORARY_CANONICAL_READ_CODES = new Set(["EAGAIN", "EBUSY", "EIO", "EMFILE", "ENFILE"]);
 const SPEC_TEST_FILE = /\.(?:js|mjs|ts|json|md|ya?ml|txt|sh)$/;
+const REQUIREMENT_TEST_SUPPORT_PREFIX = "tests/support/";
 const COMMAND_OWNED_SPEC_TEST_DIRECTORY = ".raw";
 
 const SOURCE_EFFECT_KEYS = Object.freeze([
@@ -235,8 +237,8 @@ function base64Bytes(value, label) {
   return bytes;
 }
 
-function boundedJson(filePath, label, { retryableMalformedJson = false } = {}) {
-  const snapshot = readRegularFile(filePath, label, MAX_JSON_BYTES);
+function boundedJson(filePath, label, { retryableMalformedJson = false, transport = null } = {}) {
+  const snapshot = readRegularFile(filePath, label, MAX_JSON_BYTES, { transport });
   try {
     return { document: JSON.parse(snapshot.bytes.toString("utf8")), snapshot };
   } catch (cause) {
@@ -247,13 +249,13 @@ function boundedJson(filePath, label, { retryableMalformedJson = false } = {}) {
       {
         cause,
         retryable: retryableMalformedJson,
-        data: retryableMalformedJson ? { transport: "malformed-json" } : {},
+        data: retryableMalformedJson ? { transport: transport ?? "malformed-json" } : {},
       },
     );
   }
 }
 
-function readRegularFile(filePath, label, maxBytes = MAX_PAYLOAD_BYTES) {
+function readRegularFile(filePath, label, maxBytes = MAX_PAYLOAD_BYTES, { transport = null } = {}) {
   try {
     return captureRegularFile(filePath, { label, maxBytes });
   } catch (cause) {
@@ -264,7 +266,16 @@ function readRegularFile(filePath, label, maxBytes = MAX_PAYLOAD_BYTES) {
         ? "FLOW_ARTIFACT_HANDOFF_MISSING"
         : "FLOW_ARTIFACT_HANDOFF_INVALID",
       `${label} is unavailable: ${cause.message}`,
-      { cause, retryable: ["ENOENT", "EIO", "EACCES"].includes(cause?.code) },
+      {
+        cause,
+        retryable: ["ENOENT", "EIO", "EACCES"].includes(cause?.code),
+        // Callers must explicitly identify a provider-output boundary. The
+        // same reader also protects requests, authority checkpoints, and
+        // publication manifests, whose absence is an integrity failure.
+        data: transport !== null && ["ENOENT", "EIO", "EACCES"].includes(cause?.code)
+          ? { transport }
+          : {},
+      },
     );
   }
 }
@@ -359,37 +370,242 @@ export class WorkerArtifactHandoffError extends Error {
   }
 }
 
-const SPEC_TEST_BOOTSTRAP_ERROR_CODE = "FLOW_SPEC_TEST_BOOTSTRAP_INVALID";
-
-/** Parent-owned authority for observing the one retried bootstrap failure. */
-export class SpecTestBootstrapObservationAuthority {
-  static fromRetryable(error) {
-    if (!(error instanceof WorkerArtifactHandoffError)
-      || error.code !== SPEC_TEST_BOOTSTRAP_ERROR_CODE
-      || error.retryable !== true) return null;
-    return new SpecTestBootstrapObservationAuthority(error);
-  }
-
-  constructor(error) {
-    if (!(error instanceof WorkerArtifactHandoffError)
-      || error.code !== SPEC_TEST_BOOTSTRAP_ERROR_CODE
-      || error.retryable !== true
-      || typeof error.data.actionDigest !== "string"
-      || typeof error.data.inputDigest !== "string"
-      || typeof error.data.inputRevision !== "string") {
-      throw new Error("spec test bootstrap observation requires retryable bootstrap handoff error");
+/**
+ * Common immutable semantic evidence for a sealed Requirement-test candidate
+ * that can be repaired without relaxing its authority or digest checks.
+ */
+class RequirementTestRecoverableHandoffValidation {
+  constructor({ validation, recoverableIssues, reason, title, requiredChange, whyBlocking }) {
+    if (!validation || typeof validation !== "object" || Array.isArray(validation)) {
+      throw new Error("recoverable Requirement test validation requires a document");
     }
-    this.actionDigest = error.data.actionDigest;
-    this.inputDigest = error.data.inputDigest;
-    this.inputRevision = error.data.inputRevision;
+    if (!Array.isArray(recoverableIssues)
+      || recoverableIssues.some((issue) => typeof issue?.toJSON !== "function")) {
+      throw new Error("recoverable Requirement test validation requires typed issues");
+    }
+    this.validation = Object.freeze(structuredClone(validation));
+    this.recoverableIssues = Object.freeze([...recoverableIssues]);
+    this.reason = requiredString(reason, "recoverable Requirement test validation reason");
+    this.title = requiredString(title, "recoverable Requirement test validation title");
+    this.requiredChange = requiredString(requiredChange, "recoverable Requirement test validation requiredChange");
+    this.whyBlocking = requiredString(whyBlocking, "recoverable Requirement test validation whyBlocking");
     Object.freeze(this);
   }
 
-  accepts(request) {
-    return request.stepId === "test-generate"
-      && request.actionDigest === this.actionDigest
-      && request.inputDigest === this.inputDigest
-      && request.inputRevision === this.inputRevision;
+  get ok() { return false; }
+
+  toJSON() {
+    return structuredClone(this.validation);
+  }
+}
+
+class RequirementTestHeaderRecoverableHandoffValidation extends RequirementTestRecoverableHandoffValidation {
+  constructor(validation) {
+    if (validation?.ok !== false || !Array.isArray(validation.recoverableIssues)) {
+      throw new Error("Requirement test header recovery requires failed assigned validation");
+    }
+    super({
+      validation: validation.toJSON(),
+      recoverableIssues: validation.recoverableIssues,
+      reason: formatValidationMessages(validation.result).join("; "),
+      title: "Requirement test structure is invalid",
+      requiredChange: "Repair the Requirement test structure.",
+      whyBlocking: "The immutable Requirement candidate cannot be reviewed or gated until its ownership metadata is valid.",
+    });
+  }
+}
+
+/** A typed bootstrap issue promoted into the normal Requirement-test repair finding. */
+class RequirementTestBootstrapRecoverableIssue {
+  constructor(issue) {
+    if (!issue || typeof issue.relativeTestFile !== "string" || typeof issue.specifier !== "string"
+      || !Number.isInteger(issue.line) || typeof issue.expectedPath !== "string") {
+      throw new Error("Requirement test bootstrap recovery requires a typed bootstrap issue");
+    }
+    this.code = "static_import_unresolved";
+    this.relativeTestFile = issue.relativeTestFile;
+    this.specifier = issue.specifier;
+    this.line = issue.line;
+    this.expectedPath = issue.expectedPath;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      code: this.code,
+      relativeTestFile: this.relativeTestFile,
+      specifier: this.specifier,
+      line: this.line,
+      expectedPath: this.expectedPath,
+    };
+  }
+}
+
+class RequirementTestBootstrapRecoverableHandoffValidation extends RequirementTestRecoverableHandoffValidation {
+  constructor(validation) {
+    if (validation?.ok !== false || !Array.isArray(validation.issues)) {
+      throw new Error("Requirement test bootstrap recovery requires failed bootstrap validation");
+    }
+    const issues = validation.issues.map((issue) => new RequirementTestBootstrapRecoverableIssue(issue));
+    super({
+      validation: { issues: issues.map((issue) => issue.toJSON()) },
+      recoverableIssues: issues,
+      reason: validation.issues.map((issue) => issue.toString()).join("; "),
+      title: "Requirement test bootstrap imports are invalid",
+      requiredChange: "Replace unresolved static imports with test inputs that resolve before implementation.",
+      whyBlocking: "The immutable Requirement candidate cannot be executed or reviewed while its static imports fail during test bootstrap.",
+    });
+  }
+}
+
+/**
+ * Parent-only handoff result for a Requirement-bound test bundle whose sealed
+ * bytes are intact but whose header/primary-Requirement structure is not.
+ *
+ * This is deliberately not a retryable transport error.  The lifecycle
+ * connector consumes the candidate publication inputs and the R-bound finding
+ * in one canonical transaction; until then no candidate is published and the
+ * active test tree remains untouched.
+ */
+export class RequirementTestStructuralHandoffResult {
+  constructor({ request, submission, validation, publications } = {}) {
+    if (!(request instanceof WorkerArtifactHandoffRequest)
+      || !REQUIREMENT_TEST_WORKER_STEPS.has(request.stepId)) {
+      throw new Error("Requirement test structural handoff result requires a Requirement test request");
+    }
+    if (!(validation instanceof RequirementTestRecoverableHandoffValidation)) {
+      throw new Error("Requirement test structural handoff result requires typed recoverable validation");
+    }
+    if (!(publications?.requirementTestCandidate instanceof RequirementTestCandidateBundle)
+      || !Array.isArray(publications.requirementTestCandidateSources)) {
+      throw new Error("Requirement test structural handoff result requires an immutable candidate publication");
+    }
+    const binding = request.requirementTestBinding;
+    const candidate = publications.requirementTestCandidate;
+    if (!(binding instanceof RequirementTestWorkerHandoffBinding)
+      || candidate.bundle.requirementId !== binding.requirementId
+      || candidate.bundle.revision !== binding.bundleRevision
+      || !candidate.bundle.specRevision.equals(binding.specRevision)) {
+      throw new Error("Requirement test structural handoff result candidate does not bind the assigned Requirement");
+    }
+    const sources = publications.requirementTestCandidateSources.map((entry) => {
+      if (typeof entry?.testPath !== "string" || !Buffer.isBuffer(entry.bytes)) {
+        throw new Error("Requirement test structural handoff result requires validated candidate source bytes");
+      }
+      const candidateSource = candidate.sources.find((source) => source.testPath === `tests/${entry.testPath}`);
+      if (!candidateSource || candidateSource.digest !== digest(entry.bytes)) {
+        throw new Error("Requirement test structural handoff result source bytes do not match candidate metadata");
+      }
+      return Object.freeze({
+        testPath: entry.testPath,
+        digest: candidateSource.digest,
+        byteLength: candidateSource.byteLength,
+        bytes: Buffer.from(entry.bytes),
+      });
+    });
+    if (sources.length !== candidate.sources.length) {
+      throw new Error("Requirement test structural handoff result does not contain every candidate source");
+    }
+    const validationJson = validation.toJSON();
+    const recoverableIssues = Object.freeze(validation.recoverableIssues.map((issue) => Object.freeze(issue.toJSON())));
+    const reason = validation.reason;
+    const findingDocument = {
+      findingId: `requirement-test-handoff-${binding.requirementId}-${binding.bundleRevision}-${submission.handoffDigest.slice(0, 16)}`,
+      requirementId: binding.requirementId,
+      category: "requirement_test_handoff_structure",
+      title: `${validation.title} for ${binding.requirementId}`,
+      target: sources[0]?.testPath ?? binding.requirementId,
+      issue: reason,
+      requiredChange: `${validation.requiredChange.slice(0, -1)} for ${binding.requirementId}.`,
+      whyBlocking: validation.whyBlocking,
+      reason,
+      sourceStepId: request.stepId,
+      sourceAttempt: binding.sourceAttempt.toJSON(),
+      specRevision: binding.specRevision.toJSON(),
+      bundleRevision: binding.bundleRevision,
+      candidateDigest: candidate.digest,
+      handoffDigest: submission.handoffDigest,
+      validation: validationJson,
+      recoverableIssues,
+      testPaths: sources.map((source) => source.testPath),
+    };
+    findingDocument.fingerprint = digest(stableStringify(findingDocument));
+    const finding = new TestReviewRepairFinding(findingDocument);
+
+    this.requirementId = binding.requirementId;
+    this.stepId = request.stepId;
+    this.binding = binding;
+    this.candidate = candidate;
+    this.candidateSources = Object.freeze(sources);
+    this.finding = finding;
+    this.publications = Object.freeze({
+      artifactWrites: Object.freeze(publications.artifactWrites.map((entry) => Object.freeze({
+        ...entry,
+        ...(Buffer.isBuffer(entry.bytes) ? { bytes: Buffer.from(entry.bytes) } : {}),
+      }))),
+      artifactRemovals: Object.freeze(publications.artifactRemovals.map((entry) => Object.freeze({ ...entry }))),
+      artifactBaselines: Object.freeze([...publications.artifactBaselines]),
+      testSourceBaseline: publications.testSourceBaseline,
+    });
+    Object.freeze(this);
+  }
+
+  /** Connector-only input; source bytes are copied on every read. */
+  connectorInput() {
+    return {
+      requirementId: this.requirementId,
+      stepId: this.stepId,
+      binding: this.binding.toJSON(),
+      candidate: this.candidate,
+      candidateSources: this.candidateSources.map((source) => ({ ...source, bytes: Buffer.from(source.bytes) })),
+      finding: this.finding.toJSON(),
+      publications: {
+        artifactWrites: this.publications.artifactWrites.map((entry) => ({
+          ...entry,
+          ...(Buffer.isBuffer(entry.bytes) ? { bytes: Buffer.from(entry.bytes) } : {}),
+        })),
+        artifactRemovals: this.publications.artifactRemovals.map((entry) => ({ ...entry })),
+        artifactBaselines: [...this.publications.artifactBaselines],
+        testSourceBaseline: this.publications.testSourceBaseline,
+      },
+    };
+  }
+
+  toJSON() {
+    return {
+      requirementId: this.requirementId,
+      stepId: this.stepId,
+      binding: this.binding.toJSON(),
+      candidate: this.candidate.toJSON(),
+      candidateSources: this.candidateSources.map(({ testPath, digest: hash, byteLength }) => ({ testPath, digest: hash, byteLength })),
+      finding: this.finding.toJSON(),
+    };
+  }
+}
+
+/** Typed boundary used by the dispatcher/lifecycle connector, never a tooling retry. */
+export class RequirementTestStructuralHandoffError extends WorkerArtifactHandoffError {
+  constructor(result) {
+    if (!(result instanceof RequirementTestStructuralHandoffResult)) {
+      throw new Error("Requirement test structural handoff error requires a typed result");
+    }
+    super(
+      "invalid",
+      "FLOW_REQUIREMENT_TEST_HANDOFF_STRUCTURAL_INVALID",
+      `Requirement test handoff for ${result.requirementId} has recoverable structural findings`,
+      {
+        retryable: false,
+        recoveryPossible: false,
+        data: {
+          stepId: result.stepId,
+          requirementId: result.requirementId,
+          candidateDigest: result.candidate.digest,
+          finding: result.finding.toJSON(),
+        },
+      },
+    );
+    this.name = "RequirementTestStructuralHandoffError";
+    this.result = result;
   }
 }
 
@@ -415,6 +631,8 @@ export class WorkerArtifactRetryExhaustedError extends WorkerArtifactHandoffErro
       handoffDirectory: request?.directory || error.data?.handoffDirectory || null,
       actionDigest: request?.actionDigest || error.data?.actionDigest || null,
       dispatchInvocationId: request?.dispatchInvocationId || error.data?.dispatchInvocationId || null,
+      transport: error.data?.transport ?? null,
+      payloadFormat: error.data?.payloadFormat ?? null,
     });
     super(
       "invalid",
@@ -1345,6 +1563,23 @@ function isCommandOwnedSpecTestTarget(relativePath) {
   return relativePath === reserved || relativePath.startsWith(`${reserved}/`);
 }
 
+function isRequirementTestSupportTarget(relativePath) {
+  return relativePath.startsWith(REQUIREMENT_TEST_SUPPORT_PREFIX);
+}
+
+function requirementTestSupportPublication(support, bytes) {
+  return Object.freeze({
+    logicalKey: "test.requirement.support",
+    parameters: {
+      ownerRequirementId: support.ownerRequirementId,
+      supportPath: support.supportPath.slice("tests/".length),
+      supportDigest: support.digest,
+    },
+    mediaType: mediaTypeForPath(support.supportPath),
+    bytes: Buffer.from(bytes),
+  });
+}
+
 function assertPayloadDirectoryMatchesManifest(request, manifest, label) {
   const declaredFiles = new Set();
   const allowedDirectories = new Set();
@@ -1413,6 +1648,50 @@ function manifestDigest(entries) {
   }))));
 }
 
+/** The only approved-Spec projection a Requirement-test worker may inspect. */
+class RequirementTestWorkerSpecProjection {
+  constructor({ spec, workItem }) {
+    if (!spec || !Array.isArray(spec.requirements)) {
+      throw new Error("Requirement test worker Spec projection requires a canonical Spec");
+    }
+    if (!workItem || typeof workItem.requirementId !== "string" || !workItem.expectation) {
+      throw new Error("Requirement test worker Spec projection requires a typed work item");
+    }
+    const requirement = spec.requirements.find((entry) => entry?.id === workItem.requirementId);
+    if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)) {
+      throw new Error("Requirement test worker Spec projection cannot find the assigned Requirement");
+    }
+    const expectation = workItem.expectation.toJSON();
+    if (requirement.preimplementation_test_expectation !== expectation) {
+      throw new Error("Requirement test worker Spec projection expectation does not match the active work item");
+    }
+    this.requirementId = requiredString(requirement.id, "Requirement test worker assigned Requirement id");
+    this.description = requiredString(requirement.desc, "Requirement test worker assigned Requirement description");
+    this.expectation = expectation;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      version: 1,
+      requirements: [{
+        id: this.requirementId,
+        desc: this.description,
+        preimplementation_test_expectation: this.expectation,
+      }],
+      expectation: structuredClone(this.expectation),
+    };
+  }
+}
+
+function canonicalRequirementTestSpec({ flowManager, state, consumerNodeId, label }) {
+  return CanonicalWorkerArtifactAddress.from("spec.json").read({
+    flowManager,
+    specId: state.specId,
+    consumerNodeId,
+  }).jsonDocument(label);
+}
+
 /**
  * Resolve a stable worker protocol filename through the Version Store.
  * `workerPath` remains part of the agent handoff contract; it is never a
@@ -1420,7 +1699,38 @@ function manifestDigest(entries) {
  * ownership before this boundary parses the established JSON document.
  */
 function canonicalHandoffInputSnapshot({ flowManager, state, workerPath, consumerNodeId, label }) {
+  if (workerPath === "spec.json" && REQUIREMENT_TEST_WORKER_STEPS.has(consumerNodeId)) {
+    const workItem = new RequirementTestArtifactStore({ flowManager, state })
+      .readPlan(consumerNodeId).artifact.plan.activeWorkItem();
+    const document = new RequirementTestWorkerSpecProjection({
+      spec: canonicalRequirementTestSpec({ flowManager, state, consumerNodeId, label }),
+      workItem,
+    }).toJSON();
+    const bytes = Buffer.from(stableStringify(document), "utf8");
+    return Object.freeze({
+      document,
+      snapshot: Object.freeze({ digest: digest(bytes), byteLength: bytes.length }),
+    });
+  }
   if (workerPath === "requirement-test-review.json") {
+    const repair = canonicalTestReviewRepairForTarget({
+      flowManager,
+      state,
+      targetStepId: consumerNodeId,
+    });
+    if (repair !== null && repair.sourceStepId !== "test-review") {
+      // A structural handoff has no test-review Attempt artifact.  Its
+      // Definition-owned failure is already reconstituted by this shared
+      // resolver into the same immutable repair episode.  Keep that parent
+      // input private (the worker receives only its selected scope) while
+      // binding the request to its exact source candidate and finding.
+      const document = repair.toJSON();
+      const bytes = Buffer.from(stableStringify(document), "utf8");
+      return Object.freeze({
+        document,
+        snapshot: Object.freeze({ digest: digest(bytes), byteLength: bytes.length }),
+      });
+    }
     const current = new CanonicalTestArtifactStore({ flowManager, state }).readCurrentAttempt({
       logicalKey: "test.requirement.review",
       consumerNodeId,
@@ -1443,7 +1753,7 @@ function canonicalHandoffInputSnapshot({ flowManager, state, workerPath, consume
 }
 
 function requirementTestHandoffContext({ flowManager, state, policy, semanticIdentity }) {
-  if (!new Set(["test-generate", "test-repair"]).has(policy.stepId)) return null;
+  if (!REQUIREMENT_TEST_WORKER_STEPS.has(policy.stepId)) return null;
   const store = new RequirementTestArtifactStore({ flowManager, state });
   const workItem = store.readPlan(policy.stepId).artifact.plan.activeWorkItem();
   if (!workItem) throw new WorkerArtifactHandoffError(
@@ -4072,7 +4382,7 @@ export class WorkerArtifactHandoffRequest {
     this.testReviewRepair = testReviewRepair;
     this.testReviewRepairProgress = testReviewRepairProgress;
     this.workerVisibleTestReviewRepair = workerVisibleTestReviewRepair;
-    const requirementStep = new Set(["test-generate", "test-repair"]).has(this.stepId);
+    const requirementStep = REQUIREMENT_TEST_WORKER_STEPS.has(this.stepId);
     if (requirementStep !== (requirementTestBinding instanceof RequirementTestWorkerHandoffBinding)) {
       throw new Error("Requirement test worker handoff requires exactly one typed binding");
     }
@@ -4174,7 +4484,7 @@ export class WorkerArtifactHandoffRequest {
     this.submissionPath = path.join(this.directory, "handoff.json");
     this.sourceMutationManifestPath = path.join(this.directory, "source-mutation-manifest.json");
     this.quarantinePath = path.join(this.directory, "quarantine.json");
-    this.specTestTopology = new Set(["test", "test-generate", "test-repair"]).has(this.stepId)
+    this.specTestTopology = REQUIREMENT_TEST_WORKER_STEPS.has(this.stepId)
       ? CanonicalSpecTestTopology.fromWorkerTestTree({
           flowManager: this.flowManager,
           specId: this.specId,
@@ -4735,6 +5045,7 @@ export class WorkerArtifactHandoffRequest {
       semanticIdentity,
       planGateRepair,
       testReviewRepair,
+      requirementTestBinding: requirementTestContext?.binding ?? null,
       acceptanceRepairRoute,
     });
     if (currentDigest !== this.inputDigest || currentRevision !== this.inputRevision) {
@@ -4760,21 +5071,12 @@ export class WorkerArtifactHandoffRequest {
 export class WorkerArtifactHandoffReference {
   constructor(request) {
     if (!(request instanceof WorkerArtifactHandoffRequest)) throw new Error("worker input reference requires a handoff request");
-    const contract = request.toWorkerJSON();
     this.requestPath = request.requestPath;
     this.requestDigest = request.requestDigest;
     this.actionFilePath = request.actionRequestPath;
     this.actionFileDigest = request.actionRequestDigest;
     this.actionDigest = request.actionDigest;
     this.dispatchInvocationId = request.dispatchInvocationId;
-    this.inputDigest = request.inputDigest;
-    this.inputRevision = request.inputRevision;
-    this.requirementTestBinding = request.requirementTestBinding;
-    this.inputs = Object.freeze(contract.inputs.map(({ name, targetRelativePath, digest: inputDigest, byteLength }) =>
-      Object.freeze({ name, targetRelativePath, digest: inputDigest, byteLength })));
-    this.payloads = Object.freeze(contract.payloads.map((payload) => Object.freeze(payload)));
-    this.specTestTopology = contract.specTestTopology ? Object.freeze(contract.specTestTopology) : null;
-    this.sealCommand = contract.sealCommand ?? null;
     Object.freeze(this);
   }
 
@@ -4783,10 +5085,6 @@ export class WorkerArtifactHandoffReference {
       requestPath: this.requestPath, requestDigest: this.requestDigest,
       actionFilePath: this.actionFilePath, actionFileDigest: this.actionFileDigest,
       actionDigest: this.actionDigest, dispatchInvocationId: this.dispatchInvocationId,
-      inputDigest: this.inputDigest, inputRevision: this.inputRevision,
-      requirementTestBinding: this.requirementTestBinding?.toJSON() ?? null,
-      inputs: this.inputs, payloads: this.payloads, specTestTopology: this.specTestTopology,
-      sealCommand: this.sealCommand, completionOwner: "parent-dispatcher",
     });
   }
 }
@@ -5025,7 +5323,7 @@ function validateFilePayloadAtCliBoundary(request, rule, source) {
     const { document } = boundedJson(
       source,
       `handoff payload ${rule.logicalName}`,
-      { retryableMalformedJson: true },
+      { retryableMalformedJson: true, transport: "worker-payload" },
     );
     if (rule.logicalName === "upgrade.result") {
       const validation = validateUpgradeResultArtifact(document);
@@ -5166,7 +5464,7 @@ function requestFromStored(filePath) {
   if (document.sealCommand !== expectedSealCommand) {
     throw new Error("handoff request seal command does not match its step policy");
   }
-  if (document.stepId === "test") {
+  if (REQUIREMENT_TEST_WORKER_STEPS.has(document.stepId)) {
     CanonicalSpecTestTopology.fromJSON(document.specTestTopology, { repositoryRoot: executionRoot });
   } else if (document.specTestTopology !== null) {
     throw new Error("handoff request spec-test topology does not match its step policy");
@@ -6062,10 +6360,27 @@ function testReviewRepairValidationRoot(request, submission, state) {
     ensureRealDirectory(path.dirname(target), testsRoot);
     new AtomicFile(target, { phaseNamespace: "test-review-repair-parent-validation" }).write(artifact.bytes);
   }
+  // Shared support is immutable candidate evidence, not part of a repair
+  // worker's editable primary-test capability. Materialize it only in this
+  // parent validation tree so bootstrap resolution observes the same complete
+  // candidate tree Gate will execute.
+  const baseline = request.requirementTestBinding?.candidateBaseline;
+  if (baseline !== null && baseline !== undefined) {
+    const candidate = new RequirementTestArtifactStore({ flowManager: request.flowManager, state })
+      .readCandidate({ bundle: baseline.bundle, consumerNodeId: request.stepId });
+    for (const support of candidate.support) {
+      const target = path.resolve(root, support.targetRelativePath);
+      if (!isWithin(testsRoot, target)) {
+        throw new WorkerArtifactHandoffError("invalid", "FLOW_TEST_REVIEW_REPAIR_SCOPE_INVALID", "Requirement test support validation path escapes its root");
+      }
+      ensureRealDirectory(path.dirname(target), testsRoot);
+      new AtomicFile(target, { phaseNamespace: "test-review-repair-parent-validation-support" }).write(support.bytes);
+    }
+  }
   return root;
 }
 
-function validatePayload(request, submission, state, { bootstrapObservationAuthority = null } = {}) {
+function validatePayload(request, submission, state) {
   try {
     if (request.policy.kind === "source") {
       const effect = SourceWorkerEffect.fromDocument(
@@ -6165,11 +6480,29 @@ function validatePayload(request, submission, state, { bootstrapObservationAutho
       );
       return;
     }
-    if (new Set(["test-generate", "test-repair"]).has(request.stepId)) {
-      const spec = request.inputs.find((input) => input.name === "spec.json").document;
+    if (REQUIREMENT_TEST_WORKER_STEPS.has(request.stepId)) {
+      // The worker is intentionally limited to its assigned Requirement.
+      // Header ownership is parent validation over the canonical approved
+      // Spec, including secondary ids, never an authority delegated through
+      // the worker-visible projection.
+      const spec = canonicalRequirementTestSpec({
+        flowManager: request.flowManager,
+        state,
+        consumerNodeId: request.stepId,
+        label: "canonical Requirement test validation Spec",
+      });
+      // A repair worker may not turn an unchanged rejected candidate into a
+      // new semantic episode merely by preserving the same invalid bytes.
+      // The submission was already sealed and its manifest/path authority
+      // verified; enforce the existing Definition-owned progress contract
+      // before any recoverable semantic classification or composition error.
+      if (request.stepId === "test-repair") {
+        assertTestReviewRepairMadeProgress(request, submission, state, "spec-tests");
+      }
       const validationRoot = testReviewRepairValidationRoot(request, submission, state);
       const candidatePaths = submission.payloadManifest
-        .filter((entry) => entry.targetRelativePath.startsWith("tests/"))
+        .filter((entry) => entry.targetRelativePath.startsWith("tests/")
+          && !isRequirementTestSupportTarget(entry.targetRelativePath))
         .map((entry) => entry.targetRelativePath);
       const secondaryRequirementIds = spec.requirements
         .filter((requirement) => requirement.id !== request.requirementTestBinding.requirementId)
@@ -6181,7 +6514,19 @@ function validatePayload(request, submission, state, { bootstrapObservationAutho
         secondaryRequirementIds,
         candidatePaths,
       });
-      if (!result.ok) throw new Error(formatValidationMessages(result.result).join("; "));
+      if (!result.ok) {
+        // Header and primary-Requirement attribution defects are semantic
+        // evidence, not transport. Build the exact immutable candidate input
+        // now, after the sealed payload's digests and path authority have
+        // already been verified. The lifecycle connector owns publication and
+        // routing this typed result to test-repair atomically.
+        return new RequirementTestStructuralHandoffResult({
+          request,
+          submission,
+          validation: new RequirementTestHeaderRecoverableHandoffValidation(result),
+          publications: canonicalHandoffPublications(request, submission),
+        });
+      }
       const bootstrapValidation = new SpecTestBootstrapValidator({
         payloadSpecDir: validationRoot,
         canonicalSpecDir: CanonicalWorkerTestTree.artifactRoot({
@@ -6191,34 +6536,21 @@ function validatePayload(request, submission, state, { bootstrapObservationAutho
         repositoryRoot: request.mainRoot,
         executionRoot: request.executionRoot,
       }).validate();
-      if (!bootstrapValidation.ok && !(bootstrapObservationAuthority instanceof SpecTestBootstrapObservationAuthority
-        && bootstrapObservationAuthority.accepts(request))) {
-        bootstrapValidation.assertValid();
+      if (!bootstrapValidation.ok) {
+        // The sealed candidate is authoritative and intact. An unresolved
+        // static import is semantic repair evidence, never a provider-format
+        // retry or a deferred observation on the active test tree.
+        return new RequirementTestStructuralHandoffResult({
+          request,
+          submission,
+          validation: new RequirementTestBootstrapRecoverableHandoffValidation(bootstrapValidation),
+          publications: canonicalHandoffPublications(request, submission),
+        });
       }
-      assertTestReviewRepairMadeProgress(request, submission, state, "spec-tests");
-      return bootstrapValidation.ok ? null : bootstrapValidation;
+      return null;
     }
   } catch (cause) {
     if (cause instanceof WorkerArtifactHandoffError) throw cause;
-    if (cause instanceof SpecTestBootstrapValidationError) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        SPEC_TEST_BOOTSTRAP_ERROR_CODE,
-        `worker artifact payload failed ${request.stepId} validation: ${cause.message}`,
-        {
-          cause,
-          retryable: true,
-          data: {
-            stepId: request.stepId,
-            handoffDirectory: request.directory,
-            actionDigest: request.actionDigest,
-            inputDigest: request.inputDigest,
-            inputRevision: request.inputRevision,
-            bootstrapIssues: cause.validation.issues.map((issue) => issue.toString()),
-          },
-        },
-      );
-    }
     if (cause instanceof SpecRepairOperationsError) {
       throw new WorkerArtifactHandoffError(
         "invalid",
@@ -6270,7 +6602,10 @@ function readSubmission(request) {
     ({ document } = boundedJson(
       request.submissionPath,
       "sealed worker artifact handoff",
-      { retryableMalformedJson: true },
+      // This is the only runtime file whose absence is a provider/worker
+      // output condition.  Requests, manifests, authority checkpoints, and
+      // payload members deliberately use the default fail-closed reader.
+      { retryableMalformedJson: true, transport: "worker-submission" },
     ));
   } catch (error) {
     if (error instanceof WorkerArtifactHandoffError) throw error;
@@ -6640,13 +6975,22 @@ function canonicalHandoffPublications(request, submission) {
     artifactBaselines.set(relativePath, baseline);
   };
   for (const input of request.inputs) {
-    if (request.policy.inputContract.virtualInputs.includes(input.targetRelativePath)) continue;
+    if (request.policy.inputContract.virtualInputs.includes(input.targetRelativePath)
+      || (request.testReviewRepair !== null && input.targetRelativePath === "requirement-test-review.json")) continue;
     const address = CanonicalWorkerArtifactAddress.from(input.targetRelativePath);
+    const canonicalSnapshot = input.targetRelativePath === "spec.json"
+      && REQUIREMENT_TEST_WORKER_STEPS.has(request.stepId)
+      ? address.read({
+        flowManager: request.flowManager,
+        specId: request.specId,
+        consumerNodeId: request.stepId,
+      }).snapshot()
+      : input;
     addArtifactBaseline(new CanonicalFlowArtifactBaseline({
       logicalKey: address.logicalKey,
       parameters: address.parameters,
-      digest: input.digest,
-      byteLength: input.byteLength,
+      digest: canonicalSnapshot.digest,
+      byteLength: canonicalSnapshot.byteLength,
     }));
   }
   for (const entry of submission.payloadManifest) {
@@ -6706,13 +7050,31 @@ function canonicalHandoffPublications(request, submission) {
     ));
   }
   if (testEntries.length > 0) {
+    const primaryTestEntries = testEntries.filter((entry) => !isRequirementTestSupportTarget(entry.targetRelativePath));
+    const submittedSupportEntries = testEntries.filter((entry) => isRequirementTestSupportTarget(entry.targetRelativePath));
+    if (primaryTestEntries.length === 0) {
+      throw new WorkerArtifactHandoffError(
+        "invalid",
+        "FLOW_ARTIFACT_HANDOFF_INVALID",
+        "Requirement test handoff must contain at least one primary test source",
+      );
+    }
+    if (request.testReviewRepair !== null && submittedSupportEntries.length > 0) {
+      throw new WorkerArtifactHandoffError(
+        "invalid",
+        "FLOW_TEST_REVIEW_REPAIR_SCOPE_INVALID",
+        "Requirement test repair may not change shared support artifacts",
+      );
+    }
     const baseline = canonicalTestTreeBaselineForPublication(request);
+    const candidateStore = new RequirementTestArtifactStore({
+      flowManager: request.flowManager,
+      state: request.state,
+    });
+    let currentCandidate = null;
     if (request.requirementTestBinding?.candidateBaseline !== null
       && request.requirementTestBinding?.candidateBaseline !== undefined) {
-      const currentCandidate = new RequirementTestArtifactStore({
-        flowManager: request.flowManager,
-        state: request.state,
-      }).readCandidate({
+      currentCandidate = candidateStore.readCandidate({
         bundle: request.requirementTestBinding.candidateBaseline.bundle,
         consumerNodeId: request.stepId,
       });
@@ -6726,8 +7088,8 @@ function canonicalHandoffPublications(request, submission) {
       currentCandidate.baselines.forEach(addArtifactBaseline);
     }
     const replacement = request.testReviewRepair === null
-      ? new CanonicalWorkerTestTree(testEntries).replacement(baseline)
-      : new CanonicalWorkerTestTree(testEntries).repairComposition({
+      ? new CanonicalWorkerTestTree(primaryTestEntries).replacement(baseline)
+      : new CanonicalWorkerTestTree(primaryTestEntries).repairComposition({
         baseline,
         allowedTestPaths: request.workerVisibleTestReviewRepair.batch.allowedTestPaths,
         canonicalEntries: request.testReviewRepairProgress.stagedSources,
@@ -6753,7 +7115,40 @@ function canonicalHandoffPublications(request, submission) {
           : request.workerVisibleTestReviewRepair.blockingFindings.map((finding) => finding.fingerprint),
       }),
     });
-    const candidate = new RequirementTestCandidateBundle({ bundle, sources });
+    // Candidate manifests are the single provenance authority for both
+    // primary-path reservations and shared support reuse. Build that view
+    // once for this publication so the number of support files cannot turn
+    // manifest validation into repeated catalog scans.
+    const provenanceIndex = candidateStore.candidateProvenanceIndex({
+      consumerNodeId: request.stepId,
+    });
+    const supportPublications = request.testReviewRepair === null
+      ? submittedSupportEntries.map((entry) => {
+        const existing = candidateStore.resolveExistingSupport({
+          consumerNodeId: request.stepId,
+          supportPath: entry.targetRelativePath,
+          bytes: entry.bytes,
+          provenanceIndex,
+        });
+        if (existing !== null) addArtifactBaseline(existing.baseline);
+        return Object.freeze({
+          support: existing?.support ?? RequirementTestSupportArtifact.fromBytes({
+            ownerRequirementId: binding.requirementId,
+            supportPath: entry.targetRelativePath,
+            bytes: entry.bytes,
+          }),
+          bytes: Buffer.from(entry.bytes),
+          publish: existing === null,
+        });
+      })
+      : currentCandidate.candidate.support.map((entry) => Object.freeze({
+        support: entry,
+        bytes: null,
+        publish: false,
+      }));
+    const support = supportPublications.map((entry) => entry.support);
+    const candidate = new RequirementTestCandidateBundle({ bundle, sources, support });
+    candidateStore.assertCandidatePrimaryPathsAvailable(candidate, provenanceIndex);
     requirementTestCandidate = candidate;
     const parameters = { requirementId: binding.requirementId, bundleRevision: String(binding.bundleRevision) };
     artifactWrites.push(...replacement.artifactWrites.map((entry) => ({
@@ -6761,7 +7156,12 @@ function canonicalHandoffPublications(request, submission) {
       parameters: { ...parameters, testPath: entry.parameters.testPath },
       mediaType: entry.mediaType,
       bytes: entry.bytes,
-    })), {
+    })), ...(
+      request.testReviewRepair === null
+        ? supportPublications.filter((entry) => entry.publish)
+          .map((entry) => requirementTestSupportPublication(entry.support, entry.bytes))
+        : []
+    ), {
       logicalKey: "test.requirement.candidate.bundle",
       parameters,
       mediaType: "application/json",
@@ -6806,67 +7206,18 @@ function canonicalHandoffPublications(request, submission) {
   });
 }
 
-/** Typed publication for the latest bootstrap validation of a canonical test tree. */
-class CanonicalSpecTestBootstrapObservationPublication {
-  constructor({ request, submission, validation }) {
-    if (request.stepId !== "test") {
-      throw new Error("bootstrap observation publication requires the test step");
-    }
-    this.observation = new SpecTestBootstrapObservation({
-      actionDigest: request.actionDigest,
-      inputDigest: request.inputDigest,
-      inputRevision: request.inputRevision,
-      handoffDigest: submission.handoffDigest,
-      issues: validation?.issues ?? [],
-    });
-    this.bytes = Buffer.from(`${JSON.stringify(this.observation.toJSON(), null, 2)}\n`, "utf8");
-    this.artifactDigest = digest(this.bytes);
-    Object.freeze(this);
-  }
-
-  artifactWrite() {
-    return Object.freeze({
-      logicalKey: "test.bootstrap.observation",
-      parameters: {},
-      mediaType: "application/json",
-      bytes: this.bytes,
-    });
-  }
-
-  artifactReference() {
-    return Object.freeze({ kind: "test-bootstrap-observation", id: this.artifactDigest });
-  }
-}
-
-function withBootstrapObservationPublication(publications, request, submission, bootstrapValidation) {
-  if (request.stepId !== "test") return { publications, bootstrapObservation: null };
-  const bootstrapObservation = new CanonicalSpecTestBootstrapObservationPublication({
-    request, submission, validation: bootstrapValidation,
-  });
-  return {
-    publications: Object.freeze({
-      ...publications,
-      artifactWrites: Object.freeze([...publications.artifactWrites, bootstrapObservation.artifactWrite()]),
-    }),
-    bootstrapObservation,
-  };
-}
-
 function canonicalHandoffResult(request, submission, now, {
-  status = "done", bootstrapValidation = null, bootstrapObservation = null, noChangeReason = null,
+  status = "done", noChangeReason = null,
 } = {}) {
   return Object.freeze({
     outcome: status === "skipped" ? "skipped" : "passed",
     summary: noChangeReason !== null
       ? `Worker handoff confirmed for ${request.stepId}; no source change: ${noChangeReason}.`
-      : bootstrapValidation === null
-      ? `Worker handoff confirmed for ${request.stepId}.`
-      : `Worker handoff confirmed for ${request.stepId}; unresolved static test imports are deferred to scenario validity.`,
+      : `Worker handoff confirmed for ${request.stepId}.`,
     confirmedAt: now().toISOString(),
     artifactRefs: [
       { kind: "worker-handoff", id: submission.handoffDigest },
       { kind: "worker-handoff-request", id: request.requestDigest },
-      ...(bootstrapObservation === null ? [] : [bootstrapObservation.artifactReference()]),
     ],
   });
 }
@@ -7835,7 +8186,7 @@ export class WorkerArtifactHandoffCoordinator {
       : null;
   }
 
-  reconcile({ ctx, request, mutationAuthority = null, bootstrapObservationAuthority = null }) {
+  reconcile({ ctx, request, mutationAuthority = null }) {
     if (!(request instanceof WorkerArtifactHandoffRequest)) return null;
     // A sealed V1 payload sits in `.runtime/` until the parent accepts it.
     // Validate that untrusted surface before loading the Version Store: a
@@ -7902,12 +8253,12 @@ export class WorkerArtifactHandoffCoordinator {
       mutationAuthority = this.sourceMutationAuthority({ ctx, request });
     }
     return this.#reconcileCanonical({
-      ctx, request, state, submission, mutationAuthority, bootstrapObservationAuthority,
+      ctx, request, state, submission, mutationAuthority,
     });
   }
 
   #reconcileCanonical({
-    ctx, request, state, submission = null, mutationAuthority = null, bootstrapObservationAuthority = null,
+    ctx, request, state, submission = null, mutationAuthority = null,
   }) {
     const committed = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
     if (committed !== null) {
@@ -7919,13 +8270,13 @@ export class WorkerArtifactHandoffCoordinator {
         payloadDigest: null,
       };
     }
-    let bootstrapValidation = null;
+    let recoverableValidation = null;
     try {
       const resolvedSubmission = submission ?? readSubmission(request);
       if (submission === null) validateSubmission(request, resolvedSubmission);
       submission = resolvedSubmission;
       request.assertCurrent(state);
-      bootstrapValidation = validatePayload(request, submission, state, { bootstrapObservationAuthority }) ?? null;
+      recoverableValidation = validatePayload(request, submission, state) ?? null;
     } catch (cause) {
       throw cause instanceof WorkerArtifactHandoffError
         ? cause
@@ -7934,7 +8285,10 @@ export class WorkerArtifactHandoffCoordinator {
             "FLOW_ARTIFACT_HANDOFF_INVALID",
             `canonical worker artifact handoff is invalid: ${cause.message}`,
             { cause },
-      );
+          );
+    }
+    if (recoverableValidation instanceof RequirementTestStructuralHandoffResult) {
+      throw new RequirementTestStructuralHandoffError(recoverableValidation);
     }
     if (request.policy.kind === "source") {
       return this.#reconcileSource({ ctx, request, submission, mutationAuthority });
@@ -7953,7 +8307,6 @@ export class WorkerArtifactHandoffCoordinator {
       );
     }
     let publications;
-    let bootstrapObservation = null;
     try {
       publications = canonicalHandoffPublications(request, submission);
     } catch (cause) {
@@ -7966,12 +8319,6 @@ export class WorkerArtifactHandoffCoordinator {
             { cause, retryable: false },
         );
     }
-    ({ publications, bootstrapObservation } = withBootstrapObservationPublication(
-      publications,
-      request,
-      submission,
-      bootstrapValidation,
-    ));
     let repairCheckpoint = null;
     try {
       repairCheckpoint = testReviewRepairProgressPublication(request, submission, publications);
@@ -8042,17 +8389,13 @@ export class WorkerArtifactHandoffCoordinator {
         }
         const confirmation = {
           specId: request.specId,
-          result: canonicalHandoffResult(request, submission, this.now, { bootstrapValidation, bootstrapObservation }),
+          result: canonicalHandoffResult(request, submission, this.now),
           references: {
             evaluations: [],
             findings: [],
             repairs: [],
             artifacts: [
               { id: submission.handoffDigest, label: request.stepId },
-              ...(bootstrapObservation === null ? [] : [{
-                id: bootstrapObservation.artifactDigest,
-                label: "test.bootstrap.observation",
-              }]),
             ],
           },
           specRecord: publications.specRecord,
@@ -8067,11 +8410,16 @@ export class WorkerArtifactHandoffCoordinator {
             decision: publications.draftCoverageRepairDecision,
             draft: publications.draftCoverageRepairDraft,
           });
-        } else if (new Set(["test-generate", "test-repair"]).has(request.stepId)) {
-          const planRead = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state })
+        } else if (REQUIREMENT_TEST_WORKER_STEPS.has(request.stepId)) {
+          // A repair-progress publication may have refreshed the runtime
+          // object while preserving the same Attempt. Re-read the canonical
+          // state for Definition authority rather than retaining that stale
+          // in-memory object across the publication boundary.
+          const lifecycleState = ctx.flowManager.loadReadOnly(request.specId);
+          const planRead = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state: lifecycleState })
             .readPlan(request.stepId);
           const decision = resolveRequirementTestLifecycle(new RequirementTestLifecycleFacts({
-            authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
+            authority: RequirementTestLifecycleAuthority.capture({ state: lifecycleState, planDescriptor: planRead.descriptor }),
             plan: planRead.artifact.plan,
             leaf: request.stepId,
             observation: publications.requirementTestCandidate,

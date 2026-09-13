@@ -36,6 +36,7 @@ import {
   TaskNoChangeContinuationFacts, selectTaskNoChangeContinuation,
   initializeRequirementTestLifecycle,
   RequirementTestLifecycleFacts,
+  RequirementTestStructuralRejectionObservation,
   RequirementTestStepObservation,
   resolveRequirementTestLifecycle,
 } from "../definition.js";
@@ -109,6 +110,7 @@ import { CanonicalSpecApproval } from "./canonical-spec-approval.js";
 import {
   RequirementTestCandidateBundle,
   RequirementTestDeferredReceipt,
+  RequirementTestFailureArtifact,
   RequirementTestGateResult,
   RequirementTestPlanArtifact,
 } from "./requirement-test-artifacts.js";
@@ -493,10 +495,28 @@ function sameRequirementTestObservation(left, right) {
       bundleRevision: value?.bundleRevision,
       candidateDigest: value?.candidateDigest,
       sourceAttempt: value?.sourceAttempt,
+      semanticFindingFingerprint: value?.semanticFindingFingerprint,
       kind: value?.kind,
     };
   };
   return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
+}
+
+function requirementTestToolingFailureFinding({ nodeId, workItem, candidate, attempt, reason } = {}) {
+  const content = {
+    findingId: `${nodeId}:${workItem.requirementId}:tooling:${attempt.sequence}`,
+    requirementId: workItem.requirementId,
+    category: "tooling_failure",
+    reason,
+    bundleRevision: candidate?.bundle.revision ?? null,
+    candidateDigest: candidate?.digest ?? null,
+    sourceAttempt: { id: attempt.id, sequence: attempt.sequence },
+    specRevision: workItem.specRevision.toJSON(),
+  };
+  return Object.freeze({
+    ...content,
+    fingerprint: crypto.createHash("sha256").update(JSON.stringify(content)).digest("hex"),
+  });
 }
 
 function reviewObservationFromPublication(payload, facts) {
@@ -511,6 +531,9 @@ function reviewObservationFromPublication(payload, facts) {
     bundleRevision: payload.bundleRevision,
     candidateDigest: payload.candidateDigest,
     sourceAttempt: payload.sourceAttempt,
+    semanticFindingFingerprint: kind === "semantic_rejection"
+      ? payload.canonicalEvidence?.blockingFindings?.[0]?.fingerprint ?? null
+      : null,
     kind,
   });
 }
@@ -520,7 +543,7 @@ function reviewObservationFromPublication(payload, facts) {
  * snapshot held by the Version Store publication lock.
  */
 class RequirementTestLifecycleAdmission {
-  constructor({ manager, state, decision, artifactWrites, commandResult, currentCandidateRead = null } = {}) {
+  constructor({ manager, state, decision, artifactWrites, artifactBaselines = [], commandResult, currentCandidateRead = null, externalBlock = false } = {}) {
     if (!(decision instanceof RequirementTestLifecycleDecision)
       || !(decision.facts instanceof RequirementTestLifecycleFacts)) {
       throw new CurrentFlowStateInvariantError("Requirement test settlement requires a typed Definition decision with facts");
@@ -564,17 +587,32 @@ class RequirementTestLifecycleAdmission {
           descriptor: source.descriptor,
         }));
       }
+      for (const source of currentCandidateRead.support) {
+        candidateIdentities.push(new RequirementTestPublicationIdentity({
+          logicalKey: "test.requirement.support",
+          parameters: {
+            ownerRequirementId: source.support.ownerRequirementId,
+            supportPath: source.support.supportPath.slice("tests/".length),
+            supportDigest: source.support.digest,
+          },
+          descriptor: source.descriptor,
+        }));
+      }
     }
     let observation = facts.observation;
     if (new Set(["test-generate", "test-repair"]).has(authority.leaf)
-      && observation instanceof RequirementTestCandidateBundle) {
+      && (observation instanceof RequirementTestCandidateBundle
+        || observation instanceof RequirementTestStructuralRejectionObservation)) {
+      const observedCandidate = observation instanceof RequirementTestStructuralRejectionObservation
+        ? observation.candidate
+        : observation;
       const parameters = {
-        requirementId: observation.bundle.requirementId,
-        bundleRevision: String(observation.bundle.revision),
+        requirementId: observedCandidate.bundle.requirementId,
+        bundleRevision: String(observedCandidate.bundle.revision),
       };
       const manifestWrite = exactRequirementTestWrite(artifactWrites, "test.requirement.candidate.bundle", parameters);
       const published = RequirementTestCandidateBundle.fromJSON(JSON.parse(manifestWrite.bytes.toString("utf8")));
-      if (!sameRequirementTestObservation(observation, published)) {
+      if (!sameRequirementTestObservation(observedCandidate, published)) {
         throw new CurrentFlowStateInvariantError("Requirement test candidate publication does not match Definition facts");
       }
       candidateIdentities.push(new RequirementTestPublicationIdentity({
@@ -583,7 +621,7 @@ class RequirementTestLifecycleAdmission {
         descriptor: catalogDescriptor(manager, state.specId, "test.requirement.candidate.bundle", parameters),
         pendingBytes: manifestWrite.bytes,
       }));
-      for (const source of observation.sources) {
+      for (const source of observedCandidate.sources) {
         const sourceParameters = { ...parameters, testPath: source.testPath.slice("tests/".length) };
         const write = exactRequirementTestWrite(artifactWrites, "test.requirement.candidate.source", sourceParameters);
         if (write.bytes.length !== source.byteLength
@@ -597,7 +635,51 @@ class RequirementTestLifecycleAdmission {
           pendingBytes: write.bytes,
         }));
       }
-    } else if (authority.leaf === "test-review" || authority.leaf === "test-gate") {
+      const supportWrites = artifactWrites.filter((entry) => entry.logicalKey === "test.requirement.support");
+      if (authority.leaf === "test-repair" && supportWrites.length !== 0) {
+        throw new CurrentFlowStateInvariantError("Requirement test repair may not replace shared support artifacts");
+      }
+      if (supportWrites.length > observedCandidate.support.length) {
+        throw new CurrentFlowStateInvariantError("Requirement test candidate publishes undeclared support artifacts");
+      }
+      for (const support of observedCandidate.support) {
+        const supportParameters = {
+          ownerRequirementId: support.ownerRequirementId,
+          supportPath: support.supportPath.slice("tests/".length),
+          supportDigest: support.digest,
+        };
+        const write = supportWrites.find((entry) => (
+          entry.logicalKey === "test.requirement.support"
+          && JSON.stringify(entry.parameters ?? {}) === JSON.stringify(supportParameters)
+        )) ?? null;
+        if (write !== null) {
+          const write = exactRequirementTestWrite(artifactWrites, "test.requirement.support", supportParameters);
+          if (!support.matchesBytes(write.bytes)) {
+            throw new CurrentFlowStateInvariantError(`Requirement test support publication changed: ${support.supportPath}`);
+          }
+          candidateIdentities.push(new RequirementTestPublicationIdentity({
+            logicalKey: "test.requirement.support",
+            parameters: supportParameters,
+            descriptor: catalogDescriptor(manager, state.specId, "test.requirement.support", supportParameters),
+            pendingBytes: write.bytes,
+          }));
+          continue;
+        }
+        const baseline = artifactBaselines.map((entry) => CanonicalFlowArtifactBaseline.from(entry)).find((entry) => (
+          entry.artifact.logicalKey === "test.requirement.support"
+          && JSON.stringify(entry.artifact.parameters) === JSON.stringify(supportParameters)
+          && entry.digest === support.digest
+          && entry.byteLength === support.byteLength
+        )) ?? null;
+        const descriptor = catalogDescriptor(manager, state.specId, "test.requirement.support", supportParameters);
+        if (baseline === null || descriptor === null || descriptor.hash !== support.digest || descriptor.size !== support.byteLength) {
+          throw new CurrentFlowStateInvariantError(`Requirement test support lacks an exact write or baseline: ${support.supportPath}`);
+        }
+        candidateIdentities.push(new RequirementTestPublicationIdentity({
+          logicalKey: "test.requirement.support", parameters: supportParameters, descriptor,
+        }));
+      }
+    } else if (!externalBlock && (authority.leaf === "test-review" || authority.leaf === "test-gate")) {
       const attached = attachedCanonicalCommandResultArtifact(commandResult);
       const logicalKey = authority.leaf === "test-review" ? "test.requirement.review" : "test.requirement.gate";
       if (attached?.logicalKey !== logicalKey) {
@@ -3438,18 +3520,19 @@ export class CanonicalFlowManagerStore {
         throw new CurrentFlowStateInvariantError("Requirement test deferral requires its exact receipt and deferred findings publication");
       }
       const active = currentPlan.artifact.plan.activeWorkItem();
-      const candidateRead = active.bundleRevision === null
+      const settled = nextPlan.workItem(active.requirementId);
+      const candidate = selected.candidateBundle ?? (active.bundleRevision === null
         ? null
-        : store.readCandidate({ bundle: active.bundleRevision, consumerNodeId: nodeId });
+        : store.readCandidate({ bundle: active.bundleRevision, consumerNodeId: nodeId }).candidate);
       const expectedFingerprints = findingsPublication.deferred.map((finding) => finding.fingerprint).sort();
-      if (deferredReceipt.requirementId !== active.requirementId
-        || !deferredReceipt.specRevision.equals(active.specRevision)
-        || deferredReceipt.expectation.toString() !== active.expectation.toString()
-        || JSON.stringify(deferredReceipt.budget.toJSON()) !== JSON.stringify(active.budget.toJSON())
+      if (deferredReceipt.requirementId !== settled.requirementId
+        || !deferredReceipt.specRevision.equals(settled.specRevision)
+        || deferredReceipt.expectation.toString() !== settled.expectation.toString()
+        || JSON.stringify(deferredReceipt.budget.toJSON()) !== JSON.stringify(settled.budget.toJSON())
         || deferredReceipt.sourceAttempt.id !== state.attempt.id
         || deferredReceipt.sourceAttempt.sequence !== state.attempt.sequence
-        || deferredReceipt.bundleRevision !== (active.bundleRevision?.revision ?? null)
-        || deferredReceipt.candidateDigest !== (candidateRead?.candidate.digest ?? null)
+        || deferredReceipt.bundleRevision !== (settled.bundleRevision?.revision ?? null)
+        || deferredReceipt.candidateDigest !== (candidate?.digest ?? null)
         || JSON.stringify([...deferredReceipt.sourceFindingFingerprints].sort()) !== JSON.stringify(expectedFingerprints)) {
         throw new CurrentFlowStateInvariantError("Requirement test deferred receipt does not match its active canonical evidence");
       }
@@ -3484,9 +3567,24 @@ export class CanonicalFlowManagerStore {
       state,
       decision: selected,
       artifactWrites: writes,
+      artifactBaselines: baselines,
       commandResult,
       currentCandidateRead,
     });
+    // A non-final generated candidate advances only the plan frontier.  It
+    // must not confirm (or recreate) the still-live generator Attempt: each
+    // Requirement is a typed publication/progress Activity in that one
+    // Attempt, and only the final candidate settles it into test-review.
+    if (selected.continuesSourceAttempt) {
+      return this.publishArtifacts({
+        specId: resolved,
+        nodeId,
+        artifactWrites: writes,
+        artifactRemovals: removals,
+        artifactBaselines: baselines,
+        admission: lifecycleAdmission,
+      });
+    }
     return this.runtime.completeRequirementTestLifecycle({
       specId: resolved,
       activityId: activityId("requirement-test-lifecycle-completed"),
@@ -3505,14 +3603,162 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  /** Convert a generate/repair tooling failure into the bounded Definition-owned lifecycle. */
-  completeRequirementTestToolingFailure({ specId = null, message } = {}) {
+  /**
+   * Persist one sealed, recoverable candidate-structure failure and let the
+   * Definition select its normal semantic repair/defer route.  The caller
+   * supplies only the handoff result; it cannot choose a lifecycle target.
+   */
+  completeRequirementTestStructuralHandoff({ specId = null, structuralResult } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const input = structuralResult?.connectorInput instanceof Function
+      ? structuralResult.connectorInput()
+      : structuralResult;
+    if (input === null || typeof input !== "object" || Array.isArray(input)) {
+      throw new CurrentFlowStateInvariantError("Requirement test structural handoff requires typed connector input");
+    }
+    const state = this.runtime.load(resolved);
+    const nodeId = state.current?.at(-1) ?? null;
+    const store = new RequirementTestArtifactStore({ flowManager: this, state });
+    const planRead = store.readPlan(nodeId);
+    const observation = new RequirementTestStructuralRejectionObservation({
+      stepId: input.stepId,
+      binding: input.binding,
+      candidate: input.candidate,
+      finding: input.finding,
+    });
+    const facts = new RequirementTestLifecycleFacts({
+      authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
+      plan: planRead.artifact.plan,
+      leaf: nodeId,
+      observation,
+    });
+    const decision = resolveRequirementTestLifecycle(facts);
+    const failureArtifact = new RequirementTestFailureArtifact({
+      requirementId: observation.requirementId,
+      bundleRevision: observation.bundleRevision,
+      fingerprint: observation.finding.fingerprint,
+    });
+    const failureWrite = {
+      ...failureArtifact.artifactWrite({ sourceStepId: nodeId, blockingFindings: [observation.finding.toJSON()] }),
+    };
+    let deferredReceipt = null;
+    let findingsPublication = null;
+    if (decision.disposition === "defer") {
+      const sourceArtifact = failureArtifact.relativePath;
+      findingsPublication = buildDeferredSemanticFindingsPublication({
+        flowManager: this,
+        flowState: this.loadReadOnly(resolved),
+        nodeId,
+        sourceStep: nodeId,
+        sourceArtifact,
+        sourcePayload: { blockingFindings: [observation.finding.toJSON()] },
+        sourceRelativePath: sourceArtifact,
+        attempts: facts.workItem.budget.autoSemantic + facts.workItem.budget.manualSemantic + facts.workItem.budget.tooling + 1,
+      });
+      deferredReceipt = new RequirementTestDeferredReceipt({
+        requirementId: facts.workItem.requirementId,
+        specRevision: facts.workItem.specRevision,
+        bundleRevision: observation.candidate.bundle.revision,
+        candidateDigest: observation.candidate.digest,
+        expectation: facts.workItem.expectation,
+        budget: facts.workItem.budget,
+        sourceAttempt: { id: state.attempt.id, sequence: state.attempt.sequence },
+        sourceArtifact,
+        sourceFindingFingerprints: findingsPublication.deferred.map((finding) => finding.fingerprint),
+      });
+    }
+    return this.completeRequirementTestLifecycle({
+      specId: resolved,
+      decision,
+      result: {
+        outcome: "passed",
+        summary: `Requirement test structural finding recorded for ${observation.requirementId}`,
+        confirmedAt: new Date().toISOString(),
+        artifactRefs: [],
+      },
+      artifactWrites: [...input.publications.artifactWrites, failureWrite],
+      artifactRemovals: input.publications.artifactRemovals,
+      artifactBaselines: input.publications.artifactBaselines,
+      deferredReceipt,
+      findingsPublication,
+    });
+  }
+
+  /**
+   * Stop a Requirement-test worker that cannot be authorized to proceed.
+   * This is a Definition-selected external block, deliberately separate from
+   * retryable tooling so unavailable credentials never consume an R budget.
+   */
+  completeRequirementTestExternalFailure({ specId = null, failure, commandResult = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
     const nodeId = state.current?.at(-1) ?? null;
-    if (!new Set(["test-generate", "test-repair"]).has(nodeId) || state.attempt === null) {
-      throw new CurrentFlowStateInvariantError("Requirement test tooling failure requires an active generate or repair Attempt");
+    if (!new Set(["test-generate", "test-review", "test-repair"]).has(nodeId) || state.attempt === null) {
+      throw new CurrentFlowStateInvariantError("Requirement test external failure requires an active generate, review, or repair Attempt");
+    }
+    const message = requiredText(failure?.message, "Requirement test external failure message");
+    const store = new RequirementTestArtifactStore({ flowManager: this, state });
+    const planRead = store.readPlan(nodeId);
+    const workItem = planRead.artifact.plan.activeWorkItem();
+    const candidateRead = workItem.bundleRevision === null
+      ? null
+      : store.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: nodeId });
+    const facts = new RequirementTestLifecycleFacts({
+      authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
+      plan: planRead.artifact.plan,
+      leaf: nodeId,
+      observation: new RequirementTestStepObservation({
+        requirementId: workItem.requirementId,
+        specRevision: workItem.specRevision,
+        bundleRevision: workItem.bundleRevision?.revision ?? null,
+        candidateDigest: candidateRead?.candidate.digest ?? null,
+        sourceAttempt: candidateRead?.candidate.bundle.lineage.sourceAttempt ?? null,
+        kind: "external_blocked",
+      }),
+      candidateBundle: candidateRead?.candidate ?? null,
+    });
+    const decision = resolveRequirementTestLifecycle(facts);
+    if (decision.disposition !== "external_blocked") {
+      throw new CurrentFlowStateInvariantError("Requirement test external failure Definition route changed");
+    }
+    const admission = new RequirementTestLifecycleAdmission({
+      manager: this,
+      state,
+      decision,
+      artifactWrites: [],
+      currentCandidateRead: candidateRead,
+      externalBlock: true,
+    });
+    return this.failCurrentAttempt({
+      specId: resolved,
+      failure: {
+        category: "external",
+        code: requiredText(failure?.code ?? "REQUIREMENT_TEST_EXTERNAL_BLOCKED", "Requirement test external failure code"),
+        message,
+        retryable: false,
+        retryKind: null,
+      },
+      result: {
+        outcome: "failed",
+        summary: message,
+        confirmedAt: new Date().toISOString(),
+        artifactRefs: [],
+      },
+      commandResult,
+      admission,
+    });
+  }
+
+  /** Convert a generate/repair tooling failure into the bounded Definition-owned lifecycle. */
+  completeRequirementTestToolingFailure({ specId = null, message, commandResult = null } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const state = this.runtime.load(resolved);
+    const nodeId = state.current?.at(-1) ?? null;
+    if (!new Set(["test-generate", "test-review", "test-repair"]).has(nodeId) || state.attempt === null) {
+      throw new CurrentFlowStateInvariantError("Requirement test tooling failure requires an active generate, review, or repair Attempt");
     }
     const reason = requiredText(message, "Requirement test tooling failure message");
     const store = new RequirementTestArtifactStore({ flowManager: this, state });
@@ -3562,21 +3808,18 @@ export class CanonicalFlowManagerStore {
       }
     }
     if (decision.disposition === "defer") {
-      const sourceArtifact = `steps/test-gate/deferred-source/${workItem.requirementId}.json`;
-      const sourcePayload = {
-        blockingFindings: [{
-          findingId: `${nodeId}:${workItem.requirementId}:tooling`,
-          requirementId: workItem.requirementId,
-          category: "tooling_failure",
-          reason,
-        }],
-      };
-      artifactWrites.push({
-        logicalKey: "test.requirement.failure",
-        parameters: { requirementId: workItem.requirementId },
-        mediaType: "application/json",
-        bytes: Buffer.from(`${JSON.stringify(sourcePayload, null, 2)}\n`, "utf8"),
+      const finding = requirementTestToolingFailureFinding({
+        nodeId, workItem, candidate: candidateRead?.candidate ?? null, attempt: state.attempt, reason,
       });
+      const candidateRevision = candidateRead?.candidate.bundle.revision ?? 1;
+      const failureArtifact = new RequirementTestFailureArtifact({
+        requirementId: workItem.requirementId,
+        bundleRevision: candidateRevision,
+        fingerprint: finding.fingerprint,
+      });
+      const sourceArtifact = failureArtifact.relativePath;
+      const sourcePayload = { sourceStepId: nodeId, blockingFindings: [finding] };
+      artifactWrites.push(failureArtifact.artifactWrite(sourcePayload));
       findingsPublication = buildDeferredSemanticFindingsPublication({
         flowManager: this,
         flowState: this.loadReadOnly(resolved),
@@ -3599,9 +3842,10 @@ export class CanonicalFlowManagerStore {
         sourceFindingFingerprints: findingsPublication.deferred.map((finding) => finding.fingerprint),
       });
     }
-    return this.completeRequirementTestLifecycle({
+    const completion = this.completeRequirementTestLifecycle({
       specId: resolved,
       decision,
+      commandResult,
       result: {
         outcome: "passed",
         summary: `Requirement test tooling failure handled: ${reason}`,
@@ -3614,6 +3858,7 @@ export class CanonicalFlowManagerStore {
       artifactRemovals,
       artifactBaselines,
     });
+    return Object.freeze({ decision, completion });
   }
 
   /**

@@ -4708,6 +4708,17 @@ export class CurrentFlowState {
     if (!(targetAttempt instanceof CurrentAttempt) || targetAttempt.nodeId !== transition.target) {
       throw new CurrentFlowStateInvariantError("Requirement test transition requires its selected target Attempt");
     }
+    if (transition.continuesSourceAttempt) {
+      if (sourceStepId !== "test-generate"
+        || targetAttempt.id !== this.attempt.id
+        || targetAttempt.sequence !== this.attempt.sequence) {
+        throw new CurrentFlowStateInvariantError("Requirement test generation continuation must retain its active Attempt");
+      }
+      // Candidate publication and plan-frontier advancement occur in the
+      // enclosing Version transaction. Keeping this Attempt live makes the
+      // next assigned Requirement part of the same generate episode.
+      return this;
+    }
     const leaves = this.definition.orderedLeaves(this.root);
     const sourceIndex = leaves.findIndex((node) => node.id === sourceStepId);
     const targetIndex = leaves.findIndex((node) => node.id === transition.target);

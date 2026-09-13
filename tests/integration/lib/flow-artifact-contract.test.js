@@ -77,7 +77,7 @@ describe("Flow artifact contract registry", () => {
       [
         "flow.activities", "spec.snapshot", "spec.review", "artifact.catalog",
         "test.requirement.plan", "test.requirement.failure", "test.requirement.candidate.bundle",
-        "test.requirement.candidate.source", "test.requirement.review", "test.requirement.repair.progress",
+        "test.requirement.candidate.source", "test.requirement.support", "test.requirement.review", "test.requirement.repair.progress",
         "test.requirement.gate", "test.requirement.deferred", "acceptance.decision",
         "retry.recovery.baseline", "retry.recovery.receipt",
         "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement",

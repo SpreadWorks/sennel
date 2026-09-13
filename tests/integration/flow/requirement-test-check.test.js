@@ -52,6 +52,26 @@ test("invalid, skipped, and missing execution evidence remain distinct", () => {
   assert.equal(check.observe({ missing: true }).kind, "missing");
 });
 
+test("a named runtime exception is invalid test evidence rather than an expected assertion failure", () => {
+  const check = new RequirementTestCheck({ requirementId: "R6", testName: "R6: behavior" });
+  for (const rawText of [
+    "not ok 1 - R6: behavior\n  error: 'fixture is not defined'\n  code: 'ERR_TEST_FAILURE'\n  name: 'ReferenceError'",
+    "not ok 1 - R6: behavior\n  error: 'candidate crashed'\n  code: 'ERR_TEST_FAILURE'",
+  ]) {
+    assert.equal(check.observe({ process: processResult(1), rawText }).kind, "invalid_test");
+  }
+});
+
+test("runner timeout remains tooling failure even when partial output contains a source error", () => {
+  const result = observeRequirementTest({
+    requirementId: "R7",
+    testName: "R7: behavior",
+    process: processResult(null, { timedOut: true }),
+    rawText: "not ok 1 - R7: behavior\n  name: 'ReferenceError'",
+  });
+  assert.equal(result.kind, "tooling_failure");
+});
+
 test("a different test identity does not satisfy the assigned requirement", () => {
   const result = observeRequirementTest({
     requirementId: "R5",

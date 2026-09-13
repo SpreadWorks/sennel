@@ -40,9 +40,9 @@ import {
   WorkerArtifactHandoffCoordinator,
   WorkerArtifactHandoffError,
   WorkerArtifactRetryExhaustedError,
+  RequirementTestStructuralHandoffError,
   WorkerArtifactHandoffRequest,
   WorkerArtifactWorkerInstructions,
-  SpecTestBootstrapObservationAuthority,
   materializeSourceWorkerEffect,
   sealParentMaterializedSourceWorkerEffect,
   workerArtifactHandoffPolicy,
@@ -102,13 +102,81 @@ const NON_REPLAYABLE_HANDOFF_ERROR_CODES = new Set([
   "FLOW_SOURCE_HANDOFF_FINALIZE_AUTHORITY_VIOLATION",
   "FLOW_SOURCE_HANDOFF_CANONICAL_PATH_VIOLATION",
 ]);
+const REQUIREMENT_TEST_WORKER_LEAVES = new Set(["test-generate", "test-repair"]);
+
+function agentFailuresFor(error, agentError = null) {
+  return Object.freeze([
+    ...(agentError instanceof AgentFailure ? [agentError] : []),
+    ...(Array.isArray(error?.agentFailures) ? error.agentFailures.filter((failure) => failure instanceof AgentFailure) : []),
+  ]);
+}
+
+function isToolingAgentFailure(failure) {
+  return failure instanceof AgentFailure
+    && failure.retryable === true;
+}
+
+function isRequirementTestExternalAgentFailure(failure) {
+  return failure instanceof AgentFailure
+    && failure.requiresExternalIntervention;
+}
+
+function isExternalAgentFailure(error, agentError = null) {
+  return agentFailuresFor(error, agentError).some(isRequirementTestExternalAgentFailure);
+}
+
+function isExplicitWorkerToolingFailure(error, agentError = null) {
+  if (!(error instanceof WorkerArtifactHandoffError)) return false;
+  // A missing sealed submission after the provider never authenticated or
+  // acquired permission is not a handoff transport failure. Preserve that
+  // external boundary instead of letting the absence consume R tooling budget.
+  if (isExternalAgentFailure(error, agentError)) return false;
+  const handoffClass = (value) => value?.transport != null || value?.payloadFormat != null;
+  if (error instanceof WorkerArtifactRetryExhaustedError) {
+    return handoffClass(error.data?.first) && handoffClass(error.data?.second);
+  }
+  if (handoffClass(error.data)) return true;
+  return agentFailuresFor(error, agentError).some(isToolingAgentFailure);
+}
 
 function settleRequirementTestToolingFailure(ctx, attempt, error) {
   const stepId = attempt?.handoffRequest?.stepId ?? null;
-  if (!new Set(["test-generate", "test-repair"]).has(stepId)) return false;
+  if (!REQUIREMENT_TEST_WORKER_LEAVES.has(stepId)
+    || !isExplicitWorkerToolingFailure(error, attempt.agentError)) return false;
   ctx.flowManager.completeRequirementTestToolingFailure({
     specId: attempt.handoffRequest.specId,
     message: error?.message || String(error),
+  });
+  ctx.flowState = ctx.flowManager.loadReadOnly(attempt.handoffRequest.specId);
+  return true;
+}
+
+function settleRequirementTestExternalFailure(ctx, attempt, error) {
+  const stepId = attempt?.handoffRequest?.stepId ?? null;
+  const failure = agentFailuresFor(error, attempt?.agentError)
+    .find(isRequirementTestExternalAgentFailure) ?? null;
+  if (!REQUIREMENT_TEST_WORKER_LEAVES.has(stepId) || failure === null) return false;
+  ctx.flowManager.completeRequirementTestExternalFailure({
+    specId: attempt.handoffRequest.specId,
+    failure,
+  });
+  ctx.flowState = ctx.flowManager.loadReadOnly(attempt.handoffRequest.specId);
+  return true;
+}
+
+/**
+ * A sealed Requirement-test candidate can be structurally unusable while its
+ * authority, identity, digests, and paths are all valid.  That is a semantic
+ * rejection, not a worker/tooling failure: the FlowManager is the only owner
+ * of publishing the candidate, recording its R-bound finding, and selecting
+ * the Definition route in one transaction.
+ */
+function settleRequirementTestStructuralHandoff(ctx, attempt, error) {
+  if (!(error instanceof RequirementTestStructuralHandoffError)
+    || !REQUIREMENT_TEST_WORKER_LEAVES.has(attempt?.handoffRequest?.stepId)) return false;
+  ctx.flowManager.completeRequirementTestStructuralHandoff({
+    specId: attempt.handoffRequest.specId,
+    structuralResult: error.result,
   });
   ctx.flowState = ctx.flowManager.loadReadOnly(attempt.handoffRequest.specId);
   return true;
@@ -286,7 +354,6 @@ export class WorkerArtifactRetryFeedback {
     this.code = error.code;
     this.classification = error.classification;
     this.message = error.message;
-    this.bootstrapObservationAuthority = SpecTestBootstrapObservationAuthority.fromRetryable(error);
     this.remainingCalls = remainingCalls;
     Object.freeze(this);
   }
@@ -772,13 +839,14 @@ export class FlowDispatchWork {
     }
     this.invocation = invocation;
     this.handoffRequest = handoffRequest;
+    this.handoffReference = handoffRequest.toPromptReference();
     Object.freeze(this);
   }
 
   workerInvocation() {
     return new FlowDispatchWorkerInvocation({
       invocation: this.invocation,
-      handoffReference: this.handoffRequest.toPromptReference(),
+      handoffReference: this.handoffReference,
     });
   }
 
@@ -1295,6 +1363,7 @@ export default class RunDispatchCommand extends FlowCommand {
     let handoffAuthority = null;
     let handoffPolicy = null;
     let handoffAuthorityAcquired = false;
+    let work = null;
     let agentOptions = {};
     try {
       handoffPolicy = workerArtifactHandoffPolicy(action.nextAction.step);
@@ -1332,6 +1401,7 @@ export default class RunDispatchCommand extends FlowCommand {
         invocation,
         workerInstructions,
       });
+      work = new FlowDispatchWork(invocation, handoffRequest);
       if (handoffRequest.policy.kind === "source") {
         // The Definition-owned action schema remains the canonical base. A
         // source request may refine only response values it owns immutably
@@ -1362,7 +1432,7 @@ export default class RunDispatchCommand extends FlowCommand {
         };
       }
       if (!(error instanceof WorkerArtifactHandoffError)) throw error;
-      return { error, handoffRequest: null, agentError: null };
+      return { error, handoffRequest, agentError: null };
     }
 
     try {
@@ -1376,7 +1446,6 @@ export default class RunDispatchCommand extends FlowCommand {
         return { error, handoffRequest, agentError: null };
       }
 
-      const work = new FlowDispatchWork(invocation, handoffRequest);
       const holdsSpecRepairMetric = action.nextAction.step === "spec-repair";
       const deferredMetric = handoffRequest
         ? new DeferredAgentInvocationMetric({ flowManager: ctx.flowManager })
@@ -1446,7 +1515,14 @@ export default class RunDispatchCommand extends FlowCommand {
                 // Preserve the existing one-fresh-invocation transport retry
                 // for provider failures. Parse and schema failures are thrown
                 // above as typed handoff errors and remain terminal.
-                { cause: error, retryable: error instanceof AgentFailure, data: { stepId: handoffRequest.stepId } },
+                {
+                  cause: error,
+                  retryable: error instanceof AgentFailure,
+                  data: {
+                    stepId: handoffRequest.stepId,
+                    ...(error instanceof AgentFailure ? { transport: "source-worker-response" } : {}),
+                  },
+                },
               );
         }
       }
@@ -1458,7 +1534,6 @@ export default class RunDispatchCommand extends FlowCommand {
           ctx,
           request: handoffRequest,
           mutationAuthority: workerArtifactAuthority,
-          bootstrapObservationAuthority: retryFeedback?.bootstrapObservationAuthority,
         });
         agentError = null;
       } catch (error) {
@@ -2061,11 +2136,22 @@ export default class RunDispatchCommand extends FlowCommand {
       dispatchCount += 1;
       const deferredMetrics = attempt.deferredMetric ? [attempt.deferredMetric] : [];
       if (attempt.error) {
+        if (settleRequirementTestStructuralHandoff(ctx, attempt, attempt.error)) {
+          await flushDeferredMetrics(deferredMetrics);
+          current = await this.fetchNextAction(target);
+          continue;
+        }
         if (
           attempt.error.retryable !== true
+          || !isExplicitWorkerToolingFailure(attempt.error, attempt.agentError)
           || !attempt.handoffRequest
           || (attempt.handoffRequest.policy.kind === "source" && attempt.sourceRetryAllowed !== true)
         ) {
+          if (settleRequirementTestExternalFailure(ctx, attempt, attempt.error)) {
+            await flushDeferredMetrics(deferredMetrics);
+            current = await this.fetchNextAction(target);
+            continue;
+          }
           if (settleRequirementTestToolingFailure(ctx, attempt, attempt.error)) {
             await flushDeferredMetrics(deferredMetrics);
             current = await this.fetchNextAction(target);
@@ -2136,7 +2222,17 @@ export default class RunDispatchCommand extends FlowCommand {
           if (exhausted instanceof WorkerArtifactHandoffError) {
             exhausted.agentFailures = Object.freeze([firstAgentError, attempt.agentError].filter(Boolean));
           }
+          if (settleRequirementTestExternalFailure(ctx, attempt, exhausted)) {
+            await flushDeferredMetrics(deferredMetrics);
+            current = await this.fetchNextAction(target);
+            continue;
+          }
           if (settleRequirementTestToolingFailure(ctx, attempt, exhausted)) {
+            await flushDeferredMetrics(deferredMetrics);
+            current = await this.fetchNextAction(target);
+            continue;
+          }
+          if (settleRequirementTestStructuralHandoff(ctx, attempt, exhausted)) {
             await flushDeferredMetrics(deferredMetrics);
             current = await this.fetchNextAction(target);
             continue;

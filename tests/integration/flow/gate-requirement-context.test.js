@@ -75,6 +75,7 @@ describe("requirement gate context", () => {
       result: {
         summary: [{
           id: "R1",
+          execution: "executed",
           result: "pass",
           evidence: {
             command: "node --test specs/demo/tests/migration.test.js",
@@ -104,6 +105,7 @@ describe("requirement gate context", () => {
       result: {
         summary: [{
           id: "R1",
+          execution: "deferred_no_active_test",
           result: "deferred",
           deferred_receipt: { sourceArtifact: "steps/test-gate/result.json" },
         }],

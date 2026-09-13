@@ -747,12 +747,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     .withDraftDisposition(draftDisposition);
   const gateSelection = definitionOwnedGateSelection(ctx, state, target);
   const gateDirective = definitionOwnedGateDirective(gateSelection, { state, binding });
-  const strictDirective = target.scope === "flow"
-    ? buildPreimplementationBootstrapDirective(ctx, state, target, binding)
-    : null;
-  const definitionEligibility = strictDirective === null
-    ? definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager)
-    : null;
+  const definitionEligibility = definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager);
   const activationOffer = nonblockingActivationOfferForStrictStop({
     state,
     eligibility: definitionEligibility,
@@ -820,7 +815,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
         : null,
       });
   let selectedDirective = userDecisionDirective ?? draftDecisionDirective ?? approvalDirective ?? activationDirective
-    ?? strictDirective ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
+    ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
   if (selectedDirective instanceof ExecuteStepDirective && target.scope === "task" && target.stepId === "task-review" && typedState.attempt?.failure === null) {
     try { assertReconciledTaskReviewInput({ flowManager: ctx.flowManager, state: typedState, taskId: target.taskId, root: ctx.executionRoot || ctx.root }); }
     catch (error) {

@@ -11,6 +11,7 @@ import { runCmd } from "../../lib/process.js";
 import { VALID_REVIEW_PHASES } from "../../lib/constants.js";
 import { AgentProcessStopEvidence } from "../../lib/agent-failure.js";
 import { AgentRuntimeDirectorySet } from "../../lib/agent.js";
+import { AgentFailure } from "../../lib/agent-failure.js";
 import { FlowCommand } from "./base-command.js";
 import { ReviewProviderTimeoutFailure } from "./current-flow-state.js";
 import { Envelope } from "../../lib/flow-envelope.js";
@@ -149,8 +150,16 @@ const PHASE_REVIEW_PARSERS = {
   draft: { countPattern: /(questions|findings|issues)=(\d+)/, countKey: "issueCount", countWord: "issue(s)", label: "Draft review", commandId: "flow.draft.review" },
 };
 
-function parseToolingOutcome(stderr) {
-  if (!REVIEW_TOOLING_OUTCOME_PATTERN.test(stderr)) return null;
+export function parseToolingOutcome(stderr) {
+  // Provider classification belongs to AgentFailure. Do not grow a second
+  // review-local regex taxonomy: terminal authorization/configuration/usage
+  // failures must survive as an external block, while retryable provider
+  // failures remain bounded Requirement tooling observations.
+  const agentFailure = AgentFailure.from(new Error(stderr));
+  const knownAgentFailure = agentFailure.requiresExternalIntervention || agentFailure.retryable
+    ? agentFailure
+    : null;
+  if (!REVIEW_TOOLING_OUTCOME_PATTERN.test(stderr) && knownAgentFailure === null) return null;
   const stage = stderr.match(/stage=([a-z_]+)/)?.[1] || "communication";
   const attempt = Number(stderr.match(/attempt=(\d+)/)?.[1] || 1);
   const maxAttempts = Number(stderr.match(/maxAttempts=(\d+)/)?.[1] || 1);
@@ -159,8 +168,8 @@ function parseToolingOutcome(stderr) {
     stage,
     attempt,
     maxAttempts,
-    reason: toolingKind,
-    permissionRelated: /permission|EACCES|EPERM|sandbox/i.test(stderr),
+    reason: knownAgentFailure?.message ?? toolingKind,
+    permissionRelated: knownAgentFailure?.requiresExternalIntervention === true,
   });
 }
 

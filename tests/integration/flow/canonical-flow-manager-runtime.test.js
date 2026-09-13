@@ -4580,7 +4580,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(persisted.policy.nonblocking.enabled, true);
     assert.equal(Object.hasOwn(persisted, "nonblocking"), false);
     assert.equal(Object.hasOwn(persisted, "stepAttempts"), false);
-    assert.equal(activities.at(-1).type, "nonblocking_recorded");
+    assert.equal(activities.at(-1).type, "policy_updated");
+    assert.equal(activities.at(-1).transition.operation, "activate_nonblocking");
     assert.equal(activities.at(-1).transition.nonblocking.sourceStep, "test-result-review");
   });
 

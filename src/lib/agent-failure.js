@@ -141,6 +141,12 @@ export class AgentProcessStopEvidence {
   }
 }
 
+const EXTERNAL_INTERVENTION_KINDS = new Set([
+  "authentication",
+  "permission_configuration",
+  "usage_limit",
+]);
+
 export class AgentFailure extends Error {
   constructor({
     message,
@@ -178,6 +184,11 @@ export class AgentFailure extends Error {
       throw new Error("agent failure attemptCount must not exceed maxAttempts");
     }
     return this;
+  }
+
+  /** The provider cannot be retried until credentials, configuration, or quota changes. */
+  get requiresExternalIntervention() {
+    return EXTERNAL_INTERVENTION_KINDS.has(this.kind);
   }
 
   toJSON() {

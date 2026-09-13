@@ -709,61 +709,84 @@ export function promoteCanonicalRequirementTest({
   testPath = `${requirementId.toLowerCase()}.test.js`,
   source = null,
   completion = "gate",
+  resumeStaged = false,
 } = {}) {
   if (!["generate", "review", "gate"].includes(completion)) {
     throw new Error("Requirement test fixture completion must be generate, review, or gate");
   }
   let state = flowManager.canonicalState(specId);
-  if (state.current?.at(-1) !== "test-generate") {
-    throw new Error("Requirement test fixture requires active test-generate");
-  }
-  const generateStore = new RequirementTestArtifactStore({ flowManager, state });
-  const generatePlan = generateStore.readPlan("test-generate");
-  const item = generatePlan.artifact.plan.activeWorkItem();
-  if (item?.requirementId !== requirementId) {
-    throw new Error(`Requirement test fixture expected active ${requirementId}`);
-  }
-  const normalizedPath = testPath.startsWith("tests/") ? testPath : `tests/${testPath}`;
-  const bytes = Buffer.from(source ?? `// spec: ${requirementId}\nimport test from "node:test";\nimport assert from "node:assert/strict";\ntest("${requirementId}: preimplementation expectation", () => assert.fail("expected before implementation"));\n`);
-  const candidateSource = RequirementTestCandidateSource.fromBytes({ testPath: normalizedPath, bytes });
-  const bundle = new RequirementTestBundleRevision({
-    requirementId,
-    specRevision: item.specRevision,
-    revision: 1,
-    paths: [normalizedPath],
-    lineage: new RequirementTestBundleLineage({
+  let item;
+  let candidate;
+  let bundle;
+  let bytes;
+  let facts;
+  if (resumeStaged) {
+    if (completion === "generate" || state.current?.at(-1) !== "test-review") {
+      throw new Error("Requirement test fixture staged resume requires active test-review");
+    }
+    const stagedStore = new RequirementTestArtifactStore({ flowManager, state });
+    const stagedPlan = stagedStore.readPlan("test-review");
+    item = stagedPlan.artifact.plan.activeWorkItem();
+    if (item?.requirementId !== requirementId || item.bundleRevision === null) {
+      throw new Error(`Requirement test fixture expected staged ${requirementId}`);
+    }
+    const staged = stagedStore.readCandidate({ bundle: item.bundleRevision, consumerNodeId: "test-review" });
+    candidate = staged.candidate;
+    bundle = candidate.bundle;
+    bytes = staged.sources[0]?.bytes ?? null;
+    if (bytes === null) throw new Error(`Requirement test fixture staged candidate has no source: ${requirementId}`);
+  } else {
+    if (state.current?.at(-1) !== "test-generate") {
+      throw new Error("Requirement test fixture requires active test-generate");
+    }
+    const generateStore = new RequirementTestArtifactStore({ flowManager, state });
+    const generatePlan = generateStore.readPlan("test-generate");
+    item = generatePlan.artifact.plan.activeWorkItem();
+    if (item?.requirementId !== requirementId) {
+      throw new Error(`Requirement test fixture expected active ${requirementId}`);
+    }
+    const normalizedPath = testPath.startsWith("tests/") ? testPath : `tests/${testPath}`;
+    bytes = Buffer.from(source ?? `// spec: ${requirementId}\nimport test from "node:test";\nimport assert from "node:assert/strict";\ntest("${requirementId}: preimplementation expectation", () => assert.fail("expected before implementation"));\n`);
+    const candidateSource = RequirementTestCandidateSource.fromBytes({ testPath: normalizedPath, bytes });
+    bundle = new RequirementTestBundleRevision({
       requirementId,
       specRevision: item.specRevision,
-      bundleRevision: 1,
-      predecessorRevision: null,
-      sourceAttempt: { id: state.attempt.id, sequence: state.attempt.sequence },
-      sourceFindingFingerprints: [],
-    }),
-  });
-  const candidate = new RequirementTestCandidateBundle({ bundle, sources: [candidateSource] });
-  let facts = new RequirementTestLifecycleFacts({
-    authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: generatePlan.descriptor }),
-    plan: generatePlan.artifact.plan,
-    leaf: "test-generate",
-    observation: candidate,
-  });
-  const parameters = { requirementId, bundleRevision: "1" };
-  flowManager.completeRequirementTestLifecycle({
-    specId,
-    decision: resolveRequirementTestLifecycle(facts),
-    artifactWrites: [{
-      logicalKey: "test.requirement.candidate.source",
-      parameters: { ...parameters, testPath: normalizedPath.slice("tests/".length) },
-      mediaType: "text/javascript",
-      bytes,
-    }, {
-      logicalKey: "test.requirement.candidate.bundle",
-      parameters,
-      mediaType: "application/json",
-      bytes: Buffer.from(`${JSON.stringify(candidate.toJSON())}\n`),
-    }],
-  });
-  if (completion === "generate") return Object.freeze({ candidate, bytes });
+      revision: 1,
+      paths: [normalizedPath],
+      lineage: new RequirementTestBundleLineage({
+        requirementId,
+        specRevision: item.specRevision,
+        bundleRevision: 1,
+        predecessorRevision: null,
+        sourceAttempt: { id: state.attempt.id, sequence: state.attempt.sequence },
+        sourceFindingFingerprints: [],
+      }),
+    });
+    candidate = new RequirementTestCandidateBundle({ bundle, sources: [candidateSource] });
+    facts = new RequirementTestLifecycleFacts({
+      authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: generatePlan.descriptor }),
+      plan: generatePlan.artifact.plan,
+      leaf: "test-generate",
+      observation: candidate,
+    });
+    const parameters = { requirementId, bundleRevision: "1" };
+    flowManager.completeRequirementTestLifecycle({
+      specId,
+      decision: resolveRequirementTestLifecycle(facts),
+      artifactWrites: [{
+        logicalKey: "test.requirement.candidate.source",
+        parameters: { ...parameters, testPath: normalizedPath.slice("tests/".length) },
+        mediaType: "text/javascript",
+        bytes,
+      }, {
+        logicalKey: "test.requirement.candidate.bundle",
+        parameters,
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(candidate.toJSON())}\n`),
+      }],
+    });
+    if (completion === "generate") return Object.freeze({ candidate, bytes });
+  }
 
   state = flowManager.canonicalState(specId);
   const reviewStore = new RequirementTestArtifactStore({ flowManager, state });

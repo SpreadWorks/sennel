@@ -283,14 +283,17 @@ export class WorkerVisibleTestReviewRepair {
       "version", "sourceStepId", "targetStepId", "sourceArtifact", "sourceAttempt",
       "sourceArtifactDigest", "sourceEvidenceId", "sourceCandidate", "blockingFindings", "batch",
     ], "worker-visible selected repair contract");
-    if (value.version !== 3 || value.sourceStepId !== "test-review" || value.targetStepId !== "test-repair"
-      || value.sourceArtifact !== "requirement-test-review.json" || !Number.isSafeInteger(value.sourceAttempt) || value.sourceAttempt < 1) {
+    const sourceIsReview = value.sourceStepId === "test-review" && value.sourceArtifact === "requirement-test-review.json";
+    const sourceIsStructural = new Set(["test-generate", "test-repair"]).has(value.sourceStepId)
+      && value.sourceArtifact === "requirement-test-failure.json";
+    if (value.version !== 3 || (!sourceIsReview && !sourceIsStructural) || value.targetStepId !== "test-repair"
+      || !Number.isSafeInteger(value.sourceAttempt) || value.sourceAttempt < 1) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "worker-visible selected repair contract has invalid identity");
     }
     this.version = 3;
-    this.sourceStepId = "test-review";
+    this.sourceStepId = value.sourceStepId;
     this.targetStepId = "test-repair";
-    this.sourceArtifact = "requirement-test-review.json";
+    this.sourceArtifact = value.sourceArtifact;
     this.sourceAttempt = value.sourceAttempt;
     this.sourceArtifactDigest = requiredDigest(value.sourceArtifactDigest, "worker-visible repair sourceArtifactDigest");
     this.sourceEvidenceId = requiredDigest(value.sourceEvidenceId, "worker-visible repair sourceEvidenceId");
@@ -683,16 +686,22 @@ export function canonicalTestReviewRepairProgress({ flowManager, state, repair, 
  * review Attempt, catalog descriptor, and current cataloged test tree.
  */
 export class CanonicalTestReviewRepair {
-  constructor({ state, attempt, artifactDigest, evidenceId, sourceCandidate, blockingFindings } = {}) {
+  constructor({ state, attempt, artifactDigest, evidenceId, sourceCandidate, blockingFindings, sourceStepId = "test-review", sourceArtifact = "requirement-test-review.json" } = {}) {
     if (state?.schemaRevision !== 3) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test-review repair requires a Version-1 Flow");
     }
     this.version = 2;
     this.runId = requiredString(state.runId, "test review repair runId", 500);
     this.specId = requiredString(state.specId, "test review repair specId", 500);
-    this.sourceStepId = "test-review";
+    const sourceIsReview = sourceStepId === "test-review" && sourceArtifact === "requirement-test-review.json";
+    const sourceIsStructural = new Set(["test-generate", "test-repair"]).has(sourceStepId)
+      && sourceArtifact === "requirement-test-failure.json";
+    if (!sourceIsReview && !sourceIsStructural) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test-review repair source identity is invalid");
+    }
+    this.sourceStepId = sourceStepId;
     this.targetStepId = "test-repair";
-    this.sourceArtifact = "requirement-test-review.json";
+    this.sourceArtifact = sourceArtifact;
     try {
       this.coordinatorAttempt = state.attempt instanceof RequirementTestSourceAttempt
         ? state.attempt
@@ -775,7 +784,7 @@ export class CanonicalTestReviewRepair {
       findings: this.blockingFindings.map((finding) => ({ id: finding.findingId, label: "test-review" })),
       repairs: [],
       artifacts: [
-        { id: this.sourceArtifactDigest, label: "test.requirement.review" },
+        { id: this.sourceArtifactDigest, label: this.sourceArtifact },
         { id: this.sourceCandidate.digest, label: "test.requirement.candidate.bundle" },
       ],
     };
@@ -783,17 +792,6 @@ export class CanonicalTestReviewRepair {
 }
 
 function repairFromCatalog({ flowManager, state, consumerNodeId, reviewAttemptSequence = null }) {
-  const store = new CanonicalTestArtifactStore({ flowManager, state });
-  const current = store.readCurrentAttempt({ logicalKey: "test.requirement.review", consumerNodeId });
-  if (reviewAttemptSequence !== null && current.attempt < reviewAttemptSequence) return null;
-  if (reviewAttemptSequence !== null && current.attempt > reviewAttemptSequence) {
-    throw new TestReviewRepairError(
-      "TEST_REVIEW_REPAIR_ATTEMPT_MISMATCH",
-      "cataloged test-review evidence belongs to a future review Attempt",
-    );
-  }
-  const artifact = current.payload;
-  const evidence = artifact?.canonicalEvidence;
   const requirementStore = new RequirementTestArtifactStore({ flowManager, state });
   const workItem = requirementStore.readPlan(consumerNodeId).artifact.plan.activeWorkItem();
   if (workItem?.status !== "reviewed" || workItem.bundleRevision === null) {
@@ -803,16 +801,102 @@ function repairFromCatalog({ flowManager, state, consumerNodeId, reviewAttemptSe
     );
   }
   const candidateRead = requirementStore.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId });
-  if (
-    artifact?.requirementId !== workItem.requirementId
+  const reviewSource = flowManager.readArtifact({
+    specId: state.specId,
+    logicalKey: "test.requirement.review",
+    consumerNodeId,
+    optional: true,
+  });
+  let current;
+  let artifact;
+  let evidence;
+  let sourceStepId = "test-review";
+  let sourceArtifact = "requirement-test-review.json";
+  let reviewMatches = false;
+  if (reviewSource !== null) {
+    const store = new CanonicalTestArtifactStore({ flowManager, state });
+    current = store.readCurrentAttempt({ logicalKey: "test.requirement.review", consumerNodeId });
+    if (reviewAttemptSequence !== null && current.attempt < reviewAttemptSequence) return null;
+    if (reviewAttemptSequence !== null && current.attempt > reviewAttemptSequence) {
+      throw new TestReviewRepairError(
+        "TEST_REVIEW_REPAIR_ATTEMPT_MISMATCH",
+        "cataloged test-review evidence belongs to a future review Attempt",
+      );
+    }
+    artifact = current.payload;
+    evidence = artifact?.canonicalEvidence;
+    reviewMatches = artifact?.requirementId === workItem.requirementId
+      && artifact?.bundleRevision === workItem.bundleRevision.revision
+      && artifact?.candidateDigest === candidateRead.candidate.digest
+      && artifact?.verdict === "REJECTED"
+      && evidence?.disposition === "REJECTED"
+      && Array.isArray(evidence.blockingFindings)
+      && evidence.blockingFindings.length > 0
+      && SHA256.test(evidence?.identity?.evidenceDigest || "");
+  }
+  if (!reviewMatches) {
+    const finding = workItem.semanticFindings.findLast((entry) => (
+      entry.bundleRevision === workItem.bundleRevision.revision
+    ));
+    if (finding === undefined) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_EVIDENCE_INVALID", "repair has neither canonical review nor structural failure evidence");
+    }
+    const failure = flowManager.readArtifact({
+      specId: state.specId,
+      logicalKey: "test.requirement.failure",
+      parameters: {
+        requirementId: workItem.requirementId,
+        bundleRevision: String(workItem.bundleRevision.revision),
+        fingerprint: finding.fingerprint,
+      },
+      consumerNodeId,
+      optional: true,
+    });
+    if (failure === null) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_EVIDENCE_INVALID", "repair structural failure evidence is missing");
+    }
+    let payload;
+    try { payload = JSON.parse(failure.bytes.toString("utf8")); } catch (cause) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_EVIDENCE_INVALID", `repair structural failure evidence is invalid JSON: ${cause.message}`);
+    }
+    const blockingFindings = Array.isArray(payload?.blockingFindings) ? payload.blockingFindings : [];
+    const sourceFinding = blockingFindings.find((entry) => entry?.fingerprint === finding.fingerprint) ?? null;
+    if (sourceFinding === null
+      || sourceFinding.requirementId !== workItem.requirementId
+      || sourceFinding.bundleRevision !== workItem.bundleRevision.revision
+      || sourceFinding.candidateDigest !== candidateRead.candidate.digest
+      || sourceFinding.sourceAttempt?.id !== candidateRead.candidate.bundle.lineage.sourceAttempt.id
+      || sourceFinding.sourceAttempt?.sequence !== candidateRead.candidate.bundle.lineage.sourceAttempt.sequence) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_EVIDENCE_INVALID", "repair structural failure evidence does not bind the active candidate");
+    }
+    current = Object.freeze({ attempt: sourceFinding.sourceAttempt.sequence, descriptor: failure.descriptor });
+    artifact = Object.freeze({
+      requirementId: workItem.requirementId,
+      bundleRevision: workItem.bundleRevision.revision,
+      candidateDigest: candidateRead.candidate.digest,
+      verdict: "REJECTED",
+      blockingFindings,
+      canonicalEvidence: {
+        disposition: "REJECTED",
+        identity: { evidenceDigest: crypto.createHash("sha256").update(failure.bytes).digest("hex") },
+        blockingFindings: blockingFindings.map(({ findingId, fingerprint }) => ({ findingId, fingerprint })),
+      },
+    });
+    evidence = artifact.canonicalEvidence;
+    sourceStepId = payload.sourceStepId;
+    if (!new Set(["test-generate", "test-repair"]).has(sourceStepId)) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_EVIDENCE_INVALID", "repair structural failure evidence has an invalid source step");
+    }
+    sourceArtifact = "requirement-test-failure.json";
+  }
+  if (artifact?.requirementId !== workItem.requirementId
     || artifact?.bundleRevision !== workItem.bundleRevision.revision
     || artifact?.candidateDigest !== candidateRead.candidate.digest
     || artifact?.verdict !== "REJECTED"
     || evidence?.disposition !== "REJECTED"
     || !Array.isArray(evidence.blockingFindings)
     || evidence.blockingFindings.length === 0
-    || !SHA256.test(evidence?.identity?.evidenceDigest || "")
-  ) {
+    || !SHA256.test(evidence?.identity?.evidenceDigest || "")) {
     throw new TestReviewRepairError(
       "TEST_REVIEW_REPAIR_EVIDENCE_INVALID",
       "cataloged test-review evidence must be a REJECTED review with blocking findings",
@@ -829,6 +913,8 @@ function repairFromCatalog({ flowManager, state, consumerNodeId, reviewAttemptSe
     evidenceId: evidence.identity.evidenceDigest,
     sourceCandidate: candidateRead.candidate,
     blockingFindings: findingBinding.findings,
+    sourceStepId,
+    sourceArtifact,
   });
   canonicalTestReviewRepairProgress({
     flowManager, state, repair, consumerNodeId,

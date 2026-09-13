@@ -1728,8 +1728,36 @@ export const FLOW_COMMANDS = {
             || payload.sourceAttempt?.sequence !== workItem.bundleRevision.lineage.sourceAttempt.sequence) {
             throw new Error("Requirement test review result does not match the active candidate");
           }
-          const kind = payload.toolingOutcome != null ? "tooling_failure"
-            : payload.verdict === "PASS" ? "review_pass"
+          // ReviewToolingOutcome is the process-boundary classification. A
+          // permission/authentication denial is not a retryable provider
+          // outage: hand the exact fact to the Definition-owned lifecycle
+          // settlement so it records an external block without charging R.
+          if (payload.toolingOutcome?.permissionRelated === true) {
+            ctx.flowManager.completeRequirementTestExternalFailure({
+              specId,
+              failure: {
+                code: "REQUIREMENT_TEST_REVIEW_PERMISSION_DENIED",
+                message: String(payload.toolingOutcome.reason || "Requirement test review permission denied"),
+              },
+              commandResult: result,
+            });
+            ctx.flowState = ctx.flowManager.loadReadOnly(specId);
+            const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
+            attachedCanonicalReviewWorkUnit(result)?.cleanup();
+            return { disposition: "external_blocked", target: "test-review" };
+          }
+          if (payload.toolingOutcome != null) {
+            const settlement = ctx.flowManager.completeRequirementTestToolingFailure({
+              specId,
+              message: String(payload.toolingOutcome.reason || "Requirement test review tooling failure"),
+              commandResult: result,
+            });
+            ctx.flowState = ctx.flowManager.loadReadOnly(specId);
+            const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
+            attachedCanonicalReviewWorkUnit(result)?.cleanup();
+            return settlement.decision;
+          }
+          const kind = payload.verdict === "PASS" ? "review_pass"
             : payload.verdict === "ADVISORY" ? "review_advisory"
               : payload.verdict === "REJECTED" ? "semantic_rejection" : null;
           if (kind === null) throw new Error("Requirement test review verdict is invalid");
@@ -1739,6 +1767,9 @@ export const FLOW_COMMANDS = {
             bundleRevision: workItem.bundleRevision.revision,
             candidateDigest: candidateRead.candidate.digest,
             sourceAttempt: workItem.bundleRevision.lineage.sourceAttempt,
+            semanticFindingFingerprint: kind === "semantic_rejection"
+              ? payload.canonicalEvidence?.blockingFindings?.[0]?.fingerprint ?? null
+              : null,
             kind,
           });
           const facts = new RequirementTestLifecycleFacts({
@@ -1751,10 +1782,19 @@ export const FLOW_COMMANDS = {
           const decision = resolveRequirementTestLifecycle(facts);
           let deferredReceipt = null;
           let findingsPublication = null;
+          let failureArtifact = null;
           if (decision.disposition === "defer") {
-            const { RequirementTestDeferredReceipt } = await import("./lib/requirement-test-artifacts.js");
+            const {
+              RequirementTestDeferredReceipt,
+              RequirementTestFailureArtifact,
+            } = await import("./lib/requirement-test-artifacts.js");
             const { buildDeferredSemanticFindingsPublication } = await import("./lib/flow-findings.js");
-            const sourceArtifact = "steps/test-review/result.json";
+            failureArtifact = new RequirementTestFailureArtifact({
+              requirementId: workItem.requirementId,
+              bundleRevision: workItem.bundleRevision.revision,
+              fingerprint: observation.semanticFindingFingerprint,
+            });
+            const sourceArtifact = failureArtifact.relativePath;
             findingsPublication = buildDeferredSemanticFindingsPublication({
               flowManager: ctx.flowManager,
               flowState: ctx.flowManager.loadReadOnly(specId),
@@ -1779,7 +1819,12 @@ export const FLOW_COMMANDS = {
             });
           }
           ctx.flowManager.completeRequirementTestLifecycle({
-            specId, decision, commandResult: result, deferredReceipt, findingsPublication,
+            specId,
+            decision,
+            commandResult: result,
+            deferredReceipt,
+            findingsPublication,
+            artifactWrites: deferredReceipt === null ? [] : [failureArtifact.artifactWrite(payload)],
           });
           ctx.flowState = ctx.flowManager.loadReadOnly(specId);
           const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
@@ -2330,6 +2375,7 @@ export const FLOW_COMMANDS = {
       async post(ctx, result) {
         const {
           RequirementTestDeferredReceipt,
+          RequirementTestFailureArtifact,
           RequirementTestGateResult,
         } = await import("./lib/requirement-test-artifacts.js");
         const { RequirementTestArtifactStore } = await import("./lib/requirement-test-store.js");
@@ -2355,9 +2401,15 @@ export const FLOW_COMMANDS = {
         const decision = resolveRequirementTestLifecycle(facts);
         let deferredReceipt = null;
         let findingsPublication = null;
+        let failureArtifact = null;
         if (decision.disposition === "defer") {
-          const sourceArtifact = "steps/test-gate/result.json";
           const fingerprints = new Set(gateResult.findings.map((finding) => finding.fingerprint));
+          failureArtifact = new RequirementTestFailureArtifact({
+            requirementId: workItem.requirementId,
+            bundleRevision: workItem.bundleRevision.revision,
+            fingerprint: gateResult.findings[0].fingerprint,
+          });
+          const sourceArtifact = failureArtifact.relativePath;
           findingsPublication = buildDeferredSemanticFindingsPublication({
             flowManager: ctx.flowManager,
             flowState: ctx.flowManager.loadReadOnly(specId),
@@ -2387,6 +2439,7 @@ export const FLOW_COMMANDS = {
           commandResult: result,
           deferredReceipt,
           findingsPublication,
+          artifactWrites: failureArtifact === null ? [] : [failureArtifact.artifactWrite(gateResult.toJSON())],
         });
         ctx.flowState = ctx.flowManager.loadReadOnly(specId);
         return decision;

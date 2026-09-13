@@ -24,10 +24,11 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "result"],
+        "required": ["id", "execution", "result"],
         "additionalProperties": false,
         "properties": {
           "id": { "type": "string" },
+          "execution": { "type": "string", "enum": ["executed", "deferred_no_active_test"] },
           "result": { "type": "string", "enum": ["pass", "fail", "deferred", "not_applicable"] },
           "reason": { "type": "string", "enum": ["no_tests_declared"] },
           "deferred_receipt": {

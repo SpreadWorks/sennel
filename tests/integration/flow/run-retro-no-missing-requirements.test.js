@@ -51,6 +51,7 @@ function executionArtifact({ repairFingerprint = FIXTURE_REPAIR_FINGERPRINT, tes
     raw_output_path: "test-execute.raw-log",
     summary: [{
       id: "R1",
+      execution: "executed",
       result: "pass",
       evidence: {
         test_file: "f.test.js",

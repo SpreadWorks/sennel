@@ -183,11 +183,19 @@ function buildSummary({ root, specDir, testableRequirements, specLocal, range, f
   const deferredById = new Map(deferredReceipts.map((receipt) => [receipt.requirementId, receipt]));
   return testableRequirements.map((req) => {
     const deferred = deferredById.get(req.id);
-    if (deferred) return { id: req.id, result: "deferred", deferred_receipt: deferred };
+    if (deferred) {
+      return {
+        id: req.id,
+        execution: "deferred_no_active_test",
+        result: "deferred",
+        deferred_receipt: deferred.toJSON(),
+      };
+    }
     const result = requirementSummaryResult(req.id, specLocal, resolvedFailedIds);
     if (result === "not_applicable") {
       return {
         id: req.id,
+        execution: "executed",
         result,
         reason: NO_TESTS_DECLARED_REASON,
         evidence: {
@@ -200,6 +208,7 @@ function buildSummary({ root, specDir, testableRequirements, specLocal, range, f
     if (!file) throw new Error(`spec-local test file missing for ${req.id}`);
     return {
       id: req.id,
+      execution: "executed",
       result,
       ...(result === "pass" ? {} : { error: "spec-local requirement tests failed" }),
       evidence: {

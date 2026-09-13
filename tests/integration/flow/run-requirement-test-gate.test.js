@@ -7,6 +7,7 @@ import { afterEach, test } from "node:test";
 import {
   RequirementTestCandidateBundle,
   RequirementTestCandidateSource,
+  RequirementTestSupportArtifact,
 } from "../../../src/flow/lib/requirement-test-artifacts.js";
 import {
   RequirementTestBundleLineage,
@@ -29,7 +30,7 @@ const revision = {
   byteLength: 1,
 };
 
-function candidate(source) {
+function candidate(source, support = []) {
   const testPath = "tests/r1.test.js";
   const bytes = Buffer.from(source);
   const member = new RequirementTestCandidateSource({
@@ -51,7 +52,10 @@ function candidate(source) {
       sourceFindingFingerprints: [],
     }),
   });
-  return { bundle: new RequirementTestCandidateBundle({ bundle, sources: [member] }), sourceBytes: new Map([[testPath, bytes]]) };
+  return {
+    bundle: new RequirementTestCandidateBundle({ bundle, sources: [member], support }),
+    sourceBytes: new Map([[testPath, bytes]]),
+  };
 }
 
 function setup(activeSource = null) {
@@ -70,7 +74,7 @@ function setup(activeSource = null) {
 
 test("executes only the candidate named test and returns a bound observation", async () => {
   const context = setup();
-  const source = "// spec: R1\nimport test from 'node:test';\ntest('R1: behavior', () => { throw new Error('candidate'); });\n";
+  const source = "// spec: R1\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('R1: behavior', () => assert.equal('before', 'required'));\n";
   const value = candidate(source);
   const result = await runRequirementTestGate({ ...context, specRevision: revision, requirementId: "R1", ...value });
   assert.equal(result.observation.kind, "assertion_failed");
@@ -109,10 +113,17 @@ test("distinguishes invalid source and runner tooling failure", async () => {
 
 test("candidate materialization is isolated from active tests", async () => {
   const context = setup("// spec: R1\nimport test from 'node:test';\ntest('R1: behavior', () => {});\n");
-  const value = candidate("// spec: R1\nimport test from 'node:test';\ntest('R1: behavior', () => { throw new Error('candidate'); });\n");
+  const value = candidate("// spec: R1\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('R1: behavior', () => assert.equal('before', 'required'));\n");
   const result = await runRequirementTestGate({ ...context, specRevision: revision, requirementId: "R1", ...value });
   assert.equal(result.observation.kind, "assertion_failed");
   assert.match(fs.readFileSync(path.join(root, "specs", "gate-engine", "001", "tests", "r1.test.js"), "utf8"), /=> \{\}\);/);
+});
+
+test("a named ReferenceError is invalid test evidence, not an expected failure", async () => {
+  const context = setup();
+  const value = candidate("// spec: R1\nimport test from 'node:test';\ntest('R1: behavior', () => missingFixture());\n");
+  const result = await runRequirementTestGate({ ...context, specRevision: revision, requirementId: "R1", ...value });
+  assert.equal(result.observation.kind, "invalid_test");
 });
 
 test("candidate relative imports resolve as if executed from the canonical promoted path", async () => {
@@ -121,4 +132,35 @@ test("candidate relative imports resolve as if executed from the canonical promo
   const value = candidate("// spec: R1\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { value } from '../../../../../value.mjs';\ntest('R1: behavior', () => assert.equal(value, 1));\n");
   const result = await runRequirementTestGate({ ...context, specRevision: revision, requirementId: "R1", ...value });
   assert.equal(result.observation.kind, "assertion_passed");
+});
+
+test("materializes owner-bound shared support before running the candidate test", async () => {
+  const context = setup();
+  const helper = Buffer.from("export const value = 1;\n");
+  const support = RequirementTestSupportArtifact.fromBytes({
+    ownerRequirementId: "R1",
+    supportPath: "tests/support/helper.mjs",
+    bytes: helper,
+  });
+  const value = candidate(
+    "// spec: R1\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\nimport { value } from './support/helper.mjs';\ntest('R1: behavior', () => assert.equal(value, 1));\n",
+    [support],
+  );
+  value.sourceBytes.set(support.supportPath, helper);
+  const result = await runRequirementTestGate({ ...context, specRevision: revision, requirementId: "R1", ...value });
+  assert.equal(result.observation.kind, "assertion_passed");
+});
+
+test("records an invalid_test observation when any materialized candidate import cannot bootstrap", async () => {
+  const context = setup();
+  const value = candidate(
+    "// spec: R1\nimport test from 'node:test';\nimport './support/missing.mjs';\ntest('R1: behavior', () => {});\n",
+  );
+  const result = await runRequirementTestGate({ ...context, specRevision: revision, requirementId: "R1", ...value });
+  assert.equal(result.observation.kind, "invalid_test");
+  assert.equal(result.observation.requirementId, "R1");
+  assert.equal(result.observation.candidateDigest, value.bundle.digest);
+  assert.equal(result.command, null);
+  assert.equal(result.process, null);
+  assert.match(result.rawLog, /statically imports missing pre-implementation module \.\/support\/missing\.mjs/);
 });

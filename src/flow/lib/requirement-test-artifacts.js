@@ -61,6 +61,14 @@ function canonicalTestPath(value, field) {
   return result;
 }
 
+function canonicalSupportPath(value, field) {
+  const result = canonicalTestPath(value, field);
+  if (!result.startsWith("tests/support/")) {
+    throw new Error(`${field} must be below tests/support/`);
+  }
+  return result;
+}
+
 function canonicalRelativePath(value, field) {
   const result = requiredText(value, field);
   if (path.posix.isAbsolute(result) || result.includes("\\") || path.posix.normalize(result) !== result
@@ -78,10 +86,61 @@ function sourceAttempt(value) {
   return value instanceof RequirementTestSourceAttempt ? value : RequirementTestSourceAttempt.fromJSON(value);
 }
 
+/**
+ * Immutable identity of a helper shared by Requirement candidates.
+ *
+ * Helpers are deliberately not candidate test sources: one Requirement owns
+ * the publication and every consumer binds to that owner's exact bytes.  The
+ * owner is part of the identity even when two helpers happen to have the same
+ * digest, so a path cannot silently change hands after a restart.
+ */
+export class RequirementTestSupportArtifact {
+  constructor({ ownerRequirementId, supportPath, digest: supportDigest, byteLength } = {}) {
+    this.ownerRequirementId = requiredText(ownerRequirementId, "Requirement test support ownerRequirementId");
+    this.supportPath = canonicalSupportPath(supportPath, "Requirement test support path");
+    this.digest = digest(supportDigest, "Requirement test support digest");
+    this.byteLength = nonNegativeInteger(byteLength, "Requirement test support byteLength");
+    Object.freeze(this);
+  }
+
+  static fromBytes({ ownerRequirementId, supportPath, bytes } = {}) {
+    if (!Buffer.isBuffer(bytes)) throw new Error("Requirement test support bytes must be a Buffer");
+    return new RequirementTestSupportArtifact({
+      ownerRequirementId,
+      supportPath,
+      digest: crypto.createHash("sha256").update(bytes).digest("hex"),
+      byteLength: bytes.length,
+    });
+  }
+
+  static fromJSON(value) {
+    exactKeys(value, ["ownerRequirementId", "supportPath", "digest", "byteLength"], "Requirement test support artifact");
+    return new RequirementTestSupportArtifact(value);
+  }
+
+  matchesBytes(bytes) {
+    return Buffer.isBuffer(bytes)
+      && bytes.length === this.byteLength
+      && crypto.createHash("sha256").update(bytes).digest("hex") === this.digest;
+  }
+
+  toJSON() {
+    return {
+      ownerRequirementId: this.ownerRequirementId,
+      supportPath: this.supportPath,
+      digest: this.digest,
+      byteLength: this.byteLength,
+    };
+  }
+}
+
 /** Exact bytes staged below a Requirement candidate bundle, never active tests.source. */
 export class RequirementTestCandidateSource {
   constructor({ testPath, digest: sourceDigest, byteLength } = {}) {
     this.testPath = canonicalTestPath(testPath, "Requirement test candidate source path");
+    if (this.testPath.startsWith("tests/support/")) {
+      throw new Error("Requirement test candidate source must not be a support artifact");
+    }
     this.digest = digest(sourceDigest, "Requirement test candidate source digest");
     this.byteLength = nonNegativeInteger(byteLength, "Requirement test candidate source byteLength");
     Object.freeze(this);
@@ -106,7 +165,7 @@ export class RequirementTestCandidateSource {
 
 /** Immutable catalog manifest binding a bundle revision to every staged source member. */
 export class RequirementTestCandidateBundle {
-  constructor({ bundle, sources } = {}) {
+  constructor({ bundle, sources, support = [] } = {}) {
     this.bundle = bundle instanceof RequirementTestBundleRevision
       ? bundle
       : RequirementTestBundleRevision.fromJSON(bundle);
@@ -120,19 +179,33 @@ export class RequirementTestCandidateBundle {
     if (new Set(sourcePaths).size !== sourcePaths.length) {
       throw new Error("Requirement test candidate bundle sources must be unique");
     }
+    if (!Array.isArray(support)) {
+      throw new Error("Requirement test candidate bundle support must be an array");
+    }
+    this.support = Object.freeze(support.map((entry) => (
+      entry instanceof RequirementTestSupportArtifact ? entry : RequirementTestSupportArtifact.fromJSON(entry)
+    )).sort((left, right) => left.supportPath.localeCompare(right.supportPath)));
+    const supportPaths = this.support.map((entry) => entry.supportPath);
+    if (new Set(supportPaths).size !== supportPaths.length) {
+      throw new Error("Requirement test candidate bundle support paths must be unique");
+    }
+    if (supportPaths.some((supportPath) => sourcePaths.includes(supportPath))) {
+      throw new Error("Requirement test candidate bundle cannot use one path as source and support");
+    }
     const bundlePaths = [...this.bundle.paths].sort();
     if (bundlePaths.length !== sourcePaths.length
       || bundlePaths.some((candidatePath, index) => candidatePath !== sourcePaths[index])) {
       throw new Error("Requirement test candidate bundle sources must exactly match bundle paths");
     }
-    this.digest = crypto.createHash("sha256").update(this.sources.map((source) => (
-      `${source.testPath}\0${source.digest}\0${source.byteLength}`
-    )).join("\n")).digest("hex");
+    this.digest = crypto.createHash("sha256").update([
+      ...this.sources.map((source) => `source\0${source.testPath}\0${source.digest}\0${source.byteLength}`),
+      ...this.support.map((entry) => `support\0${entry.ownerRequirementId}\0${entry.supportPath}\0${entry.digest}\0${entry.byteLength}`),
+    ].join("\n")).digest("hex");
     Object.freeze(this);
   }
 
   static fromJSON(value) {
-    exactKeys(value, ["bundle", "sources", "digest"], "Requirement test candidate bundle");
+    exactKeys(value, ["bundle", "sources", "support", "digest"], "Requirement test candidate bundle");
     const bundle = new RequirementTestCandidateBundle(value);
     if (bundle.digest !== value.digest) throw new Error("Requirement test candidate bundle digest does not match sources");
     return bundle;
@@ -142,6 +215,7 @@ export class RequirementTestCandidateBundle {
     return {
       bundle: this.bundle.toJSON(),
       sources: this.sources.map((source) => source.toJSON()),
+      support: this.support.map((entry) => entry.toJSON()),
       digest: this.digest,
     };
   }
@@ -149,7 +223,7 @@ export class RequirementTestCandidateBundle {
 
 /** Candidate-only identity passed to the bounded Requirement test reviewer. */
 export class RequirementTestReviewSource {
-  constructor({ runId, requirementId, specRevision, bundleRevision, candidateDigest, sourceAttempt: attempt, candidatePaths } = {}) {
+  constructor({ runId, requirementId, specRevision, bundleRevision, candidateDigest, sourceAttempt: attempt, candidatePaths, gateEvidence = null } = {}) {
     this.runId = requiredText(runId, "Requirement test review source runId");
     this.requirementId = requiredText(requirementId, "Requirement test review source requirementId");
     this.specRevision = revision(specRevision);
@@ -163,11 +237,16 @@ export class RequirementTestReviewSource {
     if (new Set(this.candidatePaths).size !== this.candidatePaths.length) {
       throw new Error("Requirement test review source candidatePaths must be unique");
     }
+    this.gateEvidence = gateEvidence === null ? null : gateEvidence instanceof RequirementTestReviewGateEvidence
+      ? gateEvidence : RequirementTestReviewGateEvidence.fromJSON(gateEvidence);
+    if (this.gateEvidence !== null && !this.gateEvidence.matches(this)) {
+      throw new Error("Requirement test review source Gate evidence does not match its candidate");
+    }
     Object.freeze(this);
   }
 
   static fromJSON(value) {
-    exactKeys(value, ["runId", "requirementId", "specRevision", "bundleRevision", "candidateDigest", "sourceAttempt", "candidatePaths"], "Requirement test review source");
+    exactKeys(value, ["runId", "requirementId", "specRevision", "bundleRevision", "candidateDigest", "sourceAttempt", "candidatePaths", "gateEvidence"], "Requirement test review source");
     return new RequirementTestReviewSource(value);
   }
 
@@ -187,6 +266,7 @@ export class RequirementTestReviewSource {
       candidateDigest: this.candidateDigest,
       sourceAttempt: this.sourceAttempt.toJSON(),
       candidatePaths: [...this.candidatePaths],
+      gateEvidence: this.gateEvidence?.toJSON() ?? null,
     };
   }
 }
@@ -265,6 +345,39 @@ export class RequirementTestGateFinding {
       reason: this.reason,
       fingerprint: this.fingerprint,
     };
+  }
+}
+
+/** History-bound Gate evidence made available to the reopened Requirement review. */
+export class RequirementTestReviewGateEvidence {
+  constructor({ attempt, observation, finding } = {}) {
+    this.attempt = positiveInteger(attempt, "Requirement test review Gate Attempt");
+    this.observation = observation instanceof RequirementTestGateObservation
+      ? observation : RequirementTestGateObservation.fromJSON(observation);
+    this.finding = finding instanceof RequirementTestGateFinding
+      ? finding : RequirementTestGateFinding.fromJSON(finding);
+    if (this.finding.requirementId !== this.observation.requirementId) {
+      throw new Error("Requirement test review Gate finding does not match its observation");
+    }
+    Object.freeze(this);
+  }
+
+  static fromJSON(value) {
+    exactKeys(value, ["attempt", "observation", "finding"], "Requirement test review Gate evidence");
+    return new RequirementTestReviewGateEvidence(value);
+  }
+
+  matches(source) {
+    return source.requirementId === this.observation.requirementId
+      && source.specRevision.equals(this.observation.specRevision)
+      && source.bundleRevision === this.observation.bundleRevision
+      && source.candidateDigest === this.observation.candidateDigest
+      && source.sourceAttempt.id === this.observation.sourceAttempt.id
+      && source.sourceAttempt.sequence === this.observation.sourceAttempt.sequence;
+  }
+
+  toJSON() {
+    return { attempt: this.attempt, observation: this.observation.toJSON(), finding: this.finding.toJSON() };
   }
 }
 
@@ -349,7 +462,7 @@ export class RequirementTestDeferredReceipt {
     this.budget = budget instanceof RequirementTestBudget ? budget : RequirementTestBudget.fromJSON(budget);
     this.sourceAttempt = sourceAttempt(attempt);
     this.sourceArtifact = canonicalRelativePath(sourceArtifact, "Requirement test deferred receipt sourceArtifact");
-    if (!["steps/test-generate/", "steps/test-review/", "steps/test-repair/", "steps/test-gate/"]
+    if (!["steps/test-generate/", "steps/test-review/", "steps/test-repair/", "steps/test-gate/", "artifacts/test-findings/"]
       .some((prefix) => this.sourceArtifact.startsWith(prefix))) {
       throw new Error("Requirement test deferred receipt sourceArtifact must reference canonical Requirement test evidence");
     }
@@ -382,6 +495,49 @@ export class RequirementTestDeferredReceipt {
       sourceArtifact: this.sourceArtifact,
       sourceFindingFingerprints: [...this.sourceFindingFingerprints],
     };
+  }
+}
+
+/** Immutable address of one Requirement-scoped lifecycle failure. */
+export class RequirementTestFailureArtifact {
+  constructor({ requirementId, bundleRevision, fingerprint } = {}) {
+    this.requirementId = requiredText(requirementId, "Requirement test failure requirementId");
+    this.bundleRevision = positiveInteger(bundleRevision, "Requirement test failure bundleRevision");
+    this.fingerprint = digest(fingerprint, "Requirement test failure fingerprint");
+    this.parameters = Object.freeze({
+      requirementId: this.requirementId,
+      bundleRevision: String(this.bundleRevision),
+      fingerprint: this.fingerprint,
+    });
+    this.relativePath = `artifacts/test-findings/${this.requirementId}/revision-${this.bundleRevision}/${this.fingerprint}.json`;
+    Object.freeze(this);
+  }
+
+  static fromRelativePath(value) {
+    const relativePath = requiredText(value, "Requirement test failure relative path");
+    const match = /^artifacts\/test-findings\/([^/]+)\/revision-([1-9][0-9]*)\/([a-f0-9]{64})\.json$/.exec(relativePath);
+    if (match === null) throw new Error("Requirement test failure relative path is invalid");
+    const artifact = new RequirementTestFailureArtifact({
+      requirementId: match[1],
+      bundleRevision: Number(match[2]),
+      fingerprint: match[3],
+    });
+    if (artifact.relativePath !== relativePath) {
+      throw new Error("Requirement test failure relative path does not match its identity");
+    }
+    return artifact;
+  }
+
+  artifactWrite(sourcePayload) {
+    if (sourcePayload === null || typeof sourcePayload !== "object" || Array.isArray(sourcePayload)) {
+      throw new Error("Requirement test failure source payload must be an object");
+    }
+    return Object.freeze({
+      logicalKey: "test.requirement.failure",
+      parameters: this.parameters,
+      mediaType: "application/json",
+      bytes: Buffer.from(`${JSON.stringify(sourcePayload, null, 2)}\n`, "utf8"),
+    });
   }
 }
 

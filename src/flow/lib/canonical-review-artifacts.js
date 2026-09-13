@@ -18,6 +18,7 @@ import {
   CanonicalCommandResultPublication,
   attachCanonicalCommandResultArtifact,
   attachCanonicalCommandResultPublications,
+  CanonicalCommandAttemptArtifactHistory,
 } from "./canonical-command-result.js";
 import {
   ReviewDisposition,
@@ -41,7 +42,11 @@ import { CanonicalTaskContext } from "./task-canonical-context.js";
 import { CurrentTaskSourceSnapshot, captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 import { TaskReviewPublicationBinding } from "./task-review-stage-artifacts.js";
-import { RequirementTestReviewSource } from "./requirement-test-artifacts.js";
+import {
+  RequirementTestGateResult,
+  RequirementTestReviewGateEvidence,
+  RequirementTestReviewSource,
+} from "./requirement-test-artifacts.js";
 import { RequirementTestArtifactStore } from "./requirement-test-store.js";
 
 const PHASES = new Set(["draft-questions", "draft-coverage", "spec", "test", "impl"]);
@@ -68,6 +73,58 @@ function requiredFlowManager(value) {
     throw new Error("canonical review source requires the FlowManager catalog surface");
   }
   return value;
+}
+
+function currentRequirementTestGateEvidence({ flowManager, state, workItem, candidate }) {
+  const prior = flowManager.activityLedger(state.specId).at(-1) ?? null;
+  const reopenedByGate = prior?.nodeId === "test-gate"
+    && prior.transition?.operation === "advance_requirement_test_lifecycle"
+    && prior.transition?.requirementTestLifecycle?.target === "test-review";
+  const resolved = flowManager.readArtifact({
+    specId: state.specId,
+    logicalKey: "test.requirement.gate",
+    consumerNodeId: "test-review",
+    optional: true,
+  });
+  if (resolved === null) {
+    if (reopenedByGate) throw new Error("Requirement test review reopened by Gate requires its exact Gate evidence");
+    return null;
+  }
+  const history = CanonicalCommandAttemptArtifactHistory.fromBytes({
+    logicalKey: "test.requirement.gate",
+    bytes: resolved.bytes,
+  });
+  const gate = RequirementTestGateResult.fromJSON(history.current.payload);
+  const observation = gate.observation;
+  const sourceAttempt = workItem.bundleRevision.lineage.sourceAttempt;
+  if (observation.requirementId !== workItem.requirementId
+    || !observation.specRevision.equals(workItem.specRevision)
+    || observation.bundleRevision !== workItem.bundleRevision.revision
+    || observation.candidateDigest !== candidate.digest
+    || observation.sourceAttempt.id !== sourceAttempt.id
+    || observation.sourceAttempt.sequence !== sourceAttempt.sequence) {
+    if (reopenedByGate) throw new Error("Requirement test review reopened by Gate received stale Gate evidence");
+    return null;
+  }
+  return new RequirementTestReviewGateEvidence({
+    attempt: history.current.attempt,
+    observation,
+    finding: gate.findings[0],
+  });
+}
+
+function canonicalGateBlockingFinding(gateEvidence) {
+  return Object.freeze({
+    findingId: gateEvidence.finding.findingId,
+    fingerprint: gateEvidence.finding.fingerprint,
+    requirementId: gateEvidence.finding.requirementId,
+    category: gateEvidence.finding.category,
+    title: `Requirement test Gate mismatch: ${gateEvidence.finding.reason}`,
+    target: "GLOBAL",
+    issue: gateEvidence.finding.reason,
+    requiredChange: gateEvidence.finding.reason,
+    origin: "requirement-test-gate",
+  });
 }
 
 function jsonObject(value, field) {
@@ -496,7 +553,10 @@ export class CanonicalReviewWorkUnit {
       }
       const candidateRead = store.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: this.nodeId });
       this.requirementTestCandidate = candidateRead.candidate;
-      this.requirementTestCandidateSources = candidateRead.sources;
+      this.requirementTestCandidateSources = Object.freeze([
+        ...candidateRead.sources,
+        ...candidateRead.support,
+      ]);
       this.requirementTestReviewSource = new RequirementTestReviewSource({
         runId: state.runId,
         requirementId: workItem.requirementId,
@@ -505,6 +565,12 @@ export class CanonicalReviewWorkUnit {
         candidateDigest: candidateRead.candidate.digest,
         sourceAttempt: workItem.bundleRevision.lineage.sourceAttempt,
         candidatePaths: candidateRead.candidate.bundle.paths,
+        gateEvidence: currentRequirementTestGateEvidence({
+          flowManager,
+          state: typed,
+          workItem,
+          candidate: candidateRead.candidate,
+        }),
       });
     } else {
       this.requirementTestCandidate = null;
@@ -738,7 +804,7 @@ export class CanonicalReviewWorkUnit {
     for (const source of sources) {
       const testPath = source.targetRelativePath.slice("tests/".length);
       const input = {
-        logicalKey: "test.requirement.candidate.source",
+        logicalKey: source.kind === "support" ? "test.requirement.support" : "test.requirement.candidate.source",
         logicalPath: `tests/${testPath}`,
         mediaType: "text/plain",
         bytes: source.bytes,
@@ -831,6 +897,15 @@ export class CanonicalReviewPromotion {
       return Object.freeze({ sealed, delta, next });
     }
     const artifact = jsonObject(JSON.parse(sealed.bytes.toString("utf8")), `canonical ${this.phase} review artifact`);
+    const gateEvidence = this.requirementTestReviewSource?.gateEvidence ?? null;
+    if (gateEvidence !== null && artifact.toolingOutcome == null) {
+      const canonicalFinding = canonicalGateBlockingFinding(gateEvidence);
+      const existing = findingLists(artifact, "test").blocking;
+      artifact.verdict = "REJECTED";
+      artifact.blockingFindings = existing.some((finding) => finding?.fingerprint === canonicalFinding.fingerprint)
+        ? existing
+        : [...existing, canonicalFinding];
+    }
     if (this.phase === "test" && artifact.toolingOutcome != null) {
       return Object.freeze({ sealed, artifact, evidence: null });
     }
@@ -937,6 +1012,11 @@ export class CanonicalReviewPromotion {
       return result;
     }
     const { sealed, artifact, evidence } = this.sealedArtifact();
+    const gateEvidence = this.requirementTestReviewSource?.gateEvidence ?? null;
+    if (gateEvidence !== null && (evidence === null
+      || !evidence.blockingFindings.some((finding) => finding.fingerprint === gateEvidence.finding.fingerprint))) {
+      throw new Error("Requirement test review reopening a Gate mismatch must retain its exact canonical Gate finding");
+    }
     const logicalKey = logicalKeyFor({ phase: this.phase, taskId: this.taskId });
     const normalizedArtifact = structuredClone(artifact);
     // `test-coverage.json` remains a logical document inside test.review;

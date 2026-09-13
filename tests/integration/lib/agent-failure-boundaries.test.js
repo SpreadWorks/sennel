@@ -85,6 +85,10 @@ describe("typed agent failure boundaries", () => {
     assert.ok(failures[3] instanceof PermanentNetworkFailure);
     assert.ok(failures[4] instanceof UnknownProviderFailure);
     assert.ok(failures.every((failure) => failure.retryable === false));
+    assert.deepEqual(
+      failures.map((failure) => failure.requiresExternalIntervention),
+      [true, true, true, false, false],
+    );
     assert.ok(failures.every((failure) => failure.code && failure.recoveryHint));
   });
 

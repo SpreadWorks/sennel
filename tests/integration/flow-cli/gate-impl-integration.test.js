@@ -103,6 +103,15 @@ function publishIntegrationDesignArtifacts(fixture, flowManager, specId, require
       requirementId: id,
       testPath: `${id}.test.js`,
       source: `// spec: ${id}\nimport test from "node:test";\ntest("${id}: validates integration gate trust", () => {});\n`,
+      completion: "generate",
+    });
+  }
+  for (const id of requirementIds) {
+    promoteCanonicalRequirementTest({
+      flowManager,
+      specId,
+      requirementId: id,
+      resumeStaged: true,
     });
   }
 }

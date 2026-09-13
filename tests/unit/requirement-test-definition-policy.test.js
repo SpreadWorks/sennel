@@ -102,6 +102,7 @@ function stepObservation(item, kind, overrides = {}) {
     bundleRevision: item.bundleRevision?.revision ?? null,
     candidateDigest: currentCandidate?.digest ?? null,
     sourceAttempt: currentCandidate?.bundle.lineage.sourceAttempt ?? null,
+    semanticFindingFingerprint: kind === "semantic_rejection" ? "e".repeat(64) : null,
     kind,
     ...overrides,
   });
@@ -120,13 +121,14 @@ function gateObservation(item, candidate, kind, overrides = {}) {
   });
 }
 
-function resolve({ leaf, item, workItems = [item], observation, candidateBundle: candidate = null }) {
+function resolve({ leaf, item, workItems = [item], observation, candidateBundle: candidate = null, autoApprove = false }) {
   const selectedAuthority = observation instanceof RequirementTestCandidateBundle
     ? new RequirementTestLifecycleAuthority({
         ...authority(leaf).toJSON(),
         attempt: observation.bundle.lineage.sourceAttempt,
+        autoApprove,
       })
-    : authority(leaf);
+    : new RequirementTestLifecycleAuthority({ ...authority(leaf).toJSON(), autoApprove });
   return resolveRequirementTestLifecycle(new RequirementTestLifecycleFacts({
     authority: selectedAuthority,
     plan: plan(workItems), leaf, observation, candidateBundle: candidate,
@@ -134,6 +136,20 @@ function resolve({ leaf, item, workItems = [item], observation, candidateBundle:
 }
 
 describe("Definition-owned Requirement test lifecycle policy", () => {
+  it("stages each non-final candidate while retaining the generate frontier", () => {
+    const first = workItem({ requirementId: "R1", status: "in_progress" });
+    const second = workItem({ requirementId: "R2", status: "pending" });
+    const decision = resolve({
+      leaf: "test-generate", item: first, workItems: [first, second], observation: candidateBundle(first),
+    });
+    assert.equal(decision.continuesSourceAttempt, true);
+    assert.equal(decision.target, "test-generate");
+    assert.equal(decision.nextRequirementId, "R2");
+    const advanced = decision.apply(plan([first, second]));
+    assert.equal(advanced.workItem("R1").status, "candidate_saved");
+    assert.equal(advanced.activeWorkItem().requirementId, "R2");
+  });
+
   it("skips repair atomically after an accepted review and uses repair only for a changed candidate", () => {
     const generating = workItem({ status: "in_progress" });
     const generated = candidateBundle(generating);
@@ -184,27 +200,45 @@ describe("Definition-owned Requirement test lifecycle policy", () => {
       observation: gateObservation(expectedFail, failCandidate, "assertion_passed"), candidateBundle: failCandidate,
     });
     assert.deepEqual([mismatch.disposition, mismatch.target, mismatch.budgetIncrement, mismatch.repairRequired], [
-      "semantic_retry", "test-repair", "autoSemantic", true,
+      "advance", "test-review", null, null,
     ]);
   });
 
-  it("owns automatic then manual semantic retry boundaries and defers at exhaustion", () => {
+  it("uses only the selected automatic or manual semantic retry budget", () => {
     const cases = [
-      [new RequirementTestBudget({ autoSemantic: 4, manualSemantic: 0, tooling: 0 }), "semantic_retry", "autoSemantic"],
-      [new RequirementTestBudget({ autoSemantic: 5, manualSemantic: 4, tooling: 0 }), "semantic_retry", "manualSemantic"],
-      [new RequirementTestBudget({ autoSemantic: 5, manualSemantic: 5, tooling: 0 }), "defer", null],
+      [true, new RequirementTestBudget({ autoSemantic: 4, manualSemantic: 5, tooling: 0 }), "semantic_retry", "autoSemantic"],
+      [false, new RequirementTestBudget({ autoSemantic: 5, manualSemantic: 4, tooling: 0 }), "semantic_retry", "manualSemantic"],
+      [true, new RequirementTestBudget({ autoSemantic: 5, manualSemantic: 0, tooling: 0 }), "defer", null],
+      [false, new RequirementTestBudget({ autoSemantic: 0, manualSemantic: 5, tooling: 0 }), "defer", null],
     ];
-    for (const [budget, disposition, increment] of cases) {
+    for (const [autoApprove, budget, disposition, increment] of cases) {
       const item = workItem({ status: "candidate_saved", budget });
       const candidate = candidateBundle(item);
       const decision = resolve({
         leaf: "test-review", item, observation: stepObservation(item, "semantic_rejection"),
-        candidateBundle: candidate,
+        candidateBundle: candidate, autoApprove,
       });
       assert.equal(decision.disposition, disposition);
       assert.equal(decision.budgetIncrement, increment);
       assert.equal(decision.acceptanceHandoff, disposition === "defer");
     }
+  });
+
+  it("counts a canonical rejected finding once for one Requirement candidate revision", () => {
+    const item = workItem({ status: "candidate_saved" });
+    const candidate = candidateBundle(item);
+    const first = resolve({
+      leaf: "test-review", item,
+      observation: stepObservation(item, "semantic_rejection"), candidateBundle: candidate,
+    });
+    assert.equal(first.budgetIncrement, "manualSemantic");
+    const alreadyCounted = item.withState({ semanticFindings: [first.semanticFinding] });
+    const duplicate = resolve({
+      leaf: "test-review", item: alreadyCounted,
+      observation: stepObservation(alreadyCounted, "semantic_rejection"), candidateBundle: candidateBundle(alreadyCounted),
+    });
+    assert.equal(duplicate.budgetIncrement, null);
+    assert.equal(duplicate.apply(plan([alreadyCounted])).workItem("R1").budget.manualSemantic, 0);
   });
 
   it("retries the same leaf through tooling count 2 and defers at count 3 before a candidate exists", () => {
@@ -244,6 +278,19 @@ describe("Definition-owned Requirement test lifecycle policy", () => {
     });
     assert.equal(decision.target, "test-generate");
     assert.equal(decision.nextRequirementId, "R4");
+  });
+
+  it("reviews an already staged next Requirement before claiming any new generator work", () => {
+    const current = workItem({ requirementId: "R1" });
+    const staged = workItem({ requirementId: "R2", status: "candidate_saved" });
+    const candidate = candidateBundle(current);
+    const decision = resolve({
+      leaf: "test-gate", item: current, workItems: [current, staged],
+      observation: gateObservation(current, candidate, "assertion_failed"), candidateBundle: candidate,
+    });
+    assert.equal(decision.target, "test-review");
+    assert.equal(decision.nextRequirementId, null);
+    assert.equal(decision.apply(plan([current, staged])).activeWorkItem().requirementId, "R2");
   });
 
   it("fails closed for wrong Requirement, Spec, bundle, observation type, and status", () => {

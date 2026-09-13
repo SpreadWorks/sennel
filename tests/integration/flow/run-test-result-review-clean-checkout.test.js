@@ -36,6 +36,7 @@ function testExecutePayload(repairFingerprint, testSourceRevision) {
     raw_output_path: "specs/001-test/001/artifacts/test.execute.raw-log",
     summary: [{
       id: "R1",
+      execution: "executed",
       result: "pass",
       evidence: {
         test_file: "specs/001-test/001/artifacts/tests/fixture.test.js",

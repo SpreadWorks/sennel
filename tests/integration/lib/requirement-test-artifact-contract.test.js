@@ -103,6 +103,7 @@ describe("Requirement test artifact authority", () => {
       ["test.requirement.plan", "steps/test-generate/plan.json"],
       ["test.requirement.candidate.bundle", "artifacts/test-candidates/:{requirementId}/revision-:{bundleRevision}/bundle.json"],
       ["test.requirement.candidate.source", "artifacts/test-candidates/:{requirementId}/revision-:{bundleRevision}/sources/:{testPath}"],
+      ["test.requirement.support", "artifacts/test-support/:{ownerRequirementId}/:{supportPath}/:{supportDigest}"],
       ["test.requirement.review", "steps/test-review/result.json"],
       ["test.requirement.repair.progress", "steps/test-repair/progress/:{requirementId}.json"],
       ["test.requirement.gate", "steps/test-gate/result.json"],
@@ -127,7 +128,7 @@ describe("Requirement test artifact authority", () => {
     assert.equal(repairProgress.mutationPolicy.toString(), "replaceable");
 
     for (const logicalKey of [
-      "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.deferred",
+      "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support", "test.requirement.deferred",
     ]) {
       const contract = FLOW_ARTIFACT_CONTRACTS.require(logicalKey);
       assert.equal(contract.authoritySlot.cardinality.toString(), "collection", logicalKey);
@@ -155,6 +156,12 @@ describe("Requirement test artifact authority", () => {
         requirementId: "R1", bundleRevision: "1", testPath: "tests/r1.test.js",
       }).relativePath,
       "artifacts/test-candidates/R1/revision-1/sources/tests/r1.test.js",
+    );
+    assert.equal(
+      FLOW_ARTIFACT_CONTRACTS.resolve("test.requirement.support", {
+        ownerRequirementId: "R1", supportPath: "support/fixture.js", supportDigest: "a".repeat(64),
+      }).relativePath,
+      "artifacts/test-support/R1/support/fixture.js/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     );
     assert.equal(
       FLOW_ARTIFACT_CONTRACTS.resolve("tests.source", { testPath: "r1.test.js" }).relativePath,

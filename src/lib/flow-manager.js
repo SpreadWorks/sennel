@@ -628,6 +628,18 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  completeRequirementTestStructuralHandoff(input = {}) {
+    return this._store.completeRequirementTestStructuralHandoff({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  completeRequirementTestExternalFailure(input = {}) {
+    return this._store.completeRequirementTestExternalFailure({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   completeRequirementTestToolingFailure(input = {}) {
     return this._store.completeRequirementTestToolingFailure({
       ...input,

@@ -1,5 +1,5 @@
    <!-- include("/flow/prompts/partials/worker-artifact-handoff.md") -->
-   - Work only on the current reviewed Requirement candidate and the bounded finding batch supplied by `context.requirementTestRepair`.
+   - Work only on the current reviewed Requirement candidate and bounded finding batch supplied by the handoff's `requirementTestBinding` and `testReviewRepair` fields.
    - Verify the Requirement id, approved Spec revision, predecessor bundle revision and digest, source review Attempt, allowed test paths, and finding fingerprints before editing.
    - When repair is required, return only the allowed candidate files. Preserve all unaffected coverage and do not edit active `tests.source`.
    - When no repair is required, publish no candidate mutation; the parent records the mandatory no-op checkpoint and proceeds to Gate.

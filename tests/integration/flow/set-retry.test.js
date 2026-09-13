@@ -200,7 +200,7 @@ test("a non-Review canonical timeout does not require Review process-stop eviden
 });
 
 test("a Review timeout without stop evidence stays blocked through all reload projections", async () => {
-  const fixture = retryFixture({ nodeId: "test-review", failureKind: null });
+  const fixture = retryFixture({ nodeId: "impl-review", failureKind: null });
   fixture.manager.failCurrentAttempt({
     specId: fixture.flow.specId,
     failure: {
@@ -378,7 +378,6 @@ for (const { nodeId, phase } of [
   { nodeId: "draft-questions-review", phase: "draft-questions" },
   { nodeId: "draft-coverage-review", phase: "draft-coverage" },
   { nodeId: "spec-review", phase: "spec" },
-  { nodeId: "test-review", phase: "test" },
   { nodeId: "impl-review", phase: "impl" },
 ]) {
   test(`${nodeId} grants one unchanged exhausted recovery for confirmed timeout evidence`, () => {
@@ -483,9 +482,9 @@ test("status and next-action project unchanged confirmed-timeout recovery", asyn
   assert.equal(recoveryPlan.basis.confirmedTimeout, true, recoveryPlan.reason);
   assert.notEqual(status.recoveryDiagnostics, undefined, JSON.stringify(status));
   assert.equal(status.recoveryDiagnostics.review.recoveryPossible, true);
-  assert.match(status.recoveryDiagnostics.review.recoveryCommand, /set retry reset review test/);
+  assert.match(status.recoveryDiagnostics.review.recoveryCommand, /set retry reset review impl/);
   assert.equal(next.directive.actionId, "RECOVER_EXHAUSTED_TOOLING_RETRY", JSON.stringify(next));
-  assert.match(next.directive.nextAction, /set retry reset review test/);
+  assert.match(next.directive.nextAction, /set retry reset review impl/);
 });
 
 test("confirmed-timeout recovery remains consumed after changed evidence returns to its prior lineage", () => {
@@ -833,7 +832,7 @@ test("competing confirmed-timeout resets append exactly one exhausted recovery",
     "const manager=new FlowManager({root,mainRoot:root,inWorktree:false});",
     "const retryExhaustedAttempt=manager.retryExhaustedAttempt.bind(manager);",
     "manager.retryExhaustedAttempt=(input)=>{fs.writeFileSync(readyPath,'ready');const deadline=Date.now()+10000;while(!fs.existsSync(releasePath)){if(Date.now()>deadline)throw new Error('recovery barrier timed out');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}return retryExhaustedAttempt(input);};",
-    "const result=new SetRetryCommand().execute({action:'reset',kind:'review',phase:'test',reason:'Competing confirmed timeout recovery must remain atomic.',yes:true,root,mainRoot:root,executionRoot:root,flowManager:manager,flowState:manager.load(specId)});",
+    "const result=new SetRetryCommand().execute({action:'reset',kind:'review',phase:'impl',reason:'Competing confirmed timeout recovery must remain atomic.',yes:true,root,mainRoot:root,executionRoot:root,flowManager:manager,flowState:manager.load(specId)});",
     "if (result.ok === false) { process.stderr.write(result.errors[0].messages.join(' ')); process.exitCode=1; }",
     "else process.stdout.write(JSON.stringify(result));",
   ].join("");
@@ -1108,7 +1107,6 @@ test("Store rejects a Task Review admission bound to a different typed authoriza
 for (const { nodeId, phase } of [
   { nodeId: "draft-questions-review", phase: "draft-questions" },
   { nodeId: "draft-coverage-review", phase: "draft-coverage" },
-  { nodeId: "test-review", phase: "test" },
   { nodeId: "impl-review", phase: "impl" },
 ]) {
   test(`${nodeId} permits a prior artifact but rejects a current Attempt canonical Review artifact`, async () => {
@@ -1190,7 +1188,7 @@ test("confirmed timeout recovery fails closed when its producer baseline is miss
     fixture.manager,
     fixture.flow.specId,
     "retry.recovery.baseline",
-    { routeId: "review-test", attemptId: state.attempt.id },
+    { routeId: "review-impl", attemptId: state.attempt.id },
   );
   fixture.manager.failCurrentAttempt({
     specId: fixture.flow.specId,

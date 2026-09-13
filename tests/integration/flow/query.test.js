@@ -431,7 +431,7 @@ describe("flow query", () => {
 
   it("keeps canonical Review stop evidence out of the public Activity failure contract", () => {
     const fixture = createFlow();
-    fixture.flow.activate("test-review");
+    fixture.flow.activate("impl-review");
     fixture.flowManager.failCurrentAttempt({
       specId: "001-query",
       failure: {

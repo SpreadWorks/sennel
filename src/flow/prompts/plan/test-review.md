@@ -1,5 +1,6 @@
-   - Review only the current immutable Requirement candidate identified by `context.requirementTest`.
+   - Review only the current immutable Requirement candidate identified by the canonical Requirement test review source artifact.
    - Verify the exact Requirement id, approved Spec revision, bundle revision, candidate digest, and source Attempt before reviewing.
+   - If the canonical review source includes prior Gate evidence for this exact candidate, classify that evidence as a blocking review finding; do not discard, re-run, or reinterpret it as provider/tooling failure.
    - Check the assigned named `R-N:` test for production-code reachability, meaningful assertions, stable public surfaces, and consistency with the approved `preimplementation_test_expectation`.
    - Report `PASS`, `ADVISORY`, `REJECTED`, or `TOOLING_ERROR`. Preserve stable finding fingerprints and exact candidate paths for repair.
    - Do not mutate candidate files, active `tests.source`, the work plan, retry counters, or Flow state. Definition selects the next fixed checkpoint and budget disposition from the persisted observation.

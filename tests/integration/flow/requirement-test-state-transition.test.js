@@ -116,6 +116,34 @@ function activeApproval() {
 }
 
 describe("Requirement test fixed-leaf state connector", () => {
+  it("keeps the generate Attempt active while Definition stages a non-final Requirement", () => {
+    let state = activeApproval();
+    const initialization = initializeRequirementTestLifecycle({
+      specRevision: revision(),
+      spec: spec([
+        { id: "R1", testable: true, preimplementation_test_expectation: "fail" },
+        { id: "R2", testable: true, preimplementation_test_expectation: "pass" },
+      ]),
+    });
+    state = state.initializeRequirementTestLifecycle({
+      result: result("approved"),
+      decision: initialization.effect,
+      targetAttempt: attemptFor(state, "test-generate", "shared-generate"),
+    });
+    const sourceAttempt = state.attempt;
+    state = state.completeRequirementTestLifecycle({
+      result: result("R1 staged"),
+      decision: new RequirementTestLifecycleDecision({
+        disposition: "advance", target: "test-generate", nextStatus: "candidate_saved",
+        requirementId: "R1", nextRequirementId: "R2", candidateBundle: candidate("R1"),
+      }),
+      targetAttempt: sourceAttempt,
+    });
+    assert.equal(state.current.at(-1), "test-generate");
+    assert.equal(state.attempt.id, "shared-generate");
+    assert.equal(state.attempt.sequence, sourceAttempt.sequence);
+  });
+
   it("claims the first R and atomically loops the fixed leaves for the next R", () => {
     const sourceRevision = revision();
     const initialization = initializeRequirementTestLifecycle({

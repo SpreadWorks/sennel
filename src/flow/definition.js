@@ -18,11 +18,15 @@ import {
   RequirementTestBudget,
   RequirementTestLifecycleAuthority,
   RequirementTestPlan,
+  RequirementTestSemanticFinding,
+  RequirementTestSourceAttempt,
 } from "./lib/requirement-test-lifecycle.js";
 import {
   RequirementTestCandidateBundle,
   RequirementTestGateObservation,
 } from "./lib/requirement-test-artifacts.js";
+import { TestReviewRepairFinding } from "./lib/test-review-repair.js";
+import { SpecRevisionIdentity } from "./lib/spec-revision-identity.js";
 import {
   REQUIREMENT_TEST_LEAF_IDS,
   RequirementTestInitializationDecision,
@@ -313,10 +317,10 @@ export { resolveTaskExecutionOverrun } from "./lib/task-execution-policy.js";
 
 const REQUIREMENT_TEST_LEAVES = new Set(REQUIREMENT_TEST_LEAF_IDS);
 const REQUIREMENT_TEST_STEP_OBSERVATIONS = new Set([
-  "review_pass", "review_advisory", "semantic_rejection", "tooling_failure",
+  "review_pass", "review_advisory", "semantic_rejection", "tooling_failure", "external_blocked",
 ]);
-const REQUIREMENT_TEST_SEMANTIC_LIMIT = 5;
-const REQUIREMENT_TEST_TOOLING_LIMIT = 3;
+export const REQUIREMENT_TEST_SEMANTIC_LIMIT = 5;
+export const REQUIREMENT_TEST_TOOLING_LIMIT = 3;
 
 function requirementTestPositiveInteger(value, field) {
   if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${field} must be a positive integer`);
@@ -325,7 +329,7 @@ function requirementTestPositiveInteger(value, field) {
 
 /** Normalized non-Gate observation bound to one Requirement bundle revision. */
 export class RequirementTestStepObservation {
-  constructor({ requirementId, specRevision, bundleRevision = null, candidateDigest = null, sourceAttempt = null, kind } = {}) {
+  constructor({ requirementId, specRevision, bundleRevision = null, candidateDigest = null, sourceAttempt = null, semanticFindingFingerprint = null, kind } = {}) {
     if (typeof requirementId !== "string" || requirementId.trim() === "") {
       throw new Error("Requirement test observation requirementId is required");
     }
@@ -353,6 +357,62 @@ export class RequirementTestStepObservation {
       throw new Error("Requirement test step observation kind is invalid");
     }
     this.kind = kind;
+    if (semanticFindingFingerprint !== null
+      && (typeof semanticFindingFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(semanticFindingFingerprint))) {
+      throw new Error("Requirement test semantic observation fingerprint is invalid");
+    }
+    if ((kind === "semantic_rejection") !== (semanticFindingFingerprint !== null)) {
+      throw new Error("Requirement test semantic rejection must bind one canonical finding fingerprint");
+    }
+    this.semanticFindingFingerprint = semanticFindingFingerprint;
+    Object.freeze(this);
+  }
+}
+
+/**
+ * Parent-only structural rejection of a sealed Requirement candidate.
+ * It is semantic evidence: the candidate remains immutable and repairable,
+ * while Definition alone decides the bounded repair/defer route.
+ */
+export class RequirementTestStructuralRejectionObservation {
+  constructor({ stepId, binding, candidate, finding } = {}) {
+    if (!new Set(["test-generate", "test-repair"]).has(stepId)) {
+      throw new Error("Requirement test structural rejection leaf is invalid");
+    }
+    if (binding === null || typeof binding !== "object" || Array.isArray(binding)) {
+      throw new Error("Requirement test structural rejection binding is required");
+    }
+    this.stepId = stepId;
+    this.requirementId = String(binding.requirementId || "").trim();
+    if (this.requirementId === "") throw new Error("Requirement test structural rejection Requirement is required");
+    this.specRevision = binding.specRevision instanceof SpecRevisionIdentity
+      ? binding.specRevision
+      : new SpecRevisionIdentity(binding.specRevision);
+    this.bundleRevision = requirementTestPositiveInteger(binding.bundleRevision, "Requirement test structural rejection bundle revision");
+    this.sourceAttempt = binding.sourceAttempt instanceof RequirementTestSourceAttempt
+      ? binding.sourceAttempt
+      : RequirementTestSourceAttempt.fromJSON(binding.sourceAttempt);
+    if (!(candidate instanceof RequirementTestCandidateBundle)
+      || candidate.bundle.requirementId !== this.requirementId
+      || !candidate.bundle.specRevision.equals(this.specRevision)
+      || candidate.bundle.revision !== this.bundleRevision
+      || candidate.bundle.lineage.sourceAttempt.id !== this.sourceAttempt.id
+      || candidate.bundle.lineage.sourceAttempt.sequence !== this.sourceAttempt.sequence) {
+      throw new Error("Requirement test structural rejection candidate does not match its binding");
+    }
+    const typedFinding = finding instanceof TestReviewRepairFinding ? finding : new TestReviewRepairFinding(finding);
+    const document = typedFinding.document;
+    if (document.requirementId !== this.requirementId
+      || document.bundleRevision !== this.bundleRevision
+      || document.candidateDigest !== candidate.digest
+      || document.sourceAttempt?.id !== this.sourceAttempt.id
+      || document.sourceAttempt?.sequence !== this.sourceAttempt.sequence
+      || JSON.stringify(document.specRevision) !== JSON.stringify(this.specRevision.toJSON())) {
+      throw new Error("Requirement test structural rejection finding does not bind its candidate");
+    }
+    this.candidate = candidate;
+    this.finding = typedFinding;
+    this.semanticFindingFingerprint = typedFinding.fingerprint;
     Object.freeze(this);
   }
 }
@@ -371,7 +431,8 @@ export class RequirementTestLifecycleFacts {
     const isGate = observation instanceof RequirementTestGateObservation;
     const isCandidate = observation instanceof RequirementTestCandidateBundle;
     const isStep = observation instanceof RequirementTestStepObservation;
-    if (leaf === "test-gate" ? !isGate : (leaf === "test-generate" || leaf === "test-repair") ? !isCandidate && !isStep : !isStep) {
+    const isStructural = observation instanceof RequirementTestStructuralRejectionObservation;
+    if (leaf === "test-gate" ? !isGate : (leaf === "test-generate" || leaf === "test-repair") ? !isCandidate && !isStep && !isStructural : !isStep) {
       throw new Error("Requirement test lifecycle observation type does not match its leaf");
     }
     const observationRequirementId = isCandidate ? observation.bundle.requirementId : observation.requirementId;
@@ -380,22 +441,23 @@ export class RequirementTestLifecycleFacts {
       || !workItem.specRevision.equals(observationSpecRevision)) {
       throw new Error("Requirement test lifecycle observation has stale Requirement or Spec identity");
     }
-    const observationKind = isCandidate ? "candidate_saved" : observation.kind;
+    const observationKind = isCandidate ? "candidate_saved" : isStructural ? "structural_rejection" : observation.kind;
     let boundCandidate = candidateBundle;
-    if (isCandidate) {
-      boundCandidate = observation;
-      const producerAttempt = observation.bundle.lineage.sourceAttempt;
+    if (isCandidate || isStructural) {
+      const observedCandidate = isStructural ? observation.candidate : observation;
+      boundCandidate = observedCandidate;
+      const producerAttempt = observedCandidate.bundle.lineage.sourceAttempt;
       if (producerAttempt.id !== authority.attempt.id
         || producerAttempt.sequence !== authority.attempt.sequence) {
         throw new Error("Requirement test candidate lineage does not match its active producer Attempt");
       }
       if (leaf === "test-generate") {
-        if (workItem.status !== "in_progress" || observation.bundle.revision !== 1) {
+        if (workItem.status !== "in_progress" || observedCandidate.bundle.revision !== 1) {
           throw new Error("Requirement test generation candidate requires in-progress revision 1 facts");
         }
       } else if (workItem.status !== "reviewed"
-        || observation.bundle.revision !== workItem.bundleRevision.revision + 1
-        || observation.bundle.lineage.predecessorRevision !== workItem.bundleRevision.revision) {
+        || observedCandidate.bundle.revision !== workItem.bundleRevision.revision + 1
+        || observedCandidate.bundle.lineage.predecessorRevision !== workItem.bundleRevision.revision) {
         throw new Error("Requirement test repair candidate must immediately succeed the reviewed bundle");
       }
     } else {
@@ -405,13 +467,13 @@ export class RequirementTestLifecycleFacts {
       }
     }
     const permitted = new Map([
-      ["test-generate", new Map([["candidate_saved", "in_progress"], ["tooling_failure", "in_progress"]])],
+      ["test-generate", new Map([["candidate_saved", "in_progress"], ["structural_rejection", "in_progress"], ["tooling_failure", "in_progress"], ["external_blocked", "in_progress"]])],
       ["test-review", new Map([
         ["review_pass", "candidate_saved"], ["review_advisory", "candidate_saved"],
-        ["semantic_rejection", "candidate_saved"], ["tooling_failure", "candidate_saved"],
+        ["semantic_rejection", "candidate_saved"], ["tooling_failure", "candidate_saved"], ["external_blocked", "candidate_saved"],
       ])],
       ["test-repair", new Map([
-        ["candidate_saved", "reviewed"], ["tooling_failure", "reviewed"],
+        ["candidate_saved", "reviewed"], ["structural_rejection", "reviewed"], ["tooling_failure", "reviewed"], ["external_blocked", "reviewed"],
       ])],
       ["test-gate", new Map([
         ["assertion_failed", "reviewed"], ["assertion_passed", "reviewed"], ["invalid_test", "reviewed"],
@@ -427,7 +489,7 @@ export class RequirementTestLifecycleFacts {
         throw new Error("Requirement test lifecycle candidate bundle is not current");
       }
     }
-    if ((leaf === "test-review" || leaf === "test-repair") && !isCandidate && (
+    if ((leaf === "test-review" || leaf === "test-repair") && !isCandidate && !isStructural && (
       observation.candidateDigest !== boundCandidate.digest
       || observation.sourceAttempt?.id !== workItem.bundleRevision.lineage.sourceAttempt.id
       || observation.sourceAttempt?.sequence !== workItem.bundleRevision.lineage.sourceAttempt.sequence
@@ -471,33 +533,52 @@ function requirementTestDecision(facts, input) {
   return new RequirementTestLifecycleDecision({ requirementId: facts.workItem.requirementId, ...input, facts });
 }
 
-function requirementTestTerminalDecision(facts, disposition) {
-  const next = facts.plan.nextPendingWorkItem();
+function requirementTestTerminalDecision(facts, disposition, candidateBundle = null) {
+  const nextStatus = disposition === "promote" ? "promoted" : "deferred";
+  const afterSettlement = facts.plan.withWorkItem(facts.workItem.withState({ status: nextStatus }));
+  // Generate may have staged later Requirements in the same Attempt.  Those
+  // candidates are the next review frontier; only when none remain may a
+  // still-pending Requirement claim a fresh generator Attempt.
+  const staged = afterSettlement.activeWorkItem();
+  const pending = afterSettlement.nextPendingWorkItem();
   return requirementTestDecision(facts, {
     disposition,
-    target: next ? "test-generate" : "implement",
-    nextStatus: disposition === "promote" ? "promoted" : "deferred",
-    nextRequirementId: next?.requirementId ?? null,
+    target: staged ? "test-review" : pending ? "test-generate" : "implement",
+    nextStatus,
+    nextRequirementId: staged ? null : pending?.requirementId ?? null,
     acceptanceHandoff: disposition === "defer",
+    candidateBundle,
   });
 }
 
 function requirementTestSemanticRetry(facts) {
   const budget = facts.workItem.budget;
   if (!(budget instanceof RequirementTestBudget)) throw new Error("Requirement test lifecycle budget must be typed");
-  if (budget.autoSemantic < REQUIREMENT_TEST_SEMANTIC_LIMIT) {
+  // A structural rejection can be the first generated candidate, before the
+  // plan has recorded a bundle revision.  Its sealed candidate is the only
+  // authority for the semantic finding's revision in that case.
+  const bundleRevision = facts.candidateBundle?.bundle.revision
+    ?? facts.workItem.bundleRevision?.revision;
+  if (!Number.isSafeInteger(bundleRevision) || bundleRevision < 1) {
+    throw new Error("Requirement test semantic retry requires a candidate bundle revision");
+  }
+  const finding = new RequirementTestSemanticFinding({
+    requirementId: facts.workItem.requirementId,
+    bundleRevision,
+    fingerprint: facts.observation.semanticFindingFingerprint,
+  });
+  const duplicate = facts.workItem.hasSemanticFinding(finding);
+  const candidateBundle = facts.observationKind === "structural_rejection" ? facts.candidateBundle : null;
+  const budgetIncrement = facts.authority.autoApprove ? "autoSemantic" : "manualSemantic";
+  const selectedAttempts = budget[budgetIncrement];
+  if (duplicate || selectedAttempts < REQUIREMENT_TEST_SEMANTIC_LIMIT) {
     return requirementTestDecision(facts, {
       disposition: "semantic_retry", target: "test-repair", nextStatus: "reviewed",
-      budgetIncrement: "autoSemantic", repairRequired: true,
+      budgetIncrement: duplicate ? null : budgetIncrement, semanticFinding: duplicate ? null : finding,
+      repairRequired: true, candidateBundle,
     });
   }
-  if (budget.manualSemantic < REQUIREMENT_TEST_SEMANTIC_LIMIT) {
-    return requirementTestDecision(facts, {
-      disposition: "semantic_retry", target: "test-repair", nextStatus: "reviewed",
-      budgetIncrement: "manualSemantic", repairRequired: true,
-    });
-  }
-  return requirementTestTerminalDecision(facts, "defer");
+  return requirementTestTerminalDecision(facts, "defer", candidateBundle);
 }
 
 /** Sole Requirement-test route, compatibility, and retry-budget policy. */
@@ -506,7 +587,22 @@ export function resolveRequirementTestLifecycle(input) {
     ? input
     : new RequirementTestLifecycleFacts(input);
   const observation = facts.observationKind;
+  if (observation === "external_blocked") {
+    return requirementTestDecision(facts, {
+      disposition: "external_blocked",
+      target: facts.leaf,
+      nextStatus: facts.workItem.status,
+      repairRequired: facts.leaf === "test-repair" ? true : null,
+    });
+  }
   if (observation === "candidate_saved") {
+    const next = facts.leaf === "test-generate" ? facts.plan.nextPendingWorkItem() : null;
+    if (next !== null) {
+      return requirementTestDecision(facts, {
+        disposition: "advance", target: "test-generate", nextStatus: "candidate_saved",
+        nextRequirementId: next.requirementId, candidateBundle: facts.candidateBundle,
+      });
+    }
     return requirementTestDecision(facts, {
       disposition: "advance", target: "test-review", nextStatus: "candidate_saved",
       candidateBundle: facts.candidateBundle,
@@ -526,9 +622,16 @@ export function resolveRequirementTestLifecycle(input) {
     }
     return requirementTestTerminalDecision(facts, "defer");
   }
+  if (observation === "structural_rejection") return requirementTestSemanticRetry(facts);
   if (facts.leaf === "test-gate") {
     const expected = facts.workItem.expectation.value === "fail" ? "assertion_failed" : "assertion_passed";
     if (observation === expected) return requirementTestTerminalDecision(facts, "promote");
+    // Gate records executable evidence only. Review owns canonical semantic
+    // classification, so an incompatible observation reopens this exact
+    // staged candidate rather than consuming a repair budget directly.
+    return requirementTestDecision(facts, {
+      disposition: "advance", target: "test-review", nextStatus: "candidate_saved",
+    });
   }
   return requirementTestSemanticRetry(facts);
 }

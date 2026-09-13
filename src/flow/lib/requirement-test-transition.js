@@ -1,6 +1,7 @@
 import { RequirementTestCandidateBundle } from "./requirement-test-artifacts.js";
 import {
   RequirementTestPlan,
+  RequirementTestSemanticFinding,
   RequirementTestWorkItem,
 } from "./requirement-test-lifecycle.js";
 
@@ -12,7 +13,7 @@ export const REQUIREMENT_TEST_LEAF_IDS = Object.freeze([
 ]);
 
 const TARGETS = new Set([...REQUIREMENT_TEST_LEAF_IDS, "implement"]);
-const DISPOSITIONS = new Set(["advance", "semantic_retry", "tooling_retry", "promote", "defer"]);
+const DISPOSITIONS = new Set(["advance", "semantic_retry", "tooling_retry", "promote", "defer", "external_blocked"]);
 const STATUSES = new Set(["in_progress", "candidate_saved", "reviewed", "promoted", "deferred"]);
 const BUDGET_KINDS = new Set(["autoSemantic", "manualSemantic", "tooling"]);
 
@@ -22,7 +23,7 @@ function exactDecision(value) {
   }
   const expected = [
     "disposition", "target", "nextStatus", "budgetIncrement", "requirementId",
-    "nextRequirementId", "repairRequired", "acceptanceHandoff", "candidateBundle",
+    "nextRequirementId", "repairRequired", "acceptanceHandoff", "candidateBundle", "semanticFinding",
   ].sort();
   const actual = Object.keys(value).sort();
   if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
@@ -42,6 +43,7 @@ export class RequirementTestLifecycleDecision {
     repairRequired = null,
     acceptanceHandoff = false,
     candidateBundle = null,
+    semanticFinding = null,
     facts = null,
   } = {}) {
     if (!DISPOSITIONS.has(disposition)) throw new Error("Requirement test lifecycle disposition is invalid");
@@ -49,6 +51,14 @@ export class RequirementTestLifecycleDecision {
     if (!STATUSES.has(nextStatus)) throw new Error("Requirement test lifecycle next status is invalid");
     if (budgetIncrement !== null && !BUDGET_KINDS.has(budgetIncrement)) {
       throw new Error("Requirement test lifecycle budget increment is invalid");
+    }
+    this.semanticFinding = semanticFinding === null
+      ? null
+      : semanticFinding instanceof RequirementTestSemanticFinding
+        ? semanticFinding
+        : RequirementTestSemanticFinding.fromJSON(semanticFinding);
+    if ((budgetIncrement === "autoSemantic" || budgetIncrement === "manualSemantic") !== (this.semanticFinding !== null)) {
+      throw new Error("Requirement test lifecycle semantic budget increment must bind one canonical finding");
     }
     if (typeof requirementId !== "string" || requirementId === "") {
       throw new Error("Requirement test lifecycle requirementId is required");
@@ -67,8 +77,16 @@ export class RequirementTestLifecycleDecision {
     if (typeof acceptanceHandoff !== "boolean" || acceptanceHandoff !== (disposition === "defer")) {
       throw new Error("Requirement test lifecycle acceptance handoff does not match disposition");
     }
+    const carriesCandidate = (disposition === "advance" && nextStatus === "candidate_saved")
+      || (disposition === "semantic_retry" && target === "test-repair")
+      // A structurally rejected final candidate is still the authoritative
+      // evidence at semantic exhaustion; its plan/receipt must not regress
+      // to the preceding reviewed revision.
+      || disposition === "defer";
     if ((candidateBundle !== null && !(candidateBundle instanceof RequirementTestCandidateBundle))
-      || ((disposition === "advance" && nextStatus === "candidate_saved") !== (candidateBundle !== null))) {
+      || (candidateBundle !== null && !carriesCandidate)
+      || (target === "test-generate" && disposition === "advance"
+        && nextStatus === "candidate_saved" && candidateBundle === null)) {
       throw new Error("Requirement test lifecycle candidate bundle does not match decision");
     }
     this.disposition = disposition;
@@ -91,6 +109,9 @@ export class RequirementTestLifecycleDecision {
       candidateBundle: value.candidateBundle === null
         ? null
         : RequirementTestCandidateBundle.fromJSON(value.candidateBundle),
+      semanticFinding: value.semanticFinding === null
+        ? null
+        : RequirementTestSemanticFinding.fromJSON(value.semanticFinding),
     });
   }
 
@@ -102,13 +123,28 @@ export class RequirementTestLifecycleDecision {
     if (!(current instanceof RequirementTestWorkItem) || plan.activeWorkItem()?.requirementId !== this.requirementId) {
       throw new Error("Requirement test lifecycle decision does not match the active work item");
     }
+    if (this.disposition === "external_blocked") {
+      if (this.target !== this.facts?.leaf || this.nextStatus !== current.status
+        || this.budgetIncrement !== null || this.semanticFinding !== null
+        || this.nextRequirementId !== null || this.candidateBundle !== null) {
+        throw new Error("Requirement test external block must preserve its active work item");
+      }
+      return plan;
+    }
     const budget = this.budgetIncrement === null
       ? current.budget
       : current.budget.increment(this.budgetIncrement);
+    const semanticFindings = this.semanticFinding === null
+      ? current.semanticFindings
+      : [...current.semanticFindings, this.semanticFinding];
+    if (this.semanticFinding !== null && current.hasSemanticFinding(this.semanticFinding)) {
+      throw new Error("Requirement test lifecycle cannot consume an already counted semantic finding");
+    }
     let next = plan.withWorkItem(current.withState({
       status: this.nextStatus,
       bundleRevision: this.candidateBundle?.bundle ?? current.bundleRevision,
       budget,
+      semanticFindings,
     }));
     if (this.nextRequirementId !== null) {
       const pending = next.workItem(this.nextRequirementId);
@@ -118,6 +154,15 @@ export class RequirementTestLifecycleDecision {
       next = next.withWorkItem(pending.withState({ status: "in_progress" }));
     }
     return next;
+  }
+
+  /** A staged candidate advances the Requirement frontier without ending its generator Attempt. */
+  get continuesSourceAttempt() {
+    return this.disposition === "advance"
+      && this.target === "test-generate"
+      && this.nextStatus === "candidate_saved"
+      && this.nextRequirementId !== null
+      && this.candidateBundle !== null;
   }
 
   toJSON() {
@@ -131,6 +176,7 @@ export class RequirementTestLifecycleDecision {
       repairRequired: this.repairRequired,
       acceptanceHandoff: this.acceptanceHandoff,
       candidateBundle: this.candidateBundle?.toJSON() ?? null,
+      semanticFinding: this.semanticFinding?.toJSON() ?? null,
     };
   }
 }

@@ -91,6 +91,8 @@ function installWorker(root, {
   const release = path.join(workDir, "worker.release");
   const prompt = path.join(workDir, "worker-prompt.txt");
   const invocation = path.join(workDir, "worker-invocation.json");
+  const action = path.join(workDir, "worker-action.json");
+  const request = path.join(workDir, "worker-request.json");
   fs.mkdirSync(workDir, { recursive: true });
   fs.writeFileSync(worker, [
     'import fs from "node:fs";',
@@ -105,6 +107,9 @@ function installWorker(root, {
     ...(captureInput ? [
       `fs.writeFileSync(${JSON.stringify(prompt)},process.argv.at(-1)||"");`,
       `fs.writeFileSync(${JSON.stringify(invocation)},process.env.SENNEL_FLOW_DISPATCH_INVOCATION||"");`,
+      `const capturedInvocation=JSON.parse(process.env.SENNEL_FLOW_DISPATCH_INVOCATION||"{}");`,
+      `if (capturedInvocation.actionFilePath) fs.copyFileSync(capturedInvocation.actionFilePath,${JSON.stringify(action)});`,
+      `if (capturedInvocation.requestPath) fs.copyFileSync(capturedInvocation.requestPath,${JSON.stringify(request)});`,
     ] : []),
     ...(failAfterCapture ? ['throw new Error("intentional worker capture failure");'] : []),
     holdForRelease
@@ -127,7 +132,7 @@ function installWorker(root, {
       },
     },
   }, null, 2)}\n`);
-  return { count, lock, overlap, release, prompt, invocation };
+  return { count, lock, overlap, release, prompt, invocation, action, request };
 }
 
 function installSummaryAgent(root) {
@@ -1128,22 +1133,25 @@ describe("flow dispatch CLI", () => {
       "authorization",
       "targetBinding",
     ]);
-    const workerAction = JSON.parse(fs.readFileSync(invocation.actionFilePath, "utf8"));
-    const workerRequest = JSON.parse(fs.readFileSync(invocation.requestPath, "utf8"));
+    const workerAction = JSON.parse(fs.readFileSync(worker.action, "utf8"));
+    const workerRequest = JSON.parse(fs.readFileSync(worker.request, "utf8"));
     const boundaryAction = boundary.envelope.data.nextAction;
     assert.equal(resumed.envelope.data.nextAction, null, "the deliberately failed worker must not advance the handoff step");
     assert.deepEqual(Object.keys(workerAction), [
-      "digest",
-      "progressDigest",
-      "repositoryFingerprint",
       "taskId",
       "step",
       "action",
+      "instructions",
+      "context",
+      "output_schema",
+      "requires_approval",
+      "maxAttempts",
       "directive",
     ]);
     assert.equal(workerAction.step, "implement");
     assert.equal(workerAction.action, "run-impl");
-    assert.equal(workerAction.context.workerArtifactHandoff.required, true);
+    assert.equal(workerRequest.stepId, "implement");
+    assert.equal(workerRequest.targetAuthority, "execution-checkout");
     assert.equal(invocation.actionDigest, workerRequest.actionDigest);
     assert.match(invocation.requestDigest, /^[a-f0-9]{64}$/);
     assert.match(invocation.actionFileDigest, /^[a-f0-9]{64}$/);

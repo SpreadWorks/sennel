@@ -84,6 +84,33 @@ export class RequirementTestBudget {
   }
 }
 
+/** One canonical semantic finding that has consumed this Requirement's retry budget. */
+export class RequirementTestSemanticFinding {
+  constructor({ requirementId, bundleRevision, fingerprint } = {}) {
+    this.requirementId = requiredText(requirementId, "Requirement test semantic finding requirementId");
+    this.bundleRevision = positiveInteger(bundleRevision, "Requirement test semantic finding bundleRevision");
+    if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(fingerprint)) {
+      throw new Error("Requirement test semantic finding fingerprint must be a SHA-256 digest");
+    }
+    this.fingerprint = fingerprint;
+    Object.freeze(this);
+  }
+
+  static fromJSON(value) {
+    exactKeys(value, ["requirementId", "bundleRevision", "fingerprint"], "Requirement test semantic finding");
+    return new RequirementTestSemanticFinding(value);
+  }
+
+  equals(other) {
+    return other instanceof RequirementTestSemanticFinding
+      && other.requirementId === this.requirementId
+      && other.bundleRevision === this.bundleRevision
+      && other.fingerprint === this.fingerprint;
+  }
+
+  toJSON() { return { requirementId: this.requirementId, bundleRevision: this.bundleRevision, fingerprint: this.fingerprint }; }
+}
+
 /** Explicit red/green expectation captured in the approved Spec. */
 export class RequirementTestExpectation {
   constructor(value) {
@@ -163,7 +190,7 @@ export class RequirementTestPlanPublication {
 
 /** Stable state and plan authority captured when Definition selected a route. */
 export class RequirementTestLifecycleAuthority {
-  constructor({ runId, specId, leaf, attempt, planPublication } = {}) {
+  constructor({ runId, specId, leaf, attempt, planPublication, autoApprove = false } = {}) {
     this.runId = requiredText(runId, "Requirement test lifecycle runId");
     this.specId = requiredText(specId, "Requirement test lifecycle specId");
     if (!LIFECYCLE_LEAVES.has(leaf)) throw new Error("Requirement test lifecycle authority leaf is invalid");
@@ -172,6 +199,8 @@ export class RequirementTestLifecycleAuthority {
       ? attempt
       : RequirementTestSourceAttempt.fromJSON(attempt);
     this.planPublication = RequirementTestPlanPublication.fromDescriptor(planPublication);
+    if (typeof autoApprove !== "boolean") throw new Error("Requirement test lifecycle autoApprove policy must be boolean");
+    this.autoApprove = autoApprove;
     Object.freeze(this);
   }
 
@@ -186,6 +215,7 @@ export class RequirementTestLifecycleAuthority {
         sequence: state.attempt.sequence,
       },
       planPublication: planDescriptor,
+      autoApprove: state?.policy?.autoApprove === true,
     });
   }
 
@@ -196,6 +226,7 @@ export class RequirementTestLifecycleAuthority {
       leaf: this.leaf,
       attempt: this.attempt.toJSON(),
       planPublication: this.planPublication.toJSON(),
+      autoApprove: this.autoApprove,
     };
   }
 }
@@ -295,7 +326,7 @@ export class RequirementTestBundleRevision {
 
 /** Immutable lifecycle state for one Requirement-owned test work item. */
 export class RequirementTestWorkItem {
-  constructor({ requirementId, specRevision: revision, expectation, status = "pending", bundleRevision = null, budget = RequirementTestBudget.initial() } = {}) {
+  constructor({ requirementId, specRevision: revision, expectation, status = "pending", bundleRevision = null, budget = RequirementTestBudget.initial(), semanticFindings = [] } = {}) {
     this.requirementId = requiredText(requirementId, "Requirement test work item requirementId");
     this.specRevision = specRevision(revision);
     this.expectation = RequirementTestExpectation.from(expectation);
@@ -305,6 +336,14 @@ export class RequirementTestWorkItem {
       ? null
       : bundleRevision instanceof RequirementTestBundleRevision ? bundleRevision : RequirementTestBundleRevision.fromJSON(bundleRevision);
     this.budget = budget instanceof RequirementTestBudget ? budget : RequirementTestBudget.fromJSON(budget);
+    if (!Array.isArray(semanticFindings)) throw new Error("Requirement test semantic findings must be an array");
+    this.semanticFindings = Object.freeze(semanticFindings.map((finding) => (
+      finding instanceof RequirementTestSemanticFinding ? finding : RequirementTestSemanticFinding.fromJSON(finding)
+    )));
+    if (this.semanticFindings.some((finding) => finding.requirementId !== this.requirementId)
+      || new Set(this.semanticFindings.map((finding) => JSON.stringify(finding.toJSON()))).size !== this.semanticFindings.length) {
+      throw new Error("Requirement test semantic findings do not match this Requirement");
+    }
     if (["pending", "in_progress"].includes(this.status) && this.bundleRevision !== null) {
       throw new Error("Requirement test pending work cannot carry a bundle revision");
     }
@@ -323,12 +362,12 @@ export class RequirementTestWorkItem {
   }
 
   static fromJSON(value) {
-    exactKeys(value, ["requirementId", "specRevision", "expectation", "status", "bundleRevision", "budget"], "Requirement test work item");
+    exactKeys(value, ["requirementId", "specRevision", "expectation", "status", "bundleRevision", "budget", "semanticFindings"], "Requirement test work item");
     return new RequirementTestWorkItem(value);
   }
 
   /** Reconstruct facts selected by Definition-owned connector policy. */
-  withState({ status = this.status, bundleRevision = this.bundleRevision, budget = this.budget } = {}) {
+  withState({ status = this.status, bundleRevision = this.bundleRevision, budget = this.budget, semanticFindings = this.semanticFindings } = {}) {
     return new RequirementTestWorkItem({
       requirementId: this.requirementId,
       specRevision: this.specRevision,
@@ -336,7 +375,15 @@ export class RequirementTestWorkItem {
       status,
       bundleRevision,
       budget,
+      semanticFindings,
     });
+  }
+
+  hasSemanticFinding(finding) {
+    const candidate = finding instanceof RequirementTestSemanticFinding
+      ? finding
+      : RequirementTestSemanticFinding.fromJSON(finding);
+    return this.semanticFindings.some((entry) => entry.equals(candidate));
   }
 
   toJSON() {
@@ -347,6 +394,7 @@ export class RequirementTestWorkItem {
       status: this.status,
       bundleRevision: this.bundleRevision?.toJSON() ?? null,
       budget: this.budget.toJSON(),
+      semanticFindings: this.semanticFindings.map((finding) => finding.toJSON()),
     };
   }
 }
@@ -408,9 +456,23 @@ export class RequirementTestPlan {
   }
 
   activeWorkItem() {
-    const active = this.workItems.filter((item) => !["pending", "promoted", "deferred"].includes(item.status));
-    if (active.length > 1) throw new Error("Requirement test plan contains multiple active work items");
-    return active[0] ?? null;
+    // Generation deliberately stages every Requirement before review begins.
+    // A saved predecessor is therefore not an active generator while one
+    // later Requirement is in progress. Once generation is exhausted, the
+    // earliest staged candidate becomes the review frontier.
+    const generating = this.workItems.filter((item) => item.status === "in_progress");
+    if (generating.length > 1) throw new Error("Requirement test plan contains multiple generating work items");
+    if (generating.length === 1) {
+      if (this.workItems.some((item) => item.status === "reviewed")) {
+        throw new Error("Requirement test plan cannot generate while a Requirement is under review");
+      }
+      return generating[0];
+    }
+    const staged = this.workItems.filter((item) => ["candidate_saved", "reviewed"].includes(item.status));
+    if (staged.length === 0) return null;
+    const reviewed = staged.filter((item) => item.status === "reviewed");
+    if (reviewed.length > 1) throw new Error("Requirement test plan contains multiple reviewed work items");
+    return reviewed[0] ?? staged[0];
   }
 
   nextPendingWorkItem() {

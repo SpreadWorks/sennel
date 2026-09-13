@@ -8,7 +8,13 @@
 import { derivePhase } from "../../lib/flow-helpers.js";
 import { normalizeAgentMetricDimension } from "../../lib/agent-metrics.js";
 import { BROAD_MODE_HISTORY_MAX_ENTRIES } from "../../lib/constants.js";
-import { findLatestInProgressLeaf, resolveMaxAttempts, resolveToolingMaxAttempts } from "../definition.js";
+import {
+  findLatestInProgressLeaf,
+  REQUIREMENT_TEST_SEMANTIC_LIMIT,
+  REQUIREMENT_TEST_TOOLING_LIMIT,
+  resolveMaxAttempts,
+  resolveToolingMaxAttempts,
+} from "../definition.js";
 import { flattenSteps } from "./step-tree.js";
 import { FlowCommand } from "./base-command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
@@ -34,6 +40,7 @@ import { advisorySummary } from "./nonblocking.js";
 import { CanonicalSpecRecord } from "./canonical-spec-record.js";
 import { CanonicalFileMap } from "./canonical-file-map.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
+import { RequirementTestPlanArtifact } from "./requirement-test-artifacts.js";
 
 /** Token sub-fields that the Logger / canonical command view emit per agent entry. */
 export const TOKEN_KEYS = ["input", "output", "cacheRead", "cacheCreation"];
@@ -268,6 +275,45 @@ class CanonicalStatusArtifacts {
     }).current.payload;
   }
 
+  requirementTestLifecycle() {
+    // The plan's catalog contract authorizes report-style read projections;
+    // status is such a read-only projection, not a lifecycle worker.
+    const resolved = this.flowManager.readArtifact({
+      specId: this.specId,
+      logicalKey: "test.requirement.plan",
+      consumerNodeId: "report",
+      optional: true,
+    });
+    if (resolved === null) return null;
+    const plan = RequirementTestPlanArtifact.fromJSON(JSON.parse(resolved.bytes.toString("utf8"))).plan;
+    const active = plan.activeWorkItem();
+    return {
+      activeRequirementId: active?.requirementId ?? null,
+      semanticMode: this.state.policy.autoApprove ? "auto" : "manual",
+      requirements: plan.workItems.map((item) => {
+        const auto = { attempts: item.budget.autoSemantic, remaining: REQUIREMENT_TEST_SEMANTIC_LIMIT - item.budget.autoSemantic };
+        const manual = { attempts: item.budget.manualSemantic, remaining: REQUIREMENT_TEST_SEMANTIC_LIMIT - item.budget.manualSemantic };
+        const selected = this.state.policy.autoApprove ? auto : manual;
+        return {
+          requirementId: item.requirementId,
+          status: item.status,
+          bundleRevision: item.bundleRevision?.revision ?? null,
+          semantic: {
+            mode: this.state.policy.autoApprove ? "auto" : "manual",
+            attempts: selected.attempts,
+            remaining: selected.remaining,
+            auto,
+            manual,
+          },
+          tooling: {
+            attempts: item.budget.tooling,
+            remaining: REQUIREMENT_TEST_TOOLING_LIMIT - item.budget.tooling,
+          },
+        };
+      }),
+    };
+  }
+
   deferredFindings() {
     const resolved = this.#read("flow.findings", { optional: true });
     if (resolved === null) return {
@@ -393,6 +439,7 @@ function buildStatusOutput(state, root, options = {}) {
       artifactPath: FLOW_ARTIFACT_CONTRACTS.resolve("flow.findings").relativePath,
     };
   const finalRegression = finalRegressionStatus(artifacts?.finalRegression() ?? null);
+  const requirementTestLifecycle = artifacts?.requirementTestLifecycle() ?? null;
   const taskReviewConvergence = artifacts?.taskReviewConvergence() ?? [];
   const implementationReviewConvergence = artifacts?.implementationReviewConvergence() ?? null;
   const completion = new FlowCompletion(state);
@@ -411,6 +458,7 @@ function buildStatusOutput(state, root, options = {}) {
     stepsProgress: { done: doneSteps, total: totalSteps },
     requirements,
     requirementsProgress: { mapped: mappedReqs, total: totalReqs },
+    ...(requirementTestLifecycle !== null && { requirementTestLifecycle }),
     ...(deferredFindings.count > 0 && { deferredFindings }),
     ...(finalRegression && { finalRegression }),
     ...(taskReviewConvergence.length > 0 && { taskReviewConvergence }),

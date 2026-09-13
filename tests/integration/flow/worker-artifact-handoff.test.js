@@ -622,7 +622,15 @@ describe("worker artifact handoff", () => {
   });
 
   it("stores spec-test topology and the seal command only in the immutable request file", () => {
-    const value = fixture("test", { specRecord: validSpec() });
+    const spec = validSpec();
+    spec.requirements = [{
+      id: "R1",
+      desc: "Publish a validated Requirement test artifact.",
+      testable: true,
+      preimplementation_test_expectation: "fail",
+      task_ids: ["T1"],
+    }];
+    const value = fixture("test-generate", { specRecord: spec });
     try {
       const request = value.coordinator.createRequest({
         ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
@@ -632,6 +640,7 @@ describe("worker artifact handoff", () => {
 
       assert.equal(stored.sealCommand, "sennel flow run seal-handoff");
       assert.equal(stored.completionOwner, "parent-dispatcher");
+      assert.ok(stored.specTestTopology);
       assert.deepEqual(stored.specTestTopology, request.specTestTopology.toJSON());
       assert.equal(Object.hasOwn(reference, "specTestTopology"), false);
       assert.equal(Object.hasOwn(reference, "sealCommand"), false);
@@ -707,7 +716,7 @@ describe("worker artifact handoff", () => {
           _envelopeKey: "dispatch",
         });
 
-        assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_STALE");
+        assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_STALE", JSON.stringify(result));
         assert.equal(result.data.classification, "stale");
         assert.equal(result.data.retryable, false);
         assert.equal(calls, 0);

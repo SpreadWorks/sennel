@@ -17,6 +17,7 @@ import {
 import { RequirementTestArtifactStore } from "./requirement-test-store.js";
 import { SharedSpecTestExecution } from "./shared-spec-test-execution.js";
 import { extractTestNameReqIds, scanFileHeader } from "./test-headers.js";
+import { SpecTestBootstrapValidator } from "./spec-test-bootstrap-validator.js";
 
 const TEST_NAME_RE = /(?:it|test)\s*\(\s*["'`]([^"'`]+)["'`]/g;
 const SKIPPED_TEST_NAME_RE = /(?:it|test)\.skip\s*\(\s*["'`]([^"'`]+)["'`]/g;
@@ -42,7 +43,16 @@ function candidateSourcesByPath(candidateBundle, sourceBytes) {
     const actualDigest = crypto.createHash("sha256").update(bytes).digest("hex");
     if (actualDigest !== source.digest) throw new Error(`candidate source digest is invalid: ${source.testPath}`);
   }
-  if (bytesByPath.size !== bundle.sources.length) throw new Error("candidate source set contains an unassigned path");
+  for (const support of bundle.support) {
+    const bytes = bytesByPath.get(support.supportPath);
+    if (!bytes) throw new Error(`candidate support bytes are missing: ${support.supportPath}`);
+    if (bytes.length !== support.byteLength) throw new Error(`candidate support byte length does not match: ${support.supportPath}`);
+    const actualDigest = crypto.createHash("sha256").update(bytes).digest("hex");
+    if (actualDigest !== support.digest) throw new Error(`candidate support digest is invalid: ${support.supportPath}`);
+  }
+  if (bytesByPath.size !== bundle.sources.length + bundle.support.length) {
+    throw new Error("candidate source set contains an unassigned path");
+  }
   return { bundle, bytesByPath };
 }
 
@@ -115,6 +125,32 @@ export async function runRequirementTestGate({
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, sources.bytesByPath.get(source.testPath), { mode: 0o644 });
       testFiles.push(target);
+    }
+    for (const support of sources.bundle.support) {
+      const target = path.join(materialized, support.supportPath);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, sources.bytesByPath.get(support.supportPath), { mode: 0o644 });
+    }
+    const bootstrap = new SpecTestBootstrapValidator({
+      payloadSpecDir: materialized,
+      canonicalSpecDir: versionLocation.resolve("artifacts"),
+      repositoryRoot,
+      executionRoot: repositoryRoot,
+    }).validate();
+    if (!bootstrap.ok) {
+      const fallbackName = `${requirementId}: assigned requirement test`;
+      return {
+        observation: observationFor({
+          bundle: sources.bundle,
+          requirementId,
+          specRevision,
+          kind: "invalid_test",
+          testName: fallbackName,
+        }),
+        rawLog: bootstrap.issues.map((issue) => issue.toString()).join("\n"),
+        command: null,
+        process: null,
+      };
     }
     const assigned = [];
     const skipped = [];
@@ -240,7 +276,8 @@ export default class RunRequirementTestGateCommand extends FlowCommand {
       specRevision: workItem.specRevision,
       requirementId: workItem.requirementId,
       bundle: candidate.candidate,
-      sourceBytes: new Map(candidate.sources.map((source) => [source.targetRelativePath, source.bytes])),
+      sourceBytes: new Map([...candidate.sources, ...candidate.support]
+        .map((source) => [source.targetRelativePath, source.bytes])),
     });
     const rawOutputPath = testArtifacts.location.relativeArtifact("test.requirement.gate.raw-log");
     testArtifacts.writeRaw({

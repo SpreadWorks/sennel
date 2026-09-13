@@ -323,10 +323,19 @@ export function validateTestExecuteResultV2(result) {
   if (!result.regression || typeof result.regression !== "object") throw new Error("regression object is required");
   for (const entry of result.summary) {
     if (typeof entry.id !== "string") throw new Error("summary[].id is required");
+    if (!["executed", "deferred_no_active_test"].includes(entry.execution)) {
+      throw new Error(`summary[].execution invalid for ${entry.id}`);
+    }
     if (!SUMMARY_RESULT_VALUES.includes(entry.result)) throw new Error(`summary[].result invalid for ${entry.id}`);
     if (entry.result === "deferred") {
+      if (entry.execution !== "deferred_no_active_test") {
+        throw new Error(`summary[${entry.id}].execution must be deferred_no_active_test for deferred result`);
+      }
       RequirementTestDeferredReceipt.fromJSON(entry.deferred_receipt);
       continue;
+    }
+    if (entry.execution !== "executed") {
+      throw new Error(`summary[${entry.id}].execution must be executed for active result`);
     }
     if (!entry.evidence || typeof entry.evidence !== "object") throw new Error(`summary[].evidence missing for ${entry.id}`);
     if (typeof entry.evidence.command !== "string" || entry.evidence.command.length === 0) {
@@ -963,6 +972,9 @@ export function validateSummaryEvidence(summary, {
       throw new Error("summary[].id must be a non-empty requirement id");
     }
     if (entry.result === "deferred") {
+      if (entry.execution !== "deferred_no_active_test") {
+        throw new Error(`${entry.id}: deferred result requires execution=deferred_no_active_test`);
+      }
       const entryReceipt = entry.deferred_receipt instanceof RequirementTestDeferredReceipt
         ? entry.deferred_receipt
         : RequirementTestDeferredReceipt.fromJSON(entry.deferred_receipt);
@@ -971,6 +983,9 @@ export function validateSummaryEvidence(summary, {
         throw new Error(`${entry.id}: deferred receipt does not match canonical receipt`);
       }
       continue;
+    }
+    if (entry.execution !== "executed") {
+      throw new Error(`${entry.id}: active result requires execution=executed`);
     }
     const evidence = entry.evidence;
     if (!evidence || typeof evidence !== "object") {

@@ -6,7 +6,8 @@
  * the Definition layer.
  */
 
-const INVALID_TEST_PATTERN = /SyntaxError|ERR_MODULE|Cannot find module|ReferenceError|bootstrap|module loader/i;
+const ASSERTION_FAILURE_PATTERN = /(?:\bcode:\s*['"]ERR_ASSERTION['"]|\bname:\s*['"]AssertionError['"]|\bAssertionError\b)/i;
+const INVALID_TEST_PATTERN = /SyntaxError|ERR_(?:MODULE|TEST_FAILURE)|Cannot find module|ReferenceError|TypeError|RangeError|bootstrap|module loader|hook/i;
 
 function requiredText(value, label) {
   if (typeof value !== "string" || value.length === 0) throw new Error(`${label} is required`);
@@ -56,16 +57,19 @@ export class RequirementTestCheck {
     if (missing) return new RequirementTestObservation({ ...common, kind: "missing", reason: "assigned named requirement test was not found" });
     if (skipped) return new RequirementTestObservation({ ...common, kind: "skipped", reason: "assigned named requirement test was skipped" });
 
-    const text = String(rawText || "");
-    const status = namedTestStatus(text, this.testName);
-    if (INVALID_TEST_PATTERN.test(text) && status === null) {
-      return new RequirementTestObservation({ ...common, kind: "invalid_test", reason: "test source or bootstrap failed before the named test ran" });
-    }
     if (!process || process.started !== true || process.spawnError || process.signal || process.timedOut) {
       return new RequirementTestObservation({ ...common, kind: "tooling_failure", reason: "test runner transport did not provide a usable result" });
     }
+
+    const text = String(rawText || "");
+    const status = namedTestStatus(text, this.testName);
+    if (status === null && INVALID_TEST_PATTERN.test(text)) {
+      return new RequirementTestObservation({ ...common, kind: "invalid_test", reason: "test source or bootstrap failed before the named test ran" });
+    }
     if (status === "not ok" && process.exitCode !== 0) {
-      return new RequirementTestObservation({ ...common, kind: "assertion_failed", reason: "assigned named test reported an assertion failure" });
+      return ASSERTION_FAILURE_PATTERN.test(text)
+        ? new RequirementTestObservation({ ...common, kind: "assertion_failed", reason: "assigned named test reported an assertion failure" })
+        : new RequirementTestObservation({ ...common, kind: "invalid_test", reason: "assigned named test failed without assertion evidence" });
     }
     if (status === "ok" && process.exitCode === 0) {
       return new RequirementTestObservation({ ...common, kind: "assertion_passed", reason: "assigned named test reported a passing assertion" });

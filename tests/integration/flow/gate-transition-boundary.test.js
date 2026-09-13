@@ -443,14 +443,13 @@ describe("definition-owned Gate transition boundary", () => {
   it("keeps every review, Gate, and acceptance route in the Definition-owned behavior table", () => {
     assert.deepEqual(NONBLOCKING_ROUTES.map((route) => route.sourceStep).sort(), [
       "acceptance-review", "draft-coverage-review", "draft-gate", "draft-questions-review",
-      "final-regression", "impl-gate", "impl-review", "retro", "scenario-validity",
-      "spec-gate", "task-gate", "task-review", "test-result-review", "test-review",
+      "final-regression", "impl-gate", "impl-review", "retro",
+      "spec-gate", "task-gate", "task-review", "test-result-review",
     ]);
     const selected = new Map();
     for (const [sourceStep, phase, scope] of [
       ["draft-questions-review", "draft-questions", "flow"],
       ["draft-coverage-review", "draft-coverage", "flow"],
-      ["test-review", "test", "flow"],
       ["task-review", "impl", "task"],
       ["impl-review", "impl", "flow"],
     ]) {
@@ -486,7 +485,7 @@ describe("definition-owned Gate transition boundary", () => {
     }
     assert.deepEqual([...selected.keys()].sort(), [
       "acceptance-review", "draft-coverage-review", "draft-gate", "draft-questions-review",
-      "impl-gate", "impl-review", "retro", "spec-gate", "task-gate", "task-review", "test-review",
+      "impl-gate", "impl-review", "retro", "spec-gate", "task-gate", "task-review",
     ]);
   });
 
