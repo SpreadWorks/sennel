@@ -31,4 +31,5 @@ pnpm-lock.yaml
 **/[0-9][0-9][0-9]/.runtime/
 
 # Legacy Flow raw output is migration-only transient evidence.
+**/[0-9][0-9][0-9]/steps/scenario-validity/output.log
 **/tests/.raw/
