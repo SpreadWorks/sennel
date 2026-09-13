@@ -31,6 +31,7 @@ import {
   testExecuteTransitionDefinition,
   testResultReviewTransitionDefinition,
   DraftCoverageRepairCompletionDecision,
+  DefinitionNonblockingEligibility,
   resolveSourceQualityIssueRecoveryPlan,
   TaskReviewStageBinding, TaskReviewStageFacts, resolveTaskReviewStageTransition,
   resolveTaskReviewStageCompletion,
@@ -62,11 +63,13 @@ import {
   CurrentFlowSpecRecord,
   CanonicalSourceWorkerSpecCompletion,
   CanonicalSourceWorkerUpgradeResult,
+  CurrentFlowPolicy,
   CurrentFlowNonBlockingPolicy,
   CurrentFlowContext,
   CurrentFlowState,
   CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
+  CurrentFlowTransitionSnapshot,
   ApprovalTaskAdmission,
   FlowActivity,
   TaskNode,
@@ -105,7 +108,8 @@ import { CanonicalSpecApproval } from "./canonical-spec-approval.js";
 import { CanonicalFileMapUpdate, CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { CanonicalRequirementDefinitions } from "./canonical-requirement-definitions.js";
-import { nonblockingRouteFor } from "./nonblocking-route.js";
+import { buildNonblockingAcceptanceHandoffPublication } from "./nonblocking-handoff.js";
+import { validateNonblockingRecordForActiveFlow } from "./nonblocking.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
 import { DRAFT_ARTIFACT_WRITER_STEPS } from "./draft-artifact-promotion.js";
 import {
@@ -518,6 +522,44 @@ export class TaskGateSettlementAdmission {
 class CombinedAdmission {
   constructor(...admissions) { this.admissions = admissions.filter(Boolean); Object.freeze(this.admissions); Object.freeze(this); }
   assert(view) { for (const admission of this.admissions) admission.assert(view); }
+}
+
+/** Optimistic lock for a Definition-selected nonblocking identity. */
+class NonblockingSelectionAdmission {
+  constructor({ snapshot, record } = {}) {
+    if (!(snapshot instanceof CurrentFlowTransitionSnapshot)) {
+      throw new CurrentFlowStateInvariantError("nonblocking admission requires a canonical snapshot");
+    }
+    this.revision = snapshot.revision;
+    this.specId = snapshot.state.specId;
+    this.runId = snapshot.state.runId;
+    this.nodeId = snapshot.state.current?.at(-1) ?? null;
+    this.attemptId = snapshot.state.attempt?.id ?? null;
+    this.attemptSequence = snapshot.state.attempt?.sequence ?? null;
+    this.record = record instanceof ActivityNonBlockingRecord ? record : new ActivityNonBlockingRecord(record);
+    Object.freeze(this);
+  }
+
+  assert(view) {
+    if (view.revision !== this.revision
+      || view.state.specId !== this.specId
+      || view.state.runId !== this.runId
+      || view.state.current?.at(-1) !== this.nodeId
+      || view.state.attempt?.id !== this.attemptId
+      || view.state.attempt?.sequence !== this.attemptSequence
+      || this.record.sourceAttempt !== this.attemptSequence) {
+      throw new CurrentFlowStateConflictError("nonblocking Definition selection changed before commit");
+    }
+  }
+}
+
+function materializeNonblockingEffectStep(state, definitionStepId, sourceNodeId) {
+  const identity = TaskStepIdentity.fromStateNode(state, sourceNodeId);
+  if (identity === null) return definitionStepId;
+  if (identity.definitionId !== definitionStepId && definitionStepId.startsWith("task-")) {
+    return new TaskStepIdentity({ taskId: identity.taskId, role: definitionStepId.slice("task-".length) }).nodeId;
+  }
+  return definitionStepId.startsWith("task-") ? identity.nodeId : definitionStepId;
 }
 
 function nextTaskExecutionBudget({ state, taskId, lineages }) {
@@ -1311,7 +1353,8 @@ export class CanonicalFlowManagerStore {
 
   /** Store-local counterpart used by Gate facts during lock re-admission. */
   readCanonicalTransitionSnapshot(specId) {
-    return this.transitionSnapshot(specId);
+    const snapshot = this.transitionSnapshot(specId);
+    return snapshot === null ? null : new CurrentFlowTransitionSnapshot(snapshot);
   }
 
   /** Read one lock-scoped canonical view for a Definition fact adapter. */
@@ -1458,6 +1501,7 @@ export class CanonicalFlowManagerStore {
   }
 
   executionRoot() { return this.root; }
+  specLocation(specId) { return this.location(specId); }
 
   resolveWorktreePaths(state) {
     if (state?.execution?.mode !== "worktree" && state?.worktree !== true) {
@@ -4453,20 +4497,61 @@ export class CanonicalFlowManagerStore {
   }
 
   /** One-way advisory policy activation through the typed policy Activity. */
-  activateNonblockingPolicy({ specId = null, policy } = {}) {
+  activateNonblockingPolicy({ specId = null, policy, observation, eligibility } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const state = this.runtime.load(resolved);
-    if (state.policy.nonblocking !== null) return state.policy.nonblocking.toJSON();
+    const snapshot = this.readCanonicalTransitionSnapshot(resolved);
+    const state = snapshot.state;
     const next = policy instanceof CurrentFlowNonBlockingPolicy
       ? policy
       : new CurrentFlowNonBlockingPolicy(policy);
-    this.runtime.setPolicy({
-      specId: resolved,
-      activityId: activityId("policy-nonblocking-enabled"),
-      policy: { autoApprove: state.policy.autoApprove, nonblocking: next.toJSON() },
+    const fact = observation instanceof ActivityNonBlockingRecord
+      ? observation
+      : new ActivityNonBlockingRecord(observation);
+    if (!(eligibility instanceof DefinitionNonblockingEligibility)
+      || fact.kind !== "observation"
+      || eligibility.sourceStep !== next.activatedStep
+      || fact.sourceStep !== eligibility.sourceStep
+      || fact.resultKind !== eligibility.resultKind
+      || fact.definitionDigest !== eligibility.definitionDigest) {
+      throw new CurrentFlowStateInvariantError("nonblocking activation requires its Definition-selected observation");
+    }
+    let currentEligibility;
+    try {
+      currentEligibility = validateNonblockingRecordForActiveFlow(
+        this.executionRoot(), this.loadReadOnly(resolved), this, fact,
+      );
+    } catch (error) {
+      throw new CurrentFlowStateInvariantError(error.message);
+    }
+    if (currentEligibility.definitionDigest !== eligibility.definitionDigest) {
+      throw new CurrentFlowStateInvariantError("nonblocking activation Definition selection is stale");
+    }
+    const admission = new NonblockingSelectionAdmission({ snapshot, record: fact });
+    const stableId = `nonblocking-activation-${crypto.createHash("sha256").update(JSON.stringify(fact.toJSON())).digest("hex")}`;
+    const existing = this.runtime.activities(resolved).find((activity) => activity.id === stableId) ?? null;
+    if (existing !== null
+      && JSON.stringify(existing.transition.nonblocking?.toJSON?.() ?? null) !== JSON.stringify(fact.toJSON())) {
+      throw new CurrentFlowStateInvariantError("canonical nonblocking activation identity conflict");
+    }
+    if (state.policy.nonblocking !== null && existing === null) {
+      throw new CurrentFlowStateInvariantError("canonical nonblocking activation replay does not match the enabled policy");
+    }
+    const durablePolicy = existing?.transition.policy ?? new CurrentFlowPolicy({
+      autoApprove: state.policy.autoApprove,
+      nonblocking: next.toJSON(),
     });
-    return next.toJSON();
+    if (existing !== null) this.runtime.apply(resolved, existing, { admission });
+    else {
+      this.runtime.activateNonblockingPolicy({
+        specId: resolved,
+        activityId: stableId,
+        policy: durablePolicy.toJSON(),
+        nonblocking: fact.toJSON(),
+        admission,
+      });
+    }
+    return durablePolicy.nonblocking.toJSON();
   }
 
   /** Record one exact observation or decision in the canonical Activity ledger. */
@@ -4499,42 +4584,137 @@ export class CanonicalFlowManagerStore {
 
   /**
    * Apply an evidence-bound advisory decision and its definition-owned
-   * continuation through Activities only.  The decision fact is written
-   * first; an interrupted continuation is therefore recoverable by replaying
-   * this operation with the same immutable identity.
+   * continuation as one Version transaction. The Activity fact, replacement
+   * Attempt/lifecycle, and acceptance publication either commit together or
+   * remain absent for an exact replay.
    */
-  applyNonblockingDecision({ specId = null, nodeId, sourceStep, record } = {}) {
+  applyNonblockingDecision({ specId = null, nodeId, record, eligibility } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const target = requiredText(nodeId, "canonical nonblocking decision nodeId");
-    const route = nonblockingRouteFor(requiredText(sourceStep, "canonical nonblocking decision sourceStep"));
-    if (route === null) throw new CurrentFlowStateInvariantError("canonical nonblocking decision route is unavailable");
+    if (!(eligibility instanceof DefinitionNonblockingEligibility)) {
+      throw new CurrentFlowStateInvariantError("canonical nonblocking decision requires a Definition-selected plan");
+    }
     const fact = record instanceof ActivityNonBlockingRecord ? record : new ActivityNonBlockingRecord(record);
     if (fact.kind !== "decision") throw new CurrentFlowStateInvariantError("canonical nonblocking continuation requires a decision fact");
     const identity = JSON.stringify(fact.toJSON());
     const stableId = `nonblocking-${crypto.createHash("sha256").update(identity).digest("hex")}`;
     const existing = this.runtime.activities(resolved).find((activity) => activity.id === stableId) ?? null;
-    if (existing !== null) return fact.toJSON();
-    if (fact.action === "continue") {
+    const snapshot = this.readCanonicalTransitionSnapshot(resolved);
+    const state = snapshot.state;
+    let currentEligibility;
+    try {
+      currentEligibility = validateNonblockingRecordForActiveFlow(
+        this.executionRoot(), this.loadReadOnly(resolved), this, fact,
+      );
+    } catch (error) {
+      throw new CurrentFlowStateInvariantError(error.message);
+    }
+    if (eligibility.sourceStep !== fact.sourceStep
+      || eligibility.resultKind !== fact.resultKind
+      || eligibility.definitionDigest !== fact.definitionDigest) {
+      throw new CurrentFlowStateInvariantError("canonical nonblocking decision does not match its Definition plan");
+    }
+    if (currentEligibility.definitionDigest !== eligibility.definitionDigest) {
+      throw new CurrentFlowStateInvariantError("canonical nonblocking decision Definition selection is stale");
+    }
+    const selectionAdmission = new NonblockingSelectionAdmission({ snapshot, record: fact });
+    if (eligibility.gateDecision !== null
+      && eligibility.gateDecision.facts.target.stepId !== target) {
+      throw new CurrentFlowStateInvariantError("canonical nonblocking Gate target does not match its Definition plan");
+    }
+    const effect = eligibility.effectFor(fact.action);
+    if (effect.operation === "continue") {
+      let publication = null;
+      if (eligibility.acceptancePublication === "semantic-findings") {
+        const gateFacts = eligibility.gateDecision?.facts ?? null;
+        publication = buildDeferredSemanticFindingsPublication({
+          flowManager: this,
+          flowState: this.loadReadOnly(resolved),
+          nodeId: target,
+          sourceStep: fact.sourceStep,
+          sourceArtifact: fact.evidenceRef,
+          attempts: gateFacts === null ? fact.sourceAttempt : gateFacts.retry.used + 1,
+          round: gateFacts?.taskBudget?.round ?? (gateFacts === null ? fact.sourceAttempt : gateFacts.retry.used + 1),
+          fingerprints: eligibility.selectedFindingFingerprints.length === 0
+            ? null
+            : new Set(eligibility.selectedFindingFingerprints),
+        });
+      } else if (eligibility.acceptancePublication === "nonblocking-handoff") {
+        publication = buildNonblockingAcceptanceHandoffPublication({
+          flowManager: this,
+          flowState: this.loadReadOnly(resolved),
+          nodeId: target,
+          sourceStep: fact.sourceStep,
+          evidenceRef: fact.evidenceRef,
+          evidenceDigest: fact.evidenceDigest,
+          resultKind: fact.resultKind,
+          attempts: fact.sourceAttempt,
+          rationale: fact.remainingRisk,
+        });
+      } else {
+        throw new CurrentFlowStateInvariantError("canonical nonblocking acceptance publication is invalid");
+      }
+      const settlement = publication?.settlementArtifacts() ?? {};
+      const admission = new CombinedAdmission(
+        selectionAdmission,
+        eligibility.gateDecision?.facts.scope === "task"
+          ? new TaskGateSettlementAdmission(eligibility.gateDecision, "continuation")
+          : null,
+      );
+      const materializedTargetStepId = materializeNonblockingEffectStep(state, effect.targetStepId, target);
+      const materializedSkippedStepIds = effect.skippedStepIds.map((stepId) => (
+        materializeNonblockingEffectStep(state, stepId, target)
+      ));
+      const replacementAttempt = state.attempt?.failure === null ? null : commandContextAttempt(state, target);
+      const gateTaskLifecycle = eligibility.gateDecision?.plan.taskLifecycle?.toJSON?.() ?? null;
+      const preview = state.continueNonblockingAttempt({
+        result: {
+          outcome: "passed", summary: "explicit nonblocking continuation",
+          confirmedAt: new Date().toISOString(), artifactRefs: [],
+        },
+        skippedNodeIds: materializedSkippedStepIds,
+        gateTaskLifecycle,
+        attempt: replacementAttempt,
+      });
+      if (preview.nextAction()?.nodeId !== materializedTargetStepId) {
+        throw new CurrentFlowStateInvariantError("canonical nonblocking continuation does not reach its Definition target");
+      }
+      const continued = existing !== null
+        ? this.runtime.apply(resolved, existing, { ...settlement, admission })
+        : this.runtime.continueNonblocking({
+          specId: resolved,
+          activityId: stableId,
+          nodeId: target,
+          nonblocking: fact.toJSON(),
+          attempt: replacementAttempt,
+          skippedNodeIds: materializedSkippedStepIds,
+          gateTaskLifecycle,
+          ...settlement,
+          admission,
+        });
+      if (continued.nextAction()?.nodeId !== materializedTargetStepId) {
+        throw new CurrentFlowStateInvariantError("canonical nonblocking continuation settled outside its Definition target");
+      }
+      return fact.toJSON();
+    }
+    if (effect.operation !== "restart-source") {
+      throw new CurrentFlowStateInvariantError("canonical nonblocking decision effect operation is invalid");
+    }
+    if (materializeNonblockingEffectStep(state, effect.targetStepId, target) !== target) {
+      throw new CurrentFlowStateInvariantError("canonical nonblocking restart does not target its Definition source Step");
+    }
+    if (existing !== null) this.runtime.apply(resolved, existing, { admission: selectionAdmission });
+    else {
       this.runtime.continueNonblocking({
         specId: resolved,
         activityId: stableId,
         nodeId: target,
         nonblocking: fact.toJSON(),
-        skippedNodeIds: route.skippedSteps,
+        attempt: commandContextAttempt(state, target),
+        admission: selectionAdmission,
       });
-      return fact.toJSON();
     }
-    this.recordNonblocking({ specId: resolved, nodeId: target, record: fact });
-    let state = this.runtime.load(resolved);
-    // An identical replay after the typed continuation has completed is a
-    // no-op; a crash between Activities resumes from the exact current leaf.
-    if (state.current?.at(-1) !== target) return fact.toJSON();
-    // A repair/retry always creates a new current Attempt episode. The
-    // immutable decision remains tied to the prior artifact digest; a fresh
-    // producer publication is required before another decision can be made.
-    this.updateStepStatus({ stepId: target, requestedStatus: "done" }, { specId: resolved });
-    this.rewindTo(target, { specId: resolved });
     return fact.toJSON();
   }
 

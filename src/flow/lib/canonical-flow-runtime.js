@@ -62,6 +62,7 @@ const TYPE_FOR_OPERATION = Object.freeze({
   resume_flow: "flow_resumed",
   finalize_flow: "flow_finalized",
   set_policy: "policy_updated",
+  activate_nonblocking: "policy_updated",
   publish_artifacts: "artifacts_published",
   publish_plugin_artifacts: "artifacts_published",
   publish_upgrade_result: "artifacts_published",
@@ -811,6 +812,24 @@ export class CanonicalFlowRuntime {
     }));
   }
 
+  /** Commit one-way policy activation and its bound initial observation together. */
+  activateNonblockingPolicy({ specId, activityId, policy, nonblocking, admission = undefined } = {}) {
+    const state = this.#state(specId);
+    return this.apply(specId, this.#activity(state, {
+      id: activityId,
+      nodeId: state.root.id,
+      policy,
+      transition: {
+        operation: "activate_nonblocking",
+        nodeId: state.root.id,
+        task: null,
+        attempt: null,
+        status: null,
+        nonblocking,
+      },
+    }), { admission });
+  }
+
   /**
    * Publish durable producer output without inventing a second state update.
    * The Version Store atomically appends this Activity, writes the bytes, and
@@ -1012,19 +1031,30 @@ export class CanonicalFlowRuntime {
         task: null,
         attempt: null,
         status: null,
-        nonblocking: null,
         nonblocking,
       },
     }), { artifactWrites, artifactBaselines, admission });
   }
 
-  continueNonblocking({ specId, activityId, nodeId, nonblocking, skippedNodeIds = [] } = {}) {
+  continueNonblocking({
+    specId,
+    activityId,
+    nodeId,
+    nonblocking,
+    attempt = null,
+    skippedNodeIds = [],
+    gateTaskLifecycle = null,
+    artifactWrites = undefined,
+    artifactBaselines = undefined,
+    admission = undefined,
+  } = {}) {
     const state = this.#state(specId);
     const target = requiredText(nodeId, "nonblocking continuation nodeId");
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
       nodeId: target,
       operation: "continue_nonblocking",
+      attempt,
       result: {
         outcome: "passed",
         summary: "explicit nonblocking continuation",
@@ -1033,6 +1063,10 @@ export class CanonicalFlowRuntime {
       },
       references: { evaluations: [], findings: [], repairs: skippedNodeIds.map((id) => ({ id, label: "nonblocking route skip" })), artifacts: [] },
       nonblocking,
+      gateTaskLifecycle,
+      artifactWrites,
+      artifactBaselines,
+      admission,
     });
   }
 
@@ -1216,7 +1250,7 @@ export class CanonicalFlowRuntime {
     const target = requiredText(nodeId, "transition nodeId");
     const node = state.findNode(target);
     if (node === null) throw new CurrentFlowStateInvariantError(`transition node is not part of this Flow: ${target}`);
-    const transitionAttempt = ["start_attempt", "rewind", "rewind_test_evidence", "repair_test_review", "settle_test_review_repair_timeout", "repair_scenario_validity", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "preimplementation_bootstrap", "recover_existing_implementation", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage"].includes(operation)
+    const transitionAttempt = ["start_attempt", "rewind", "rewind_test_evidence", "repair_test_review", "settle_test_review_repair_timeout", "repair_scenario_validity", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "preimplementation_bootstrap", "recover_existing_implementation", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "continue_nonblocking", "advance_task_review_stage"].includes(operation)
       ? attempt
       : null;
     const activityAttempt = operation === "complete_draft_completion"

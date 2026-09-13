@@ -147,6 +147,7 @@ function postFinalizationNonblockingActivity(manager, specId) {
         sourceAttempt: 1,
         evidenceRef: "steps/scenario-validity/result.json",
         evidenceDigest: "c".repeat(64),
+        definitionDigest: "d".repeat(64),
         resultKind: "unavailable",
         action: null,
         rationale: null,
@@ -305,13 +306,20 @@ describe("finalized canonical Flow contract", () => {
         })],
       })],
       ["dispatch approval", () => manager.recordDispatchApproval({ specId: fixture.specId, receipt })],
-      ["nonblocking policy", () => manager.activateNonblockingPolicy({
+      ["nonblocking policy", () => manager._store.runtime.activateNonblockingPolicy({
         specId: fixture.specId,
-        policy: {
+        activityId: "post-finalization-nonblocking-activation",
+        policy: { autoApprove: false, nonblocking: {
           enabled: true,
           activatedAt: "2026-08-15T00:00:00.000Z",
           activatedStep: "scenario-validity",
           reason: "This must not create a post-finalization policy Activity.",
+        } },
+        nonblocking: {
+          kind: "observation", sourceStep: "scenario-validity", sourceAttempt: 1,
+          evidenceRef: "steps/scenario-validity/result.json", evidenceDigest: "a".repeat(64),
+          definitionDigest: "b".repeat(64),
+          resultKind: "unavailable", action: null, rationale: null, remainingRisk: null,
         },
       })],
       ["direct policy Activity", () => manager.setAutoApprove(true, { specId: fixture.specId })],

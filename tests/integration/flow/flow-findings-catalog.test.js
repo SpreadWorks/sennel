@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, test } from "node:test";
@@ -8,11 +7,6 @@ import {
   CanonicalFlowFindingsStore,
   deferExhaustedSemanticFindings,
 } from "../../../src/flow/lib/flow-findings.js";
-import {
-  CanonicalNonBlockingHandoffStore,
-  materializeNonblockingAcceptanceHandoff,
-  verifyNonblockingHandoffSource,
-} from "../../../src/flow/lib/nonblocking-handoff.js";
 import RunReopenDraftCommand from "../../../src/flow/lib/run-reopen-draft.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -228,48 +222,4 @@ test("actual draft reopen starts a ledger-derived flow-finding cycle for both pu
   assert.equal(all.entries[1].planRewindAt, reopenActivity.timing.finishedAt);
   assert.deepEqual(current.entries.map((entry) => entry.findingId), [all.entries[1].findingId]);
   assert.equal(current.entries[0].planRewindAt, store.cycle.planRewindAt);
-});
-
-test("nonblocking handoff binds its evidence and deferred finding to cataloged artifacts", () => {
-  tmp = createTmpDir("nonblocking-handoff-catalog-");
-  const flowManager = makeFlowManager(tmp);
-  const flow = new CanonicalFlowFixture({ flowManager, specId: "002-handoff" })
-    .create()
-    .registerActive()
-    .activate("scenario-validity");
-  const state = flow.state();
-  const evidence = attemptHistory("scenario.validity", { result: "unavailable", reason: "test runner unavailable" });
-  flowManager.publishArtifacts({
-    specId: state.specId,
-    nodeId: "scenario-validity",
-    artifactWrites: [{
-      logicalKey: "scenario.validity",
-      mediaType: "application/json",
-      bytes: evidence,
-    }],
-  });
-
-  const result = materializeNonblockingAcceptanceHandoff({
-    flowManager,
-    flowState: state,
-    nodeId: "scenario-validity",
-    sourceStep: "scenario-validity",
-    evidenceRef: "scenario.validity",
-    evidenceDigest: crypto.createHash("sha256").update(evidence).digest("hex"),
-    resultKind: "unavailable",
-    attempts: 1,
-  });
-
-  assert.equal(result.findingCount, 1);
-  const handoffs = new CanonicalNonBlockingHandoffStore({ flowManager, flowState: state, nodeId: "scenario-validity" }).read();
-  assert.equal(handoffs.findings.length, 1);
-  assert.equal(verifyNonblockingHandoffSource({
-    flowManager,
-    flowState: state,
-    nodeId: "scenario-validity",
-    value: handoffs.findings[0],
-  }), true);
-  const findings = new CanonicalFlowFindingsStore({ flowManager, flowState: state, nodeId: "scenario-validity" }).read();
-  assert.equal(findings.entries[0].sourceArtifact, "steps/nonblocking-handoffs.json");
-  assert.equal(fs.existsSync(path.join(flowManager.specLocation(state.specId).directory, "nonblocking-handoffs.json")), false);
 });

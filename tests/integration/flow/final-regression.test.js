@@ -12,6 +12,7 @@ import {
 } from "../../../src/flow/lib/final-regression-transition-facts.js";
 import { validateFinalRegressionResult } from "../../../src/flow/lib/test-artifacts.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { FlowDispatchAction } from "../../../src/flow/lib/run-dispatch.js";
 import { createTmpDir, removeTmpDir, writeFile } from "../../support/builders/tmp-dir.js";
 import { FlowAtStepFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
@@ -249,6 +250,7 @@ describe("flow run final-regression", () => {
     ctx.flowState = ctx.flowManager.loadReadOnly(SPEC_ID);
     const next = await new GetNextActionCommand().execute(ctx);
     assert.equal(next.directive.kind, "execute_command");
+    assert.equal(next.directive.actionPrompt, undefined);
     assert.equal(next.directive.actionId, "FINAL_REGRESSION_REPAIR");
     assert.match(next.directive.nextAction, /flow run claim-next-action/);
     const decision = resolveFinalRegressionDecision(ctx);
@@ -279,6 +281,9 @@ describe("flow run final-regression", () => {
     const next = await new GetNextActionCommand().execute(ctx);
     assert.equal(next.directive.kind, "blocked");
     assert.equal(next.directive.code, "FINAL_REGRESSION_BLOCKED");
+    assert.equal(next.directive.actionPrompt, undefined);
+    assert.equal(new FlowDispatchAction(next).isTerminal, true);
+    assert.equal(new FlowDispatchAction(next).awaitsUserDecision, false);
     assert.equal(ctx.flowManager.canonicalState(SPEC_ID).attempt.sequence, 1);
     assert.equal(ctx.flowManager.canonicalState(SPEC_ID).attempt.failure.code, "FINAL_REGRESSION_FAILED");
   });
@@ -439,8 +444,29 @@ describe("flow run final-regression", () => {
 
     ctx.flowState = ctx.flowManager.loadReadOnly(SPEC_ID);
     const next = await new GetNextActionCommand().execute(ctx);
-    assert.equal(next.directive.kind, "blocked");
-    assert.equal(next.directive.code, "FINAL_REGRESSION_EXTERNAL_BLOCKED");
+    assert.deepEqual(
+      {
+        kind: next.directive.kind,
+        terminal: next.directive.terminal,
+        requiresUserAction: next.directive.requiresUserAction,
+      },
+      { kind: "await_user_decision", terminal: false, requiresUserAction: true },
+    );
+    assert.deepEqual(
+      next.directive.actionPrompt.choices.map((choice) => ({
+        actionId: choice.actionId,
+        stateTransition: choice.stateTransition,
+        hasNextAction: choice.nextAction !== null,
+      })),
+      [
+        { actionId: "KEEP_STRICT_FLOW", stateTransition: "retain-strict-flow-block", hasNextAction: false },
+        { actionId: "ENABLE_NONBLOCKING", stateTransition: null, hasNextAction: true },
+      ],
+    );
+    const dispatched = new FlowDispatchAction(next);
+    assert.equal(dispatched.isTerminal, false);
+    assert.equal(dispatched.awaitsUserDecision, true);
+    assert.equal(next.definitionTransition.action.identity.operation, "external-blocked");
     assert.equal(ctx.flowManager.canonicalState(SPEC_ID).attempt.sequence, 1);
   });
 

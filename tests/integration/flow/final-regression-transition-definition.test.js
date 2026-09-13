@@ -14,6 +14,7 @@ import {
   NonGateSourcePublication,
   NonGateTargetBinding,
   NonGateTransitionFacts,
+  nonGateNonblockingEligibilityForDecision,
   resolveNonGateTransition,
 } from "../../../src/flow/definition.js";
 import { applyFinalRegressionTransition } from "../../../src/flow/lib/final-regression-transition-application.js";
@@ -84,6 +85,18 @@ describe("final-regression Definition transition policy", () => {
     }), FINAL_REGRESSION_STEP_DEFINITION);
     assert.equal(mismatched.disposition.operation, "blocked");
     assert.equal(mismatched.disposition.reason, "retry_history_mismatch");
+  });
+
+  it("keeps final regression in the Definition-owned advisory behavior table", () => {
+    const eligibility = nonGateNonblockingEligibilityForDecision(resolveNonGateTransition(
+      facts({ category: "environment" }),
+      FINAL_REGRESSION_STEP_DEFINITION,
+    ));
+    assert.notEqual(eligibility, null);
+    assert.equal(eligibility.sourceStep, "final-regression");
+    assert.equal(eligibility.resultKind, "tooling");
+    assert.deepEqual(eligibility.allowedActions, ["retry", "continue"]);
+    assert.equal(eligibility.effectFor("continue").targetStepId, "report");
   });
 
   it("binds record-and-proceed to the exhausted current-change Definition Action", () => {

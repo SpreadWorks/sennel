@@ -29,6 +29,7 @@ import {
   TestExecuteStepFacts,
   TestResultReviewStepFacts,
   resolveNonGateTransition,
+  nonGateNonblockingEligibilityForDecision,
   scenarioValidityTransitionDefinition,
   testExecuteTransitionDefinition,
   testResultReviewTransitionDefinition,
@@ -133,20 +134,21 @@ const definition = new NonGateStepDefinition({
 function facts(overrides = {}) {
   const attempt = overrides.currentAttempt ?? new NonGateAttemptIdentity({ id: "attempt-9", sequence: 9 });
   const fingerprint = "f".repeat(64);
+  const stepId = overrides.stepId ?? "fixture-step";
   return new NonGateTransitionFacts({
     runId: "run-9",
     specId: "009-non-gate-transition",
-    stepId: "fixture-step",
+    stepId,
     snapshotRevision: "state-revision-9",
     producer: new NonGateProducerOwnership({
-      runId: "run-9", specId: "009-non-gate-transition", activityId: "activity-9", stepId: "fixture-step", attempt,
+      runId: "run-9", specId: "009-non-gate-transition", activityId: "activity-9", stepId, attempt,
     }),
     target: new NonGateTargetBinding({
-      runId: "run-9", specId: "009-non-gate-transition", stepId: "fixture-step", attempt,
+      runId: "run-9", specId: "009-non-gate-transition", stepId, attempt,
     }),
     currentAttempt: attempt,
     catalogPublication: new NonGateCatalogPublication({
-      runId: "run-9", specId: "009-non-gate-transition", stepId: "fixture-step",
+      runId: "run-9", specId: "009-non-gate-transition", stepId,
       attemptId: attempt.id,
       sequence: attempt.sequence,
       producerActivityId: "activity-9",
@@ -154,7 +156,7 @@ function facts(overrides = {}) {
       fingerprint,
     }),
     sourcePublication: new NonGateSourcePublication({
-      runId: "run-9", specId: "009-non-gate-transition", stepId: "fixture-step",
+      runId: "run-9", specId: "009-non-gate-transition", stepId,
       attemptId: attempt.id, sequence: attempt.sequence, producerActivityId: "activity-9", artifactId: "fixture.result.9", fingerprint,
     }),
     lineage: new NonGateLineage({
@@ -193,6 +195,37 @@ function flowManagerFor(source) {
 }
 
 describe("definition-owned non-Gate transition boundary", () => {
+  it("keeps scenario and test-result advisory routes in the Definition-owned behavior table", () => {
+    const cases = [
+      [
+        "scenario-validity",
+        scenarioValidityTransitionDefinition,
+        new ScenarioValidityStepFacts({
+          result: "pass",
+          process: { started: false, exitCode: null, signal: null, timedOut: false, spawnError: "provider unavailable" },
+        }),
+      ],
+      [
+        "test-result-review",
+        testResultReviewTransitionDefinition,
+        new TestResultReviewStepFacts({
+          verdict: "pass",
+          checkedItems: [{ result: "pass" }],
+          toolingFailure: true,
+        }),
+      ],
+    ];
+    for (const [stepId, stepDefinition, stepFacts] of cases) {
+      const decision = resolveNonGateTransition(facts({ stepId, stepFacts }), stepDefinition);
+      const eligibility = nonGateNonblockingEligibilityForDecision(decision);
+      assert.notEqual(eligibility, null);
+      assert.equal(eligibility.sourceStep, stepId);
+      assert.equal(eligibility.resultKind, "tooling");
+      assert.deepEqual(eligibility.allowedActions, ["retry", "continue"]);
+      assert.equal(eligibility.effectFor("retry").targetStepId, stepId);
+    }
+  });
+
   it("reloads typed state, revision, Activity prefix, and catalog from one persisted Version snapshot", () => {
     const repository = createTmpDir("non-gate-transition-snapshot-");
     fixtureRoots.push(repository);
@@ -249,13 +282,13 @@ describe("definition-owned non-Gate transition boundary", () => {
       ["scenario-validity", scenarioValidityTransitionDefinition, new ScenarioValidityStepFacts({ result: "pass", rawAvailable: true }), true, false, "advance"],
       ["scenario-validity", scenarioValidityTransitionDefinition, new ScenarioValidityStepFacts({ result: "block", rawAvailable: true, blockingEvidence: [{ classification: "invalid_test" }] }), true, false, "repair"],
       ["scenario-validity", scenarioValidityTransitionDefinition, new ScenarioValidityStepFacts({ result: "block", rawAvailable: true, blockingEvidence: [{ classification: "unexpected_pass" }] }), true, false, "repair"],
-      ["scenario-validity", scenarioValidityTransitionDefinition, new ScenarioValidityStepFacts({ result: "block", rawAvailable: true, blockingEvidence: [{ classification: "unexpected_pass" }] }), true, true, "await-user-input"],
+      ["scenario-validity", scenarioValidityTransitionDefinition, new ScenarioValidityStepFacts({ result: "block", rawAvailable: true, blockingEvidence: [{ classification: "unexpected_pass" }] }), true, true, "repair"],
       ["scenario-validity", scenarioValidityTransitionDefinition, new ScenarioValidityStepFacts({ result: "block", rawAvailable: true, blockingEvidence: [{ classification: "unexpected_pass" }], process: { started: false, exitCode: null, signal: null, timedOut: false, spawnError: "fixture" } }), true, false, "external-blocked"],
       ["test-execute", testExecuteTransitionDefinition, new TestExecuteStepFacts({ rawAvailable: true }), true, false, "advance"],
       ["test-execute", testExecuteTransitionDefinition, new TestExecuteStepFacts({ rawAvailable: true, process: { started: false, exitCode: null, signal: null, timedOut: false, spawnError: "fixture" } }), true, false, "external-blocked"],
       ["test-result-review", testResultReviewTransitionDefinition, new TestResultReviewStepFacts({ verdict: "pass", rawAvailable: true, checkedItems: [{ result: "pass" }] }), true, false, "advance"],
       ["test-result-review", testResultReviewTransitionDefinition, new TestResultReviewStepFacts({ verdict: "fail", rawAvailable: true, checkedItems: [{ result: "fail" }] }), true, false, "retry"],
-      ["test-result-review", testResultReviewTransitionDefinition, new TestResultReviewStepFacts({ verdict: "fail", rawAvailable: true, checkedItems: [{ result: "fail" }] }), true, true, "await-user-input"],
+      ["test-result-review", testResultReviewTransitionDefinition, new TestResultReviewStepFacts({ verdict: "fail", rawAvailable: true, checkedItems: [{ result: "fail" }] }), true, true, "retry"],
       ["test-result-review", testResultReviewTransitionDefinition, new TestResultReviewStepFacts({ verdict: "fail", rawAvailable: true, checkedItems: [{ result: "fail" }], toolingFailure: true }), true, false, "external-blocked"],
     ];
     for (const [stepId, stepDefinition, stepFacts, completed, nonblocking, operation] of scenarios) {

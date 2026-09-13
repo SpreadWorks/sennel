@@ -75,6 +75,11 @@ import {
   specTriageDeltaPayloadSchema,
 } from "./spec-review-artifacts.js";
 import { TestReviewRepairWorkerTimeout } from "./test-review-repair-timeout.js";
+import {
+  NonBlockingDecisionContext,
+  decisionEvidenceForActiveFlow,
+  recordNonBlockingDecision,
+} from "./nonblocking.js";
 
 const DEFAULT_MAX_DISPATCHES = 256;
 const DEFAULT_MAX_STALLED_DISPATCHES = 3;
@@ -667,6 +672,62 @@ export class FlowDispatchAction {
     return this.directive instanceof AwaitUserDecisionDirective
       || this.directive instanceof AwaitDraftQuestionDirective;
   }
+
+  get nonblockingDecision() {
+    return this.nextAction.nonblockingDecision == null
+      ? null
+      : NonBlockingDecisionContext.fromStored(this.nextAction.nonblockingDecision);
+  }
+}
+
+class NonBlockingAgentDecision {
+  constructor({ choice, reason, remainingRisk = null } = {}, context) {
+    if (!(context instanceof NonBlockingDecisionContext)) {
+      throw new Error("nonblocking agent decision requires its canonical context");
+    }
+    if (!context.allowedActions.includes(choice)) {
+      throw new Error(`nonblocking agent choice ${choice} is not allowed for ${context.resultKind} evidence`);
+    }
+    if (typeof reason !== "string" || reason.trim() === "") {
+      throw new Error("nonblocking agent decision reason is required");
+    }
+    if (remainingRisk !== null && (typeof remainingRisk !== "string" || remainingRisk.trim() === "")) {
+      throw new Error("nonblocking agent decision remainingRisk must be a non-empty string or null");
+    }
+    if (choice === "continue" && remainingRisk === null) {
+      throw new Error("nonblocking agent continue requires a concrete remainingRisk");
+    }
+    this.choice = choice;
+    this.reason = reason.trim();
+    this.remainingRisk = remainingRisk?.trim() ?? null;
+    Object.freeze(this);
+  }
+
+  static parse(response, context) {
+    if (typeof response !== "string" || response.trim() === "") {
+      throw new Error("nonblocking agent returned an empty decision");
+    }
+    let value;
+    try {
+      value = JSON.parse(response);
+    } catch (cause) {
+      throw new Error("nonblocking agent decision must be valid JSON", { cause });
+    }
+    return new NonBlockingAgentDecision(value, context);
+  }
+}
+
+function nonblockingDecisionSchema(context) {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["choice", "reason", "remainingRisk"],
+    properties: {
+      choice: { type: "string", enum: [...context.allowedActions] },
+      reason: { type: "string", minLength: 1, maxLength: 2000 },
+      remainingRisk: { anyOf: [{ type: "string", minLength: 1, maxLength: 2000 }, { type: "null" }] },
+    },
+  };
 }
 
 export class FlowDispatchBoundary {
@@ -1135,6 +1196,48 @@ export default class RunDispatchCommand extends FlowCommand {
       buildHookCtx: (container, input) => buildFlowCommandHookContext(container, entry, input),
     });
     return commandEnvelope(stdout.trim(), commandName, exitCode);
+  }
+
+  /**
+   * Ask the configured provider for only the evidence disposition. The agent
+   * cannot execute the ordinary directive in this invocation; the parent
+   * records the guarded result and reloads canonical authority first.
+   */
+  async runNonblockingAgentDecision(ctx, action) {
+    const context = action.nonblockingDecision;
+    if (context === null) return null;
+    const state = readFlowState(ctx);
+    const evidence = decisionEvidenceForActiveFlow(
+      ctx.root,
+      state,
+      ctx.flowManager,
+      context,
+    );
+    const schema = nonblockingDecisionSchema(context);
+    const prompt = [
+      "You are making one bounded advisory disposition for a canonical Flow check.",
+      "Do not edit files, run commands, ask the user, or execute the ordinary Flow directive.",
+      "Choose only an allowed action. Use repair for quality evidence, retry for tooling/unavailable evidence,",
+      "or continue only when you can state a concrete bounded remaining risk for acceptance.",
+      "Return only JSON matching the supplied schema.",
+      "",
+      "Canonical decision context:",
+      JSON.stringify(context.toJSON(), null, 2),
+      "",
+      "Digest-bound canonical evidence:",
+      evidence,
+    ].join("\n");
+    const agent = this.agent || (this.agent = this.container.get("agent"));
+    const response = await agent.call(prompt, {
+      commandId: "flow.dispatch.nonblocking-decision",
+      executionWorkDir: ctx.executionRoot || ctx.root,
+      cacheMode: "bypass",
+      retryCount: 0,
+      waitForProcessTree: true,
+      jsonSchema: schema,
+      fmtFallback: `Return only JSON matching this schema:\n${JSON.stringify(schema, null, 2)}`,
+    });
+    return NonBlockingAgentDecision.parse(response, context);
   }
 
   async runDispatcherOwnedCommand(ctx, target, action) {
@@ -1651,6 +1754,37 @@ export default class RunDispatchCommand extends FlowCommand {
       }
 
       const action = new FlowDispatchAction(current);
+
+      if (action.nonblockingDecision !== null) {
+        let decision;
+        try {
+          decision = await this.runNonblockingAgentDecision(ctx, action);
+          recordNonBlockingDecision({
+            root: ctx.root,
+            flowManager: ctx.flowManager,
+            choice: decision.choice,
+            reason: decision.reason,
+            remainingRisk: decision.remainingRisk,
+            expectEvidenceDigest: action.nonblockingDecision.evidenceDigest,
+            expectIdentity: action.nonblockingDecision.identity().toJSON(),
+          });
+        } catch (error) {
+          return this.failure(
+            ctx,
+            error.code || "FLOW_DISPATCH_NONBLOCKING_DECISION_FAILED",
+            error.message || String(error),
+            blockedBoundary({
+              target,
+              nextAction: current,
+              dispatchCount,
+              message: "The dedicated advisory decision was not durably recorded; the original check evidence is unchanged.",
+            }),
+          );
+        }
+        dispatchCount += 1;
+        current = await this.fetchNextAction(target);
+        continue;
+      }
 
       if (action.awaitsUserDecision) {
         if (suppliedApproval) {

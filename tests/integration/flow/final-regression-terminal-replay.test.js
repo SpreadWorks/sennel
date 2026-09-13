@@ -14,6 +14,11 @@ import {
 import { createTmpDir, removeTmpDir, writeFile } from "../../support/builders/tmp-dir.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { FlowAtStepFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import {
+  activateNonBlockingPolicy,
+  decisionContextForActiveFlow,
+  recordNonBlockingDecision,
+} from "../../../src/flow/lib/nonblocking.js";
 
 const SPEC_ID = "001-test";
 const SCRIPT_PATH = "final-regression-fixture.sh";
@@ -142,5 +147,28 @@ describe("final-regression terminal replay guard", () => {
       root,
       "specs/001-test/001/steps/final-regression/attempt-002.log",
     )), false);
+  });
+
+  it("keeps final-regression advisory identity stable across activation and reload", async () => {
+    root = createTmpDir("final-regression-nonblocking-reload-");
+    const ctx = setupCanonical(root, "exit 1\n");
+    await executeAndApply(ctx);
+    activateNonBlockingPolicy({
+      root,
+      flowManager: ctx.flowManager,
+      reason: "The canonical final regression is acceptance-backed.",
+    });
+    const reloaded = makeFlowManager(root);
+    const context = decisionContextForActiveFlow(root, reloaded.load(SPEC_ID), reloaded);
+    recordNonBlockingDecision({
+      root,
+      flowManager: reloaded,
+      choice: "continue",
+      reason: "Continue with the recorded final regression failure.",
+      remainingRisk: "The report retains the failed regression evidence.",
+      expectEvidenceDigest: context.evidenceDigest,
+      expectIdentity: context.identity().toJSON(),
+    });
+    assert.equal(reloaded.canonicalState(SPEC_ID).nextAction().nodeId, "report");
   });
 });

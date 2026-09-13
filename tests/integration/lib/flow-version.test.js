@@ -583,6 +583,26 @@ describe("Flow artifact catalog authority slots", () => {
       id: "activity-task-review", nodeId: "T-2-review", nodeKey: "impl.T-2.review", confirmationOrder: 1,
     }).assertRelatedArtifact(taskDescriptor), /task artifact owner/);
 
+    const nonblockingHandoff = FLOW_ARTIFACT_CONTRACTS.resolve("nonblocking.handoffs");
+    const nonblockingHandoffDescriptor = new FlowArtifactDescriptor({
+      logicalKey: nonblockingHandoff.logicalKey,
+      authoritySlot: nonblockingHandoff.authoritySlotFor("task-gate"),
+      relativePath: nonblockingHandoff.relativePath,
+      hash: "e".repeat(64),
+      size: 1,
+      mediaType: "application/json",
+      retention: "permanent",
+      activityId: "activity-task-gate-nonblocking",
+    });
+    assert.doesNotThrow(() => new FlowArtifactActivityAssociation({
+      id: "activity-task-gate-nonblocking", nodeId: "T-1-gate", nodeKey: "impl.T-1.gate", confirmationOrder: 1,
+      operation: "continue_nonblocking",
+    }).assertRelatedArtifact(nonblockingHandoffDescriptor));
+    assert.throws(() => new FlowArtifactActivityAssociation({
+      id: "activity-task-gate-nonblocking", nodeId: "T-1-gate", nodeKey: "impl.T-1.gate", confirmationOrder: 1,
+      operation: "record_nonblocking",
+    }).assertRelatedArtifact(nonblockingHandoffDescriptor), /not bound to a task artifact/);
+
     // A Task Attempt owns a task-local Step, but its journal transition also
     // updates the one flow.json authority.  That association must remain
     // valid without pretending flow.json is a task-owned result artifact.

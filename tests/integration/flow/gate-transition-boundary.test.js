@@ -21,11 +21,17 @@ import {
   SetStepStatus,
   buildCurrentFlowDefinition,
   projectGatePublicOutcome,
+  gateNonblockingEligibilityForDecision,
+  reviewNonblockingEligibilityForDisposition,
+  acceptanceBoundaryNonblockingEligibility,
+  resolveReviewTransition,
   resolveLifecycle,
   resolveLifecyclePlan,
   resolveGatePublicationRecovery,
   resolveGateTransition,
 } from "../../../src/flow/definition.js";
+import { ReviewTransitionFacts } from "../../../src/flow/lib/review-transition-facts.js";
+import { NONBLOCKING_ROUTES } from "../../../src/flow/lib/nonblocking-route.js";
 import {
   GateTransitionActionProjection,
   admitGateTransition,
@@ -257,6 +263,11 @@ describe("definition-owned Gate transition boundary", () => {
     const nonblocking = resolveGateTransition(facts({
       phase: "integration", result: "fail", nonblocking: true,
       failure: new GateFailureCategory({ category: "semantic", code: "GATE_REJECTED" }),
+      retry: new GateRetryMetrics({ used: 2, maximum: 2 }),
+    }));
+    const nonblockingRetry = resolveGateTransition(facts({
+      phase: "integration", result: "fail", nonblocking: true,
+      failure: new GateFailureCategory({ category: "semantic", code: "GATE_REJECTED" }),
       retry: new GateRetryMetrics({ used: 0, maximum: 2 }),
     }));
     const recovered = resolveGateTransition(facts({
@@ -275,6 +286,7 @@ describe("definition-owned Gate transition boundary", () => {
     assert.equal(tooling.disposition.operation, "external-blocked");
     assert.equal(tooling.plan.retryMetric, null);
     assert.equal(exhausted.disposition.operation, "defer");
+    assert.equal(nonblockingRetry.disposition.operation, "retry");
     assert.equal(nonblocking.disposition.operation, "nonblocking");
     assert.deepEqual(nonblocking.plan.nonblockingHandoff.toJSON(), {
       sourceStepId: "impl-gate", targetStepId: "retro",
@@ -288,6 +300,43 @@ describe("definition-owned Gate transition boundary", () => {
       assert.deepEqual(reloaded.plan.toJSON(), decision.plan.toJSON());
       assert.equal(reloaded.plan.action.identity.matches(decision.plan.action.identity), true);
     }
+  });
+
+  it("selects Task Gate advisory eligibility only after strict recovery is exhausted", () => {
+    const recoverable = resolveGateTransition(facts({
+      phase: "task-impl", result: "fail",
+      failure: new GateFailureCategory({ category: "semantic", code: "GATE_REJECTED" }),
+      retry: new GateRetryMetrics({ used: 1, maximum: 2 }),
+    }));
+    assert.equal(gateNonblockingEligibilityForDecision(recoverable), null);
+
+    const exhausted = resolveGateTransition(facts({
+      phase: "task-impl", result: "fail",
+      failure: new GateFailureCategory({ category: "semantic", code: "GATE_REJECTED" }),
+      retry: new GateRetryMetrics({ used: 2, maximum: 2 }),
+      taskBudget: { round: 2, maximumRounds: 2 },
+    }));
+    const eligibility = gateNonblockingEligibilityForDecision(exhausted);
+    assert.match(eligibility.definitionDigest, /^[a-f0-9]{64}$/);
+    assert.deepEqual(eligibility.toJSON(), {
+      strictDisposition: { operation: "defer", reason: null },
+      sourceStep: "task-gate",
+      resultKind: "quality",
+      blocker: "Strict Gate recovery is exhausted.",
+      allowedActions: ["repair", "continue"],
+      continueTargetStepId: "test-execute",
+      skippedStepIds: [],
+      acceptancePublication: "semantic-findings",
+      definitionDigest: eligibility.definitionDigest,
+      handoff: { sourceStepId: "task-gate", targetStepId: "test-execute", taskId: "T-1" },
+    });
+
+    const enabled = resolveGateTransition(GateTransitionFacts.fromPersisted({
+      ...exhausted.facts.toJSON(), nonblocking: true,
+    }));
+    assert.equal(enabled.disposition.operation, "nonblocking");
+    assert.equal(enabled.plan.taskLifecycle.operation, "defer-and-advance");
+    assert.equal(enabled.plan.nonblockingHandoff.targetStepId, "test-execute");
   });
 
   it("blocks a nominal integration PASS when typed review readiness retains a finding", () => {
@@ -357,6 +406,88 @@ describe("definition-owned Gate transition boundary", () => {
       retry: new GateRetryMetrics({ used: 3, maximum: 4 }),
       recoveryEvidence: new GateRecoveryEvidence({ kind: "repair", ...binding }),
     })).disposition.operation, "retry");
+  });
+
+  it("selects the Task Gate advisory matrix from typed failure, retry, and successor facts", () => {
+    for (const category of ["semantic", "local", "tooling"]) {
+      for (const exhausted of [false, true]) {
+        for (const nextTaskId of [null, "T-2"]) {
+          const retry = new GateRetryMetrics({ used: exhausted ? 2 : 0, maximum: 2 });
+          const decision = resolveGateTransition(facts({
+            phase: "task-impl",
+            result: "fail",
+            failure: new GateFailureCategory({
+              category,
+              code: category === "local" ? "GATE_LOCAL_INPUT_INVALID" : category === "tooling" ? "GATE_PROVIDER_UNAVAILABLE" : "TASK_GATE_REJECTED",
+            }),
+            retry,
+            taskBudget: { round: exhausted ? 2 : 1, maximumRounds: 2 },
+            taskLifecycle: { taskId: "T-1", nextTaskId, integrationStepId: "test-execute" },
+          }));
+          const eligibility = gateNonblockingEligibilityForDecision(decision);
+          if (category === "semantic" && !exhausted) {
+            assert.equal(decision.disposition.operation, "retry");
+            assert.equal(eligibility, null);
+            continue;
+          }
+          assert.notEqual(eligibility, null);
+          assert.equal(eligibility.resultKind, category === "semantic" ? "quality" : category === "local" ? "unavailable" : "tooling");
+          assert.deepEqual(eligibility.allowedActions, category === "semantic" ? ["repair", "continue"] : ["retry", "continue"]);
+          assert.equal(eligibility.effectFor("continue").targetStepId, nextTaskId === null ? "test-execute" : `${nextTaskId}-impl`);
+          assert.equal(eligibility.effectFor(category === "semantic" ? "repair" : "retry").targetStepId, "task-gate");
+        }
+      }
+    }
+  });
+
+  it("keeps every review, Gate, and acceptance route in the Definition-owned behavior table", () => {
+    assert.deepEqual(NONBLOCKING_ROUTES.map((route) => route.sourceStep).sort(), [
+      "acceptance-review", "draft-coverage-review", "draft-gate", "draft-questions-review",
+      "final-regression", "impl-gate", "impl-review", "retro", "scenario-validity",
+      "spec-gate", "task-gate", "task-review", "test-result-review", "test-review",
+    ]);
+    const selected = new Map();
+    for (const [sourceStep, phase, scope] of [
+      ["draft-questions-review", "draft-questions", "flow"],
+      ["draft-coverage-review", "draft-coverage", "flow"],
+      ["test-review", "test", "flow"],
+      ["task-review", "impl", "task"],
+      ["impl-review", "impl", "flow"],
+    ]) {
+      const disposition = resolveReviewTransition({
+        stepId: sourceStep,
+        flowState: { policy: { nonblocking: null }, metrics: [] },
+        facts: new ReviewTransitionFacts({ scope, phase, toolingOutcome: { code: "PROVIDER_UNAVAILABLE" } }),
+      });
+      selected.set(sourceStep, reviewNonblockingEligibilityForDisposition({ stepId: sourceStep, disposition }));
+    }
+    for (const [sourceStep, phase] of [["draft-gate", "draft"], ["spec-gate", "spec"], ["impl-gate", "integration"]]) {
+      selected.set(sourceStep, gateNonblockingEligibilityForDecision(resolveGateTransition(facts({
+        phase,
+        result: "fail",
+        failure: new GateFailureCategory({ category: "local", code: "GATE_LOCAL_INPUT_INVALID" }),
+      }))));
+    }
+    selected.set("task-gate", gateNonblockingEligibilityForDecision(resolveGateTransition(facts({
+      phase: "task-impl",
+      result: "fail",
+      failure: new GateFailureCategory({ category: "tooling", code: "GATE_PROVIDER_UNAVAILABLE" }),
+    }))));
+    for (const sourceStep of ["retro", "acceptance-review"]) {
+      selected.set(sourceStep, acceptanceBoundaryNonblockingEligibility({ sourceStep, resultKind: "quality" }));
+    }
+    for (const route of NONBLOCKING_ROUTES.filter((entry) => selected.has(entry.sourceStep))) {
+      const eligibility = selected.get(route.sourceStep);
+      assert.notEqual(eligibility, null, `${route.sourceStep} remains eligible`);
+      assert.deepEqual(eligibility.allowedActions, eligibility.resultKind === "quality" ? ["repair", "continue"] : ["retry", "continue"]);
+      assert.equal(eligibility.effectFor("continue").targetStepId,
+        route.sourceStep === "task-gate" ? "test-execute" : route.targetStep);
+      assert.deepEqual(eligibility.effectFor("continue").skippedStepIds, route.skippedSteps);
+    }
+    assert.deepEqual([...selected.keys()].sort(), [
+      "acceptance-review", "draft-coverage-review", "draft-gate", "draft-questions-review",
+      "impl-gate", "impl-review", "retro", "spec-gate", "task-gate", "task-review", "test-review",
+    ]);
   });
 
   it("uses persisted Attempt consumption: four retries permit a fifth failed evaluation, never a sixth", () => {

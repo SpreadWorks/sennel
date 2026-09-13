@@ -489,7 +489,12 @@ function appendDeferredFindingToArtifact({
   });
 }
 
-export function appendDeferredFlowFinding({
+/**
+ * Prepare one deferred index entry for a source artifact that will be
+ * published by the same Store transaction. The caller must already own and
+ * validate that source write; this function only owns flow.findings CAS.
+ */
+export function buildDeferredFlowFindingPublication({
   flowManager,
   flowState,
   nodeId,
@@ -501,18 +506,15 @@ export function appendDeferredFlowFinding({
   attempts,
   round = null,
   finalDisposition = null,
-}) {
+} = {}) {
   const store = new CanonicalFlowFindingsStore({ flowManager, flowState, nodeId });
   const snapshot = store.readSnapshot();
-  const existing = snapshot.artifact;
-  const source = store.sourceArtifact(sourceArtifact);
-  if (source === null) throw new Error(`canonical source artifact is absent: ${sourceArtifact}`);
   const update = appendDeferredFindingToArtifact({
-    artifact: existing,
+    artifact: snapshot.artifact,
     cycle: store.cycle,
     flowState,
     sourceStep,
-    sourceArtifact: source.relativePath,
+    sourceArtifact: normalizeSourceArtifactPath(sourceArtifact),
     sourceFindingId,
     fingerprint,
     rationale,
@@ -520,8 +522,12 @@ export function appendDeferredFlowFinding({
     round,
     finalDisposition,
   });
-  if (update.changed) store.publish(update.artifact, { artifactBaselines: [snapshot.baseline] });
-  return update.entry;
+  return new DeferredFlowFindingsPublication({
+    artifact: update.artifact,
+    deferred: [update.entry],
+    changed: update.changed,
+    baseline: snapshot.baseline,
+  });
 }
 
 export function buildDeferredFindingsSummary({ flowManager, flowState, nodeId }) {

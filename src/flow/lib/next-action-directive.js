@@ -173,20 +173,37 @@ export class RepairEvidenceDirective extends NextActionDirective {
 }
 
 export class AwaitUserDecisionDirective extends NextActionDirective {
-  constructor({ prompt = null, actionPrompt = null, reason = null } = {}) {
+  constructor({
+    prompt = null,
+    actionPrompt = null,
+    reason = null,
+    continuation = null,
+    actionId = null,
+    nextAction = null,
+    instruction = null,
+  } = {}) {
     super({ kind: "await_user_decision", terminal: false, requiresUserAction: true });
     this.prompt = UserActionPrompt.fromStored(prompt || actionPrompt);
     this.reason = reason == null
       ? this.prompt.recommendationReason
       : requireString(reason, "directive.reason");
+    const storedContinuation = continuation ?? (actionId === null
+      ? null
+      : { actionId, nextAction, instruction, reason });
+    this.continuation = storedContinuation === null ? null : FlowContinuation.fromStored(storedContinuation);
     Object.freeze(this);
   }
+
+  get actionId() { return this.continuation?.actionId; }
+  get nextAction() { return this.continuation?.nextAction; }
+  get instruction() { return this.continuation?.instruction; }
 
   toJSON() {
     return {
       ...super.toJSON(),
       actionPrompt: this.prompt.toJSON(),
       reason: this.reason,
+      ...(this.continuation && this.continuation.toJSON()),
     };
   }
 }
@@ -214,14 +231,16 @@ export class AwaitDraftQuestionDirective extends NextActionDirective {
 }
 
 export class BlockedDirective extends NextActionDirective {
-  constructor({ code, reason, resumeInstruction } = {}) {
-    super({ kind: "blocked", terminal: true, requiresUserAction: false });
+  constructor({ code, reason, resumeInstruction, actionPrompt = null } = {}) {
+    const prompt = actionPrompt == null ? null : UserActionPrompt.fromStored(actionPrompt);
+    super({ kind: "blocked", terminal: true, requiresUserAction: prompt !== null });
     this.code = requireString(code, "directive.code", 200);
     this.reason = requireString(reason, "directive.reason");
     this.resumeInstruction = requireString(
       resumeInstruction || reason,
       "directive.resumeInstruction",
     );
+    this.prompt = prompt;
     Object.freeze(this);
   }
 
@@ -231,6 +250,7 @@ export class BlockedDirective extends NextActionDirective {
       code: this.code,
       reason: this.reason,
       resumeInstruction: this.resumeInstruction,
+      ...(this.prompt && { actionPrompt: this.prompt.toJSON() }),
     };
   }
 }
