@@ -1367,14 +1367,33 @@ export function buildGateResultArtifact({
 // Guardrail AI check — shared
 // ---------------------------------------------------------------------------
 
-async function callGateAgent(agent, built, attempt, providerCallAdmission) {
+export class GateProviderCallAdmission {
+  constructor(base, guard) {
+    this.base = base;
+    this.guard = guard;
+  }
+  claim() { this.base.claim(); return this; }
+  async beforeProviderAttempt(context) {
+    await this.guard(context);
+    return this.base.beforeProviderAttempt(context);
+  }
+  settle() { return this.base.settle(); }
+  get claimed() { return this.base.claimed; }
+  get attemptCount() { return this.base.attemptCount; }
+  get settled() { return this.base.settled; }
+}
+
+async function callGateAgent(agent, built, attempt, providerCallAdmission, providerCallGuard = null) {
   let cacheDecision = null;
+  const admission = providerCallGuard === null
+    ? providerCallAdmission
+    : new GateProviderCallAdmission(providerCallAdmission, providerCallGuard);
   const text = await agent.call(built.userPrompt, {
     commandId: "flow.spec.gate",
     systemPrompt: built.systemPrompt,
     jsonSchema: built.jsonSchema,
     fmtFallback: built.fmtFallback,
-    providerCallAdmission,
+    providerCallAdmission: admission,
     cacheMode: attempt.cacheMode,
     onCacheDecision(decision) { cacheDecision = decision; },
   });
@@ -1549,7 +1568,9 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
     const executionBudget = options.executionBudget ?? createGateExecutionBudget();
     executionBudget.assertCanExecute(plans.reduce((count, plan) => count + plan.batches.length, evidencePlans.length));
     const observations = [];
-    const callAgent = (request, _batch, _index, attempt, providerCallAdmission) => callGateAgent(agent, request, attempt, providerCallAdmission);
+    const callAgent = (request, _batch, _index, attempt, providerCallAdmission) => callGateAgent(
+      agent, request, attempt, providerCallAdmission, options.providerCallGuard ?? null,
+    );
     for (const [index, initialPlan] of plans.entries()) {
       let plan = initialPlan;
       if (!direct) {
@@ -1587,6 +1608,7 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
       entry.requirementRef ?? entry.guardrail_id, entry.where ?? entry.violations, entry.observed ?? entry.reason,
     ]), entry])).values()];
   } catch (error) {
+    if (error?.code === "FLOW_GATE_EVALUATION_ADMISSION_DENIED") throw error;
     return requiredGateEvaluationFailure(error);
   }
   const byId = new Map(filtered.map((g) => [g.id, g]));
@@ -3054,9 +3076,11 @@ export class RequirementGateExecutionPlan {
     for (const batch of plan.batches) projectInvocation(batch.request).assertWithinLimit(this.limit);
   }
 
-  async execute({ agent, phase, projectInvocation, executionBudget }) {
+  async execute({ agent, phase, projectInvocation, executionBudget, providerCallGuard = null }) {
     const invocationProjector = projectInvocation ?? gateInvocationProjector(agent);
-    const callAgent = (request, _batch, _index, attempt, providerCallAdmission) => callGateAgent(agent, request, attempt, providerCallAdmission);
+    const callAgent = (request, _batch, _index, attempt, providerCallAdmission) => callGateAgent(
+      agent, request, attempt, providerCallAdmission, providerCallGuard,
+    );
     if (this.direct) {
       const result = await executeGatePlan({
         plan: this.direct, projectInvocation: invocationProjector, callAgent, executionBudget,
@@ -3104,6 +3128,7 @@ async function evaluateCanonicalRequirements({
   structuredSpec = null,
   sourceScope = null,
   executionBudget = createGateExecutionBudget(),
+  providerCallGuard = null,
 }) {
   const requirementContexts = new Map(requirements.map((requirement) => [
     requirement.id,
@@ -3146,7 +3171,9 @@ async function evaluateCanonicalRequirements({
     // Every source and context range is planned before the first provider call.
     for (const execution of executions) execution.preflight(projectInvocation);
     for (const execution of executions) {
-      const result = await execution.execute({ agent, phase, projectInvocation, executionBudget });
+      const result = await execution.execute({
+        agent, phase, projectInvocation, executionBudget, providerCallGuard,
+      });
       evaluations.push(...result.map((entry) => ({
         ...entry,
         title: entry.guardrail_id,
@@ -3154,6 +3181,7 @@ async function evaluateCanonicalRequirements({
       })));
     }
   } catch (error) {
+    if (error?.code === "FLOW_GATE_EVALUATION_ADMISSION_DENIED") throw error;
     return gateRequiredEvaluationFail(
       level,
       phase,
@@ -3524,6 +3552,7 @@ export async function runGateFlow(args) {
     {
       ...guardrailPromptOptions,
       executionBudget: ctx?.promptExecutionBudget ?? guardrailPromptOptions.executionBudget,
+      providerCallGuard: ctx?.gateProviderCallGuard ?? null,
       priorMemoryMarkdown,
       excludedGuardrailIds: ownedEvaluations.map((evaluation) => evaluation.guardrail_id),
     },
@@ -3643,14 +3672,15 @@ export class RunGateCommand extends FlowCommand {
     if (state.current?.at(-1) !== nodeId || state.attempt?.nodeId !== nodeId) {
       throw new Error(`canonical gate requires active ${nodeId}, found ${state.current?.at(-1) ?? "none"}`);
     }
+    let admittedTaskSourceFingerprint = null;
     if (phase === "task-impl" && activeTaskId !== null) {
       try {
-        CanonicalTaskContext.capture({
+        admittedTaskSourceFingerprint = CanonicalTaskContext.capture({
           root: executionRoot,
           flowManager,
           state: ctx.flowState,
           taskId: activeTaskId,
-        });
+        }).sourceFingerprint;
       } catch (error) {
         return Envelope.fail(
           "run",
@@ -3705,6 +3735,46 @@ export class RunGateCommand extends FlowCommand {
     const specPath = flowManager.specLocation(ctx.flowState.specId).relativeSpecFile;
     const issueLog = inputs.issueLog();
     const canonicalCtx = { ...ctx, flowState: ctx.flowState, issueLog };
+    const expectedAttempt = { id: state.attempt.id, sequence: state.attempt.sequence };
+    canonicalCtx.gateProviderCallGuard = () => {
+      const currentState = flowManager.canonicalState(state.specId);
+      const currentAttempt = currentState?.attempt;
+      if (currentState?.current?.at(-1) !== nodeId
+        || currentAttempt?.id !== expectedAttempt.id
+        || currentAttempt?.sequence !== expectedAttempt.sequence
+        || currentAttempt?.failure !== null) {
+        const error = new Error("Gate provider admission lost its exact active Attempt");
+        error.code = "FLOW_GATE_EVALUATION_ADMISSION_DENIED";
+        throw error;
+      }
+      const facts = readCurrentGateTransitionFacts({
+        flowManager,
+        flowState: flowManager.loadReadOnly(state.specId),
+        phase,
+        root: executionRoot,
+      });
+      if (facts !== null) {
+        const decision = resolveGateTransition(facts);
+        const error = new Error(
+          `Gate provider admission denied evaluation; Definition selected ${decision.disposition.operation}`,
+        );
+        error.code = "FLOW_GATE_EVALUATION_ADMISSION_DENIED";
+        throw error;
+      }
+      if (admittedTaskSourceFingerprint !== null) {
+        const currentSource = captureCurrentTaskSource({
+          root: executionRoot,
+          flowManager,
+          state: flowManager.loadReadOnly(state.specId),
+          taskId: activeTaskId,
+        });
+        if (admittedTaskSourceFingerprint !== currentSource.fingerprint) {
+          const error = new Error("Gate provider admission detected changed Task evidence");
+          error.code = "FLOW_GATE_EVALUATION_ADMISSION_DENIED";
+          throw error;
+        }
+      }
+    };
     let result;
 
     if (phase === "draft") {
@@ -3892,6 +3962,7 @@ export class RunGateCommand extends FlowCommand {
       executionBudget: ctx.promptExecutionBudget,
       previousResult,
       sourceScope,
+      providerCallGuard: ctx.gateProviderCallGuard,
     });
     if (!Array.isArray(requirementEvaluation)) return complete(requirementEvaluation);
     const result = await runGateFlow({
@@ -4108,6 +4179,7 @@ export class RunGateCommand extends FlowCommand {
       previousResult,
       executionEvidence: integrationExecutionEvidence,
       structuredSpec: phase === "integration" ? spec : null,
+      providerCallGuard: ctx.gateProviderCallGuard,
     });
     if (!Array.isArray(requirementEvaluation)) return requirementEvaluation;
     const reqEvaluations = requirementEvaluation;
@@ -4127,6 +4199,7 @@ export class RunGateCommand extends FlowCommand {
       {
         acknowledgedRationale: buildAcknowledgedRationaleSection({ spec, guardrails: diffGuardrails }),
         executionBudget: ctx.promptExecutionBudget,
+        providerCallGuard: ctx.gateProviderCallGuard,
       },
     );
     if (!grResult) return gatePass(level, phase, specPath, reqEvaluations, fileMapWarnings);

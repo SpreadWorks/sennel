@@ -11,7 +11,6 @@ import {
   FlowActivity,
 } from "../../../src/flow/lib/current-flow-state.js";
 import { CanonicalFlowCreateRequest } from "../../../src/flow/lib/canonical-flow-manager-store.js";
-import { PlanGateRepairRecord } from "../../../src/flow/lib/plan-gate-repair.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunRecoverMissingProducerArtifactCommand from "../../../src/flow/lib/run-recover-missing-producer-artifact.js";
 import RunSettleFailureCommand from "../../../src/flow/lib/run-settle-failure.js";
@@ -577,22 +576,26 @@ describe("missing producer artifact recovery", () => {
       }],
       timestamp: "2026-08-20T00:00:00.000Z",
     };
-    const record = PlanGateRepairRecord.create({
-      state: manager.canonicalState(created.specId),
-      phase: "spec",
-      issueLogEntry: source,
-      requestedAt: "2026-08-20T00:00:01.000Z",
-    });
     const before = unchangedPersistentSnapshot(manager, created.specId);
 
     assert.throws(
       () => manager.repairPlanGate({
         specId: created.specId,
-        record,
+        record: {
+          version: 1,
+          runId: created.runId,
+          specId: created.specId,
+          issue: null,
+          phase: "spec",
+          targetStepId: "spec",
+          sourceIssueLogId: source.issueLogId,
+          sourceEntryDigest: "a".repeat(64),
+          observations: source.observations,
+          requestedAt: "2026-08-20T00:00:01.000Z",
+        },
         issueLog: { entries: [source] },
       }),
-      (error) => error?.code === "CURRENT_FLOW_STATE_INVARIANT_INVALID"
-        && /typed Gate decision/.test(error.message),
+      /plan gate repair version must be 2/,
     );
     assert.deepEqual(unchangedPersistentSnapshot(manager, created.specId), before);
   });

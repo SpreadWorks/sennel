@@ -120,6 +120,19 @@ import { ApprovedFindingExceptionSet } from "./acknowledged-rationale.js";
 import { loadMergedGuardrails } from "../../lib/guardrail.js";
 import { CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
 import { getPorcelainV2Status } from "../../lib/git-helpers.js";
+import {
+  ArtifactGateRepairLineage,
+  ArtifactGateRepairObservationResult,
+  GateRepairMutationLineageEntry,
+  GateRepairReport,
+  PlanGateRepairOutcomeDraft,
+  SourceGateRepairLineage,
+  SourceGateRepairObservationResult,
+} from "./gate-observation-convergence.js";
+import {
+  CanonicalGateObservationCycle,
+  GateObservationRecurrenceHandoff,
+} from "./canonical-gate-observation-cycle.js";
 
 export const WORKER_ARTIFACT_HANDOFF_REQUEST_ENV = PRODUCT.env("FLOW_HANDOFF_REQUEST");
 const REQUIREMENT_TEST_WORKER_STEPS = new Set(["test-generate", "test-repair"]);
@@ -146,7 +159,7 @@ const SPEC_TEST_FILE = /\.(?:js|mjs|ts|json|md|ya?ml|txt|sh)$/;
 const REQUIREMENT_TEST_SUPPORT_PREFIX = "tests/support/";
 const COMMAND_OWNED_SPEC_TEST_DIRECTORY = ".raw";
 
-const SOURCE_EFFECT_KEYS = Object.freeze([
+const SOURCE_EFFECT_BASE_KEYS = Object.freeze([
   "version",
   "stepId",
   "completionStatus",
@@ -157,9 +170,19 @@ const SOURCE_EFFECT_KEYS = Object.freeze([
   "repair",
   "noChangeReason",
 ]);
-const SOURCE_EFFECT_REPORT_KEYS = Object.freeze(
-  SOURCE_EFFECT_KEYS.filter((key) => key !== "files"),
-);
+
+function sourceEffectKeys(stepId, { workerReport = false } = {}) {
+  const keys = SOURCE_EFFECT_BASE_KEYS.filter((key) => !(workerReport && key === "files"));
+  return stepId === "task-impl" ? [...keys, "gateRepair"] : keys;
+}
+
+function assertSourceEffectDocumentKeys(value, stepId, options = {}) {
+  const keys = sourceEffectKeys(stepId, options);
+  const expected = stepId === "task-impl" && !Object.hasOwn(value, "gateRepair")
+    ? keys.filter((key) => key !== "gateRepair")
+    : keys;
+  exactObjectKeys(value, expected, "source worker effect");
+}
 
 function sourceHandoffReadError(cause, message) {
   const temporary = TEMPORARY_CANONICAL_READ_CODES.has(cause?.code ?? cause?.cause?.code);
@@ -818,7 +841,7 @@ export class WorkerArtifactHandoffPolicy {
       repairInputs,
       testReviewRepairInputs,
       acceptanceRepairInputs,
-      virtualInputs,
+      virtualInputs: [...virtualInputs, "gate-observation-recurrence.json"],
     });
     this.inputs = this.inputContract.inputs;
     this.payloads = Object.freeze(payloads.map((entry) => (
@@ -860,7 +883,10 @@ const POLICIES = Object.freeze([
   new WorkerArtifactHandoffPolicy({
     stepId: "draft-refine",
     inputs: ["draft.json"],
-    payloads: [{ logicalName: "draft.json", targetRelativePath: "draft.json" }],
+    payloads: [
+      { logicalName: "draft.json", targetRelativePath: "draft.json" },
+      { logicalName: "gate-repair-report.json", targetRelativePath: "gate-repair-report.json", required: false },
+    ],
     revisionKind: "draft",
   }),
   new WorkerArtifactHandoffPolicy({
@@ -879,7 +905,10 @@ const POLICIES = Object.freeze([
     stepId: "spec",
     inputs: ["draft.json"],
     repairInputs: { spec: ["draft.json", "spec.json"] },
-    payloads: [{ logicalName: "spec.json", targetRelativePath: "spec.json" }],
+    payloads: [
+      { logicalName: "spec.json", targetRelativePath: "spec.json" },
+      { logicalName: "gate-repair-report.json", targetRelativePath: "gate-repair-report.json", required: false },
+    ],
     revisionKind: "spec",
   }),
   new WorkerArtifactHandoffPolicy({
@@ -1230,6 +1259,97 @@ export class SourceRepairReport {
   }
 }
 
+class GateRepairWorkerObservationResult {
+  constructor({ fingerprint, strategy, summary, priorInsufficiency = null } = {}) {
+    this.fingerprint = requiredDigest(fingerprint, "Gate repair worker observation fingerprint");
+    this.strategy = requiredString(strategy, "Gate repair worker observation strategy");
+    this.summary = requiredString(summary, "Gate repair worker observation summary");
+    this.priorInsufficiency = priorInsufficiency === null
+      ? null
+      : requiredString(priorInsufficiency, "Gate repair worker prior insufficiency");
+    Object.freeze(this);
+  }
+  toJSON() {
+    return {
+      fingerprint: this.fingerprint,
+      strategy: this.strategy,
+      summary: this.summary,
+      priorInsufficiency: this.priorInsufficiency,
+    };
+  }
+}
+
+/** Worker claim only; the parent adds observed artifact/source lineage. */
+export class GateRepairWorkerReport {
+  constructor({ version, summary, results } = {}) {
+    if (version !== 1) throw new Error("Gate repair worker report version must be 1");
+    this.version = 1;
+    this.summary = requiredString(summary, "Gate repair worker report summary");
+    if (!Array.isArray(results) || results.length === 0 || results.length > MAX_PAYLOAD_FILES) {
+      throw new Error("Gate repair worker report requires bounded observation results");
+    }
+    this.results = Object.freeze(results.map((entry) => {
+      exactObjectKeys(entry, ["fingerprint", "strategy", "summary", "priorInsufficiency"], "Gate repair worker observation result");
+      return new GateRepairWorkerObservationResult(entry);
+    }));
+    if (new Set(this.results.map((entry) => entry.fingerprint)).size !== this.results.length) {
+      throw new Error("Gate repair worker report must not duplicate observation fingerprints");
+    }
+    Object.freeze(this);
+  }
+
+  static fromDocument(value) {
+    exactObjectKeys(value, ["version", "summary", "results"], "Gate repair worker report");
+    return new GateRepairWorkerReport(value);
+  }
+
+  bindArtifact({ repair, beforeEvidenceDigest, outputEvidenceDigest, deltaIds }) {
+    const lineage = new ArtifactGateRepairLineage({ deltaIds });
+    return this.#bind({
+      repair, beforeEvidenceDigest, outputEvidenceDigest, lineage,
+      Result: ArtifactGateRepairObservationResult,
+      changes: { deltaIds: lineage.changeIds() },
+    });
+  }
+
+  bindSource({ repair, beforeEvidenceDigest, outputEvidenceDigest, manifest }) {
+    if (!(manifest instanceof SourceMutationManifest)) {
+      throw new Error("Gate repair source report requires a SourceMutationManifest");
+    }
+    const mutations = manifest.mutations.map((mutation) => new GateRepairMutationLineageEntry({
+      mutationId: mutation.mutationId,
+      path: mutation.path,
+    }));
+    const lineage = new SourceGateRepairLineage({ currentCheckout: true, mutations });
+    return this.#bind({
+      repair, beforeEvidenceDigest, outputEvidenceDigest, lineage,
+      Result: SourceGateRepairObservationResult,
+      changes: { mutationIds: lineage.changeIds() },
+    });
+  }
+
+  #bind({ repair, beforeEvidenceDigest, outputEvidenceDigest, lineage, Result, changes }) {
+    const requests = repair.requests;
+    const expected = requests.map((entry) => entry.fingerprint.toString());
+    const reported = this.results.map((entry) => entry.fingerprint);
+    if (expected.length !== reported.length || reported.some((fingerprint) => !expected.includes(fingerprint))) {
+      throw new Error("Gate repair worker report must resolve every blocking observation exactly once");
+    }
+    return new GateRepairReport({
+      beforeEvidenceDigest,
+      outputEvidenceDigest,
+      summary: this.summary,
+      requests,
+      lineage,
+      results: this.results.map((entry) => new Result({ ...entry.toJSON(), ...changes })),
+    });
+  }
+
+  toJSON() {
+    return { version: this.version, summary: this.summary, results: this.results.map((entry) => entry.toJSON()) };
+  }
+}
+
 /** Durable explanation for a successful source Attempt with no mutation. */
 export class SourceNoChangeReason {
   constructor(value) {
@@ -1239,7 +1359,7 @@ export class SourceNoChangeReason {
   toJSON() { return this.text; }
 }
 
-function assertSourceEffectShape({ stepId, completionStatus, files, issues, overview, triage, repair, noChangeReason }) {
+function assertSourceEffectShape({ stepId, completionStatus, files, issues, overview, triage, repair, gateRepair, noChangeReason }) {
   if (!new Set(["done", "skipped"]).has(completionStatus)) throw new Error("source worker completionStatus is invalid");
   if (completionStatus === "skipped" && stepId !== "implement") {
     throw new Error("only implement may report a skipped source completion");
@@ -1248,6 +1368,9 @@ function assertSourceEffectShape({ stepId, completionStatus, files, issues, over
   if (stepId !== "task-impl" && overview !== null) throw new Error("only task-impl may submit overview additions");
   if ((new Set(["impl-triage", "task-triage"]).has(stepId)) !== (triage !== null)) throw new Error("source triage effect is required only for impl-triage");
   if ((new Set(["impl-repair", "task-repair"]).has(stepId)) !== (repair !== null)) throw new Error("source repair effect is required only for impl-repair");
+  if (stepId !== "task-impl" && gateRepair !== null) {
+    throw new Error("only task-impl may submit a Gate repair report");
+  }
   if (stepId !== "task-impl" && noChangeReason !== null) {
     throw new Error("only task-impl may submit a source no-change reason");
   }
@@ -1260,7 +1383,7 @@ function assertSourceEffectShape({ stepId, completionStatus, files, issues, over
 }
 
 export class SourceWorkerEffect {
-  constructor({ version, stepId, completionStatus, files = [], issues = [], overview = null, triage = null, repair = null, noChangeReason = null } = {}) {
+  constructor({ version, stepId, completionStatus, files = [], issues = [], overview = null, triage = null, repair = null, gateRepair = null, noChangeReason = null } = {}) {
     if (version !== 1) throw new Error("source worker effect version must be 1");
     this.version = 1;
     this.stepId = requiredString(stepId, "source worker effect stepId");
@@ -1281,13 +1404,14 @@ export class SourceWorkerEffect {
     this.overview = overview === null ? null : new SourceOverviewEffect(overview);
     this.triage = triage === null ? null : new SourceTriageEffect(triage);
     this.repair = repair === null ? null : new SourceRepairEffect(repair);
+    this.gateRepair = gateRepair === null ? null : GateRepairReport.fromJSON(gateRepair);
     this.noChangeReason = noChangeReason === null ? null : new SourceNoChangeReason(noChangeReason);
     assertSourceEffectShape(this);
     Object.freeze(this);
   }
 
   static fromDocument(value, expectedStepId) {
-    exactObjectKeys(value, SOURCE_EFFECT_KEYS, "source worker effect");
+    assertSourceEffectDocumentKeys(value, expectedStepId);
     const effect = new SourceWorkerEffect(value);
     if (effect.stepId !== expectedStepId) throw new Error("source worker effect step does not match the handoff");
     return effect;
@@ -1303,6 +1427,7 @@ export class SourceWorkerEffect {
       overview: this.overview?.toJSON() ?? null,
       triage: this.triage?.toJSON() ?? null,
       repair: this.repair?.toJSON() ?? null,
+      ...(this.stepId === "task-impl" ? { gateRepair: this.gateRepair?.toJSON() ?? null } : {}),
       noChangeReason: this.noChangeReason?.toJSON() ?? null,
     };
   }
@@ -1310,7 +1435,7 @@ export class SourceWorkerEffect {
 
 /** Worker-facing report bound to observed source mutations only by the parent. */
 export class SourceWorkerEffectReport {
-  constructor({ version, stepId, completionStatus, issues = [], overview = null, triage = null, repair = null, noChangeReason = null } = {}) {
+  constructor({ version, stepId, completionStatus, issues = [], overview = null, triage = null, repair = null, gateRepair = null, noChangeReason = null } = {}) {
     if (version !== 1) throw new Error("source worker effect report version must be 1");
     this.version = 1;
     this.stepId = requiredString(stepId, "source worker effect report stepId");
@@ -1325,17 +1450,18 @@ export class SourceWorkerEffectReport {
     this.overview = overview === null ? null : new SourceOverviewEffect(overview);
     this.triage = triage === null ? null : new SourceTriageEffect(triage);
     this.repair = repair === null ? null : new SourceRepairReport(repair);
+    this.gateRepair = gateRepair === null ? null : GateRepairWorkerReport.fromDocument(gateRepair);
     this.noChangeReason = noChangeReason === null ? null : new SourceNoChangeReason(noChangeReason);
     assertSourceEffectShape({ ...this, files: [] });
     Object.freeze(this);
   }
   static fromDocument(value, expectedStepId) {
-    exactObjectKeys(value, SOURCE_EFFECT_REPORT_KEYS, "source worker effect report");
+    assertSourceEffectDocumentKeys(value, expectedStepId, { workerReport: true });
     const report = new SourceWorkerEffectReport(value);
     if (report.stepId !== expectedStepId) throw new Error("source worker effect report step does not match the handoff");
     return report;
   }
-  bind(manifest, requirementAuthority) {
+  bind(manifest, requirementAuthority, gateRepairBinding = null) {
     if (!(manifest instanceof SourceMutationManifest)) throw new Error("source worker effect report requires a SourceMutationManifest");
     if (!(requirementAuthority instanceof CanonicalSourceRequirementAuthority)) {
       throw new Error("source worker effect report requires canonical Requirement authority");
@@ -1343,12 +1469,23 @@ export class SourceWorkerEffectReport {
     const files = requirementAuthority.bindMutationIds(
       manifest.mutations.map((mutation) => mutation.mutationId),
     );
+    if ((this.gateRepair !== null) !== (gateRepairBinding !== null)) {
+      throw new Error("source Gate repair report is required exactly for a selected plan-Gate repair");
+    }
+    const gateRepair = this.gateRepair === null ? null : this.gateRepair.bindSource({
+      repair: gateRepairBinding.repair,
+      beforeEvidenceDigest: gateRepairBinding.beforeEvidenceDigest,
+      outputEvidenceDigest: gateRepairBinding.outputEvidenceDigest,
+      manifest,
+    });
     return new SourceWorkerEffect({
       version: this.version, stepId: this.stepId, completionStatus: this.completionStatus,
       files: files.map((entry) => entry.toJSON()),
       issues: this.issues.map((entry) => entry.toJSON()),
       overview: this.overview?.toJSON() ?? null, triage: this.triage?.toJSON() ?? null,
-      repair: this.repair?.bind(manifest).toJSON() ?? null, noChangeReason: this.noChangeReason?.toJSON() ?? null,
+      repair: this.repair?.bind(manifest).toJSON() ?? null,
+      ...(this.stepId === "task-impl" ? { gateRepair: gateRepair?.toJSON() ?? null } : {}),
+      noChangeReason: this.noChangeReason?.toJSON() ?? null,
     });
   }
   toJSON() {
@@ -1356,7 +1493,9 @@ export class SourceWorkerEffectReport {
       version: this.version, stepId: this.stepId, completionStatus: this.completionStatus,
       issues: this.issues.map((entry) => entry.toJSON()),
       overview: this.overview?.toJSON() ?? null, triage: this.triage?.toJSON() ?? null,
-      repair: this.repair?.toJSON() ?? null, noChangeReason: this.noChangeReason?.toJSON() ?? null,
+      repair: this.repair?.toJSON() ?? null,
+      ...(this.stepId === "task-impl" ? { gateRepair: this.gateRepair?.toJSON() ?? null } : {}),
+      noChangeReason: this.noChangeReason?.toJSON() ?? null,
     };
   }
 }
@@ -1408,7 +1547,24 @@ function sourceEffectDocumentFromResponse(responseText, request, manifest) {
   }
   try {
     const requirementAuthority = sourceRequirementAuthorityForRequest(request);
-    return SourceWorkerEffectReport.fromDocument(document, request.stepId).bind(manifest, requirementAuthority);
+    const selected = currentPlanGateObservationRepair({ request, state: request.state });
+    const gateRepairBinding = selected === null ? null : Object.freeze({
+      repair: selected.repair,
+      beforeEvidenceDigest: request.contextSnapshot.context.sourceFingerprint,
+      outputEvidenceDigest: manifest.mutations.length === 0
+        ? request.contextSnapshot.context.sourceFingerprint
+        : captureCurrentTaskSource({
+          root: request.executionRoot,
+          flowManager: request.flowManager,
+          state: request.state,
+          taskId: request.taskId,
+        }).fingerprint,
+    });
+    return SourceWorkerEffectReport.fromDocument(document, request.stepId).bind(
+      manifest,
+      requirementAuthority,
+      gateRepairBinding,
+    );
   } catch (cause) {
     const diagnostic = cause instanceof WorkerArtifactHandoffError
       ? { sourceEffectViolation: cause.code, ...cause.data }
@@ -1803,6 +1959,35 @@ function reviewRecurrenceHandoffInput({ flowManager, state, policy }) {
   })];
 }
 
+/** Always-present transient Gate recurrence input; never cataloged. */
+function gateObservationRecurrenceHandoffInput({ flowManager, state, policy }) {
+  if (!policy.inputContract.virtualInputs.includes("gate-observation-recurrence.json")) return [];
+  const readModel = new CanonicalGateObservationCycle({ flowManager, state }).read();
+  const record = currentPlanGateRepair({ flowManager, state, stepId: policy.stepId });
+  const document = new GateObservationRecurrenceHandoff({ record, readModel }).toJSON();
+  const bytes = Buffer.from(stableStringify(document), "utf8");
+  return [new WorkerArtifactInputSnapshot({
+    name: "gate-observation-recurrence.json",
+    targetRelativePath: "gate-observation-recurrence.json",
+    snapshot: { digest: digest(bytes), byteLength: bytes.length },
+    document,
+  })];
+}
+
+function workerVirtualHandoffInputs({ flowManager, state, policy, contextSnapshot = null, executionRoot }) {
+  const available = new Map([
+    ...taskReviewStageHandoffInputs({ flowManager, state, policy, contextSnapshot }),
+    ...approvedFindingExceptionHandoffInputs({ flowManager, state, policy, executionRoot }),
+    ...reviewRecurrenceHandoffInput({ flowManager, state, policy }),
+    ...gateObservationRecurrenceHandoffInput({ flowManager, state, policy }),
+  ].map((input) => [input.targetRelativePath, input]));
+  return policy.inputContract.virtualInputs.map((relativePath) => {
+    const input = available.get(relativePath) ?? null;
+    if (input === null) throw new Error(`worker virtual handoff input is unavailable: ${relativePath}`);
+    return input;
+  });
+}
+
 function canonicalIssueSnapshotText({ flowManager, state }) {
   if (state.issue == null) return null;
   return CanonicalWorkerArtifactAddress.from("issue.md").read({
@@ -1815,6 +2000,7 @@ function canonicalIssueSnapshotText({ flowManager, state }) {
 function canonicalPayloadBaseline({ flowManager, state, rule, requirementTestContext = null, testReviewRepairProgress = null }) {
   if (rule.logicalName === "effects.json") return null;
   if (rule.logicalName === "review.delta.json") return null;
+  if (rule.logicalName === "gate-repair-report.json") return null;
   if (rule.kind === "tree") {
     const snapshot = requirementTestContext === null
       ? CanonicalWorkerTestTree.catalogSnapshot({ flowManager, specId: state.specId })
@@ -3942,6 +4128,26 @@ function currentPlanGateRepair({ flowManager, state, stepId }) {
   return canonicalPlanGateRepairForTarget({ flowManager, state, targetStepId });
 }
 
+function currentPlanGateObservationRepair({ request, state }) {
+  const record = currentPlanGateRepair({
+    flowManager: request.flowManager,
+    state,
+    stepId: request.stepId,
+  });
+  if (record === null) return null;
+  const canonicalState = typeof request.flowManager.canonicalState === "function"
+    ? request.flowManager.canonicalState(request.specId)
+    : state;
+  return Object.freeze({
+    record,
+    repair: record.observationRepair({
+      state: canonicalState,
+      activities: request.flowManager.activityLedger(request.specId),
+      handoffRevision: request.inputRevision,
+    }),
+  });
+}
+
 function currentTestReviewRepair({ flowManager, state, stepId }) {
   return canonicalTestReviewRepairForTarget({ flowManager, state, targetStepId: stepId });
 }
@@ -4301,6 +4507,25 @@ export class WorkerArtifactWorkerInstructions {
 }
 
 function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
+  const gateRecurrence = inputs.find((input) => (
+    input.name === "gate-observation-recurrence.json"
+  ))?.document ?? null;
+  if (Array.isArray(gateRecurrence?.entries) && gateRecurrence.entries.length > 0) {
+    const target = stepId === "task-impl"
+      ? "Populate the gateRepair field in the structured source response."
+      : "Write gate-repair-report.json in the declared payload path.";
+    return [
+      target,
+      "Use version 1 with summary and exactly one results entry for every fingerprint below.",
+      JSON.stringify(gateRecurrence.entries.map((entry) => ({
+        fingerprint: entry.fingerprint,
+        recurrenceCount: entry.recurrenceCount,
+        priorStrategy: entry.priorStrategy,
+      }))),
+      "Each result must contain fingerprint, strategy, summary, and priorInsufficiency.",
+      "For a recurring observation, explain why the prior strategy was insufficient and use a different strategy.",
+    ].join("\n");
+  }
   if (stepId === "task-triage") {
     const review = inputs.find((input) => input.name === "task-review.json").document;
     const findingKeys = [
@@ -4553,7 +4778,6 @@ export class WorkerArtifactHandoffRequest {
         document,
       });
     });
-    inputs.push(...reviewRecurrenceHandoffInput({ flowManager, state, policy }));
     let contextSnapshot = null;
     if (workerContextKind(policy) !== null) {
       try {
@@ -4584,8 +4808,9 @@ export class WorkerArtifactHandoffRequest {
         );
       }
     }
-    inputs.push(...taskReviewStageHandoffInputs({ flowManager, state, policy, contextSnapshot }));
-    inputs.push(...approvedFindingExceptionHandoffInputs({ flowManager, state, policy, executionRoot }));
+    inputs.push(...workerVirtualHandoffInputs({
+      flowManager, state, policy, contextSnapshot, executionRoot,
+    }));
     const inputDigestValue = handoffInputDigest(inputs, contextSnapshot);
     const semanticIdentity = canonicalSemanticInputIdentity({ flowManager, state });
     const requirementTestContext = requirementTestHandoffContext({ flowManager, state, policy, semanticIdentity });
@@ -5013,16 +5238,13 @@ export class WorkerArtifactHandoffRequest {
         "worker artifact handoff input contract changed before publication",
       );
     }
-    const virtualInputs = new Map([...taskReviewStageHandoffInputs({ flowManager: this.flowManager, state, policy: this.policy, contextSnapshot: this.contextSnapshot }), ...approvedFindingExceptionHandoffInputs({
+    const virtualInputs = new Map(workerVirtualHandoffInputs({
       flowManager: this.flowManager,
       state,
       policy: this.policy,
+      contextSnapshot: this.contextSnapshot,
       executionRoot: this.executionRoot,
-    }), ...reviewRecurrenceHandoffInput({
-      flowManager: this.flowManager,
-      state,
-      policy: this.policy,
-    })].map((input) => [input.targetRelativePath, input]));
+    }).map((input) => [input.targetRelativePath, input]));
     const current = this.inputs.map(({ targetRelativePath: relativePath }) => {
       const virtual = virtualInputs.get(relativePath) ?? null;
       if (virtual !== null) return {
@@ -6279,31 +6501,84 @@ function validateDraftPayload(request, submission, state) {
   }
 }
 
-function assertPlanGateRepairMadeProgress(request, submission, state, logicalName) {
-  const repair = currentPlanGateRepair({
-    flowManager: request.flowManager,
-    state,
-    stepId: request.stepId,
-  });
-  if (!repair) return;
-  const target = request.payloads.find(({ rule }) => rule.logicalName === logicalName);
-  const entries = submission.payloadManifest.filter((candidate) => candidate.logicalName === logicalName);
-  if (!target || entries.length === 0) return;
-  const payloadDigest = target.rule.kind === "tree"
-    ? digest(stableStringify(entries.map((entry) => ({
-        targetRelativePath: entry.targetRelativePath,
-        digest: entry.digest,
-        byteLength: entry.byteLength,
-      }))))
-    : entries[0].digest;
-  if (target.baselineDigest === payloadDigest) {
+function gateRepairReportEntry(submission) {
+  return submission.payloadManifest.find((entry) => entry.logicalName === "gate-repair-report.json") ?? null;
+}
+
+function planGateRepairArtifactOutcomeDraft(request, submission, state, logicalName) {
+  const selected = currentPlanGateObservationRepair({ request, state });
+  const reportEntry = gateRepairReportEntry(submission);
+  if ((selected !== null) !== (reportEntry !== null)) {
     throw new WorkerArtifactHandoffError(
       "invalid",
-      "FLOW_PLAN_GATE_REPAIR_NO_PROGRESS",
-      `${logicalName} did not change while repairing ${repair.phase} gate observations`,
-      { data: { sourceIssueLogId: repair.sourceIssueLogId, stepId: request.stepId } },
+      "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID",
+      selected === null
+        ? "gate-repair-report.json is forbidden without a selected plan-Gate repair"
+        : "gate-repair-report.json is required for a selected plan-Gate repair",
+      { retryable: false, data: { stepId: request.stepId } },
     );
   }
+  if (selected === null) return null;
+  const target = request.payloads.find(({ rule }) => rule.logicalName === logicalName) ?? null;
+  const output = submission.payloadManifest.find((entry) => entry.logicalName === logicalName) ?? null;
+  if (target === null || output === null || target.baselineDigest === null) {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID",
+      "plan-Gate repair report lacks its exact artifact baseline or output",
+      { retryable: false, data: { stepId: request.stepId, logicalName } },
+    );
+  }
+  let workerReport;
+  try {
+    workerReport = GateRepairWorkerReport.fromDocument(
+      payloadDocument(request, submission, "gate-repair-report.json"),
+    );
+  } catch (cause) {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID",
+      `gate-repair-report.json violates its canonical contract: ${cause.message}`,
+      { cause, retryable: false, data: { stepId: request.stepId } },
+    );
+  }
+  const changed = target.baselineDigest !== output.digest;
+  const report = workerReport.bindArtifact({
+    repair: selected.repair,
+    beforeEvidenceDigest: target.baselineDigest,
+    outputEvidenceDigest: output.digest,
+    deltaIds: changed ? [output.digest] : [],
+  });
+  const draft = new PlanGateRepairOutcomeDraft({
+    repair: selected.repair,
+    disposition: changed ? "applied" : "rejected-no-progress",
+    report,
+  });
+  draft.seal("plan-gate-repair-outcome-validation");
+  return draft;
+}
+
+function planGateRepairSourceOutcomeDraft(request, submission, state, effect) {
+  const selected = currentPlanGateObservationRepair({ request, state });
+  if ((selected !== null) !== (effect.gateRepair !== null)) {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID",
+      selected === null
+        ? "source Gate repair report is forbidden without a selected plan-Gate repair"
+        : "source Gate repair report is required for a selected plan-Gate repair",
+      { retryable: false, data: { stepId: request.stepId } },
+    );
+  }
+  if (selected === null) return null;
+  const changed = submission.sourceMutationManifest.mutations.length > 0;
+  const draft = new PlanGateRepairOutcomeDraft({
+    repair: selected.repair,
+    disposition: changed ? "applied" : "rejected-no-progress",
+    report: effect.gateRepair,
+  });
+  draft.seal("plan-gate-repair-outcome-validation");
+  return draft;
 }
 
 function assertTestReviewRepairMadeProgress(request, submission, state, logicalName) {
@@ -6387,6 +6662,7 @@ function validatePayload(request, submission, state) {
         payloadDocument(request, submission, "effects.json"),
         request.stepId,
       );
+      planGateRepairSourceOutcomeDraft(request, submission, state, effect);
       if (request.taskId !== null && ["task-triage", "task-repair"].includes(request.stepId)) {
         try {
           const stage = new TaskReviewStageInputs({ flowManager: request.flowManager, state: request.flowManager.canonicalState(request.specId), taskId: request.taskId, context: request.contextSnapshot.context, stage: request.stepId });
@@ -6456,14 +6732,14 @@ function validatePayload(request, submission, state) {
       } else {
         validateDraftPayload(request, submission, state);
         if (request.stepId === "draft-refine") {
-          assertPlanGateRepairMadeProgress(request, submission, state, "draft.json");
+          planGateRepairArtifactOutcomeDraft(request, submission, state, "draft.json");
         }
       }
       return;
     }
     if (request.stepId === "spec") {
       validateSpecJsonObject(payloadDocument(request, submission, "spec.json"));
-      assertPlanGateRepairMadeProgress(request, submission, state, "spec.json");
+      planGateRepairArtifactOutcomeDraft(request, submission, state, "spec.json");
       return;
     }
     if (request.stepId === "spec-triage") {
@@ -6994,6 +7270,9 @@ function canonicalHandoffPublications(request, submission) {
     }));
   }
   for (const entry of submission.payloadManifest) {
+    // This is a worker claim consumed only by the parent when sealing the
+    // immutable repair outcome. It is never a catalog publication itself.
+    if (entry.logicalName === "gate-repair-report.json") continue;
     const bytes = draftRepairResultValue !== null && entry.logicalName === repairRoute.repairArtifact
         ? Buffer.from(`${JSON.stringify(draftRepairResultValue.audit, null, 2)}\n`, "utf8")
         : manifestPayloadBytes(request, entry, "canonical handoff payload");
@@ -8329,9 +8608,31 @@ export class WorkerArtifactHandoffCoordinator {
         `test-review repair progress could not be prepared: ${cause.message}`, { cause },
       );
     }
+    const planGateRepairOutcome = request.stepId === "draft-refine"
+      ? planGateRepairArtifactOutcomeDraft(request, submission, state, "draft.json")
+      : request.stepId === "spec"
+        ? planGateRepairArtifactOutcomeDraft(request, submission, state, "spec.json")
+        : null;
     try {
       let promotionApplied = false;
       this.faultInjector({ phase: "before-worker-handoff-publication", stepId: request.stepId });
+      if (planGateRepairOutcome?.disposition === "rejected-no-progress") {
+        ctx.flowManager.rejectPlanGateRepairHandoff({
+          specId: request.specId,
+          outcome: planGateRepairOutcome,
+          result: canonicalHandoffResult(request, submission, this.now),
+        });
+        const receipt = canonicalHandoffReceipt(request, submission, this.now);
+        cleanupCompletedHandoff(request.handoffRoot, receipt, this.faultInjector);
+        return {
+          completed: true,
+          rejected: true,
+          replayed: false,
+          stepId: receipt.stepId,
+          handoffDigest: receipt.handoffDigest,
+          payloadDigest: receipt.payloadDigest,
+        };
+      }
       if (request.stepId === "draft-refine") {
         const draftPayload = submission.payloadManifest.find((entry) => entry.targetRelativePath === "draft.json");
         const draftBytes = draftPayload === undefined ? null : manifestPayloadBytes(request, draftPayload, "draft-refine payload");
@@ -8353,6 +8654,14 @@ export class WorkerArtifactHandoffCoordinator {
         });
         const action = plan?.actions.find((entry) => entry instanceof PromoteDraftQuestionAndKeepRefineActive) ?? null;
         if (action !== null) {
+          if (planGateRepairOutcome !== null) {
+            throw new WorkerArtifactHandoffError(
+              "invalid",
+              "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID",
+              "draft Gate repair cannot promote a question instead of recording its selected repair outcome",
+              { retryable: false, data: { stepId: request.stepId } },
+            );
+          }
           action.apply(new DraftPromotionHandoffAdapter({
             flowManager: ctx.flowManager,
             specId: request.specId,
@@ -8403,6 +8712,7 @@ export class WorkerArtifactHandoffCoordinator {
           artifactRemovals: publications.artifactRemovals,
           artifactBaselines: publications.artifactBaselines,
           testSourceBaseline: publications.testSourceBaseline,
+          planGateRepairOutcome,
         };
         if (publications.draftCoverageRepairDecision !== null) {
           ctx.flowManager.confirmDraftCoverageRepairCompletion({
@@ -8499,7 +8809,32 @@ export class WorkerArtifactHandoffCoordinator {
       eventDigest: protocolAuthority.event.digest,
       kind: "accepted",
     });
+    const planGateRepairOutcome = planGateRepairSourceOutcomeDraft(
+      request,
+      submission,
+      request.state,
+      effect,
+    );
     try {
+      if (planGateRepairOutcome?.disposition === "rejected-no-progress") {
+        ctx.flowManager.rejectPlanGateRepairHandoff({
+          specId: request.specId,
+          outcome: planGateRepairOutcome,
+          result: canonicalHandoffResult(request, submission, this.now),
+          sourceHandoffSettlement,
+          mutationManifest: manifest,
+        });
+        const receipt = canonicalHandoffReceipt(request, submission, this.now);
+        cleanupCompletedHandoff(request.handoffRoot, receipt, this.faultInjector);
+        return {
+          completed: true,
+          rejected: true,
+          replayed: false,
+          stepId: receipt.stepId,
+          handoffDigest: receipt.handoffDigest,
+          payloadDigest: receipt.payloadDigest,
+        };
+      }
       ctx.flowManager.confirmSourceWorkerHandoff({
         sourceMutationBaseline: request.sourceMutationBaseline,
         specId: request.specId,
@@ -8514,6 +8849,7 @@ export class WorkerArtifactHandoffCoordinator {
           status: effect.completionStatus,
           noChangeReason: effect.noChangeReason?.text ?? null,
         }),
+        planGateRepairOutcome,
         ...(upgradeResult === null ? {} : { upgradeResult }),
       });
     } catch (cause) {

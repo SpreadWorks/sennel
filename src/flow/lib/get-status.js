@@ -41,6 +41,7 @@ import { CanonicalSpecRecord } from "./canonical-spec-record.js";
 import { CanonicalFileMap } from "./canonical-file-map.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { RequirementTestPlanArtifact } from "./requirement-test-artifacts.js";
+import { GateObservationConvergenceStatus } from "./canonical-gate-observation-cycle.js";
 
 /** Token sub-fields that the Logger / canonical command view emit per agent entry. */
 export const TOKEN_KEYS = ["input", "output", "cacheRead", "cacheCreation"];
@@ -350,6 +351,14 @@ class CanonicalStatusArtifacts {
       cycle,
     }).toJSON();
   }
+
+  gateObservationConvergence() {
+    const status = GateObservationConvergenceStatus.fromCanonical({
+      flowManager: this.flowManager,
+      state: this.state,
+    });
+    return status.empty ? null : status.toJSON();
+  }
 }
 
 function buildStatusGateViews(state, active, root, options = {}) {
@@ -442,6 +451,7 @@ function buildStatusOutput(state, root, options = {}) {
   const requirementTestLifecycle = artifacts?.requirementTestLifecycle() ?? null;
   const taskReviewConvergence = artifacts?.taskReviewConvergence() ?? [];
   const implementationReviewConvergence = artifacts?.implementationReviewConvergence() ?? null;
+  const gateObservationConvergence = artifacts?.gateObservationConvergence() ?? null;
   const completion = new FlowCompletion(state);
   const advisory = advisorySummary(state);
 
@@ -463,6 +473,7 @@ function buildStatusOutput(state, root, options = {}) {
     ...(finalRegression && { finalRegression }),
     ...(taskReviewConvergence.length > 0 && { taskReviewConvergence }),
     ...(implementationReviewConvergence !== null && { implementationReviewConvergence }),
+    ...(gateObservationConvergence !== null && { gateObservationConvergence }),
     ...(recoveryDiagnostics && { recoveryDiagnostics }),
     mergeStrategy: state.mergeStrategy || null,
     autoApprove,

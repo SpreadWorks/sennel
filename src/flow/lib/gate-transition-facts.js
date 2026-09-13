@@ -8,6 +8,7 @@
  */
 import {
   GateFailureCategory,
+  GateObservationConvergenceFacts,
   GateTaskBudget,
   GateTaskLifecycle,
   GateTransitionFacts,
@@ -29,6 +30,7 @@ import {
   TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION,
   TaskGateClassificationRecoveryIdentity,
 } from "./task-gate-classification-recovery.js";
+import { CanonicalGateObservationCycle } from "./canonical-gate-observation-cycle.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 
@@ -605,6 +607,41 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
     sourceRevisionFingerprint,
     canonicalRevisionFingerprint,
   };
+  const taskBudget = taskId === null ? null : new GateTaskBudget({
+    round: flowManager.taskMutationLineages({ specId: state.specId, taskId }).at(-1)?.budget.round,
+  });
+  let observationConvergence = null;
+  if (failure?.category === "semantic" && classificationRecorded) {
+    const evidenceKey = [
+      keys.result,
+      attempt.id,
+      attempt.sequence,
+      publication.id,
+      resultSource.descriptor.hash,
+    ].join(":");
+    const cycleRead = new CanonicalGateObservationCycle({ flowManager, state }).read();
+    const cycles = cycleRead.cycles.filter((cycle) => cycle.occurrences.some((occurrence) => (
+      occurrence.evidence.key() === evidenceKey
+    )));
+    if (cycles.length > 0) {
+      const outcomes = cycles.flatMap((cycle) => cycle.outcomes)
+        .filter((outcome) => outcome.sourceAttempt.sequence < attempt.sequence)
+        .sort((left, right) => right.sourceAttempt.sequence - left.sourceAttempt.sequence);
+      const latestOutcome = outcomes.at(0) ?? null;
+      observationConvergence = new GateObservationConvergenceFacts({
+        evidenceKey,
+        observationFingerprints: cycles.map((cycle) => cycle.fingerprint.toString()),
+        occurrenceCount: cycles.reduce((total, cycle) => total + cycle.occurrenceCount, 0),
+        repairCount: cycles.reduce((total, cycle) => total + cycle.repairCount, 0),
+        recurrenceCount: cycles.reduce((total, cycle) => total + cycle.recurrenceCount, 0),
+        latestOutcomeDisposition: latestOutcome?.disposition ?? null,
+        latestOutcomeChangedEvidence: latestOutcome === null
+          ? false
+          : latestOutcome.report.beforeEvidenceDigest !== latestOutcome.report.outputEvidenceDigest,
+        finalRound: taskBudget?.finalRound ?? false,
+      });
+    }
+  }
   return new GateTransitionFacts({
     phase: persistedPhase,
     scope: scopeFor(persistedPhase, taskId),
@@ -623,9 +660,8 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
     failure,
     postPublication,
     retry,
-    taskBudget: taskId === null ? null : new GateTaskBudget({
-      round: flowManager.taskMutationLineages({ specId: state.specId, taskId }).at(-1)?.budget.round,
-    }),
+    taskBudget,
+    observationConvergence,
     lineage,
     recoveryEvidence: payload.result === "recovered"
       ? { kind: "recovered", attempt: { id: attempt.id, sequence: attempt.sequence }, fingerprint: resultSource.descriptor.hash }

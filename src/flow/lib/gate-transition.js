@@ -371,6 +371,63 @@ export class GateTaskBudget {
   toJSON() { return { round: this.round, maximumRounds: this.maximumRounds, finalRound: this.finalRound }; }
 }
 
+/** Persisted-evidence convergence facts consumed by Definition with a Gate result. */
+export class GateObservationConvergenceFacts {
+  constructor({
+    evidenceKey,
+    observationFingerprints = [],
+    occurrenceCount,
+    repairCount,
+    recurrenceCount,
+    latestOutcomeDisposition = null,
+    latestOutcomeChangedEvidence = false,
+    finalRound = false,
+  } = {}) {
+    this.evidenceKey = requiredText(evidenceKey, "Gate convergence evidence key");
+    if (!Array.isArray(observationFingerprints) || observationFingerprints.length === 0
+      || observationFingerprints.some((value) => typeof value !== "string" || value === "")) {
+      throw new Error("Gate convergence observation fingerprints must be a non-empty array");
+    }
+    this.observationFingerprints = Object.freeze([...observationFingerprints].sort());
+    if (new Set(this.observationFingerprints).size !== this.observationFingerprints.length) {
+      throw new Error("Gate convergence observation fingerprints must be unique");
+    }
+    this.occurrenceCount = positiveInteger(occurrenceCount, "Gate convergence occurrenceCount");
+    this.repairCount = nonNegativeInteger(repairCount, "Gate convergence repairCount");
+    this.recurrenceCount = nonNegativeInteger(recurrenceCount, "Gate convergence recurrenceCount");
+    if (this.recurrenceCount > this.occurrenceCount - 1) {
+      throw new Error("Gate convergence recurrenceCount exceeds its occurrences");
+    }
+    this.latestOutcomeDisposition = optionalText(
+      latestOutcomeDisposition,
+      "Gate convergence latest outcome disposition",
+    );
+    if (this.latestOutcomeDisposition !== null
+      && !new Set(["applied", "rejected-no-progress"]).has(this.latestOutcomeDisposition)) {
+      throw new Error("Gate convergence latest outcome disposition is invalid");
+    }
+    if (typeof latestOutcomeChangedEvidence !== "boolean" || typeof finalRound !== "boolean") {
+      throw new Error("Gate convergence evidence-change and final-round facts must be boolean");
+    }
+    this.latestOutcomeChangedEvidence = latestOutcomeChangedEvidence;
+    this.finalRound = finalRound;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      evidenceKey: this.evidenceKey,
+      observationFingerprints: [...this.observationFingerprints],
+      occurrenceCount: this.occurrenceCount,
+      repairCount: this.repairCount,
+      recurrenceCount: this.recurrenceCount,
+      latestOutcomeDisposition: this.latestOutcomeDisposition,
+      latestOutcomeChangedEvidence: this.latestOutcomeChangedEvidence,
+      finalRound: this.finalRound,
+    };
+  }
+}
+
 /** Read-only progress of the durable effects that follow a Task Gate result. */
 export class TaskGateSettlementProgress {
   constructor({
@@ -488,6 +545,7 @@ export class GateTransitionFacts {
     taskLifecycle = null,
     taskBudget = null,
     taskSettlementProgress = null,
+    observationConvergence = null,
   } = {}) {
     this.phase = requiredText(phase, "gate phase");
     if (!GATE_PHASES.has(this.phase)) throw new Error("gate phase is invalid");
@@ -549,6 +607,18 @@ export class GateTransitionFacts {
     if (["repair", "defer"].includes(this.recoveryEvidence.kind) && this.failure?.category !== "semantic") {
       throw new Error("gate repair or defer evidence requires a semantic failure");
     }
+    this.observationConvergence = observationConvergence === null
+      ? null
+      : (observationConvergence instanceof GateObservationConvergenceFacts
+        ? observationConvergence
+        : new GateObservationConvergenceFacts(observationConvergence));
+    if (this.observationConvergence !== null && this.failure?.category !== "semantic") {
+      throw new Error("Gate observation convergence requires a semantic failure");
+    }
+    if (this.observationConvergence !== null
+      && this.observationConvergence.finalRound !== (this.taskBudget?.finalRound ?? false)) {
+      throw new Error("Gate observation convergence final round does not match Task budget");
+    }
     Object.freeze(this);
   }
 
@@ -599,6 +669,7 @@ export class GateTransitionFacts {
       reviewReadiness: this.reviewReadiness?.toJSON() ?? null,
       taskLifecycle: this.taskLifecycle?.toJSON() ?? null,
       taskBudget: this.taskBudget?.toJSON() ?? null,
+      observationConvergence: this.observationConvergence?.toJSON() ?? null,
       ...(this.scope === "task" ? { taskSettlementProgress: this.taskSettlementProgress.toJSON() } : {}),
     };
   }

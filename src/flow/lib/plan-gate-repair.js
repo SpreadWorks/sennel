@@ -2,6 +2,13 @@ import crypto from "node:crypto";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { CanonicalGateInputStore } from "./canonical-gate-artifacts.js";
 import { canonicalRepairAttemptOwner } from "./repair-attempt-lineage.js";
+import {
+  GateEvidenceIdentity,
+  GateObservation,
+  GateObservationCycleReadModel,
+  GateObservationRepair,
+  GateRepairObservationRequest,
+} from "./gate-observation-convergence.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const MAX_TEXT_LENGTH = 4000;
@@ -56,9 +63,12 @@ function repairIdentity(record) {
     specId: record.specId,
     issue: record.issue,
     phase: record.phase,
-    targetStepId: record.targetStepId,
+    connector: record.connector.toJSON(),
+    evidenceIdentity: record.evidenceIdentity.toJSON(),
     sourceIssueLogId: record.sourceIssueLogId,
     sourceEntryDigest: record.sourceEntryDigest,
+    observationFingerprints: [...record.observationFingerprints],
+    observationRequests: record.observationRequests.map((entry) => entry.toJSON()),
   };
 }
 
@@ -101,6 +111,29 @@ export class PlanGateRepairObservation {
     this.refs = Object.freeze(refs.map((ref, index) => (
       requiredString(ref, `plan gate repair observation refs[${index}]`, 500)
     )));
+    this.authority = Object.freeze({
+      kind: requiredString(input.authority?.kind ?? "requirement", "plan gate repair observation authority kind", 100),
+      id: requiredString(input.authority?.id ?? this.requirementRef, "plan gate repair observation authority id", 500),
+    });
+    this.rootCause = input.rootCause == null
+      ? null
+      : requiredString(input.rootCause, "plan gate repair observation rootCause");
+    this.canonical = new GateObservation({
+      phase: input.phase,
+      scope: input.scope,
+      taskId: input.taskId ?? null,
+      authority: this.authority,
+      failureMode: this.failureMode,
+      file: this.where?.file ?? null,
+      locator: this.where?.locator ?? null,
+      rootCause: this.rootCause,
+      observed: this.observed,
+      title: input.title ?? null,
+    });
+    this.fingerprint = this.canonical.fingerprint;
+    if (input.fingerprint !== undefined && input.fingerprint !== this.fingerprint.toString()) {
+      throw new Error("plan gate repair observation fingerprint does not match its canonical identity");
+    }
     Object.freeze(this);
   }
 
@@ -113,6 +146,58 @@ export class PlanGateRepairObservation {
       observed: this.observed,
       severity: this.severity,
       refs: [...this.refs],
+      authority: this.authority,
+      rootCause: this.rootCause,
+      fingerprint: this.fingerprint.toString(),
+    };
+  }
+}
+
+/** Persisted projection of the Definition-sealed repair connector. */
+export class PlanGateRepairConnectorBinding {
+  constructor(input = {}, evidenceIdentity = null) {
+    const evidence = evidenceIdentity instanceof GateEvidenceIdentity
+      ? evidenceIdentity
+      : GateEvidenceIdentity.fromJSON(evidenceIdentity);
+    this.phase = requiredString(input.phase, "plan Gate repair connector phase", 100);
+    this.sourceGateStepId = requiredString(input.sourceGateStepId, "plan Gate repair connector sourceGateStepId", 100);
+    this.sourceAttempt = evidence.sourceAttempt;
+    if (stableStringify(input.sourceAttempt) !== stableStringify(this.sourceAttempt.toJSON())) {
+      throw new Error("plan Gate repair connector source Attempt does not match its evidence");
+    }
+    this.resultLogicalKey = requiredString(input.resultLogicalKey, "plan Gate repair connector resultLogicalKey", 100);
+    this.resultArtifactId = requiredString(input.resultArtifactId, "plan Gate repair connector resultArtifactId", 1000);
+    this.catalogFingerprint = requiredDigest(input.catalogFingerprint, "plan Gate repair connector catalogFingerprint");
+    this.targetStepId = requiredString(input.targetStepId, "plan Gate repair connector targetStepId", 100);
+    if (!Array.isArray(input.resetStepIds) || input.resetStepIds.length === 0) {
+      throw new Error("plan Gate repair connector resetStepIds must be a non-empty array");
+    }
+    this.resetStepIds = Object.freeze(input.resetStepIds.map((stepId, index) => (
+      requiredString(stepId, `plan Gate repair connector resetStepIds[${index}]`, 100)
+    )));
+    this.taskLifecycle = input.taskLifecycle == null ? null : Object.freeze(structuredClone(input.taskLifecycle));
+    const route = planGateRepairRouteForGateStep(this.sourceGateStepId);
+    if (route === null || route.phase !== this.phase || route.targetStepId !== this.targetStepId
+      || stableStringify(route.resetStepIds) !== stableStringify(this.resetStepIds)
+      || this.resultLogicalKey !== planGateRepairResultLogicalKey(route)
+      || !this.sourceAttempt.matches(evidence.sourceAttempt)
+      || this.catalogFingerprint !== evidence.catalogFingerprint) {
+      throw new Error("plan Gate repair connector does not match its evidence and canonical route");
+    }
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      phase: this.phase,
+      sourceGateStepId: this.sourceGateStepId,
+      sourceAttempt: this.sourceAttempt.toJSON(),
+      resultLogicalKey: this.resultLogicalKey,
+      resultArtifactId: this.resultArtifactId,
+      catalogFingerprint: this.catalogFingerprint,
+      targetStepId: this.targetStepId,
+      resetStepIds: [...this.resetStepIds],
+      taskLifecycle: this.taskLifecycle,
     };
   }
 }
@@ -194,7 +279,7 @@ export function planGateRepairRouteForGateStep(stepId) {
   return ROUTE_BY_GATE.get(stepId) || (taskId === null ? null : taskRoute(taskId));
 }
 
-function planGateRepairResultLogicalKey(route) {
+export function planGateRepairResultLogicalKey(route) {
   if (!(route instanceof PlanGateRepairRoute)) {
     throw new Error("plan gate repair result requires a typed route");
   }
@@ -322,12 +407,13 @@ class CanonicalPlanGateRepairEvidence {
       || `The ${this.route.phase} gate recorded blocking observations that require a governed artifact revision.`;
   }
 
-  createRecord(state) {
+  createRecord(state, { gateFacts, connector, cycleReadModel } = {}) {
     return PlanGateRepairRecord.create({
       state,
-      phase: this.route.phase,
       issueLogEntry: this.source,
-      route: this.route,
+      gateFacts,
+      connector,
+      cycleReadModel,
     });
   }
 }
@@ -360,8 +446,8 @@ export function inspectCanonicalPlanGateRepair({ flowManager, state } = {}) {
 
 export class PlanGateRepairRecord {
   constructor(input = {}) {
-    if (input.version !== 1) throw new Error("plan gate repair version must be 1");
-    this.version = 1;
+    if (input.version !== 2) throw new Error("plan gate repair version must be 2");
+    this.version = 2;
     this.runId = requiredString(input.runId, "plan gate repair runId", 500);
     this.specId = requiredString(input.specId, "plan gate repair specId", 500);
     this.issue = input.issue == null ? null : Number(input.issue);
@@ -369,12 +455,15 @@ export class PlanGateRepairRecord {
       throw new Error("plan gate repair issue must be a positive integer or null");
     }
     this.phase = requiredString(input.phase, "plan gate repair phase", 100);
-    this.targetStepId = requiredString(input.targetStepId, "plan gate repair targetStepId", 100);
-    this.route = this.phase === "task-impl"
-      ? planGateRepairRouteForTargetStep(this.targetStepId)
-      : planGateRepairRouteForPhase(this.phase);
-    if (!this.route) throw new Error(`unsupported plan gate repair phase: ${this.phase}`);
-    if (this.targetStepId !== this.route.targetStepId) {
+    this.evidenceIdentity = input.evidenceIdentity instanceof GateEvidenceIdentity
+      ? input.evidenceIdentity
+      : GateEvidenceIdentity.fromJSON(input.evidenceIdentity);
+    this.connector = input.connector instanceof PlanGateRepairConnectorBinding
+      ? input.connector
+      : new PlanGateRepairConnectorBinding(input.connector, this.evidenceIdentity);
+    this.targetStepId = this.connector.targetStepId;
+    this.route = planGateRepairRouteForTargetStep(this.targetStepId);
+    if (this.route === null || this.phase !== this.connector.phase) {
       throw new Error("plan gate repair target does not match its phase");
     }
     this.sourceIssueLogId = requiredString(
@@ -392,30 +481,113 @@ export class PlanGateRepairRecord {
     if (input.observations.length > MAX_OBSERVATIONS) {
       throw new Error(`plan gate repair observations exceed ${MAX_OBSERVATIONS}`);
     }
-    this.observations = Object.freeze(input.observations.map((observation) => (
-      observation instanceof PlanGateRepairObservation
-        ? observation
-        : new PlanGateRepairObservation(observation)
+    const taskId = this.phase === "task-impl"
+      ? this.route.gateStepId.slice(0, -"-gate".length)
+      : null;
+    this.observations = Object.freeze(input.observations.map((observation) => new PlanGateRepairObservation({
+      ...(observation instanceof PlanGateRepairObservation ? observation.toJSON() : observation),
+      phase: this.phase,
+      scope: taskId === null ? "flow" : "task",
+      taskId,
+    })));
+    this.observationFingerprints = Object.freeze(this.observations.map((observation) => (
+      observation.fingerprint.toString()
     )));
+    if (new Set(this.observationFingerprints).size !== this.observationFingerprints.length) {
+      throw new Error("plan gate repair observations must have unique canonical fingerprints");
+    }
+    if (!Array.isArray(input.observationFingerprints)
+      || stableStringify(input.observationFingerprints) !== stableStringify(this.observationFingerprints)) {
+      throw new Error("plan gate repair observation fingerprints do not match canonical observations");
+    }
+    if (!Array.isArray(input.observationRequests) || input.observationRequests.length !== this.observations.length) {
+      throw new Error("plan gate repair requires one recurrence-bound request per observation");
+    }
+    this.observationRequests = Object.freeze(input.observationRequests.map((entry) => (
+      entry instanceof GateRepairObservationRequest ? entry : new GateRepairObservationRequest(entry)
+    )));
+    if (stableStringify(this.observationRequests.map((entry) => entry.fingerprint.toString()).sort())
+      !== stableStringify([...this.observationFingerprints].sort())) {
+      throw new Error("plan gate repair requests do not match canonical observation fingerprints");
+    }
     this.requestedAt = requiredTimestamp(input.requestedAt, "plan gate repair requestedAt");
     Object.freeze(this);
   }
 
-  static create({ state, phase, issueLogEntry, route = null, requestedAt = new Date().toISOString() }) {
-    const selectedRoute = route || planGateRepairRouteForPhase(phase);
-    if (!selectedRoute) throw new Error(`unsupported plan gate repair phase: ${phase}`);
+  static create({ state, issueLogEntry, gateFacts, connector, cycleReadModel, requestedAt = new Date().toISOString() }) {
+    if (gateFacts === null || typeof gateFacts !== "object" || connector === null || typeof connector !== "object") {
+      throw new Error("plan gate repair creation requires Definition-selected Gate facts and connector");
+    }
+    const evidenceIdentity = new GateEvidenceIdentity({
+      sourceAttempt: gateFacts.currentAttempt,
+      resultLogicalKey: connector.resultLogicalKey,
+      publicationActivityId: gateFacts.catalogPublication?.producerActivityId,
+      catalogFingerprint: gateFacts.catalogPublication?.fingerprint,
+      transitionLineage: gateFacts.lineage,
+    });
+    const connectorBinding = new PlanGateRepairConnectorBinding(
+      typeof connector.toJSON === "function" ? connector.toJSON() : connector,
+      evidenceIdentity,
+    );
     const observations = (issueLogEntry?.observations || [])
       .filter((observation) => observation?.severity === "blocking");
+    const taskId = connectorBinding.phase === "task-impl"
+      ? connectorBinding.sourceGateStepId.slice(0, -"-gate".length)
+      : null;
+    const typedObservations = observations.map((observation) => new PlanGateRepairObservation({
+      ...observation,
+      phase: connectorBinding.phase,
+      scope: taskId === null ? "flow" : "task",
+      taskId,
+    }));
+    if (!(cycleReadModel instanceof GateObservationCycleReadModel)) {
+      throw new Error("plan gate repair creation requires the canonical Gate observation cycle");
+    }
+    const observationRequests = typedObservations.map((observation) => {
+      const cycle = cycleReadModel.find(observation.fingerprint);
+      if (cycle === null || !cycle.occurrences.some((occurrence) => (
+        occurrence.blocking
+        && occurrence.evidence.matches(evidenceIdentity)
+        && occurrence.fingerprint.equals(observation.fingerprint)
+      ))) {
+        throw new Error("plan gate repair observation is absent from the exact canonical Gate cycle");
+      }
+      const priorOccurrences = cycle.occurrences.filter((occurrence) => (
+        occurrence.evidence.resultLogicalKey === evidenceIdentity.resultLogicalKey
+        && occurrence.evidence.sourceAttempt.sequence < evidenceIdentity.sourceAttempt.sequence
+      ));
+      const priorOutcome = [...cycle.outcomes]
+        .filter((outcome) => (
+          outcome.sourceEvidence.resultLogicalKey === evidenceIdentity.resultLogicalKey
+          && outcome.sourceAttempt.sequence < evidenceIdentity.sourceAttempt.sequence
+          && outcome.report.results.some((result) => result.fingerprint.equals(observation.fingerprint))
+        ))
+        .sort((left, right) => right.sourceAttempt.sequence - left.sourceAttempt.sequence)
+        .at(0) ?? null;
+      const priorStrategy = priorOutcome?.report.results
+        .find((result) => result.fingerprint.equals(observation.fingerprint))?.strategy ?? null;
+      if ((priorOccurrences.length > 0) !== (priorStrategy !== null)) {
+        throw new Error("recurring plan gate observation lacks its exact prior repair outcome");
+      }
+      return new GateRepairObservationRequest({
+        fingerprint: observation.fingerprint,
+        recurrenceCount: priorOccurrences.length,
+        priorStrategy,
+      });
+    });
     return new PlanGateRepairRecord({
-      version: 1,
+      version: 2,
       runId: state?.runId,
       specId: state?.specId,
       issue: state?.issue ?? null,
-      phase,
-      targetStepId: selectedRoute.targetStepId,
+      phase: connectorBinding.phase,
+      connector: connectorBinding,
+      evidenceIdentity,
       sourceIssueLogId: issueLogEntry?.issueLogId,
       sourceEntryDigest: digest(issueLogEntry),
-      observations,
+      observations: typedObservations,
+      observationFingerprints: typedObservations.map((observation) => observation.fingerprint.toString()),
+      observationRequests,
       requestedAt,
     });
   }
@@ -429,8 +601,10 @@ export class PlanGateRepairRecord {
    * repair record.  The timestamp is an observation, not a second identity.
    */
   get idempotencyKey() {
-    return `plan-gate-repair-${digest(repairIdentity(this))}`;
+    return `plan-gate-repair-${this.fingerprint}`;
   }
+
+  get fingerprint() { return digest(repairIdentity(this)); }
 
   /** Durable, cataloged evidence appended with the recovery Activity. */
   issueLogEntry() {
@@ -515,6 +689,24 @@ export class PlanGateRepairRecord {
     return record;
   }
 
+  observationRepair({ state, activities, handoffRevision }) {
+    const rewind = canonicalRepairAttemptOwner({ state, activities, targetStepId: this.targetStepId });
+    if (rewind?.transition?.operation !== "plan_gate_repair"
+      || rewind.references?.repairs?.[0]?.id !== this.idempotencyKey) {
+      throw new Error("plan Gate repair replacement Attempt has no exact publication Activity");
+    }
+    const targetAttempt = rewind.transition.attempt;
+    return new GateObservationRepair({
+      repairId: this.idempotencyKey,
+      sourceEvidence: this.evidenceIdentity,
+      targetAttempt,
+      publicationActivityId: rewind.id,
+      recordFingerprint: this.fingerprint,
+      handoffRevision,
+      requests: this.observationRequests,
+    });
+  }
+
   assertFlow(state) {
     if (
       state?.runId !== this.runId
@@ -538,20 +730,29 @@ export class PlanGateRepairRecord {
       issue: this.issue,
       phase: this.phase,
       targetStepId: this.targetStepId,
+      connector: this.connector.toJSON(),
+      evidenceIdentity: this.evidenceIdentity.toJSON(),
       sourceIssueLogId: this.sourceIssueLogId,
       sourceEntryDigest: this.sourceEntryDigest,
       observations: this.observations.map((observation) => observation.toJSON()),
+      observationFingerprints: [...this.observationFingerprints],
+      observationRequests: this.observationRequests.map((entry) => entry.toJSON()),
       requestedAt: this.requestedAt,
     };
   }
 
   toWorkerJSON() {
     return {
+      version: this.version,
       phase: this.phase,
       targetStepId: this.targetStepId,
+      connector: this.connector.toJSON(),
+      evidenceIdentity: this.evidenceIdentity.toJSON(),
       sourceIssueLogId: this.sourceIssueLogId,
       sourceEntryDigest: this.sourceEntryDigest,
       observations: this.observations.map((observation) => observation.toJSON()),
+      observationFingerprints: [...this.observationFingerprints],
+      observationRequests: this.observationRequests.map((entry) => entry.toJSON()),
     };
   }
 }

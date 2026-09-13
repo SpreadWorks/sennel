@@ -9,6 +9,36 @@
     "overview": { "type": "object", "required": ["modules", "data_flow", "decisions"], "properties": { "modules": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 500 } }, "data_flow": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 500 } }, "decisions": { "type": "array", "maxItems": 50, "items": { "type": "string", "maxLength": 500 } } }, "additionalProperties": false },
     "triage": { "type": "null" },
     "repair": { "type": "null" },
+    "gateRepair": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["version", "summary", "results"],
+          "properties": {
+            "version": { "type": "integer", "enum": [1] },
+            "summary": { "type": "string", "minLength": 1 },
+            "results": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 256,
+              "items": {
+                "type": "object",
+                "required": ["fingerprint", "strategy", "summary", "priorInsufficiency"],
+                "properties": {
+                  "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+                  "strategy": { "type": "string", "minLength": 1 },
+                  "summary": { "type": "string", "minLength": 1 },
+                  "priorInsufficiency": { "type": ["string", "null"] }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "noChangeReason": { "type": ["string", "null"], "minLength": 1 }
   },
   "additionalProperties": false

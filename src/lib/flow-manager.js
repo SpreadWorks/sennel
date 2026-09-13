@@ -488,6 +488,12 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  rejectPlanGateRepairHandoff(input = {}) {
+    return this._store.rejectPlanGateRepairHandoff({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   repairAcceptanceReview(input = {}) {
     return this._store.repairAcceptanceReview({
       ...input,

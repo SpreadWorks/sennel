@@ -121,7 +121,7 @@ describe("Task Gate source authority", () => {
     root = null;
   });
 
-  it("binds a semantic failure before publication, then a fresh reader classifies the same Attempt", async () => {
+  it("binds a semantic failure before publication, then a fresh reader selects the sealed repair route", async () => {
     root = createTmpDir("gate-source-authority-");
     const flowManager = taskGateFixture(root);
     const originalGet = container.get.bind(container);
@@ -155,7 +155,7 @@ describe("Task Gate source authority", () => {
     assert.equal(facts.failure.category, "semantic");
     const decision = settleTaskGateFailure(root, reloaded, result);
     assert.equal(reloaded.canonicalState(SPEC_ID).attempt.failure.category, "semantic");
-    assert.equal(decision.disposition.operation, "retry");
+    assert.equal(decision.disposition.operation, "repair");
     const next = await new GetNextActionCommand().execute({
       root,
       mainRoot: root,
@@ -165,10 +165,10 @@ describe("Task Gate source authority", () => {
       flowManager: makeFlowManager(root),
       flowState: makeFlowManager(root).loadReadOnly(SPEC_ID),
     });
-    assert.equal(next.directive.actionId, "CLAIM_GATE_RETRY");
+    assert.equal(next.directive.actionId, "REPAIR_PLAN_GATE_EVIDENCE");
   });
 
-  it("reuses a prior partial PASS on the Definition-selected retry without another R-1 evaluation", async () => {
+  it("reuses a prior partial PASS for the exact scope before selecting the sealed repair route", async () => {
     root = createTmpDir("gate-source-reuse-");
     const flowManager = taskGateFixture(root);
     const originalGet = container.get.bind(container);
@@ -225,57 +225,11 @@ describe("Task Gate source authority", () => {
     assert.equal(flipped.result, "pass");
     assert.equal(flipped.artifacts.evaluations[0].result, "pass");
     const decision = settleTaskGateFailure(root, reloaded, result);
-    reloaded.retryGateTransition({ specId: SPEC_ID, decision });
-
-    const retriedIds = [];
-    container.get = (key) => key !== "agent" ? originalGet(key) : {
-      resolve: () => true,
-      call: async (_prompt, options) => {
-        const ids = options.jsonSchema.properties.evaluations.items.properties.guardrail_id.enum;
-        retriedIds.push(...ids);
-        return JSON.stringify({ evaluations: ids.map((id) => ({
-          guardrail_id: id,
-          result: "pass",
-          reason: `[REQ:${id}] retry evaluates the remaining Requirement only.`,
-        })) });
-      },
-    };
-    try {
-      const retried = await executeTaskGate(root, reloaded);
-      assert.equal(retried.result, "pass");
-    } finally {
-      container.get = originalGet;
-    }
-    assert.deepEqual(retriedIds, ["R-2"]);
-
-    writeJson(root, ".sennel/guardrail.json", {
-      guardrails: [{
-        id: "retry-scope-change",
-        title: "Retry Scope Change",
-        body: "A changed Task Gate guardrail requires a fresh Requirement evaluation.",
-        meta: { phase: ["task-impl"], category: "process" },
-      }],
-    });
-    const changedIds = [];
-    container.get = (key) => key !== "agent" ? originalGet(key) : {
-      resolve: () => true,
-      call: async (_prompt, options) => {
-        const ids = options.jsonSchema.properties.evaluations.items.properties.guardrail_id.enum;
-        changedIds.push(...ids);
-        return JSON.stringify({ evaluations: ids.map((id) => ({
-          guardrail_id: id,
-          result: "pass",
-          reason: `[REQ:${id}] changed guardrail requires a fresh evaluation.`,
-        })) });
-      },
-    };
-    try {
-      const changed = await executeTaskGate(root, reloaded);
-      assert.equal(changed.result, "pass");
-    } finally {
-      container.get = originalGet;
-    }
-    assert.deepEqual(changedIds.sort(), ["R-1", "R-2"]);
+    assert.equal(decision.disposition.operation, "repair");
+    assert.throws(
+      () => reloaded.retryGateTransition({ specId: SPEC_ID, decision }),
+      /stale or no longer admitted/,
+    );
   });
 
   it("refuses provider-time canonical spec drift without publishing a Task Gate result", async () => {

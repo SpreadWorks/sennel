@@ -387,7 +387,7 @@ describe("definition-owned Gate transition boundary", () => {
     assert.equal(exhaustedActions.some((action) => action instanceof IncrementMetric), false);
   });
 
-  it("keeps a Task Gate retry ahead of a repair receipt until exhaustion", () => {
+  it("prioritizes a current Task Gate repair receipt over a same-evidence retry", () => {
     const exhausted = {
       result: "fail", failure: new GateFailureCategory({ category: "semantic" }),
       retry: new GateRetryMetrics({ used: 4, maximum: 4 }), taskBudget: { round: 2, maximumRounds: 2 },
@@ -400,12 +400,14 @@ describe("definition-owned Gate transition boundary", () => {
     assert.equal(deferred.disposition.operation, "defer");
     assert.equal(deferred.plan.retryMetric, null);
     assert.equal(deferred.plan.updates[0].status, "in_progress");
-    assert.equal(resolveGateTransition(facts({ phase: "task-impl",
+    const repairBeforeExhaustion = resolveGateTransition(facts({ phase: "task-impl",
       result: "fail",
       failure: new GateFailureCategory({ category: "semantic" }),
       retry: new GateRetryMetrics({ used: 3, maximum: 4 }),
       recoveryEvidence: new GateRecoveryEvidence({ kind: "repair", ...binding }),
-    })).disposition.operation, "retry");
+    }));
+    assert.equal(repairBeforeExhaustion.disposition.operation, "repair");
+    assert.equal(repairBeforeExhaustion.plan.retryMetric, null);
   });
 
   it("selects the Task Gate advisory matrix from typed failure, retry, and successor facts", () => {
@@ -556,6 +558,7 @@ describe("definition-owned Gate transition boundary", () => {
       ...task.toJSON(), result: "fail", failure: { category: "semantic", code: "GATE_REJECTED" },
       retry: { used: 4, maximum: 4 },
       taskLifecycle: { taskId: "T-1", nextTaskId: null, integrationStepId: "test-execute" },
+      recoveryEvidence: { kind: "repair", attempt: { id: "attempt-7", sequence: 7 }, fingerprint: "revision-7" },
     }));
     assert.deepEqual(firstRoundExhausted.plan.taskLifecycle.toJSON(), {
       operation: "repair-task-impl", taskId: "T-1", successorStepId: "T-1-impl",

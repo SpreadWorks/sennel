@@ -2386,8 +2386,9 @@ describe("worker artifact handoff", () => {
       "impl-review.json",
       "impl-triage.json",
       "impl-review-recurrence.json",
+      "gate-observation-recurrence.json",
     ]);
-    assert.equal(contract.accepts(["spec.json", "impl-review.json", "impl-triage.json", "impl-review-recurrence.json"]), true);
+    assert.equal(contract.accepts(["spec.json", "impl-review.json", "impl-triage.json", "impl-review-recurrence.json", "gate-observation-recurrence.json"]), true);
     assert.equal(contract.accepts(["spec.json", "impl-review.json", "impl-triage.json"]), false);
   });
 

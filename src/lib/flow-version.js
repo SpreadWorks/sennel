@@ -82,6 +82,7 @@ const SOURCE_HANDOFF_TASK_ARTIFACTS = new Set([
   "source.handoff.checkpoint",
   "source.handoff.event",
   "source.handoff.settlement",
+  "plan.gate.repair.outcome",
 ]);
 const MIGRATION_CATALOG_INITIALIZATION = Symbol("migration-catalog-initialization");
 const CATALOG_LOCK_RETRY_INTERVAL_MS = 250;

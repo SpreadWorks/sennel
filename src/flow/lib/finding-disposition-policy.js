@@ -1,14 +1,32 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { FlowActivity } from "./current-flow-state.js";
+import {
+  CanonicalFindingFingerprint,
+  CanonicalFindingIdentity,
+} from "./canonical-finding-identity.js";
 
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const COMMIT_RE = /^[a-f0-9]{7,40}$/i;
 const MANDATORY_REQUIREMENT_PRIORITIES = new Set(["must", "required", "blocking"]);
 const REVIEW_DISPOSITIONS = new Set(["must-fix", "deferred", "informational"]);
 const REVIEW_FINDING_CANONICAL_TUPLE_LENGTH = 4;
+const REVIEW_CASE_FOLDED_IDENTITY_FIELDS = [
+  "scope",
+  "phase",
+  "taskId",
+  "category",
+  "failureMode",
+  "findingKey",
+  "location",
+  "rootCause",
+  "title",
+  "issue",
+];
+const REVIEW_CASE_PRESERVING_IDENTITY_FIELDS = ["requirementId", "guardrailId"];
+const REVIEW_PATH_IDENTITY_FIELDS = ["file"];
+const REVIEW_PRESERVE_WHITESPACE_IDENTITY_FIELDS = ["requirementId", "guardrailId"];
 const DRAFT_REOPEN_ACTIVITY_OPERATIONS = new Set([
   "reopen_draft_preimplementation",
   "reopen_draft_task_addition",
@@ -58,53 +76,43 @@ function requireCommit(value, field) {
   return commit;
 }
 
-function stableStringify(value) {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  if (value && typeof value === "object") {
-    const fields = Object.keys(value).sort().map((key) => (
-      `${JSON.stringify(key)}:${stableStringify(value[key])}`
-    ));
-    return `{${fields.join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function normalizeIdentityText(value) {
-  if (value == null) return null;
-  const text = String(value).trim().replace(/\s+/g, " ");
-  return text === "" ? null : text.toLowerCase();
-}
-
-function normalizeIdentityPath(value) {
-  if (value == null) return null;
-  const file = String(value).trim().replaceAll("\\", "/");
-  return file === "" ? null : file;
-}
-
 function findingIdentity(value) {
   const finding = requireRecord(value, "finding");
   const requirementId = optionalString(finding.requirementId, "finding.requirementId");
   const guardrailId = optionalString(finding.guardrailId, "finding.guardrailId");
   const findingKey = optionalString(finding.findingKey, "finding.findingKey");
   const authoritative = requirementId !== null || guardrailId !== null;
-  const identity = {
-    scope: normalizeIdentityText(finding.scope),
-    phase: normalizeIdentityText(finding.phase),
-    taskId: normalizeIdentityText(finding.taskId),
-    category: normalizeIdentityText(finding.category),
-    failureMode: normalizeIdentityText(finding.failureMode),
+  const fields = {
+    scope: finding.scope,
+    phase: finding.phase,
+    taskId: finding.taskId,
+    category: finding.category,
+    failureMode: finding.failureMode,
     requirementId,
     guardrailId,
-    findingKey: normalizeIdentityText(findingKey),
-    file: normalizeIdentityPath(finding.file),
-    location: normalizeIdentityText(finding.location),
-    rootCause: normalizeIdentityText(finding.rootCause),
-    title: authoritative ? null : normalizeIdentityText(finding.title),
-    issue: authoritative ? null : normalizeIdentityText(finding.issue || finding.reason || finding.body),
+    findingKey,
+    file: finding.file,
+    location: finding.location,
+    rootCause: finding.rootCause,
+    title: authoritative ? null : finding.title,
+    issue: authoritative ? null : finding.issue || finding.reason || finding.body,
   };
-  const hasSemanticIdentity = Object.values(identity).some((item) => item !== null);
-  if (!hasSemanticIdentity) {
-    identity.findingId = requireString(finding.findingId, "finding.findingId");
+  const identity = new CanonicalFindingIdentity(fields, {
+    caseFoldedFields: REVIEW_CASE_FOLDED_IDENTITY_FIELDS,
+    casePreservingFields: REVIEW_CASE_PRESERVING_IDENTITY_FIELDS,
+    pathFields: REVIEW_PATH_IDENTITY_FIELDS,
+    preserveWhitespaceFields: REVIEW_PRESERVE_WHITESPACE_IDENTITY_FIELDS,
+  });
+  if (!identity.hasValue()) {
+    return new CanonicalFindingIdentity({
+      ...identity.toJSON(),
+      findingId: requireString(finding.findingId, "finding.findingId"),
+    }, {
+      caseFoldedFields: REVIEW_CASE_FOLDED_IDENTITY_FIELDS,
+      casePreservingFields: [...REVIEW_CASE_PRESERVING_IDENTITY_FIELDS, "findingId"],
+      pathFields: REVIEW_PATH_IDENTITY_FIELDS,
+      preserveWhitespaceFields: [...REVIEW_PRESERVE_WHITESPACE_IDENTITY_FIELDS, "findingId"],
+    });
   }
   return identity;
 }
@@ -112,10 +120,10 @@ function findingIdentity(value) {
 export class ReviewFindingFingerprint {
   constructor(value) {
     const fingerprint = value instanceof ReviewFindingFingerprint ? value.value : value;
-    if (typeof fingerprint !== "string" || !SHA256_RE.test(fingerprint)) {
+    if (typeof fingerprint !== "string") {
       throw new Error("finding fingerprint must be a lowercase SHA-256 string");
     }
-    this.value = fingerprint;
+    this.value = new CanonicalFindingFingerprint(fingerprint).value;
     Object.freeze(this);
   }
 
@@ -124,11 +132,7 @@ export class ReviewFindingFingerprint {
     if (Object.hasOwn(finding, "fingerprint")) {
       return new ReviewFindingFingerprint(finding.fingerprint);
     }
-    const digest = crypto
-      .createHash("sha256")
-      .update(stableStringify(findingIdentity(finding)))
-      .digest("hex");
-    return new ReviewFindingFingerprint(digest);
+    return new ReviewFindingFingerprint(CanonicalFindingFingerprint.fromIdentity(findingIdentity(finding)).value);
   }
 
   static fromCanonicalTuple(values) {
@@ -146,11 +150,7 @@ export class ReviewFindingFingerprint {
         + ` of at most ${REVIEW_FINDING_CANONICAL_FIELD_MAX_CHARS} characters`,
       );
     }
-    const digest = crypto
-      .createHash("sha256")
-      .update(stableStringify(values))
-      .digest("hex");
-    return new ReviewFindingFingerprint(digest);
+    return new ReviewFindingFingerprint(CanonicalFindingFingerprint.fromCanonicalTuple(values).value);
   }
 
   equals(other) {

@@ -36,6 +36,7 @@ import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-trans
 import { resolveGateTransition, resolveSourceHandoffTransitionPlan } from "../../../src/flow/definition.js";
 import { SourceHandoffFailureFacts } from "../../../src/flow/lib/source-handoff-failure.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
+import { canonicalPlanGateRepairForTarget } from "../../../src/flow/lib/plan-gate-repair.js";
 import { appendIssueLogFromGateResult } from "../../../src/flow/lib/run-gate.js";
 import { FlowDispatchSession, FlowDispatchTarget } from "../../../src/flow/lib/dispatch-invocation.js";
 import { FlowTargetExpectation } from "../../../src/lib/flow-target-guard.js";
@@ -480,70 +481,67 @@ describe("canonical Task context", () => {
         severity: "blocking",
         refs: ["R-T-1"],
       };
-      for (let evaluation = 1; evaluation <= 5; evaluation += 1) {
-        const commandResult = new CanonicalGatePromotion({
-          state: manager.canonicalState(specId),
-          phase: "task-impl",
-          nodeId: "T-1-gate",
-          activeTaskId: "T-1",
-        }).promote({
-          result: "fail",
-          artifacts: {
-            failureKind: "ai_semantic_fail",
-            failureCode: "TASK_GATE_REJECTED",
-            sourceFingerprint: captureCurrentTaskSource({
-              root,
-              flowManager: manager,
-              state: manager.loadReadOnly(specId),
-              taskId: "T-1",
-            }).fingerprint,
-            nextAction: { diagnosis: { observations: [observation] } },
-          },
-        });
-        manager.failCurrentAttempt({
-          specId,
-          failure: {
-            category: "semantic",
-            code: "TASK_GATE_REJECTED",
-            message: "Fixture gate rejection requests a bounded Task repair.",
-            retryable: evaluation < 5,
-            retryKind: evaluation < 5 ? "semantic" : null,
-          },
-          commandResult,
-        });
-        let decision = resolveGateTransition(readCurrentGateTransitionFacts({
-          flowManager: manager,
-          flowState: manager.loadReadOnly(specId),
-          phase: "task-impl",
-        }));
-        if (decision.plan.retryMetric !== null) {
-          manager.recordTaskGateSettlementMetric({ specId, decision });
-        }
-        decision = resolveGateTransition(readCurrentGateTransitionFacts({
-          flowManager: manager,
-          flowState: manager.loadReadOnly(specId),
-          phase: "task-impl",
-        }));
-        appendIssueLogFromGateResult({
-          ...ctx(),
-          phase: "task-impl",
-          gateTransitionDecision: decision,
-          gitState: { headSha: "a".repeat(40), worktreeHash: "b".repeat(64) },
-        }, commandResult);
-        decision = resolveGateTransition(readCurrentGateTransitionFacts({
-          flowManager: manager,
-          flowState: manager.loadReadOnly(specId),
-          phase: "task-impl",
-        }));
-        if (evaluation < 5) {
-          manager.retryGateTransition({ specId, decision });
-          continue;
-        }
-        assert.equal(decision.disposition.operation, "repair");
-      }
+      const commandResult = new CanonicalGatePromotion({
+        state: manager.canonicalState(specId),
+        phase: "task-impl",
+        nodeId: "T-1-gate",
+        activeTaskId: "T-1",
+      }).promote({
+        result: "fail",
+        artifacts: {
+          failureKind: "ai_semantic_fail",
+          failureCode: "TASK_GATE_REJECTED",
+          sourceFingerprint: captureCurrentTaskSource({
+            root,
+            flowManager: manager,
+            state: manager.loadReadOnly(specId),
+            taskId: "T-1",
+          }).fingerprint,
+          nextAction: { diagnosis: { observations: [observation] } },
+        },
+      });
+      manager.failCurrentAttempt({
+        specId,
+        failure: {
+          category: "semantic",
+          code: "TASK_GATE_REJECTED",
+          message: "Fixture gate rejection requests a bounded Task repair.",
+          retryable: true,
+          retryKind: "semantic",
+        },
+        commandResult,
+      });
+      let decision = resolveGateTransition(readCurrentGateTransitionFacts({
+        flowManager: manager,
+        flowState: manager.loadReadOnly(specId),
+        phase: "task-impl",
+      }));
+      manager.recordTaskGateSettlementMetric({ specId, decision });
+      decision = resolveGateTransition(readCurrentGateTransitionFacts({
+        flowManager: manager,
+        flowState: manager.loadReadOnly(specId),
+        phase: "task-impl",
+      }));
+      appendIssueLogFromGateResult({
+        ...ctx(),
+        phase: "task-impl",
+        gateTransitionDecision: decision,
+        gitState: { headSha: "a".repeat(40), worktreeHash: "b".repeat(64) },
+      }, commandResult);
+      decision = resolveGateTransition(readCurrentGateTransitionFacts({
+        flowManager: manager,
+        flowState: manager.loadReadOnly(specId),
+        phase: "task-impl",
+      }));
+      assert.equal(decision.disposition.operation, "repair");
       const repaired = new RunRepairPlanGateCommand().execute(ctx());
       assert.equal(repaired.ok, true, JSON.stringify(repaired));
       assert.equal(manager.canonicalState(specId).current.at(-1), "T-1-impl");
+      const canonicalRepair = canonicalPlanGateRepairForTarget({
+        flowManager: manager,
+        state: manager.loadReadOnly(specId),
+        targetStepId: "T-1-impl",
+      });
 
       const coordinator = new WorkerArtifactHandoffCoordinator({
         now: () => new Date("2026-09-03T00:00:00.000Z"),
@@ -584,6 +582,16 @@ describe("canonical Task context", () => {
           overview: { modules: [], data_flow: [], decisions: [] },
           triage: null,
           repair: null,
+          gateRepair: {
+            version: 1,
+            summary: "Updated the existing lineage file for every selected Gate observation.",
+            results: canonicalRepair.observationRequests.map((request) => ({
+              fingerprint: request.fingerprint.toString(),
+              strategy: "update the existing source lineage with the required revision",
+              summary: "The existing source lineage now contains the repaired revision.",
+              priorInsufficiency: null,
+            })),
+          },
           noChangeReason: null,
         }) });
         sealParentMaterializedSourceWorkerEffect({ request, now: () => new Date("2026-09-03T00:00:01.000Z") });

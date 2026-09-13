@@ -72,6 +72,8 @@ describe("Flow artifact contract registry", () => {
     assert.equal(paths.get("task.review.aborted.work-unit"), "steps/impl/:{taskId}/review/recovery/aborted/:{attemptId}.json");
     assert.equal(paths.get("task.mutation.lineage"), "steps/impl/:{taskId}/impl/mutation-lineage/:{attemptId}.json");
     assert.equal(paths.get("activity.evidence"), "steps/:{ownerPath}/activity-evidence/:{digest}.json");
+    assert.equal(paths.get("plan.gate.repair.outcome"), "artifacts/plan-gate-repairs/:{repairId}/outcome.json");
+    assert.equal(paths.get("gate.observation.recurrence"), ".runtime/gate-observation-recurrence.json");
     assert.deepEqual(
       FLOW_ARTIFACT_SWITCH_TARGETS.filter((entry) => entry.action === "new").map((entry) => entry.logicalKey),
       [
@@ -79,12 +81,12 @@ describe("Flow artifact contract registry", () => {
         "test.requirement.plan", "test.requirement.failure", "test.requirement.candidate.bundle",
         "test.requirement.candidate.source", "test.requirement.support", "test.requirement.review", "test.requirement.repair.progress",
         "test.requirement.gate", "test.requirement.deferred", "acceptance.decision",
-        "retry.recovery.baseline", "retry.recovery.receipt",
+        "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome",
         "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement",
         "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.review.aborted.work-unit",
         "task.triage", "task.repair",
         "task.review", "task.mutation.lineage", "activity.evidence", "test.requirement.gate.raw-log",
-        "runtime.step-metadata",
+        "gate.observation.recurrence", "runtime.step-metadata",
       ],
     );
     assert.equal(paths.get("draft.gate.source"), "steps/draft-gate/source.json");
@@ -239,6 +241,7 @@ describe("Flow artifact contract registry", () => {
       ["draft-coverage-repair.json", "draft.coverage.repair"],
       ["spec.json", "spec.record"],
       ["review.delta.json", null],
+      ["gate-repair-report.json", null],
       ["spec-tests", "tests.source"],
     ]);
     for (const stepId of WORKER_ARTIFACT_HANDOFF_STEPS) {
@@ -259,7 +262,11 @@ describe("Flow artifact contract registry", () => {
           : logicalKeyByPayload.get(payload.logicalName);
         assert.notEqual(logicalKey, undefined, `${stepId}/${payload.logicalName}`);
         if (logicalKey === null) {
-          assert.equal(["spec-triage", "spec-repair"].includes(stepId), true, `${stepId} owns only a transient review delta`);
+          if (payload.logicalName === "gate-repair-report.json") {
+            assert.equal(["draft-refine", "spec"].includes(stepId), true, `${stepId} owns only a transient Gate repair report`);
+          } else {
+            assert.equal(["spec-triage", "spec-repair"].includes(stepId), true, `${stepId} owns only a transient review delta`);
+          }
           continue;
         }
         const ownership = FLOW_ARTIFACT_CONTRACTS.require(logicalKey).ownership;
@@ -381,6 +388,7 @@ describe("Flow artifact contract registry", () => {
       ["task.gate.source", { taskId: "T-1" }, { taskId: "T-2" }],
       ["task.gate", { taskId: "T-1" }, { taskId: "T-2" }],
       ["task.mutation.lineage", { taskId: "T-1", attemptId: "attempt-1" }, { taskId: "T-1", attemptId: "attempt-2" }],
+      ["plan.gate.repair.outcome", { repairId: "repair-1" }, { repairId: "repair-2" }],
       ["tests.source", { testPath: "scenarios/one.test.js" }, { testPath: "scenarios/two.test.js" }],
     ]) {
       const first = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, firstParameters);
@@ -418,6 +426,13 @@ describe("Flow artifact contract registry", () => {
     assert.equal(draft.authoritySlot.authority.toString(), "canonical-flow-artifacts");
     assert.equal(tests.authoritySlot.authority.toString(), "canonical-flow-artifacts");
     assert.equal(fileMap.authoritySlot.authority.toString(), "execution-checkout");
+    const repairOutcome = FLOW_ARTIFACT_CONTRACTS.require("plan.gate.repair.outcome");
+    assert.equal(repairOutcome.retention.toString(), "permanent");
+    assert.equal(repairOutcome.mutationPolicy.toString(), "immutable");
+    assert.equal(repairOutcome.cataloged, true);
+    const recurrence = FLOW_ARTIFACT_CONTRACTS.require("gate.observation.recurrence");
+    assert.equal(recurrence.retention.toString(), "transient");
+    assert.equal(recurrence.cataloged, false);
     assert.deepEqual(fileMap.ownership.producers, ["implement", "task-impl"]);
     assert.equal(fileMap.ownership.consumers.includes("report"), true);
     assert.equal(FLOW_ARTIFACT_CONTRACTS.inventory().some((entry) => entry.logicalKey.toString() === "worker.handoff"), false);

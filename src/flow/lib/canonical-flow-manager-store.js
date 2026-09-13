@@ -85,6 +85,7 @@ import {
 } from "./canonical-command-result.js";
 import { attachedTaskReviewPublicationBinding } from "./canonical-review-artifacts.js";
 import { PlanGateRepairRecord } from "./plan-gate-repair.js";
+import { PlanGateRepairOutcomeDraft } from "./gate-observation-convergence.js";
 import { TaskReviewEpisodeBinding, TaskReviewStageInputs, TaskReviewStageResult, TaskReviewSourcePublicationAdmission } from "./task-review-stage-artifacts.js";
 import { TaskReviewAccounting } from "./task-review-accounting.js";
 import { CanonicalTaskContext } from "./task-canonical-context.js";
@@ -2272,14 +2273,20 @@ export class CanonicalFlowManagerStore {
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const repair = PlanGateRepairRecord.from(record);
     const state = this.runtime.load(resolved);
-    const activeTaskGate = TaskStepIdentity.fromStateNode(
-      this.loadReadOnly(resolved), state.current?.at(-1),
-    )?.definitionId === "task-gate";
-    const gateDecision = (new Set(["draft-gate", "spec-gate"]).has(state.current?.at(-1)) || activeTaskGate)
-      ? this.#admitGateDecision(state, decision, "repair")
-      : null;
+    const gateDecision = this.#admitGateDecision(state, decision, "repair");
+    const connector = gateDecision.plan.repairConnector;
+    if (connector === null
+      || connector.phase !== repair.phase
+      || connector.sourceGateStepId !== state.current?.at(-1)
+      || !connector.sourceAttempt.matches(repair.evidenceIdentity.sourceAttempt)
+      || connector.resultLogicalKey !== repair.evidenceIdentity.resultLogicalKey
+      || connector.catalogFingerprint !== repair.evidenceIdentity.catalogFingerprint
+      || connector.targetStepId !== repair.targetStepId
+      || JSON.stringify(connector.resetStepIds) !== JSON.stringify(repair.route.resetStepIds)) {
+      throw new CurrentFlowStateInvariantError("plan Gate repair record does not match the sealed Definition connector");
+    }
     if (repair.phase === "task-impl") {
-      const effect = decision?.plan?.taskLifecycle ?? null;
+      const effect = connector.taskLifecycle;
       if (effect?.operation !== "repair-task-impl"
         || effect.taskId !== repair.route.gateStepId.slice(0, -"-gate".length)
         || effect.successorStepId !== repair.targetStepId
@@ -2318,11 +2325,11 @@ export class CanonicalFlowManagerStore {
           route: "repair-plan-gate",
           targetNodeId: target,
         }),
-        gateDecision?.facts.scope === "task"
+        gateDecision.facts.scope === "task"
           ? new TaskGateSettlementAdmission(gateDecision, "continuation")
           : null,
       ),
-      gateTaskLifecycle: decision?.plan?.taskLifecycle?.toJSON?.() ?? null,
+      gateTaskLifecycle: connector.taskLifecycle?.toJSON?.() ?? null,
     });
   }
 
@@ -3421,13 +3428,33 @@ export class CanonicalFlowManagerStore {
    * and replaces the catalog descriptors.  It deliberately accepts no
    * mutable flow-state callback.
    */
-  confirmCurrentAttempt({ specId = null, status = "done", result = null, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined } = {}) {
+  confirmCurrentAttempt({ specId = null, status = "done", result = null, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
     if (state.current === null) throw new CurrentFlowStateInvariantError("canonical completion requires an active Attempt");
     const nodeId = state.current.at(-1);
     const confirmation = result ?? resultFor(status, nodeId);
+    const confirmationActivityId = activityId("attempt-confirmed");
+    const writes = [...artifactWrites];
+    if (planGateRepairOutcome !== null) {
+      if (!(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
+        || planGateRepairOutcome.disposition !== "applied"
+        || status !== "done") {
+        throw new CurrentFlowStateInvariantError("successful plan-Gate repair confirmation requires an applied typed outcome");
+      }
+      const outcome = planGateRepairOutcome.seal(confirmationActivityId);
+      if (outcome.targetAttempt.id !== state.attempt.id
+        || outcome.targetAttempt.sequence !== state.attempt.sequence) {
+        throw new CurrentFlowStateInvariantError("plan-Gate repair outcome does not target the current Attempt");
+      }
+      writes.push({
+        logicalKey: "plan.gate.repair.outcome",
+        parameters: { repairId: outcome.repairId },
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(outcome.toJSON(), null, 2)}\n`, "utf8"),
+      });
+    }
     const sealedTaskLifecycle = this.#taskGatePassLifecycle({
       state,
       nodeId,
@@ -3443,18 +3470,18 @@ export class CanonicalFlowManagerStore {
     });
     return this.runtime.confirmAttempt({
       specId: resolved,
-      activityId: activityId("attempt-confirmed"),
+      activityId: confirmationActivityId,
       status,
       result: confirmation,
       references,
       specRecord,
-      artifactWrites,
+      artifactWrites: writes,
       artifactRemovals,
       artifactBaselines,
       testSourceBaseline,
       gateTaskLifecycle: sealedTaskLifecycle,
       ...(status === "done" && { admission: new CombinedAdmission(
-        this.#producerCompletionAdmission(nodeId, artifactWrites),
+        this.#producerCompletionAdmission(nodeId, writes),
         sealedTaskLifecycle === null ? null : new TaskGateSettlementAdmission(gateTransitionDecision, "terminal"),
       ) }),
     });
@@ -4163,7 +4190,7 @@ export class CanonicalFlowManagerStore {
    * Commit a sealed source-worker effect and its Attempt confirmation in one
    * Version Store transaction. Workers never receive this surface.
    */
-  confirmSourceWorkerHandoff({ specId = null, effect, mutationManifest, handoffDigest, result, upgradeResult = null, taskStageBinding = null, sourceMutationBaseline = null, sourceHandoffSettlement = null } = {}) {
+  confirmSourceWorkerHandoff({ specId = null, effect, mutationManifest, handoffDigest, result, upgradeResult = null, taskStageBinding = null, sourceMutationBaseline = null, sourceHandoffSettlement = null, planGateRepairOutcome = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(effect instanceof SourceWorkerEffect)) {
@@ -4180,6 +4207,7 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("canonical source worker mutation manifest does not target the current Attempt");
     }
     const nodeId = state.current?.at(-1) ?? null;
+    const confirmationActivityId = activityId(nodeId === "impl-repair" ? "impl-repair-invalidation-confirmed" : "source-handoff-confirmed");
     const effectTargetsActiveNode = nodeId === effect.stepId
       || (effect.stepId.startsWith("task-") && taskIdForNode(state, nodeId) !== null && nodeId === `${taskIdForNode(state, nodeId)}-${effect.stepId.slice(5)}`);
     if (!effectTargetsActiveNode) throw new CurrentFlowStateInvariantError("source worker effect does not target the active Attempt");
@@ -4230,6 +4258,28 @@ export class CanonicalFlowManagerStore {
       spec = new CanonicalOverviewUpdate({ taskId, additions: effect.overview.additions }).applyTo(spec).document;
     }
     const artifactWrites = [...settlementWrites];
+    if (planGateRepairOutcome !== null) {
+      if (!(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
+        || planGateRepairOutcome.disposition !== "applied"
+        || effect.stepId !== "task-impl"
+        || effect.gateRepair === null) {
+        throw new CurrentFlowStateInvariantError("source plan-Gate repair confirmation requires an applied typed outcome and report");
+      }
+      const outcome = planGateRepairOutcome.seal(confirmationActivityId);
+      if (outcome.targetAttempt.id !== state.attempt.id
+        || outcome.targetAttempt.sequence !== state.attempt.sequence
+        || JSON.stringify(outcome.report.toJSON()) !== JSON.stringify(effect.gateRepair.toJSON())) {
+        throw new CurrentFlowStateInvariantError("source plan-Gate repair outcome does not bind the current Attempt effect");
+      }
+      artifactWrites.push({
+        logicalKey: "plan.gate.repair.outcome",
+        parameters: { repairId: outcome.repairId },
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(outcome.toJSON(), null, 2)}\n`, "utf8"),
+      });
+    } else if (effect.gateRepair !== null) {
+      throw new CurrentFlowStateInvariantError("source Gate repair report lacks its parent-owned outcome");
+    }
     if (effect.stepId === "task-impl") {
       const taskId = taskIdForNode(state, nodeId);
       if (taskId === null) throw new CurrentFlowStateInvariantError("Task mutation lineage requires an active Task");
@@ -4347,7 +4397,7 @@ export class CanonicalFlowManagerStore {
     const sourceSpecChanged = requirementDefinitions.changed || effect.overview !== null;
     return this.runtime.confirmAttempt({
       specId: resolved,
-      activityId: activityId(nodeId === "impl-repair" ? "impl-repair-invalidation-confirmed" : "source-handoff-confirmed"),
+      activityId: confirmationActivityId,
       result,
       status: effect.completionStatus,
       ...(sourceSpecChanged ? { specRecord: new CanonicalSourceWorkerSpecCompletion(spec) } : {}),
@@ -4459,6 +4509,97 @@ export class CanonicalFlowManagerStore {
           parameters: { taskId: id, attemptId: match[1] }, consumerNodeId: "task-review",
         }).bytes;
       },
+    });
+  }
+
+  /**
+   * Audit a plan-Gate repair that produced no parent-observed change. The
+   * outcome publication and failed replacement Attempt share one Activity;
+   * a source handoff settlement, when present, is committed in that same
+   * transaction after proving that its mutation manifest is empty.
+   */
+  rejectPlanGateRepairHandoff({
+    specId = null,
+    outcome,
+    result = null,
+    sourceHandoffSettlement = null,
+    mutationManifest = null,
+  } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    if (!(outcome instanceof PlanGateRepairOutcomeDraft)
+      || outcome.disposition !== "rejected-no-progress") {
+      throw new CurrentFlowStateInvariantError("plan-Gate no-progress rejection requires a typed rejected outcome");
+    }
+    const state = this.runtime.load(resolved);
+    if (state.current === null || state.attempt === null) {
+      throw new CurrentFlowStateInvariantError("plan-Gate no-progress rejection requires an active Attempt");
+    }
+    const failureActivityId = activityId("plan-gate-repair-rejected");
+    const sealed = outcome.seal(failureActivityId);
+    if (sealed.targetAttempt.id !== state.attempt.id
+      || sealed.targetAttempt.sequence !== state.attempt.sequence) {
+      throw new CurrentFlowStateInvariantError("plan-Gate no-progress outcome does not target the current Attempt");
+    }
+    const artifactWrites = [{
+      logicalKey: "plan.gate.repair.outcome",
+      parameters: { repairId: sealed.repairId },
+      mediaType: "application/json",
+      bytes: Buffer.from(`${JSON.stringify(sealed.toJSON(), null, 2)}\n`, "utf8"),
+    }];
+    let admission;
+    if (sourceHandoffSettlement !== null || mutationManifest !== null) {
+      if (!(sourceHandoffSettlement instanceof SourceHandoffSettlement)
+        || sourceHandoffSettlement.kind !== "accepted"
+        || !(mutationManifest instanceof SourceMutationManifest)
+        || mutationManifest.mutations.length !== 0) {
+        throw new CurrentFlowStateInvariantError("source plan-Gate no-progress rejection requires an empty accepted settlement");
+      }
+      const authority = this.readSourceHandoffAuthority({
+        specId: resolved,
+        identity: sourceHandoffSettlement.identity,
+        requireUnsettled: true,
+      });
+      if (sourceHandoffSettlement.checkpointDigest !== authority.checkpoint.digest
+        || sourceHandoffSettlement.eventDigest !== authority.event.digest
+        || sourceHandoffSettlement.handoffDigest === null) {
+        throw new CurrentFlowStateConflictError("source plan-Gate rejection settlement is stale");
+      }
+      mutationManifest.assertBinding(authority.checkpoint.baseline);
+      artifactWrites.push(...sourceHandoffArtifactWrites({ settlement: sourceHandoffSettlement }));
+      admission = new CombinedAdmission(
+        new SourceHandoffPersistenceAdmission({
+          identity: authority.identity,
+          checkpoint: authority.checkpoint,
+          expectedCheckpointDigest: authority.checkpoint.digest,
+          expectedPreviousEventDigest: authority.event.digest,
+          settlement: sourceHandoffSettlement,
+        }),
+        new SourceMutationPublicationAdmission({
+          baseline: authority.checkpoint.baseline,
+          manifest: mutationManifest,
+        }),
+      );
+    }
+    const summary = "Plan-Gate repair was rejected because it produced no canonical progress.";
+    return this.runtime.failAttempt({
+      specId: resolved,
+      activityId: failureActivityId,
+      failure: {
+        category: "semantic",
+        code: "FLOW_PLAN_GATE_REPAIR_NO_PROGRESS",
+        message: summary,
+        retryable: false,
+        retryKind: null,
+      },
+      result: {
+        outcome: "failed",
+        summary,
+        confirmedAt: result?.confirmedAt ?? new Date().toISOString(),
+        artifactRefs: [{ kind: "plan-gate-repair-outcome", id: sealed.repairId }],
+      },
+      artifactWrites,
+      admission,
     });
   }
 

@@ -55,6 +55,11 @@ import { nonblockingRouteFor } from "./lib/nonblocking-route.js";
 import { TaskStepIdentity } from "./lib/task-step-identity.js";
 import { canonicalTaskContextKinds } from "./lib/task-context-kinds.js";
 import { DefinitionFailureOwnership } from "./lib/definition-failure-ownership.js";
+import {
+  PlanGateRepairRoute,
+  planGateRepairRouteForGateStep,
+  planGateRepairResultLogicalKey,
+} from "./lib/plan-gate-repair.js";
 import { ReviewTransitionFacts } from "./lib/review-transition-facts.js";
 import { DraftTransitionFacts } from "./lib/draft-transition-facts.js";
 import {
@@ -1359,7 +1364,7 @@ export class GateNonblockingEligibility extends DefinitionNonblockingEligibility
 }
 
 export class GateStepUpdatePlan {
-  constructor(token, { action, phaseDefinition, updates, taskLifecycle = null, recoveryEffect = null, nonblockingHandoff = null, retryMetric = null } = {}) {
+  constructor(token, { action, phaseDefinition, updates, taskLifecycle = null, repairConnector = null, recoveryEffect = null, nonblockingHandoff = null, retryMetric = null } = {}) {
     if (token !== GATE_TRANSITION_TOKEN) {
       throw new Error("Gate step update plans are created only by the definition resolver");
     }
@@ -1372,6 +1377,9 @@ export class GateStepUpdatePlan {
     if (taskLifecycle !== null && !(taskLifecycle instanceof GateTaskLifecycleEffect)) {
       throw new Error("gate step update plan requires typed Task lifecycle effect");
     }
+    if (repairConnector !== null && !(repairConnector instanceof PlanGateRepairConnector)) {
+      throw new Error("gate step update plan requires a typed plan Gate repair connector");
+    }
     if (recoveryEffect !== null && !(recoveryEffect instanceof GateRecoveryEffect)) {
       throw new Error("gate step update plan requires typed recovery effect");
     }
@@ -1382,6 +1390,7 @@ export class GateStepUpdatePlan {
     this.phaseDefinition = phaseDefinition;
     this.updates = Object.freeze([...updates]);
     this.taskLifecycle = taskLifecycle;
+    this.repairConnector = repairConnector;
     this.recoveryEffect = recoveryEffect;
     this.nonblockingHandoff = nonblockingHandoff;
     this.retryMetric = retryMetric;
@@ -1394,9 +1403,57 @@ export class GateStepUpdatePlan {
       phaseDefinition: this.phaseDefinition.toJSON(),
       updates: this.updates.map((entry) => entry.toJSON()),
       taskLifecycle: this.taskLifecycle?.toJSON() ?? null,
+      repairConnector: this.repairConnector?.toJSON() ?? null,
       recoveryEffect: this.recoveryEffect?.toJSON() ?? null,
       nonblockingHandoff: this.nonblockingHandoff?.toJSON() ?? null,
       retryMetric: this.retryMetric?.toJSON() ?? null,
+    };
+  }
+}
+
+/** Definition-sealed route from one failed Gate Attempt to its repair worker. */
+export class PlanGateRepairConnector {
+  constructor(token, { facts, route, taskLifecycle = null } = {}) {
+    if (token !== GATE_TRANSITION_TOKEN
+      || !(facts instanceof GateTransitionFacts)
+      || !(route instanceof PlanGateRepairRoute)
+      || facts.recoveryEvidence.kind !== "repair") {
+      throw new Error("plan Gate repair connectors are created only by Definition");
+    }
+    if (route.phase !== facts.phase || route.gateStepId !== facts.target.stepId) {
+      throw new Error("plan Gate repair connector route does not match its Gate facts");
+    }
+    if ((facts.scope === "task") !== (taskLifecycle instanceof GateTaskLifecycleEffect)) {
+      throw new Error("plan Gate repair connector Task lifecycle is inconsistent");
+    }
+    if (taskLifecycle !== null && (
+      taskLifecycle.operation !== "repair-task-impl"
+      || taskLifecycle.successorStepId !== route.targetStepId
+      || stableGateJson(taskLifecycle.resetStepIds) !== stableGateJson(route.resetStepIds)
+    )) throw new Error("plan Gate repair connector does not match its sealed Task lifecycle");
+    this.phase = route.phase;
+    this.sourceGateStepId = route.gateStepId;
+    this.sourceAttempt = facts.currentAttempt;
+    this.resultLogicalKey = planGateRepairResultLogicalKey(route);
+    this.resultArtifactId = facts.catalogPublication.artifactId;
+    this.catalogFingerprint = facts.catalogPublication.fingerprint;
+    this.targetStepId = route.targetStepId;
+    this.resetStepIds = Object.freeze([...route.resetStepIds]);
+    this.taskLifecycle = taskLifecycle;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      phase: this.phase,
+      sourceGateStepId: this.sourceGateStepId,
+      sourceAttempt: this.sourceAttempt.toJSON(),
+      resultLogicalKey: this.resultLogicalKey,
+      resultArtifactId: this.resultArtifactId,
+      catalogFingerprint: this.catalogFingerprint,
+      targetStepId: this.targetStepId,
+      resetStepIds: [...this.resetStepIds],
+      taskLifecycle: this.taskLifecycle?.toJSON() ?? null,
     };
   }
 }
@@ -1555,8 +1612,16 @@ function gatePlan(facts, disposition, { status = "in_progress", updates = null, 
   const phaseDefinition = gatePhaseDefinition(facts.phase);
   const selectedUpdates = updates ?? [new GateStepUpdate({ stepId: facts.target.stepId, status })];
   const lifecycle = taskLifecycleEffect(facts, disposition);
+  const repairConnector = disposition.operation === "repair"
+    ? new PlanGateRepairConnector(GATE_TRANSITION_TOKEN, {
+      facts,
+      route: planGateRepairRouteForGateStep(facts.target.stepId),
+      taskLifecycle: lifecycle,
+    })
+    : null;
   const selectedFingerprint = createHash("sha256").update(stableGateJson({
     disposition: disposition.toJSON(), phaseDefinition: phaseDefinition.toJSON(), updates: selectedUpdates.map((entry) => entry.toJSON()), taskLifecycle: lifecycle?.toJSON() ?? null,
+    repairConnector: repairConnector?.toJSON() ?? null,
     recoveryEffect: recoveryEffect?.toJSON() ?? null, nonblockingHandoff: nonblockingHandoff?.toJSON() ?? null, retryMetric: retryMetric?.toJSON() ?? null,
   })).digest("hex");
   const identity = new GateActionIdentity(GATE_TRANSITION_TOKEN, {
@@ -1572,7 +1637,7 @@ function gatePlan(facts, disposition, { status = "in_progress", updates = null, 
   });
   return new GateStepUpdatePlan(GATE_TRANSITION_TOKEN, {
     action: new GateTransitionAction(GATE_TRANSITION_TOKEN, { identity }), phaseDefinition, updates: selectedUpdates, taskLifecycle: lifecycle,
-    recoveryEffect, nonblockingHandoff, retryMetric,
+    repairConnector, recoveryEffect, nonblockingHandoff, retryMetric,
   });
 }
 
@@ -1689,18 +1754,19 @@ function resolveGateClassification(facts) {
     ));
     return selectGateNonblockingDecision(facts, strict);
   }
-  // Task Gates consume their semantic retry budget before considering a
-  // plan-repair receipt. A gate:post receipt is emitted after every failed
-  // evaluation, so letting it win here would open an unbudgeted Task round.
-  if (facts.scope === "task" && !facts.retry.exhausted) {
-    return gateDecision(facts, new GateRetryDisposition(GATE_TRANSITION_TOKEN), {
-      retryMetric: new GateRetryMetricEffect({ operation: "increment", phase: facts.phase }),
-    });
-  }
-  // Other Gate scopes retain their sealed repair-receipt lifecycle. Their
-  // repair route has no bounded Task execution-round transition to protect.
-  if (facts.recoveryEvidence.kind === "repair" && !facts.retry.exhausted) {
+  // A current canonical repair receipt is stronger evidence than a raw
+  // semantic retry for every repairable Gate. Repeating the evaluator against
+  // the same evidence cannot converge; only the selected repair can change it.
+  // Task execution rounds remain bounded separately.
+  if (facts.recoveryEvidence.kind === "repair"
+    && (facts.scope !== "task" || !facts.taskBudget.finalRound)) {
     return gateDecision(facts, new GateRepairDisposition(GATE_TRANSITION_TOKEN));
+  }
+  if (facts.scope === "task"
+    && facts.taskBudget.finalRound
+    && facts.recoveryEvidence.kind === "repair") {
+    const strict = gateDecision(facts, new GateDeferDisposition(GATE_TRANSITION_TOKEN));
+    return selectGateNonblockingDecision(facts, strict);
   }
   if (!facts.retry.exhausted) {
     return gateDecision(facts, new GateRetryDisposition(GATE_TRANSITION_TOKEN), {
@@ -1708,7 +1774,10 @@ function resolveGateClassification(facts) {
     });
   }
   if (facts.scope === "task" && !facts.taskBudget.finalRound) {
-    return gateDecision(facts, new GateRepairDisposition(GATE_TRANSITION_TOKEN));
+    return gateDecision(facts, new GateBlockedDisposition(
+      GATE_TRANSITION_TOKEN,
+      "missing_plan_gate_repair_evidence",
+    ));
   }
   // The failed Attempt remains current until the canonical settlement command
   // records its finding.  `defer` therefore has no premature status advance.

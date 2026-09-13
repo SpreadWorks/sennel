@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { checkGuardrail, RequirementGateBatch, RequirementGateExecutionPlan } from "../../../src/flow/lib/run-gate.js";
+import { checkGuardrail, GateProviderCallAdmission, RequirementGateBatch, RequirementGateExecutionPlan } from "../../../src/flow/lib/run-gate.js";
 import { buildAcknowledgedRationaleSection } from "../../../src/flow/lib/acknowledged-rationale.js";
 import { PromptLogicalFootprint, PromptRequestLimit, PromptExecutionBudget, PromptExecutionLimit } from "../../../src/lib/prompt-batching.js";
 
@@ -11,6 +11,31 @@ const article = Object.freeze({
 });
 
 describe("Guardrail complete evidence batching", () => {
+  it("runs canonical admission before consuming a provider transport attempt", async () => {
+    const events = [];
+    const base = {
+      claim() { events.push("claim"); },
+      beforeProviderAttempt() { events.push("provider"); },
+      settle() { events.push("settle"); },
+      claimed: false,
+      attemptCount: 0,
+      settled: false,
+    };
+    const admission = new GateProviderCallAdmission(base, async () => {
+      events.push("canonical-read");
+      const error = new Error("the exact Gate Attempt is no longer admitted");
+      error.code = "FLOW_GATE_EVALUATION_ADMISSION_DENIED";
+      throw error;
+    });
+
+    admission.claim();
+    await assert.rejects(
+      admission.beforeProviderAttempt(),
+      (error) => error.code === "FLOW_GATE_EVALUATION_ADMISSION_DENIED",
+    );
+    assert.deepEqual(events, ["claim", "canonical-read"]);
+  });
+
   it("partitions a 133,813-character Requirement body with exact canonical coverage", async () => {
     const description = `REQ_HEAD ${"r".repeat(133795)} REQ_TAIL`;
     assert.equal(description.length, 133813);

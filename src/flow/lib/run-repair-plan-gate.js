@@ -6,6 +6,7 @@ import {
 } from "./plan-gate-repair.js";
 import { resolveGateTransition } from "../definition.js";
 import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
+import { CanonicalGateObservationCycle } from "./canonical-gate-observation-cycle.js";
 
 export default class RunRepairPlanGateCommand extends FlowCommand {
   constructor() {
@@ -35,17 +36,35 @@ export default class RunRepairPlanGateCommand extends FlowCommand {
   }
 
   #executeCanonical(ctx, state) {
-    const activeStepId = state.current === null ? null : state.current.at(-1);
-    const route = planGateRepairRouteForGateStep(activeStepId);
-    if (!route) {
+    const route = planGateRepairRouteForGateStep(state.current?.at(-1));
+    if (route === null) {
       return Envelope.fail(
         "run",
         "repair-plan-gate",
         "PLAN_GATE_REPAIR_STAGE_UNSUPPORTED",
-        "plan gate repair requires a supported Gate to be in progress",
+        "the current step is not a supported plan Gate repair source",
       );
     }
-    const { phase } = route;
+    let evidence;
+    try {
+      evidence = inspectCanonicalPlanGateRepair({ flowManager: ctx.flowManager, state });
+    } catch (error) {
+      return Envelope.fail(
+        "run",
+        "repair-plan-gate",
+        "PLAN_GATE_REPAIR_NOT_ADMITTED",
+        `Definition cannot admit the current plan Gate evidence: ${error.message}`,
+      );
+    }
+    if (evidence === null) {
+      return Envelope.fail(
+        "run",
+        "repair-plan-gate",
+        "PLAN_GATE_REPAIR_NOT_ADMITTED",
+        "Definition did not select current blocking plan Gate evidence for repair",
+      );
+    }
+    const { phase } = evidence.route;
     let decision = null;
     if (phase === "draft" || phase === "spec" || phase === "task-impl") {
       try {
@@ -63,28 +82,16 @@ export default class RunRepairPlanGateCommand extends FlowCommand {
           "Definition did not select repair for the current Gate action");
       }
     }
-    let evidence;
-    try {
-      evidence = inspectCanonicalPlanGateRepair({ flowManager: ctx.flowManager, state });
-    } catch (error) {
-      return Envelope.fail(
-        "run",
-        "repair-plan-gate",
-        "PLAN_GATE_REPAIR_EVIDENCE_MISSING",
-        `canonical ${phase} gate evidence is unavailable: ${error.message}`,
-      );
-    }
-    if (evidence === null) {
-      return Envelope.fail(
-        "run",
-        "repair-plan-gate",
-        "PLAN_GATE_REPAIR_EVIDENCE_MISSING",
-        `no blocking ${phase} gate evidence is available for guarded repair`,
-      );
-    }
     let record;
     try {
-      record = evidence.createRecord(state);
+      record = evidence.createRecord(state, {
+        gateFacts: decision.facts,
+        connector: decision.plan.repairConnector,
+        cycleReadModel: new CanonicalGateObservationCycle({
+          flowManager: ctx.flowManager,
+          state,
+        }).read(),
+      });
       ctx.flowManager.repairPlanGate({
         specId: state.specId,
         record,
