@@ -46,7 +46,7 @@ afterEach(() => {
   while (roots.length > 0) removeTmpDir(roots.pop());
 });
 
-function retryFixture({ nodeId = "test-review", failureKind = "semantic" } = {}) {
+function retryFixture({ nodeId = "impl-review", failureKind = "semantic" } = {}) {
   const root = createTmpDir("set-retry-v1-");
   roots.push(root);
   const manager = makeFlowManager(root);
@@ -90,7 +90,7 @@ function commandInput(flow, values = {}) {
   return {
     action: "reset",
     kind: "review",
-    phase: "test",
+    phase: "impl",
     reason: "The failed Attempt is retried through the Version-1 lifecycle.",
     yes: true,
     flowState: flow.manager.load(flow.flow.specId),
@@ -304,7 +304,7 @@ test("retry reset rejects a route that does not identify the active Attempt", ()
   const flow = retryFixture();
   const before = flow.manager.activityLedger(flow.flow.specId);
 
-  const result = new SetRetryCommand().execute(commandInput(flow, { phase: "impl" }));
+  const result = new SetRetryCommand().execute(commandInput(flow, { phase: "test" }));
 
   assert.equal(result.ok, false);
   assert.equal(result.errors[0].code, "RETRY_NOT_AVAILABLE");

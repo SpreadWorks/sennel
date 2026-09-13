@@ -303,6 +303,8 @@ describe("flow-state steps and requirements", () => {
       /current status in_progress/,
     );
     const loaded = fm.load();
-    for (const s of flattenSteps(loaded.steps)) assert.equal(s.status, "done");
+    for (const s of flattenSteps(loaded.steps)) {
+      assert.ok(["done", "skipped"].includes(s.status), `${s.id} must be terminal`);
+    }
   });
 });

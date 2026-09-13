@@ -24,8 +24,10 @@ import {
   findActiveNode,
   getFlowNode,
   PromoteDraftQuestionAndKeepRefineActive,
+  RequirementTestLifecycleFacts,
   resolveDraftCoverageRepairCompletion,
   resolveLifecyclePlan,
+  resolveRequirementTestLifecycle,
   resolveSourceHandoffTransitionPlan,
 } from "../definition.js";
 import { SourceHandoffFailureFacts } from "./source-handoff-failure.js";
@@ -37,7 +39,10 @@ import {
 import { DraftTransitionFacts } from "./draft-transition-facts.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { findStepById } from "./step-tree.js";
-import { validateTestHeaders, formatValidationMessages } from "./test-headers.js";
+import {
+  validateAssignedRequirementTestHeaders,
+  formatValidationMessages,
+} from "./test-headers.js";
 import {
   SpecTestBootstrapObservation,
   SpecTestBootstrapValidationError,
@@ -71,6 +76,18 @@ import {
   testReviewRepairProgressReceiptForSelectedContract,
 } from "./test-review-repair.js";
 import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
+import {
+  RequirementTestCandidateBundle,
+  RequirementTestCandidateSource,
+} from "./requirement-test-artifacts.js";
+import {
+  RequirementTestBundleLineage,
+  RequirementTestBundleRevision,
+  RequirementTestLifecycleAuthority,
+  RequirementTestSourceAttempt,
+} from "./requirement-test-lifecycle.js";
+import { RequirementTestArtifactStore } from "./requirement-test-store.js";
+import { SpecRevisionIdentity } from "./spec-revision-identity.js";
 import { DraftWorkerContextSnapshot, TaskWorkerContextSnapshot } from "./worker-context-snapshot.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { TaskReviewEpisodeBinding, TaskReviewStageInputs } from "./task-review-stage-artifacts.js";
@@ -78,6 +95,7 @@ import {
   CanonicalWorkerArtifactAddress,
   CanonicalSpecTestTopology,
   CanonicalWorkerTestTree,
+  CanonicalWorkerTestTreeSnapshot,
   mediaTypeForPath,
 } from "./canonical-worker-artifacts.js";
 import {
@@ -106,7 +124,7 @@ import { getPorcelainV2Status } from "../../lib/git-helpers.js";
 export const WORKER_ARTIFACT_HANDOFF_REQUEST_ENV = PRODUCT.env("FLOW_HANDOFF_REQUEST");
 // Source requests store only canonical checkpoint references. Version 4
 // intentionally rejects request documents that duplicated baseline authority.
-export const WORKER_ARTIFACT_HANDOFF_VERSION = 4;
+export const WORKER_ARTIFACT_HANDOFF_VERSION = 5;
 export const WORKER_ARTIFACT_HANDOFF_ROOT = PRODUCT.managedPath("handoffs");
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -368,7 +386,7 @@ export class SpecTestBootstrapObservationAuthority {
   }
 
   accepts(request) {
-    return request.stepId === "test"
+    return request.stepId === "test-generate"
       && request.actionDigest === this.actionDigest
       && request.inputDigest === this.inputDigest
       && request.inputRevision === this.inputRevision;
@@ -431,6 +449,51 @@ export class WorkerArtifactPayloadRule {
   }
 }
 
+/** Immutable Requirement/candidate identity carried through one worker session. */
+export class RequirementTestWorkerHandoffBinding {
+  constructor({ requirementId, specRevision, bundleRevision, sourceAttempt, candidateBaseline = null } = {}) {
+    this.requirementId = requiredString(requirementId, "Requirement test handoff requirementId");
+    this.specRevision = specRevision instanceof SpecRevisionIdentity
+      ? specRevision
+      : new SpecRevisionIdentity(specRevision);
+    if (!Number.isSafeInteger(bundleRevision) || bundleRevision < 1) {
+      throw new Error("Requirement test handoff bundleRevision must be a positive integer");
+    }
+    this.bundleRevision = bundleRevision;
+    this.sourceAttempt = sourceAttempt instanceof RequirementTestSourceAttempt
+      ? sourceAttempt
+      : RequirementTestSourceAttempt.fromJSON(sourceAttempt);
+    this.candidateBaseline = candidateBaseline === null
+      ? null
+      : candidateBaseline instanceof RequirementTestCandidateBundle
+        ? candidateBaseline
+        : RequirementTestCandidateBundle.fromJSON(candidateBaseline);
+    if (this.candidateBaseline !== null && (
+      this.candidateBaseline.bundle.requirementId !== this.requirementId
+      || !this.candidateBaseline.bundle.specRevision.equals(this.specRevision)
+      || this.candidateBaseline.bundle.revision !== this.bundleRevision - 1
+    )) throw new Error("Requirement test handoff candidate baseline is stale");
+    Object.freeze(this);
+  }
+
+  static fromJSON(value) {
+    exactObjectKeys(value, [
+      "requirementId", "specRevision", "bundleRevision", "sourceAttempt", "candidateBaseline",
+    ], "Requirement test handoff binding");
+    return new RequirementTestWorkerHandoffBinding(value);
+  }
+
+  toJSON() {
+    return {
+      requirementId: this.requirementId,
+      specRevision: this.specRevision.toJSON(),
+      bundleRevision: this.bundleRevision,
+      sourceAttempt: this.sourceAttempt.toJSON(),
+      candidateBaseline: this.candidateBaseline?.toJSON() ?? null,
+    };
+  }
+}
+
 export class WorkerArtifactInputContract {
   constructor({
     stepId,
@@ -458,8 +521,8 @@ export class WorkerArtifactInputContract {
     this.testReviewRepairInputs = Object.freeze(testReviewRepairInputs.map((entry) => (
       normalizedRelativePath(entry, `${this.stepId}.testReviewRepair.input`)
     )));
-    if (this.testReviewRepairInputs.length > 0 && this.stepId !== "test") {
-      throw new Error("test-review repair inputs may only belong to the test handoff");
+    if (this.testReviewRepairInputs.length > 0 && this.stepId !== "test-repair") {
+      throw new Error("test-review repair inputs may only belong to the Requirement test-repair handoff");
     }
     this.acceptanceRepairInputs = Object.freeze(acceptanceRepairInputs.map((entry) => (
       normalizedRelativePath(entry, `${this.stepId}.acceptanceRepair.input`)
@@ -615,10 +678,15 @@ const POLICIES = Object.freeze([
     revisionKind: "spec",
   }),
   new WorkerArtifactHandoffPolicy({
-    stepId: "test",
+    stepId: "test-generate",
     inputs: ["spec.json"],
-    repairInputs: { test: ["spec.json", "scenario-validity-result.json"] },
-    testReviewRepairInputs: ["spec.json", "test-review.json"],
+    payloads: [{ logicalName: "spec-tests", kind: "tree", targetRelativePath: "tests" }],
+    revisionKind: "test",
+  }),
+  new WorkerArtifactHandoffPolicy({
+    stepId: "test-repair",
+    inputs: ["spec.json"],
+    testReviewRepairInputs: ["spec.json", "requirement-test-review.json"],
     payloads: [{ logicalName: "spec-tests", kind: "tree", targetRelativePath: "tests" }],
     revisionKind: "test",
   }),
@@ -1352,6 +1420,16 @@ function manifestDigest(entries) {
  * ownership before this boundary parses the established JSON document.
  */
 function canonicalHandoffInputSnapshot({ flowManager, state, workerPath, consumerNodeId, label }) {
+  if (workerPath === "requirement-test-review.json") {
+    const current = new CanonicalTestArtifactStore({ flowManager, state }).readCurrentAttempt({
+      logicalKey: "test.requirement.review",
+      consumerNodeId,
+    });
+    return Object.freeze({
+      document: current.payload,
+      snapshot: Object.freeze({ digest: current.descriptor.hash, byteLength: current.descriptor.size }),
+    });
+  }
   const address = CanonicalWorkerArtifactAddress.from(workerPath);
   const input = address.read({
     flowManager,
@@ -1361,6 +1439,36 @@ function canonicalHandoffInputSnapshot({ flowManager, state, workerPath, consume
   return Object.freeze({
     document: input.jsonDocument(label),
     snapshot: input.snapshot(),
+  });
+}
+
+function requirementTestHandoffContext({ flowManager, state, policy, semanticIdentity }) {
+  if (!new Set(["test-generate", "test-repair"]).has(policy.stepId)) return null;
+  const store = new RequirementTestArtifactStore({ flowManager, state });
+  const workItem = store.readPlan(policy.stepId).artifact.plan.activeWorkItem();
+  if (!workItem) throw new WorkerArtifactHandoffError(
+    "invalid", "FLOW_REQUIREMENT_TEST_HANDOFF_INVALID", "Requirement test handoff has no active work item",
+  );
+  const repairing = policy.stepId === "test-repair";
+  if (workItem.status !== (repairing ? "reviewed" : "in_progress")) {
+    throw new WorkerArtifactHandoffError(
+      "stale", "FLOW_REQUIREMENT_TEST_HANDOFF_STALE",
+      `Requirement test ${policy.stepId} does not match active work item status ${workItem.status}`,
+    );
+  }
+  const candidateRead = repairing
+    ? store.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: policy.stepId })
+    : null;
+  return Object.freeze({
+    workItem,
+    candidateRead,
+    binding: new RequirementTestWorkerHandoffBinding({
+      requirementId: workItem.requirementId,
+      specRevision: workItem.specRevision,
+      bundleRevision: repairing ? workItem.bundleRevision.revision + 1 : 1,
+      sourceAttempt: { id: semanticIdentity.attempt.id, sequence: semanticIdentity.attempt.sequence },
+      candidateBaseline: candidateRead?.candidate ?? null,
+    }),
   });
 }
 
@@ -1394,11 +1502,18 @@ function canonicalIssueSnapshotText({ flowManager, state }) {
   }).text("linked Issue context");
 }
 
-function canonicalPayloadBaseline({ flowManager, state, rule }) {
+function canonicalPayloadBaseline({ flowManager, state, rule, requirementTestContext = null, testReviewRepairProgress = null }) {
   if (rule.logicalName === "effects.json") return null;
   if (rule.logicalName === "review.delta.json") return null;
   if (rule.kind === "tree") {
-    const snapshot = CanonicalWorkerTestTree.catalogSnapshot({ flowManager, specId: state.specId });
+    const snapshot = requirementTestContext === null
+      ? CanonicalWorkerTestTree.catalogSnapshot({ flowManager, specId: state.specId })
+      : new CanonicalWorkerTestTreeSnapshot((testReviewRepairProgress?.stagedSources
+        ?? requirementTestContext.candidateRead?.sources ?? []).map((source) => ({
+        targetRelativePath: source.targetRelativePath ?? `tests/${source.testPath}`,
+        digest: source.digest ?? digest(source.bytes),
+        byteLength: source.byteLength ?? source.bytes.length,
+      })));
     return Object.freeze({
       digest: digest(stableStringify(snapshot.entries)),
       byteLength: snapshot.entries.reduce((total, entry) => total + entry.byteLength, 0),
@@ -3428,6 +3543,7 @@ export class WorkerArtifactSemanticInputRevision {
     attempt,
     planGateRepair = null,
     testReviewRepair = null,
+    requirementTestBinding = null,
     acceptanceRepairRoute = null,
   } = {}) {
     this.inputDigest = requiredDigest(inputDigest, "worker artifact semantic input digest");
@@ -3441,7 +3557,12 @@ export class WorkerArtifactSemanticInputRevision {
       flowIdentity: this.flowIdentity.toJSON(),
       attempt: this.attempt.toJSON(),
     }));
-    if (acceptanceRepairRoute !== null) {
+    if (requirementTestBinding !== null) {
+      if (!(requirementTestBinding instanceof RequirementTestWorkerHandoffBinding)) {
+        throw new Error("worker artifact semantic input revision requires a typed Requirement test binding");
+      }
+      this.value = digest(stableStringify({ baseRevision, requirementTestBinding: requirementTestBinding.toJSON() }));
+    } else if (acceptanceRepairRoute !== null) {
       this.value = digest(stableStringify({ baseRevision, acceptanceRepairRoute: acceptanceRepairRoute.toJSON() }));
     } else if (testReviewRepair !== null) {
       this.value = digest(stableStringify({ baseRevision, testReviewRepair: testReviewRepair.toJSON() }));
@@ -3478,6 +3599,7 @@ function inputRevision(inputDigest, {
   semanticIdentity,
   planGateRepair = null,
   testReviewRepair = null,
+  requirementTestBinding = null,
   acceptanceRepairRoute = null,
 } = {}) {
   return new WorkerArtifactSemanticInputRevision({
@@ -3486,6 +3608,7 @@ function inputRevision(inputDigest, {
     attempt: semanticIdentity.attempt,
     planGateRepair,
     testReviewRepair,
+    requirementTestBinding,
     acceptanceRepairRoute,
   }).toString();
 }
@@ -3516,7 +3639,12 @@ function currentTestReviewRepair({ flowManager, state, stepId }) {
 function currentTestReviewRepairProgress({ flowManager, state, repair }) {
   if (repair === null) return null;
   try {
-    return canonicalTestReviewRepairProgress({ flowManager, state, repair, consumerNodeId: "test" });
+    const stagedSources = new RequirementTestArtifactStore({ flowManager, state })
+      .readCandidate({ bundle: repair.sourceCandidate.bundle, consumerNodeId: "test-repair" })
+      .sources.map((source) => ({ testPath: source.targetRelativePath.slice("tests/".length), bytes: source.bytes }));
+    return canonicalTestReviewRepairProgress({
+      flowManager, state, repair, consumerNodeId: "test-repair", stagedSources,
+    });
   } catch (cause) {
     throw new WorkerArtifactHandoffError(
       "invalid", "FLOW_TEST_REVIEW_REPAIR_PROGRESS_INVALID",
@@ -3553,7 +3681,9 @@ function restoredTestReviewRepairContext({ flowManager, state, stepId, workerVis
       "persisted worker repair scope is not bound to current canonical findings",
     );
   }
-  const testSources = new CanonicalTestArtifactStore({ flowManager, state }).testSources("test");
+  const testSources = new RequirementTestArtifactStore({ flowManager, state })
+    .readCandidate({ bundle: testReviewRepair.sourceCandidate.bundle, consumerNodeId: "test-repair" })
+    .sources.map((source) => ({ testPath: source.targetRelativePath.slice("tests/".length), bytes: source.bytes }));
   const progress = currentTestReviewRepairProgress({ flowManager, state, repair: testReviewRepair });
   const batch = progress.nextBatch(testReviewRepair, testSources);
   if (batch === null) throw new WorkerArtifactHandoffError("stale", "FLOW_TEST_REVIEW_REPAIR_PROGRESS_INVALID", "persisted repair request has no pending batch");
@@ -3898,6 +4028,7 @@ export class WorkerArtifactHandoffRequest {
     testReviewRepair = null,
     testReviewRepairProgress = null,
     workerVisibleTestReviewRepair = null,
+    requirementTestBinding = null,
     sourceMutationBaseline = null,
     sourceHandoffCheckpoint = null,
     sourceHandoffIdentity = null,
@@ -3941,6 +4072,15 @@ export class WorkerArtifactHandoffRequest {
     this.testReviewRepair = testReviewRepair;
     this.testReviewRepairProgress = testReviewRepairProgress;
     this.workerVisibleTestReviewRepair = workerVisibleTestReviewRepair;
+    const requirementStep = new Set(["test-generate", "test-repair"]).has(this.stepId);
+    if (requirementStep !== (requirementTestBinding instanceof RequirementTestWorkerHandoffBinding)) {
+      throw new Error("Requirement test worker handoff requires exactly one typed binding");
+    }
+    if (requirementTestBinding !== null && (
+      (this.stepId === "test-generate") !== (requirementTestBinding.candidateBaseline === null)
+      || (this.stepId === "test-generate" && requirementTestBinding.bundleRevision !== 1)
+    )) throw new Error("Requirement test worker handoff binding does not match its step");
+    this.requirementTestBinding = requirementTestBinding;
     if ((policy.kind === "source") !== (sourceMutationBaseline instanceof SourceMutationBaseline)) {
       throw new Error("source worker handoff requires exactly one SourceMutationBaseline");
     }
@@ -4034,7 +4174,7 @@ export class WorkerArtifactHandoffRequest {
     this.submissionPath = path.join(this.directory, "handoff.json");
     this.sourceMutationManifestPath = path.join(this.directory, "source-mutation-manifest.json");
     this.quarantinePath = path.join(this.directory, "quarantine.json");
-    this.specTestTopology = this.stepId === "test"
+    this.specTestTopology = new Set(["test", "test-generate", "test-repair"]).has(this.stepId)
       ? CanonicalSpecTestTopology.fromWorkerTestTree({
           flowManager: this.flowManager,
           specId: this.specId,
@@ -4137,8 +4277,12 @@ export class WorkerArtifactHandoffRequest {
     inputs.push(...taskReviewStageHandoffInputs({ flowManager, state, policy, contextSnapshot }));
     inputs.push(...approvedFindingExceptionHandoffInputs({ flowManager, state, policy, executionRoot }));
     const inputDigestValue = handoffInputDigest(inputs, contextSnapshot);
+    const semanticIdentity = canonicalSemanticInputIdentity({ flowManager, state });
+    const requirementTestContext = requirementTestHandoffContext({ flowManager, state, policy, semanticIdentity });
     const payloads = policy.payloads.map((rule) => {
-      const baseline = canonicalPayloadBaseline({ flowManager, state, rule });
+      const baseline = canonicalPayloadBaseline({
+        flowManager, state, rule, requirementTestContext, testReviewRepairProgress,
+      });
       return Object.freeze({
         rule,
         baselineDigest: baseline?.digest ?? null,
@@ -4146,11 +4290,10 @@ export class WorkerArtifactHandoffRequest {
         baselineEntries: baseline?.entries ?? null,
       });
     });
-    const repairSources = testReviewRepair === null ? [] : new CanonicalTestArtifactStore({ flowManager, state }).testSources("test");
+    const repairSources = testReviewRepair === null ? [] : testReviewRepairProgress.stagedSources;
     const selectedBatch = testReviewRepair === null ? null : testReviewRepairProgress.nextBatch(testReviewRepair, repairSources);
     if (testReviewRepair !== null && selectedBatch === null) throw new WorkerArtifactHandoffError("recovery-required", "FLOW_TEST_REVIEW_REPAIR_PROGRESS_COMPLETE", "test-review repair has no pending batch", { retryable: false, recoveryPossible: true });
     const selectedRepairContract = selectedBatch === null ? null : testReviewRepair.forBatch(selectedBatch);
-    const semanticIdentity = canonicalSemanticInputIdentity({ flowManager, state });
     const sourceHandoffRoot = executionHandoffRoot(executionRoot, state.specId);
     const actionDirectory = handoffActionDirectory(
       sourceHandoffRoot,
@@ -4189,12 +4332,14 @@ export class WorkerArtifactHandoffRequest {
         semanticIdentity,
         planGateRepair,
         testReviewRepair,
+        requirementTestBinding: requirementTestContext?.binding ?? null,
         acceptanceRepairRoute,
       }),
       generatedAt: now().toISOString(),
       testReviewRepair,
       testReviewRepairProgress,
       workerVisibleTestReviewRepair: selectedRepairContract,
+      requirementTestBinding: requirementTestContext?.binding ?? null,
       sourceMutationBaseline,
       canonicalGeneration: policy.kind === "source" ? canonicalSourceHandoffGeneration({ flowManager, state }) : null,
       canonicalLocation: flowManager.specLocation(state.specId),
@@ -4264,11 +4409,12 @@ export class WorkerArtifactHandoffRequest {
       targetAuthority: this.targetAuthority,
       inputDigest: this.inputDigest,
       inputRevision: this.inputRevision,
+      requirementTestBinding: this.requirementTestBinding?.toJSON() ?? null,
       // request.json is an untrusted worker capability. The complete rejected
       // review stays parent-private in the canonical store; only the selected
       // repair surface is serialised into the worker-readable request.
       inputs: this.inputs
-        .filter((input) => !(this.testReviewRepair && input.name === "test-review.json"))
+        .filter((input) => !(this.testReviewRepair && input.name === "requirement-test-review.json"))
         .map((input) => input.toJSON()),
       testReviewRepair: visibleRepair?.toJSON?.() ?? visibleRepair,
       contextSnapshot: this.contextSnapshot?.toJSON() ?? null,
@@ -4346,6 +4492,7 @@ export class WorkerArtifactHandoffRequest {
       workerVisibleTestReviewRepair: this.workerVisibleTestReviewRepair,
       workerInstructions: this.workerInstructions,
       sourceResponseContract: this.sourceResponseContract,
+      requirementTestBinding: this.requirementTestBinding,
       sourceMutationBaseline: this.sourceMutationBaseline, sourceHandoffCheckpoint,
       sourceHandoffIdentity: this.sourceHandoffIdentity, canonicalGeneration: this.canonicalGeneration,
       canonicalLocation: this.flowManager.specLocation(this.specId), flowManager: this.flowManager,
@@ -4353,12 +4500,14 @@ export class WorkerArtifactHandoffRequest {
   }
 
   #materializeCanonicalRepairTests() {
-    if (this.stepId !== "test" || this.testReviewRepair === null) return;
+    if (this.stepId !== "test-repair" || this.testReviewRepair === null) return;
     const root = this.payloadPath("spec-tests");
-    const store = new CanonicalTestArtifactStore({ flowManager: this.flowManager, state: this.state });
     const allowed = new Set(this.workerVisibleTestReviewRepair.batch.allowedTestPaths);
-    for (const source of store.testSources("test").filter((candidate) => allowed.has(candidate.testPath))) {
-      const target = path.resolve(root, source.testPath);
+    for (const source of this.testReviewRepairProgress.stagedSources.filter((candidate) => (
+      allowed.has(candidate.testPath)
+    ))) {
+      const testPath = source.testPath;
+      const target = path.resolve(root, testPath);
       if (!isWithin(root, target)) {
         throw new WorkerArtifactHandoffError(
           "invalid",
@@ -4368,12 +4517,12 @@ export class WorkerArtifactHandoffRequest {
       }
       ensureRealDirectory(path.dirname(target), root);
       if (fs.existsSync(target)) {
-        const existing = readRegularFile(target, `repair payload ${source.testPath}`);
+        const existing = readRegularFile(target, `repair payload ${testPath}`);
         if (existing.digest !== digest(source.bytes)) {
           throw new WorkerArtifactHandoffError(
             "invalid",
             "FLOW_ARTIFACT_HANDOFF_INVALID",
-            `repair payload already differs from canonical test ${source.testPath}`,
+            `repair payload already differs from canonical test ${testPath}`,
           );
         }
       } else {
@@ -4402,11 +4551,12 @@ export class WorkerArtifactHandoffRequest {
       payloads: workerPayloads,
       inputDigest: this.inputDigest,
       inputRevision: this.inputRevision,
+      requirementTestBinding: this.requirementTestBinding?.toJSON() ?? null,
       ...(this.toJSON().testReviewRepair && { testReviewRepair: this.toJSON().testReviewRepair }),
       inputs: this.inputs
         // The parent retains the complete rejected review as canonical
         // evidence; a repair worker receives only the selected finding above.
-        .filter((input) => !(this.testReviewRepair && input.name === "test-review.json"))
+        .filter((input) => !(this.testReviewRepair && input.name === "requirement-test-review.json"))
         .map((input) => input.toJSON()),
       contextSnapshot: this.contextSnapshot?.toJSON() ?? null,
       workerInstructions: this.workerInstructions.toJSON(),
@@ -4522,6 +4672,16 @@ export class WorkerArtifactHandoffRequest {
       state,
       stepId: this.stepId,
     });
+    const requirementTestContext = requirementTestHandoffContext({
+      flowManager: this.flowManager, state, policy: this.policy, semanticIdentity,
+    });
+    if (stableStringify(requirementTestContext?.binding.toJSON() ?? null)
+      !== stableStringify(this.requirementTestBinding?.toJSON() ?? null)) {
+      throw new WorkerArtifactHandoffError(
+        "stale", "FLOW_REQUIREMENT_TEST_HANDOFF_STALE",
+        "Requirement test worker handoff binding changed before publication",
+      );
+    }
     const acceptanceRepairRoute = currentAcceptanceImplementationRepair({
       flowManager: this.flowManager,
       state,
@@ -4530,6 +4690,7 @@ export class WorkerArtifactHandoffRequest {
     const expectedInputPaths = this.policy.inputContract.resolve({
       planGateRepair,
       testReviewRepair,
+      requirementTestBinding: requirementTestContext?.binding ?? null,
       acceptanceRepairRoute,
     });
     if (
@@ -4559,12 +4720,11 @@ export class WorkerArtifactHandoffRequest {
         digest: virtual.digest,
         byteLength: virtual.byteLength,
       };
-      const input = CanonicalWorkerArtifactAddress.from(relativePath).read({
-        flowManager: this.flowManager,
-        specId: state.specId,
-        consumerNodeId: this.stepId,
+      const input = canonicalHandoffInputSnapshot({
+        flowManager: this.flowManager, state, workerPath: relativePath,
+        consumerNodeId: this.stepId, label: `current canonical handoff input ${relativePath}`,
       });
-      return { path: relativePath, digest: input.snapshot().digest, byteLength: input.snapshot().byteLength };
+      return { path: relativePath, digest: input.snapshot.digest, byteLength: input.snapshot.byteLength };
     });
     const currentDigest = handoffInputDigest(current.map((input) => ({
       targetRelativePath: input.path,
@@ -4600,12 +4760,21 @@ export class WorkerArtifactHandoffRequest {
 export class WorkerArtifactHandoffReference {
   constructor(request) {
     if (!(request instanceof WorkerArtifactHandoffRequest)) throw new Error("worker input reference requires a handoff request");
+    const contract = request.toWorkerJSON();
     this.requestPath = request.requestPath;
     this.requestDigest = request.requestDigest;
     this.actionFilePath = request.actionRequestPath;
     this.actionFileDigest = request.actionRequestDigest;
     this.actionDigest = request.actionDigest;
     this.dispatchInvocationId = request.dispatchInvocationId;
+    this.inputDigest = request.inputDigest;
+    this.inputRevision = request.inputRevision;
+    this.requirementTestBinding = request.requirementTestBinding;
+    this.inputs = Object.freeze(contract.inputs.map(({ name, targetRelativePath, digest: inputDigest, byteLength }) =>
+      Object.freeze({ name, targetRelativePath, digest: inputDigest, byteLength })));
+    this.payloads = Object.freeze(contract.payloads.map((payload) => Object.freeze(payload)));
+    this.specTestTopology = contract.specTestTopology ? Object.freeze(contract.specTestTopology) : null;
+    this.sealCommand = contract.sealCommand ?? null;
     Object.freeze(this);
   }
 
@@ -4614,6 +4783,10 @@ export class WorkerArtifactHandoffReference {
       requestPath: this.requestPath, requestDigest: this.requestDigest,
       actionFilePath: this.actionFilePath, actionFileDigest: this.actionFileDigest,
       actionDigest: this.actionDigest, dispatchInvocationId: this.dispatchInvocationId,
+      inputDigest: this.inputDigest, inputRevision: this.inputRevision,
+      requirementTestBinding: this.requirementTestBinding?.toJSON() ?? null,
+      inputs: this.inputs, payloads: this.payloads, specTestTopology: this.specTestTopology,
+      sealCommand: this.sealCommand, completionOwner: "parent-dispatcher",
     });
   }
 }
@@ -4960,7 +5133,7 @@ function requestFromStored(filePath) {
   exactObjectKeys(document, [
     "version", "runId", "specId", "issue", "stepId", "taskId", "actionDigest", "dispatchInvocationId",
       "targetAuthority", "inputDigest", "inputRevision", "inputs", "testReviewRepair", "contextSnapshot",
-    "payloads", "workerInstructions", "sourceResponseContract", "specTestTopology", "sealCommand", "completionOwner", "generatedAt",
+    "requirementTestBinding", "payloads", "workerInstructions", "sourceResponseContract", "specTestTopology", "sealCommand", "completionOwner", "generatedAt",
     "sourceMutationBaselineDigest", "sourceHandoffIdentity", "sourceHandoffCheckpointDigest",
   ], "worker artifact handoff request");
   if (document.version !== WORKER_ARTIFACT_HANDOFF_VERSION) {
@@ -5061,6 +5234,9 @@ function requestFromStored(filePath) {
     }),
     inputs: inputSnapshots,
     testReviewRepair: document.testReviewRepair === null ? null : parseWorkerVisibleTestReviewRepair(document.testReviewRepair),
+    requirementTestBinding: document.requirementTestBinding === null
+      ? null
+      : RequirementTestWorkerHandoffBinding.fromJSON(document.requirementTestBinding),
     contextSnapshot: document.contextSnapshot == null
       ? null
       : document.contextSnapshot.kind === "task"
@@ -5186,6 +5362,7 @@ function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, 
     workerVisibleTestReviewRepair: stored.testReviewRepair,
     workerInstructions: stored.workerInstructions,
     sourceResponseContract: stored.sourceResponseContract,
+    requirementTestBinding: stored.requirementTestBinding,
     sourceMutationBaseline: sourceAuthority?.checkpoint.baseline ?? null,
     sourceHandoffIdentity: sourceAuthority?.checkpoint.identity ?? null,
     canonicalGeneration: stored.sourceHandoffIdentity?.canonicalGeneration ?? null,
@@ -5228,6 +5405,7 @@ function reboundRestoredHandoffRequest({ identityRequest, mainRoot, executionRoo
     workerVisibleTestReviewRepair: stored.testReviewRepair,
     workerInstructions: stored.workerInstructions,
     sourceResponseContract: stored.sourceResponseContract,
+    requirementTestBinding: stored.requirementTestBinding,
     sourceMutationBaseline: sourceAuthority?.checkpoint.baseline ?? null,
     sourceHandoffIdentity: sourceAuthority?.checkpoint.identity ?? null,
     canonicalGeneration: stored.sourceHandoffIdentity?.canonicalGeneration ?? null,
@@ -5422,6 +5600,9 @@ export class WorkerArtifactPublicationJournal {
     this.handoffDigest = requiredDigest(input.handoffDigest, "publication handoffDigest");
     this.inputDigest = requiredDigest(input.inputDigest, "publication inputDigest");
     this.inputRevision = requiredDigest(input.inputRevision, "publication inputRevision");
+    this.requirementTestBinding = input.requirementTestBinding === null || input.requirementTestBinding === undefined
+      ? null
+      : RequirementTestWorkerHandoffBinding.fromJSON(input.requirementTestBinding);
     this.handoffDirectory = path.resolve(requiredString(input.handoffDirectory, "publication handoffDirectory"));
     this.payloadManifest = Object.freeze((input.payloadManifest || []).map((entry) => new WorkerArtifactManifestEntry(entry)));
     this.targetBaselines = Object.freeze((input.targetBaselines || []).map((entry) => {
@@ -5482,6 +5663,7 @@ export class WorkerArtifactPublicationJournal {
       handoffDigest: submission.handoffDigest,
       inputDigest: request.inputDigest,
       inputRevision: request.inputRevision,
+      requirementTestBinding: request.requirementTestBinding?.toJSON() ?? null,
       handoffDirectory: request.directory,
       payloadManifest: submission.payloadManifest.map((entry) => entry.toJSON()),
       targetBaselines: request.payloads.map(({ rule, baselineDigest, baselineByteLength, baselineEntries }) => ({
@@ -5501,7 +5683,9 @@ export class WorkerArtifactPublicationJournal {
       && this.specId === request.specId
       && this.stepId === request.stepId
       && this.requestDigest === request.requestDigest
-      && this.handoffDigest === submission.handoffDigest;
+      && this.handoffDigest === submission.handoffDigest
+      && stableStringify(this.requirementTestBinding?.toJSON() ?? null)
+        === stableStringify(request.requirementTestBinding?.toJSON() ?? null);
   }
 
   toJSON() {
@@ -5517,6 +5701,7 @@ export class WorkerArtifactPublicationJournal {
       handoffDigest: this.handoffDigest,
       inputDigest: this.inputDigest,
       inputRevision: this.inputRevision,
+      requirementTestBinding: this.requirementTestBinding?.toJSON() ?? null,
       handoffDirectory: this.handoffDirectory,
       payloadManifest: this.payloadManifest.map((entry) => entry.toJSON()),
       targetBaselines: this.targetBaselines.map((entry) => ({
@@ -5541,6 +5726,9 @@ export class WorkerArtifactHandoffReceipt {
     this.handoffDigest = requiredDigest(input.handoffDigest, "worker artifact receipt handoffDigest");
     this.inputDigest = requiredDigest(input.inputDigest, "worker artifact receipt inputDigest");
     this.inputRevision = requiredDigest(input.inputRevision, "worker artifact receipt inputRevision");
+    this.requirementTestBinding = input.requirementTestBinding === null || input.requirementTestBinding === undefined
+      ? null
+      : RequirementTestWorkerHandoffBinding.fromJSON(input.requirementTestBinding);
     this.payloadDigest = requiredDigest(input.payloadDigest, "worker artifact receipt payloadDigest");
     this.consumedAt = requiredString(input.consumedAt, "worker artifact receipt consumedAt");
     if (!Number.isFinite(Date.parse(this.consumedAt))) {
@@ -5561,6 +5749,7 @@ export class WorkerArtifactHandoffReceipt {
       handoffDigest: this.handoffDigest,
       inputDigest: this.inputDigest,
       inputRevision: this.inputRevision,
+      requirementTestBinding: this.requirementTestBinding?.toJSON() ?? null,
       payloadDigest: this.payloadDigest,
       consumedAt: this.consumedAt,
     };
@@ -5844,7 +6033,7 @@ function assertTestReviewRepairMadeProgress(request, submission, state, logicalN
       {
         data: {
           sourceEvidenceId: repair.sourceEvidenceId,
-          sourceTestRevisionDigest: repair.sourceTestRevision.digest,
+          sourceCandidateDigest: repair.sourceCandidate.digest,
           stepId: request.stepId,
         },
       },
@@ -5857,7 +6046,7 @@ function testReviewRepairValidationRoot(request, submission, state) {
   if (request.testReviewRepair === null) return request.payloadDirectory;
   const entries = submission.payloadManifest.filter((entry) => entry.targetRelativePath.startsWith("tests/"))
     .map((entry) => ({ targetRelativePath: entry.targetRelativePath, bytes: manifestPayloadBytes(request, entry, "bounded repair validation payload") }));
-  const canonicalEntries = new CanonicalTestArtifactStore({ flowManager: request.flowManager, state }).testSources("test");
+  const canonicalEntries = request.testReviewRepairProgress.stagedSources;
   const composition = new CanonicalWorkerTestTree(entries).repairComposition({
     baseline: canonicalTestTreeBaselineForPublication(request),
     allowedTestPaths: request.workerVisibleTestReviewRepair.batch.allowedTestPaths,
@@ -5976,11 +6165,23 @@ function validatePayload(request, submission, state, { bootstrapObservationAutho
       );
       return;
     }
-    if (request.stepId === "test") {
+    if (new Set(["test-generate", "test-repair"]).has(request.stepId)) {
       const spec = request.inputs.find((input) => input.name === "spec.json").document;
       const validationRoot = testReviewRepairValidationRoot(request, submission, state);
-      const result = validateTestHeaders({ specDir: validationRoot, spec });
-      if (!result.ok) throw new Error(formatValidationMessages(result).join("; "));
+      const candidatePaths = submission.payloadManifest
+        .filter((entry) => entry.targetRelativePath.startsWith("tests/"))
+        .map((entry) => entry.targetRelativePath);
+      const secondaryRequirementIds = spec.requirements
+        .filter((requirement) => requirement.id !== request.requirementTestBinding.requirementId)
+        .map((requirement) => requirement.id);
+      const result = validateAssignedRequirementTestHeaders({
+        specDir: validationRoot,
+        spec,
+        assignedRequirementId: request.requirementTestBinding.requirementId,
+        secondaryRequirementIds,
+        candidatePaths,
+      });
+      if (!result.ok) throw new Error(formatValidationMessages(result.result).join("; "));
       const bootstrapValidation = new SpecTestBootstrapValidator({
         payloadSpecDir: validationRoot,
         canonicalSpecDir: CanonicalWorkerTestTree.artifactRoot({
@@ -5994,7 +6195,6 @@ function validatePayload(request, submission, state, { bootstrapObservationAutho
         && bootstrapObservationAuthority.accepts(request))) {
         bootstrapValidation.assertValid();
       }
-      assertPlanGateRepairMadeProgress(request, submission, state, "spec-tests");
       assertTestReviewRepairMadeProgress(request, submission, state, "spec-tests");
       return bootstrapValidation.ok ? null : bootstrapValidation;
     }
@@ -6280,10 +6480,9 @@ function canonicalTestTreeBaselineForPublication(request) {
       "canonical test publication has no declared test-tree baseline",
     );
   }
-  const baseline = CanonicalWorkerTestTree.catalogSnapshot({
-    flowManager: request.flowManager,
-    specId: request.specId,
-  });
+  const baseline = request.requirementTestBinding === null
+    ? CanonicalWorkerTestTree.catalogSnapshot({ flowManager: request.flowManager, specId: request.specId })
+    : new CanonicalWorkerTestTreeSnapshot(payload.baselineEntries ?? []);
   const baselineDigest = digest(stableStringify(baseline.entries));
   const baselineByteLength = baseline.entries.reduce((total, entry) => total + entry.byteLength, 0);
   if (payload.baselineDigest !== baselineDigest || payload.baselineByteLength !== baselineByteLength) {
@@ -6416,6 +6615,7 @@ function canonicalHandoffPublications(request, submission) {
   const artifactBaselines = new Map();
   let specRecord;
   let testSourceBaseline;
+  let requirementTestCandidate;
   const testEntries = [];
   const repairRoute = draftRepairRouteForRequest(request);
   const draftRepairResultValue = repairRoute === null ? null : draftRepairResult(request, submission);
@@ -6507,16 +6707,66 @@ function canonicalHandoffPublications(request, submission) {
   }
   if (testEntries.length > 0) {
     const baseline = canonicalTestTreeBaselineForPublication(request);
+    if (request.requirementTestBinding?.candidateBaseline !== null
+      && request.requirementTestBinding?.candidateBaseline !== undefined) {
+      const currentCandidate = new RequirementTestArtifactStore({
+        flowManager: request.flowManager,
+        state: request.state,
+      }).readCandidate({
+        bundle: request.requirementTestBinding.candidateBaseline.bundle,
+        consumerNodeId: request.stepId,
+      });
+      if (stableStringify(currentCandidate.candidate.toJSON())
+        !== stableStringify(request.requirementTestBinding.candidateBaseline.toJSON())) {
+        throw new WorkerArtifactHandoffError(
+          "stale", "FLOW_REQUIREMENT_TEST_HANDOFF_STALE",
+          "Requirement test candidate baseline changed before publication",
+        );
+      }
+      currentCandidate.baselines.forEach(addArtifactBaseline);
+    }
     const replacement = request.testReviewRepair === null
       ? new CanonicalWorkerTestTree(testEntries).replacement(baseline)
       : new CanonicalWorkerTestTree(testEntries).repairComposition({
         baseline,
         allowedTestPaths: request.workerVisibleTestReviewRepair.batch.allowedTestPaths,
-        canonicalEntries: new CanonicalTestArtifactStore({ flowManager: request.flowManager, state: request.state }).testSources("test"),
+        canonicalEntries: request.testReviewRepairProgress.stagedSources,
       });
-    artifactWrites.push(...replacement.artifactWrites);
-    artifactRemovals.push(...replacement.artifactRemovals);
-    testSourceBaseline = replacement.testSourceBaseline;
+    const sources = replacement.artifactWrites.map((entry) => RequirementTestCandidateSource.fromBytes({
+      testPath: `tests/${entry.parameters.testPath}`,
+      bytes: entry.bytes,
+    }));
+    const binding = request.requirementTestBinding;
+    const bundle = new RequirementTestBundleRevision({
+      requirementId: binding.requirementId,
+      specRevision: binding.specRevision,
+      revision: binding.bundleRevision,
+      paths: sources.map((source) => source.testPath),
+      lineage: new RequirementTestBundleLineage({
+        requirementId: binding.requirementId,
+        specRevision: binding.specRevision,
+        bundleRevision: binding.bundleRevision,
+        predecessorRevision: binding.candidateBaseline?.bundle.revision ?? null,
+        sourceAttempt: binding.sourceAttempt,
+        sourceFindingFingerprints: request.testReviewRepair === null
+          ? []
+          : request.workerVisibleTestReviewRepair.blockingFindings.map((finding) => finding.fingerprint),
+      }),
+    });
+    const candidate = new RequirementTestCandidateBundle({ bundle, sources });
+    requirementTestCandidate = candidate;
+    const parameters = { requirementId: binding.requirementId, bundleRevision: String(binding.bundleRevision) };
+    artifactWrites.push(...replacement.artifactWrites.map((entry) => ({
+      logicalKey: "test.requirement.candidate.source",
+      parameters: { ...parameters, testPath: entry.parameters.testPath },
+      mediaType: entry.mediaType,
+      bytes: entry.bytes,
+    })), {
+      logicalKey: "test.requirement.candidate.bundle",
+      parameters,
+      mediaType: "application/json",
+      bytes: Buffer.from(`${JSON.stringify(candidate.toJSON(), null, 2)}\n`, "utf8"),
+    });
     if (request.testReviewRepair !== null) {
       return Object.freeze({
         specRecord: specRecord ?? undefined,
@@ -6529,6 +6779,10 @@ function canonicalHandoffPublications(request, submission) {
           })).sort((left, right) => left.targetRelativePath.localeCompare(right.targetRelativePath)))),
           changedPaths: replacement.changedPaths,
         }),
+        requirementTestCandidate: candidate,
+        requirementTestCandidateSources: Object.freeze(replacement.artifactWrites.map((entry) => ({
+          testPath: entry.parameters.testPath, bytes: Buffer.from(entry.bytes),
+        }))),
         draftCoverageRepairDecision, draftCoverageRepairDraft: draftCoverageRepairDecision === null ? null : structuredClone(draftRepairResultValue.draft),
       });
     }
@@ -6540,6 +6794,11 @@ function canonicalHandoffPublications(request, submission) {
     artifactBaselines: Object.freeze([...artifactBaselines.values()]),
     testSourceBaseline: testSourceBaseline ?? undefined,
     testReviewRepairComposition: undefined,
+    requirementTestCandidate,
+    requirementTestCandidateSources: requirementTestCandidate === undefined ? undefined : Object.freeze(
+      artifactWrites.filter((entry) => entry.logicalKey === "test.requirement.candidate.source")
+        .map((entry) => ({ testPath: entry.parameters.testPath, bytes: Buffer.from(entry.bytes) })),
+    ),
     draftCoverageRepairDecision,
     draftCoverageRepairDraft: draftCoverageRepairDecision === null
       ? null
@@ -6624,13 +6883,15 @@ function testReviewRepairProgressPublication(request, submission, publications) 
     handoff = {
       batchId: batch.batchId, findingIds: batch.findingIds,
       beforeTreeDigest: composition.beforeTreeDigest, afterTreeDigest: composition.afterTreeDigest,
-      changedPaths: composition.changedPaths, sourceTestRevision: request.testReviewRepair.sourceTestRevision.toJSON(),
+      changedPaths: composition.changedPaths, sourceCandidate: request.testReviewRepair.sourceCandidate.toJSON(),
     handoffDigest: submission.handoffDigest,
     requestDigest: request.requestDigest,
     payloadDigest: manifestDigest(submission.payloadManifest),
     };
     // The progress value class owns receipt/batch identity validation.
-    const next = request.testReviewRepairProgress.markBatchComplete(request.testReviewRepair, batch, handoff);
+    const next = request.testReviewRepairProgress.markBatchComplete(
+      request.testReviewRepair, batch, handoff, publications.requirementTestCandidateSources,
+    );
     return testReviewRepairProgressPublicationResult(request, publications, next);
   } catch (cause) {
     throw cause;
@@ -6640,27 +6901,39 @@ function testReviewRepairProgressPublication(request, submission, publications) 
 function testReviewRepairProgressPublicationResult(request, publications, next) {
   const previous = request.flowManager.readArtifact({
     specId: request.specId,
-    logicalKey: "test.review.repair.progress",
-    consumerNodeId: "test",
+    logicalKey: "test.requirement.repair.progress",
+    parameters: { requirementId: request.requirementTestBinding.requirementId },
+    consumerNodeId: "test-repair",
     optional: true,
   });
   const artifactBaselines = [...publications.artifactBaselines];
   if (previous !== null) {
     artifactBaselines.push(new CanonicalFlowArtifactBaseline({
-      logicalKey: "test.review.repair.progress",
+      logicalKey: "test.requirement.repair.progress",
+      parameters: { requirementId: request.requirementTestBinding.requirementId },
       digest: previous.descriptor.hash,
       byteLength: previous.descriptor.size,
     }));
   }
+  const parameters = { requirementId: request.requirementTestBinding.requirementId };
+  const candidateKeys = new Set(["test.requirement.candidate.bundle", "test.requirement.candidate.source"]);
+  const artifactWrites = next.complete
+    ? publications.artifactWrites
+    : publications.artifactWrites.filter((write) => !candidateKeys.has(write.logicalKey));
   return Object.freeze({
     progress: next,
     publications: Object.freeze({
       ...publications,
-      artifactWrites: Object.freeze([...publications.artifactWrites, {
-        logicalKey: "test.review.repair.progress",
+      artifactWrites: Object.freeze([...artifactWrites, ...(next.complete ? [] : [{
+        logicalKey: "test.requirement.repair.progress",
+        parameters,
         mediaType: "application/json",
         bytes: Buffer.from(`${JSON.stringify(next.toJSON(), null, 2)}\n`, "utf8"),
-      }]),
+      }])]),
+      artifactRemovals: Object.freeze([
+        ...publications.artifactRemovals,
+        ...(next.complete && previous !== null ? [{ logicalKey: "test.requirement.repair.progress", parameters }] : []),
+      ]),
       artifactBaselines: Object.freeze(artifactBaselines),
     }),
   });
@@ -6678,6 +6951,7 @@ function canonicalHandoffReceipt(request, submission, now) {
     handoffDigest: submission.handoffDigest,
     inputDigest: request.inputDigest,
     inputRevision: request.inputRevision,
+    requirementTestBinding: request.requirementTestBinding?.toJSON() ?? null,
     payloadDigest: manifestDigest(submission.payloadManifest),
     consumedAt: now().toISOString(),
   });
@@ -6685,12 +6959,13 @@ function canonicalHandoffReceipt(request, submission, now) {
 
 function canonicalHandoffReceiptForRequest(state, request, flowManager = null) {
   const selectedRepair = request.workerVisibleTestReviewRepair;
-  if (request.stepId === "test" && selectedRepair !== null && flowManager !== null) {
+  if (request.stepId === "test-repair" && selectedRepair !== null && flowManager !== null) {
     try {
       const progress = flowManager.readArtifact({
         specId: request.specId,
-        logicalKey: "test.review.repair.progress",
-        consumerNodeId: "test",
+        logicalKey: "test.requirement.repair.progress",
+        parameters: { requirementId: request.requirementTestBinding.requirementId },
+        consumerNodeId: "test-repair",
         optional: true,
       });
       if (progress !== null) {
@@ -7792,6 +8067,16 @@ export class WorkerArtifactHandoffCoordinator {
             decision: publications.draftCoverageRepairDecision,
             draft: publications.draftCoverageRepairDraft,
           });
+        } else if (new Set(["test-generate", "test-repair"]).has(request.stepId)) {
+          const planRead = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state })
+            .readPlan(request.stepId);
+          const decision = resolveRequirementTestLifecycle(new RequirementTestLifecycleFacts({
+            authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
+            plan: planRead.artifact.plan,
+            leaf: request.stepId,
+            observation: publications.requirementTestCandidate,
+          }));
+          ctx.flowManager.completeRequirementTestLifecycle({ ...confirmation, decision });
         } else {
           ctx.flowManager.confirmCurrentAttempt(confirmation);
         }

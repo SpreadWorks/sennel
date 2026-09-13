@@ -67,7 +67,6 @@ describe("CommandDefinition registry", () => {
     const approvalHelp = FLOW_COMMANDS.set.approval.help;
     const overviewHelp = FLOW_COMMANDS.run["update-overview"].help;
     const testExecuteHelp = FLOW_COMMANDS.run["test-execute"].help;
-    const scenarioValidityHelp = FLOW_COMMANDS.run["scenario-validity"].help;
     const testResultReviewHelp = FLOW_COMMANDS.run["test-result-review"].help;
     const retroHelp = FLOW_COMMANDS.run.retro.help;
     const finalRegressionHelp = FLOW_COMMANDS.run["final-regression"].help;
@@ -101,13 +100,13 @@ describe("CommandDefinition registry", () => {
     assert.equal(FLOW_COMMANDS.run["impl-confirm"], undefined);
     assert.equal(FLOW_COMMANDS.set.summary, undefined);
     assert.match(testExecuteHelp, /steps\/test-execute\/result\.json/);
-    assert.match(scenarioValidityHelp, /steps\/scenario-validity\/result\.json/);
+    assert.equal(FLOW_COMMANDS.run["scenario-validity"], undefined);
     assert.match(testResultReviewHelp, /steps\/test-result-review\/result\.json/);
     assert.match(retroHelp, /steps\/impl\/retro\/result\.json/);
     assert.equal(FLOW_COMMANDS.run.retro.args.flags.includes("--force"), false);
     assert.match(finalRegressionHelp, /steps\/final-regression\/result\.json/);
     assert.match(acceptanceReviewHelp, /steps\/acceptance-review\/result\.json/);
-    for (const help of [testExecuteHelp, scenarioValidityHelp, testResultReviewHelp, retroHelp, finalRegressionHelp, acceptanceReviewHelp]) {
+    for (const help of [testExecuteHelp, testResultReviewHelp, retroHelp, finalRegressionHelp, acceptanceReviewHelp]) {
       assert.doesNotMatch(help, /<configured-spec-root>|tests\/\.raw\/|test-execute-result\.json|test-result-review\.json|retro\.json|final-regression-result\.json|acceptance-review\.json/);
     }
   });

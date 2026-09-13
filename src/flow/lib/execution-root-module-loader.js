@@ -14,6 +14,7 @@ function requiredDirectory(name) {
 const repositoryRoot = requiredDirectory(PRODUCT.env("TEST_REPOSITORY_ROOT"));
 const executionRoot = requiredDirectory(PRODUCT.env("TEST_EXECUTION_ROOT"));
 const specRoot = requiredDirectory(PRODUCT.env("TEST_SPEC_ROOT"));
+const canonicalSpecRoot = requiredDirectory(PRODUCT.env("TEST_CANONICAL_SPEC_ROOT"));
 
 function isWithin(root, candidate) {
   const relative = path.relative(root, candidate);
@@ -25,10 +26,16 @@ function executionUrlForSharedRelativeImport(specifier, context) {
   const parentPath = fileURLToPath(context.parentURL);
   if (!isWithin(specRoot, parentPath)) return null;
 
-  const repositoryUrl = new URL(specifier, context.parentURL);
+  const relativeParent = path.relative(specRoot, parentPath);
+  const canonicalParent = path.join(canonicalSpecRoot, relativeParent);
+  const repositoryUrl = new URL(specifier, pathToFileURL(canonicalParent));
   if (repositoryUrl.protocol !== "file:") return null;
   const repositoryPath = fileURLToPath(repositoryUrl);
-  if (!isWithin(repositoryRoot, repositoryPath) || isWithin(specRoot, repositoryPath)) return null;
+  if (isWithin(canonicalSpecRoot, repositoryPath)) {
+    const materializedPath = path.join(specRoot, path.relative(canonicalSpecRoot, repositoryPath));
+    return fs.existsSync(materializedPath) ? pathToFileURL(materializedPath).href : null;
+  }
+  if (!isWithin(repositoryRoot, repositoryPath)) return null;
 
   const executionPath = path.join(executionRoot, path.relative(repositoryRoot, repositoryPath));
   if (!fs.existsSync(executionPath)) return null;

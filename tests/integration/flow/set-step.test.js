@@ -5,7 +5,12 @@
  */
 
 import { describe, it, afterEach } from "node:test";
-import { CanonicalFlowFixture, TaskLifecycleFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import {
+  CanonicalFlowFixture,
+  TaskLifecycleFixture,
+  makeFlowManager,
+  promoteCanonicalRequirementTest,
+} from "../../support/infrastructure/flow-setup.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { execFileSync } from "child_process";
@@ -98,11 +103,31 @@ describe("flow set step", () => {
   it("rejects a current step whose completion is owned by a definition lifecycle", async () => {
     tmp = createTmpDir();
     const flowManager = makeFlowManager(tmp);
-    new CanonicalFlowFixture({ flowManager, specId: "demo" })
-      .create()
-      .activate("scenario-validity");
+    const fixture = new CanonicalFlowFixture({
+      flowManager,
+      specId: "demo",
+      specRecord: {
+        requirements: [{
+          id: "R1",
+          desc: "Exercise lifecycle-owned completion.",
+          priority: "must",
+          testable: true,
+          preimplementation_test_expectation: "fail",
+          task_ids: ["T1"],
+        }],
+      },
+    }).create().addTask({
+      id: "T1",
+      title: "Exercise lifecycle-owned completion",
+      goal: "Keep the Requirement assignment valid.",
+      origin: "plan",
+      added_round: 0,
+      status: "pending",
+    });
+    fixture.settleBefore("test-generate");
+    promoteCanonicalRequirementTest({ flowManager, specId: "demo", requirementId: "R1", completion: "generate" });
     const result = await new SetStepCommand().execute({
-      id: "scenario-validity",
+      id: "test-review",
       status: "done",
       root: tmp,
       specId: "demo",
@@ -111,7 +136,7 @@ describe("flow set step", () => {
 
     assert.equal(result.ok, false);
     assert.equal(result.errors[0].code, "FLOW_STEP_TRANSITION_INVALID");
-    assert.equal(findStepById(flowManager.loadReadOnly("demo").steps, "scenario-validity").status, "in_progress");
+    assert.equal(findStepById(flowManager.loadReadOnly("demo").steps, "test-review").status, "in_progress");
   });
 
   it("rejects direct completion or skip of Task review-funnel stages without changing state or Activities", async () => {

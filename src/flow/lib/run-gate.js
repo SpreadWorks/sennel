@@ -508,15 +508,6 @@ function filterDiffSegments(diff, includesPath) {
     .join("");
 }
 
-export function excludeScenarioValidityEvidenceFromTaskGateDiff(diff, specPath) {
-  if (typeof diff !== "string") throw new Error("diff must be a string");
-  if (typeof specPath !== "string" || specPath.trim() === "") {
-    throw new Error("specPath must be a non-empty string");
-  }
-  const registry = new RepairArtifactRegistry(specPath);
-  return filterDiffSegments(diff, (file) => !registry.owns(file));
-}
-
 export function excludeGateLifecycleArtifactsFromGateDiff(diff, specPath) {
   if (typeof diff !== "string") throw new Error("diff must be a string");
   return filterDiffSegments(diff, (file) => !isGateLifecycleArtifactForGate(file, specPath));
@@ -2435,13 +2426,20 @@ export class IntegrationExecutionEvidence {
   }
 
   entriesFor(requirementId) {
-    const entry = this.result.summary.find((item) => item?.id === requirementId && item.result === "pass");
+    const entry = this.result.summary.find((item) => item?.id === requirementId);
     const entries = [];
-    if (entry?.evidence) {
+    if (entry?.result === "pass" && entry.evidence) {
       entries.push(new RequirementContextEntry({
         section: "execution",
         reference: `[TEST:${requirementId}]`,
         text: `Validated test-execute result=pass. Executed ${entry.evidence.command}; test ${entry.evidence.test_name}.`,
+      }));
+    }
+    if (entry?.result === "deferred" && entry.deferred_receipt) {
+      entries.push(new RequirementContextEntry({
+        section: "execution",
+        reference: `[TEST:${requirementId}]`,
+        text: "Requirement-scoped preimplementation test work was deferred with a canonical acceptance receipt; this is not passing test evidence.",
       }));
     }
     if (this.review.verdict === "pass") {

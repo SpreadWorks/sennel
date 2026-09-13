@@ -140,7 +140,7 @@ export class ReviewWorkUnitOutput {
       // Spec review is a full-input-bound V2 delta.  The parent alone merges
       // it into the revision-scoped `spec.review` authority.
       spec: ["spec.review", "review.delta.json"],
-      test: ["test.review", "test-review.json"],
+      test: ["test.requirement.review", "requirement-test-review.json"],
       impl: [task === null ? "impl.review" : "task.review", "impl-review.json"],
     }[reviewPhase];
     if (!values) throw new Error("review work unit review phase is unsupported");

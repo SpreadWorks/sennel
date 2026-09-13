@@ -198,7 +198,6 @@ async function resumeTaskGateSettlement({ root, specId }) {
 
 test("definition-owned registry command failures settle their exact active Attempt", async (t) => {
   for (const scenario of [
-    { commandName: "scenario-validity", nodeId: "scenario-validity" },
     { commandName: "test-execute", nodeId: "test-execute" },
     { commandName: "test-result-review", nodeId: "test-result-review" },
     { commandName: "retro", nodeId: "retro" },
@@ -233,29 +232,29 @@ test("definition-owned registry command failures settle their exact active Attem
 
 test("failed envelope records tooling failure for a dispatcher-primary command", async () => {
   const root = createTmpDir("definition-lifecycle-envelope-");
-  const entry = flowCommands.run["scenario-validity"];
+  const entry = flowCommands.run["test-execute"];
   const originalCommand = entry.command;
   try {
-    const specId = "902-scenario-envelope";
+    const specId = "902-test-execute-envelope";
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     new CanonicalFlowFixture({
       flowManager: manager,
       specId,
-      runId: "run-scenario-envelope",
+      runId: "run-test-execute-envelope",
       execution: { mode: "direct", baseBranch: "main", featureBranch: null },
-    }).create().registerActive().activate("scenario-validity");
+    }).create().registerActive().activate("test-execute");
     class FailedEnvelopeCommand extends Command {
       static outputMode = "envelope";
-      execute() { return Envelope.fail("run", "scenario-validity", "SCENARIO_ENVELOPE_FAILED", "scenario envelope failed"); }
+      execute() { return Envelope.fail("run", "test-execute", "TEST_EXECUTE_ENVELOPE_FAILED", "test execution envelope failed"); }
     }
     entry.command = async () => ({ default: FailedEnvelopeCommand });
     const out = [];
     await dispatch({
-      container: commandContainer({ root, manager }), entry, argv: [], envelopeType: "run", envelopeKey: "scenario-validity",
+      container: commandContainer({ root, manager }), entry, argv: [], envelopeType: "run", envelopeKey: "test-execute",
       stdout: (chunk) => out.push(chunk), stderr: () => {}, setExitCode: () => {},
       buildHookCtx: () => hookContext({ root, manager, specId }),
     });
-    assert.equal(JSON.parse(out.join("")).errors[0].code, "SCENARIO_ENVELOPE_FAILED");
+    assert.equal(JSON.parse(out.join("")).errors[0].code, "TEST_EXECUTE_ENVELOPE_FAILED");
     assert.equal(manager.canonicalState(specId).attempt.failure.retryKind, null);
   } finally {
     entry.command = originalCommand;
@@ -328,7 +327,7 @@ test("every definition-owned parent command declares exactly one typed failure o
   }
   assert.deepEqual(
     owners.filter((entry) => entry.owner.toJSON() === "dispatcher-primary").map((entry) => entry.id),
-    ["scenario-validity", "test-execute", "test-result-review", "retro"],
+    ["test-gate", "test-execute", "test-result-review", "retro"],
   );
 });
 

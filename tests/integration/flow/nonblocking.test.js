@@ -39,7 +39,7 @@ function attemptHistory(nodeId, logicalKey, payload) {
 const EVIDENCE_KEY = {
   "draft-questions-review": "draft.questions.review", "draft-coverage-review": "draft.coverage.review",
   "draft-gate": "draft.gate", "spec-gate": "spec.gate",
-  "scenario-validity": "scenario.validity", "test-review": "test.review", "test-result-review": "test.result.review",
+  "test-result-review": "test.result.review",
   "impl-review": "impl.review", "impl-gate": "impl.gate", "acceptance-review": "acceptance.review",
   "final-regression": "final.regression", retro: "retro",
 };
@@ -1091,9 +1091,6 @@ describe("canonical nonblocking policy", () => {
       () => fromGateResult({ ref: "gate", source: '{"result":"fail","failureKind":"schema"}' }),
       /artifacts must be an object/,
     );
-  });
-  it("classifies scenario unavailable evidence as retryable", () => {
-    assert.equal(fromVerificationResult({ ref: "scenario", source: '{"result":"block"}' }, "scenario-validity").resultKind, "unavailable");
   });
   it("classifies acceptance blockers as quality evidence", () => {
     assert.equal(fromAcceptanceResult({ ref: "acceptance", source: '{"verdict":"blocked"}' }).resultKind, "quality");

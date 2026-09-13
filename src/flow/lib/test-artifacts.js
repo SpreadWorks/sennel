@@ -7,6 +7,7 @@ import { globToRegex } from "../../lib/glob.js";
 import { listChangedFilesDetailed } from "../../lib/git-helpers.js";
 import { validateSchema } from "../../lib/schema-validate.js";
 import { RegressionFileSnapshotList } from "./regression-file-snapshot.js";
+import { RequirementTestDeferredReceipt } from "./requirement-test-artifacts.js";
 import { UPGRADE_RESULT_FILE } from "./upgrade-evidence-paths.js";
 import {
   UpgradeResultArtifact,
@@ -26,7 +27,7 @@ const MAX_EVIDENCE_RAW_OUTPUT_LINES = 2_000;
 const MAX_TEST_SOURCE_BYTES = 4 * 1024 * 1024;
 const MAX_SUMMARY_ITEMS = 500;
 const MAX_REVIEW_CHECKED_ITEMS = 500;
-const SUMMARY_RESULT_VALUES = Object.freeze(["pass", "fail", "not_applicable"]);
+const SUMMARY_RESULT_VALUES = Object.freeze(["pass", "fail", "deferred", "not_applicable"]);
 const SUMMARY_NO_TESTS_REASON = "no_tests_declared";
 const FINAL_REGRESSION_SKIP_KINDS = Object.freeze([
   "covered_by_test_execute_full_regression",
@@ -50,33 +51,6 @@ function validateArtifactSchema(value, schemaFile, label) {
   const errors = validateSchema(value, schema);
   if (errors.length > 0) throw new Error(`${label} schema validation failed: ${errors.join("; ")}`);
   return value;
-}
-
-/** Structural boundaries reused by commands and registry post hooks. */
-export function validateScenarioValidityArtifactShape(result) {
-  return validateArtifactSchema(result, "scenario-validity-result.schema.json", "scenario-validity-result.json");
-}
-
-/**
- * The scenario command reports observations; it does not get to choose a
- * contradictory route.  Keep this independent of filesystem evidence so the
- * registry can reject an invalid producer payload before it is published.
- */
-export function validateScenarioValidityObservationCoherence(result) {
-  if (!result || typeof result !== "object" || !Array.isArray(result.summary)) {
-    throw new Error("scenario-validity observations require a summary[]");
-  }
-  const hasBlockingObservation = result.summary.some((entry) => {
-    if (!entry || !SCENARIO_VALIDITY_CLASSIFICATIONS.has(entry.classification)) {
-      throw new Error("scenario-validity summary contains an invalid classification");
-    }
-    return entry.classification !== "expected_fail";
-  });
-  const expectedResult = hasBlockingObservation ? "block" : "pass";
-  if (result.result !== expectedResult) {
-    throw new Error(`scenario-validity result must be ${expectedResult} for its observed summary`);
-  }
-  return result;
 }
 
 export function validateTestExecuteResultShape(result) {
@@ -231,28 +205,6 @@ export function validateCanonicalUpgradeEvidence({
   });
 }
 
-export const SCENARIO_VALIDITY_CLASSIFICATIONS = Object.freeze(new Set([
-  "expected_fail",
-  "unexpected_pass",
-  "invalid_test",
-  "skipped",
-  "not_run",
-]));
-const SCENARIO_VALIDITY_EVIDENCE_FIELDS = Object.freeze([
-  "test_file",
-  "test_name",
-  "command",
-  "raw_output_lines",
-]);
-const SCENARIO_VALIDITY_CLASSIFICATIONS_REQUIRING_TEST_FILE = Object.freeze(new Set([
-  "expected_fail",
-  "unexpected_pass",
-  "skipped",
-]));
-const MAX_SCENARIO_VALIDITY_RAW_OUTPUT_CHARS = 20 * 1024 * 1024;
-const MAX_SCENARIO_VALIDITY_SUMMARY_ENTRIES = 500;
-const SCENARIO_VALIDITY_TEST_FILE_RE = /\.(test|spec)\.(js|ts|mjs)$/;
-
 export class IntegrationArtifactFingerprintAuthority {
   constructor({ result, review }) {
     const resultFingerprint = result?.repairFingerprint;
@@ -372,6 +324,10 @@ export function validateTestExecuteResultV2(result) {
   for (const entry of result.summary) {
     if (typeof entry.id !== "string") throw new Error("summary[].id is required");
     if (!SUMMARY_RESULT_VALUES.includes(entry.result)) throw new Error(`summary[].result invalid for ${entry.id}`);
+    if (entry.result === "deferred") {
+      RequirementTestDeferredReceipt.fromJSON(entry.deferred_receipt);
+      continue;
+    }
     if (!entry.evidence || typeof entry.evidence !== "object") throw new Error(`summary[].evidence missing for ${entry.id}`);
     if (typeof entry.evidence.command !== "string" || entry.evidence.command.length === 0) {
       throw new Error(`summary[${entry.id}].evidence.command is required`);
@@ -418,132 +374,6 @@ function assertRequiredFields(value, fields, label) {
   for (const field of fields) {
     if (value[field] == null) throw new Error(`${label}.${field} is required`);
   }
-}
-
-function assertNonEmptyString(value, label) {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`${label} must be a non-empty string`);
-  }
-}
-
-function assertScenarioValidityEvidence(evidence, label) {
-  assertRequiredFields(evidence, SCENARIO_VALIDITY_EVIDENCE_FIELDS, label);
-  assertNonEmptyString(evidence.test_file, `${label}.test_file`);
-  assertNonEmptyString(evidence.test_name, `${label}.test_name`);
-  assertNonEmptyString(evidence.command, `${label}.command`);
-  assertRange(evidence.raw_output_lines, `${label}.raw_output_lines`);
-}
-
-function assertScenarioValidityTestFilePath(root, specDir, testFile, testDirectory = "tests") {
-  const testPath = path.resolve(root, testFile);
-  const testDir = path.join(specDir, testDirectory);
-  const relative = path.relative(testDir, testPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`test file must be under the resolved spec tests directory: ${testFile}`);
-  }
-  if (!SCENARIO_VALIDITY_TEST_FILE_RE.test(path.basename(testPath))) {
-    throw new Error(`test file must match scenario-validity test pattern: ${testFile}`);
-  }
-  return testPath;
-}
-
-function assertScenarioValiditySummaryEntry(entry) {
-  if (!entry || typeof entry !== "object") throw new Error("summary[] entry must be an object");
-  if (typeof entry.id !== "string" || entry.id.length === 0) throw new Error("summary[].id is required");
-}
-
-export function validateScenarioValidityResult(result, {
-  root,
-  specDir,
-  requirements = [],
-  rawText = "",
-  rawLines = [],
-  testFileSources = new Map(),
-  expectedRawOutputPath = null,
-  testDirectory = "tests",
-} = {}) {
-  validateScenarioValidityArtifactShape(result);
-  if (!result || typeof result !== "object") throw new Error("scenario-validity-result.json must be an object");
-  if (typeof root !== "string" || root.length === 0) throw new Error("root is required");
-  if (typeof specDir !== "string" || specDir.length === 0) throw new Error("specDir is required");
-  if (result.version !== "1") throw new Error(`scenario-validity-result.json version='${result.version}', expected '1'`);
-  if (typeof result.testSourceRevision !== "string" || !REPAIR_FINGERPRINT_PATTERN.test(result.testSourceRevision)) {
-    throw new Error("scenario-validity-result.json testSourceRevision must be a 64-character SHA-256 digest");
-  }
-  if (!Array.isArray(rawLines)) throw new Error("scenario-validity rawLines must be an array");
-  const hasRawEvidence = rawLines.length > 0 || (typeof rawText === "string" && rawText.length > 0);
-  if (rawLines.length === 0 && hasRawEvidence) {
-    rawLines = rawText.split(/\r?\n/);
-  }
-  if (hasRawEvidence && (typeof rawText !== "string" || rawText.length === 0)) {
-    rawText = rawLines.join("\n");
-  }
-  if (rawText.length > MAX_SCENARIO_VALIDITY_RAW_OUTPUT_CHARS) {
-    throw new Error(`scenario-validity raw output exceeds ${MAX_SCENARIO_VALIDITY_RAW_OUTPUT_CHARS} characters`);
-  }
-  if (typeof expectedRawOutputPath !== "string" || expectedRawOutputPath === "") {
-    throw new Error("scenario-validity expectedRawOutputPath is required");
-  }
-  const expectedRaw = expectedRawOutputPath;
-  if (result.raw_output_path !== expectedRaw) {
-    throw new Error(`raw_output_path must point to ${expectedRaw}`);
-  }
-  if (typeof result.command !== "string" || result.command.length === 0) {
-    throw new Error("command is required");
-  }
-  assertProcessMetadata(result.process);
-  if (result.result !== "pass" && result.result !== "block") {
-    throw new Error("result must be pass or block");
-  }
-  if (!Array.isArray(result.summary)) throw new Error("summary[] is required");
-  if (requirements.length > MAX_SCENARIO_VALIDITY_SUMMARY_ENTRIES) {
-    throw new Error(`requirements exceeds scenario-validity maximum ${MAX_SCENARIO_VALIDITY_SUMMARY_ENTRIES}`);
-  }
-  if (result.summary.length > MAX_SCENARIO_VALIDITY_SUMMARY_ENTRIES) {
-    throw new Error(`summary exceeds scenario-validity maximum ${MAX_SCENARIO_VALIDITY_SUMMARY_ENTRIES}`);
-  }
-
-  const expected = requirements.filter((r) => r.testable !== false).map((r) => r.id);
-  if (result.summary.length > expected.length) {
-    throw new Error("summary contains more entries than testable requirements");
-  }
-  const expectedSet = new Set(expected);
-  const seen = new Set();
-  const duplicates = [];
-  const unknown = [];
-  for (const entry of result.summary) {
-    assertScenarioValiditySummaryEntry(entry);
-    if (seen.has(entry.id)) duplicates.push(entry.id);
-    seen.add(entry.id);
-    if (!expectedSet.has(entry.id)) unknown.push(entry.id);
-  }
-  const missing = expected.filter((id) => !seen.has(id));
-  if (missing.length || unknown.length || duplicates.length) {
-    throw new Error(`summary membership invalid: missing=${missing.join(",")} unknown=${unknown.join(",")} duplicate=${duplicates.join(",")}`);
-  }
-
-  for (const entry of result.summary) {
-    if (!SCENARIO_VALIDITY_CLASSIFICATIONS.has(entry.classification)) {
-      throw new Error(`${entry.id}: classification invalid: ${entry.classification}`);
-    }
-    const evidence = entry.evidence;
-    assertScenarioValidityEvidence(evidence, `${entry.id}: evidence`);
-    if (hasRawEvidence && evidence.raw_output_lines.end_line > rawLines.length) {
-      throw new Error(`${entry.id}: raw_output_lines is outside raw output`);
-    }
-    if (SCENARIO_VALIDITY_CLASSIFICATIONS_REQUIRING_TEST_FILE.has(entry.classification)) {
-      const testPath = assertScenarioValidityTestFilePath(root, specDir, evidence.test_file, testDirectory);
-      const source = testFileSources.get(evidence.test_file) || testFileSources.get(testPath);
-      if (source && !source.includes(evidence.test_name)) {
-        throw new Error(`${entry.id}: test name not found in ${evidence.test_file}: ${evidence.test_name}`);
-      }
-    }
-    if (hasRawEvidence && !rawText.includes(entry.id)) {
-      throw new Error(`${entry.id}: raw output does not contain requirement id`);
-    }
-  }
-  validateScenarioValidityObservationCoherence(result);
-  return result;
 }
 
 function validateRegression(regression) {
@@ -1115,6 +945,7 @@ export function validateSummaryEvidence(summary, {
   rawLines,
   requirements = [],
   specDir = null,
+  deferredReceipts = [],
 }) {
   const expected = requirements.filter((r) => r.testable !== false).map((r) => r.id);
   const actual = summary.map((entry) => entry.id);
@@ -1124,10 +955,22 @@ export function validateSummaryEvidence(summary, {
   if (missing.length || unknown.length || duplicates.length) {
     throw new Error(`summary membership invalid: missing=${missing.join(",")} unknown=${unknown.join(",")} duplicate=${duplicates.join(",")}`);
   }
+  const deferredById = new Map(deferredReceipts.map((receipt) => [receipt.requirementId, receipt]));
+  if (deferredById.size !== deferredReceipts.length) throw new Error("deferred receipt membership contains duplicate requirements");
 
   for (const entry of summary) {
     if (typeof entry.id !== "string" || entry.id.trim().length === 0) {
       throw new Error("summary[].id must be a non-empty requirement id");
+    }
+    if (entry.result === "deferred") {
+      const entryReceipt = entry.deferred_receipt instanceof RequirementTestDeferredReceipt
+        ? entry.deferred_receipt
+        : RequirementTestDeferredReceipt.fromJSON(entry.deferred_receipt);
+      const receipt = deferredById.get(entry.id);
+      if (deferredReceipts.length > 0 && (!receipt || JSON.stringify(receipt.toJSON()) !== JSON.stringify(entryReceipt.toJSON()))) {
+        throw new Error(`${entry.id}: deferred receipt does not match canonical receipt`);
+      }
+      continue;
     }
     const evidence = entry.evidence;
     if (!evidence || typeof evidence !== "object") {

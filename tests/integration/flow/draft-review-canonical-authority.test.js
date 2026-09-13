@@ -27,6 +27,17 @@ describe("draft reopen canonical authority", () => {
   function createAt(targetStep, { issue = null, taskDocuments = [] } = {}) {
     root = createTmpDir("draft-reopen-authority-");
     const flowManager = makeFlowManager(root);
+    const effectiveTasks = targetStep === "test-generate" && taskDocuments.length === 0
+      ? [{
+        id: "T1",
+        title: "Exercise Requirement test generation",
+        goal: "Reach the Requirement test frontier.",
+        parent: null,
+        origin: "plan",
+        added_round: 0,
+        status: "pending",
+      }]
+      : taskDocuments;
     const fixture = new FlowAtStepFixture({
       flowManager,
       specId: SPEC_ID,
@@ -37,13 +48,15 @@ describe("draft reopen canonical authority", () => {
       issueSnapshot: issue === null ? null : `# Issue #${issue}\nCanonical body\n`,
       specRecord: {
         goal: "canonical authority",
-        requirements: taskDocuments.map((task) => ({
+        requirements: effectiveTasks.map((task) => ({
           id: `R-${task.id}`,
           desc: `Complete canonical Task ${task.id}.`,
           task_ids: [task.id],
+          testable: true,
+          preimplementation_test_expectation: "fail",
         })),
       },
-      taskDocuments,
+      taskDocuments: effectiveTasks,
       targetStep,
     }).create();
     return { flowManager, fixture };
@@ -55,7 +68,7 @@ describe("draft reopen canonical authority", () => {
   }
 
   it("reopens every pre-implementation authority leaf through the definition-owned recovery Activity", async () => {
-    for (const targetStep of ["draft-questions-review", "draft-coverage-review", "draft-gate", "spec-review", "test-review"]) {
+    for (const targetStep of ["draft-questions-review", "draft-coverage-review", "draft-gate", "spec-review", "test-generate"]) {
       if (root) removeTmpDir(root);
       const { flowManager } = createAt(targetStep);
       const result = await run(new RunReopenDraftCommand(), flowManager);
@@ -189,13 +202,13 @@ describe("draft reopen canonical authority", () => {
   });
 
   it("invalidates every downstream leaf without recreating a mutable root Flow blob", async () => {
-    const { flowManager } = createAt("test-review");
+    const { flowManager } = createAt("test-generate");
     const result = await run(new RunReopenDraftCommand(), flowManager);
     assert.equal(result.ok, true, JSON.stringify(result));
     const state = flowManager.loadReadOnly(SPEC_ID);
     const invalidated = flattenSteps(state.steps).filter((step) => step.status === "invalidated").map((step) => step.id);
     assert.deepEqual(result.data.resetSteps, ["draft", ...invalidated]);
-    assert.ok(invalidated.includes("test-review"));
+    assert.ok(invalidated.includes("test-generate"));
     assert.ok(invalidated.includes("final-regression"));
   });
 });

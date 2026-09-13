@@ -38,13 +38,21 @@ function aggregate(requirements, summary) {
     if (entry.result === "not_applicable") {
       return { desc: r.desc, status: "not_applicable", note: entry.reason || "no_tests_declared" };
     }
+    if (entry.result === "deferred") {
+      return {
+        desc: r.desc,
+        status: "deferred",
+        note: `Requirement test work deferred by ${entry.deferred_receipt.sourceArtifact}`,
+      };
+    }
     return { desc: r.desc, status: "not_done", note: entry.error || entry.evidence?.test_name || "" };
   });
 
   const total = reqs.length;
   const done = reqs.filter((x) => x.status === "done").length;
   const notApplicable = reqs.filter((x) => x.status === "not_applicable").length;
-  const notDone = total - done - notApplicable;
+  const deferred = reqs.filter((x) => x.status === "deferred").length;
+  const notDone = total - done - notApplicable - deferred;
   const rate = total > 0 ? done / total : 0;
 
   return {
@@ -56,6 +64,7 @@ function aggregate(requirements, summary) {
       partial: 0,
       not_done: notDone,
       not_applicable_count: notApplicable,
+      deferred_count: deferred,
       na_count: naCount,
       not_testable_count: naCount,
       rate: Math.round(rate * 100) / 100,

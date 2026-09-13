@@ -24,7 +24,10 @@ import {
   writePromptDispatchStubAgentScript,
   stubAgentConfig,
 } from "../../support/fakes/stub-agent.js";
-import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
+import {
+  CanonicalFlowFixture,
+  promoteCanonicalRequirementTest,
+} from "../../support/infrastructure/flow-setup.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import {
   FlowArtifactAttemptHistory,
@@ -92,43 +95,16 @@ function publishAttemptArtifact(flowManager, specId, nodeId, logicalKey, payload
 }
 
 function publishIntegrationDesignArtifacts(fixture, flowManager, specId, requirementIds) {
-  fixture.activate("test");
+  fixture.settleBefore("test-generate");
   for (const id of requirementIds) {
-    flowManager.publishArtifacts({
+    promoteCanonicalRequirementTest({
+      flowManager,
       specId,
-      nodeId: "test",
-      artifactWrites: [{
-        logicalKey: "tests.source",
-        parameters: { testPath: `${id}.test.js` },
-        mediaType: "text/javascript",
-        bytes: Buffer.from(`// spec: ${id}\nimport test from "node:test";\ntest("${id}: validates integration gate trust", () => {});\n`),
-      }],
+      requirementId: id,
+      testPath: `${id}.test.js`,
+      source: `// spec: ${id}\nimport test from "node:test";\ntest("${id}: validates integration gate trust", () => {});\n`,
     });
   }
-  fixture.settle("test").activate("scenario-validity", { settlePredecessors: false });
-  const testSourceRevision = new CanonicalTestArtifactStore({
-    flowManager,
-    state: fixture.state(),
-  }).testSourceRevision().digest;
-  publishAttemptArtifact(flowManager, specId, "scenario-validity", "scenario.validity", {
-    version: "1",
-    testSourceRevision,
-    command: "node --test artifacts/tests/*.test.js",
-    process: { started: true, exitCode: 0, signal: null, timedOut: false, spawnError: null },
-    result: "pass",
-    raw_output_path: flowManager.specLocation(specId).relativeArtifact("scenario.validity.raw-log"),
-    summary: [],
-  });
-  fixture.settle("scenario-validity").activate("test-review", { settlePredecessors: false });
-  publishAttemptArtifact(flowManager, specId, "test-review", "test.review", {
-    version: 1,
-    phase: "test",
-    verdict: "PASS",
-    summary: "Canonical test review passed.",
-    blockingFindings: [],
-    nonBlockingImprovements: [],
-  });
-  fixture.settle("test-review");
 }
 
 function publishIntegrationExecutionArtifacts(fixture, flowManager, specId, requirementIds) {
@@ -253,6 +229,9 @@ function setupFixture(tmp, {
     requirements: (specJson.requirements ?? []).map((requirement) => ({
       ...requirement,
       task_ids: requirement.task_ids ?? [gateTask.id],
+      ...(integrationTrustRequirementIds?.includes(requirement.id)
+        ? { testable: true, preimplementation_test_expectation: "fail" }
+        : {}),
     })),
   };
   const fixture = new CanonicalFlowFixture({
@@ -277,6 +256,17 @@ function setupFixture(tmp, {
   }
   fixture.settle("implement");
 
+  const taskFrontier = flowManager.canonicalState(SPEC_ID);
+  assert.equal(
+    taskFrontier.nextAction()?.nodeId,
+    `${gateTask.id}-impl`,
+    `Task implementation must follow Flow implementation: ${JSON.stringify(taskFrontier.nextAction())}`,
+  );
+  assert.equal(
+    taskFrontier.definition.nextExecutableLeaf(taskFrontier.root)?.id,
+    `${gateTask.id}-impl`,
+    "Definition and next-action must agree on the Task frontier",
+  );
   fixture.activate(`${gateTask.id}-impl`, { settlePredecessors: false });
   completeCanonicalSourceHandoff({
     root: tmp, manager: flowManager, specId: SPEC_ID, stepId: "task-impl", taskId: gateTask.id,
@@ -465,7 +455,6 @@ describe("gate-impl integration (spec 202)", () => {
       id: "R1",
       desc: "Preserve delegated `resultField` behavior",
       priority: "must",
-      status: "pending",
     }];
     specJson.acceptance_criteria = ["AC1 (R1): regression evidence keeps `resultField` unchanged"];
     specJson.implementationTargets = ["tests/dummy.test.js"];
@@ -556,9 +545,9 @@ describe("gate-impl integration (spec 202)", () => {
       specJson: { ...minimalSpecJson(), requirements: [{ id: "   ", desc: "no usable id" }] },
       integrationTrustRequirementIds: ["REQ-FALLBACK"],
       stubResponse: buildPassResponseJson("REQ-FALLBACK"),
-    }), /canonical requirement\[0\]\.id is required/);
+    }), /requirements\[0\]\.id: must match pattern/);
     const manager = new FlowManager({ root: tmp, mainRoot: tmp, inWorktree: false });
-    assert.equal(manager.loadReadOnly(SPEC_ID).currentNodeId, "T-1-impl");
+    assert.equal(manager.loadReadOnly(SPEC_ID).currentNodeId, "approval");
     assert.deepEqual(manager.taskMutationLineages({ specId: SPEC_ID, taskId: "T-1" }), []);
     assert.equal(manager.artifactCatalog(SPEC_ID).artifacts.some((entry) => entry.logicalKey === "file.map"), false);
   });

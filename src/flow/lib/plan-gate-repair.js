@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { CanonicalGateInputStore } from "./canonical-gate-artifacts.js";
-import { CanonicalTestSourceRevision } from "./canonical-test-artifacts.js";
 import { canonicalRepairAttemptOwner } from "./repair-attempt-lineage.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -169,12 +168,6 @@ const ROUTES = Object.freeze([
     targetStepId: "spec",
     resetStepIds: ["spec", "spec-review", "spec-triage", "spec-repair", "spec-gate"],
   }),
-  new PlanGateRepairRoute({
-    phase: "test",
-    gateStepId: "scenario-validity",
-    targetStepId: "test",
-    resetStepIds: ["test", "scenario-validity"],
-  }),
 ]);
 
 const ROUTE_BY_PHASE = new Map(ROUTES.map((route) => [route.phase, route]));
@@ -184,7 +177,6 @@ const EVIDENCE_BY_PHASE = new Map([
   ["draft", Object.freeze({ logicalKey: "draft.gate", failureCode: null })],
   ["spec", Object.freeze({ logicalKey: "spec.gate", failureCode: null })],
   ["task-impl", Object.freeze({ logicalKey: "task.gate", failureCode: null })],
-  ["test", Object.freeze({ logicalKey: "scenario.validity", failureCode: "SCENARIO_VALIDITY_REJECTED" })],
 ]);
 
 export function planGateRepairRouteForPhase(phase) {
@@ -282,49 +274,6 @@ function matchingGateIssueLogEntry(entry, route, gateResult) {
     && entry.observations?.some((observation) => observation?.severity === "blocking") === true;
 }
 
-export function scenarioValidityBlockingEntries(summary) {
-  if (!Array.isArray(summary)) throw new Error("scenario-validity summary must be an array");
-  return Object.freeze(summary
-    .map((entry, index) => ({ entry, index }))
-    .map((value) => Object.freeze(value))
-    .filter(({ entry }) => entry.classification !== "expected_fail"));
-}
-
-export function scenarioValidityRepairObservations(blocking) {
-  if (!Array.isArray(blocking)) throw new Error("scenario-validity blocking entries must be an array");
-  return blocking
-    .slice(0, MAX_OBSERVATIONS)
-    .map(({ entry, index }) => ({
-      kind: "violation",
-      failureMode: entry.classification,
-      requirementRef: entry.id,
-      where: {
-        file: entry.evidence.test_file,
-        locator: entry.evidence.test_name,
-      },
-      observed: `Scenario validity classified ${entry.id} as ${entry.classification} before implementation.`,
-      severity: "blocking",
-      refs: [`scenario.validity#summary.${index}`],
-    }));
-}
-
-function matchingScenarioIssueLogEntry(entry, route, payload) {
-  let observations;
-  try {
-    observations = scenarioValidityRepairObservations(scenarioValidityBlockingEntries(payload.summary));
-  } catch {
-    return false;
-  }
-  if (observations.length === 0) return false;
-  return typeof entry?.issueLogId === "string"
-    && entry.issueLogId !== ""
-    && entry.step === route.gateStepId
-    && entry.phase === route.phase
-    && entry.trigger === "scenario-validity found a test-design blocker before implementation"
-    && entry.sourceArtifact === "scenario.validity"
-    && stableStringify(entry.observations) === stableStringify(observations);
-}
-
 /**
  * Resolve the single durable source entry for a currently failed plan gate.
  *
@@ -343,9 +292,7 @@ function latestPlanGateRepairIssueLogEntry({ state, issueLog, gateResult, catalo
   if (!isPlanGateRepairEligibleFailure(state, route)) return null;
   if (!matchingCurrentGateResult({ state, route, gateResult, catalog, activities })) return null;
   return [...issueLog.entries].reverse().find((entry) => (
-    route.phase === "test"
-      ? matchingScenarioIssueLogEntry(entry, route, gateResult.payload)
-      : matchingGateIssueLogEntry(entry, route, gateResult)
+    matchingGateIssueLogEntry(entry, route, gateResult)
   )) ?? null;
 }
 
@@ -408,10 +355,6 @@ export function inspectCanonicalPlanGateRepair({ flowManager, state } = {}) {
     activities,
   });
   if (source === null) return null;
-  if (route.phase === "test") {
-    const revision = CanonicalTestSourceRevision.fromCatalog({ state, catalog, activities });
-    if (source.testRevisionDigest !== revision.digest) return null;
-  }
   return new CanonicalPlanGateRepairEvidence({ route, issueLog, source });
 }
 
@@ -551,27 +494,6 @@ export class PlanGateRepairRecord {
     if (!Array.isArray(activities)) throw new Error("canonical plan gate repair requires an Activity ledger");
     const document = issueLogDocument(issueLog);
     const rewind = canonicalRepairAttemptOwner({ state, activities, targetStepId });
-    if (rewind?.transition?.operation === "repair_scenario_validity") {
-      if (!Array.isArray(rewind.references?.repairs) || rewind.references.repairs.length !== 1) {
-        throw new Error("canonical scenario repair Activity requires exactly one repair reference");
-      }
-      const reference = rewind.references.repairs[0];
-      const source = document.entries.find((candidate) => candidate?.issueLogId === reference?.id) ?? null;
-      if (source === null || reference.label !== source.issueLogId) {
-        throw new Error("canonical scenario repair Activity references missing issue-log evidence");
-      }
-      const record = PlanGateRepairRecord.create({
-        state,
-        phase: "test",
-        issueLogEntry: source,
-        requestedAt: source.timestamp,
-      });
-      record.assertFlow(state);
-      if (record.targetStepId !== targetStepId) {
-        throw new Error("canonical scenario repair target is inconsistent");
-      }
-      return record;
-    }
     if (rewind?.transition?.operation !== "plan_gate_repair") return null;
     if (!Array.isArray(rewind.references?.repairs) || rewind.references.repairs.length !== 1) {
       throw new Error("canonical plan gate repair Activity requires exactly one repair reference");

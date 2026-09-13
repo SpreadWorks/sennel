@@ -3,8 +3,6 @@ const ENTRY_OPERATIONS = new Set([
   "start_attempt",
   "rewind",
   "rewind_test_evidence",
-  "repair_test_review",
-  "repair_scenario_validity",
   "plan_gate_repair",
   "recover_attempt",
   ...RETRY_OPERATIONS,
@@ -18,8 +16,7 @@ export class RepairAttemptLineageError extends Error {
 }
 
 function entryTargetsStep(activity, targetStepId) {
-  return activity.nodeId === targetStepId
-    || activity.transition.operation === "repair_scenario_validity";
+  return activity.nodeId === targetStepId;
 }
 
 function matchingEntry({ activities, attempt, targetStepId }) {

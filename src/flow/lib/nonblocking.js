@@ -47,8 +47,6 @@ const CANONICAL_EVIDENCE_KEYS = Object.freeze({
   "draft-coverage-review": "draft.coverage.review",
   "draft-gate": "draft.gate",
   "spec-gate": "spec.gate",
-  "scenario-validity": "scenario.validity",
-  "test-review": "test.review",
   "test-result-review": "test.result.review",
   "task-review": "task.review",
   "task-gate": "task.gate",

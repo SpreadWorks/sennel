@@ -191,7 +191,7 @@ export function buildReqToFilesMap(fileHeaders, specDir) {
  * @param {{ specDir: string, spec: { requirements?: Array<{id, desc, testable?}> } }} args
  * @returns canonical ValidationResult
  */
-export function validateTestHeaders({ specDir, spec }) {
+function validateHeaderFiles({ specDir, spec, coverageRequirementIds = null, selectedFileHeaders = collectFileHeaders(specDir) }) {
   const requirements = Array.isArray(spec?.requirements) ? spec.requirements : [];
   const validReqIds = new Set(requirements.map((r) => r.id));
   const testableIds = new Set(
@@ -200,8 +200,6 @@ export function validateTestHeaders({ specDir, spec }) {
   const nonTestableIds = new Set(
     requirements.filter((r) => r.testable === false).map((r) => r.id),
   );
-
-  const fileHeaders = collectFileHeaders(specDir);
 
   const result = {
     ok: true,
@@ -219,7 +217,7 @@ export function validateTestHeaders({ specDir, spec }) {
 
   const declaredIds = new Set();
 
-  for (const [file, info] of fileHeaders) {
+  for (const [file, info] of selectedFileHeaders) {
     const rel = path.relative(specDir, file);
     const { scan } = info;
     if (scan.kind === "missing") {
@@ -262,8 +260,11 @@ export function validateTestHeaders({ specDir, spec }) {
     }
   }
 
-  // Coverage: every testable requirement must be declared in at least one file
-  for (const req of requirements) {
+  // Coverage: every selected testable requirement must be declared in at least one file.
+  const coverageRequirements = coverageRequirementIds === null
+    ? requirements
+    : requirements.filter((req) => coverageRequirementIds.has(req.id));
+  for (const req of coverageRequirements) {
     if (req.testable === false) continue;
     if (!declaredIds.has(req.id)) {
       result.uncoveredRequirements.push({ id: req.id, desc: req.desc });
@@ -282,6 +283,186 @@ export function validateTestHeaders({ specDir, spec }) {
     && result.testNoHeader.length === 0;
 
   return result;
+}
+
+/**
+ * Validate all testable requirements in a spec. This is the original global
+ * validation mode; its result shape and coverage semantics are intentionally
+ * unchanged.
+ */
+export function validateTestHeaders({ specDir, spec }) {
+  return validateHeaderFiles({ specDir, spec });
+}
+
+function requiredRequirementId(value, label) {
+  if (typeof value !== "string" || !/^R\d+$/.test(value)) {
+    throw new Error(`${label} must be a requirement id`);
+  }
+  return value;
+}
+
+/**
+ * The result of validating a worker bundle bound to one primary Requirement.
+ * Secondary Requirements are checked for normal header integrity, but never
+ * contribute to primary completion.
+ */
+export class AssignedRequirementTestValidation {
+  constructor({ assignedRequirementId, secondaryRequirementIds = [], validationResult, recoverableIssues = [], assignedCovered = false }) {
+    this.assignedRequirementId = requiredRequirementId(assignedRequirementId, "assignedRequirementId");
+    if (!Array.isArray(secondaryRequirementIds)
+      || !secondaryRequirementIds.every((id) => typeof id === "string" && /^R\d+$/.test(id))) {
+      throw new Error("secondaryRequirementIds must contain requirement ids");
+    }
+    const secondary = [...new Set(secondaryRequirementIds)];
+    if (secondary.includes(this.assignedRequirementId)) {
+      throw new Error("secondaryRequirementIds must not contain assignedRequirementId");
+    }
+    if (!validationResult || typeof validationResult !== "object") {
+      throw new Error("validationResult is required");
+    }
+    if (!Array.isArray(recoverableIssues)) {
+      throw new Error("recoverableIssues must be an array");
+    }
+    this.secondaryRequirementIds = Object.freeze(secondary);
+    this.validationResult = validationResult;
+    this.recoverableIssues = Object.freeze(recoverableIssues);
+    if (typeof assignedCovered !== "boolean") throw new Error("assignedCovered must be boolean");
+    this.assignedCovered = assignedCovered;
+    Object.freeze(this);
+  }
+
+  get ok() {
+    return this.validationResult.ok && this.recoverableIssues.length === 0;
+  }
+
+  get result() {
+    return this.validationResult;
+  }
+
+  get recoverableIssueCodes() {
+    return this.recoverableIssues.map((issue) => issue.code);
+  }
+
+  toJSON() {
+    return {
+      assignedRequirementId: this.assignedRequirementId,
+      secondaryRequirementIds: [...this.secondaryRequirementIds],
+      assignedCovered: this.assignedCovered,
+      validationResult: this.validationResult,
+      recoverableIssues: [...this.recoverableIssues],
+      recoverableIssueCodes: this.recoverableIssueCodes,
+      ok: this.ok,
+    };
+  }
+}
+
+export class AssignedRequirementRecoverableIssue {
+  constructor({ code, requirementId, file = null }) {
+    if (!["assigned_requirement_missing_header", "assigned_requirement_missing_test_name", "assigned_requirement_uncovered"].includes(code)) {
+      throw new Error(`invalid assigned requirement issue code: ${code}`);
+    }
+    if (typeof requirementId !== "string" || !/^R\d+$/.test(requirementId)) {
+      throw new Error("requirementId must be a requirement id");
+    }
+    if (file !== null && (typeof file !== "string" || file.length === 0)) {
+      throw new Error("file must be a non-empty string or null");
+    }
+    this.code = code;
+    this.requirementId = requirementId;
+    this.file = file;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return { code: this.code, requirementId: this.requirementId, file: this.file };
+  }
+}
+
+function canonicalCandidatePath(candidatePath) {
+  if (typeof candidatePath !== "string"
+    || candidatePath.length === 0
+    || candidatePath.includes("\\")
+    || candidatePath.startsWith("/")
+    || candidatePath.split("/").some((part) => part === "" || part === "." || part === "..")
+    || !/^tests\/(?:.+\/)?[^/]+\.(?:test|spec)\.(?:js|ts|mjs)$/.test(candidatePath)) {
+    throw new Error(`candidate path must be a canonical repository-relative spec test path: ${candidatePath}`);
+  }
+  return candidatePath;
+}
+
+/**
+ * Validate a test bundle scoped to its assigned primary Requirement.
+ * Structural checks are shared with global validation; only coverage is
+ * narrowed to the assigned Requirement.
+ */
+export function validateAssignedRequirementTestHeaders({
+  specDir,
+  spec,
+  assignedRequirementId,
+  secondaryRequirementIds = [],
+  candidatePaths,
+}) {
+  const assignedId = requiredRequirementId(assignedRequirementId, "assignedRequirementId");
+  const secondaryIds = [...new Set(secondaryRequirementIds)];
+  const requirements = Array.isArray(spec?.requirements) ? spec.requirements : [];
+  const assigned = requirements.find((req) => req.id === assignedId);
+  if (!assigned) throw new Error(`assigned requirement ${assignedId} is not defined`);
+  if (assigned.testable === false) throw new Error(`assigned requirement ${assignedId} is not testable`);
+  const knownIds = new Set(requirements.map((req) => req.id));
+  for (const id of secondaryIds) {
+    requiredRequirementId(id, "secondaryRequirementId");
+    if (!knownIds.has(id)) throw new Error(`secondary requirement ${id} is not defined`);
+  }
+
+  if (!Array.isArray(candidatePaths) || candidatePaths.length === 0) {
+    throw new Error("candidatePaths must be a non-empty array");
+  }
+  const candidates = candidatePaths.map(canonicalCandidatePath);
+  if (new Set(candidates).size !== candidates.length) throw new Error("candidatePaths must not contain duplicates");
+  const fileHeaders = new Map();
+  for (const candidate of candidates) {
+    const file = path.join(specDir, candidate);
+    const testsRoot = path.join(specDir, "tests");
+    const resolved = path.resolve(file);
+    if (!resolved.startsWith(`${path.resolve(testsRoot)}${path.sep}`) || !fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+      throw new Error(`candidate path does not identify an existing spec test file: ${candidate}`);
+    }
+    const scan = scanFileHeader(resolved);
+    fileHeaders.set(resolved, {
+      headerIds: scan.kind === "valid" ? scan.ids : [],
+      testNameIds: extractTestNameReqIds(resolved),
+      scan,
+    });
+  }
+
+  const validationResult = validateHeaderFiles({
+    specDir,
+    spec,
+    coverageRequirementIds: new Set([assignedId]),
+    selectedFileHeaders: fileHeaders,
+  });
+  const recoverableIssues = [];
+  let assignedCovered = false;
+  for (const [file, info] of fileHeaders) {
+    const rel = path.relative(specDir, file);
+    if (info.headerIds.includes(assignedId) && info.testNameIds.includes(assignedId)) assignedCovered = true;
+    if (info.headerIds.includes(assignedId) && !info.testNameIds.includes(assignedId)) {
+      recoverableIssues.push(new AssignedRequirementRecoverableIssue({ code: "assigned_requirement_missing_test_name", requirementId: assignedId, file: rel }));
+    }
+    if (!info.headerIds.includes(assignedId) && info.testNameIds.includes(assignedId)) {
+      recoverableIssues.push(new AssignedRequirementRecoverableIssue({ code: "assigned_requirement_missing_header", requirementId: assignedId, file: rel }));
+    }
+  }
+  if (!assignedCovered) {
+    recoverableIssues.push(new AssignedRequirementRecoverableIssue({ code: "assigned_requirement_uncovered", requirementId: assignedId }));
+  }
+  return new AssignedRequirementTestValidation({
+    assignedRequirementId: assignedId,
+    secondaryRequirementIds: secondaryIds,
+    validationResult,
+    recoverableIssues,
+    assignedCovered,
+  });
 }
 
 /**

@@ -25,12 +25,10 @@ import {
   NonGateTargetBinding,
   NonGateTransitionFacts,
   NonGateTransitionSelection,
-  ScenarioValidityStepFacts,
   TestExecuteStepFacts,
   TestResultReviewStepFacts,
   resolveNonGateTransition,
   nonGateNonblockingEligibilityForDecision,
-  scenarioValidityTransitionDefinition,
   testExecuteTransitionDefinition,
   testResultReviewTransitionDefinition,
 } from "../../../src/flow/definition.js";
@@ -43,10 +41,7 @@ import {
 } from "../../../src/flow/lib/non-gate-transition-application.js";
 import { readCurrentNonGateTransitionFacts } from "../../../src/flow/lib/non-gate-transition-facts.js";
 import { admitTestChainDirectExecution, readCurrentTestChainTransitionFacts } from "../../../src/flow/lib/test-chain-transition-facts.js";
-import { CanonicalTestSourceProvenanceError } from "../../../src/flow/lib/canonical-test-artifacts.js";
 import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
-import { validateScenarioValidityArtifactShape } from "../../../src/flow/lib/test-artifacts.js";
-import RunScenarioValidityCommand from "../../../src/flow/lib/run-scenario-validity.js";
 import RunTestExecuteCommand from "../../../src/flow/lib/run-test-execute.js";
 import RunTestResultReviewCommand from "../../../src/flow/lib/run-test-result-review.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
@@ -61,13 +56,18 @@ const finalizedTestSourceDigest = createHash("sha256")
 function finalizedTestSourceSnapshotEntries() {
   return {
     activity: {
-      id: "test-source-confirmed", attemptId: "test-attempt-1", sequence: 1, nodeId: "test",
-      type: "result_confirmed", transition: { operation: "confirm_attempt", nodeId: "test", status: "done" },
+      id: "test-source-confirmed", attemptId: "test-attempt-1", sequence: 1, nodeId: "test-gate",
+      type: "result_confirmed",
+      transition: {
+        operation: "advance_requirement_test_lifecycle",
+        nodeId: "test-gate",
+        requirementTestLifecycle: { disposition: "promote" },
+      },
       result: { outcome: "passed", confirmedAt: "2026-08-24T00:00:00.000Z" },
     },
     descriptor: {
       logicalKey: "tests.source", relativePath: "artifacts/tests/fixture.test.js", hash: testSourceHash,
-      size: 1, activityId: "test-source-confirmed", slot: { publicationStep: "test" },
+      size: 1, activityId: "test-source-confirmed", slot: { publicationStep: "test-gate" },
     },
   };
 }
@@ -195,16 +195,8 @@ function flowManagerFor(source) {
 }
 
 describe("definition-owned non-Gate transition boundary", () => {
-  it("keeps scenario and test-result advisory routes in the Definition-owned behavior table", () => {
+  it("keeps the test-result advisory route in the Definition-owned behavior table", () => {
     const cases = [
-      [
-        "scenario-validity",
-        scenarioValidityTransitionDefinition,
-        new ScenarioValidityStepFacts({
-          result: "pass",
-          process: { started: false, exitCode: null, signal: null, timedOut: false, spawnError: "provider unavailable" },
-        }),
-      ],
       [
         "test-result-review",
         testResultReviewTransitionDefinition,
@@ -277,13 +269,8 @@ describe("definition-owned non-Gate transition boundary", () => {
     }
   });
 
-  it("keeps the three test-chain route tables in Definition", () => {
+  it("keeps the remaining test-chain route tables in Definition", () => {
     const scenarios = [
-      ["scenario-validity", scenarioValidityTransitionDefinition, new ScenarioValidityStepFacts({ result: "pass", rawAvailable: true }), true, false, "advance"],
-      ["scenario-validity", scenarioValidityTransitionDefinition, new ScenarioValidityStepFacts({ result: "block", rawAvailable: true, blockingEvidence: [{ classification: "invalid_test" }] }), true, false, "repair"],
-      ["scenario-validity", scenarioValidityTransitionDefinition, new ScenarioValidityStepFacts({ result: "block", rawAvailable: true, blockingEvidence: [{ classification: "unexpected_pass" }] }), true, false, "repair"],
-      ["scenario-validity", scenarioValidityTransitionDefinition, new ScenarioValidityStepFacts({ result: "block", rawAvailable: true, blockingEvidence: [{ classification: "unexpected_pass" }] }), true, true, "repair"],
-      ["scenario-validity", scenarioValidityTransitionDefinition, new ScenarioValidityStepFacts({ result: "block", rawAvailable: true, blockingEvidence: [{ classification: "unexpected_pass" }], process: { started: false, exitCode: null, signal: null, timedOut: false, spawnError: "fixture" } }), true, false, "external-blocked"],
       ["test-execute", testExecuteTransitionDefinition, new TestExecuteStepFacts({ rawAvailable: true }), true, false, "advance"],
       ["test-execute", testExecuteTransitionDefinition, new TestExecuteStepFacts({ rawAvailable: true, process: { started: false, exitCode: null, signal: null, timedOut: false, spawnError: "fixture" } }), true, false, "external-blocked"],
       ["test-result-review", testResultReviewTransitionDefinition, new TestResultReviewStepFacts({ verdict: "pass", rawAvailable: true, checkedItems: [{ result: "pass" }] }), true, false, "advance"],
@@ -318,17 +305,7 @@ describe("definition-owned non-Gate transition boundary", () => {
     }
   });
 
-  it("rejects contradictory typed scenario and review observations in their constructors", () => {
-    assert.throws(
-      () => new ScenarioValidityStepFacts({
-        result: "pass", blockingEvidence: [{ classification: "invalid_test" }],
-      }),
-      /result must match its blocking observations/,
-    );
-    assert.throws(
-      () => new ScenarioValidityStepFacts({ result: "block", blockingEvidence: [] }),
-      /result must match its blocking observations/,
-    );
+  it("rejects contradictory typed review observations in their constructors", () => {
     assert.throws(
       () => new TestResultReviewStepFacts({ verdict: "pass", checkedItems: [{ result: "fail" }] }),
       /verdict must match its checked observations/,
@@ -336,21 +313,6 @@ describe("definition-owned non-Gate transition boundary", () => {
     assert.throws(
       () => new TestResultReviewStepFacts({ verdict: "fail", checkedItems: [{ result: "pass" }] }),
       /verdict must match its checked observations/,
-    );
-  });
-
-  it("rejects process metadata that typed facts cannot represent at the artifact schema boundary", () => {
-    assert.throws(
-      () => validateScenarioValidityArtifactShape({
-        version: "1",
-        testSourceRevision: "a".repeat(64),
-        raw_output_path: "steps/scenario-validity/output.log",
-        command: "node --test",
-        process: { started: true, exitCode: -1, signal: null, timedOut: false, spawnError: null },
-        result: "pass",
-        summary: [],
-      }),
-      /process\.exitCode: minimum 0/,
     );
   });
 
@@ -444,21 +406,6 @@ describe("definition-owned non-Gate transition boundary", () => {
       }, decision);
       assert.equal(effects, 0);
     }
-    const tooling = resolveNonGateTransition(facts({
-      stepId: "scenario-validity",
-      producer: new NonGateProducerOwnership({ runId: "run-9", specId: "009-non-gate-transition", activityId: "activity-9", stepId: "scenario-validity", attempt: { id: "attempt-9", sequence: 9 } }),
-      target: new NonGateTargetBinding({ runId: "run-9", specId: "009-non-gate-transition", stepId: "scenario-validity", attempt: { id: "attempt-9", sequence: 9 } }),
-      catalogPublication: new NonGateCatalogPublication({ runId: "run-9", specId: "009-non-gate-transition", stepId: "scenario-validity", attemptId: "attempt-9", sequence: 9, producerActivityId: "activity-9", artifactId: "fixture.result.9", fingerprint: "f".repeat(64) }),
-      sourcePublication: new NonGateSourcePublication({ runId: "run-9", specId: "009-non-gate-transition", stepId: "scenario-validity", attemptId: "attempt-9", sequence: 9, producerActivityId: "activity-9", artifactId: "fixture.result.9", fingerprint: "f".repeat(64) }),
-      completion: new NonGateCompletionFacts({ completed: true }),
-      stepFacts: new ScenarioValidityStepFacts({ result: "block", rawAvailable: true, blockingEvidence: [{ classification: "unexpected_pass" }], process: { started: false, exitCode: null, signal: null, timedOut: false, spawnError: "fixture" } }),
-    }), scenarioValidityTransitionDefinition);
-    const failures = [];
-    applyNonGateTransitionDecision({
-      setStepStatus() {}, incrementRetry() { throw new Error("tooling must not increment semantic retry"); },
-      failCurrentAttempt(action) { failures.push(action.toJSON()); },
-    }, tooling);
-    assert.deepEqual(failures.map((entry) => [entry.category, entry.retryKind, entry.retryable]), [["tooling", null, false]]);
   });
 
   it("makes nonblocking and recovery facts available only to the Step Definition", () => {
@@ -546,7 +493,7 @@ describe("definition-owned non-Gate transition boundary", () => {
   });
 
   it("admits only an unobserved current test-chain execute Action", () => {
-    const stepId = "scenario-validity";
+    const stepId = "test-execute";
     const snapshot = {
       runId: "run-9", specId: "009-non-gate-transition", stepId, revision: "state-revision-9",
       attempt: { id: "attempt-9", sequence: 9 }, activities: [], catalog: [],
@@ -560,7 +507,7 @@ describe("definition-owned non-Gate transition boundary", () => {
     const published = {
       ...snapshot,
       activities: [{ id: "published", attemptId: "attempt-9", sequence: 9, nodeId: stepId }],
-      catalog: [{ logicalKey: "scenario.validity", activityId: "published" }],
+      catalog: [{ logicalKey: "test.execute", activityId: "published" }],
     };
     const blockedFacts = facts({
       stepId,
@@ -568,24 +515,25 @@ describe("definition-owned non-Gate transition boundary", () => {
       target: new NonGateTargetBinding({ runId: "run-9", specId: snapshot.specId, stepId, attempt: snapshot.attempt }),
       catalogPublication: new NonGateCatalogPublication({ runId: "run-9", specId: snapshot.specId, stepId, attemptId: "attempt-9", sequence: 9, producerActivityId: "published", artifactId: "result", fingerprint: "f".repeat(64) }),
       sourcePublication: new NonGateSourcePublication({ runId: "run-9", specId: snapshot.specId, stepId, attemptId: "attempt-9", sequence: 9, producerActivityId: "published", artifactId: "result", fingerprint: "f".repeat(64) }),
-      stepFacts: new ScenarioValidityStepFacts({ result: "block", blockingEvidence: [{ classification: "invalid_test" }] }),
+      completion: new NonGateCompletionFacts({ partial: true }),
+      stepFacts: new TestExecuteStepFacts({ rawAvailable: false }),
     });
     assert.throws(() => admitTestChainDirectExecution({
       flowManager: { ...manager, readCanonicalTransitionSnapshot: () => published }, specId: snapshot.specId, stepId,
       readFacts: () => blockedFacts,
-    }), /Definition-selected repair/);
+    }), /Definition-selected blocked/);
     assert.equal(workerStarts, 0);
   });
 
   it("rejects an unobserved failed Attempt before a worker starts when Definition selected blocked", () => {
-    const stepId = "scenario-validity";
+    const stepId = "test-execute";
     const snapshot = {
       runId: "run-10", specId: "010-non-gate-blocked", stepId, revision: "state-revision-10",
       state: {
         schemaRevision: 3, runId: "run-10", specId: "010-non-gate-blocked", current: [stepId],
         attempt: {
           id: "attempt-10", sequence: 10,
-          failure: { category: "semantic", code: "SCENARIO_VALIDITY_REJECTED" },
+          failure: { category: "semantic", code: "TEST_EXECUTE_REJECTED" },
         },
       },
       attempt: { id: "attempt-10", sequence: 10 }, activities: [], catalog: [],
@@ -604,7 +552,6 @@ describe("definition-owned non-Gate transition boundary", () => {
 
   it("keeps legacy route fields and route construction out of non-Gate producers and consumers", () => {
     const sources = [
-      "../../../src/flow/lib/run-scenario-validity.js",
       "../../../src/flow/lib/run-test-execute.js",
       "../../../src/flow/lib/run-test-result-review.js",
       "../../../src/flow/lib/run-review.js",
@@ -635,7 +582,6 @@ describe("definition-owned non-Gate transition boundary", () => {
   it("rejects actual test-chain commands before their worker/process boundary", async () => {
     const attempts = [];
     for (const [stepId, Command, command] of [
-      ["scenario-validity", RunScenarioValidityCommand, new RunScenarioValidityCommand({ scenarioTestExecutor: async () => { attempts.push(stepId); return []; } })],
       ["test-execute", RunTestExecuteCommand, new RunTestExecuteCommand()],
       ["test-result-review", RunTestResultReviewCommand, new RunTestResultReviewCommand()],
     ]) {
@@ -643,7 +589,7 @@ describe("definition-owned non-Gate transition boundary", () => {
         runId: "run-9", specId: "009-non-gate-transition", stepId, revision: "state-revision-9",
         attempt: { id: "attempt-9", sequence: 9 },
         activities: [{ id: "published", attemptId: "attempt-9", sequence: 9, nodeId: stepId }],
-        catalog: [{ logicalKey: stepId === "scenario-validity" ? "scenario.validity" : stepId === "test-execute" ? "test.execute" : "test.result.review", activityId: "published" }],
+        catalog: [{ logicalKey: stepId === "test-execute" ? "test.execute" : "test.result.review", activityId: "published" }],
       };
       const flowManager = {
         readCanonicalTransitionSnapshot: () => snapshot,
@@ -688,17 +634,6 @@ describe("definition-owned non-Gate transition boundary", () => {
           testExecute: { historyAttempt: 1, producerActivityId: "execute-activity", attemptId: "execute-attempt", sequence: 1 },
         },
       })],
-      ["scenario-validity", attachCanonicalCommandResultArtifact({ result: "block", artifacts: {} }, {
-        logicalKey: "scenario.validity",
-        payload: {
-          version: "1", testSourceRevision: fingerprint, command: "node --test",
-          process: { started: true, exitCode: 1, signal: null, timedOut: false, spawnError: null }, result: "block",
-          raw_output_path: "steps/scenario-validity/output.log",
-          summary: [{ id: "R1", classification: "invalid_test", evidence: {
-            test_file: "fixture.test.js", test_name: "R1: fixture", command: "node --test", raw_output_lines: { start_line: 1, end_line: 1 },
-          }, producerSelectedNext: "test" }],
-        },
-      })],
     ];
     for (const [stepId, result] of malformed) {
       await assert.rejects(
@@ -722,17 +657,6 @@ describe("definition-owned non-Gate transition boundary", () => {
       },
     };
     const fingerprint = "a".repeat(64);
-    const scenario = ({ result, classification }) => attachCanonicalCommandResultArtifact({ result: "ok", artifacts: {} }, {
-      logicalKey: "scenario.validity",
-      payload: {
-        version: "1", testSourceRevision: fingerprint, command: "node --test",
-        process: { started: true, exitCode: 1, signal: null, timedOut: false, spawnError: null }, result,
-        raw_output_path: "steps/scenario-validity/output.log",
-        summary: [{ id: "R1", classification, evidence: {
-          test_file: "fixture.test.js", test_name: "R1: fixture", command: "node --test", raw_output_lines: { start_line: 1, end_line: 1 },
-        } }],
-      },
-    });
     const review = ({ verdict, result }) => attachCanonicalCommandResultArtifact({ result: "ok", artifacts: {} }, {
       logicalKey: "test.result.review",
       payload: {
@@ -743,8 +667,6 @@ describe("definition-owned non-Gate transition boundary", () => {
       },
     });
     for (const [stepId, result] of [
-      ["scenario-validity", scenario({ result: "pass", classification: "invalid_test" })],
-      ["scenario-validity", scenario({ result: "block", classification: "expected_fail" })],
       ["test-result-review", review({ verdict: "pass", result: "fail" })],
       ["test-result-review", review({ verdict: "fail", result: "pass" })],
     ]) {
@@ -866,31 +788,6 @@ describe("definition-owned non-Gate transition boundary", () => {
       setStepStatus() { effects += 1; }, incrementRetry() { effects += 1; }, failCurrentAttempt() { effects += 1; },
     }, decision);
     assert.equal(effects, 0);
-  });
-
-  it("rejects unfinalized test-source provenance before scenario facts can reach Definition", () => {
-    const snapshot = {
-      runId: "run-9", specId: "009-non-gate-transition", stepId: "scenario-validity", revision: "revision-9",
-      state: { schemaRevision: 3, runId: "run-9", specId: "009-non-gate-transition", policy: { nonblocking: null } },
-      attempt: { id: "attempt-1", sequence: 1, consumption: { semantic: 0, tooling: 0 } },
-      activities: [
-        { id: "scenario-result", attemptId: "attempt-1", sequence: 1, nodeId: "scenario-validity" },
-        { id: "unfinalized-source", attemptId: "test-attempt-1", sequence: 1, nodeId: "test", type: "artifacts_published", transition: { operation: "publish_artifacts", nodeId: "test" }, confirmationOrder: 1 },
-      ],
-      catalog: [
-        { logicalKey: "scenario.validity", relativePath: "steps/scenario-validity/result.json", hash: "f".repeat(64), activityId: "scenario-result" },
-        { logicalKey: "tests.source", relativePath: "artifacts/tests/example.test.js", hash: "a".repeat(64), size: 1, activityId: "unfinalized-source", slot: { publicationStep: "test" } },
-      ],
-    };
-    const manager = {
-      readCanonicalTransitionSnapshot: () => snapshot,
-      readActiveProducerArtifact: () => ({ bytes: Buffer.from(JSON.stringify({ attempts: [{ attempt: 1, artifact: { logicalKey: "scenario.validity", payload: { result: "pass", summary: [], process: {} } } }] })) }),
-      readRuntimeArtifact: () => ({ bytes: Buffer.from("scenario output") }),
-    };
-    assert.throws(
-      () => readCurrentTestChainTransitionFacts({ flowManager: manager, specId: snapshot.specId }),
-      (error) => error instanceof CanonicalTestSourceProvenanceError && error.code === "CANONICAL_TEST_SOURCE_REVISION_UNAVAILABLE",
-    );
   });
 
   it("maps stale review lineage evidence to Definition blocked plans without side effects", () => {

@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { join } from "path";
 import { execFileSync } from "child_process";
 import { createTmpDir, removeTmpDir } from "../../../support/builders/tmp-dir.js";
-import { CanonicalFlowFixture, makeFlowManager } from "../../../support/infrastructure/flow-setup.js";
+import {
+  CanonicalFlowFixture,
+  makeFlowManager,
+  promoteCanonicalRequirementTest,
+} from "../../../support/infrastructure/flow-setup.js";
 const FLOW_CMD = join(process.cwd(), "src/sennel.js");
 const FLOW_CMD_ARGS_PREFIX = ["flow"];
 
@@ -21,7 +25,7 @@ describe("flow get check impl", () => {
     }).create();
   }
 
-  it("PASS when spec-gate and test are both done", () => {
+  it("PASS when approval has skipped an empty Requirement test plan", () => {
     tmp = createTmpDir();
     createFixture().settleBefore("implement").registerActive();
     const result = execFileSync("node", [FLOW_CMD, ...FLOW_CMD_ARGS_PREFIX, "get", "check", "impl"], {
@@ -31,28 +35,35 @@ describe("flow get check impl", () => {
     assert.match(result, /pass.*true/is);
   });
 
-  it("does not construct a skipped test state when the canonical definition forbids it", () => {
+  it("FAIL while a Requirement candidate is awaiting test-review", () => {
     tmp = createTmpDir();
-    const fixture = createFixture().settleBefore("test");
-    assert.throws(
-      () => fixture.settle("test", "skipped"),
-      /definition forbids transition in_progress:skipped for test/,
-    );
-  });
-
-  it("FAIL when test-review (last plan-branch leaf) is not done", () => {
-    // In the definition-based model, the only cross-branch prerequisite for
-    // `implement` is `test-review` (the last leaf of the preceding `plan` branch).
-    tmp = createTmpDir();
-    // `test-review` is intentionally left pending after its legitimate
-    // definition predecessors have been confirmed.
-    createFixture().settleBefore("test-review").registerActive();
+    const manager = makeFlowManager(tmp);
+    const fixture = new CanonicalFlowFixture({
+      flowManager: manager,
+      specId: "001-test",
+      runId: "status-check",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+      specRecord: { requirements: [{
+        id: "R1", desc: "Exercise the Requirement test frontier.", task_ids: ["T1"],
+        preimplementation_test_expectation: "fail",
+      }] },
+    }).create().addTask({
+      id: "T1", title: "Fixture Task", goal: "Exercise the Requirement test frontier.",
+      origin: "plan", added_round: 0, status: "pending",
+    }).registerActive().activate("approval");
+    fixture.settle("approval");
+    promoteCanonicalRequirementTest({
+      flowManager: manager,
+      specId: fixture.specId,
+      requirementId: "R1",
+      completion: "generate",
+    });
     const result = execFileSync("node", [FLOW_CMD, ...FLOW_CMD_ARGS_PREFIX, "get", "check", "impl"], {
       encoding: "utf8",
       env: { ...process.env, SENNEL_WORK_ROOT: tmp },
     });
     assert.match(result, /pass.*false/is);
-    assert.match(result, /test-review/);
+    assert.match(result, /test-gate/);
   });
 
   it("returns ok:true with pass:false when no flow.json exists", () => {

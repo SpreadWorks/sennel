@@ -43,9 +43,16 @@ function preparedSourceHandoff(t) {
     runId: "run-source-handoff-settlement-admission",
     specRecord: {
       goal: "Reject invalid source settlements before publication.",
-      requirements: [{ id: "R1", desc: "Keep source settlement atomic.", task_ids: [] }],
+      requirements: [{ id: "R1", desc: "Keep source settlement atomic.", task_ids: ["T1"], testable: false }],
     },
-  }).create().registerActive().activate("implement");
+  }).create().addTask({
+    id: "T1",
+    title: "Source settlement fixture",
+    goal: "Reach the source settlement boundary.",
+    origin: "plan",
+    added_round: 0,
+    status: "pending",
+  }).registerActive().activate("implement");
 
   const ctx = { root, executionRoot: root, mainRoot: root, specId, flowManager: manager, config: {} };
   const state = manager.loadReadOnly(specId);

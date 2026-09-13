@@ -164,7 +164,6 @@ test("CLI target guards reject a mismatched canonical Flow before policy mutatio
     assert.equal(scenario.manager.load(scenario.fixture.specId).policy.nonblocking, null);
   } finally { removeTmpDir(scenario.root); }
 });
-
 test("CLI activation records refreshed canonical review evidence from the current producer Attempt", () => {
   const firstPayload = rejectedReviewPayload("First canonical review.");
   const scenario = canonicalCliScenario({

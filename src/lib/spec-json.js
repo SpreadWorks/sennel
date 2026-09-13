@@ -124,6 +124,13 @@ export function validateSpecJsonObject(spec) {
   if (Array.isArray(spec?.requirements)) {
     spec.requirements.forEach((requirement, index) => {
       if (typeof requirement?.desc === "string") new RequirementPromptElement(requirement, index).assertWithinHardLimit();
+      if (requirement?.testable === false) {
+        if (Object.hasOwn(requirement, "preimplementation_test_expectation")) {
+          throw new Error(`spec.json failed schema validation: requirements[${index}].preimplementation_test_expectation is forbidden when testable is false`);
+        }
+      } else if (!Object.hasOwn(requirement ?? {}, "preimplementation_test_expectation")) {
+        throw new Error(`spec.json failed schema validation: requirements[${index}].preimplementation_test_expectation is required when testable is not false`);
+      }
     });
   }
   const errors = validateSchema(spec, loadSchema());

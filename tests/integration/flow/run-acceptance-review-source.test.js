@@ -58,6 +58,88 @@ test("acceptance has no Task Review handoff when no Task review artifact is a fo
   assert.deepEqual(store.taskReviewHandoffs(), []);
 });
 
+test("acceptance resolves deferred findings from a historical Attempt payload", () => {
+  const finding = {
+    findingId: "R1-review-blocker",
+    fingerprint: "a".repeat(64),
+    requirementId: "R1",
+    category: "semantic_rejection",
+    reason: "the assertion does not prove the Requirement",
+  };
+  const flowFindings = {
+    version: 2,
+    entries: [{
+      findingId: "DF-1",
+      sourceStep: "test-review",
+      sourceArtifact: "steps/test-review/result.json",
+      sourceFindingId: finding.findingId,
+      runId: "run",
+      fingerprint: finding.fingerprint,
+      disposition: "deferred",
+      rationale: finding.reason,
+      retryExhausted: true,
+      attempts: 10,
+      round: 10,
+      completionKind: "deferred",
+      finalDisposition: null,
+    }],
+  };
+  const reviewHistory = {
+    attempts: [
+      {
+        attempt: 1,
+        artifact: {
+          logicalKey: "test.requirement.review",
+          payload: { verdict: "REJECTED", blockingFindings: [finding] },
+        },
+      },
+      {
+        attempt: 2,
+        artifact: {
+          logicalKey: "test.requirement.review",
+          payload: {
+            verdict: "PASS",
+            requirementId: "R2",
+            blockingFindings: [],
+          },
+        },
+      },
+    ],
+  };
+  const manager = {
+    readArtifact({ logicalKey }) {
+      if (logicalKey === "flow.findings") {
+        return { bytes: Buffer.from(JSON.stringify(flowFindings)), descriptor: { hash: "b".repeat(64), size: 1 } };
+      }
+      if (logicalKey === "test.requirement.review") {
+        return {
+          bytes: Buffer.from(JSON.stringify(reviewHistory)),
+          relativePath: "steps/test-review/result.json",
+          descriptor: { relativePath: "steps/test-review/result.json" },
+        };
+      }
+      return null;
+    },
+    readProducerArtifact() { return null; },
+    readCatalogArtifact() { throw new Error("deferred finding lookup uses logical catalog reads"); },
+    publishArtifacts() {},
+    activityLedger() { return []; },
+    artifactCatalog() { return { artifacts: [] }; },
+    specLocation() { return { specRoot: "specs", specId: "001", relativeDirectory: "specs/001" }; },
+  };
+  const store = new CanonicalAcceptanceArtifactStore({
+    state: { schemaRevision: 3, specId: "001", runId: "run", flowId: "flow", flowVersionId: "v1", request: "x" },
+    flowManager: manager,
+  });
+  const blockers = [];
+
+  const deferred = store.deferredFindings(blockers);
+
+  assert.deepEqual(blockers, []);
+  assert.equal(deferred.evidence.length, 1);
+  assert.equal(deferred.evidence[0].sourceFinding.findingId, finding.findingId);
+});
+
 test("rejects a retired root-artifact acceptance fixture", async () => {
   await assert.rejects(
     () => new RunAcceptanceReviewCommand().execute({
@@ -130,6 +212,12 @@ test("oversized acceptance evidence is fully mapped before one bounded final jud
       deferredFindings: [{ findingId: "DF-1", finalDisposition: "still_open" }],
       deferredFindingEvidence: [{ findingId: "DF-1", sourceRef: "impl.review#source-1", sourceFinding: { issue: "check" } }],
     },
+    readProducerArtifact() { throw new Error("acceptance is not the deferred source producer"); },
+    publishArtifacts() { throw new Error("read-only acceptance fixture must not publish"); },
+    readCatalogArtifact() { throw new Error("deferred finding lookup uses logical catalog reads"); },
+    artifactCatalog() { return { artifacts: [] }; },
+    activityLedger() { return []; },
+    specLocation() { return { specRoot: "specs", specId: "001", relativeDirectory: "specs/001" }; },
   };
   const calls = [];
   const agent = {

@@ -61,8 +61,6 @@ const ROUTES = [
   }),
   new NonBlockingRoute({ sourceStep: "draft-gate", artifact: "draft-gate-result.json", kind: "gate", phase: "draft", targetStep: "spec" }),
   new NonBlockingRoute({ sourceStep: "spec-gate", artifact: "spec-gate-result.json", kind: "gate", phase: "spec", targetStep: "approval" }),
-  new NonBlockingRoute({ sourceStep: "scenario-validity", artifact: "scenario-validity-result.json", kind: "verification", targetStep: "test-review" }),
-  new NonBlockingRoute({ sourceStep: "test-review", artifact: "test-review.json", kind: "review", phase: "test", targetStep: "implement" }),
   new NonBlockingRoute({ sourceStep: "test-result-review", artifact: "test-result-review.json", kind: "verification", targetStep: "impl-review" }),
   new NonBlockingRoute({
     sourceStep: "task-review",

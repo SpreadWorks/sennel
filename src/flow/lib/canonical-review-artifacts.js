@@ -26,7 +26,6 @@ import {
   ReviewTargetState,
 } from "./review-convergence.js";
 import { DraftReviewEvidenceSet } from "./draft-review-artifacts.js";
-import { CanonicalTestSourceRevision } from "./canonical-test-artifacts.js";
 import { CanonicalSpecTestTopology } from "./canonical-worker-artifacts.js";
 import { CanonicalReviewInputDescriptor } from "./review-work-unit-input.js";
 import { draftReviewSourceStepIds } from "./draft-review-routes.js";
@@ -42,6 +41,8 @@ import { CanonicalTaskContext } from "./task-canonical-context.js";
 import { CurrentTaskSourceSnapshot, captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 import { TaskReviewPublicationBinding } from "./task-review-stage-artifacts.js";
+import { RequirementTestReviewSource } from "./requirement-test-artifacts.js";
+import { RequirementTestArtifactStore } from "./requirement-test-store.js";
 
 const PHASES = new Set(["draft-questions", "draft-coverage", "spec", "test", "impl"]);
 const ATTACHED_REVIEW_WORK_UNIT = Symbol("canonical-review-work-unit");
@@ -157,7 +158,7 @@ function logicalKeyFor({ phase: reviewPhase, taskId = null }) {
   if (reviewPhase === "draft-questions") return "draft.questions.review";
   if (reviewPhase === "draft-coverage") return "draft.coverage.review";
   if (reviewPhase === "spec") return "spec.review";
-  if (reviewPhase === "test") return "test.review";
+  if (reviewPhase === "test") return "test.requirement.review";
   return taskId === null ? "impl.review" : "task.review";
 }
 
@@ -487,6 +488,29 @@ export class CanonicalReviewWorkUnit {
       throw new Error(`canonical review requires active Attempt for ${this.nodeId}`);
     }
     this.attemptId = requiredText(typed.attempt.id, "canonical review Attempt id");
+    if (this.phase === "test") {
+      const store = new RequirementTestArtifactStore({ flowManager, state: typed });
+      const workItem = store.readPlan(this.nodeId).artifact.plan.activeWorkItem();
+      if (workItem?.status !== "candidate_saved" || workItem.bundleRevision === null) {
+        throw new Error("Requirement test review requires the active candidate-saved work item");
+      }
+      const candidateRead = store.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: this.nodeId });
+      this.requirementTestCandidate = candidateRead.candidate;
+      this.requirementTestCandidateSources = candidateRead.sources;
+      this.requirementTestReviewSource = new RequirementTestReviewSource({
+        runId: state.runId,
+        requirementId: workItem.requirementId,
+        specRevision: workItem.specRevision,
+        bundleRevision: workItem.bundleRevision.revision,
+        candidateDigest: candidateRead.candidate.digest,
+        sourceAttempt: workItem.bundleRevision.lineage.sourceAttempt,
+        candidatePaths: candidateRead.candidate.bundle.paths,
+      });
+    } else {
+      this.requirementTestCandidate = null;
+      this.requirementTestCandidateSources = null;
+      this.requirementTestReviewSource = null;
+    }
     this.workUnit = new ReviewWorkUnit({
       executionRoot,
       runId: state.runId,
@@ -707,30 +731,17 @@ export class CanonicalReviewWorkUnit {
   /** Materialize catalog-resolved test inputs only in the transient work unit. */
   materializeTestSources(directory, { write = true } = {}) {
     if (this.phase !== "test") return null;
-    const catalog = this.flowManager.artifactCatalog(this.state.specId);
-    const sources = catalog.artifacts
-      .filter((entry) => entry.logicalKey === "tests.source")
-      .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+    const sources = this.requirementTestCandidateSources;
     // Work-unit inputs are deliberately namespaced below `inputs/`; the
     // review child receives this parent-owned surface, not a source-tree path.
     const testRoot = path.join(directory, "inputs", "tests");
-    for (const descriptor of sources) {
-      const prefix = "artifacts/tests/";
-      if (!descriptor.relativePath.startsWith(prefix)) {
-        throw new Error("canonical test source catalog path is invalid");
-      }
-      const testPath = descriptor.relativePath.slice(prefix.length);
-      const resolved = this.flowManager.readArtifact({
-        specId: this.state.specId,
-        logicalKey: "tests.source",
-        parameters: { testPath },
-        consumerNodeId: "test-review",
-      });
+    for (const source of sources) {
+      const testPath = source.targetRelativePath.slice("tests/".length);
       const input = {
-        logicalKey: "tests.source",
+        logicalKey: "test.requirement.candidate.source",
         logicalPath: `tests/${testPath}`,
         mediaType: "text/plain",
-        bytes: resolved.bytes,
+        bytes: source.bytes,
       };
       if (!write) {
         this.workUnit.declareInput(input);
@@ -741,20 +752,13 @@ export class CanonicalReviewWorkUnit {
         throw new Error("canonical test source work-unit path escapes its review directory");
       }
     }
-    const ledger = typeof this.flowManager.activityLedger === "function"
-      ? this.flowManager.activityLedger(this.state.specId)
-      : [];
     if (!write) return null;
     return Object.freeze({
       // review.js treats this as the source root and resolves `tests/` below
       // it; expose only the declared input namespace, never the work-unit
       // root that also contains parent-owned output and sealing metadata.
       directory: path.join(directory, "inputs"),
-      revision: CanonicalTestSourceRevision.fromCatalog({
-        state: this.state,
-        catalog,
-        activities: ledger,
-      }).toJSON(),
+      revision: this.requirementTestReviewSource.toJSON(),
       topology: CanonicalSpecTestTopology.fromWorkerTestTree({
         flowManager: this.flowManager,
         specId: this.state.specId,
@@ -778,7 +782,7 @@ export class CanonicalReviewWorkUnit {
 
 /** Turn a child worker's transient JSON artifact into one V1 command result. */
 export class CanonicalReviewPromotion {
-  constructor({ workUnit, phase: reviewPhase, taskId = null, treeSha, targetStateDigest, specReviewSource = null, taskSource = null, taskContext = null, taskSpecDigest = null, taskReviewCycle = null, taskReviewPublicationBinding = null } = {}) {
+  constructor({ workUnit, phase: reviewPhase, taskId = null, treeSha, targetStateDigest, specReviewSource = null, requirementTestReviewSource = null, taskSource = null, taskContext = null, taskSpecDigest = null, taskReviewCycle = null, taskReviewPublicationBinding = null } = {}) {
     if (!(workUnit instanceof ReviewWorkUnit)) throw new Error("canonical review promotion requires a sealed execution work unit");
     this.workUnit = workUnit;
     this.phase = phase(reviewPhase);
@@ -790,6 +794,10 @@ export class CanonicalReviewPromotion {
     this.taskSpecDigest = taskSpecDigest;
     this.taskReviewCycle = taskReviewCycle;
     this.taskReviewPublicationBinding = taskReviewPublicationBinding;
+    if ((this.phase === "test") !== (requirementTestReviewSource instanceof RequirementTestReviewSource)) {
+      throw new Error("canonical Requirement test review promotion requires exactly one candidate source identity");
+    }
+    this.requirementTestReviewSource = requirementTestReviewSource;
     if (this.taskId !== null && (!(taskReviewCycle instanceof ReviewFindingCycle) || !(taskContext instanceof CanonicalTaskContext)
       || taskContext.sourceFingerprint !== taskSource?.fingerprint
       || !/^[a-f0-9]{64}$/.test(taskSpecDigest || ""))) {
@@ -823,6 +831,9 @@ export class CanonicalReviewPromotion {
       return Object.freeze({ sealed, delta, next });
     }
     const artifact = jsonObject(JSON.parse(sealed.bytes.toString("utf8")), `canonical ${this.phase} review artifact`);
+    if (this.phase === "test" && artifact.toolingOutcome != null) {
+      return Object.freeze({ sealed, artifact, evidence: null });
+    }
     const evidence = evidenceFor({
       artifact,
       phase: this.phase,
@@ -863,6 +874,13 @@ export class CanonicalReviewPromotion {
       };
     }
     const { artifact, evidence } = this.sealedArtifact();
+    if (this.phase === "test" && evidence === null) {
+      return {
+        result: "tooling-error",
+        changed: [],
+        artifacts: { phase: "test", toolingOutcome: structuredClone(artifact.toolingOutcome), blockingCount: 0, advisoryCount: 0 },
+      };
+    }
     const verdict = normalizedVerdict(artifact.verdict);
     const findings = findingLists(artifact, this.phase);
     const blockingCount = findings.blocking.length;
@@ -924,12 +942,31 @@ export class CanonicalReviewPromotion {
     // `test-coverage.json` remains a logical document inside test.review;
     // its transient work-unit path is never a durable consumer path.
     if (this.phase === "test") normalizedArtifact.coverageArtifact = "test-coverage.json";
+    if (this.phase === "test") Object.assign(normalizedArtifact, {
+      requirementId: this.requirementTestReviewSource.requirementId,
+      specRevision: this.requirementTestReviewSource.specRevision.toJSON(),
+      bundleRevision: this.requirementTestReviewSource.bundleRevision,
+      candidateDigest: this.requirementTestReviewSource.candidateDigest,
+      sourceAttempt: this.requirementTestReviewSource.sourceAttempt.toJSON(),
+    });
+    if (this.phase === "test" && evidence === null) {
+      const content = {
+        findingId: `${this.requirementTestReviewSource.requirementId}-review-tooling`,
+        requirementId: this.requirementTestReviewSource.requirementId,
+        category: "tooling_failure",
+        reason: String(artifact.toolingOutcome?.reason || "Requirement test review tooling failed"),
+      };
+      normalizedArtifact.blockingFindings = [{
+        ...content,
+        fingerprint: crypto.createHash("sha256").update(JSON.stringify(content)).digest("hex"),
+      }];
+    }
     normalizedArtifact.workerOutput = new ReviewWorkUnitOutputReceipt({
       digest: sealed.seal.output.digest,
       byteLength: sealed.seal.output.byteLength,
       mediaType: sealed.output.mediaType,
     }).toJSON();
-    normalizedArtifact.canonicalEvidence = evidence.toJSON();
+    if (evidence !== null) normalizedArtifact.canonicalEvidence = evidence.toJSON();
     normalizedArtifact.canonicalTarget = {
       treeSha: this.treeSha,
       targetStateDigest: this.targetStateDigest,
@@ -951,7 +988,7 @@ export class CanonicalReviewPromotion {
       logicalKey,
       payload: normalizedArtifact,
     });
-    const publications = [new CanonicalCommandResultPublication({
+    const publications = evidence === null ? [] : [new CanonicalCommandResultPublication({
       logicalKey: "review.evidence",
       parameters: this.taskId === null
         ? { reviewStep: nodeIdFor({ phase: this.phase, taskId: null }), digest: evidence.identity.evidenceDigest }
@@ -961,9 +998,11 @@ export class CanonicalReviewPromotion {
     })];
     result.artifacts ||= {};
     result.artifacts.phase = this.phase;
-    result.artifacts.verdict = normalizedVerdict(artifact.verdict);
-    result.artifacts.canonicalVerdict = result.artifacts.verdict;
-    result.artifacts.evidenceDigest = evidence.identity.evidenceDigest;
+    if (evidence !== null) {
+      result.artifacts.verdict = normalizedVerdict(artifact.verdict);
+      result.artifacts.canonicalVerdict = result.artifacts.verdict;
+      result.artifacts.evidenceDigest = evidence.identity.evidenceDigest;
+    }
     result.artifacts.treeSha = this.treeSha;
     result.artifacts.targetStateDigest = this.targetStateDigest;
     if (this.taskId !== null) result.artifacts.taskId = this.taskId;

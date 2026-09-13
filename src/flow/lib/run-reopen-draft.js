@@ -21,9 +21,10 @@ const PREIMPLEMENTATION_STAGES = new Set([
   "spec-repair",
   "spec-gate",
   "approval",
-  "test",
-  "scenario-validity",
+  "test-generate",
   "test-review",
+  "test-repair",
+  "test-gate",
 ]);
 const SPEC_CORRECTION_STAGES = new Set([
   "implement",

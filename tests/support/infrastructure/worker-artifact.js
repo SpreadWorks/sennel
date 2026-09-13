@@ -10,7 +10,7 @@ export function validWorkerHandoffSpec() {
     constraints: [],
     design_principles: [],
     overview: { modules: [], data_flow: [], decisions: [] },
-    requirements: [{ id: "R1", desc: "Publish a validated artifact.", task_ids: ["T1"] }],
+    requirements: [{ id: "R1", desc: "Publish a validated artifact.", testable: false, task_ids: ["T1"] }],
     acceptance_criteria: ["The canonical artifact is published."],
     clarifications: [],
     alternatives_considered: [],

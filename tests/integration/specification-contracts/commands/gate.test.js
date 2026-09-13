@@ -79,11 +79,13 @@ function validSpecJson(overrides = {}) {
     ...overrides,
   };
   const taskIds = result.tasks.map((task) => task.id);
-  result.requirements = result.requirements.map((requirement) => (
-    requirement.task_ids == null && taskIds.length > 0
-      ? { ...requirement, task_ids: [...taskIds] }
-      : requirement
-  ));
+  result.requirements = result.requirements.map((requirement) => ({
+    ...requirement,
+    ...(requirement.task_ids == null && taskIds.length > 0 ? { task_ids: [...taskIds] } : {}),
+    ...(requirement.testable === false || requirement.preimplementation_test_expectation != null
+      ? {}
+      : { preimplementation_test_expectation: "fail" }),
+  }));
   return result;
 }
 

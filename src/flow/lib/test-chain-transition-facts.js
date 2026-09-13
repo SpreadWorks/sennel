@@ -10,30 +10,23 @@ import {
   NonGateStepFacts,
   NonGateTargetBinding,
   NonGateTransitionFacts,
-  ScenarioValidityStepFacts,
   TestExecuteStepFacts,
   TestResultReviewStepFacts,
   resolveMaxAttempts,
   resolveNonGateTransition,
-  scenarioValidityTransitionDefinition,
   testExecuteTransitionDefinition,
   testResultReviewTransitionDefinition,
 } from "../definition.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { CanonicalTestSourceRevision, canonicalRawEvidenceFingerprint } from "./canonical-test-artifacts.js";
-import {
-  validateScenarioValidityObservationCoherence,
-  validateTestResultReviewObservationCoherence,
-} from "./test-artifacts.js";
+import { validateTestResultReviewObservationCoherence } from "./test-artifacts.js";
 
 const RESULT_KEYS = Object.freeze({
-  "scenario-validity": "scenario.validity",
   "test-execute": "test.execute",
   "test-result-review": "test.result.review",
 });
 
 const DEFINITIONS = Object.freeze({
-  "scenario-validity": scenarioValidityTransitionDefinition,
   "test-execute": testExecuteTransitionDefinition,
   "test-result-review": testResultReviewTransitionDefinition,
 });
@@ -150,19 +143,6 @@ function assertCurrentTestSourceRevision(payload, snapshot, testSource, field = 
 
 function testStepFacts(stepId, payload, { snapshot, readRuntimeArtifact, sourcePayload = null } = {}) {
   const digest = catalogDigest(snapshot);
-  if (stepId === "scenario-validity") {
-    const process = payload.process ?? {};
-    return new ScenarioValidityStepFacts({
-      result: payload.result,
-      summary: payload.summary ?? [],
-      rawAvailable: rawEvidence(readRuntimeArtifact, "scenario.validity.raw-log") !== null,
-      blockingEvidence: (payload.summary ?? []).filter((entry) => entry?.classification !== "expected_fail"),
-      testSourceRevision: payload.testSourceRevision,
-      catalogDigest: digest,
-      repairFingerprint: payload.testSourceRevision,
-      process,
-    });
-  }
   if (stepId === "test-execute") {
     return new TestExecuteStepFacts({
     summary: payload.summary ?? [], regression: payload.regression ?? {},
@@ -192,7 +172,6 @@ function currentPayload(descriptor, readCatalogedArtifact) {
 
 function observationCoherenceFailure(stepId, payload) {
   try {
-    if (stepId === "scenario-validity") validateScenarioValidityObservationCoherence(payload);
     if (stepId === "test-result-review") validateTestResultReviewObservationCoherence(payload);
     return null;
   } catch {

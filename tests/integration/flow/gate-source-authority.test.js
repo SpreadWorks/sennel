@@ -8,7 +8,6 @@ import RunGateCommand, {
   findReusablePassedGuardrails,
   runGateFlow,
 } from "../../../src/flow/lib/run-gate.js";
-import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
 import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
 import { resolveGateTransition } from "../../../src/flow/definition.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
@@ -30,8 +29,8 @@ function taskGateFixture(root) {
   commitAll(root, "initial fixture");
   const flowManager = makeFlowManager(root);
   const requirements = [
-    { id: "R-1", desc: "Keep the first task behavior.", task_ids: ["T-1"] },
-    { id: "R-2", desc: "Keep the second task behavior.", task_ids: ["T-1"] },
+    { id: "R-1", desc: "Keep the first task behavior.", task_ids: ["T-1"], testable: false },
+    { id: "R-2", desc: "Keep the second task behavior.", task_ids: ["T-1"], testable: false },
   ];
   const fixture = new CanonicalFlowFixture({
     flowManager,
@@ -54,17 +53,8 @@ function taskGateFixture(root) {
     added_round: 0,
     status: "pending",
   }).registerActive();
-  fixture.settleBefore("scenario-validity").activate("scenario-validity", { settlePredecessors: false });
-  commitAll(root, "record canonical baseline");
-  flowManager.publishCurrentAttemptResult({
-    specId: SPEC_ID,
-    commandResult: attachCanonicalCommandResultArtifact({ result: "pass" }, {
-      logicalKey: "scenario.validity",
-      payload: { version: "1", process: { started: true, exitCode: 1 }, result: "pass" },
-    }),
-  });
-  fixture.settle("scenario-validity");
   fixture.settleBefore("T-1-impl");
+  commitAll(root, "record canonical baseline");
   fixture.activateTask("T-1", { settlePredecessors: false });
 
   completeCanonicalSourceHandoff({

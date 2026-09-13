@@ -92,9 +92,16 @@ describe("canonical finalize merge Spec source", () => {
       execution: { mode: "branch", baseBranch: "main", featureBranch: "feature/finalize-merge-spec" },
       specRecord: {
         goal: "Use the cataloged merge metadata.",
-        requirements: [{ id: "R-1", desc: "Do not read the retired root Spec." }],
+        requirements: [{ id: "R-1", desc: "Do not read the retired root Spec.", task_ids: ["T-1"], testable: false }],
       },
-    }).create().registerActive().activate("finalize-merge");
+    }).create().addTask({
+      id: "T-1",
+      title: "Finalize merge fixture",
+      goal: "Reach the finalize merge boundary.",
+      origin: "plan",
+      added_round: 0,
+      status: "pending",
+    }).registerActive().activate("finalize-merge");
     const retired = path.join(root, "specs", fixture.specId, "spec.json");
     fs.writeFileSync(retired, `${JSON.stringify({ goal: "retired root value" })}\n`);
 

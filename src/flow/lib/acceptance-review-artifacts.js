@@ -39,7 +39,6 @@ export class MechanicalBlocker {
 export class AcceptanceTestEvidenceProjection {
   constructor(artifacts = {}) {
     const fields = {
-      "scenario-validity-result.json": ["version", "command", "process", "result", "summary"],
       "test-execute-result.json": ["version", "summary", "regression", "repairFingerprint"],
       "test-result-review.json": ["verdict", "checked_items", "result_file_path", "raw_output_path", "repairFingerprint"],
       "impl-review.json": ["version", "phase", "verdict", "summary", "blockingFindings", "nonBlockingImprovements", "repairFingerprint"],

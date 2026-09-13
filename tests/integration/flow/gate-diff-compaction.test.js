@@ -10,13 +10,11 @@ import {
   collectPerFileDiffsForGate,
   excludeGeneratedSpecArtifactsFromGateDiff,
   excludeGateLifecycleArtifactsFromGateDiff,
-  excludeScenarioValidityEvidenceFromTaskGateDiff,
   PlanGateEvidenceTarget,
   planRequirementGateCalls,
   RequirementGateBatch,
   default as RunGateCommand,
 } from "../../../src/flow/lib/run-gate.js";
-import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
 import {
   CanonicalSourceRequirementAuthority,
 } from "../../../src/flow/lib/canonical-file-map.js";
@@ -288,7 +286,7 @@ describe("requirement diff authority", () => {
     const two = new RequirementGateBatch({ requirements, diff, sourceScope });
     const maxChars = Math.floor((one.promptCharCount + two.promptCharCount) / 2);
     const batches = buildRequirementGateBatches({
-      requirements,
+      requirements: requirements.map((requirement) => ({ ...requirement, testable: false })),
       relatedDiffs: new Map(requirements.map((requirement) => [requirement.id, diff])),
       maxChars,
       sourceScope,
@@ -296,68 +294,6 @@ describe("requirement diff authority", () => {
 
     assert.equal(batches.length, 2);
     assert.ok(batches.every((batch) => batch.promptCharCount <= maxChars));
-  });
-});
-
-describe("task gate scenario-validity evidence", () => {
-  it("excludes active Version artifacts while retaining implementation and foreign evidence", () => {
-    const specDir = "specs/999-example/001";
-    const preamble = "diagnostic preamble\n";
-    const malformed = [
-      "diff --git malformed-header",
-      "+malformed content remains",
-      "",
-    ].join("\n");
-    const quoted = [
-      'diff --git "a/specs/999-example/001/steps/scenario-validity/output.log" "b/specs/999-example/001/steps/scenario-validity/output.log"',
-      '--- "a/specs/999-example/001/steps/scenario-validity/output.log"',
-      '+++ "b/specs/999-example/001/steps/scenario-validity/output.log"',
-      "@@ -0,0 +1 @@",
-      "+quoted path remains",
-      "",
-    ].join("\n");
-    const special = modifiedDiff("specs/999-example/証拠-ß.json");
-    const scenarioResult = modifiedDiff(`${specDir}/steps/scenario-validity/result.json`);
-    const scenarioLog = modifiedDiff(`${specDir}/steps/scenario-validity/output.log`);
-    const testExecuteResult = modifiedDiff(`${specDir}/steps/test-execute/result.json`);
-    const testExecutionLog = modifiedDiff(`${specDir}/steps/test-execute/output.log`);
-    const otherSpecScenario = modifiedDiff("specs/998-other/001/steps/scenario-validity/result.json");
-    const implementation = modifiedDiff("src/flow/lib/review-convergence.js");
-    const diff = [
-      preamble,
-      scenarioResult,
-      malformed,
-      scenarioLog,
-      quoted,
-      testExecuteResult,
-      testExecutionLog,
-      otherSpecScenario,
-      special,
-      implementation,
-    ].join("");
-    const expected = [
-      preamble,
-      malformed,
-      otherSpecScenario,
-      special,
-      implementation,
-    ].join("");
-
-    const filtered = excludeScenarioValidityEvidenceFromTaskGateDiff(
-      diff,
-      `${specDir}/spec.json`,
-    );
-
-    assert.equal(filtered, expected);
-    assert.doesNotMatch(filtered, new RegExp(`${specDir}/steps/test-execute/result\\.json`));
-    assert.doesNotMatch(filtered, new RegExp(`${specDir}/steps/test-execute/output\\.log`));
-    assert.match(filtered, /specs\/998-other\/001\/steps\/scenario-validity\/result\.json/);
-    assert.match(filtered, /src\/flow\/lib\/review-convergence\.js/);
-    assert.ok(filtered.startsWith(preamble));
-    assert.match(filtered, /diff --git malformed-header\n\+malformed content remains/);
-    assert.doesNotMatch(filtered, /quoted path remains/);
-    assert.match(filtered, /specs\/999-example\/証拠-ß\.json/);
-    assert.ok(filtered.indexOf("malformed-header") >= 0);
   });
 });
 
@@ -436,7 +372,7 @@ describe("gate lifecycle evidence", () => {
 const TASK_GATE_SPEC_ID = "001-task-gate-evidence";
 
 function setupTaskGateRepository(root, {
-  requirements = [{ id: "R-1", desc: "Task implementation evidence is evaluated.", task_ids: ["T-1"] }],
+  requirements = [{ id: "R-1", desc: "Task implementation evidence is evaluated.", testable: false, task_ids: ["T-1"] }],
 } = {}) {
   writeJson(root, ".sennel/config.json", {
     lang: "en",
@@ -468,26 +404,12 @@ function setupTaskGateRepository(root, {
     added_round: 0,
     status: "pending",
   }).registerActive();
-  fixture.settleBefore("scenario-validity").activate("scenario-validity", { settlePredecessors: false });
+  fixture.settleBefore("T-1-impl");
   commitAll(root, "record canonical pre-validation baseline");
   return { flowManager, fixture };
 }
 
-function advanceToTaskGate(flowManager, fixture, padding = "", mutateImplementation = null) {
-  flowManager.publishCurrentAttemptResult({
-    specId: TASK_GATE_SPEC_ID,
-    commandResult: attachCanonicalCommandResultArtifact({ result: "pass" }, {
-      logicalKey: "scenario.validity",
-      payload: {
-        version: "1",
-        process: { started: true, exitCode: 1 },
-        result: "pass",
-        padding,
-      },
-    }),
-  });
-  fixture.settle("scenario-validity");
-  fixture.settleBefore("T-1-impl");
+function advanceToTaskGate(flowManager, fixture, _padding = "", mutateImplementation = null) {
   fixture.activateTask("T-1", { settlePredecessors: false });
   if (mutateImplementation === null) {
     fixture.settle("T-1-impl");
@@ -546,7 +468,7 @@ describe("task gate scenario-validity evidence through task scope", () => {
   it("sizes and evaluates only implementation and post-fix evidence", async () => {
     tmp = createTmpDir("task-gate-filtered-size-");
     const { flowManager, fixture } = setupTaskGateRepository(tmp);
-    advanceToTaskGate(flowManager, fixture, "x".repeat(1_100_000), () => {
+    advanceToTaskGate(flowManager, fixture, "", () => {
       writeFile(tmp, "src/task-evidence.js", "export const taskEvidence = true;\n");
       writeFile(
         tmp,
@@ -554,13 +476,6 @@ describe("task gate scenario-validity evidence through task scope", () => {
         "// spec: R-1\n// post-fix tests pass\n",
       );
     });
-    const scenario = flowManager.readArtifact({
-      specId: TASK_GATE_SPEC_ID,
-      logicalKey: "scenario.validity",
-      consumerNodeId: "implement",
-    });
-    assert.ok(scenario.bytes.length > 1024 * 1024);
-
     let capturedPrompt = "";
     const originalGet = container.get.bind(container);
     container.get = (key) => {

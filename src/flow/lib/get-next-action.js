@@ -21,7 +21,6 @@ import {
   resolveDraftTransition,
   resolveTaskExecutionOverrun,
   selectedNonGateUserAction,
-  scenarioValidityTransitionDefinition,
   testExecuteTransitionDefinition,
   testResultReviewTransitionDefinition,
 } from "../definition.js";
@@ -57,7 +56,6 @@ import {
   resolveCanonicalFinalRegressionTransition,
 } from "./final-regression-transition-facts.js";
 import { FINAL_REGRESSION_RECORD_AND_PROCEED_ACTION_ID } from "./final-regression-transition.js";
-import { inspectPreimplementationBootstrap } from "./run-preimplementation-bootstrap.js";
 import { resolveFinalizationOutboxRecovery } from "./finalization-outbox-recovery.js";
 import { inspectInterruptedFinalizeSync } from "./recover-interrupted-finalize-sync.js";
 import {
@@ -66,12 +64,10 @@ import {
 } from "./flow-artifact-authority.js";
 import {
   canonicalPlanGateRepairForTarget,
-  inspectCanonicalPlanGateRepair,
 } from "./plan-gate-repair.js";
 import {
   canonicalTestReviewRepairForTarget,
   canonicalTestReviewRepairProgress,
-  inspectCanonicalTestReviewRepair,
 } from "./test-review-repair.js";
 import { inspectRetryRecoveryPlan, retryEvidenceRouteForNode } from "./retry-recovery.js";
 import { resolveCurrentReviewTransition } from "./review-transition-persistence.js";
@@ -106,12 +102,10 @@ import {
 export { resolveNonGateNextAction } from "./non-gate-transition-application.js";
 
 const TEST_CHAIN_NEXT_ACTION_DEFINITIONS = Object.freeze({
-  "scenario-validity": scenarioValidityTransitionDefinition,
   "test-execute": testExecuteTransitionDefinition,
   "test-result-review": testResultReviewTransitionDefinition,
 });
 const TEST_CHAIN_RESULT_KEYS = Object.freeze({
-  "scenario-validity": "scenario.validity",
   "test-execute": "test.execute",
   "test-result-review": "test.result.review",
 });
@@ -180,7 +174,7 @@ function buildContextDescriptor(kinds, target, state) {
   }
   if (target.scope === "task" && kinds.includes("task_spec")) {
     const task = state.tasks.find((t) => t.id === target.taskId);
-    if (task?.spec) paths.task_spec = task.spec;
+    if (task !== undefined) paths.task_spec = path.posix.join("tasks", `${task.id}.md`);
   }
   return { kinds, paths };
 }
@@ -272,28 +266,6 @@ function finalRegressionNextAction(ctx, state, typedState, binding) {
     return new FinalRegressionNextAction({ decision, directive: new BlockedDirective({ code: operation === "external-blocked" ? "FINAL_REGRESSION_EXTERNAL_BLOCKED" : "FINAL_REGRESSION_BLOCKED", reason: decision.disposition.reason || "The final-regression Definition selected a blocked disposition.", resumeInstruction: "Provide changed canonical evidence or an explicit allowed decision; do not rerun the worker directly." }) });
   }
   return null;
-}
-
-function buildPreimplementationBootstrapDirective(ctx, state, target, binding) {
-  if (target.stepId !== "scenario-validity") return null;
-  const plan = inspectPreimplementationBootstrap({ flowManager: ctx.flowManager, state });
-  if (!plan) return null;
-  return new ExecuteCommandDirective({
-    actionId: "RECOVER_PREIMPLEMENTATION_BOOTSTRAP",
-    nextAction: guardedCommand("sennel flow run preimplementation-bootstrap", state, binding),
-    instruction: "Use the persisted scenario-validity preflight evidence to enter implementation without reclassifying existing implementation-target changes as test design.",
-    reason: `scenario-validity detected ${plan.invalidPaths.length} existing implementation-target change(s) against the immutable Flow baseline`,
-  });
-}
-
-function canonicalTestReviewRepairFact(ctx, state, target) {
-  if (target.stepId !== "test-review") return null;
-  try {
-    return inspectCanonicalTestReviewRepair({ flowManager: ctx.flowManager, state });
-  } catch (error) {
-    if (/absent from catalog/.test(error.message)) return null;
-    throw error;
-  }
 }
 
 /** Definition-owned Gate routing is projected only from its canonical typed facts. */
@@ -752,15 +724,6 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
         stepId: target.stepId,
       })
     : { facts: null, disposition: null };
-  const repairEvidence = reviewSelection.disposition?.operation === "repair-test-review"
-    ? canonicalTestReviewRepairFact(ctx, state, target)
-    : null;
-  if (reviewSelection.disposition?.operation === "repair-test-review" && repairEvidence === null) {
-    throw new NextActionPlanError(
-      "TEST_REVIEW_REPAIR_EVIDENCE_INVALID",
-      "definition-selected test-review repair evidence is unavailable for the current Attempt",
-    );
-  }
   let draftDisposition = null;
   if (
     target.scope === "flow"
@@ -836,11 +799,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const recoveryCommand = retryRecoveryCommandFor({ ctx, state, descriptor, target, binding });
   const missingRoute = missingProducerArtifactRoute
     ?? missingProducerArtifactRouteFor({ ctx, typedState });
-  // Scenario-validity has not migrated to the Gate reducer.  Draft/spec
-  // never ask this legacy repair inspector to select their route.
-  const planGateRepair = target.stepId === "scenario-validity"
-    ? inspectCanonicalPlanGateRepair({ flowManager: ctx.flowManager, state: typedState })
-    : null;
+  const planGateRepair = null;
   const lifecycleDirective = selectedFinalRegressionAction?.directive ?? new NextActionDirectiveResolver({
     state,
     binding,
@@ -980,12 +939,6 @@ export default class GetNextActionCommand extends FlowCommand {
       };
     }
     let result = null;
-    if (descriptor.nodeId === "scenario-validity") {
-      result = buildCanonicalNextActionResult(ctx, ctx.flowState, typedState, descriptor, binding, null, selectedFinalRegressionAction);
-      if (result.directive.actionId === "RECOVER_PREIMPLEMENTATION_BOOTSTRAP") {
-        return result;
-      }
-    }
     const nonGateBlocked = blockedTestChainProjection(ctx, typedState, descriptor);
     if (nonGateBlocked !== null) {
       result ??= buildCanonicalNextActionResult(ctx, ctx.flowState, typedState, descriptor, binding, null);

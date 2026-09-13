@@ -15,12 +15,6 @@ import { loadSpecJsonSchema } from "../../lib/spec-json.js";
 import { FlowCommand } from "./base-command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { AgentFailure } from "../../lib/agent-failure.js";
-import {
-  AgentTimeout,
-  AgentTimeoutDiagnostic,
-  TestReviewRepairWorkerMonitor,
-  TEST_REVIEW_REPAIR_WORKER_MAX_LIFETIME_SECONDS,
-} from "../../lib/agent-timeout.js";
 import { DeferredAgentInvocationMetric } from "../../lib/agent-invocation-metric.js";
 import { flowCommands } from "../../lib/command-registry.js";
 import { dispatch } from "../../lib/dispatcher.js";
@@ -76,7 +70,6 @@ import {
   specRepairDeltaPayloadSchema,
   specTriageDeltaPayloadSchema,
 } from "./spec-review-artifacts.js";
-import { TestReviewRepairWorkerTimeout } from "./test-review-repair-timeout.js";
 import {
   NonBlockingDecisionContext,
   decisionEvidenceForActiveFlow,
@@ -94,7 +87,6 @@ const RESUMABLE_DISPATCH_BOUNDARIES = new Set([
 ]);
 const DISPATCHER_OWNED_REPAIR_COMMANDS = new Set([
   "repair-plan-gate",
-  "repair-test-review",
 ]);
 const DISPATCHER_OWNED_RECOVERY_COMMANDS = new Set([
   "claim-next-action",
@@ -111,28 +103,15 @@ const NON_REPLAYABLE_HANDOFF_ERROR_CODES = new Set([
   "FLOW_SOURCE_HANDOFF_CANONICAL_PATH_VIOLATION",
 ]);
 
-function isTestReviewRepairWorker(request) {
-  return request?.stepId === "test" && request.testReviewRepair !== null;
-}
-
-function testReviewRepairWorkerMonitor(request, agentConfig, factory) {
-  if (!isTestReviewRepairWorker(request)) return null;
-  return factory({
-    handoffDirectory: request.directory,
-    inactivityTimeoutMs: AgentTimeout.fromConfig(agentConfig).toMilliseconds(),
-    maximumLifetimeMs: TEST_REVIEW_REPAIR_WORKER_MAX_LIFETIME_SECONDS * 1000,
+function settleRequirementTestToolingFailure(ctx, attempt, error) {
+  const stepId = attempt?.handoffRequest?.stepId ?? null;
+  if (!new Set(["test-generate", "test-repair"]).has(stepId)) return false;
+  ctx.flowManager.completeRequirementTestToolingFailure({
+    specId: attempt.handoffRequest.specId,
+    message: error?.message || String(error),
   });
-}
-
-function hasPendingTestReviewRepairTimeout(state) {
-  return (state?.currentNodeId ?? state?.current?.at(-1)) === "test"
-    && TestReviewRepairWorkerTimeout.isFailureCode(state?.attempt?.failure?.code);
-}
-
-function safelyDiscardableRepairTimeout(error) {
-  return error instanceof WorkerArtifactHandoffError
-    && error.recoveryPossible === false
-    && new Set(["missing", "invalid"]).has(error.classification);
+  ctx.flowState = ctx.flowManager.loadReadOnly(attempt.handoffRequest.specId);
+  return true;
 }
 /**
  * Definition-backed command invocation owned by the dispatcher.  This keeps
@@ -1040,7 +1019,6 @@ export default class RunDispatchCommand extends FlowCommand {
     maxStalledDispatches = DEFAULT_MAX_STALLED_DISPATCHES,
     leaseFactory = (session) => new FlowDispatchLease(session),
     handoffCoordinator = new WorkerArtifactHandoffCoordinator(),
-    testReviewRepairMonitorFactory = (options) => new TestReviewRepairWorkerMonitor(options),
     repairCommandRunner = null,
     commandRunner = null,
   } = {}) {
@@ -1052,8 +1030,6 @@ export default class RunDispatchCommand extends FlowCommand {
     this.maxStalledDispatches = maxStalledDispatches;
     this.leaseFactory = leaseFactory;
     this.handoffCoordinator = handoffCoordinator;
-    if (typeof testReviewRepairMonitorFactory !== "function") throw new Error("test-review repair monitor factory must be a function");
-    this.testReviewRepairMonitorFactory = testReviewRepairMonitorFactory;
     this.repairCommandRunner = repairCommandRunner;
     this.commandRunner = commandRunner;
   }
@@ -1409,11 +1385,6 @@ export default class RunDispatchCommand extends FlowCommand {
       let sourceResponseError = null;
       let sourceWorkerStopped = false;
       const supervisorEvents = [];
-      const activityMonitor = testReviewRepairWorkerMonitor(
-        handoffRequest,
-        ctx.config?.agent ?? {},
-        this.testReviewRepairMonitorFactory,
-      );
       try {
         const agent = this.agent || (this.agent = this.container.get("agent"));
         let responseText;
@@ -1436,14 +1407,6 @@ export default class RunDispatchCommand extends FlowCommand {
             waitForProcessTree: true,
             executionEnvironment: work.executionEnvironment(workerInvocation),
             deferredMetric,
-            ...(activityMonitor && {
-              timeoutMs: activityMonitor.maximumLifetimeMs,
-              timeoutDiagnostic: new AgentTimeoutDiagnostic({
-                reason: "maximum_lifetime",
-                timeoutMs: activityMonitor.maximumLifetimeMs,
-              }),
-              activityMonitor,
-            }),
             onSupervisorEvent(event) {
               supervisorEvents.push(Object.freeze({ at: new Date().toISOString(), ...event }));
             },
@@ -1490,8 +1453,6 @@ export default class RunDispatchCommand extends FlowCommand {
 
       let reconciliation = null;
       try {
-        if (fs.existsSync(handoffRequest.submissionPath)) activityMonitor?.observeSubmission();
-        if (agentError instanceof WorkerArtifactHandoffError) throw agentError;
         if (sourceResponseError !== null) throw sourceResponseError;
         reconciliation = this.handoffCoordinator.reconcile({
           ctx,
@@ -1501,45 +1462,6 @@ export default class RunDispatchCommand extends FlowCommand {
         });
         agentError = null;
       } catch (error) {
-        const timedOutRepairWorker = isTestReviewRepairWorker(handoffRequest)
-          && agentError instanceof AgentFailure
-          && agentError.code === "AGENT_TIMEOUT";
-        if (timedOutRepairWorker && safelyDiscardableRepairTimeout(error)) {
-          const timeout = TestReviewRepairWorkerTimeout.fromAgentFailure(agentError);
-          // Persist the timeout before removing transient bytes. If cleanup or
-          // settlement is interrupted, the next dispatcher observes the
-          // failed Attempt and cannot start this worker again in place.
-          ctx.flowManager.failCurrentAttempt({
-            specId: handoffRequest.specId,
-            failure: {
-              category: "tooling",
-              code: timeout.failureCode,
-              message: `test-review repair worker timed out (${timeout.reason}) without an accepted handoff`,
-              retryable: false,
-              retryKind: null,
-            },
-            result: {
-              outcome: "failed",
-              summary: "Test-review repair worker timed out without an accepted handoff.",
-              confirmedAt: new Date().toISOString(),
-              artifactRefs: [],
-            },
-          });
-          this.handoffCoordinator.discardRejectedTimeoutHandoff(handoffRequest);
-          ctx.flowManager.settleTimedOutTestReviewRepair({
-            specId: handoffRequest.specId,
-            references: handoffRequest.testReviewRepair.references(),
-          });
-          if (!holdsSpecRepairMetric) await deferredMetric.flush();
-          return {
-            error: null,
-            handoffRequest,
-            agentError: null,
-            timeoutSettled: true,
-            supervisorEvents,
-            deferredMetric: holdsSpecRepairMetric ? deferredMetric : null,
-          };
-        }
         const sourcePlan = error instanceof WorkerArtifactHandoffError && handoffRequest.policy.kind === "source"
           ? resolveSourceHandoffTransitionPlan({
               facts: SourceHandoffFailureFacts.fromError(error, {
@@ -1708,13 +1630,6 @@ export default class RunDispatchCommand extends FlowCommand {
         specId: ctx.specId ?? ctx.flowState?.specId,
         executionRoot: ctx.executionRoot || ctx.root,
       });
-      const recoveredSpecId = ctx.specId ?? ctx.flowState?.specId;
-      const recoveredState = typeof ctx.flowManager.canonicalState === "function"
-        ? ctx.flowManager.canonicalState(recoveredSpecId)
-        : ctx.flowManager.load(recoveredSpecId);
-      if (hasPendingTestReviewRepairTimeout(recoveredState)) {
-        ctx.flowManager.settleTimedOutTestReviewRepair({ specId: recoveredState.specId });
-      }
     } catch (error) {
       if (!(error instanceof WorkerArtifactHandoffError)) throw error;
       return this.failure(
@@ -2151,6 +2066,11 @@ export default class RunDispatchCommand extends FlowCommand {
           || !attempt.handoffRequest
           || (attempt.handoffRequest.policy.kind === "source" && attempt.sourceRetryAllowed !== true)
         ) {
+          if (settleRequirementTestToolingFailure(ctx, attempt, attempt.error)) {
+            await flushDeferredMetrics(deferredMetrics);
+            current = await this.fetchNextAction(target);
+            continue;
+          }
           discardDeferredMetrics(deferredMetrics);
           return this.failure(
             ctx,
@@ -2215,6 +2135,11 @@ export default class RunDispatchCommand extends FlowCommand {
             : attempt.error;
           if (exhausted instanceof WorkerArtifactHandoffError) {
             exhausted.agentFailures = Object.freeze([firstAgentError, attempt.agentError].filter(Boolean));
+          }
+          if (settleRequirementTestToolingFailure(ctx, attempt, exhausted)) {
+            await flushDeferredMetrics(deferredMetrics);
+            current = await this.fetchNextAction(target);
+            continue;
           }
           return this.failure(
             ctx,

@@ -102,7 +102,7 @@ class CanonicalTestSourceMemberFinalization {
     if (!Array.isArray(activities)) {
       throw new CanonicalTestSourceProvenanceError("canonical test source requires an Activity ledger");
     }
-    if (descriptor.logicalKey !== "tests.source" || descriptor.slot?.publicationStep !== "test") {
+    if (descriptor.logicalKey !== "tests.source" || descriptor.slot?.publicationStep !== "test-gate") {
       throw new CanonicalTestSourceProvenanceError("canonical test source descriptor has invalid publication provenance");
     }
     if (typeof descriptor.activityId !== "string" || descriptor.activityId.trim() === "") {
@@ -118,13 +118,19 @@ class CanonicalTestSourceMemberFinalization {
     } else if (this.#isPublication(producer)) {
       this.finalizedAt = this.#publicationConfirmation(producer, activities);
     } else {
-      throw new CanonicalTestSourceProvenanceError("canonical test source producer Activity is not a test confirmation or publication");
+      throw new CanonicalTestSourceProvenanceError("canonical test source producer Activity is not a test-gate confirmation or publication");
     }
     Object.freeze(this);
   }
 
   #isConfirmation(activity) {
-    return activity?.type === "result_confirmed" && activity.transition?.operation === "confirm_attempt";
+    return activity?.type === "result_confirmed" && (
+      activity.transition?.operation === "confirm_attempt"
+      || (
+        activity.transition?.operation === "advance_requirement_test_lifecycle"
+        && activity.transition?.requirementTestLifecycle?.disposition === "promote"
+      )
+    );
   }
 
   #isPublication(activity) {
@@ -133,9 +139,11 @@ class CanonicalTestSourceMemberFinalization {
 
   #confirmedAt(activity) {
     if (
-      activity.nodeId !== "test"
-      || activity.transition?.nodeId !== "test"
-      || activity.transition?.status !== "done"
+      activity.nodeId !== "test-gate"
+      || activity.transition?.nodeId !== "test-gate"
+      || (activity.transition?.operation === "confirm_attempt"
+        ? activity.transition?.status !== "done"
+        : activity.transition?.requirementTestLifecycle?.disposition !== "promote")
       || typeof activity.attemptId !== "string"
       || activity.attemptId.trim() === ""
       || !Number.isSafeInteger(activity.sequence)
@@ -143,15 +151,15 @@ class CanonicalTestSourceMemberFinalization {
       || activity.result?.outcome !== "passed"
       || !isIsoTimestamp(activity.result?.confirmedAt)
     ) {
-      throw new CanonicalTestSourceProvenanceError("canonical test source has no successful test confirmation");
+      throw new CanonicalTestSourceProvenanceError("canonical test source has no successful test-gate confirmation");
     }
     return activity.result.confirmedAt;
   }
 
   #publicationConfirmation(publication, activities) {
     if (
-      publication.nodeId !== "test"
-      || publication.transition?.nodeId !== "test"
+      publication.nodeId !== "test-gate"
+      || publication.transition?.nodeId !== "test-gate"
       || typeof publication.attemptId !== "string"
       || publication.attemptId.trim() === ""
       || !Number.isSafeInteger(publication.sequence)
@@ -159,12 +167,12 @@ class CanonicalTestSourceMemberFinalization {
       || !Number.isSafeInteger(publication.confirmationOrder)
       || publication.confirmationOrder < 1
     ) {
-      throw new CanonicalTestSourceProvenanceError("canonical test source publication has no test Attempt identity");
+      throw new CanonicalTestSourceProvenanceError("canonical test source publication has no test-gate Attempt identity");
     }
     const confirmations = activities.filter((activity) => (
       this.#isConfirmation(activity)
-      && activity.nodeId === "test"
-      && activity.transition?.nodeId === "test"
+      && activity.nodeId === "test-gate"
+      && activity.transition?.nodeId === "test-gate"
       && activity.attemptId === publication.attemptId
       && activity.sequence === publication.sequence
       && Number.isSafeInteger(activity.confirmationOrder)
@@ -177,6 +185,30 @@ class CanonicalTestSourceMemberFinalization {
       throw new CanonicalTestSourceProvenanceError("canonical test source publication has an ambiguous successful confirmation");
     }
     return this.#confirmedAt(confirmations[0]);
+  }
+}
+
+/** Approval evidence that canonically finalizes an intentionally empty test tree. */
+class CanonicalEmptyTestSourceFinalization {
+  constructor({ activities } = {}) {
+    if (!Array.isArray(activities)) {
+      throw new CanonicalTestSourceProvenanceError("empty canonical test source requires an Activity ledger");
+    }
+    const confirmations = activities.filter((activity) => (
+      activity?.type === "result_confirmed"
+      && activity.transition?.operation === "initialize_requirement_test_lifecycle"
+      && activity.transition?.nodeId === "approval"
+      && activity.transition?.requirementTestInitialization?.target === "implement"
+      && JSON.stringify(activity.transition.requirementTestInitialization.skippedLeafIds)
+        === JSON.stringify(["test-generate", "test-review", "test-repair", "test-gate"])
+      && activity.result?.outcome === "passed"
+      && isIsoTimestamp(activity.result?.confirmedAt)
+    ));
+    if (confirmations.length !== 1) {
+      throw new CanonicalTestSourceProvenanceError("empty canonical test source has no unique approval finalization");
+    }
+    this.finalizedAt = confirmations[0].result.confirmedAt;
+    Object.freeze(this);
   }
 }
 
@@ -246,14 +278,13 @@ export class CanonicalTestSourceRevision {
           activityId: descriptor.activityId ?? null,
         });
       });
-    if (descriptors.length === 0) {
-      throw new CanonicalTestSourceProvenanceError("canonical test source revision has no cataloged test sources");
-    }
     const members = descriptors.map(({ descriptor, ...member }) => member);
-    const finalizedAt = descriptors
-      .map(({ descriptor }) => new CanonicalTestSourceMemberFinalization({ descriptor, activities }).finalizedAt)
-      .sort((left, right) => Date.parse(left) - Date.parse(right))
-      .at(-1);
+    const finalizedAt = descriptors.length === 0
+      ? new CanonicalEmptyTestSourceFinalization({ activities }).finalizedAt
+      : descriptors
+        .map(({ descriptor }) => new CanonicalTestSourceMemberFinalization({ descriptor, activities }).finalizedAt)
+        .sort((left, right) => Date.parse(left) - Date.parse(right))
+        .at(-1);
     return new CanonicalTestSourceRevision({
       runId: canonical.runId,
       specId: canonical.specId,
@@ -267,7 +298,7 @@ export class CanonicalTestSourceRevision {
       version: 1,
       runId: this.runId,
       specId: this.specId,
-      stepId: "test",
+      stepId: "test-gate",
       digest: this.digest,
       byteLength: this.byteLength,
       finalizedAt: this.finalizedAt,

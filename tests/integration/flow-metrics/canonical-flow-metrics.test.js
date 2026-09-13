@@ -46,7 +46,7 @@ describe("CanonicalMetricsFlowIndex", () => {
       execution: { mode: "direct" },
       specRecord: {
         goal: "Read metrics from the V1 catalog.",
-        requirements: [{ id: "R-1", desc: "Use the Store." }],
+        requirements: [],
       },
     }).create();
     flowManager.incrementMetric("draft", "question", { specId: fixture.specId });

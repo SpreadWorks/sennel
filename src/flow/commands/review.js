@@ -409,7 +409,7 @@ import { VALID_PHASES } from "../../lib/constants.js";
 import { loadMergedGuardrails, filterByPhase } from "../../lib/guardrail.js";
 import { resolveMaxAttempts } from "../definition.js";
 import { flattenSteps } from "../lib/step-tree.js";
-import { WorkerArtifactRevision } from "../lib/worker-artifact-revision.js";
+import { RequirementTestReviewSource } from "../lib/requirement-test-artifacts.js";
 import { CanonicalSpecTestTopology } from "../lib/canonical-worker-artifacts.js";
 
 const REVIEW_PHASE_NODE_MAP = {
@@ -598,7 +598,7 @@ function reviewTestArtifactRevision() {
   } catch (error) {
     throw new Error(`${REVIEW_TEST_ARTIFACT_REVISION_ENV} must be JSON: ${error.message}`);
   }
-  return WorkerArtifactRevision.from(revision);
+  return RequirementTestReviewSource.fromJSON(revision);
 }
 
 function reviewTestSourceTopology(repositoryRoot) {
@@ -1608,7 +1608,7 @@ function buildImplReviewPrompt({ requirementFileMap = {}, requirementSourceScope
       modeList,
       "Non-blocking improvements are optional. Do not generate one unless it names a touched file, describes an observable issue in that file, and provides a replacement action that names the affected function, branch, assertion, prompt sentence, or artifact field.",
       "File-specific findings must use a file from the touched file set.",
-      "Implementation review is static. Do not require running tests or completing test-execute as a prerequisite; scenario-validity, test-execute, test-result-review, impl-gate, and final-regression own runtime verdicts.",
+      "Implementation review is static. Do not require running tests or completing test-execute as a prerequisite; requirement-test-gate, test-execute, test-result-review, impl-gate, and final-regression own runtime verdicts.",
       "For task review, a task spec's Test Strategy describes the later spec-level execution plan, not evidence that must already exist during task-review.",
       "requirementId is always required and must use one of the allowed target requirement IDs.",
       "A missing_acceptance_requirement blocker may omit file only when its requirementId identifies the missing target requirement.",
@@ -3103,7 +3103,7 @@ function buildTestFixPrompt(testDesign, gaps, testFiles) {
     .build();
 }
 
-const TEST_REVIEW_JSON_FILE = "test-review.json";
+const TEST_REVIEW_JSON_FILE = "requirement-test-review.json";
 const TEST_COVERAGE_JSON_FILE = "test-coverage.json";
 const TEST_REVIEW_FINDING_KINDS = Object.freeze(["blocking", "advisory"]);
 const TEST_REVIEW_TRUNCATION_SUFFIX = " [truncated]";
@@ -3315,7 +3315,8 @@ class TestCoverageArtifact {
     this.version = 1;
     this.phase = "test-review";
     this.generatedAt = generatedAt;
-    this.sourceTestArtifactRevision = WorkerArtifactRevision.from(sourceTestArtifactRevision);
+    this.sourceTestArtifactRevision = sourceTestArtifactRevision instanceof RequirementTestReviewSource
+      ? sourceTestArtifactRevision : RequirementTestReviewSource.fromJSON(sourceTestArtifactRevision);
     this.validation = Object.freeze({
       ok: headerResult.ok === true,
       messages: headerResult.messages || [],
@@ -3355,7 +3356,8 @@ class TestCoverageArtifact {
 class TestCoverageFailureArtifact {
   constructor(message, sourceTestArtifactRevision) {
     this.message = normalizeTestReviewText(message, "coverage artifact generation failed");
-    this.sourceTestArtifactRevision = WorkerArtifactRevision.from(sourceTestArtifactRevision);
+    this.sourceTestArtifactRevision = sourceTestArtifactRevision instanceof RequirementTestReviewSource
+      ? sourceTestArtifactRevision : RequirementTestReviewSource.fromJSON(sourceTestArtifactRevision);
   }
 
   toPromptSummary() {
@@ -3391,7 +3393,8 @@ class TestReviewArtifact {
     this.phase = "test";
     this.generatedAt = generatedAt;
     this.coverageArtifact = coverageArtifact;
-    this.sourceTestArtifactRevision = WorkerArtifactRevision.from(sourceTestArtifactRevision);
+    this.sourceTestArtifactRevision = sourceTestArtifactRevision instanceof RequirementTestReviewSource
+      ? sourceTestArtifactRevision : RequirementTestReviewSource.fromJSON(sourceTestArtifactRevision);
     this.blockingFindings = blocking.map((item) => item instanceof TestReviewFinding ? item : new TestReviewFinding("blocking", item));
     this.advisoryFindings = advisory.map((item) => item instanceof TestReviewFinding ? item : new TestReviewFinding("advisory", item));
     this.toolingOutcome = toolingOutcome == null
@@ -3457,7 +3460,7 @@ function buildTestReviewPrompt(requirements, coverageArtifact, testFiles) {
       "Do not fail for advisory findings.",
       "Do not ask for a review/fix/re-review loop.",
       "Do not rewrite tests. Report the smallest requiredChange for blocking findings.",
-      "Runtime pass/fail belongs to scenario-validity, test-execute, test-result-review, impl-gate, and final-regression.",
+      "Runtime pass/fail belongs to requirement-test-gate, test-execute, test-result-review, impl-gate, and final-regression.",
       "",
       "Return JSON only. The response object must contain:",
       "- blockingFindings[] with title, target, issue, requiredChange, whyBlocking, origin, failureKind, plus testPaths[] for existing canonical spec tests or createTestPaths[] for required new canonical spec tests",
@@ -3960,11 +3963,13 @@ async function runTestReview(root, flow, spec, config, dryRun) {
   const testSourceTopology = reviewTestSourceTopology(root);
   const sourceTestArtifactRevision = reviewTestArtifactRevision();
   sourceTestArtifactRevision.assertFlow(flow);
-  if (sourceTestArtifactRevision.stepId !== "test") {
-    throw new Error("test-review requires a canonical test-step artifact revision");
-  }
 
-  const requirements = extractRequirements(spec);
+  const assignedRequirement = spec.requirements?.find((entry) => entry.id === sourceTestArtifactRevision.requirementId);
+  if (!assignedRequirement || assignedRequirement.testable === false) {
+    throw new Error("test-review source does not identify a testable Requirement");
+  }
+  const reviewSpec = { ...spec, requirements: [assignedRequirement] };
+  const requirements = extractRequirements(reviewSpec);
   if (!requirements) {
     console.error("Error: no requirements defined in spec.json");
     process.exit(EXIT_ERROR);
@@ -3974,15 +3979,19 @@ async function runTestReview(root, flow, spec, config, dryRun) {
   let headerBlockingFindings = [];
   let artifactPaths;
   try {
-    const { validateTestHeaders, collectFileHeaders, formatValidationMessages } = await import("../lib/test-headers.js");
+    const { validateAssignedRequirementTestHeaders, collectFileHeaders, formatValidationMessages } = await import("../lib/test-headers.js");
     const absoluteSpecDir = testSourceDirectory;
-    const headerResult = validateTestHeaders({
+    const assignedValidation = validateAssignedRequirementTestHeaders({
       specDir: absoluteSpecDir,
       spec,
+      assignedRequirementId: sourceTestArtifactRevision.requirementId,
+      secondaryRequirementIds: spec.requirements.filter((entry) => entry.id !== sourceTestArtifactRevision.requirementId).map((entry) => entry.id),
+      candidatePaths: sourceTestArtifactRevision.candidatePaths,
     });
+    const headerResult = assignedValidation.result;
     headerResult.messages = formatValidationMessages(headerResult);
     coverageArtifact = new TestCoverageArtifact({
-      spec,
+      spec: reviewSpec,
       specDir: absoluteSpecDir,
       headerResult,
       fileHeaders: collectFileHeaders(absoluteSpecDir),
@@ -4009,7 +4018,7 @@ async function runTestReview(root, flow, spec, config, dryRun) {
     console.error(`  [test-review] JSON saved to ${artifactPaths.reviewJsonPath}`);
     console.error(`  [test-review] Coverage saved to ${artifactPaths.coveragePath}`);
     console.error("  [test-review] outcome=TOOLING_ERROR stage=parse attempt=1 maxAttempts=1 toolingKind=coverage_error blocking=0 advisory=0");
-    console.log("Test review TOOLING_ERROR. Coverage artifact generation failed; see test-review.json.");
+    console.log("Test review TOOLING_ERROR. Coverage artifact generation failed; see requirement-test-review.json.");
     return;
   }
 
@@ -4097,7 +4106,7 @@ async function runTestReview(root, flow, spec, config, dryRun) {
     console.error(`  [test-review] Coverage saved to ${artifactPaths.coveragePath}`);
     const stage = kind === "parser_error" ? "parse" : "communication";
     console.error(`  [test-review] outcome=TOOLING_ERROR stage=${stage} attempt=1 maxAttempts=1 toolingKind=${kind} blocking=0 advisory=0`);
-    console.log("Test review TOOLING_ERROR. Static review tooling failed; see test-review.json.");
+    console.log("Test review TOOLING_ERROR. Static review tooling failed; see requirement-test-review.json.");
     return;
   }
 

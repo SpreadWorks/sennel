@@ -70,10 +70,10 @@ describe("ProducerArtifactReadiness", () => {
       null,
       "optional implementation map availability remains owned by review's domain check",
     );
-    assert.ok(
-      producerArtifactReadiness({ producerNodeId: "scenario-validity", consumerNodeId: "test-review" })
-        instanceof ProducerArtifactReadiness,
-      "scenario validity's retained primary result remains required by test review",
+    assert.equal(
+      producerArtifactReadiness({ producerNodeId: "scenario-validity", consumerNodeId: "test-review" }),
+      null,
+      "retired scenario validity is not a Requirement test lifecycle producer",
     );
     assert.equal(
       producerArtifactReadiness({ producerNodeId: "scenario-validity", consumerNodeId: "acceptance-review" }),

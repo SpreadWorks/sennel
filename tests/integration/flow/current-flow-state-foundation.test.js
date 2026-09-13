@@ -2440,7 +2440,8 @@ describe("Current Flow state foundation", () => {
   it("classifies state-changing Activity operations for derived timestamp authority", () => {
     for (const operation of [
       "complete_task_review_stage",
-      "settle_test_review_repair_timeout",
+      "initialize_requirement_test_lifecycle",
+      "advance_requirement_test_lifecycle",
       "recover_task_execution_overrun",
       "advance_task_review_stage",
     ]) {

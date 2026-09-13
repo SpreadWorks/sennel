@@ -15,12 +15,40 @@ import {
   CanonicalWorkerTestTree,
   CanonicalWorkerTestTreeSnapshot,
 } from "../../src/flow/lib/canonical-worker-artifacts.js";
+import {
+  RequirementTestCandidateBundle,
+  RequirementTestCandidateSource,
+} from "../../src/flow/lib/requirement-test-artifacts.js";
+import {
+  RequirementTestBundleLineage,
+  RequirementTestBundleRevision,
+} from "../../src/flow/lib/requirement-test-lifecycle.js";
+import { SpecRevisionIdentity } from "../../src/flow/lib/spec-revision-identity.js";
 
 const digest = (value) => crypto.createHash("sha256").update(value).digest("hex");
-const revision = {
-  version: 1, runId: "run-batches", specId: "batches", stepId: "test", digest: digest("tree"),
-  byteLength: 1, finalizedAt: "2026-01-01T00:00:00.000Z",
-};
+const specRevision = new SpecRevisionIdentity({
+  specId: "batches", revision: 1, digest: digest("spec"), byteLength: 100,
+});
+const candidateSource = RequirementTestCandidateSource.fromBytes({
+  testPath: "tests/shared.test.js", bytes: Buffer.from("// spec: R1\n"),
+});
+const sourceCandidate = new RequirementTestCandidateBundle({
+  bundle: new RequirementTestBundleRevision({
+    requirementId: "R1", specRevision, revision: 1, paths: [candidateSource.testPath],
+    lineage: new RequirementTestBundleLineage({
+      requirementId: "R1", specRevision, bundleRevision: 1, predecessorRevision: null,
+      sourceAttempt: { id: "attempt-generate", sequence: 1 }, sourceFindingFingerprints: [],
+    }),
+  }),
+  sources: [candidateSource],
+});
+const staleCandidateSource = RequirementTestCandidateSource.fromBytes({
+  testPath: "tests/shared.test.js", bytes: Buffer.from("// spec: R1\n// stale\n"),
+});
+const staleSourceCandidate = new RequirementTestCandidateBundle({
+  bundle: sourceCandidate.bundle,
+  sources: [staleCandidateSource],
+});
 
 function finding(id, { target = "shared.test.js:R1", testPaths = undefined, createTestPaths = undefined, text = "Repair the missing assertion." } = {}) {
   return new TestReviewRepairFinding({
@@ -32,8 +60,8 @@ function finding(id, { target = "shared.test.js:R1", testPaths = undefined, crea
 
 function repair(findings) {
   return new CanonicalTestReviewRepair({
-    state: { schemaRevision: 3, runId: "run-batches", specId: "batches" }, attempt: 1,
-    artifactDigest: digest("review"), evidenceId: digest("evidence"), sourceTestRevision: revision,
+    state: { schemaRevision: 3, runId: "run-batches", specId: "batches", attempt: { id: "attempt-repair", sequence: 2 } }, attempt: 1,
+    artifactDigest: digest("review"), evidenceId: digest("evidence"), sourceCandidate,
     blockingFindings: findings,
   });
 }
@@ -45,14 +73,14 @@ function sources(...entries) {
 describe("test-review repair batches", () => {
   it("groups 13 shared-file findings deterministically and preserves one-finding batching", (t) => {
     const canonical = repair(Array.from({ length: 13 }, (_, index) => finding(`F-${index + 1}`)));
-    const progress = TestReviewRepairProgress.start(canonical);
     const fixedTargetFileBytes = 227_523;
     const inputSources = sources(["shared.test.js", fixedTargetFileBytes]);
+    const progress = TestReviewRepairProgress.start(canonical, inputSources);
     const plan = new TestReviewRepairBatchPlanner({ repair: canonical, testSources: inputSources }).plan(progress);
     assert.deepEqual(plan.map((batch) => batch.findingIds.length), [8, 5]);
     assert.equal(plan[0].batchId, new TestReviewRepairBatchPlanner({ repair: canonical, testSources: inputSources }).plan(progress)[0].batchId);
     const single = repair([finding("only")]);
-    const singleBatch = TestReviewRepairProgress.start(single).nextBatch(single, inputSources);
+    const singleBatch = TestReviewRepairProgress.start(single, inputSources).nextBatch(single, inputSources);
     assert.deepEqual(singleBatch.findingIds, ["only"]);
     const measure = (contracts) => {
       const started = process.hrtime.bigint();
@@ -114,9 +142,9 @@ describe("test-review repair batches", () => {
 
   it("splits deterministically at every configured batch cap", () => {
     const shared = repair([finding("one"), finding("two")]);
-    const progress = TestReviewRepairProgress.start(shared);
     const source = sources(["shared.test.js", 100], ["a.test.js", 80], ["b.test.js", 80], ["c.test.js", 80]);
-    const plan = (findings, limits) => new TestReviewRepairBatchPlanner({ repair: repair(findings), testSources: source, limits }).plan(TestReviewRepairProgress.start(repair(findings)));
+    const progress = TestReviewRepairProgress.start(shared, source);
+    const plan = (findings, limits) => new TestReviewRepairBatchPlanner({ repair: repair(findings), testSources: source, limits }).plan(TestReviewRepairProgress.start(repair(findings), source));
     assert.equal(plan(shared.blockingFindings, { ...TEST_REVIEW_REPAIR_BATCH_LIMITS, findingCount: 1 }).length, 2);
     assert.equal(plan([finding("text-one", { text: "x".repeat(700) }), finding("text-two", { text: "x".repeat(700) })], { ...TEST_REVIEW_REPAIR_BATCH_LIMITS, findingTextChars: 2_000 }).length, 2);
     assert.equal(plan([
@@ -132,19 +160,20 @@ describe("test-review repair batches", () => {
 
   it("fails closed for stale, partial, mismatched, or scope-escaping persisted batch receipts", () => {
     const canonical = repair([finding("receipt-one"), finding("receipt-two")]);
-    const batch = TestReviewRepairProgress.start(canonical).nextBatch(canonical, sources(["shared.test.js", 128]));
+    const stagedSources = sources(["shared.test.js", 128]);
+    const batch = TestReviewRepairProgress.start(canonical, stagedSources).nextBatch(canonical, stagedSources);
     const receipt = {
       batchId: batch.batchId,
       findingIds: [...batch.findingIds],
       beforeTreeDigest: digest("before"), afterTreeDigest: digest("after"),
       changedPaths: [{ path: "shared.test.js", beforeDigest: digest("before-file"), afterDigest: digest("after-file") }],
-      sourceTestRevision: revision,
+      sourceCandidate: sourceCandidate.toJSON(),
       handoffDigest: digest("handoff"), requestDigest: digest("request"), payloadDigest: digest("payload"),
     };
-    const completed = TestReviewRepairProgress.start(canonical).markBatchComplete(canonical, batch, receipt);
+    const completed = TestReviewRepairProgress.start(canonical, stagedSources).markBatchComplete(canonical, batch, receipt, stagedSources);
     const selectedContract = canonical.forBatch(batch).toJSON();
     const recognize = (progressDocument) => testReviewRepairProgressReceiptForSelectedContract({
-      state: { schemaRevision: 3, runId: "run-batches", specId: "batches" },
+      state: { schemaRevision: 3, runId: "run-batches", specId: "batches", attempt: { id: "attempt-repair", sequence: 2 } },
       progressDocument, selectedContract, requestDigest: receipt.requestDigest,
     });
     assert.equal(recognize(completed.toJSON()), receipt.handoffDigest);
@@ -156,7 +185,7 @@ describe("test-review repair batches", () => {
     mismatchedFindingIds.entries.forEach((entry) => { entry.handoff.findingIds = [batch.findingIds[0]]; });
     assert.equal(recognize(mismatchedFindingIds), null);
     const staleReceipt = completed.toJSON();
-    staleReceipt.entries.forEach((entry) => { entry.handoff.sourceTestRevision = { ...revision, digest: digest("stale") }; });
+    staleReceipt.entries.forEach((entry) => { entry.handoff.sourceCandidate = staleSourceCandidate.toJSON(); });
     assert.equal(recognize(staleReceipt), null);
     const scopeEscape = completed.toJSON();
     scopeEscape.entries.forEach((entry) => { entry.handoff.changedPaths = [{ path: "escape.test.js", beforeDigest: null, afterDigest: digest("escape") }]; });
@@ -166,15 +195,15 @@ describe("test-review repair batches", () => {
     partialReplay.entries[1].handoff = null;
     assert.equal(recognize(partialReplay), null);
     assert.throws(
-      () => TestReviewRepairProgress.start(canonical).markBatchComplete(canonical, batch, {
-        ...receipt, sourceTestRevision: { ...revision, digest: digest("stale") },
-      }),
-      /source revision is stale/,
+      () => TestReviewRepairProgress.start(canonical, stagedSources).markBatchComplete(canonical, batch, {
+        ...receipt, sourceCandidate: staleSourceCandidate.toJSON(),
+      }, stagedSources),
+      /source candidate is stale/,
     );
     assert.throws(
-      () => TestReviewRepairProgress.start(canonical).markBatchComplete(canonical, batch, {
+      () => TestReviewRepairProgress.start(canonical, stagedSources).markBatchComplete(canonical, batch, {
         ...receipt, changedPaths: [{ path: "escape.test.js", beforeDigest: null, afterDigest: digest("escape") }],
-      }),
+      }, stagedSources),
       /escape its batch capability/,
     );
     const partial = completed.toJSON();

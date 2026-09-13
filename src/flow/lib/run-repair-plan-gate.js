@@ -42,7 +42,7 @@ export default class RunRepairPlanGateCommand extends FlowCommand {
         "run",
         "repair-plan-gate",
         "PLAN_GATE_REPAIR_STAGE_UNSUPPORTED",
-        "plan gate repair requires scenario-validity to be in progress",
+        "plan gate repair requires a supported Gate to be in progress",
       );
     }
     const { phase } = route;

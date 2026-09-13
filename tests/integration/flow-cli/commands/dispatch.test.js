@@ -952,7 +952,7 @@ describe("flow dispatch CLI", () => {
       decisionSnapshot(location).approvalReceipts.map((receipt) => receipt.approvalToken),
       [boundary.envelope.data.dispatch.approvalToken],
     );
-    assert.equal(scenario.manager.canonicalState(scenario.state.specId).current.at(-1), "test");
+    assert.equal(scenario.manager.canonicalState(scenario.state.specId).current.at(-1), "implement");
   });
 
   it("claims a pending auto approval before applying its active route facts", () => {
@@ -968,7 +968,7 @@ describe("flow dispatch CLI", () => {
 
     assert.notEqual(result.status, 0, "the capture worker deliberately fails after auto approval continuation");
     assert.equal(fs.readFileSync(worker.count, "utf8"), "2");
-    assert.equal(scenario.manager.canonicalState(scenario.state.specId).current.at(-1), "test");
+    assert.equal(scenario.manager.canonicalState(scenario.state.specId).current.at(-1), "implement");
     assert.deepEqual(decisionSnapshot(scenario.fixture.location()).approvalReceipts, []);
   });
 
@@ -1133,18 +1133,16 @@ describe("flow dispatch CLI", () => {
     const boundaryAction = boundary.envelope.data.nextAction;
     assert.equal(resumed.envelope.data.nextAction, null, "the deliberately failed worker must not advance the handoff step");
     assert.deepEqual(Object.keys(workerAction), [
+      "digest",
+      "progressDigest",
+      "repositoryFingerprint",
       "taskId",
       "step",
       "action",
-      "instructions",
-      "context",
-      "output_schema",
-      "requires_approval",
-      "maxAttempts",
       "directive",
     ]);
-    assert.equal(workerAction.step, "test");
-    assert.equal(workerAction.action, "write-tests");
+    assert.equal(workerAction.step, "implement");
+    assert.equal(workerAction.action, "run-impl");
     assert.equal(workerAction.context.workerArtifactHandoff.required, true);
     assert.equal(invocation.actionDigest, workerRequest.actionDigest);
     assert.match(invocation.requestDigest, /^[a-f0-9]{64}$/);

@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { FLOW_STEPS, PHASE_MAP } from "../../../src/lib/flow-helpers.js";
 import { getFlowNode } from "../../../src/flow/definition.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 describe("FLOW_STEPS ordering (plan rework)", () => {
   it("has draft review triage and repair steps before their consumers", () => {
     assertStepsAppearInOrder(
@@ -29,13 +30,19 @@ describe("FLOW_STEPS ordering (plan rework)", () => {
     assert.equal(getFlowNode("draft-completion-connector"), null);
   });
 
-  it("has plan gate ordering and scenario-validity before test-review", () => {
+  it("has the fixed Requirement test lifecycle after approval", () => {
     const expectedPrefix = [
       "branch", "prepare-spec", "draft", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
       "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate",
-      "spec", "spec-review", "spec-triage", "spec-repair", "spec-gate", "approval", "test", "scenario-validity", "test-review",
+      "spec", "spec-review", "spec-triage", "spec-repair", "spec-gate", "approval",
+      "test-generate", "test-review", "test-repair", "test-gate",
     ];
     assert.deepEqual(FLOW_STEPS.slice(0, expectedPrefix.length), expectedPrefix);
+    for (const removed of ["test", "scenario-validity", "repair-test-review"]) {
+      assert.equal(FLOW_STEPS.includes(removed), false);
+      assert.equal(getFlowNode(removed), null);
+      assert.equal(FLOW_COMMANDS.run[removed], undefined);
+    }
   });
 
   it("does not contain approach (removed in spec 178)", () => {
@@ -73,11 +80,11 @@ describe("FLOW_STEPS ordering (plan rework)", () => {
     assert.equal(node.resolveMaxAttempts({ autoApprove: false }), 4);
   });
 
-  it("sets test review retry budget from recent convergence data", () => {
+  it("keeps each Requirement review checkpoint single-attempt", () => {
     const node = getFlowNode("test-review");
 
-    assert.equal(node.resolveMaxAttempts({ autoApprove: true }), 5);
-    assert.equal(node.resolveMaxAttempts({ autoApprove: false }), 5);
+    assert.equal(node.resolveMaxAttempts({ autoApprove: true }), 1);
+    assert.equal(node.resolveMaxAttempts({ autoApprove: false }), 1);
   });
 
   it("sets implementation review retry budget from recent convergence data", () => {

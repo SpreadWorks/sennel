@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "required": ["completed", "result_path", "raw_output_path", "artifact_version", "result"],
+  "properties": {
+    "completed": { "type": "boolean" },
+    "result": {
+      "type": "string",
+      "enum": ["assertion_failed", "assertion_passed", "invalid_test", "tooling_failure", "skipped", "missing"]
+    },
+    "result_path": { "type": "string", "const": "steps/test-gate/result.json" },
+    "raw_output_path": { "type": "string", "const": "steps/test-gate/output.log" },
+    "artifact_version": { "type": "string", "enum": ["1"] }
+  },
+  "additionalProperties": false
+}

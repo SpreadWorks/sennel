@@ -362,23 +362,6 @@ export class NextActionDirectiveResolver {
       });
     }
     const reviewDisposition = this.descriptor.reviewDisposition;
-    if (reviewDisposition?.operation === "repair-test-review") {
-      return new RepairEvidenceDirective({
-        actionId: "REPAIR_TEST_REVIEW",
-        evidenceKind: "test",
-        phase: "test",
-        instruction: "Run the guarded test-review repair transition. It binds the rejected review Attempt and current cataloged test revision, then starts a replacement test worker Attempt.",
-        reason: "The definition selected the repair route from the current canonical test-review evidence.",
-        nextAction: guardedCommand("sennel flow run repair-test-review", this.state, this.binding),
-      });
-    }
-    if (reviewDisposition?.operation === "repair-evidence-blocked") {
-      return new BlockedDirective({
-        code: "TEST_REVIEW_REPAIR_EVIDENCE_INVALID",
-        reason: "The definition rejected the current test-review evidence as structurally unavailable for repair.",
-        resumeInstruction: "Produce a canonical REJECTED test-review result with typed blocking findings and a current test revision; do not rerun or repair stale evidence directly.",
-      });
-    }
     if (reviewDisposition?.operation === "blocked") {
       const reason = `The definition exhausted ${reviewDisposition.phase} review retries (${reviewDisposition.attempts}/${reviewDisposition.maxAttempts}) for the current canonical evidence.`;
       return new BlockedDirective({

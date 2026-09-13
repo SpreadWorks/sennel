@@ -3,6 +3,11 @@ import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ArtifactAuthority, ArtifactAuthoritySlot, ArtifactCardinality } from "./artifact-authority.js";
 import { FLOW_ARTIFACT_AUTHORITY_MATRIX } from "../flow/lib/flow-artifact-authority.js";
+import {
+  RequirementTestCandidateBundle,
+  RequirementTestDeferredReceipt,
+  RequirementTestPlanArtifact,
+} from "../flow/lib/requirement-test-artifacts.js";
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const ROOT_ARTIFACT_KEYS = new Set([
@@ -157,7 +162,7 @@ export class FlowArtifactPlacement {
       return;
     }
     if (this.value === "transient") {
-      const stepLog = /^steps\/(?:scenario-validity|test-execute)\/output\.log$/.test(target)
+      const stepLog = /^steps\/(?:test-gate|test-execute)\/output\.log$/.test(target)
         || /^steps\/final-regression\/attempt-:\{attempt\}\.log$/.test(target);
       if ((!target.startsWith(".runtime/") && !stepLog) || lifetime !== "transient" || cataloged !== false) {
         throw new Error("transient placement requires a non-cataloged transient runtime or step log path");
@@ -277,6 +282,83 @@ export class FlowArtifactAttemptHistoryContent extends FlowArtifactContentContra
     if (previousBytes !== null) next.assertExtends(this.parse(previousBytes));
     return next;
   }
+}
+
+function parseArtifactJson(bytes, field) {
+  if (!Buffer.isBuffer(bytes)) throw new Error(`${field} content must be a Buffer`);
+  try { return JSON.parse(bytes.toString("utf8")); } catch (error) {
+    throw new Error(`${field} content must be valid JSON: ${error.message}`);
+  }
+}
+
+/** Validates the persisted Requirement work journal without selecting its next transition. */
+export class RequirementTestPlanContent extends FlowArtifactContentContract {
+  constructor() { super(); Object.freeze(this); }
+  parse(bytes) {
+    return RequirementTestPlanArtifact.fromJSON(parseArtifactJson(bytes, "Requirement test plan"));
+  }
+  assertPublication(previousBytes, nextBytes) {
+    const next = this.parse(nextBytes);
+    if (previousBytes === null) return next;
+    const previous = this.parse(previousBytes);
+    if (!next.plan.specRevision.equals(previous.plan.specRevision)) {
+      const previousRevision = previous.plan.specRevision;
+      const nextRevision = next.plan.specRevision;
+      if (nextRevision.specId !== previousRevision.specId
+        || nextRevision.revision.value <= previousRevision.revision.value) {
+        throw new Error("Requirement test plan identity cannot change");
+      }
+      // A newly approved immutable Spec revision starts a fresh Requirement
+      // lifecycle. Counters and bundle lineage belong to the prior revision
+      // and therefore must not constrain the replacement plan.
+      return next;
+    }
+    if (next.plan.workItems.length !== previous.plan.workItems.length) {
+      throw new Error("Requirement test plan identity cannot change");
+    }
+    for (let index = 0; index < previous.plan.workItems.length; index += 1) {
+      const before = previous.plan.workItems[index];
+      const after = next.plan.workItems[index];
+      if (after.requirementId !== before.requirementId
+        || !after.specRevision.equals(before.specRevision)
+        || after.expectation.toString() !== before.expectation.toString()) {
+        throw new Error("Requirement test plan work item identity cannot change");
+      }
+      for (const kind of ["autoSemantic", "manualSemantic", "tooling"]) {
+        if (after.budget[kind] < before.budget[kind]) {
+          throw new Error("Requirement test plan budget counters cannot decrease");
+        }
+      }
+      const beforeRevision = before.bundleRevision?.revision ?? null;
+      const afterRevision = after.bundleRevision?.revision ?? null;
+      if (beforeRevision !== null && (afterRevision === null || afterRevision < beforeRevision)) {
+        throw new Error("Requirement test plan bundle revision cannot decrease");
+      }
+      if (beforeRevision !== null && afterRevision === beforeRevision
+        && !isDeepStrictEqual(after.bundleRevision.toJSON(), before.bundleRevision.toJSON())) {
+        throw new Error("Requirement test plan bundle identity cannot change at the same revision");
+      }
+    }
+    return next;
+  }
+}
+
+/** Validates the immutable manifest for one Requirement candidate bundle. */
+export class RequirementTestCandidateBundleContent extends FlowArtifactContentContract {
+  constructor() { super(); Object.freeze(this); }
+  parse(bytes) {
+    return RequirementTestCandidateBundle.fromJSON(parseArtifactJson(bytes, "Requirement test candidate bundle"));
+  }
+  assertPublication(previousBytes, nextBytes) { return this.parse(nextBytes); }
+}
+
+/** Validates one immutable deferred acceptance handoff. */
+export class RequirementTestDeferredReceiptContent extends FlowArtifactContentContract {
+  constructor() { super(); Object.freeze(this); }
+  parse(bytes) {
+    return RequirementTestDeferredReceipt.fromJSON(parseArtifactJson(bytes, "Requirement test deferred receipt"));
+  }
+  assertPublication(previousBytes, nextBytes) { return this.parse(nextBytes); }
 }
 
 export class FlowArtifactLegacyTarget {
@@ -1452,10 +1534,10 @@ export class FlowArtifactRegistry {
 const FLOW_ARTIFACT_PLACEMENTS = new Map([
   ...["flow.state", "flow.activities", "spec.record", "issue.log", "artifact.catalog", "issue.snapshot"].map((key) => [key, new FlowArtifactPlacement("root-authority")]),
   ...["spec.snapshot", "spec.review"].map((key) => [key, new FlowArtifactPlacement("revision-authority")]),
-  ...["report", "ideas", "tests.source", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
+  ...["report", "ideas", "tests.source", "test.requirement.candidate.bundle", "test.requirement.candidate.source", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
   ...["upgrade.result", "completion.overrides", "retry.recovery", "flow.findings", "nonblocking.handoffs"].map((key) => [key, new FlowArtifactPlacement("step-shared")]),
   ...[
-    "scenario.validity.raw-log", "test.execute.raw-log", "final.regression.raw-log",
+    "test.requirement.gate.raw-log", "test.execute.raw-log", "final.regression.raw-log",
     "retry.recovery.transaction", "impl.repair.transaction", "test.requirement.summary", "review.work.unit",
     "finalize.cleanup.runtime-log", "finalize.cleanup.journal", "runtime.step-metadata",
     "runtime.lock.issue-log", "runtime.lock.current-flow-state", "runtime.lock.artifact-catalog",
@@ -1465,8 +1547,8 @@ const FLOW_ARTIFACT_PLACEMENTS = new Map([
   ...[
     "draft", "draft.questions.review", "draft.questions.triage", "draft.questions.repair",
     "draft.coverage.review", "draft.coverage.triage", "draft.coverage.repair", "draft.gate.source", "draft.gate",
-    "spec.gate.source", "spec.gate", "scenario.validity",
-    "test.review", "test.review.repair.progress", "test.bootstrap.observation", "test.execute", "test.result.review", "impl.review", "impl.triage", "impl.repair",
+    "spec.gate.source", "spec.gate", "test.requirement.plan", "test.requirement.failure", "test.requirement.review", "test.requirement.repair.progress", "test.requirement.gate", "test.requirement.deferred",
+    "test.execute", "test.result.review", "impl.review", "impl.triage", "impl.repair",
     "impl.gate.source", "impl.gate", "retro", "acceptance.review", "acceptance.review.evidence", "acceptance.decision", "final.regression",
     "file.map", "placeholder.permission", "gate.memory", "repair.fingerprint", "repair.delta", "repair.migration",
     "task.triage", "task.repair", "task.review", "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.review.aborted.work-unit", "task.gate.source", "task.gate", "task.mutation.lineage", "review.evidence", "activity.evidence",
@@ -1483,11 +1565,15 @@ const FLOW_ARTIFACT_MUTATION_POLICIES = new Map([
   ["source.handoff.event", new FlowArtifactMutationPolicy("immutable")],
   ["source.handoff.settlement", new FlowArtifactMutationPolicy("immutable")],
   ["source.handoff.rollback-blob", new FlowArtifactMutationPolicy("immutable")],
+  ["test.requirement.candidate.bundle", new FlowArtifactMutationPolicy("immutable")],
+  ["test.requirement.candidate.source", new FlowArtifactMutationPolicy("immutable")],
+  ["test.requirement.failure", new FlowArtifactMutationPolicy("immutable")],
+  ["test.requirement.deferred", new FlowArtifactMutationPolicy("immutable")],
 ]);
 
 const FLOW_ARTIFACT_ATTEMPT_HISTORY_KEYS = new Set([
-  "draft.questions.review", "draft.coverage.review", "scenario.validity",
-  "test.review", "test.execute", "test.result.review", "impl.review", "task.review", "task.triage", "task.repair",
+  "draft.questions.review", "draft.coverage.review", "test.requirement.review", "test.requirement.gate",
+  "test.execute", "test.result.review", "impl.review", "task.review", "task.triage", "task.repair",
   // Gates are ordinary producer Steps, not a mutable side file.  Retaining
   // each completed gate evaluation here gives retry/recovery the same
   // ordered Attempt history as reviews and test execution.
@@ -1496,6 +1582,14 @@ const FLOW_ARTIFACT_ATTEMPT_HISTORY_KEYS = new Set([
 ]);
 const FLOW_ARTIFACT_ATTEMPT_HISTORY_CONTENT = new FlowArtifactAttemptHistoryContent();
 const FLOW_ARTIFACT_ACTIVITY_EVIDENCE_CONTENT = new FlowArtifactActivityEvidenceContent();
+const REQUIREMENT_TEST_PLAN_CONTENT = new RequirementTestPlanContent();
+const REQUIREMENT_TEST_CANDIDATE_BUNDLE_CONTENT = new RequirementTestCandidateBundleContent();
+const REQUIREMENT_TEST_DEFERRED_RECEIPT_CONTENT = new RequirementTestDeferredReceiptContent();
+const FLOW_ARTIFACT_CONTENT_BY_KEY = new Map([
+  ["test.requirement.plan", REQUIREMENT_TEST_PLAN_CONTENT],
+  ["test.requirement.candidate.bundle", REQUIREMENT_TEST_CANDIDATE_BUNDLE_CONTENT],
+  ["test.requirement.deferred", REQUIREMENT_TEST_DEFERRED_RECEIPT_CONTENT],
+]);
 
 function placementFor(logicalKey) {
   const placement = FLOW_ARTIFACT_PLACEMENTS.get(logicalKey);
@@ -1519,10 +1613,12 @@ const FLOW_ARTIFACT_OWNER_STEP_BY_KEY = new Map([
   ["draft.gate", "draft-gate"],
   ["spec.gate.source", "spec-gate"],
   ["spec.gate", "spec-gate"],
-  ["scenario.validity", "scenario-validity"],
-  ["test.review", "test-review"],
-  ["test.review.repair.progress", "test"],
-  ["test.bootstrap.observation", "test"],
+  ["test.requirement.plan", "test-generate"],
+  ["test.requirement.failure", "test-gate"],
+  ["test.requirement.review", "test-review"],
+  ["test.requirement.repair.progress", "test-repair"],
+  ["test.requirement.gate", "test-gate"],
+  ["test.requirement.deferred", "test-gate"],
   ["test.execute", "test-execute"],
   ["test.result.review", "test-result-review"],
   ["impl.review", "impl-review"],
@@ -1536,7 +1632,7 @@ const FLOW_ARTIFACT_OWNER_STEP_BY_KEY = new Map([
   ["acceptance.decision", "acceptance-decision"],
   ["final.regression", "final-regression"],
   ["file.map", "implement"],
-  ["placeholder.permission", "test"],
+  ["placeholder.permission", "test-generate"],
   ["gate.memory", "impl-gate"],
   ["repair.fingerprint", "impl-repair"],
   ["repair.delta", "impl-repair"],
@@ -1564,9 +1660,10 @@ function contract(logicalKey, canonicalPath, kind, authority, publicationStep, o
   return new FlowArtifactContract({
     logicalKey, canonicalPath, placement: placementFor(logicalKey), mutationPolicy: mutationPolicyFor(logicalKey),
     stepOwner: stepOwnerFor(logicalKey),
-    contentContract: FLOW_ARTIFACT_ATTEMPT_HISTORY_KEYS.has(logicalKey)
-      ? FLOW_ARTIFACT_ATTEMPT_HISTORY_CONTENT
-      : logicalKey === "activity.evidence" ? FLOW_ARTIFACT_ACTIVITY_EVIDENCE_CONTENT : null,
+    contentContract: FLOW_ARTIFACT_CONTENT_BY_KEY.get(logicalKey)
+      ?? (FLOW_ARTIFACT_ATTEMPT_HISTORY_KEYS.has(logicalKey)
+        ? FLOW_ARTIFACT_ATTEMPT_HISTORY_CONTENT
+        : logicalKey === "activity.evidence" ? FLOW_ARTIFACT_ACTIVITY_EVIDENCE_CONTENT : null),
     retention, ownership, cataloged,
     authoritySlot: new FlowArtifactAuthoritySlot({ kind, authority, publicationStep, cardinality }),
   });
@@ -1581,7 +1678,7 @@ const NORMAL_FLOW_STEP_ACTORS = Object.freeze([...AUTHORITY_ACTORS].filter((acto
 const FLOW_WIDE_RECORD_ACTORS = Object.freeze(["system", ...NORMAL_FLOW_STEP_ACTORS]);
 const FLOW_FINDING_SOURCE_ACTORS = Object.freeze([
   "draft-questions-review", "draft-coverage-review", "draft-gate", "spec-review", "spec-gate",
-  "scenario-validity", "test-review", "test-result-review", "task-review", "task-gate",
+  "test-generate", "test-review", "test-repair", "test-gate", "test-result-review", "task-review", "task-gate",
   "impl-review", "impl-gate", "retro",
 ]);
 // Acceptance and final-regression can continue an unavailable check. That
@@ -1593,7 +1690,7 @@ const FLOW_FINDING_PUBLICATION_ACTORS = Object.freeze([
 ]);
 const NONBLOCKING_HANDOFF_SOURCE_ACTORS = Object.freeze([
   "draft-questions-review", "draft-coverage-review", "draft-gate", "spec-gate",
-  "scenario-validity", "test-review", "test-result-review", "task-review", "task-gate",
+  "test-result-review", "task-review", "task-gate",
   "impl-review", "impl-gate", "retro", "acceptance-review", "final-regression",
 ]);
 const SOURCE_HANDOFF_ACTORS = Object.freeze([
@@ -1615,7 +1712,7 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
     // The renderer is a Store-backed system consumer. It may regenerate an
     // ephemeral human view but never writes a second Spec authority.
     "system", "draft", "draft-questions-review", "draft-coverage-review", "draft-gate", "spec", "spec-review", "spec-triage",
-    "spec-repair", "spec-gate", "approval", "test", "scenario-validity", "test-review", "test-execute",
+    "spec-repair", "spec-gate", "approval", "test-generate", "test-review", "test-repair", "test-gate", "test-execute",
     "test-result-review", "implement", "impl-review", "impl-triage", "impl-repair", "impl-gate", "retro", "acceptance-review", "acceptance-decision",
     "final-regression", "report", "finalize-merge", "task-impl", "task-review", "task-triage", "task-repair", "task-gate",
   ])),
@@ -1633,7 +1730,7 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("spec.review", "revisions/:{revision}/review.json", "spec-review", "canonical-flow-artifacts", "system", own(
     ["system", "spec-review", "spec-triage", "spec-repair"],
     ["system", "spec-review", "spec-triage", "spec-repair"],
-    ["system", "spec-review", "spec-triage", "spec-repair", "spec-gate"],
+    ["system", "spec-review", "spec-triage", "spec-repair", "spec-gate", "approval"],
   ), "permanent", "collection"),
   // Issue-log entries are durable facts produced by the active Flow leaf.
   // The catalog descriptor is therefore associated with that leaf's Activity
@@ -1667,10 +1764,43 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("draft.gate", "steps/draft-gate/result.json", "draft-gate", "canonical-flow-artifacts", "draft-gate", own("draft-gate", ["draft-gate"], ["spec"])),
   contract("spec.gate.source", "steps/spec-gate/source.json", "spec-gate-source", "canonical-flow-artifacts", "spec-gate", own("spec-gate", ["spec-gate"], ["spec-gate", "approval"])),
   contract("spec.gate", "steps/spec-gate/result.json", "spec-gate", "canonical-flow-artifacts", "spec-gate", own("spec-gate", ["spec-gate"], ["approval"])),
-  contract("scenario.validity", "steps/scenario-validity/result.json", "scenario-validity", "canonical-flow-artifacts", "scenario-validity", own("scenario-validity", ["scenario-validity"], ["test", "test-review", "implement", "acceptance-review"])),
-  contract("test.review", "steps/test-review/result.json", "test-review", "canonical-flow-artifacts", "test-review", own("test-review", ["test-review"], ["system", "test", "test-review", "implement", "impl-review"])),
-  contract("test.review.repair.progress", "steps/test/repair-progress.json", "test-review-repair-progress", "canonical-flow-artifacts", "test", own("test", ["test"], ["test", "scenario-validity", "test-review"])),
-  contract("test.bootstrap.observation", "steps/test/bootstrap-observation.json", "test-bootstrap-observation", "canonical-flow-artifacts", "test", own("test", ["test"], ["test", "scenario-validity", "test-review"])),
+  contract("test.requirement.plan", "steps/test-generate/plan.json", "test-requirement-plan", "canonical-flow-artifacts", "approval", own(
+    "approval",
+    ["approval", "test-generate", "test-review", "test-repair", "test-gate"],
+    ["test-generate", "test-review", "test-repair", "test-gate", "implement", "test-execute", "test-result-review", "impl-review", "impl-gate", "retro", "acceptance-review", "acceptance-decision", "final-regression", "report"],
+  )),
+  contract("test.requirement.failure", "steps/test-gate/deferred-source/:{requirementId}.json", "test-requirement-failure", "canonical-flow-artifacts", "test-generate", own(
+    ["test-generate", "test-repair"],
+    ["test-generate", "test-repair"],
+    ["test-generate", "test-repair", "test-gate", "implement", "acceptance-review", "acceptance-decision", "report"],
+  ), "permanent", "collection"),
+  contract("test.requirement.candidate.bundle", "artifacts/test-candidates/:{requirementId}/revision-:{bundleRevision}/bundle.json", "test-requirement-candidate-bundle", "canonical-flow-artifacts", "test-generate", own(
+    ["test-generate", "test-repair"],
+    ["test-generate", "test-repair"],
+    ["test-generate", "test-review", "test-repair", "test-gate"],
+  ), "permanent", "collection"),
+  contract("test.requirement.candidate.source", "artifacts/test-candidates/:{requirementId}/revision-:{bundleRevision}/sources/:{testPath}", "test-requirement-candidate-source", "canonical-flow-artifacts", "test-generate", own(
+    ["test-generate", "test-repair"],
+    ["test-generate", "test-repair"],
+    ["test-generate", "test-review", "test-repair", "test-gate"],
+  ), "permanent", "collection"),
+  contract("test.requirement.review", "steps/test-review/result.json", "test-requirement-review", "canonical-flow-artifacts", "test-review", own(
+    "test-review", ["test-review"], ["test-review", "test-repair", "test-gate"],
+  )),
+  // Content identity is contextual: canonicalTestReviewRepairProgress binds
+  // these mutable bytes to the active Flow, review evidence, candidate
+  // bundle, and source Attempt before the coordinator resumes a batch.
+  contract("test.requirement.repair.progress", "steps/test-repair/progress/:{requirementId}.json", "test-requirement-repair-progress", "canonical-flow-artifacts", "test-repair", own(
+    "test-repair", ["test-repair"], ["test-repair"],
+  ), "permanent", "collection"),
+  contract("test.requirement.gate", "steps/test-gate/result.json", "test-requirement-gate", "canonical-flow-artifacts", "test-gate", own(
+    "test-gate", ["test-gate"], ["test-gate", "test-generate", "test-review", "implement"],
+  )),
+  contract("test.requirement.deferred", "steps/test-gate/deferred/:{requirementId}.json", "test-requirement-deferred", "canonical-flow-artifacts", "test-gate", own(
+    ["test-generate", "test-review", "test-repair", "test-gate"],
+    ["test-generate", "test-review", "test-repair", "test-gate"],
+    ["test-generate", "test-review", "test-repair", "test-gate", "implement", "test-execute", "test-result-review", "impl-review", "impl-gate", "retro", "acceptance-review", "acceptance-decision", "final-regression", "report"],
+  ), "permanent", "collection"),
   contract("test.execute", "steps/test-execute/result.json", "test-execute", "canonical-flow-artifacts", "test-execute", own("test-execute", ["test-execute"], ["test-review", "test-result-review", "impl-review", "impl-repair", "impl-gate", "task-gate", "acceptance-review", "final-regression", "retro", "report"])),
   contract("test.result.review", "steps/test-result-review/result.json", "test-result-review", "canonical-flow-artifacts", "test-result-review", own("test-result-review", ["test-result-review"], ["test-review", "impl-review", "impl-repair", "impl-gate", "task-gate", "acceptance-review", "final-regression", "retro", "report"])),
   contract("impl.review", "steps/impl/review/result.json", "impl-review", "canonical-flow-artifacts", "impl-review", own("impl-review", ["impl-review"], ["system", "impl-triage", "impl-repair", "impl-gate", "acceptance-review"])),
@@ -1697,11 +1827,11 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("file.map", "steps/impl/file-map.json", "file-map", "execution-checkout", "implement", own(["implement", "task-impl"], ["implement", "impl-repair", "task-impl", "task-repair"], ["system", "implement", "impl-repair", "task-impl", "task-repair", "test-execute", "test-result-review", "impl-review", "impl-gate", "report"])),
   // upgrade.js is the actual writer; this shared progress evidence is consumed by gates and reporting.
   contract("upgrade.result", "steps/upgrade-result.json", "upgrade-result", "canonical-flow-artifacts", "system", own("system", ["system", "impl-gate"], ["impl-gate", "acceptance-review", "final-regression", "report"])),
-  contract("placeholder.permission", "steps/test/permission.json", "placeholder-permission", "canonical-flow-artifacts", "system", own("test", ["system", "test"], ["scenario-validity", "test-review", "impl-gate"])),
+  contract("placeholder.permission", "steps/test-generate/permission.json", "placeholder-permission", "canonical-flow-artifacts", "system", own("test-generate", ["system", "test-generate"], ["test-review", "test-gate", "impl-gate"])),
   contract("completion.overrides", "steps/completion-overrides.json", "completion-overrides", "canonical-flow-artifacts", "system", own("system", ["system"], ["test-review", "test-result-review", "impl-review", "impl-gate", "acceptance-review", "final-regression"])),
-  contract("retry.recovery", "steps/retry-recovery.json", "retry-recovery", "canonical-flow-artifacts", "system", own("system", ["system"], ["draft-gate", "spec-gate", "impl-gate", "test-review", "impl-review"])),
-  contract("retry.recovery.baseline", "artifacts/retry-recovery/baselines/:{routeId}/:{attemptId}.json", "retry-recovery-baseline", "canonical-flow-artifacts", "system", own(["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "task-gate", "impl-gate"], ["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "task-gate", "impl-gate"], ["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "task-gate", "impl-gate"]), "permanent", "collection"),
-  contract("retry.recovery.receipt", "artifacts/retry-recovery/receipts/:{routeId}/:{attemptId}.json", "retry-recovery-receipt", "canonical-flow-artifacts", "system", own(["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "task-gate", "impl-gate"], ["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "task-gate", "impl-gate"], ["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "task-gate", "impl-gate"]), "permanent", "collection"),
+  contract("retry.recovery", "steps/retry-recovery.json", "retry-recovery", "canonical-flow-artifacts", "system", own("system", ["system"], ["draft-gate", "spec-gate", "test-gate", "impl-gate", "test-review", "impl-review"])),
+  contract("retry.recovery.baseline", "artifacts/retry-recovery/baselines/:{routeId}/:{attemptId}.json", "retry-recovery-baseline", "canonical-flow-artifacts", "system", own(["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "test-gate", "task-gate", "impl-gate"], ["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "test-gate", "task-gate", "impl-gate"], ["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "test-gate", "task-gate", "impl-gate"]), "permanent", "collection"),
+  contract("retry.recovery.receipt", "artifacts/retry-recovery/receipts/:{routeId}/:{attemptId}.json", "retry-recovery-receipt", "canonical-flow-artifacts", "system", own(["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "test-gate", "task-gate", "impl-gate"], ["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "test-gate", "task-gate", "impl-gate"], ["system", "draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review", "draft-gate", "spec-gate", "test-gate", "task-gate", "impl-gate"]), "permanent", "collection"),
   contract("source.handoff.rollback-blob", "artifacts/source-handoffs/:{handoffId}/rollback/:{blobDigest}.json", "source-handoff-rollback-blob", "canonical-flow-artifacts", "implement", own(SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS), "permanent", "collection"),
   contract("source.handoff.checkpoint", "artifacts/source-handoffs/:{handoffId}/checkpoint.json", "source-handoff-checkpoint", "canonical-flow-artifacts", "implement", own(SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS), "permanent", "collection"),
   contract("source.handoff.event", "artifacts/source-handoffs/:{handoffId}/events/:{eventSequence}-:{eventDigest}.json", "source-handoff-event", "canonical-flow-artifacts", "implement", own(SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS), "permanent", "collection"),
@@ -1738,20 +1868,20 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
     FLOW_WIDE_RECORD_ACTORS,
     FLOW_WIDE_RECORD_ACTORS,
   ), "permanent", "collection"),
-  contract("tests.source", "artifacts/tests/:{testPath}", "test-source", "canonical-flow-artifacts", "system", own("test", ["system", "test"], ["test", "scenario-validity", "test-review", "implement", "test-execute", "final-regression"]), "permanent", "collection"),
+  contract("tests.source", "artifacts/tests/:{testPath}", "test-source", "canonical-flow-artifacts", "test-gate", own("test-gate", ["test-gate"], ["test-generate", "test-review", "test-repair", "test-gate", "implement", "test-execute", "final-regression"]), "permanent", "collection"),
   contract("flow.findings", "steps/flow-findings.json", "flow-findings", "canonical-flow-artifacts", "impl-review", own(
     FLOW_FINDING_PUBLICATION_ACTORS,
     FLOW_FINDING_PUBLICATION_ACTORS,
     ["system", ...FLOW_FINDING_PUBLICATION_ACTORS],
   )),
-  contract("nonblocking.handoffs", "steps/nonblocking-handoffs.json", "nonblocking-handoffs", "canonical-flow-artifacts", "scenario-validity", own(
+  contract("nonblocking.handoffs", "steps/nonblocking-handoffs.json", "nonblocking-handoffs", "canonical-flow-artifacts", "test-result-review", own(
     NONBLOCKING_HANDOFF_SOURCE_ACTORS,
     NONBLOCKING_HANDOFF_SOURCE_ACTORS,
     NONBLOCKING_HANDOFF_SOURCE_ACTORS,
   )),
   // Transient records are non-cataloged. Transactions and worker state are
   // runtime-only; execution logs remain next to the step that produced them.
-  contract("scenario.validity.raw-log", "steps/scenario-validity/output.log", "scenario-validity-log", "canonical-flow-artifacts", "scenario-validity", own("scenario-validity", ["scenario-validity"], ["scenario-validity", "acceptance-review"]), "transient", "singleton", false),
+  contract("test.requirement.gate.raw-log", "steps/test-gate/output.log", "test-requirement-gate-log", "canonical-flow-artifacts", "test-gate", own("test-gate", ["test-gate"], ["test-gate"]), "transient", "singleton", false),
   contract("test.execute.raw-log", "steps/test-execute/output.log", "test-execute-log", "canonical-flow-artifacts", "test-execute", own("test-execute", ["test-execute"], ["test-execute", "test-result-review", "impl-gate"]), "transient", "singleton", false),
   contract("final.regression.raw-log", "steps/final-regression/attempt-:{attempt}.log", "final-regression-log", "canonical-flow-artifacts", "final-regression", own("final-regression", ["final-regression"], ["final-regression"]), "transient", "collection", false),
   contract("retry.recovery.transaction", ".runtime/retry-recovery/transaction.json", "retry-recovery-transaction", "canonical-flow-artifacts", "system", own("system", ["system"], ["system"]), "transient", "singleton", false),
@@ -1824,10 +1954,14 @@ export const FLOW_ARTIFACT_SWITCH_TARGETS = Object.freeze([
   target("draft.gate", ["draft-gate-result.json"], "steps/draft-gate/result.json", "draft-gate", "spec"),
   target("spec.gate.source", ["spec-gate-source.json"], "steps/spec-gate/source.json", "spec-gate", "spec-gate"),
   target("spec.gate", ["spec-gate-result.json"], "steps/spec-gate/result.json", "spec-gate", "approval"),
-  target("scenario.validity", ["scenario-validity-result.json"], "steps/scenario-validity/result.json", "scenario-validity", "test-review"),
-  target("test.review", ["test-review.json", "test-coverage.json"], "steps/test-review/result.json", "test-review", "implement"),
-  newTarget("test.review.repair.progress", "steps/test/repair-progress.json", "test", "test"),
-  newTarget("test.bootstrap.observation", "steps/test/bootstrap-observation.json", "test", "test"),
+  newTarget("test.requirement.plan", "steps/test-generate/plan.json", "approval", "test-generate"),
+  newTarget("test.requirement.failure", "steps/test-gate/deferred-source/:{requirementId}.json", "test-generate", "acceptance-review"),
+  newTarget("test.requirement.candidate.bundle", "artifacts/test-candidates/:{requirementId}/revision-:{bundleRevision}/bundle.json", "test-generate", "test-review"),
+  newTarget("test.requirement.candidate.source", "artifacts/test-candidates/:{requirementId}/revision-:{bundleRevision}/sources/:{testPath}", "test-generate", "test-review"),
+  newTarget("test.requirement.review", "steps/test-review/result.json", "test-review", "test-repair"),
+  newTarget("test.requirement.repair.progress", "steps/test-repair/progress/:{requirementId}.json", "test-repair", "test-repair"),
+  newTarget("test.requirement.gate", "steps/test-gate/result.json", "test-gate", "implement"),
+  newTarget("test.requirement.deferred", "steps/test-gate/deferred/:{requirementId}.json", "test-gate", "acceptance-review"),
   target("test.execute", ["test-execute-result.json"], "steps/test-execute/result.json", "test-execute", "test-result-review"),
   target("test.result.review", ["test-result-review.json"], "steps/test-result-review/result.json", "test-result-review", "impl-review"),
   target("impl.review", ["impl-review.json"], "steps/impl/review/result.json", "impl-review", "impl-triage"),
@@ -1845,7 +1979,7 @@ export const FLOW_ARTIFACT_SWITCH_TARGETS = Object.freeze([
   patternTarget("plugin.lifecycle.artifact", [new FlowArtifactLegacyPattern("plugin-artifacts/:{pluginArtifactPath}", { excludedPrefixes: ["plugin-artifacts/workflow/ideas.json"] })], "artifacts/plugin-artifacts/:{pluginArtifactPath}", "system", "system"),
   target("file.map", ["file-map.json"], "steps/impl/file-map.json", "implement", "impl-review"),
   target("upgrade.result", ["upgrade-result.json"], "steps/upgrade-result.json", "system", "impl-gate"),
-  target("placeholder.permission", ["placeholder-permission.json"], "steps/test/permission.json", "test", "test-review"),
+  target("placeholder.permission", ["placeholder-permission.json"], "steps/test-generate/permission.json", "test-generate", "test-review"),
   target("completion.overrides", ["completion-overrides.json"], "steps/completion-overrides.json", "system", "impl-gate"),
   target("retry.recovery", ["retry-recovery.json"], "steps/retry-recovery.json", "system", "impl-gate"),
   newTarget("retry.recovery.baseline", "artifacts/retry-recovery/baselines/:{routeId}/:{attemptId}.json", "system", "system"),
@@ -1870,10 +2004,10 @@ export const FLOW_ARTIFACT_SWITCH_TARGETS = Object.freeze([
   newTarget("task.mutation.lineage", "steps/impl/:{taskId}/impl/mutation-lineage/:{attemptId}.json", "task-impl", "task-review"),
   patternTarget("review.evidence", ["review-evidence/:{digest}.json"], "steps/:{ownerPath}/evidence/:{digest}.json", "impl-review", "impl-gate"),
   newTarget("activity.evidence", "steps/:{ownerPath}/activity-evidence/:{digest}.json", "system", "system"),
-  patternTarget("tests.source", [new FlowArtifactLegacyPattern("tests/:{testPath}", { excludedPrefixes: ["tests/.raw/"] })], "artifacts/tests/:{testPath}", "test", "test-review"),
+  patternTarget("tests.source", [new FlowArtifactLegacyPattern("tests/:{testPath}", { excludedPrefixes: ["tests/.raw/"] })], "artifacts/tests/:{testPath}", "test-gate", "test-execute"),
   target("flow.findings", ["flow-findings.json"], "steps/flow-findings.json", "impl-review", "impl-gate"),
-  target("nonblocking.handoffs", ["nonblocking-handoffs.json"], "steps/nonblocking-handoffs.json", "scenario-validity", "acceptance-review"),
-  target("scenario.validity.raw-log", ["tests/.raw/scenario-validity.log"], "steps/scenario-validity/output.log", "scenario-validity", "scenario-validity"),
+  target("nonblocking.handoffs", ["nonblocking-handoffs.json"], "steps/nonblocking-handoffs.json", "test-result-review", "acceptance-review"),
+  newTarget("test.requirement.gate.raw-log", "steps/test-gate/output.log", "test-gate", "test-gate"),
   target("test.execute.raw-log", ["tests/.raw/test-execution.log"], "steps/test-execute/output.log", "test-execute", "test-execute"),
   patternTarget("final.regression.raw-log", ["tests/.raw/final-regression-attempt-:{attempt}.log"], "steps/final-regression/attempt-:{attempt}.log", "final-regression", "final-regression"),
   target("retry.recovery.transaction", [".retry-recovery.transaction.json"], ".runtime/retry-recovery/transaction.json", "system", "system"),
@@ -1902,6 +2036,8 @@ export const FLOW_ARTIFACT_SWITCH_TARGETS = Object.freeze([
   removeTarget("legacy.derived.views", ["draft.md", "draft-review.md", "draft-review-questions.md", "draft-review-coverage.md", "spec.md", "spec-review.md", "test.md", "test-review.md", "test-result-review.md", "review.md", "qa.md"]),
   removeTarget("legacy.task.views", [], ["tasks/:{taskView}.md"]),
   removeTarget("legacy.derived.review.artifacts", ["draft-review-questions-repair.json", "spec-review-triage.json"]),
+  removeTarget("legacy.scenario.validity", ["scenario-validity-result.json", "tests/.raw/scenario-validity.log"]),
+  removeTarget("legacy.test.review", ["test-review.json", "test-coverage.json"]),
   removeTarget("legacy.review.history", [], [new FlowArtifactLegacyPattern("review-history/:{historyPath}", { excludedPrefixes: ["review-history/work-units/"] })]),
   removeTarget("legacy.finalize.envelopes", ["report-envelope.json", "recovery-envelope.json"], [], "finalize-cleanup", "finalize-cleanup"),
   removeTarget("legacy.raw.logs", ["tests/.raw/final-regression.log"]),
@@ -1921,7 +2057,7 @@ export const FLOW_ARTIFACT_NORMAL_FLOW_FILES = Object.freeze([
   known("draft.coverage.review", "switch", "draft-review-coverage.json"), known("draft.coverage.triage", "switch", "draft-coverage-triage.json"), known("draft.coverage.repair", "switch", "draft-coverage-repair.json"),
   known("draft.gate.source", "switch", "draft-gate-source.json"), known("draft.gate", "switch", "draft-gate-result.json"),
   known("spec.gate.source", "switch", "spec-gate-source.json"), known("spec.gate", "switch", "spec-gate-result.json"),
-  known("scenario.validity", "switch", "scenario-validity-result.json"), known("test.review", "switch", "test-review.json"), known("test.review", "switch", "test-coverage.json"), knownNew("test.review.repair.progress", "steps/test/repair-progress.json"), knownNew("test.bootstrap.observation", "steps/test/bootstrap-observation.json"), known("test.execute", "switch", "test-execute-result.json"), known("test.result.review", "switch", "test-result-review.json"),
+  knownNew("test.requirement.plan", "steps/test-generate/plan.json"), knownNew("test.requirement.failure", "steps/test-gate/deferred-source/:{requirementId}.json"), knownNew("test.requirement.candidate.bundle", "artifacts/test-candidates/:{requirementId}/revision-:{bundleRevision}/bundle.json"), knownNew("test.requirement.candidate.source", "artifacts/test-candidates/:{requirementId}/revision-:{bundleRevision}/sources/:{testPath}"), knownNew("test.requirement.review", "steps/test-review/result.json"), knownNew("test.requirement.repair.progress", "steps/test-repair/progress/:{requirementId}.json"), knownNew("test.requirement.gate", "steps/test-gate/result.json"), knownNew("test.requirement.deferred", "steps/test-gate/deferred/:{requirementId}.json"), known("test.execute", "switch", "test-execute-result.json"), known("test.result.review", "switch", "test-result-review.json"),
   known("impl.review", "switch", "impl-review.json"), known("impl.triage", "switch", "impl-triage.json"), known("impl.repair", "switch", "impl-repair.json"), known("impl.gate.source", "switch", "impl-gate-source.json"), known("impl.gate", "switch", "impl-gate-result.json"), known("retro", "switch", "retro.json"),
   known("acceptance.review", "switch", "acceptance-review.json"), known("acceptance.review.evidence", "switch", "acceptance-review-evidence.json"), knownNew("acceptance.decision", "steps/acceptance-decision/result.json"), known("final.regression", "switch", "final-regression-result.json"), known("report", "switch", "report.json"), known("ideas", "switch", "ideas.json"), known("ideas", "switch", "plugin-artifacts/workflow/ideas.json"), knownPattern("plugin.lifecycle.artifact", "switch", new FlowArtifactLegacyPattern("plugin-artifacts/:{pluginArtifactPath}", { excludedPrefixes: ["plugin-artifacts/workflow/ideas.json"] })), known("file.map", "switch", "file-map.json"),
   known("upgrade.result", "switch", "upgrade-result.json"), known("placeholder.permission", "switch", "placeholder-permission.json"), known("completion.overrides", "switch", "completion-overrides.json"), known("retry.recovery", "switch", "retry-recovery.json"), knownNew("retry.recovery.baseline", "artifacts/retry-recovery/baselines/:{routeId}/:{attemptId}.json"), knownNew("retry.recovery.receipt", "artifacts/retry-recovery/receipts/:{routeId}/:{attemptId}.json"), knownNew("source.handoff.rollback-blob", "artifacts/source-handoffs/:{handoffId}/rollback/:{blobDigest}.json"), knownNew("source.handoff.checkpoint", "artifacts/source-handoffs/:{handoffId}/checkpoint.json"), knownNew("source.handoff.event", "artifacts/source-handoffs/:{handoffId}/events/:{eventSequence}-:{eventDigest}.json"), knownNew("source.handoff.settlement", "artifacts/source-handoffs/:{handoffId}/settlement.json"), knownNew("task.review.unsealed.checkpoint", "steps/impl/:{taskId}/review/recovery/unsealed/:{attemptId}.json"), knownNew("task.review.recovery.authorization", "steps/impl/:{taskId}/review/recovery/authorizations/:{attemptId}.json"), known("gate.memory", "switch", "gate-impl-memory.json"),
@@ -1929,11 +2065,11 @@ export const FLOW_ARTIFACT_NORMAL_FLOW_FILES = Object.freeze([
   known("task.gate.source", "switch", "task-impl-gate-source.json"), known("task.gate", "switch", "task-impl-gate-result.json"), knownNew("task.mutation.lineage", "steps/impl/:{taskId}/impl/mutation-lineage/:{attemptId}.json"), knownPattern("review.evidence", "switch", "review-evidence/:{digest}.json"), knownPattern("tests.source", "switch", new FlowArtifactLegacyPattern("tests/:{testPath}", { excludedPrefixes: ["tests/.raw/"] })),
   knownNew("activity.evidence", "steps/:{ownerPath}/activity-evidence/:{digest}.json"),
   knownNew("task.review.reconciliation", "steps/impl/:{taskId}/review/recovery/reconciliations/:{attemptId}.json"), knownNew("task.review.aborted.work-unit", "steps/impl/:{taskId}/review/recovery/aborted/:{attemptId}.json"),
-  known("flow.findings", "switch", "flow-findings.json"), known("nonblocking.handoffs", "switch", "nonblocking-handoffs.json"), known("scenario.validity.raw-log", "switch", "tests/.raw/scenario-validity.log"), known("test.execute.raw-log", "switch", "tests/.raw/test-execution.log"), knownPattern("final.regression.raw-log", "switch", "tests/.raw/final-regression-attempt-:{attempt}.log"), known("retry.recovery.transaction", "switch", ".retry-recovery.transaction.json"), known("test.requirement.summary", "switch", "tests/.raw/requirement-summary.json"), knownPattern("review.work.unit", "switch", "review-history/work-units/:{workUnitPath}"), knownNew("runtime.step-metadata", ".runtime/step-metadata/:{stepId}.json"),
+  known("flow.findings", "switch", "flow-findings.json"), known("nonblocking.handoffs", "switch", "nonblocking-handoffs.json"), knownNew("test.requirement.gate.raw-log", "steps/test-gate/output.log"), known("test.execute.raw-log", "switch", "tests/.raw/test-execution.log"), knownPattern("final.regression.raw-log", "switch", "tests/.raw/final-regression-attempt-:{attempt}.log"), known("retry.recovery.transaction", "switch", ".retry-recovery.transaction.json"), known("test.requirement.summary", "switch", "tests/.raw/requirement-summary.json"), knownPattern("review.work.unit", "switch", "review-history/work-units/:{workUnitPath}"), knownNew("runtime.step-metadata", ".runtime/step-metadata/:{stepId}.json"),
   known("finalize.cleanup.agent-metrics", "switch", "agent-metrics.json"), known("finalize.cleanup.notes", "switch", "notes.json"), known("finalize.cleanup.plugin-artifacts", "switch", "plugin-artifacts.json"), known("finalize.cleanup.runtime-log", "switch", "runtime-log.json"), known("finalize.cleanup.journal", "switch", "finalize-cleanup.json"),
   known("runtime.lock.issue-log", "switch", ".issue-log.lock"), known("runtime.lock.current-flow-state", "switch", ".current-flow-state.lock"), known("runtime.lock.artifact-catalog", "switch", ".artifact-catalog.lock"), known("runtime.lock.retry-recovery", "switch", ".retry-recovery.lock"), known("runtime.lock.flow-state-writer", "switch", ".flow.json.writer.lock"), knownPattern("runtime.lock.flow-state-writer-owner", "switch", ".flow.json.writer.:{ownerToken}.owner.tmp"), knownPattern("runtime.lock.impl-repair", "switch", ".impl-repair.lock/:{lockPath}"),
   knownPattern("runtime.lock.issue-log-owner", "switch", "..issue-log.lock.:{ownerToken}.owner.tmp"), knownPattern("runtime.lock.current-flow-state-owner", "switch", "..current-flow-state.lock.:{ownerToken}.owner.tmp"), knownPattern("runtime.lock.artifact-catalog-owner", "switch", "..artifact-catalog.lock.:{ownerToken}.owner.tmp"), knownPattern("runtime.lock.retry-recovery-owner", "switch", "..retry-recovery.lock.:{ownerToken}.owner.tmp"),
-  known("legacy.flow.version", "remove", "flow-version.json"), known("legacy.activity.view", "remove", "activities.md"), known("legacy.derived.views", "remove", "draft.md"), known("legacy.derived.views", "remove", "draft-review.md"), known("legacy.derived.views", "remove", "draft-review-questions.md"), known("legacy.derived.views", "remove", "draft-review-coverage.md"), known("legacy.derived.views", "remove", "spec.md"), known("legacy.derived.views", "remove", "spec-review.md"), known("legacy.derived.views", "remove", "test.md"), known("legacy.derived.views", "remove", "test-review.md"), known("legacy.derived.views", "remove", "test-result-review.md"), known("legacy.derived.views", "remove", "review.md"), known("legacy.derived.views", "remove", "qa.md"), knownPattern("legacy.task.views", "remove", "tasks/:{taskView}.md"), known("legacy.derived.review.artifacts", "remove", "draft-review-questions-repair.json"), known("legacy.derived.review.artifacts", "remove", "spec-review-triage.json"), knownPattern("legacy.review.history", "remove", new FlowArtifactLegacyPattern("review-history/:{historyPath}", { excludedPrefixes: ["review-history/work-units/"] })), known("legacy.finalize.envelopes", "remove", "report-envelope.json"), known("legacy.finalize.envelopes", "remove", "recovery-envelope.json"), known("legacy.raw.logs", "remove", "tests/.raw/final-regression.log"),
+  known("legacy.flow.version", "remove", "flow-version.json"), known("legacy.activity.view", "remove", "activities.md"), known("legacy.derived.views", "remove", "draft.md"), known("legacy.derived.views", "remove", "draft-review.md"), known("legacy.derived.views", "remove", "draft-review-questions.md"), known("legacy.derived.views", "remove", "draft-review-coverage.md"), known("legacy.derived.views", "remove", "spec.md"), known("legacy.derived.views", "remove", "spec-review.md"), known("legacy.derived.views", "remove", "test.md"), known("legacy.derived.views", "remove", "test-review.md"), known("legacy.derived.views", "remove", "test-result-review.md"), known("legacy.derived.views", "remove", "review.md"), known("legacy.derived.views", "remove", "qa.md"), knownPattern("legacy.task.views", "remove", "tasks/:{taskView}.md"), known("legacy.derived.review.artifacts", "remove", "draft-review-questions-repair.json"), known("legacy.derived.review.artifacts", "remove", "spec-review-triage.json"), known("legacy.scenario.validity", "remove", "scenario-validity-result.json"), known("legacy.scenario.validity", "remove", "tests/.raw/scenario-validity.log"), known("legacy.test.review", "remove", "test-review.json"), known("legacy.test.review", "remove", "test-coverage.json"), knownPattern("legacy.review.history", "remove", new FlowArtifactLegacyPattern("review-history/:{historyPath}", { excludedPrefixes: ["review-history/work-units/"] })), known("legacy.finalize.envelopes", "remove", "report-envelope.json"), known("legacy.finalize.envelopes", "remove", "recovery-envelope.json"), known("legacy.raw.logs", "remove", "tests/.raw/final-regression.log"),
 ]);
 
 export const FLOW_ARTIFACT_LEGACY_SWITCH_TARGETS = Object.freeze([

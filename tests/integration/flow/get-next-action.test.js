@@ -36,7 +36,6 @@ import { flattenSteps, findStepById } from "../../../src/flow/lib/step-tree.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import {
   ReviewDeferralEvidence,
-  ReviewRepairEvidence,
   ReviewTransitionFacts,
 } from "../../../src/flow/lib/review-transition-facts.js";
 import { validateSchema } from "../../../src/lib/schema-validate.js";
@@ -167,31 +166,6 @@ describe("flow get next-action", () => {
     }).operation, "execute-refine");
   });
 
-  it("projects test-review retry exhaustion from definition-owned persisted facts", () => {
-    const rejected = { phase: "test", counter: "reviewRetry", delta: 1 };
-    const repair = resolveReviewTransition({
-      stepId: "test-review",
-      flowState: { metrics: [rejected, rejected, rejected, rejected], policy: { nonblocking: null } },
-      facts: new ReviewTransitionFacts({
-        scope: "flow",
-        phase: "test",
-        verdict: "REJECTED",
-        repairEvidence: new ReviewRepairEvidence({ status: "available" }),
-      }),
-    });
-    const blocked = resolveReviewTransition({
-      stepId: "test-review",
-      flowState: { metrics: [rejected, rejected, rejected, rejected, rejected], policy: { nonblocking: null } },
-      facts: new ReviewTransitionFacts({ scope: "flow", phase: "test", verdict: "REJECTED" }),
-    });
-
-    assert.equal(repair.operation, "repair-test-review");
-    assert.equal(blocked.operation, "blocked");
-    assert.deepEqual(blocked.toJSON(), {
-      operation: "blocked", phase: "test", attempts: 5, maxAttempts: 5,
-    });
-  });
-
   it("keeps exhausted flow Reviews active before draft/impl rejection routes leave Review", () => {
     const metric = (phase) => ({ phase, counter: "reviewRetry", delta: 1 });
     const cases = [
@@ -308,11 +282,11 @@ describe("flow get next-action", () => {
 
   it("keeps tooling observations as definition-owned external stops", () => {
     const transition = resolveReviewTransition({
-      stepId: "test-review",
+      stepId: "impl-review",
       flowState: { metrics: [], policy: { nonblocking: null } },
       facts: new ReviewTransitionFacts({
         scope: "flow",
-        phase: "test",
+        phase: "impl",
         toolingOutcome: { reason: "provider unavailable" },
       }),
     });
@@ -471,7 +445,7 @@ describe("flow get next-action", () => {
   it("resolves a Task worker action through its materialized Step identity", () => {
     tmp = createTmpDir();
     const scenario = createScenario(tmp, {
-      tasks: [taskDocument("T-1", { spec: "tasks/T-1.md" })],
+      tasks: [taskDocument("T-1")],
     }).atTaskStep("T-1", "task-impl");
 
     const { envelope, exitCode } = runCli(tmp, ["flow", "get", "next-action"]);
@@ -497,7 +471,7 @@ describe("flow get next-action", () => {
   it("keeps the established Task worker envelope field order and context path", () => {
     tmp = createTmpDir();
     createScenario(tmp, {
-      tasks: [taskDocument("T-1", { spec: "tasks/T-1.md" })],
+      tasks: [taskDocument("T-1")],
     }).atTaskStep("T-1", "task-review");
 
     const { envelope, exitCode } = runCli(tmp, ["flow", "get", "next-action"]);
@@ -889,7 +863,7 @@ describe("flow get next-action", () => {
 
     removeTmpDir(tmp);
     tmp = createTmpDir();
-    createScenario(tmp, { tasks: [taskDocument("T-1", { spec: "tasks/T-1.md" })] })
+    createScenario(tmp, { tasks: [taskDocument("T-1")] })
       .atTaskStep("T-1", "task-impl");
     const taskResult = runCli(tmp, ["flow", "get", "next-action"]);
 

@@ -3,7 +3,11 @@ import { afterEach, test } from "node:test";
 
 import RunTestResultReviewCommand from "../../../src/flow/lib/run-test-result-review.js";
 import { attachedCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
-import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import {
+  CanonicalFlowFixture,
+  makeFlowManager,
+  promoteCanonicalRequirementTest,
+} from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { buildRepairFingerprint } from "../../../src/flow/lib/repair-fingerprint.js";
 import { CanonicalTestArtifactStore } from "../../../src/flow/lib/canonical-test-artifacts.js";
@@ -61,25 +65,29 @@ function fixture() {
     specId: "001-test",
     runId: "run-test-result-review-clean-checkout",
     specRecord: {
-      requirements: [{ id: "R1", desc: "Preserve the canonical completion contract.", priority: "must" }],
+      requirements: [{
+        id: "R1", desc: "Preserve the canonical completion contract.", priority: "must",
+        task_ids: ["T1"], preimplementation_test_expectation: "fail",
+      }],
     },
-  }).create().registerActive().activate("test");
-  flowManager.publishArtifacts({
+  }).create().addTask({
+    id: "T1", title: "Fixture Task", goal: "Preserve the completion contract.",
+    origin: "plan", added_round: 0, status: "pending",
+  }).registerActive().activate("approval");
+  flow.settle("approval");
+  promoteCanonicalRequirementTest({
+    flowManager,
     specId: flow.specId,
-    nodeId: "test",
-    artifactWrites: [{
-      logicalKey: "tests.source",
-      parameters: { testPath: "fixture.test.js" },
-      mediaType: "text/javascript",
-      bytes: Buffer.from([
-        "// spec: R1",
-        "import test from 'node:test';",
-        "test('R1: canonical fixture requirement', () => {});",
-        "",
-      ].join("\n"), "utf8"),
-    }],
+    requirementId: "R1",
+    testPath: "fixture.test.js",
+    source: [
+      "// spec: R1",
+      "import test from 'node:test';",
+      "test('R1: canonical fixture requirement', () => { throw new Error('expected before implementation'); });",
+      "",
+    ].join("\n"),
   });
-  flow.settle("test").activate("test-execute");
+  flow.activate("test-execute");
   const repairFingerprint = buildRepairFingerprint({
     root: repository,
     artifactRoot: repository,

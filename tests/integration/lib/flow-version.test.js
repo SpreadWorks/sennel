@@ -1519,7 +1519,7 @@ describe("Version collection writers", () => {
     const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
     const flow = boundary.openVersionStore({ location });
     flow.create(freshState(boundary, location), { specRecord: specRecord() });
-    const rawLog = location.resolve("steps/scenario-validity/output.log");
+    const rawLog = location.resolve("steps/test-gate/output.log");
     const runtimeTransaction = location.resolve(".runtime/retry-recovery/transaction.json");
     fs.mkdirSync(path.dirname(rawLog), { recursive: true });
     fs.mkdirSync(path.dirname(runtimeTransaction), { recursive: true });

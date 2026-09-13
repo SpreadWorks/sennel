@@ -8,6 +8,7 @@ import { createTmpDir, removeTmpDir } from "../../../support/builders/tmp-dir.js
 import {
   CanonicalFlowFixture,
   makeFlowManager,
+  promoteCanonicalRequirementTest,
   setupFlowConfig,
 } from "../../../support/infrastructure/flow-setup.js";
 import { FLOW_STEPS } from "../../../../src/lib/flow-helpers.js";
@@ -113,6 +114,17 @@ function assertAllDoesNotMatch(text, patterns) {
 }
 
 const CATALOGED_REVIEW_FINGERPRINT = "c".repeat(64);
+
+function canonicalReviewFixtureTask() {
+  return {
+    id: "T-1",
+    title: "Canonical review fixture",
+    goal: "Reach the implementation review boundary.",
+    origin: "plan",
+    added_round: 0,
+    status: "pending",
+  };
+}
 
 function reviewFindingCycle(flowManager, flow) {
   return ReviewFindingCycle.fromActivityLedger({
@@ -231,9 +243,9 @@ describe("canonical impl review catalog history", () => {
       execution: { mode: "direct", baseBranch: "main", featureBranch: "main" },
       specRecord: {
         goal: "Keep implementation review history canonical.",
-        requirements: [{ id: "R-1", desc: "Review finding history remains durable." }],
+        requirements: [{ id: "R-1", desc: "Review finding history remains durable.", task_ids: ["T-1"], testable: false }],
       },
-    }).create().registerActive().activate("impl-review");
+    }).create().addTask(canonicalReviewFixtureTask()).registerActive().activate("impl-review");
 
     let flow = fixture.state();
     let cycle = reviewFindingCycle(flowManager, flow);
@@ -366,6 +378,7 @@ describe("normal no-diff canonical review", () => {
     execFileSync("git", ["init", "--initial-branch=main"], { cwd: noDiffRoot, stdio: "pipe" });
     execFileSync("git", ["config", "user.email", "review@example.test"], { cwd: noDiffRoot, stdio: "pipe" });
     execFileSync("git", ["config", "user.name", "Review Fixture"], { cwd: noDiffRoot, stdio: "pipe" });
+    execFileSync("git", ["commit", "--allow-empty", "-m", "review baseline"], { cwd: noDiffRoot, stdio: "pipe" });
 
     const flowManager = makeFlowManager(noDiffRoot);
     const fixture = new CanonicalFlowFixture({
@@ -375,9 +388,9 @@ describe("normal no-diff canonical review", () => {
       execution: { mode: "direct", baseBranch: "main", featureBranch: "main" },
       specRecord: {
         goal: "Exercise a normal no-diff review.",
-        requirements: [{ id: "R-1", desc: "The retry lifecycle remains canonical." }],
+        requirements: [{ id: "R-1", desc: "The retry lifecycle remains canonical.", task_ids: ["T-1"], testable: false }],
       },
-    }).create().registerActive().activate("impl-review");
+    }).create().addTask(canonicalReviewFixtureTask()).registerActive().activate("impl-review");
     execFileSync("git", ["add", "--all"], { cwd: noDiffRoot, stdio: "pipe" });
     execFileSync("git", ["commit", "-m", "canonical review fixture"], { cwd: noDiffRoot, stdio: "pipe" });
 
@@ -450,9 +463,9 @@ describe("normal no-diff canonical review", () => {
       execution: { mode: "direct", baseBranch: "main", featureBranch: "main" },
       specRecord: {
         goal: "Consume the canonical file map during review.",
-        requirements: [{ id: "R-1", desc: "Review the mapped implementation file." }],
+        requirements: [{ id: "R-1", desc: "Review the mapped implementation file.", task_ids: ["T-1"], testable: false }],
       },
-    }).create().registerActive().activate("implement");
+    }).create().addTask(canonicalReviewFixtureTask()).registerActive().activate("implement");
     flowManager.updateFileMap({
       specId: fixture.specId,
       requirementId: "R-1",
@@ -509,8 +522,8 @@ describe("normal no-diff canonical review", () => {
       specId: "001-missing-file-map-review",
       runId: "run-missing-file-map-review",
       execution: { mode: "direct", baseBranch: "main", featureBranch: "main" },
-      specRecord: { requirements: [{ id: "R-1", desc: "Require a durable file map." }] },
-    }).create().registerActive();
+      specRecord: { requirements: [{ id: "R-1", desc: "Require a durable file map.", task_ids: ["T-1"], testable: false }] },
+    }).create().addTask(canonicalReviewFixtureTask()).registerActive();
     // Model an older completion without the optional file.map publication.
     // The review command must still fail closed before the provider sees
     // changed source when its catalog authority is unavailable.
@@ -576,19 +589,27 @@ describe("canonical review target artifact filtering", () => {
       specId: "001-review-target",
       runId: "run-review-target",
       execution: { mode: "direct", baseBranch: "main", featureBranch: "main" },
-      specRecord: { goal: "Preserve canonical test source review input.", requirements: [] },
-    }).create().registerActive().activate("test");
-    flowManager.publishArtifacts({
+      specRecord: {
+        goal: "Preserve canonical test source review input.",
+        requirements: [{
+          id: "R1", desc: "Preserve the promoted source.", task_ids: ["T1"],
+          preimplementation_test_expectation: "fail",
+        }],
+      },
+    }).create().addTask({
+      id: "T1", title: "Fixture Task", goal: "Preserve the promoted source.",
+      origin: "plan", added_round: 0, status: "pending",
+    }).registerActive().activate("approval");
+    fixture.settle("approval");
+    const source = "// spec: R1\nexport const preserved = 1;\n";
+    promoteCanonicalRequirementTest({
+      flowManager,
       specId: fixture.specId,
-      nodeId: "test",
-      artifactWrites: [{
-        logicalKey: "tests.source",
-        parameters: { testPath: "preserved.test.js" },
-        mediaType: "text/javascript",
-        bytes: Buffer.from("export const preserved = 1;\n", "utf8"),
-      }],
+      requirementId: "R1",
+      testPath: "preserved.test.js",
+      source,
     });
-    fixture.settle("test").activate("impl-review");
+    fixture.activate("impl-review");
     const location = fixture.location();
     const canonicalTestPath = path.join(location.directory, "artifacts", "tests", "preserved.test.js");
     const flow = fixture.state();
@@ -1207,19 +1228,27 @@ describe("canonical test review work-unit inputs", () => {
       flowManager,
       specId: "001-test-review-input",
       runId: "run-test-review-input",
-      specRecord: { goal: "Materialize test sources inside one review work unit.", requirements: [] },
-    }).create().registerActive().activate("test");
-    flowManager.publishArtifacts({
+      specRecord: {
+        goal: "Materialize test sources inside one review work unit.",
+        requirements: [{
+          id: "R1", desc: "Materialize the generated candidate.", task_ids: ["T1"],
+          preimplementation_test_expectation: "fail",
+        }],
+      },
+    }).create().addTask({
+      id: "T1", title: "Fixture Task", goal: "Materialize the generated candidate.",
+      origin: "plan", added_round: 0, status: "pending",
+    }).registerActive().activate("approval");
+    fixture.settle("approval");
+    const source = "// spec: R1\nexport const reviewInput = true;\n";
+    promoteCanonicalRequirementTest({
+      flowManager,
       specId: fixture.specId,
-      nodeId: "test",
-      artifactWrites: [{
-        logicalKey: "tests.source",
-        parameters: { testPath: "r1.test.js" },
-        mediaType: "text/javascript",
-        bytes: Buffer.from("export const reviewInput = true;\n", "utf8"),
-      }],
+      requirementId: "R1",
+      testPath: "r1.test.js",
+      source,
+      completion: "generate",
     });
-    fixture.settle("test").settle("scenario-validity").activate("test-review", { settlePredecessors: false });
 
     const workUnit = new CanonicalReviewWorkUnit({
       flowManager,
@@ -1235,7 +1264,7 @@ describe("canonical test review work-unit inputs", () => {
     assert.equal(sources.directory, path.join(prepared.directory, "inputs"));
     assert.equal(
       fs.readFileSync(path.join(prepared.directory, "inputs", "tests", "r1.test.js"), "utf8"),
-      "export const reviewInput = true;\n",
+      source,
     );
     assert.equal(fs.existsSync(path.join(prepared.directory, "tests", "r1.test.js")), false);
     assert.deepEqual(sources.topology.toJSON(), {

@@ -127,9 +127,6 @@ export function fromAcceptanceResult({ ref, source: body }) {
  */
 export function fromVerificationResult({ ref, source: body }, step, classification = null) {
   const found = source(ref, body);
-  if (step === "scenario-validity" && found.value.result !== "pass") {
-    return { ...found, resultKind: (classification ?? NonblockingFailureClassification.fromArtifact(step, found.value)).resultKind };
-  }
   if (step === "test-result-review" && found.value.verdict !== "pass") {
     return { ...found, resultKind: (classification ?? NonblockingFailureClassification.fromArtifact(step, found.value)).resultKind };
   }

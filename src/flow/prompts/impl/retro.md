@@ -12,6 +12,7 @@
        - Look up the matching `summary[]` entry by `id`.
        - `result: "pass"` → `status: "done"`.
        - `result: "fail"` → `status: "not_done"` (carry the `error` text into `note`).
+       - `result: "deferred"` → `status: "deferred"` (carry the canonical receipt source into `note`; do not report it as passing evidence).
      - `testable: false` requirements are excluded from aggregation entirely.
      - The legacy `partial` status is no longer produced.
    - **Output:** `<configured-spec-root>/<specId>/retro.json` (schema = `src/flow/schemas/retro.schema.json`).

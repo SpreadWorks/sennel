@@ -622,6 +622,18 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  completeRequirementTestLifecycle(input = {}) {
+    return this._store.completeRequirementTestLifecycle({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  completeRequirementTestToolingFailure(input = {}) {
+    return this._store.completeRequirementTestToolingFailure({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   appendIssueLog(input = {}) {
     return this._store.appendIssueLog({
       ...input,
@@ -757,30 +769,6 @@ export class FlowManager {
   }
   applyRetroStaleEvidenceRecoveryDecision(input = {}) {
     return this._store.applyRetroStaleEvidenceRecoveryDecision({
-      ...input,
-      specId: input.specId ?? this._boundSpecId,
-    });
-  }
-  repairTestReview(input = {}) {
-    return this._store.repairTestReview({
-      ...input,
-      specId: input.specId ?? this._boundSpecId,
-    });
-  }
-  settleTimedOutTestReviewRepair(input = {}) {
-    return this._store.settleTimedOutTestReviewRepair({
-      ...input,
-      specId: input.specId ?? this._boundSpecId,
-    });
-  }
-  preimplementationBootstrap(input = {}) {
-    return this._store.preimplementationBootstrap({
-      ...input,
-      specId: input.specId ?? this._boundSpecId,
-    });
-  }
-  recoverExistingImplementation(input = {}) {
-    return this._store.recoverExistingImplementation({
       ...input,
       specId: input.specId ?? this._boundSpecId,
     });

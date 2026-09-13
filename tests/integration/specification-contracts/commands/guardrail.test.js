@@ -28,7 +28,9 @@ describe("gate guardrail integration", () => {
     constraints: [],
     design_principles: [],
     overview: { modules: [], data_flow: [], decisions: [] },
-    requirements: [{ id: "REQ-1", desc: "placeholder requirement", task_ids: ["T-default"] }],
+    requirements: [{
+      id: "REQ-1", desc: "placeholder requirement", task_ids: ["T-default"], testable: false,
+    }],
     acceptance_criteria: ["placeholder acceptance criterion"],
     clarifications: [],
     alternatives_considered: [],

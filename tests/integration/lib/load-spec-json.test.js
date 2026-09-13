@@ -27,7 +27,10 @@ function minimalSpec() {
     design_principles: [],
     overview: { modules: [], data_flow: [], decisions: [] },
     background: "",
-    requirements: [{ id: "R1", desc: "d", priority: "must", task_ids: ["T1"] }],
+    requirements: [{
+      id: "R1", desc: "d", priority: "must", task_ids: ["T1"],
+      preimplementation_test_expectation: "fail",
+    }],
     acceptance_criteria: ["ok"],
     clarifications: [],
     alternatives_considered: [],

@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 
 import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
-import { canonicalRepairAttemptOwner } from "./repair-attempt-lineage.js";
-import { WorkerArtifactRevision } from "./worker-artifact-revision.js";
+import { RequirementTestCandidateBundle } from "./requirement-test-artifacts.js";
+import { RequirementTestSourceAttempt } from "./requirement-test-lifecycle.js";
+import { RequirementTestArtifactStore } from "./requirement-test-store.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const MAX_TEXT_LENGTH = 4000;
@@ -49,6 +50,34 @@ function exactObject(value, keys, field) {
   const expected = [...keys].sort();
   if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
     throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", `${field} has an invalid schema`);
+  }
+}
+
+export class TestReviewRepairStagedSource {
+  constructor({ testPath, bytes } = {}) {
+    this.testPath = requiredString(testPath, "test review repair staged source path", 1000);
+    if (this.testPath.startsWith("/") || this.testPath.includes("\\")
+      || this.testPath.split("/").some((part) => part === "" || part === "." || part === "..")
+      || !/\.(?:test|spec)\.(?:[cm]?js|ts)$/.test(this.testPath)) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair staged source path is invalid");
+    }
+    this.bytes = Buffer.isBuffer(bytes) ? Buffer.from(bytes) : Buffer.from(requiredString(bytes, "test review repair staged source bytes"), "base64");
+    this.digest = crypto.createHash("sha256").update(this.bytes).digest("hex");
+    Object.freeze(this);
+  }
+
+  static fromJSON(value) {
+    exactObject(value, ["testPath", "digest", "byteLength", "bytes"], "test review repair staged source");
+    const source = new TestReviewRepairStagedSource({ testPath: value.testPath, bytes: value.bytes });
+    if (source.digest !== value.digest || source.bytes.length !== value.byteLength
+      || source.bytes.toString("base64") !== value.bytes) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair staged source bytes are not canonical");
+    }
+    return source;
+  }
+
+  toJSON() {
+    return { testPath: this.testPath, digest: this.digest, byteLength: this.bytes.length, bytes: this.bytes.toString("base64") };
   }
 }
 
@@ -168,9 +197,11 @@ export class TestReviewRepairScope {
 }
 
 export class TestReviewRepairBatch {
-  constructor({ sourceArtifactDigest, sourceTestRevision, scopes, limits = TEST_REVIEW_REPAIR_BATCH_LIMITS, sourceEntries = [], measurements = null } = {}) {
+  constructor({ sourceArtifactDigest, sourceCandidate, scopes, limits = TEST_REVIEW_REPAIR_BATCH_LIMITS, sourceEntries = [], measurements = null } = {}) {
     this.sourceArtifactDigest = requiredDigest(sourceArtifactDigest, "test review repair batch sourceArtifactDigest");
-    this.sourceTestRevision = WorkerArtifactRevision.from(sourceTestRevision);
+    this.sourceCandidate = sourceCandidate instanceof RequirementTestCandidateBundle
+      ? sourceCandidate
+      : RequirementTestCandidateBundle.fromJSON(sourceCandidate);
     if (!Array.isArray(scopes) || scopes.length === 0) throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "repair batch requires scopes");
     this.scopes = Object.freeze(scopes.map((scope) => scope instanceof TestReviewRepairScope ? scope : new TestReviewRepairScope(scope)));
     this.limits = Object.freeze({ ...TEST_REVIEW_REPAIR_BATCH_LIMITS, ...limits });
@@ -196,7 +227,7 @@ export class TestReviewRepairBatch {
     this.targetFileBytes = measurements?.targetFileBytes ?? measuredBytes;
     this.#assertWithinLimits();
     this.batchId = crypto.createHash("sha256").update(JSON.stringify({
-      sourceArtifactDigest: this.sourceArtifactDigest, sourceTestRevision: this.sourceTestRevision.toJSON(),
+      sourceArtifactDigest: this.sourceArtifactDigest, sourceCandidate: this.sourceCandidate.toJSON(),
       findingIds: this.findingIds, allowedTestPaths: this.allowedTestPaths,
       findingTextChars: this.findingTextChars, targetFileBytes: this.targetFileBytes,
     })).digest("hex");
@@ -236,12 +267,12 @@ export class TestReviewRepairBatchPlanner {
     for (const scope of scopes) {
       const compatible = batches.find((batchScopes) => {
         const candidate = [...batchScopes, scope];
-        try { new TestReviewRepairBatch({ sourceArtifactDigest: this.repair.sourceArtifactDigest, sourceTestRevision: this.repair.sourceTestRevision, scopes: candidate, limits: this.limits, sourceEntries: this.testSources }); return batchScopes.some((entry) => entry.allowedTestPaths.some((path) => scope.allowedTestPaths.includes(path))); } catch { return false; }
+        try { new TestReviewRepairBatch({ sourceArtifactDigest: this.repair.sourceArtifactDigest, sourceCandidate: this.repair.sourceCandidate, scopes: candidate, limits: this.limits, sourceEntries: this.testSources }); return batchScopes.some((entry) => entry.allowedTestPaths.some((path) => scope.allowedTestPaths.includes(path))); } catch { return false; }
       });
       if (compatible) compatible.push(scope);
       else batches.push([scope]);
     }
-    return Object.freeze(batches.map((scopes) => new TestReviewRepairBatch({ sourceArtifactDigest: this.repair.sourceArtifactDigest, sourceTestRevision: this.repair.sourceTestRevision, scopes, limits: this.limits, sourceEntries: this.testSources })));
+    return Object.freeze(batches.map((scopes) => new TestReviewRepairBatch({ sourceArtifactDigest: this.repair.sourceArtifactDigest, sourceCandidate: this.repair.sourceCandidate, scopes, limits: this.limits, sourceEntries: this.testSources })));
   }
 }
 
@@ -250,26 +281,25 @@ export class WorkerVisibleTestReviewRepair {
   constructor(value = {}) {
     exactObject(value, [
       "version", "sourceStepId", "targetStepId", "sourceArtifact", "sourceAttempt",
-      "sourceArtifactDigest", "sourceEvidenceId", "sourceTestRevision", "blockingFindings", "batch",
+      "sourceArtifactDigest", "sourceEvidenceId", "sourceCandidate", "blockingFindings", "batch",
     ], "worker-visible selected repair contract");
-    if (value.version !== 2 || value.sourceStepId !== "test-review" || value.targetStepId !== "test"
-      || value.sourceArtifact !== "test-review.json" || !Number.isSafeInteger(value.sourceAttempt) || value.sourceAttempt < 1) {
+    if (value.version !== 3 || value.sourceStepId !== "test-review" || value.targetStepId !== "test-repair"
+      || value.sourceArtifact !== "requirement-test-review.json" || !Number.isSafeInteger(value.sourceAttempt) || value.sourceAttempt < 1) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "worker-visible selected repair contract has invalid identity");
     }
-    this.version = 2;
+    this.version = 3;
     this.sourceStepId = "test-review";
-    this.targetStepId = "test";
-    this.sourceArtifact = "test-review.json";
+    this.targetStepId = "test-repair";
+    this.sourceArtifact = "requirement-test-review.json";
     this.sourceAttempt = value.sourceAttempt;
     this.sourceArtifactDigest = requiredDigest(value.sourceArtifactDigest, "worker-visible repair sourceArtifactDigest");
     this.sourceEvidenceId = requiredDigest(value.sourceEvidenceId, "worker-visible repair sourceEvidenceId");
     try {
-      this.sourceTestRevision = WorkerArtifactRevision.from(value.sourceTestRevision);
+      this.sourceCandidate = value.sourceCandidate instanceof RequirementTestCandidateBundle
+        ? value.sourceCandidate
+        : RequirementTestCandidateBundle.fromJSON(value.sourceCandidate);
     } catch (cause) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", `worker-visible repair source revision is invalid: ${cause.message}`);
-    }
-    if (this.sourceTestRevision.stepId !== "test") {
-      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "worker-visible repair source revision must belong to test");
     }
     if (!Array.isArray(value.blockingFindings) || value.blockingFindings.length === 0) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "worker-visible selected repair contract requires findings");
@@ -277,7 +307,7 @@ export class WorkerVisibleTestReviewRepair {
     this.blockingFindings = Object.freeze(value.blockingFindings.map((finding) => new TestReviewRepairFinding(finding)));
     exactObject(value.batch, ["batchId", "findingIds", "allowedTestPaths", "limits", "findingTextChars", "targetFileBytes", "scopes"], "worker-visible repair batch");
     this.batch = new TestReviewRepairBatch({
-      sourceArtifactDigest: this.sourceArtifactDigest, sourceTestRevision: this.sourceTestRevision,
+      sourceArtifactDigest: this.sourceArtifactDigest, sourceCandidate: this.sourceCandidate,
       scopes: value.batch.scopes.map((scope) => TestReviewRepairScope.fromWorkerJSON(scope)), limits: value.batch.limits,
       measurements: { findingTextChars: value.batch.findingTextChars, targetFileBytes: value.batch.targetFileBytes },
     });
@@ -297,7 +327,7 @@ export class WorkerVisibleTestReviewRepair {
       sourceAttempt: this.sourceAttempt,
       sourceArtifactDigest: this.sourceArtifactDigest,
       sourceEvidenceId: this.sourceEvidenceId,
-      sourceTestRevision: this.sourceTestRevision.toJSON(),
+      sourceCandidate: this.sourceCandidate.toJSON(),
       blockingFindings: this.blockingFindings.map((finding) => finding.toJSON()),
       batch: this.batch.toJSON(),
     };
@@ -312,7 +342,7 @@ export function parseWorkerVisibleTestReviewRepair(value) {
 /** A sealed receipt shared by every finding published from one repair batch. */
 class TestReviewRepairProgressHandoff {
   constructor(value = {}) {
-    exactObject(value, ["batchId", "findingIds", "beforeTreeDigest", "afterTreeDigest", "changedPaths", "sourceTestRevision", "handoffDigest", "requestDigest", "payloadDigest"], "test review repair progress handoff");
+    exactObject(value, ["batchId", "findingIds", "beforeTreeDigest", "afterTreeDigest", "changedPaths", "sourceCandidate", "handoffDigest", "requestDigest", "payloadDigest"], "test review repair progress handoff");
     this.batchId = requiredDigest(value.batchId, "test review repair batchId");
     if (!Array.isArray(value.findingIds) || value.findingIds.length === 0) throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt requires findingIds");
     this.findingIds = Object.freeze(value.findingIds.map((id) => requiredString(id, "test review repair receipt findingId", 500)));
@@ -328,7 +358,9 @@ class TestReviewRepairProgressHandoff {
       if (beforeDigest === afterDigest) throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt changed path has no digest change");
       return Object.freeze({ path: requiredString(entry.path, "test review repair receipt path"), beforeDigest, afterDigest });
     }));
-    this.sourceTestRevision = WorkerArtifactRevision.from(value.sourceTestRevision);
+    this.sourceCandidate = value.sourceCandidate instanceof RequirementTestCandidateBundle
+      ? value.sourceCandidate
+      : RequirementTestCandidateBundle.fromJSON(value.sourceCandidate);
     this.handoffDigest = requiredDigest(value.handoffDigest, "test review repair progress handoffDigest");
     this.requestDigest = requiredDigest(value.requestDigest, "test review repair progress requestDigest");
     this.payloadDigest = requiredDigest(value.payloadDigest, "test review repair progress payloadDigest");
@@ -339,7 +371,7 @@ class TestReviewRepairProgressHandoff {
     return {
       batchId: this.batchId, findingIds: [...this.findingIds], beforeTreeDigest: this.beforeTreeDigest,
       afterTreeDigest: this.afterTreeDigest, changedPaths: this.changedPaths.map((entry) => ({ ...entry })),
-      sourceTestRevision: this.sourceTestRevision.toJSON(),
+      sourceCandidate: this.sourceCandidate.toJSON(),
       handoffDigest: this.handoffDigest,
       requestDigest: this.requestDigest,
       payloadDigest: this.payloadDigest,
@@ -410,25 +442,32 @@ class CanonicalTestReviewRepairFindingBinding {
 /** A structurally complete persisted repair episode, before matching it to current evidence. */
 class TestReviewRepairProgressEpisode {
   constructor(value = {}) {
-    exactObject(value, ["version", "sourceArtifactDigest", "sourceEvidenceId", "sourceTestRevision", "entries"], "test review repair progress artifact");
-    if (value.version !== 2) {
+    exactObject(value, ["version", "sourceArtifactDigest", "sourceEvidenceId", "sourceCandidate", "coordinatorAttempt", "entries", "stagedSources"], "test review repair progress artifact");
+    if (value.version !== 3) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress version is invalid");
     }
-    this.version = 2;
+    this.version = 3;
     this.sourceArtifactDigest = requiredDigest(value.sourceArtifactDigest, "test review repair progress sourceArtifactDigest");
     this.sourceEvidenceId = requiredDigest(value.sourceEvidenceId, "test review repair progress sourceEvidenceId");
+    this.coordinatorAttempt = RequirementTestSourceAttempt.fromJSON(value.coordinatorAttempt);
     try {
-      this.sourceTestRevision = WorkerArtifactRevision.from(value.sourceTestRevision);
+      this.sourceCandidate = value.sourceCandidate instanceof RequirementTestCandidateBundle
+        ? value.sourceCandidate
+        : RequirementTestCandidateBundle.fromJSON(value.sourceCandidate);
     } catch (cause) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", `test review repair progress source revision is invalid: ${cause.message}`);
-    }
-    if (this.sourceTestRevision.stepId !== "test") {
-      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress source revision must belong to test");
     }
     if (!Array.isArray(value.entries) || value.entries.length === 0) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress entries are invalid");
     }
     this.entries = Object.freeze(value.entries.map((entry) => new TestReviewRepairProgressEntry(entry)));
+    if (!Array.isArray(value.stagedSources) || value.stagedSources.length === 0) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress requires staged sources");
+    }
+    this.stagedSources = Object.freeze(value.stagedSources.map((source) => TestReviewRepairStagedSource.fromJSON(source)));
+    if (new Set(this.stagedSources.map((source) => source.testPath)).size !== this.stagedSources.length) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress duplicates a staged source");
+    }
     if (new Set(this.entries.map((entry) => entry.findingId)).size !== this.entries.length) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress duplicates a finding");
     }
@@ -438,10 +477,11 @@ class TestReviewRepairProgressEpisode {
   static fromJSON(value) { return new TestReviewRepairProgressEpisode(value); }
 
   assertFlow(state) {
-    try {
-      this.sourceTestRevision.assertFlow(state);
-    } catch (cause) {
-      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", `test review repair progress lineage is invalid: ${cause.message}`);
+    if (state?.schemaRevision !== 3
+      || this.sourceCandidate.bundle.specRevision.specId !== state.specId
+      || state.attempt?.id !== this.coordinatorAttempt.id
+      || state.attempt?.sequence !== this.coordinatorAttempt.sequence) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress lineage is invalid");
     }
     return this;
   }
@@ -451,28 +491,36 @@ class TestReviewRepairProgressEpisode {
   materialize(repair) {
     if (!this.matchesArtifact(repair)
       || this.sourceEvidenceId !== repair.sourceEvidenceId
-      || JSON.stringify(this.sourceTestRevision.toJSON()) !== JSON.stringify(repair.sourceTestRevision.toJSON())) {
+      || this.coordinatorAttempt.id !== repair.coordinatorAttempt.id
+      || this.coordinatorAttempt.sequence !== repair.coordinatorAttempt.sequence
+      || JSON.stringify(this.sourceCandidate.toJSON()) !== JSON.stringify(repair.sourceCandidate.toJSON())) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_STALE", "test review repair progress belongs to different canonical evidence");
     }
-    return new TestReviewRepairProgress({ repair, entries: this.entries });
+    return new TestReviewRepairProgress({ repair, entries: this.entries, stagedSources: this.stagedSources });
   }
 }
 
 /** Canonical, parent-owned checkpoint for a frozen review repair episode. */
 export class TestReviewRepairProgress {
-  constructor({ repair, entries } = {}) {
+  constructor({ repair, entries, stagedSources } = {}) {
     if (!(repair instanceof CanonicalTestReviewRepair)) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress requires canonical repair evidence");
     }
     if (!Array.isArray(entries) || entries.length !== repair.blockingFindings.length) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress entries do not match findings");
     }
-    this.version = 2;
+    this.version = 3;
     this.sourceArtifactDigest = repair.sourceArtifactDigest;
     this.sourceEvidenceId = repair.sourceEvidenceId;
-    this.sourceTestRevision = repair.sourceTestRevision.toJSON();
+    this.coordinatorAttempt = repair.coordinatorAttempt;
+    this.sourceCandidate = repair.sourceCandidate.toJSON();
     this.entries = Object.freeze(entries.map((entry) => entry instanceof TestReviewRepairProgressEntry
       ? entry : new TestReviewRepairProgressEntry(entry)));
+    if (!Array.isArray(stagedSources) || stagedSources.length === 0) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress requires staged sources");
+    }
+    this.stagedSources = Object.freeze(stagedSources.map((source) => source instanceof TestReviewRepairStagedSource
+      ? source : new TestReviewRepairStagedSource(source)));
     for (const finding of repair.blockingFindings) {
       const entry = this.entries.find((candidate) => candidate.findingId === finding.findingId);
       if (!entry || entry.fingerprint !== finding.fingerprint) {
@@ -506,8 +554,8 @@ export class TestReviewRepairProgress {
         || JSON.stringify(group.entries.map((entry) => entry.findingId).sort((left, right) => left.localeCompare(right))) !== JSON.stringify(expectedFindingIds)) {
         throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt does not cover exactly its completed finding group");
       }
-      if (JSON.stringify(group.receipt.sourceTestRevision.toJSON()) !== JSON.stringify(repair.sourceTestRevision.toJSON())) {
-        throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt source revision is stale");
+      if (JSON.stringify(group.receipt.sourceCandidate.toJSON()) !== JSON.stringify(repair.sourceCandidate.toJSON())) {
+        throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt source candidate is stale");
       }
       const changedPaths = group.receipt.changedPaths.map((entry) => entry.path);
       if (new Set(changedPaths).size !== changedPaths.length
@@ -517,10 +565,10 @@ export class TestReviewRepairProgress {
     }
   }
 
-  static start(repair) {
+  static start(repair, stagedSources) {
     return new TestReviewRepairProgress({ repair, entries: repair.blockingFindings.map((finding) => ({
       findingId: finding.findingId, fingerprint: finding.fingerprint, status: "pending", handoff: null,
-    })) });
+    })), stagedSources });
   }
 
   static fromJSON(value, repair) {
@@ -538,12 +586,12 @@ export class TestReviewRepairProgress {
     return entry === null ? null : repair.blockingFindings.find((finding) => finding.findingId === entry.findingId) ?? null;
   }
 
-  markBatchComplete(repair, batch, handoff) {
+  markBatchComplete(repair, batch, handoff, stagedSources) {
     if (!(batch instanceof TestReviewRepairBatch)) throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair batch completion requires typed batch");
     const receipt = handoff instanceof TestReviewRepairProgressHandoff ? handoff : new TestReviewRepairProgressHandoff(handoff);
     if (receipt.batchId !== batch.batchId || JSON.stringify(receipt.findingIds) !== JSON.stringify(batch.findingIds)) throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt does not bind batch");
-    if (JSON.stringify(receipt.sourceTestRevision.toJSON()) !== JSON.stringify(repair.sourceTestRevision.toJSON())) {
-      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt source revision is stale");
+    if (JSON.stringify(receipt.sourceCandidate.toJSON()) !== JSON.stringify(repair.sourceCandidate.toJSON())) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt source candidate is stale");
     }
     const changedPaths = receipt.changedPaths.map((entry) => entry.path);
     if (new Set(changedPaths).size !== changedPaths.length
@@ -558,7 +606,7 @@ export class TestReviewRepairProgress {
       batch.findingIds.includes(entry.findingId)
         ? new TestReviewRepairProgressEntry({ findingId: entry.findingId, fingerprint: entry.fingerprint, status: "done", handoff: receipt })
         : entry
-    )) });
+    )), stagedSources });
   }
 
   nextBatch(repair, testSources, limits = TEST_REVIEW_REPAIR_BATCH_LIMITS) {
@@ -566,7 +614,7 @@ export class TestReviewRepairProgress {
   }
 
   get complete() { return this.entries.every((entry) => entry.status === "done"); }
-  toJSON() { return { version: this.version, sourceArtifactDigest: this.sourceArtifactDigest, sourceEvidenceId: this.sourceEvidenceId, sourceTestRevision: this.sourceTestRevision, entries: this.entries.map((entry) => entry.toJSON()) }; }
+  toJSON() { return { version: this.version, sourceArtifactDigest: this.sourceArtifactDigest, sourceEvidenceId: this.sourceEvidenceId, sourceCandidate: this.sourceCandidate, coordinatorAttempt: this.coordinatorAttempt.toJSON(), entries: this.entries.map((entry) => entry.toJSON()), stagedSources: this.stagedSources.map((source) => source.toJSON()) }; }
 }
 
 /**
@@ -582,7 +630,7 @@ export function testReviewRepairProgressReceiptForSelectedContract({
   const episode = TestReviewRepairProgressEpisode.fromJSON(progressDocument).assertFlow(state);
   if (episode.sourceArtifactDigest !== selected.sourceArtifactDigest
     || episode.sourceEvidenceId !== selected.sourceEvidenceId
-    || JSON.stringify(episode.sourceTestRevision.toJSON()) !== JSON.stringify(selected.sourceTestRevision.toJSON())) {
+    || JSON.stringify(episode.sourceCandidate.toJSON()) !== JSON.stringify(selected.sourceCandidate.toJSON())) {
     return null;
   }
   const entries = selected.blockingFindings.map((finding) => episode.entries.find((candidate) => (
@@ -595,7 +643,7 @@ export function testReviewRepairProgressReceiptForSelectedContract({
     || JSON.stringify(receipt.findingIds) !== JSON.stringify(selected.batch.findingIds)
     || receipt.batchId !== selected.batch.batchId
     || receipt.requestDigest !== requestDigest
-    || JSON.stringify(receipt.sourceTestRevision.toJSON()) !== JSON.stringify(selected.sourceTestRevision.toJSON())) return null;
+    || JSON.stringify(receipt.sourceCandidate.toJSON()) !== JSON.stringify(selected.sourceCandidate.toJSON())) return null;
   const changedPaths = receipt.changedPaths.map((entry) => entry.path);
   if (new Set(changedPaths).size !== changedPaths.length
     || JSON.stringify(changedPaths) !== JSON.stringify([...changedPaths].sort((left, right) => left.localeCompare(right)))
@@ -606,14 +654,15 @@ export function testReviewRepairProgressReceiptForSelectedContract({
 }
 
 /** Resolve only the progress record owned by this immutable review episode. */
-export function canonicalTestReviewRepairProgress({ flowManager, state, repair, consumerNodeId } = {}) {
+export function canonicalTestReviewRepairProgress({ flowManager, state, repair, consumerNodeId, stagedSources } = {}) {
   const artifact = flowManager.readArtifact({
     specId: state.specId,
-    logicalKey: "test.review.repair.progress",
+    logicalKey: "test.requirement.repair.progress",
+    parameters: { requirementId: repair.sourceCandidate.bundle.requirementId },
     consumerNodeId,
     optional: true,
   });
-  if (artifact === null) return TestReviewRepairProgress.start(repair);
+  if (artifact === null) return TestReviewRepairProgress.start(repair, stagedSources);
   let value;
   try {
     value = JSON.parse(artifact.bytes.toString("utf8"));
@@ -624,7 +673,7 @@ export function canonicalTestReviewRepairProgress({ flowManager, state, repair, 
   // to current evidence. A digest mismatch is ordinary immutable history;
   // malformed or unbound history is never a reason to silently reset state.
   const episode = TestReviewRepairProgressEpisode.fromJSON(value).assertFlow(state);
-  if (!episode.matchesArtifact(repair)) return TestReviewRepairProgress.start(repair);
+  if (!episode.matchesArtifact(repair)) return TestReviewRepairProgress.start(repair, stagedSources);
   return episode.materialize(repair);
 }
 
@@ -634,25 +683,35 @@ export function canonicalTestReviewRepairProgress({ flowManager, state, repair, 
  * review Attempt, catalog descriptor, and current cataloged test tree.
  */
 export class CanonicalTestReviewRepair {
-  constructor({ state, attempt, artifactDigest, evidenceId, sourceTestRevision, blockingFindings } = {}) {
+  constructor({ state, attempt, artifactDigest, evidenceId, sourceCandidate, blockingFindings } = {}) {
     if (state?.schemaRevision !== 3) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test-review repair requires a Version-1 Flow");
     }
-    this.version = 1;
+    this.version = 2;
     this.runId = requiredString(state.runId, "test review repair runId", 500);
     this.specId = requiredString(state.specId, "test review repair specId", 500);
     this.sourceStepId = "test-review";
-    this.targetStepId = "test";
-    this.sourceArtifact = "test-review.json";
+    this.targetStepId = "test-repair";
+    this.sourceArtifact = "requirement-test-review.json";
+    try {
+      this.coordinatorAttempt = state.attempt instanceof RequirementTestSourceAttempt
+        ? state.attempt
+        : new RequirementTestSourceAttempt(state.attempt);
+    } catch (cause) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", `test review repair coordinator Attempt is invalid: ${cause.message}`);
+    }
     this.sourceAttempt = Number(attempt);
     if (!Number.isSafeInteger(this.sourceAttempt) || this.sourceAttempt < 1) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair source Attempt is invalid");
     }
     this.sourceArtifactDigest = requiredDigest(artifactDigest, "test review repair sourceArtifactDigest");
     this.sourceEvidenceId = requiredDigest(evidenceId, "test review repair sourceEvidenceId");
-    this.sourceTestRevision = WorkerArtifactRevision.from(sourceTestRevision);
-    if (this.sourceTestRevision.stepId !== "test") {
-      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair source revision must belong to test");
+    this.sourceCandidate = sourceCandidate instanceof RequirementTestCandidateBundle
+      ? sourceCandidate
+      : RequirementTestCandidateBundle.fromJSON(sourceCandidate);
+    if (this.sourceCandidate.bundle.requirementId === ""
+      || this.sourceCandidate.bundle.specRevision.specId !== this.specId) {
+      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair candidate identity does not match the Flow");
     }
     if (!Array.isArray(blockingFindings) || blockingFindings.length === 0) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair requires blocking findings");
@@ -674,7 +733,7 @@ export class CanonicalTestReviewRepair {
       sourceAttempt: this.sourceAttempt,
       sourceArtifactDigest: this.sourceArtifactDigest,
       sourceEvidenceId: this.sourceEvidenceId,
-      sourceTestRevision: this.sourceTestRevision.toJSON(),
+      sourceCandidate: this.sourceCandidate.toJSON(),
       blockingFindings: this.blockingFindings.map((finding) => finding.toJSON()),
     };
   }
@@ -689,12 +748,12 @@ export class CanonicalTestReviewRepair {
   forBatch(batch) {
     if (!(batch instanceof TestReviewRepairBatch)
       || batch.sourceArtifactDigest !== this.sourceArtifactDigest
-      || batch.sourceTestRevision.digest !== this.sourceTestRevision.digest
+      || batch.sourceCandidate.digest !== this.sourceCandidate.digest
       || batch.findingIds.some((findingId) => !this.blockingFindings.some((finding) => finding.findingId === findingId))) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test-review repair batch is not canonical evidence");
     }
     const value = this.toWorkerJSON();
-    value.version = 2;
+    value.version = 3;
     value.blockingFindings = batch.scopes.map((scope) => scope.finding.toJSON());
     value.batch = batch.toJSON();
     return new WorkerVisibleTestReviewRepair(value);
@@ -705,7 +764,7 @@ export class CanonicalTestReviewRepair {
     const finding = this.blockingFindings.find((entry) => entry.findingId === findingId);
     if (!finding) throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test-review repair finding is not canonical evidence");
     return this.forBatch(new TestReviewRepairBatch({
-      sourceArtifactDigest: this.sourceArtifactDigest, sourceTestRevision: this.sourceTestRevision,
+      sourceArtifactDigest: this.sourceArtifactDigest, sourceCandidate: this.sourceCandidate,
       scopes: [new TestReviewRepairScope({ finding, testPaths })], sourceEntries: testPaths.map((testPath) => ({ testPath })),
     }));
   }
@@ -716,8 +775,8 @@ export class CanonicalTestReviewRepair {
       findings: this.blockingFindings.map((finding) => ({ id: finding.findingId, label: "test-review" })),
       repairs: [],
       artifacts: [
-        { id: this.sourceArtifactDigest, label: "test.review" },
-        { id: this.sourceTestRevision.digest, label: "tests.source" },
+        { id: this.sourceArtifactDigest, label: "test.requirement.review" },
+        { id: this.sourceCandidate.digest, label: "test.requirement.candidate.bundle" },
       ],
     };
   }
@@ -725,7 +784,7 @@ export class CanonicalTestReviewRepair {
 
 function repairFromCatalog({ flowManager, state, consumerNodeId, reviewAttemptSequence = null }) {
   const store = new CanonicalTestArtifactStore({ flowManager, state });
-  const current = store.readCurrentAttempt({ logicalKey: "test.review", consumerNodeId });
+  const current = store.readCurrentAttempt({ logicalKey: "test.requirement.review", consumerNodeId });
   if (reviewAttemptSequence !== null && current.attempt < reviewAttemptSequence) return null;
   if (reviewAttemptSequence !== null && current.attempt > reviewAttemptSequence) {
     throw new TestReviewRepairError(
@@ -735,8 +794,19 @@ function repairFromCatalog({ flowManager, state, consumerNodeId, reviewAttemptSe
   }
   const artifact = current.payload;
   const evidence = artifact?.canonicalEvidence;
+  const requirementStore = new RequirementTestArtifactStore({ flowManager, state });
+  const workItem = requirementStore.readPlan(consumerNodeId).artifact.plan.activeWorkItem();
+  if (workItem?.status !== "reviewed" || workItem.bundleRevision === null) {
+    throw new TestReviewRepairError(
+      "TEST_REVIEW_REPAIR_EVIDENCE_INVALID",
+      "cataloged Requirement test review must bind the reviewed active work item",
+    );
+  }
+  const candidateRead = requirementStore.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId });
   if (
-    artifact?.phase !== "test"
+    artifact?.requirementId !== workItem.requirementId
+    || artifact?.bundleRevision !== workItem.bundleRevision.revision
+    || artifact?.candidateDigest !== candidateRead.candidate.digest
     || artifact?.verdict !== "REJECTED"
     || evidence?.disposition !== "REJECTED"
     || !Array.isArray(evidence.blockingFindings)
@@ -748,7 +818,6 @@ function repairFromCatalog({ flowManager, state, consumerNodeId, reviewAttemptSe
       "cataloged test-review evidence must be a REJECTED review with blocking findings",
     );
   }
-  const artifactRevision = WorkerArtifactRevision.from(artifact.sourceTestArtifactRevision);
   const findingBinding = new CanonicalTestReviewRepairFindingBinding({
     evidenceFindings: evidence.blockingFindings,
     artifactFindings: artifact.blockingFindings,
@@ -758,57 +827,24 @@ function repairFromCatalog({ flowManager, state, consumerNodeId, reviewAttemptSe
     attempt: current.attempt,
     artifactDigest: current.descriptor.hash,
     evidenceId: evidence.identity.evidenceDigest,
-    sourceTestRevision: artifactRevision.toJSON(),
+    sourceCandidate: candidateRead.candidate,
     blockingFindings: findingBinding.findings,
   });
-  const progress = canonicalTestReviewRepairProgress({ flowManager, state, repair, consumerNodeId });
-  // A checkpoint is published atomically with the repaired test tree, but it
-  // deliberately keeps the test Attempt open for the next finding.  Such a
-  // tree does not yet have the final confirmation required by
-  // CanonicalTestSourceRevision.  The checkpoint is the canonical authority
-  // for that in-progress repair episode; only a fresh episode needs the
-  // fully-finalized tree comparison.
-  if (progress.entries.every((entry) => entry.status === "pending") && artifactRevision.digest !== store.testSourceRevision().digest) {
-    throw new TestReviewRepairError(
-      "TEST_REVIEW_REPAIR_REVISION_MISMATCH",
-      "cataloged test-review evidence targets a stale test revision",
-    );
-  }
-  return repair;
-}
-
-export function inspectCanonicalTestReviewRepair({ flowManager, state } = {}) {
-  if (state?.schemaRevision !== 3 || state.currentNodeId !== "test-review") return null;
-  const typedState = typeof flowManager.canonicalState === "function"
-    ? flowManager.canonicalState(state.specId)
-    : state;
-  return repairFromCatalog({
-    flowManager,
-    state: typedState,
-    consumerNodeId: "test-review",
-    reviewAttemptSequence: typedState.attempt.sequence,
+  canonicalTestReviewRepairProgress({
+    flowManager, state, repair, consumerNodeId,
+    stagedSources: candidateRead.sources.map((source) => ({
+      testPath: source.targetRelativePath.slice("tests/".length), bytes: source.bytes,
+    })),
   });
+  return repair;
 }
 
 export function canonicalTestReviewRepairForTarget({ flowManager, state, targetStepId } = {}) {
-  if (state?.schemaRevision !== 3 || targetStepId !== "test" || state.currentNodeId !== "test") return null;
+  if (state?.schemaRevision !== 3 || targetStepId !== "test-repair" || state.currentNodeId !== "test-repair") return null;
   const typedState = typeof flowManager.canonicalState === "function"
     ? flowManager.canonicalState(state.specId)
     : state;
-  const activity = canonicalRepairAttemptOwner({
-    state: typedState,
-    activities: flowManager.activityLedger(state.specId),
-    targetStepId,
-  });
-  if (activity?.transition?.operation !== "repair_test_review") return null;
-  const repair = repairFromCatalog({ flowManager, state: typedState, consumerNodeId: "test" });
-  if (!activity.references?.artifacts?.some((reference) => reference.id === repair.sourceArtifactDigest)) {
-    throw new TestReviewRepairError(
-      "TEST_REVIEW_REPAIR_STALE",
-      "test-review repair Activity does not reference the current review evidence",
-    );
-  }
-  return repair;
+  return repairFromCatalog({ flowManager, state: typedState, consumerNodeId: "test-repair" });
 }
 
 /** Retired state-blob APIs remain explicit rejection points during alpha. */

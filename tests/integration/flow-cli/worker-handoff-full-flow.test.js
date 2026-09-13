@@ -43,7 +43,9 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { validWorkerHandoffSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 
 const TASK_IDS = Object.freeze(["T1", "T2"]);
-const PREPARATION_LEAVES = new Set(["branch", "prepare-spec"]);
+const PREPARATION_LEAVES = new Set([
+  "branch", "prepare-spec", "test-generate", "test-review", "test-repair", "test-gate",
+]);
 const USER_DECISION_LEAF = "acceptance-decision";
 const TASK_REVIEW_FINDING_KEY = "task-repair-f1";
 
@@ -649,8 +651,10 @@ describe("deterministic full Flow worker handoff", () => {
 
       const artifactWorkers = workerSteps.filter((stepId) => WORKER_ARTIFACT_HANDOFF_STEPS.includes(stepId));
       const sourceWorkers = workerSteps.filter((stepId) => WORKER_SOURCE_HANDOFF_STEPS.includes(stepId));
+      const routedArtifactWorkers = WORKER_ARTIFACT_HANDOFF_STEPS
+        .filter((stepId) => !PREPARATION_LEAVES.has(stepId));
       assert.equal(completed.dispatch?.boundary, "completed", JSON.stringify(completed));
-      assert.deepEqual(new Set(artifactWorkers), new Set(WORKER_ARTIFACT_HANDOFF_STEPS));
+      assert.deepEqual(new Set(artifactWorkers), new Set(routedArtifactWorkers));
       assert.deepEqual(new Set(sourceWorkers), new Set(WORKER_SOURCE_HANDOFF_STEPS));
       const sourceAuthorities = flowManager.sourceHandoffAuthorities({ specId, unsettledOnly: false });
       assert.equal(sourceAuthorities.length, sourceWorkers.length);

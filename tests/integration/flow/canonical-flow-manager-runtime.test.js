@@ -54,15 +54,12 @@ import {
   resolveGateTransition,
   resolveNonGateTransition,
   resolveTaskExecutionOverrun,
-  scenarioValidityTransitionDefinition,
   testExecuteTransitionDefinition,
 } from "../../../src/flow/definition.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
 import RunSettleFailureCommand from "../../../src/flow/lib/run-settle-failure.js";
 import RunSettleReviewTransitionCommand from "../../../src/flow/lib/run-settle-review-transition.js";
 import RunSettleGateTransitionCommand from "../../../src/flow/lib/run-settle-gate-transition.js";
-import RunRepairTestReviewCommand from "../../../src/flow/lib/run-repair-test-review.js";
-import RunScenarioValidityCommand from "../../../src/flow/lib/run-scenario-validity.js";
 import RunTestExecuteCommand from "../../../src/flow/lib/run-test-execute.js";
 import RunTestResultReviewCommand from "../../../src/flow/lib/run-test-result-review.js";
 import RunAcceptanceReviewCommand, {
@@ -163,12 +160,9 @@ import {
   CanonicalTestSourceRevision,
 } from "../../../src/flow/lib/canonical-test-artifacts.js";
 import {
-  CanonicalTestReviewRepair,
   TestReviewRepairFinding,
   TestReviewRepairScope,
-  TestReviewRepairProgress,
   WorkerVisibleTestReviewRepair,
-  canonicalTestReviewRepairProgress,
 } from "../../../src/flow/lib/test-review-repair.js";
 import { buildRepairFingerprint } from "../../../src/flow/lib/repair-fingerprint.js";
 import {
@@ -382,35 +376,18 @@ function rootSpecPublicationBytes(location, revision) {
   });
 }
 
-function rejectedTestReviewCommand(onOutputDirectory) {
-  return new RunReviewCommand({
-    resolveTreeSha: () => "a".repeat(40),
-    resolveTargetStateDigest: () => "b".repeat(64),
-    runCommand(_command, _args, options) {
-      assertAggregateReviewProviderCallsComplete(options, "Test Review");
-      const outputDirectory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
-      onOutputDirectory(outputDirectory, options.env);
-      fs.writeFileSync(path.join(outputDirectory, "test-review.json"), `${JSON.stringify({
-        version: 1,
-        phase: "test",
-        generatedAt: "2026-08-23T00:00:00.000Z",
-        verdict: "REJECTED",
-        coverageArtifact: "test-coverage.json",
-        sourceTestArtifactRevision: JSON.parse(options.env.SENNEL_REVIEW_TEST_ARTIFACT_REVISION),
-        blockingFindings: [{
-          findingId: "test-review-finding",
-          fingerprint: "f".repeat(64),
-          summary: "The test omits a required behavior.",
-        }],
-        advisoryFindings: [],
-      })}\n`);
-      ReviewWorkUnit.fromEnvironment(options.env).seal();
-      return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
-    },
-  });
-}
-
 function request(specId = "001-canonical-manager", overrides = {}) {
+  const suppliedSpec = overrides.specRecord?.toJSON?.() ?? overrides.specRecord ?? { ...emptySpecStub(), tasks: [] };
+  const specRecord = new CurrentFlowSpecRecord({
+    ...suppliedSpec,
+    requirements: (suppliedSpec.requirements ?? []).map((requirement) => ({
+      ...requirement,
+      ...(requirement.task_ids === undefined ? { task_ids: ["T-fixture"] } : {}),
+      ...(requirement.testable === undefined && requirement.preimplementation_test_expectation === undefined
+        ? { testable: false }
+        : {}),
+    })),
+  }, { specId });
   return new CanonicalFlowCreateRequest({
     specId,
     runId: "canonical-manager-run",
@@ -419,8 +396,9 @@ function request(specId = "001-canonical-manager", overrides = {}) {
     policy: { autoApprove: false, nonblocking: null },
     flowId: "canonical-manager-flow",
     flowVersionId: "canonical-manager-flow-v1",
-    specRecord: new CurrentFlowSpecRecord({ ...emptySpecStub(), tasks: [] }, { specId }),
+    specRecord,
     ...overrides,
+    specRecord,
   });
 }
 
@@ -428,7 +406,7 @@ function taskRequest(specId = "001-canonical-manager", taskIds = ["T-1"]) {
   return request(specId, {
     specRecord: new CurrentFlowSpecRecord({
       ...emptySpecStub(),
-      requirements: [{ id: "R-tasks", desc: "Exercise canonical Task persistence.", task_ids: taskIds }],
+      requirements: [{ id: "R-tasks", desc: "Exercise canonical Task persistence.", task_ids: taskIds, testable: false }],
       tasks: [],
     }, { specId }),
   });
@@ -462,15 +440,42 @@ function advanceTo(manager, specId, nodeId, { onActive = null } = {}) {
   if (onActive !== null && typeof onActive !== "function") {
     throw new TypeError("canonical Flow advance onActive must be a function or null");
   }
-  const ordered = leaves(manager.load(specId).steps);
-  const targetIndex = ordered.findIndex((entry) => entry.id === nodeId);
-  assert.ok(targetIndex >= 0, `missing canonical Flow node: ${nodeId}`);
-  for (const entry of ordered.slice(0, targetIndex)) {
-    manager.updateStepStatus({ stepId: entry.id, requestedStatus: "in_progress" }, { specId });
-    onActive?.(entry.id);
-    confirmFixtureStep(manager, entry.id, { specId });
+  const spec = JSON.parse(fs.readFileSync(manager.specLocation(specId).specFile, "utf8"));
+  const existingTaskIds = new Set(spec.tasks.map((task) => task.id));
+  for (const taskId of new Set(spec.requirements.flatMap((requirement) => requirement.task_ids))) {
+    if (existingTaskIds.has(taskId)) continue;
+    manager.addTask({
+      id: taskId,
+      title: `Fixture Task ${taskId}`,
+      goal: `Provide canonical ownership for ${taskId}.`,
+      origin: "plan",
+      added_round: 0,
+      status: "pending",
+    }, { specId });
+    existingTaskIds.add(taskId);
   }
-  manager.updateStepStatus({ stepId: nodeId, requestedStatus: "in_progress" }, { specId });
+  for (let iteration = 0; iteration < 500; iteration += 1) {
+    const current = manager.load(specId);
+    const ordered = leaves(current.steps);
+    const targetIndex = ordered.findIndex((entry) => entry.id === nodeId);
+    assert.ok(targetIndex >= 0, `missing canonical Flow node: ${nodeId}`);
+    if (current.currentNodeId === nodeId) return;
+    if (current.currentNodeId !== null) {
+      const activeIndex = ordered.findIndex((entry) => entry.id === current.currentNodeId);
+      assert.ok(activeIndex >= 0 && activeIndex < targetIndex, `cannot settle ${current.currentNodeId} before ${nodeId}`);
+      onActive?.(current.currentNodeId);
+      confirmFixtureStep(manager, current.currentNodeId, { specId });
+      continue;
+    }
+    const next = ordered.slice(0, targetIndex).find((entry) => !["done", "skipped"].includes(entry.status));
+    if (next !== undefined) {
+      manager.updateStepStatus({ stepId: next.id, requestedStatus: "in_progress" }, { specId });
+      continue;
+    }
+    manager.updateStepStatus({ stepId: nodeId, requestedStatus: "in_progress" }, { specId });
+    return;
+  }
+  throw new Error(`canonical Flow advance exceeded its settlement bound before ${nodeId}`);
 }
 
 /**
@@ -571,59 +576,6 @@ function catalogArtifactReferences(catalog) {
   return catalogDescriptorReferences(catalog).map(({ publicationStep, ...reference }) => reference);
 }
 
-/** A production-API fixture for the V1 worker-owned test collection. */
-function canonicalTestTreeHandoffScenario(specId, invocationId) {
-  const repository = root();
-  const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-  const created = manager.createFresh(request(specId, {
-    specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, { specId }),
-  }));
-  manager.addActiveFlow(created.specId, "direct");
-  advanceTo(manager, created.specId, "test");
-  manager.publishArtifacts({
-    specId: created.specId,
-    nodeId: "test",
-    artifactWrites: [{
-      logicalKey: "tests.source",
-      parameters: { testPath: "obsolete.test.js" },
-      mediaType: "text/javascript",
-      bytes: Buffer.from("// spec: R1\n", "utf8"),
-    }],
-  });
-  const coordinator = new WorkerArtifactHandoffCoordinator();
-  const context = {
-    root: repository,
-    mainRoot: repository,
-    executionRoot: repository,
-    specId: created.specId,
-    flowManager: manager,
-  };
-  const handoff = coordinator.createRequest({
-    ctx: context,
-    state: manager.load(created.specId),
-    invocation: {
-      id: invocationId,
-      target: { digest: "b".repeat(64) },
-      action: { digest: "a".repeat(64), nextAction: { step: "test" } },
-    },
-  });
-  return Object.freeze({ repository, manager, created, coordinator, context, handoff });
-}
-
-function writeCanonicalTestTreePayload(handoff) {
-  const replacementPath = path.join(handoff.payloadPath("spec-tests"), "current.test.js");
-  fs.writeFileSync(replacementPath, [
-    "// spec: R1",
-    'import assert from "node:assert/strict";',
-    'import test from "node:test";',
-    "",
-    'test("R1: replaces the cataloged test collection", () => {',
-    "  assert.equal(true, true);",
-    "});",
-    "",
-  ].join("\n"));
-}
-
 function acceptanceInputWrites(manager, specId) {
   const location = manager.specLocation(specId);
   const executionRaw = Buffer.from("canonical acceptance test execution raw\n", "utf8");
@@ -657,19 +609,6 @@ function acceptanceInputWrites(manager, specId) {
     };
   };
   return new Map([
-    ["test", () => manager.publishArtifacts({ specId, nodeId: "test", artifactWrites: [{
-      logicalKey: "tests.source", parameters: { testPath: "acceptance.fixture.test.js" }, mediaType: "text/javascript",
-      bytes: Buffer.from("import test from 'node:test';\ntest('R-1: acceptance fixture', () => {});\n", "utf8"),
-    }] })],
-    ["scenario-validity", () => publishAttemptArtifact(manager, specId, "scenario-validity", "scenario.validity", {
-      version: "1",
-      testSourceRevision: testSourceRevision(),
-      command: "node --test artifacts/tests/scenario.test.js",
-      process: { started: true, exitCode: 0, signal: null, timedOut: false, spawnError: null },
-      result: "pass",
-      raw_output_path: location.relativeArtifact("scenario.validity.raw-log"),
-      summary: [],
-    })],
     ["test-execute", () => {
       manager.writeRuntimeArtifact({
         specId,
@@ -837,52 +776,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(new TestReviewRepairScope({ finding: finding("a.test.js:line 3"), testPaths: ["a.test.js"] }).toJSON().targetFiles[0], "a.test.js");
     assert.equal(new TestReviewRepairScope({ finding: finding("a.test.js:R1"), testPaths: ["a.test.js"] }).toJSON().targetFiles[0], "a.test.js");
     assert.throws(() => new TestReviewRepairScope({ finding: finding("../product.js"), testPaths: [] }), /repair target/);
-  });
-  it("starts a new progress episode when retained progress belongs to an older review artifact", () => {
-    const state = { schemaRevision: 3, runId: "repair-progress-run", specId: "repair-progress-spec" };
-    const revision = { version: 1, runId: state.runId, specId: state.specId, stepId: "test", digest: "a".repeat(64), byteLength: 1, finalizedAt: "2026-08-01T00:00:00.000Z" };
-    const finding = (findingId, fingerprint) => ({ findingId, fingerprint, target: "one.test.js", requiredChange: "Repair one assertion." });
-    const previous = new CanonicalTestReviewRepair({ state, attempt: 1, artifactDigest: "b".repeat(64), evidenceId: "c".repeat(64), sourceTestRevision: revision, blockingFindings: [finding("old", "d".repeat(64))] });
-    const current = new CanonicalTestReviewRepair({ state, attempt: 2, artifactDigest: "e".repeat(64), evidenceId: "f".repeat(64), sourceTestRevision: revision, blockingFindings: [finding("current", "1".repeat(64))] });
-    const retained = TestReviewRepairProgress.start(previous);
-    const progress = canonicalTestReviewRepairProgress({
-      flowManager: { readArtifact() { return { bytes: Buffer.from(JSON.stringify(retained.toJSON())) }; } },
-      state, repair: current, consumerNodeId: "test",
-    });
-    assert.equal(progress.nextFinding(current).findingId, "current");
-    assert.equal(progress.complete, false);
-  });
-  it("fails closed for malformed retained test-review repair progress before resetting an episode", () => {
-    const state = { schemaRevision: 3, runId: "repair-progress-run", specId: "repair-progress-spec" };
-    const revision = { version: 1, runId: state.runId, specId: state.specId, stepId: "test", digest: "a".repeat(64), byteLength: 1, finalizedAt: "2026-08-01T00:00:00.000Z" };
-    const finding = { findingId: "current", fingerprint: "1".repeat(64), target: "one.test.js", requiredChange: "Repair one assertion." };
-    const current = new CanonicalTestReviewRepair({ state, attempt: 2, artifactDigest: "e".repeat(64), evidenceId: "f".repeat(64), sourceTestRevision: revision, blockingFindings: [finding] });
-    const validOld = TestReviewRepairProgress.start(new CanonicalTestReviewRepair({
-      state, attempt: 1, artifactDigest: "b".repeat(64), evidenceId: "c".repeat(64), sourceTestRevision: revision,
-      blockingFindings: [{ ...finding, findingId: "old", fingerprint: "d".repeat(64) }],
-    })).toJSON();
-    for (const invalid of [
-      { ...validOld, sourceArtifactDigest: "not-a-digest" },
-      (() => { const copy = structuredClone(validOld); delete copy.sourceArtifactDigest; return copy; })(),
-      { ...validOld, sourceTestRevision: { ...validOld.sourceTestRevision, stepId: "test-review" } },
-      { ...validOld, entries: [{ ...validOld.entries[0], status: "done", handoff: { handoffDigest: "2".repeat(64) } }] },
-    ]) {
-      assert.throws(
-        () => canonicalTestReviewRepairProgress({
-          flowManager: { readArtifact() { return { bytes: Buffer.from(JSON.stringify(invalid)) }; } },
-          state, repair: current, consumerNodeId: "test",
-        }),
-        /test review repair progress/,
-      );
-    }
-    const staleCurrentBinding = { ...TestReviewRepairProgress.start(current).toJSON(), sourceEvidenceId: "9".repeat(64) };
-    assert.throws(
-      () => canonicalTestReviewRepairProgress({
-        flowManager: { readArtifact() { return { bytes: Buffer.from(JSON.stringify(staleCurrentBinding)) }; } },
-        state, repair: current, consumerNodeId: "test",
-      }),
-      /different canonical evidence/,
-    );
   });
   it("creates, locates, and reloads only specs/<specId>/001/flow.json", () => {
     const repository = root();
@@ -2094,7 +1987,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.deepEqual(reviewHistory.attempts.map((entry) => entry.attempt), [1]);
     assert.equal(reviewHistory.attempts[0].artifact.payload.userDecision, null);
     assert.equal(decisionHistory.attempts[0].artifact.payload.choice, "accept_risk_and_continue");
-    assert.equal(issueLog.entries[0].step, "acceptance-decision");
+    assert.ok(issueLog.entries.some((entry) => entry.step === "acceptance-decision"));
     assert.equal(manager.load(created.specId).currentNodeId, "final-regression");
   });
 
@@ -2133,8 +2026,16 @@ describe("FlowManager canonical Version-1 runtime", () => {
       consumerNodeId: "final-regression",
     }).bytes.toString("utf8"));
     assert.equal(decisions.attempts[0].artifact.payload.choice, "abort");
-    assert.equal(manager.artifactCatalog(created.specId).artifacts
-      .some((entry) => entry.logicalKey === "issue.log"), false);
+    const issueLogDescriptor = manager.artifactCatalog(created.specId).artifacts
+      .find((entry) => entry.logicalKey === "issue.log") ?? null;
+    if (issueLogDescriptor !== null) {
+      const issueLog = JSON.parse(manager.readArtifact({
+        specId: created.specId,
+        logicalKey: "issue.log",
+        consumerNodeId: "final-regression",
+      }).bytes.toString("utf8"));
+      assert.equal(issueLog.entries.some((entry) => entry.step === "acceptance-decision"), false);
+    }
   });
 
   it("routes a passing canonical acceptance result through its no-op decision to final regression", async () => {
@@ -2522,422 +2423,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.deepEqual({ state: manager.canonicalState(created.specId).toJSON(), activities: manager.activityLedger(created.specId), catalog: manager.artifactCatalog(created.specId).toJSON() }, before);
   });
 
-  it("persists Definition-owned review retry, exhaustion, tooling block, and scenario repair routes", async () => {
-    const setup = (specId, target = "test-execute", versionStoreFaultInjector = null) => {
-      const repository = root();
-      const manager = new FlowManager({
-        root: repository,
-        mainRoot: repository,
-        inWorktree: false,
-        versionStoreFaultInjector,
-      });
-      const created = manager.createFresh(request(specId));
-      manager.addActiveFlow(created.specId, "direct");
-      advanceTo(manager, created.specId, target, {
-        onActive(nodeId) {
-          if (nodeId !== "test") return;
-          manager.publishArtifacts({ specId: created.specId, nodeId: "test", artifactWrites: [{
-            logicalKey: "tests.source", parameters: { testPath: "definition-route.test.js" }, mediaType: "text/javascript",
-            bytes: Buffer.from("import test from 'node:test';\ntest('definition route', () => {});\n", "utf8"),
-          }] });
-        },
-      });
-      const testSourceRevision = new CanonicalTestArtifactStore({ flowManager: manager, state: manager.load(created.specId) }).testSourceRevision().digest;
-      const raw = Buffer.from("definition route raw evidence\n", "utf8");
-      if (target === "test-execute") {
-        manager.writeRuntimeArtifact({ specId: created.specId, nodeId: "test-execute", artifact: {
-          logicalKey: "test.execute.raw-log", mediaType: "text/plain", bytes: raw,
-        } });
-      }
-      const repairFingerprint = buildRepairFingerprint({ root: repository, artifactRoot: repository, specPath: manager.specLocation(created.specId).relativeSpecFile }).hash;
-      return { repository, manager, created, testSourceRevision, raw, repairFingerprint };
-    };
-    const executionResult = ({ manager, created, testSourceRevision, repairFingerprint, raw }, process = { started: true, exitCode: 0, signal: null, timedOut: false, spawnError: null }) => attachCanonicalCommandResultArtifact({ result: "ok", artifacts: {} }, {
-      logicalKey: "test.execute", payload: {
-        version: "2", repairFingerprint, testSourceRevision,
-        rawEvidenceFingerprint: crypto.createHash("sha256").update(raw).digest("hex"),
-        process,
-        raw_output_path: manager.specLocation(created.specId).relativeArtifact("test.execute.raw-log"), summary: [],
-        regression: { required: false, result: "skipped", mode: "none", category: "docs-only", reason: "fixture", classified_paths: [], changed_files: [], trigger_relevant_changed_files: [] },
-      },
-    });
-    const contextFor = ({ repository, manager, created }, phase) => ({ root: repository, mainRoot: repository, executionRoot: repository,
-      specId: created.specId, phase, flowManager: manager, flowState: manager.load(created.specId), config: {} });
-    const scenarioBlockResult = ({ manager, created }) => attachCanonicalCommandResultArtifact({ result: "block", artifacts: {} }, {
-      logicalKey: "scenario.validity",
-      payload: {
-        version: "1",
-        testSourceRevision: new CanonicalTestArtifactStore({
-          flowManager: manager,
-          state: manager.load(created.specId),
-        }).testSourceRevision().digest,
-        command: "node --test",
-        process: { started: true, exitCode: 1, signal: null, timedOut: false, spawnError: null }, result: "block",
-        raw_output_path: manager.specLocation(created.specId).relativeArtifact("scenario.validity.raw-log"),
-        summary: [{ id: "R1", classification: "invalid_test", evidence: {
-          test_file: "fixture.test.js", test_name: "R1: fixture", command: "node --test", raw_output_lines: { start_line: 1, end_line: 1 },
-        } }],
-      },
-    });
-    const scenarioToolingResult = ({ manager, created, testSourceRevision }) => attachCanonicalCommandResultArtifact({ result: "block", artifacts: {} }, {
-      logicalKey: "scenario.validity",
-      payload: {
-        version: "1", testSourceRevision, command: "node --test",
-        process: { started: false, exitCode: null, signal: null, timedOut: false, spawnError: "ENOENT" },
-        result: "block",
-        raw_output_path: manager.specLocation(created.specId).relativeArtifact("scenario.validity.raw-log"),
-        summary: [{ id: "R1", classification: "invalid_test", evidence: {
-          test_file: "fixture.test.js", test_name: "R1: fixture", command: "node --test",
-          raw_output_lines: { start_line: 1, end_line: 1 },
-        } }],
-      },
-    });
-
-    const retries = setup("001-test-chain-retry-routes");
-    await FLOW_COMMANDS.run["test-execute"].post(contextFor(retries, "test-execute"), executionResult(retries));
-    for (let sequence = 1; sequence <= 3; sequence += 1) {
-      if (sequence === 1) {
-        retries.manager.updateStepStatus({ stepId: "test-result-review", requestedStatus: "in_progress" }, { specId: retries.created.specId });
-      }
-      const source = retries.manager.readArtifact({ specId: retries.created.specId, logicalKey: "test.execute", consumerNodeId: "test-result-review" });
-      const sourceActivity = retries.manager.activityLedger(retries.created.specId).find((entry) => entry.id === source.descriptor.activityId);
-      const review = attachCanonicalCommandResultArtifact({ result: "ok", artifacts: {} }, { logicalKey: "test.result.review", payload: {
-        verdict: "fail", checked_items: [
-          { check: "summary_evidence", result: "fail", detail: "fixture failure" },
-          { check: "project_regression_verification", result: "pass", detail: "fixture regression evidence" },
-        ], invalid_reason: "fixture failure",
-        result_file_path: retries.manager.specLocation(retries.created.specId).relativeArtifact("test.execute"),
-        raw_output_path: retries.manager.specLocation(retries.created.specId).relativeArtifact("test.execute.raw-log"),
-        repairFingerprint: retries.repairFingerprint, testSourceRevision: retries.testSourceRevision,
-        testExecute: { historyAttempt: 1, producerActivityId: sourceActivity.id, attemptId: sourceActivity.attemptId, sequence: sourceActivity.sequence },
-        rawEvidenceFingerprint: crypto.createHash("sha256").update(retries.raw).digest("hex"),
-      } });
-      await FLOW_COMMANDS.run["test-result-review"].post(contextFor(retries, "test-result-review"), review);
-      const state = retries.manager.canonicalState(retries.created.specId);
-      if (sequence < 3) {
-        assert.equal(state.nextAction().operation, "retry");
-        retries.manager.beginNextAction(retries.created.specId);
-      } else {
-        assert.equal(state.nextAction().operation, "blocked");
-        assert.equal(state.attempt.failure.retryable, false);
-        assert.equal(state.attempt.failure.code, "TEST_CHAIN_RETRY_EXHAUSTED");
-      }
-    }
-    activateNonBlockingPolicy({
-      root: retries.repository,
-      flowManager: retries.manager,
-      reason: "The canonical result-review retry budget is exhausted.",
-    });
-    const reviewReload = new FlowManager({
-      root: retries.repository, mainRoot: retries.repository, inWorktree: false,
-    });
-    const reviewContext = decisionContextForActiveFlow(
-      retries.repository, reviewReload.load(retries.created.specId), reviewReload,
-    );
-    assert.equal(reviewContext.resultKind, "quality");
-    recordNonBlockingDecision({
-      root: retries.repository,
-      flowManager: reviewReload,
-      choice: "continue",
-      reason: "Continue with the exhausted canonical review result.",
-      remainingRisk: "Acceptance retains the failed result review.",
-      expectEvidenceDigest: reviewContext.evidenceDigest,
-      expectIdentity: reviewContext.identity().toJSON(),
-    });
-    assert.equal(reviewReload.canonicalState(retries.created.specId).nextAction().nodeId, "impl-review");
-
-    const tooling = setup("001-test-chain-tooling-route");
-    const toolingResult = executionResult(tooling, { started: false, exitCode: null, signal: null, timedOut: false, spawnError: "ENOENT" });
-    await FLOW_COMMANDS.run["test-execute"].post(contextFor(tooling, "test-execute"), toolingResult);
-    const toolingState = tooling.manager.canonicalState(tooling.created.specId);
-    assert.equal(toolingState.nextAction().operation, "blocked");
-    assert.equal(toolingState.attempt.consumption.semantic, 0);
-
-    const repair = setup("001-scenario-repair-route", "scenario-validity");
-    repair.manager.writeRuntimeArtifact({ specId: repair.created.specId, nodeId: "scenario-validity", artifact: {
-      logicalKey: "scenario.validity.raw-log", mediaType: "text/plain", bytes: Buffer.from("R1 invalid scenario\n", "utf8"),
-    } });
-    const scenario = scenarioBlockResult(repair);
-    await FLOW_COMMANDS.run["scenario-validity"].post(contextFor(repair, "scenario-validity"), scenario);
-    const repairedState = repair.manager.canonicalState(repair.created.specId);
-    assert.equal(repairedState.current.at(-1), "test");
-    assert.equal(repairedState.nextAction().operation, "resume");
-    assert.deepEqual(repairedState.attempt.consumption.toJSON(), { semantic: 0, tooling: 0 });
-    assert.equal(repair.manager.activityLedger(repair.created.specId).at(-1).transition.operation, "repair_scenario_validity");
-    assert.equal(repair.manager.readArtifact({
-      specId: repair.created.specId, logicalKey: "issue.log", consumerNodeId: "test",
-    }) !== null, true);
-
-    const unavailable = setup("001-scenario-tooling-nonblocking", "scenario-validity");
-    unavailable.manager.writeRuntimeArtifact({
-      specId: unavailable.created.specId,
-      nodeId: "scenario-validity",
-      artifact: {
-        logicalKey: "scenario.validity.raw-log", mediaType: "text/plain",
-        bytes: Buffer.from("scenario provider unavailable\n", "utf8"),
-      },
-    });
-    const unavailableResult = scenarioToolingResult(unavailable);
-    await FLOW_COMMANDS.run["scenario-validity"].post(
-      contextFor(unavailable, "scenario-validity"), unavailableResult,
-    );
-    activateNonBlockingPolicy({
-      root: unavailable.repository,
-      flowManager: unavailable.manager,
-      reason: "Scenario tooling could not obtain a semantic judgment.",
-    });
-    const scenarioReload = new FlowManager({
-      root: unavailable.repository, mainRoot: unavailable.repository, inWorktree: false,
-    });
-    const scenarioContext = decisionContextForActiveFlow(
-      unavailable.repository, scenarioReload.load(unavailable.created.specId), scenarioReload,
-    );
-    assert.equal(scenarioContext.resultKind, "tooling");
-    recordNonBlockingDecision({
-      root: unavailable.repository,
-      flowManager: scenarioReload,
-      choice: "continue",
-      reason: "Continue despite unavailable scenario tooling.",
-      remainingRisk: "Acceptance retains the unavailable scenario judgment.",
-      expectEvidenceDigest: scenarioContext.evidenceDigest,
-      expectIdentity: scenarioContext.identity().toJSON(),
-    });
-    assert.equal(scenarioReload.canonicalState(unavailable.created.specId).nextAction().nodeId, "test-review");
-
-    let failScenarioSettlement = true;
-    const interrupted = setup("001-scenario-repair-atomicity", "scenario-validity", ({ phase, activity }) => {
-      if (failScenarioSettlement && phase === "activity-appended"
-        && activity.transition.operation === "repair_scenario_validity") {
-        throw new Error("simulated scenario settlement interruption");
-      }
-    });
-    interrupted.manager.writeRuntimeArtifact({ specId: interrupted.created.specId, nodeId: "scenario-validity", artifact: {
-      logicalKey: "scenario.validity.raw-log", mediaType: "text/plain", bytes: Buffer.from("R1 interrupted scenario\n", "utf8"),
-    } });
-    const interruptedResult = scenarioBlockResult(interrupted);
-    await assert.rejects(
-      FLOW_COMMANDS.run["scenario-validity"].post(contextFor(interrupted, "scenario-validity"), interruptedResult),
-      /simulated scenario settlement interruption/,
-    );
-    const afterInterruptedSettlement = interrupted.manager.canonicalState(interrupted.created.specId);
-    assert.equal(afterInterruptedSettlement.current.at(-1), "scenario-validity");
-    assert.equal(afterInterruptedSettlement.attempt.failure, null);
-    assert.equal(interrupted.manager.readArtifact({
-      specId: interrupted.created.specId, logicalKey: "issue.log", consumerNodeId: "scenario-validity", optional: true,
-    }), null);
-    assert.equal(interrupted.manager.activityLedger(interrupted.created.specId).some((activity) => (
-      activity.transition.operation === "repair_scenario_validity"
-    )), false);
-
-    failScenarioSettlement = false;
-    const interruptedFacts = readCurrentTestChainTransitionFacts({
-      flowManager: interrupted.manager, specId: interrupted.created.specId,
-    });
-    const interruptedDecision = resolveNonGateTransition(interruptedFacts, scenarioValidityTransitionDefinition);
-    interrupted.manager.applyTestChainTransitionDecision({
-      specId: interrupted.created.specId,
-      decision: interruptedDecision,
-    });
-    const settledActivityCount = interrupted.manager.activityLedger(interrupted.created.specId).length;
-    interrupted.manager.applyTestChainTransitionDecision({
-      specId: interrupted.created.specId,
-      decision: interruptedDecision,
-    });
-    assert.equal(interrupted.manager.activityLedger(interrupted.created.specId).length, settledActivityCount);
-    assert.equal(interrupted.manager.canonicalState(interrupted.created.specId).current.at(-1), "test");
-    assert.equal(interrupted.manager.readArtifact({
-      specId: interrupted.created.specId, logicalKey: "issue.log", consumerNodeId: "test",
-    }) !== null, true);
-
-    const restarted = setup("001-test-chain-restarted-attempt", "scenario-validity");
-    for (let episode = 1; episode <= 4; episode += 1) {
-      restarted.manager.writeRuntimeArtifact({ specId: restarted.created.specId, nodeId: "scenario-validity", artifact: {
-        logicalKey: "scenario.validity.raw-log", mediaType: "text/plain",
-        bytes: Buffer.from(`R1 restarted scenario episode ${episode}\n`, "utf8"),
-      } });
-      const result = scenarioBlockResult(restarted);
-      if (episode === 4) {
-        restarted.manager.publishCurrentAttemptResult({ specId: restarted.created.specId, commandResult: result });
-        const restartedFacts = readCurrentTestChainTransitionFacts({
-          flowManager: restarted.manager,
-          specId: restarted.created.specId,
-        });
-        assert.ok(restartedFacts.currentAttempt.sequence > 3);
-        assert.equal(restarted.manager.canonicalState(restarted.created.specId).attempt.consumption.semantic, 0);
-        assert.equal(restartedFacts.retry.used, 1);
-        restarted.manager.applyTestChainTransitionDecision({
-          specId: restarted.created.specId,
-          decision: resolveNonGateTransition(restartedFacts, scenarioValidityTransitionDefinition),
-        });
-        break;
-      }
-      await FLOW_COMMANDS.run["scenario-validity"].post(contextFor(restarted, "scenario-validity"), result);
-      restarted.manager.publishArtifacts({ specId: restarted.created.specId, nodeId: "test", artifactWrites: [{
-        logicalKey: "tests.source",
-        parameters: { testPath: "definition-route.test.js" },
-        mediaType: "text/javascript",
-        bytes: Buffer.from(`import test from 'node:test';\ntest('definition route ${episode}', () => {});\n`, "utf8"),
-      }] });
-      confirmFixtureStep(restarted.manager, "test", { specId: restarted.created.specId });
-      restarted.manager.updateStepStatus({ stepId: "scenario-validity", requestedStatus: "in_progress" }, {
-        specId: restarted.created.specId,
-      });
-    }
-    assert.equal(restarted.manager.canonicalState(restarted.created.specId).current.at(-1), "test");
-
-    const advisory = setup("001-test-chain-nonblocking-route", "scenario-validity");
-    advisory.manager._store.runtime.setPolicy({
-      specId: advisory.created.specId,
-      activityId: "fixture-advisory-policy",
-      policy: { autoApprove: false, nonblocking: {
-        enabled: true, activatedAt: "2026-08-24T00:00:00.000Z", activatedStep: "impl-review", reason: "fixture policy already activated by an earlier eligible stop",
-      } },
-    });
-    advisory.manager.writeRuntimeArtifact({ specId: advisory.created.specId, nodeId: "scenario-validity", artifact: {
-      logicalKey: "scenario.validity.raw-log", mediaType: "text/plain", bytes: Buffer.from("R1 advisory scenario\n", "utf8"),
-    } });
-    await FLOW_COMMANDS.run["scenario-validity"].post(
-      contextFor(advisory, "scenario-validity"),
-      scenarioToolingResult(advisory),
-    );
-    assert.equal(advisory.manager.canonicalState(advisory.created.specId).nextAction().operation, "resume");
-    assert.equal(advisory.manager.activityLedger(advisory.created.specId).at(-1).transition.operation, "record_nonblocking");
-    assert.deepEqual(decisionContextForActiveFlow(advisory.repository, advisory.manager.load(advisory.created.specId), advisory.manager).allowedActions, ["retry", "continue"]);
-    const advisoryDirective = await new GetNextActionCommand().execute(contextFor(advisory, "scenario-validity"));
-    assert.equal(advisoryDirective.directive.code, "TEST_CHAIN_NONBLOCKING_DECISION_REQUIRED");
-    assert.equal(advisoryDirective.definitionTransition.operation, "await-user-input");
-
-    const stalePolicy = setup("001-test-chain-stale-policy", "scenario-validity");
-    stalePolicy.manager.writeRuntimeArtifact({ specId: stalePolicy.created.specId, nodeId: "scenario-validity", artifact: {
-      logicalKey: "scenario.validity.raw-log", mediaType: "text/plain", bytes: Buffer.from("R1 stale policy scenario\n", "utf8"),
-    } });
-    stalePolicy.manager.publishCurrentAttemptResult({
-      specId: stalePolicy.created.specId, commandResult: scenarioBlockResult(stalePolicy),
-    });
-    const stalePolicyDecision = resolveNonGateTransition(readCurrentTestChainTransitionFacts({
-      flowManager: stalePolicy.manager, specId: stalePolicy.created.specId,
-    }), scenarioValidityTransitionDefinition);
-    stalePolicy.manager._store.runtime.setPolicy({
-      specId: stalePolicy.created.specId,
-      activityId: "fixture-stale-plan-policy",
-      policy: { autoApprove: false, nonblocking: {
-        enabled: true, activatedAt: "2026-08-24T00:00:00.000Z", activatedStep: "impl-review", reason: "fixture policy already activated by an earlier eligible stop",
-      } },
-    });
-    const afterPolicyActivation = {
-      state: stalePolicy.manager.canonicalState(stalePolicy.created.specId).toJSON(),
-      activities: stalePolicy.manager.activityLedger(stalePolicy.created.specId),
-      catalog: stalePolicy.manager.artifactCatalog(stalePolicy.created.specId).toJSON(),
-    };
-    assert.throws(
-      () => stalePolicy.manager.applyTestChainTransitionDecision({
-        specId: stalePolicy.created.specId, decision: stalePolicyDecision,
-      }),
-      /Definition plan changed before test-chain settlement/,
-    );
-    assert.deepEqual({
-      state: stalePolicy.manager.canonicalState(stalePolicy.created.specId).toJSON(),
-      activities: stalePolicy.manager.activityLedger(stalePolicy.created.specId),
-      catalog: stalePolicy.manager.artifactCatalog(stalePolicy.created.specId).toJSON(),
-    }, afterPolicyActivation);
-
-    const staleRevision = setup("001-test-chain-stale-state-revision", "scenario-validity");
-    staleRevision.manager.writeRuntimeArtifact({ specId: staleRevision.created.specId, nodeId: "scenario-validity", artifact: {
-      logicalKey: "scenario.validity.raw-log", mediaType: "text/plain", bytes: Buffer.from("R1 stale revision scenario\n", "utf8"),
-    } });
-    staleRevision.manager.publishCurrentAttemptResult({
-      specId: staleRevision.created.specId, commandResult: scenarioBlockResult(staleRevision),
-    });
-    const staleRevisionDecision = resolveNonGateTransition(readCurrentTestChainTransitionFacts({
-      flowManager: staleRevision.manager, specId: staleRevision.created.specId,
-    }), scenarioValidityTransitionDefinition);
-    staleRevision.manager.setAutoApprove(true, { specId: staleRevision.created.specId });
-    const afterStateRevision = {
-      state: staleRevision.manager.canonicalState(staleRevision.created.specId).toJSON(),
-      activities: staleRevision.manager.activityLedger(staleRevision.created.specId),
-      catalog: staleRevision.manager.artifactCatalog(staleRevision.created.specId).toJSON(),
-    };
-    assert.throws(
-      () => staleRevision.manager.applyTestChainTransitionDecision({
-        specId: staleRevision.created.specId, decision: staleRevisionDecision,
-      }),
-      /Definition plan changed before test-chain settlement/,
-    );
-    assert.deepEqual({
-      state: staleRevision.manager.canonicalState(staleRevision.created.specId).toJSON(),
-      activities: staleRevision.manager.activityLedger(staleRevision.created.specId),
-      catalog: staleRevision.manager.artifactCatalog(staleRevision.created.specId).toJSON(),
-    }, afterStateRevision);
-
-    const staleRaw = setup("001-test-chain-stale-raw", "test-execute");
-    staleRaw.manager.publishCurrentAttemptResult({
-      specId: staleRaw.created.specId, commandResult: executionResult(staleRaw),
-    });
-    const staleRawDecision = resolveNonGateTransition(readCurrentTestChainTransitionFacts({
-      flowManager: staleRaw.manager, specId: staleRaw.created.specId,
-    }), testExecuteTransitionDefinition);
-    staleRaw.manager.writeRuntimeArtifact({ specId: staleRaw.created.specId, nodeId: "test-execute", artifact: {
-      logicalKey: "test.execute.raw-log", mediaType: "text/plain", bytes: Buffer.from("replacement raw evidence\n", "utf8"),
-    } });
-    const afterRawReplacement = {
-      state: staleRaw.manager.canonicalState(staleRaw.created.specId).toJSON(),
-      activities: staleRaw.manager.activityLedger(staleRaw.created.specId),
-      catalog: staleRaw.manager.artifactCatalog(staleRaw.created.specId).toJSON(),
-    };
-    assert.throws(
-      () => staleRaw.manager.applyTestChainTransitionDecision({
-        specId: staleRaw.created.specId, decision: staleRawDecision,
-      }),
-      /Definition plan changed before test-chain settlement/,
-    );
-    assert.deepEqual({
-      state: staleRaw.manager.canonicalState(staleRaw.created.specId).toJSON(),
-      activities: staleRaw.manager.activityLedger(staleRaw.created.specId),
-      catalog: staleRaw.manager.artifactCatalog(staleRaw.created.specId).toJSON(),
-    }, afterRawReplacement);
-    assert.throws(
-      () => interrupted.manager.writeRuntimeArtifact({ specId: interrupted.created.specId, nodeId: "scenario-validity", artifact: {
-        logicalKey: "scenario.validity.raw-log", mediaType: "text/plain", bytes: Buffer.from("stale producer write\n", "utf8"),
-      } }),
-      /producer does not own the active Attempt/,
-    );
-
-    let raceArmed = false;
-    let rawRaceError = null;
-    let rawRaceAttempts = 0;
-    let raceManager = null;
-    const raced = setup("001-test-chain-raw-write-race", "scenario-validity", ({ phase, activity }) => {
-      if (!raceArmed || phase !== "activity-ready-to-append" || activity.transition.operation !== "repair_scenario_validity") return;
-      rawRaceAttempts += 1;
-      try {
-        raceManager.writeRuntimeArtifact({ specId: raced.created.specId, nodeId: "scenario-validity", artifact: {
-          logicalKey: "scenario.validity.raw-log", mediaType: "text/plain", bytes: Buffer.from("racing replacement\n", "utf8"),
-        } });
-      } catch (error) {
-        rawRaceError = error;
-      }
-    });
-    raceManager = raced.manager;
-    const stableRaw = Buffer.from("R1 lock-race scenario\n", "utf8");
-    raced.manager.writeRuntimeArtifact({ specId: raced.created.specId, nodeId: "scenario-validity", artifact: {
-      logicalKey: "scenario.validity.raw-log", mediaType: "text/plain", bytes: stableRaw,
-    } });
-    raced.manager.publishCurrentAttemptResult({
-      specId: raced.created.specId, commandResult: scenarioBlockResult(raced),
-    });
-    const racedDecision = resolveNonGateTransition(readCurrentTestChainTransitionFacts({
-      flowManager: raced.manager, specId: raced.created.specId,
-    }), scenarioValidityTransitionDefinition);
-    raceArmed = true;
-    raced.manager.applyTestChainTransitionDecision({ specId: raced.created.specId, decision: racedDecision });
-    assert.equal(rawRaceAttempts, 1);
-    assert.equal(rawRaceError?.code, "PROCESS_LOCK_REENTRANT");
-    assert.equal(rawRaceError?.lockStatus, "reentrant");
-    assert.deepEqual(raced.manager.readRuntimeArtifact({
-      specId: raced.created.specId, logicalKey: "scenario.validity.raw-log", consumerNodeId: "scenario-validity",
-    }).bytes, stableRaw);
-  });
-
   it("confirms definition-owned no-op leaves and persists review history through the catalog", () => {
     const repository = root();
     const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
@@ -3125,38 +2610,41 @@ describe("FlowManager canonical Version-1 runtime", () => {
             id: "R1",
             desc: "Bind the implementation file map to the report.",
             priority: "must",
+            task_ids: ["T-1"],
+            testable: false,
           }],
           tasks: [],
         }, { specId: "001-canonical-linked-report" }),
       }));
+      manager.addTask({
+        id: "T-1",
+        title: "Publish the linked report",
+        goal: "Bind the implementation file map to the report.",
+        origin: "plan",
+        added_round: 0,
+        status: "pending",
+      }, { specId: created.specId });
       manager.addActiveFlow(created.specId, "direct");
-      const ordered = leaves(manager.load(created.specId).steps);
-      const reportIndex = ordered.findIndex((entry) => entry.id === "report");
-      assert.ok(reportIndex > 0);
-      for (const entry of ordered.slice(0, reportIndex)) {
-        if (entry.id === "final-regression") {
-          manager.updateStepStatus({ stepId: entry.id, requestedStatus: "in_progress" });
-          const finalRegressionContext = {
-            root: repository,
-            mainRoot: repository,
-            executionRoot: repository,
-            specId: created.specId,
-            phase: "final-regression",
-            config: { test: { command: "node --test final-regression.test.js", timeout: 5 } },
-            flowManager: manager,
-            flowState: manager.load(created.specId),
-          };
-          const finalRegressionResult = await new RunFinalRegressionCommand().execute(finalRegressionContext);
-          await FLOW_COMMANDS.run["final-regression"].post(finalRegressionContext, finalRegressionResult);
-          continue;
-        }
-        if (entry.id === "implement") {
-          manager.updateStepStatus({ stepId: entry.id, requestedStatus: "in_progress" });
-          manager.updateFileMap({ requirementId: "R1", paths: ["src/report.js"] });
-        }
-        confirmFixtureStep(manager, entry.id);
-      }
-      manager.updateStepStatus({ stepId: "report", requestedStatus: "in_progress" });
+      advanceTo(manager, created.specId, "final-regression", {
+        onActive(stepId) {
+          if (stepId === "implement") {
+            manager.updateFileMap({ requirementId: "R1", paths: ["src/report.js"] });
+          }
+        },
+      });
+      const finalRegressionContext = {
+        root: repository,
+        mainRoot: repository,
+        executionRoot: repository,
+        specId: created.specId,
+        phase: "final-regression",
+        config: { test: { command: "node --test final-regression.test.js", timeout: 5 } },
+        flowManager: manager,
+        flowState: manager.load(created.specId),
+      };
+      const finalRegressionResult = await new RunFinalRegressionCommand().execute(finalRegressionContext);
+      await FLOW_COMMANDS.run["final-regression"].post(finalRegressionContext, finalRegressionResult);
+      advanceTo(manager, created.specId, "report");
       const identity = new FlowOutboxIdentity({
         runId: created.runId,
         stepId: "report",
@@ -4198,647 +3686,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(fs.existsSync(path.join(manager.specLocation(specId).directory, "file-map.json")), false);
   });
 
-  it("binds rejected test-review evidence to a replacement test Attempt and handoff", async () => {
-    const repository = root();
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request("001-canonical-test-review-repair", {
-      specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, {
-        specId: "001-canonical-test-review-repair",
-      }),
-    }));
-    manager.addActiveFlow(created.specId, "direct");
-    advanceTo(manager, created.specId, "test-review", {
-      onActive(nodeId) {
-        if (nodeId !== "test") return;
-        manager.publishArtifacts({
-          specId: created.specId,
-          nodeId: "test",
-          artifactWrites: [{
-            logicalKey: "tests.source",
-            parameters: { testPath: "requirement.test.js" },
-            mediaType: "text/javascript",
-            bytes: Buffer.from("// spec: R1\n", "utf8"),
-          }],
-        });
-      },
-    });
-    const testArtifactStore = new CanonicalTestArtifactStore({
-      flowManager: manager,
-      state: manager.load(created.specId),
-    });
-    const sourceRevision = testArtifactStore.testSourceRevision().toJSON();
-    assert.deepEqual(
-      testArtifactStore.testSourceRevision().toJSON(),
-      sourceRevision,
-      "a cataloged test source revision is stable across repeated reads",
-    );
-    const evidenceDigest = "e".repeat(64);
-    const finding = {
-      findingId: "test-review-finding",
-      fingerprint: "f".repeat(64),
-      target: "requirement.test.js",
-      requiredChange: "Add the missing observable assertion in this test file.",
-      summary: "The test omits a required behavior.",
-      disposition: "must-fix",
-      rationale: "The test must cover the required behavior before acceptance.",
-    };
-    publishAttemptArtifact(manager, created.specId, "test-review", "test.review", {
-      phase: "test",
-      verdict: "REJECTED",
-      blockingFindings: [finding],
-      advisoryFindings: [],
-      sourceTestArtifactRevision: sourceRevision,
-      canonicalEvidence: {
-        disposition: "REJECTED",
-        // Canonical review evidence deliberately retains only identity and
-        // summary.  Repair must bind it back to the rich sealed artifact.
-        blockingFindings: [{
-          findingId: finding.findingId,
-          fingerprint: finding.fingerprint,
-          severity: "blocking",
-          summary: finding.summary,
-          evidenceRefs: ["test-review.json#test-review-finding"],
-        }],
-        advisoryFindings: [],
-        identity: { evidenceDigest },
-      },
-    });
-    for (let index = 0; index < 4; index += 1) {
-      manager.appendMetric({ phase: "test", counter: "reviewRetry", delta: 1 }, { specId: created.specId, taskId: null });
-    }
-    const ctx = {
-      root: repository,
-      mainRoot: repository,
-      executionRoot: repository,
-      specId: created.specId,
-      flowManager: manager,
-      flowState: manager.load(created.specId),
-      flowCommandBoundary: true,
-    };
-    const next = await new GetNextActionCommand().execute(ctx);
-    assert.equal(next.directive.actionId, "REPAIR_TEST_REVIEW", "four persisted retries remain below the definition maximum");
-
-    const repaired = new RunRepairTestReviewCommand().execute({
-      ...ctx,
-      flowState: manager.load(created.specId),
-    });
-    assert.equal(repaired.ok, true, JSON.stringify(repaired));
-    assert.equal(repaired.data.nextStep, "test");
-    const state = manager.load(created.specId);
-    assert.equal(state.currentNodeId, "test");
-    assert.equal(leaves(state.steps).find((entry) => entry.id === "scenario-validity").status, "invalidated");
-    assert.equal(leaves(state.steps).find((entry) => entry.id === "test-review").status, "invalidated");
-    const firstTestAction = await new GetNextActionCommand().execute({ ...ctx, flowState: state });
-    const secondTestAction = await new GetNextActionCommand().execute({ ...ctx, flowState: state });
-    assert.deepEqual(
-      secondTestAction,
-      firstTestAction,
-      "repair-test-review produces a stable next action for dispatcher identity verification",
-    );
-
-    const handoff = new WorkerArtifactHandoffCoordinator().createRequest({
-      ctx,
-      state,
-      invocation: {
-        id: "canonical-test-review-repair",
-        target: { digest: "b".repeat(64) },
-        action: { digest: "a".repeat(64), nextAction: { step: "test" } },
-      },
-    });
-    assert.deepEqual(handoff.inputs.map((entry) => entry.name), ["spec.json", "test-review.json"]);
-    assert.equal(handoff.inputs[1].document.verdict, "REJECTED");
-    assert.equal(fs.existsSync(path.join(manager.specLocation(created.specId).directory, "test-review.json")), false);
-    handoff.prepare();
-    assert.deepEqual(
-      fs.readFileSync(path.join(handoff.payloadPath("spec-tests"), "requirement.test.js")),
-      Buffer.from("// spec: R1\n", "utf8"),
-      "repair payload starts as byte-identical canonical test input",
-    );
-    const workerContract = handoff.toWorkerJSON();
-    assert.deepEqual(workerContract.inputs.map((entry) => entry.name), ["spec.json"]);
-    assert.equal(workerContract.testReviewRepair.blockingFindings.length, 1);
-    assert.deepEqual(workerContract.testReviewRepair.batch.scopes[0].targetFiles, ["requirement.test.js"]);
-    assert.match(workerContract.testReviewRepair.batch.scopes[0].repairScope, /observable assertion/);
-  });
-
-  it("publishes one shared test-review repair batch receipt and resumes without rerunning it", async () => {
-    const repository = root();
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request("001-test-review-repair-progress", {
-      specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, {
-        specId: "001-test-review-repair-progress",
-      }),
-    }));
-    manager.addActiveFlow(created.specId, "direct");
-    const original = Buffer.from([
-      "// spec: R1",
-      'import test from "node:test";',
-      'test("R1: preserves the original premise", () => {});',
-      "",
-    ].join("\n"), "utf8");
-    advanceTo(manager, created.specId, "test-review", {
-      onActive(nodeId) {
-        if (nodeId !== "test") return;
-        manager.publishArtifacts({
-          specId: created.specId,
-          nodeId: "test",
-          artifactWrites: [{
-            logicalKey: "tests.source", parameters: { testPath: "requirement.test.js" },
-            mediaType: "text/javascript", bytes: original,
-          }],
-        });
-      },
-    });
-    const sourceRevision = new CanonicalTestArtifactStore({ flowManager: manager, state: manager.load(created.specId) })
-      .testSourceRevision().toJSON();
-    const findings = [
-      { findingId: "finding-one", fingerprint: "1".repeat(64), target: "requirement.test.js", requiredChange: "Add assertion one.", disposition: "must-fix", rationale: "Required." },
-      { findingId: "finding-two", fingerprint: "2".repeat(64), target: "requirement.test.js", requiredChange: "Add assertion two.", disposition: "must-fix", rationale: "Required." },
-    ];
-    publishAttemptArtifact(manager, created.specId, "test-review", "test.review", {
-      phase: "test", verdict: "REJECTED", blockingFindings: findings, advisoryFindings: [], sourceTestArtifactRevision: sourceRevision,
-      canonicalEvidence: { disposition: "REJECTED", blockingFindings: findings, advisoryFindings: [], identity: { evidenceDigest: "e".repeat(64) } },
-    });
-    const ctx = { root: repository, mainRoot: repository, executionRoot: repository, specId: created.specId, flowManager: manager, flowState: manager.load(created.specId), flowCommandBoundary: true };
-    assert.equal(new RunRepairTestReviewCommand().execute(ctx).ok, true);
-    const selectedAction = await new GetNextActionCommand().execute({ ...ctx, flowState: manager.load(created.specId) });
-    assert.deepEqual(selectedAction.context.testReviewRepair.blockingFindings.map((entry) => entry.findingId), ["finding-one", "finding-two"]);
-    assert.equal(selectedAction.context.testReviewRepair.batch.findingIds.length, 2);
-    const invocation = { id: "test-review-progress", target: { digest: "b".repeat(64) }, action: { digest: "a".repeat(64), nextAction: { step: "test" } } };
-    const coordinator = new WorkerArtifactHandoffCoordinator();
-    const interrupted = coordinator.createRequest({
-      ctx,
-      state: manager.load(created.specId),
-      invocation: { ...invocation, id: "test-review-progress-crash" },
-    }).prepare();
-    sealWorkerArtifactHandoff({ requestPath: interrupted.requestPath, invocationId: "test-review-progress-crash" });
-    assert.deepEqual(coordinator.recoverPending({ ctx }), {
-      completed: true,
-      replayed: true,
-      cleanedHandoffs: 1,
-    });
-    assert.equal(manager.load(created.specId).currentNodeId, "test", "an uncommitted restored request cannot complete the full test Attempt");
-    assert.equal(manager.readArtifact({
-      specId: created.specId,
-      logicalKey: "test.review.repair.progress",
-      consumerNodeId: "test",
-      optional: true,
-    }), null);
-    const first = coordinator.createRequest({ ctx, state: manager.load(created.specId), invocation }).prepare();
-    assert.ok(first.workerVisibleTestReviewRepair instanceof WorkerVisibleTestReviewRepair);
-    const firstRequestText = fs.readFileSync(first.requestPath, "utf8");
-    assert.match(firstRequestText, /finding-one/);
-    assert.match(firstRequestText, /finding-two/);
-    const firstFile = path.join(first.payloadPath("spec-tests"), "requirement.test.js");
-    assert.deepEqual(fs.readFileSync(firstFile), original);
-    fs.appendFileSync(firstFile, "// repaired finding one\n");
-    sealWorkerArtifactHandoff({ requestPath: first.requestPath, invocationId: invocation.id });
-    const sealedFirst = JSON.parse(fs.readFileSync(first.submissionPath, "utf8"));
-    const journal = new WorkerArtifactPublicationJournal({
-      version: 1,
-      runId: first.runId,
-      specId: first.specId,
-      issue: first.issue,
-      stepId: first.stepId,
-      actionDigest: first.actionDigest,
-      dispatchInvocationId: first.dispatchInvocationId,
-      requestDigest: first.requestDigest,
-      handoffDigest: sealedFirst.handoffDigest,
-      inputDigest: first.inputDigest,
-      inputRevision: first.inputRevision,
-      handoffDirectory: first.directory,
-      payloadManifest: sealedFirst.payloadManifest,
-      targetBaselines: first.payloads.map(({ rule, baselineDigest, baselineByteLength, baselineEntries }) => ({
-        logicalName: rule.logicalName,
-        kind: rule.kind,
-        targetRelativePath: rule.targetRelativePath,
-        digest: baselineDigest,
-        byteLength: baselineByteLength,
-        entries: baselineEntries,
-      })),
-      startedAt: "2026-08-01T00:00:00.000Z",
-    });
-    const restoredFirst = WorkerArtifactHandoffRequest.restore({
-      mainRoot: repository,
-      state: manager.load(created.specId),
-      journal,
-      flowManager: manager,
-      canonicalLocation: manager.specLocation(created.specId),
-    });
-    assert.equal(restoredFirst.requestDigest, first.requestDigest, "selected request restore preserves sealed request identity");
-    assert.ok(restoredFirst.workerVisibleTestReviewRepair instanceof WorkerVisibleTestReviewRepair);
-    assert.deepEqual(restoredFirst.workerVisibleTestReviewRepair.toJSON(), first.workerVisibleTestReviewRepair.toJSON());
-    assert.deepEqual(restoredFirst.toWorkerJSON().testReviewRepair.batch.findingIds, ["finding-one", "finding-two"]);
-    const partialInterrupted = new WorkerArtifactHandoffCoordinator({
-      faultInjector({ phase }) {
-        if (phase === "before-worker-handoff-cleanup-rename") throw new Error("partial cleanup interruption");
-      },
-    });
-    assert.throws(
-      () => partialInterrupted.reconcile({ ctx, request: restoredFirst }),
-      /partial cleanup interruption/,
-    );
-    const liveReplay = partialInterrupted.reconcile({ ctx, request: first });
-    assert.equal(liveReplay.replayed, true, "the live selected repair request recognizes its committed checkpoint");
-    assert.equal(liveReplay.handoffDigest, sealedFirst.handoffDigest);
-    const committedPartial = WorkerArtifactHandoffRequest.restore({
-      mainRoot: repository,
-      state: manager.load(created.specId),
-      journal,
-      flowManager: manager,
-      canonicalLocation: manager.specLocation(created.specId),
-    });
-    assert.equal(committedPartial.testReviewRepair, null, "a committed selected request is recognized before rebinding current progress");
-    assert.deepEqual(committedPartial.workerVisibleTestReviewRepair.batch.findingIds, ["finding-one", "finding-two"]);
-    assert.deepEqual(coordinator.recoverPending({ ctx }), {
-      completed: true,
-      replayed: true,
-      cleanedHandoffs: 1,
-    }, "restart recognizes the published batch receipt without rerunning it");
-    const progress = JSON.parse(manager.readArtifact({ specId: created.specId, logicalKey: "test.review.repair.progress", consumerNodeId: "test" }).bytes);
-    assert.equal(progress.entries.find((entry) => entry.findingId === "finding-one").status, "done");
-    assert.equal(progress.entries.find((entry) => entry.findingId === "finding-two").status, "done");
-    assert.equal(
-      leaves(manager.load(created.specId).steps).find((entry) => entry.id === "test").status,
-      "done",
-      "the final finding completes the original test Attempt",
-    );
-  });
-
-  it("does not mix stale test-review repair into a later scenario gate test replacement", async () => {
-    const repository = root();
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request("001-repair-lineage-plan-gate", {
-      specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, {
-        specId: "001-repair-lineage-plan-gate",
-      }),
-    }));
-    manager.addActiveFlow(created.specId, "direct");
-    advanceTo(manager, created.specId, "test-review", {
-      onActive(nodeId) {
-        if (nodeId !== "test") return;
-        manager.publishArtifacts({
-          specId: created.specId,
-          nodeId: "test",
-          artifactWrites: [{
-            logicalKey: "tests.source",
-            parameters: { testPath: "scenario.test.js" },
-            mediaType: "text/javascript",
-            bytes: Buffer.from([
-              'import test from "node:test";',
-              'test("R1: exposes an invalid scenario premise", () => {});',
-              "",
-            ].join("\n"), "utf8"),
-          }],
-        });
-      },
-    });
-    const testStore = new CanonicalTestArtifactStore({ flowManager: manager, state: manager.load(created.specId) });
-    const revision = testStore.testSourceRevision().toJSON();
-    const finding = {
-      findingId: "test-review-finding",
-      fingerprint: "f".repeat(64),
-      summary: "The test omits a required behavior.",
-    };
-    publishAttemptArtifact(manager, created.specId, "test-review", "test.review", {
-      phase: "test",
-      verdict: "REJECTED",
-      blockingFindings: [finding],
-      advisoryFindings: [],
-      sourceTestArtifactRevision: revision,
-      canonicalEvidence: {
-        disposition: "REJECTED",
-        blockingFindings: [finding],
-        advisoryFindings: [],
-        identity: { evidenceDigest: "e".repeat(64) },
-      },
-    });
-    const context = {
-      root: repository,
-      mainRoot: repository,
-      executionRoot: repository,
-      specId: created.specId,
-      flowManager: manager,
-      flowState: manager.load(created.specId),
-      config: {},
-      flowCommandBoundary: true,
-    };
-    const reviewRepair = new RunRepairTestReviewCommand().execute(context);
-    assert.equal(reviewRepair.ok, true, JSON.stringify(reviewRepair));
-    confirmFixtureStep(manager, "test", { specId: created.specId });
-    manager.updateStepStatus({ stepId: "scenario-validity", requestedStatus: "in_progress" }, { specId: created.specId });
-    context.flowState = manager.load(created.specId);
-    const scenario = new RunScenarioValidityCommand({
-      scenarioTestExecutor: async ({ executions }) => executions.map((execution) => ({
-        file: execution.file,
-        requirementId: execution.requirementId,
-        command: `node --test ${execution.file}`,
-        process: {
-          started: true,
-          exitCode: 0,
-          signal: null,
-          timedOut: false,
-          spawnError: null,
-          stdout: "",
-          stderr: "",
-        },
-      })),
-    });
-    const blocked = await scenario.execute(context);
-    assert.equal(blocked.result, "block");
-    await FLOW_COMMANDS.run["scenario-validity"].post(context, blocked);
-    context.flowState = manager.load(created.specId);
-
-    const state = manager.load(created.specId);
-    const next = await new GetNextActionCommand().execute({ ...context, flowState: state });
-    assert.equal(next.step, "test");
-    assert.ok(next.context.planGateRepair);
-    assert.equal(Object.hasOwn(next.context, "testReviewRepair"), false);
-    const handoff = new WorkerArtifactHandoffCoordinator().createRequest({
-      ctx: context,
-      state,
-      invocation: {
-        id: "repair-lineage-plan-gate",
-        target: { digest: "b".repeat(64) },
-        action: { digest: "a".repeat(64), nextAction: { step: "test" } },
-      },
-    });
-    assert.ok(handoff);
-    assert.doesNotThrow(() => handoff.assertCurrent(state));
-
-    manager.publishArtifacts({
-      specId: created.specId,
-      nodeId: "test",
-      artifactWrites: [{
-        logicalKey: "tests.source",
-        parameters: { testPath: "scenario.test.js" },
-        mediaType: "text/javascript",
-        bytes: Buffer.from([
-          'import test from "node:test";',
-          'test("R1: covers the repaired scenario", () => {});',
-          "",
-        ].join("\n"), "utf8"),
-      }],
-    });
-    confirmFixtureStep(manager, "test", { specId: created.specId });
-    manager.updateStepStatus(
-      { stepId: "scenario-validity", requestedStatus: "in_progress" },
-      { specId: created.specId },
-    );
-    confirmFixtureStep(manager, "scenario-validity", { specId: created.specId });
-    manager.updateStepStatus(
-      { stepId: "test-review", requestedStatus: "in_progress" },
-      { specId: created.specId },
-    );
-
-    const resumedReviewState = manager.load(created.specId);
-    const resumedCanonicalReviewState = manager.canonicalState(created.specId);
-    const resumedReview = await new GetNextActionCommand().execute({
-      ...context,
-      flowState: resumedReviewState,
-    });
-    assert.equal(resumedCanonicalReviewState.attempt.nodeId, "test-review");
-    assert.ok(
-      resumedCanonicalReviewState.attempt.sequence > 1,
-      "the replacement test must enter a new test-review Attempt",
-    );
-    assert.equal(resumedReview.step, "test-review");
-    assert.notEqual(resumedReview.directive.actionId, "REPAIR_TEST_REVIEW");
-
-    const stateBeforeRejectedRepair = resumedCanonicalReviewState.toJSON();
-    const rejectedHistoricalRepair = new RunRepairTestReviewCommand().execute({
-      ...context,
-      flowState: resumedReviewState,
-    });
-    assert.equal(rejectedHistoricalRepair.ok, false);
-    assert.equal(rejectedHistoricalRepair.errors[0].code, "TEST_REVIEW_REPAIR_STAGE_UNSUPPORTED");
-    assert.deepEqual(manager.canonicalState(created.specId).toJSON(), stateBeforeRejectedRepair);
-  });
-
-  it("preserves current test-review Attempt evidence and revision guards", async () => {
-    const cases = [
-      {
-        label: "stale source revision",
-        expectedCode: "TEST_REVIEW_REPAIR_REVISION_MISMATCH",
-        alter({ payload }) {
-          return {
-            ...payload,
-            sourceTestArtifactRevision: {
-              ...payload.sourceTestArtifactRevision,
-              digest: "0".repeat(64),
-            },
-          };
-        },
-      },
-      {
-        label: "invalid canonical evidence",
-        expectedDirectiveCode: "TEST_REVIEW_REPAIR_EVIDENCE_INVALID",
-        alter({ payload }) {
-          return {
-            ...payload,
-            canonicalEvidence: {
-              ...payload.canonicalEvidence,
-              blockingFindings: [],
-            },
-          };
-        },
-      },
-      {
-        label: "exhausted stale source revision converges before repair validation",
-        exhausted: true,
-        alter({ payload }) {
-          return {
-            ...payload,
-            sourceTestArtifactRevision: {
-              ...payload.sourceTestArtifactRevision,
-              digest: "0".repeat(64),
-            },
-          };
-        },
-      },
-    ];
-
-    for (const testCase of cases) {
-      const repository = root();
-      const caseId = testCase.expectedCode ?? testCase.expectedDirectiveCode ?? "exhausted-stale-revision";
-      const specId = `001-current-review-guard-${caseId.toLowerCase()}`;
-      const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-      const created = manager.createFresh(request(specId, {
-        specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, { specId }),
-      }));
-      manager.addActiveFlow(created.specId, "direct");
-      advanceTo(manager, created.specId, "test-review", {
-        onActive(nodeId) {
-          if (nodeId !== "test") return;
-          manager.publishArtifacts({
-            specId: created.specId,
-            nodeId: "test",
-            artifactWrites: [{
-              logicalKey: "tests.source",
-              parameters: { testPath: "requirement.test.js" },
-              mediaType: "text/javascript",
-              bytes: Buffer.from("// spec: R1\n", "utf8"),
-            }],
-          });
-        },
-      });
-      const staleFlowState = manager.load(created.specId);
-      const currentState = manager.canonicalState(created.specId);
-      const revision = new CanonicalTestArtifactStore({
-        flowManager: manager,
-        state: currentState,
-      }).testSourceRevision().toJSON();
-      const finding = {
-        findingId: "test-review-finding",
-        fingerprint: "f".repeat(64),
-        summary: "The test omits a required behavior.",
-        disposition: "must-fix",
-        rationale: "The test must cover the required behavior before acceptance.",
-      };
-      const payload = testCase.alter({
-        payload: {
-          phase: "test",
-          verdict: "REJECTED",
-          blockingFindings: [finding],
-          advisoryFindings: [],
-          sourceTestArtifactRevision: revision,
-          canonicalEvidence: {
-            disposition: "REJECTED",
-            blockingFindings: [finding],
-            advisoryFindings: [],
-            identity: { evidenceDigest: "e".repeat(64) },
-          },
-        },
-      });
-      publishAttemptArtifact(manager, created.specId, "test-review", "test.review", payload);
-      assert.equal(currentState.attempt.sequence, 1, `${testCase.label} fixture must own review Attempt 1`);
-      if (testCase.exhausted === true) {
-        for (let index = 0; index < 5; index += 1) {
-          manager.appendMetric({ phase: "test", counter: "reviewRetry", delta: 1 }, { specId: created.specId, taskId: null });
-        }
-      }
-
-      const context = {
-        root: repository,
-        mainRoot: repository,
-        executionRoot: repository,
-        specId: created.specId,
-        flowManager: manager,
-        flowState: staleFlowState,
-        config: {},
-        flowCommandBoundary: true,
-      };
-      let workerCalls = 0;
-      const beforeDirectState = manager.canonicalState(created.specId).toJSON();
-      const beforeDirectActivities = manager.activityLedger(created.specId).length;
-      const deniedDirectReview = await new RunReviewCommand({
-        runCommand: async () => {
-          workerCalls += 1;
-          return { ok: true, stdout: "", stderr: "" };
-        },
-      }).execute({ ...context, phase: "test" });
-      assert.equal(deniedDirectReview.ok, false, testCase.label);
-      assert.equal(deniedDirectReview.errors[0].code, "REVIEW_DEFINITION_ACTION_REQUIRED", testCase.label);
-      assert.equal(workerCalls, 0, `${testCase.label} must not start a Review worker`);
-      assert.deepEqual(manager.canonicalState(created.specId).toJSON(), beforeDirectState, testCase.label);
-      assert.equal(manager.activityLedger(created.specId).length, beforeDirectActivities, testCase.label);
-      if (testCase.exhausted === true) {
-        const next = await new GetNextActionCommand().execute(context);
-        assert.equal(next.directive.actionId, "SETTLE_REVIEW_DEFER");
-        assert.match(next.directive.nextAction, /settle-review-transition/);
-      } else if (testCase.expectedDirectiveCode) {
-        const next = await new GetNextActionCommand().execute(context);
-        assert.equal(next.directive.code, testCase.expectedDirectiveCode, testCase.label);
-      } else {
-        await assert.rejects(
-          () => new GetNextActionCommand().execute(context),
-          (error) => error.code === testCase.expectedCode,
-          testCase.label,
-        );
-      }
-    }
-  });
-
-  it("settles a definition-selected exhausted test-review deferral without rerunning review", async () => {
-    const repository = root();
-    const specId = "001-test-review-defer-settlement";
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request(specId, {
-      specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, { specId }),
-    }));
-    manager.addActiveFlow(created.specId, "direct");
-    advanceTo(manager, created.specId, "test-review", {
-      onActive(nodeId) {
-        if (nodeId !== "test") return;
-        manager.publishArtifacts({
-          specId: created.specId,
-          nodeId: "test",
-          artifactWrites: [{
-            logicalKey: "tests.source",
-            parameters: { testPath: "deferred.test.js" },
-            mediaType: "text/javascript",
-            bytes: Buffer.from("// spec: R1\n", "utf8"),
-          }],
-        });
-      },
-    });
-    const revision = new CanonicalTestArtifactStore({
-      flowManager: manager,
-      state: manager.load(created.specId),
-    }).testSourceRevision().toJSON();
-    const finding = {
-      findingId: "deferred-test-review-finding",
-      fingerprint: "f".repeat(64),
-      summary: "The test omits a required behavior.",
-      disposition: "must-fix",
-      rationale: "The test must cover the required behavior before acceptance.",
-    };
-    publishAttemptArtifact(manager, created.specId, "test-review", "test.review", {
-      phase: "test",
-      verdict: "REJECTED",
-      blockingFindings: [finding],
-      sourceTestArtifactRevision: revision,
-      canonicalEvidence: {
-        disposition: "REJECTED",
-        blockingFindings: [finding],
-        advisoryFindings: [],
-        identity: { evidenceDigest: "e".repeat(64) },
-      },
-    });
-    for (let index = 0; index < 5; index += 1) {
-      manager.appendMetric({ phase: "test", counter: "reviewRetry", delta: 1 }, { specId: created.specId, taskId: null });
-    }
-    const context = {
-      root: repository,
-      mainRoot: repository,
-      executionRoot: repository,
-      specId: created.specId,
-      flowManager: manager,
-      flowState: manager.load(created.specId),
-      flowCommandBoundary: true,
-    };
-    const before = await new GetNextActionCommand().execute(context);
-    assert.equal(before.directive.actionId, "SETTLE_REVIEW_DEFER");
-    assert.match(before.directive.nextAction, /settle-review-transition/);
-
-    const beforeSettlementActivities = manager.activityLedger(created.specId).length;
-    const settled = new RunSettleReviewTransitionCommand().execute(context);
-    assert.equal(settled.ok, true, JSON.stringify(settled));
-    const reloaded = manager.load(created.specId);
-    assert.equal(leaves(reloaded.steps).find((entry) => entry.id === "test-review").status, "done");
-    const deferred = manager.readArtifact({
-      specId: created.specId,
-      logicalKey: "flow.findings",
-      consumerNodeId: "acceptance-review",
-    });
-    assert.equal(JSON.parse(deferred.bytes.toString("utf8")).entries.length, 1);
-    assert.equal(manager.activityLedger(created.specId).length, beforeSettlementActivities + 1);
-    assert.equal(manager.activityLedger(created.specId).at(-1).transition.operation, "confirm_attempt");
-    const first = await new GetNextActionCommand().execute({ ...context, flowState: reloaded });
-    const second = await new GetNextActionCommand().execute({ ...context, flowState: manager.load(created.specId) });
-    assert.deepEqual(second, first, "reloaded Flow projects one stable next Action after review deferral");
-  });
-
   it("keeps an unresolved Task Review in triage and out of Acceptance deferral", async () => {
     const repository = root();
     initializeReviewSource(repository);
@@ -5007,85 +3854,11 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(afterSettlement.step, "impl-gate");
   });
 
-  it("blocks non-deferrable exhausted test-review evidence with a stable identity", async () => {
-    const repository = root();
-    const specId = "001-test-review-blocked-settlement";
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request(specId, {
-      specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, { specId }),
-    }));
-    manager.addActiveFlow(created.specId, "direct");
-    advanceTo(manager, created.specId, "test-review", {
-      onActive(nodeId) {
-        if (nodeId !== "test") return;
-        manager.publishArtifacts({
-          specId: created.specId,
-          nodeId: "test",
-          artifactWrites: [{
-            logicalKey: "tests.source",
-            parameters: { testPath: "blocked.test.js" },
-            mediaType: "text/javascript",
-            bytes: Buffer.from("// spec: R1\n", "utf8"),
-          }],
-        });
-      },
-    });
-    const revision = new CanonicalTestArtifactStore({ flowManager: manager, state: manager.load(created.specId) }).testSourceRevision().toJSON();
-    const finding = {
-      findingId: "mechanical-test-review-finding",
-      fingerprint: "f".repeat(64),
-      summary: "The review evidence is mechanically malformed.",
-      failureKind: "schema_error",
-    };
-    publishAttemptArtifact(manager, created.specId, "test-review", "test.review", {
-      phase: "test",
-      verdict: "REJECTED",
-      blockingFindings: [finding],
-      sourceTestArtifactRevision: revision,
-      canonicalEvidence: {
-        disposition: "REJECTED",
-        blockingFindings: [finding],
-        advisoryFindings: [],
-        identity: { evidenceDigest: "e".repeat(64) },
-      },
-    });
-    for (let index = 0; index < 5; index += 1) {
-      manager.appendMetric({ phase: "test", counter: "reviewRetry", delta: 1 }, { specId: created.specId, taskId: null });
-    }
-    const context = {
-      root: repository,
-      mainRoot: repository,
-      executionRoot: repository,
-      specId: created.specId,
-      flowManager: manager,
-      flowState: manager.load(created.specId),
-      flowCommandBoundary: true,
-    };
-    let workerCalls = 0;
-    const beforeDirectState = manager.canonicalState(created.specId).toJSON();
-    const beforeDirectActivities = manager.activityLedger(created.specId).length;
-    const deniedDirectReview = await new RunReviewCommand({
-      runCommand: async () => {
-        workerCalls += 1;
-        return { ok: true, stdout: "", stderr: "" };
-      },
-    }).execute({ ...context, phase: "test" });
-    assert.equal(deniedDirectReview.ok, false);
-    assert.equal(deniedDirectReview.errors[0].code, "REVIEW_DEFINITION_ACTION_REQUIRED");
-    assert.equal(workerCalls, 0);
-    assert.deepEqual(manager.canonicalState(created.specId).toJSON(), beforeDirectState);
-    assert.equal(manager.activityLedger(created.specId).length, beforeDirectActivities);
-    const first = await new GetNextActionCommand().execute(context);
-    const second = await new GetNextActionCommand().execute({ ...context, flowState: manager.load(created.specId) });
-    assert.equal(first.directive.code, "REVIEW_MAX_ATTEMPTS_EXCEEDED");
-    assert.deepEqual(second, first);
-  });
-
   it("derives every cataloged test member finalization from durable test confirmations", () => {
     const state = { schemaRevision: 3, runId: "test-source-run", specId: "001-test-source-provenance" };
     const descriptor = (testPath, activityId) => ({
       logicalKey: "tests.source",
-      slot: { publicationStep: "test" },
+      slot: { publicationStep: "test-gate" },
       relativePath: `artifacts/tests/${testPath}`,
       hash: "a".repeat(64),
       size: 12,
@@ -5094,22 +3867,22 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const confirmation = (id, attemptId, sequence, confirmedAt, confirmationOrder) => ({
       id,
       type: "result_confirmed",
-      nodeId: "test",
+      nodeId: "test-gate",
       attemptId,
       sequence,
       confirmationOrder,
-      transition: { operation: "confirm_attempt", nodeId: "test", status: "done" },
+      transition: { operation: "confirm_attempt", nodeId: "test-gate", status: "done" },
       result: { outcome: "passed", confirmedAt },
       timing: null,
     });
     const publication = (id, attemptId, sequence, confirmationOrder) => ({
       id,
       type: "artifacts_published",
-      nodeId: "test",
+      nodeId: "test-gate",
       attemptId,
       sequence,
       confirmationOrder,
-      transition: { operation: "publish_artifacts", nodeId: "test", status: null },
+      transition: { operation: "publish_artifacts", nodeId: "test-gate", status: null },
       result: null,
       timing: null,
     });
@@ -5139,7 +3912,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const state = { schemaRevision: 3, runId: "test-source-run", specId: "001-test-source-provenance-errors" };
     const descriptor = (activityId) => ({
       logicalKey: "tests.source",
-      slot: { publicationStep: "test" },
+      slot: { publicationStep: "test-gate" },
       relativePath: "artifacts/tests/requirement.test.js",
       hash: "a".repeat(64),
       size: 12,
@@ -5148,11 +3921,11 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const invalidConfirmation = {
       id: "failed-confirmation",
       type: "result_confirmed",
-      nodeId: "test",
+      nodeId: "test-gate",
       attemptId: "test-attempt",
       sequence: 1,
       confirmationOrder: 2,
-      transition: { operation: "confirm_attempt", nodeId: "test", status: "done" },
+      transition: { operation: "confirm_attempt", nodeId: "test-gate", status: "done" },
       result: { outcome: "failed", confirmedAt: "2026-08-23T00:00:00.000Z" },
     };
     const assertUnavailable = ({ artifacts, activities }) => {
@@ -5177,11 +3950,11 @@ describe("FlowManager canonical Version-1 runtime", () => {
         {
           id: "publish-after-confirmation",
           type: "artifacts_published",
-          nodeId: "test",
+          nodeId: "test-gate",
           attemptId: "test-attempt",
           sequence: 1,
           confirmationOrder: 2,
-          transition: { operation: "publish_artifacts", nodeId: "test", status: null },
+          transition: { operation: "publish_artifacts", nodeId: "test-gate", status: null },
           result: null,
         },
         { ...invalidConfirmation, id: "earlier-confirmation", confirmationOrder: 1, result: { outcome: "passed", confirmedAt: "2026-08-23T00:00:00.000Z" } },
@@ -5193,132 +3966,17 @@ describe("FlowManager canonical Version-1 runtime", () => {
         {
           id: "publish-ambiguous",
           type: "artifacts_published",
-          nodeId: "test",
+          nodeId: "test-gate",
           attemptId: "test-attempt",
           sequence: 1,
           confirmationOrder: 1,
-          transition: { operation: "publish_artifacts", nodeId: "test", status: null },
+          transition: { operation: "publish_artifacts", nodeId: "test-gate", status: null },
           result: null,
         },
         { ...invalidConfirmation, id: "confirmation-one", result: { outcome: "passed", confirmedAt: "2026-08-23T00:00:00.000Z" } },
         { ...invalidConfirmation, id: "confirmation-two", confirmationOrder: 3, result: { outcome: "passed", confirmedAt: "2026-08-23T00:01:00.000Z" } },
       ],
     });
-  });
-
-  it("publishes a rejected test review before repair while retaining its active Attempt", async () => {
-    const repository = root();
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request("001-canonical-test-review-publication", {
-      specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, {
-        specId: "001-canonical-test-review-publication",
-      }),
-    }));
-    manager.addActiveFlow(created.specId, "direct");
-    advanceTo(manager, created.specId, "test-review", {
-      onActive(nodeId) {
-        if (nodeId !== "test") return;
-        manager.publishArtifacts({
-          specId: created.specId,
-          nodeId: "test",
-          artifactWrites: [{
-            logicalKey: "tests.source",
-            parameters: { testPath: "requirement.test.js" },
-            mediaType: "text/javascript",
-            bytes: Buffer.from("// spec: R1\n", "utf8"),
-          }],
-        });
-      },
-    });
-    let outputDirectory = null;
-    let testTopology = null;
-    const review = rejectedTestReviewCommand((directory, environment) => {
-      outputDirectory = directory;
-      testTopology = JSON.parse(environment.SENNEL_REVIEW_TEST_TOPOLOGY);
-    });
-    const ctx = {
-      root: repository,
-      mainRoot: repository,
-      executionRoot: repository,
-      specId: created.specId,
-      phase: "test",
-      flowManager: manager,
-      flowState: manager.load(created.specId),
-      flowCommandBoundary: true,
-      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
-    };
-    const result = await review.execute(ctx);
-    assert.equal(attachedCanonicalCommandResultArtifact(result).logicalKey, "test.review");
-    assert.deepEqual(testTopology, {
-      canonicalTestRoot: path.relative(
-        repository,
-        path.join(manager.specLocation(created.specId).directory, "artifacts", "tests"),
-      ).split(path.sep).join("/"),
-      staticRelativeImportBase: "each canonical test file",
-    });
-
-    await FLOW_COMMANDS.run.review.post(ctx, result);
-
-    const catalog = manager.artifactCatalog(created.specId);
-    assert.ok(catalog.artifacts.some((artifact) => artifact.logicalKey === "test.review"));
-    assert.ok(catalog.artifacts.some((artifact) => artifact.logicalKey === "review.evidence"));
-    const active = manager.canonicalState(created.specId);
-    assert.equal(active.current.at(-1), "test-review");
-    assert.equal(active.attempt.failure, null);
-    assert.equal(fs.existsSync(outputDirectory), false, "publication confirmation cleans the sealed worker surface");
-
-    const next = await new GetNextActionCommand().execute({ ...ctx, flowState: manager.load(created.specId) });
-    assert.equal(next.directive.actionId, "REPAIR_TEST_REVIEW");
-    const repaired = new RunRepairTestReviewCommand().execute({ ...ctx, flowState: manager.load(created.specId) });
-    assert.equal(repaired.ok, true, JSON.stringify(repaired));
-    assert.equal(manager.canonicalState(created.specId).current.at(-1), "test");
-  });
-
-  it("retains a rejected test-review work unit when its canonical publication fails", async () => {
-    const repository = root();
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request("001-canonical-test-review-publication-failure", {
-      specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, {
-        specId: "001-canonical-test-review-publication-failure",
-      }),
-    }));
-    manager.addActiveFlow(created.specId, "direct");
-    advanceTo(manager, created.specId, "test-review", {
-      onActive(nodeId) {
-        if (nodeId !== "test") return;
-        manager.publishArtifacts({
-          specId: created.specId,
-          nodeId: "test",
-          artifactWrites: [{
-            logicalKey: "tests.source",
-            parameters: { testPath: "requirement.test.js" },
-            mediaType: "text/javascript",
-            bytes: Buffer.from("// spec: R1\n", "utf8"),
-          }],
-        });
-      },
-    });
-    let outputDirectory = null;
-    const review = rejectedTestReviewCommand((directory) => { outputDirectory = directory; });
-    const ctx = {
-      root: repository,
-      mainRoot: repository,
-      executionRoot: repository,
-      specId: created.specId,
-      phase: "test",
-      flowManager: manager,
-      flowState: manager.load(created.specId),
-      config: {},
-    };
-    const result = await review.execute(ctx);
-    manager.publishCurrentAttemptResult = () => { throw new Error("simulated publication failure"); };
-
-    await assert.rejects(
-      () => FLOW_COMMANDS.run.review.post(ctx, result),
-      /simulated publication failure/,
-    );
-    assert.equal(fs.existsSync(outputDirectory), true, "failed publication retains the sealed worker surface");
-    assert.equal(manager.canonicalState(created.specId).current.at(-1), "test-review");
   });
 
   it("records a material impl repair and invalidates to one replacement test-execute Attempt", () => {
@@ -5497,42 +4155,18 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     const created = manager.createFresh(request("001-canonical-finalized-request"));
     const originalIdentity = canonicalIdentity(manager.canonicalState(created.specId));
-    const ordered = leaves(manager.load(created.specId).steps);
-    const scenarioIndex = ordered.findIndex((step) => step.id === "scenario-validity");
-    assert.ok(scenarioIndex >= 0);
-    for (const step of ordered.slice(0, scenarioIndex)) {
-      confirmFixtureStep(manager, step.id, { specId: created.specId });
+    for (let transition = 0; transition < 200; transition += 1) {
+      const current = manager.load(created.specId);
+      const pending = leaves(current.steps).filter((step) => step.status === "pending");
+      if (pending.length === 0 && current.currentNodeId === null) break;
+      confirmFixtureStep(manager, current.currentNodeId ?? pending[0].id, { specId: created.specId });
     }
-    manager.updateStepStatus(
-      { stepId: "scenario-validity", requestedStatus: "in_progress" },
-      { specId: created.specId },
-    );
-    const location = manager.specLocation(created.specId);
-    publishAttemptArtifact(manager, created.specId, "scenario-validity", "scenario.validity", {
-      version: "1",
-      command: "node --test artifacts/tests/scenario.test.js",
-      process: { started: true, exitCode: 0, signal: null, timedOut: false, spawnError: null },
-      result: "pass",
-      raw_output_path: location.relativeArtifact("scenario.validity.raw-log"),
-      summary: [],
-    });
     assert.equal(
-      catalogArtifactReferences(manager.artifactCatalog(created.specId))
-        .some((artifact) => artifact.logicalKey === "scenario.validity"),
+      leaves(manager.load(created.specId).steps).every((step) => ["done", "skipped"].includes(step.status)),
       true,
     );
-    manager.updateStepStatus(
-      { stepId: "scenario-validity", requestedStatus: "done" },
-      { specId: created.specId },
-    );
-
-    for (const step of leaves(manager.load(created.specId).steps)) {
-      if (step.status === "pending") {
-        confirmFixtureStep(manager, step.id, { specId: created.specId });
-      }
-    }
     const referencesBeforeFinalization = catalogArtifactReferences(manager.artifactCatalog(created.specId));
-    assert.equal(referencesBeforeFinalization.some((artifact) => artifact.logicalKey === "scenario.validity"), true);
+    assert.equal(referencesBeforeFinalization.some((artifact) => artifact.logicalKey === "spec.record"), true);
 
     const finalized = manager.finalizeFlow(created.specId);
     assert.equal(finalized.lifecycle.state, "finalized");
@@ -5923,14 +4557,14 @@ describe("FlowManager canonical Version-1 runtime", () => {
       policy: { autoApprove: false, nonblocking: {
         enabled: true,
         activatedAt: "2026-08-14T00:00:00.000Z",
-        activatedStep: "scenario-validity",
+        activatedStep: "test-result-review",
         reason: "A durable acceptance decision is required.",
       } },
       nonblocking: {
         kind: "observation",
-        sourceStep: "scenario-validity",
+        sourceStep: "test-result-review",
         sourceAttempt: 1,
-        evidenceRef: "steps/scenario-validity/result.json",
+        evidenceRef: "steps/test-result-review/result.json",
         evidenceDigest: "a".repeat(64),
         definitionDigest: "b".repeat(64),
         resultKind: "unavailable",
@@ -5946,9 +4580,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(persisted.policy.nonblocking.enabled, true);
     assert.equal(Object.hasOwn(persisted, "nonblocking"), false);
     assert.equal(Object.hasOwn(persisted, "stepAttempts"), false);
-    assert.equal(activities.at(-1).type, "policy_updated");
-    assert.equal(activities.at(-1).transition.operation, "activate_nonblocking");
-    assert.equal(activities.at(-1).transition.nonblocking.sourceStep, "scenario-validity");
+    assert.equal(activities.at(-1).type, "nonblocking_recorded");
+    assert.equal(activities.at(-1).transition.nonblocking.sourceStep, "test-result-review");
   });
 
   it("records metrics and notes in Activities while keeping dispatcher metadata transient", () => {
@@ -6147,17 +4780,31 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(JSON.parse(after.root.toString("utf8")).overview.modules.at(-1).added_by_task, "T-1");
   });
 
-  it("advances one revision for the flow-level source worker Spec completion", () => {
+  it("retains the current revision when a flow-level source worker does not change the Spec", () => {
     const repository = root();
     const specId = "001-source-flow-implementation-revision";
     const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     const created = manager.createFresh(request(specId, {
       specRecord: new CurrentFlowSpecRecord({
         ...validWorkerHandoffSpec(),
-        requirements: [{ id: "R1", desc: "Publish a validated artifact.", status: "done" }],
+        requirements: [{
+          id: "R1",
+          desc: "Publish a validated artifact.",
+          priority: "must",
+          task_ids: ["T-1"],
+          testable: false,
+        }],
         tasks: [],
       }, { specId }),
     }));
+    manager.addTask({
+      id: "T-1",
+      title: "Publish the validated artifact",
+      goal: "Publish a validated source worker artifact.",
+      origin: "plan",
+      added_round: 0,
+      status: "pending",
+    }, { specId: created.specId });
     manager.addActiveFlow(created.specId, "direct");
     advanceTo(manager, created.specId, "implement");
     const before = currentSpecRevisionAuthority(manager, created.specId);
@@ -6176,7 +4823,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
       },
     });
     const after = currentSpecRevisionAuthority(manager, created.specId);
-    assertSpecRevisionAdvanced(before, after);
+    assert.equal(after.revision, before.revision);
+    assert.deepEqual(after.root, before.root);
     assert.equal(Object.hasOwn(JSON.parse(after.root.toString("utf8")).requirements[0], "status"), false);
   });
 
@@ -6480,59 +5128,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(manager.load(created.specId).metrics[0].kind, "agent");
     assert.deepEqual(fs.readFileSync(path.join(location.directory, draft.relativePath)), draftBytes);
     assert.equal(fs.existsSync(path.join(location.directory, "draft.json")), false);
-  });
-
-  it("replaces worker test sources through the V1 catalog without retaining obsolete artifacts", () => {
-    const specId = "001-canonical-test-tree";
-    const { manager, created, coordinator, context, handoff } = canonicalTestTreeHandoffScenario(
-      specId,
-      "canonical-test-tree",
-    );
-    writeCanonicalTestTreePayload(handoff);
-    sealWorkerArtifactHandoff({ requestPath: handoff.requestPath, invocationId: "canonical-test-tree" });
-
-    const result = coordinator.reconcile({ ctx: context, request: handoff });
-    const location = manager.specLocation(created.specId);
-    const catalog = manager.artifactCatalog(created.specId);
-    const sourcePaths = catalog.artifacts
-      .filter((entry) => entry.logicalKey === "tests.source")
-      .map((entry) => entry.relativePath);
-
-    assert.equal(result.completed, true);
-    assert.deepEqual(sourcePaths, ["artifacts/tests/current.test.js"]);
-    assert.equal(fs.existsSync(path.join(location.directory, "artifacts", "tests", "obsolete.test.js")), false);
-    assert.equal(fs.existsSync(path.join(location.directory, "artifacts", "tests", "current.test.js")), true);
-    assert.equal(manager.canonicalState(created.specId).findNode("test").status, "done");
-  });
-
-  it("fails a stale V1 test-tree handoff without deleting newer cataloged sources", () => {
-    const { manager, created, coordinator, context, handoff } = canonicalTestTreeHandoffScenario(
-      "001-canonical-test-tree-cas",
-      "canonical-test-tree-cas",
-    );
-    manager.publishArtifacts({
-      specId: created.specId,
-      nodeId: "test",
-      artifactWrites: [{
-        logicalKey: "tests.source",
-        parameters: { testPath: "newer.test.js" },
-        mediaType: "text/javascript",
-        bytes: Buffer.from("// spec: R1\n", "utf8"),
-      }],
-    });
-    writeCanonicalTestTreePayload(handoff);
-    sealWorkerArtifactHandoff({ requestPath: handoff.requestPath, invocationId: "canonical-test-tree-cas" });
-
-    assert.throws(
-      () => coordinator.reconcile({ ctx: context, request: handoff }),
-      (error) => error?.code === "FLOW_ARTIFACT_HANDOFF_CONFLICT",
-    );
-    const sources = manager.artifactCatalog(created.specId).artifacts
-      .filter((entry) => entry.logicalKey === "tests.source")
-      .map((entry) => entry.relativePath)
-      .sort();
-    assert.deepEqual(sources, ["artifacts/tests/newer.test.js", "artifacts/tests/obsolete.test.js"]);
-    assert.equal(manager.canonicalState(created.specId).findNode("test").status, "in_progress");
   });
 
   it("hands cataloged draft review payloads to V1 triage and repair without exposing attempts wrappers", () => {
@@ -8623,92 +7218,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(transition.transition.attempt.nodeId, "spec");
     assert.equal(FLOW_COMMANDS.run["settle-failure"].args.options.includes("--target"), false);
     assert.equal(FLOW_COMMANDS.run["settle-failure"].args.options.includes("--result"), false);
-  });
-
-  it("records a blocked V1 scenario gate in the catalog before its guarded test rewind", async () => {
-    const repository = root();
-    const specId = "001-canonical-scenario-plan-gate";
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request(specId, {
-      specRecord: new CurrentFlowSpecRecord({ ...validWorkerHandoffSpec(), tasks: [] }, { specId }),
-    }));
-    manager.addActiveFlow(created.specId, "direct");
-    advanceTo(manager, created.specId, "scenario-validity", {
-      onActive(nodeId) {
-        if (nodeId !== "test") return;
-        manager.publishArtifacts({
-          specId: created.specId,
-          nodeId,
-          artifactWrites: [{
-            logicalKey: "tests.source",
-            parameters: { testPath: "scenario.test.js" },
-            mediaType: "text/javascript",
-            bytes: Buffer.from([
-              'import test from "node:test";',
-              'test("R1: exposes an invalid scenario premise", () => {});',
-              "",
-            ].join("\n"), "utf8"),
-          }],
-        });
-      },
-    });
-    const context = {
-      root: repository,
-      mainRoot: repository,
-      executionRoot: repository,
-      specId: created.specId,
-      flowManager: manager,
-      flowState: manager.load(created.specId),
-      config: {},
-    };
-    const scenario = new RunScenarioValidityCommand({
-      scenarioTestExecutor: async ({ executions }) => executions.map((execution) => ({
-        file: execution.file,
-        requirementId: execution.requirementId,
-        command: `node --test ${execution.file}`,
-        process: {
-          started: true,
-          exitCode: 0,
-          signal: null,
-          timedOut: false,
-          spawnError: null,
-          stdout: "",
-          stderr: "",
-        },
-      })),
-    });
-
-    const blocked = await scenario.execute(context);
-    assert.equal(blocked.result, "block");
-    await FLOW_COMMANDS.run["scenario-validity"].post(context, blocked);
-    context.flowState = manager.load(created.specId);
-    const issueLog = manager.readArtifact({
-      specId: created.specId,
-      logicalKey: "issue.log",
-      consumerNodeId: "test",
-    });
-    const source = JSON.parse(issueLog.bytes.toString("utf8")).entries.at(-1);
-    assert.equal(source.sourceArtifact, "scenario.validity");
-    assert.match(source.testRevisionDigest, /^[a-f0-9]{64}$/);
-    assert.deepEqual(source.observations.map((entry) => entry.refs), [["scenario.validity#summary.0"]]);
-    const activities = manager.activityLedger(created.specId);
-    const resultPublication = activities.find((activity) => (
-      activity.transition.operation === "publish_artifacts"
-      && activity.nodeId === "scenario-validity"
-    ));
-    const repairActivity = activities.find((activity) => (
-      activity.transition.operation === "repair_scenario_validity"
-    ));
-    assert.equal(resultPublication.attemptId, repairActivity.attemptId);
-    assert.equal(resultPublication.sequence, repairActivity.sequence);
-    const repairAction = await new GetNextActionCommand().execute(context);
-    assert.equal(repairAction.step, "test");
-    assert.ok(repairAction.context.planGateRepair);
-    const typed = manager.canonicalState(created.specId);
-
-    assert.equal(typed.current.at(-1), "test");
-    assert.equal(Object.hasOwn(typed.toJSON(), "planGateRepair"), false);
-    assert.equal(activities.at(-1).transition.operation, "repair_scenario_validity");
   });
 
   it("recovers a committed V1 handoff cleanup from the Flow runtime directory", async () => {

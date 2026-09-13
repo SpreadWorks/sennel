@@ -99,6 +99,24 @@ describe("requirement gate context", () => {
     assert.match(prompt.systemPrompt, /full-regression-deferred.*final-regression/i);
   });
 
+  it("preserves deferred Requirement evidence without presenting it as a pass", () => {
+    const executionEvidence = new IntegrationExecutionEvidence({
+      result: {
+        summary: [{
+          id: "R1",
+          result: "deferred",
+          deferred_receipt: { sourceArtifact: "steps/test-gate/result.json" },
+        }],
+      },
+      review: { verdict: "pass" },
+    });
+    const entries = executionEvidence.entriesFor("R1");
+    const requirementEntry = entries.find((entry) => entry.reference === "[TEST:R1]");
+
+    assert.match(requirementEntry.text, /deferred.*not passing test evidence/i);
+    assert.doesNotMatch(requirementEntry.text, /result=pass/);
+  });
+
   it("uses matching acceptance criteria when classifying obligations", () => {
     assert.equal(classifyRequirementObligation(
       { id: "R1", desc: "Verify delegated routing" },

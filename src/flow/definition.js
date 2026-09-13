@@ -14,6 +14,24 @@
 import { createHash } from "node:crypto";
 import { SourceHandoffFailureFacts } from "./lib/source-handoff-failure.js";
 import { NonblockingFailureClassification } from "./lib/nonblocking-evidence.js";
+import {
+  RequirementTestBudget,
+  RequirementTestLifecycleAuthority,
+  RequirementTestPlan,
+} from "./lib/requirement-test-lifecycle.js";
+import {
+  RequirementTestCandidateBundle,
+  RequirementTestGateObservation,
+} from "./lib/requirement-test-artifacts.js";
+import {
+  REQUIREMENT_TEST_LEAF_IDS,
+  RequirementTestInitializationDecision,
+  RequirementTestLifecycleDecision,
+} from "./lib/requirement-test-transition.js";
+export {
+  RequirementTestInitializationDecision,
+  RequirementTestLifecycleDecision,
+} from "./lib/requirement-test-transition.js";
 
 import {
   ActivityFailure,
@@ -292,6 +310,228 @@ export {
 };
 export { selectTaskNoChangeContinuation } from "./lib/task-review-stage-transition.js";
 export { resolveTaskExecutionOverrun } from "./lib/task-execution-policy.js";
+
+const REQUIREMENT_TEST_LEAVES = new Set(REQUIREMENT_TEST_LEAF_IDS);
+const REQUIREMENT_TEST_STEP_OBSERVATIONS = new Set([
+  "review_pass", "review_advisory", "semantic_rejection", "tooling_failure",
+]);
+const REQUIREMENT_TEST_SEMANTIC_LIMIT = 5;
+const REQUIREMENT_TEST_TOOLING_LIMIT = 3;
+
+function requirementTestPositiveInteger(value, field) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${field} must be a positive integer`);
+  return value;
+}
+
+/** Normalized non-Gate observation bound to one Requirement bundle revision. */
+export class RequirementTestStepObservation {
+  constructor({ requirementId, specRevision, bundleRevision = null, candidateDigest = null, sourceAttempt = null, kind } = {}) {
+    if (typeof requirementId !== "string" || requirementId.trim() === "") {
+      throw new Error("Requirement test observation requirementId is required");
+    }
+    this.requirementId = requirementId.trim();
+    this.specRevision = specRevision;
+    if (!this.specRevision || typeof this.specRevision.equals !== "function") {
+      throw new Error("Requirement test observation Spec revision must be typed");
+    }
+    this.bundleRevision = bundleRevision === null
+      ? null
+      : requirementTestPositiveInteger(bundleRevision, "Requirement test observation bundle revision");
+    if ((candidateDigest === null) !== (sourceAttempt === null)) {
+      throw new Error("Requirement test observation candidate identity must be wholly present or absent");
+    }
+    if (candidateDigest !== null && !/^[a-f0-9]{64}$/.test(candidateDigest)) {
+      throw new Error("Requirement test observation candidate digest is invalid");
+    }
+    if (sourceAttempt !== null && (typeof sourceAttempt.id !== "string" || sourceAttempt.id === ""
+      || !Number.isSafeInteger(sourceAttempt.sequence) || sourceAttempt.sequence < 1)) {
+      throw new Error("Requirement test observation source Attempt is invalid");
+    }
+    this.candidateDigest = candidateDigest;
+    this.sourceAttempt = sourceAttempt === null ? null : Object.freeze({ id: sourceAttempt.id, sequence: sourceAttempt.sequence });
+    if (!REQUIREMENT_TEST_STEP_OBSERVATIONS.has(kind)) {
+      throw new Error("Requirement test step observation kind is invalid");
+    }
+    this.kind = kind;
+    Object.freeze(this);
+  }
+}
+
+/** Latest canonical plan and the exact observed leaf result consumed by Definition. */
+export class RequirementTestLifecycleFacts {
+  constructor({ authority, plan, leaf, observation, candidateBundle = null } = {}) {
+    if (!(authority instanceof RequirementTestLifecycleAuthority)) {
+      throw new Error("Requirement test lifecycle requires typed Store authority");
+    }
+    if (!(plan instanceof RequirementTestPlan)) throw new Error("Requirement test lifecycle requires a typed plan");
+    if (!REQUIREMENT_TEST_LEAVES.has(leaf)) throw new Error("Requirement test lifecycle leaf is invalid");
+    if (authority.leaf !== leaf) throw new Error("Requirement test lifecycle authority does not match its leaf");
+    const workItem = plan.activeWorkItem();
+    if (!workItem) throw new Error("Requirement test lifecycle requires one active work item");
+    const isGate = observation instanceof RequirementTestGateObservation;
+    const isCandidate = observation instanceof RequirementTestCandidateBundle;
+    const isStep = observation instanceof RequirementTestStepObservation;
+    if (leaf === "test-gate" ? !isGate : (leaf === "test-generate" || leaf === "test-repair") ? !isCandidate && !isStep : !isStep) {
+      throw new Error("Requirement test lifecycle observation type does not match its leaf");
+    }
+    const observationRequirementId = isCandidate ? observation.bundle.requirementId : observation.requirementId;
+    const observationSpecRevision = isCandidate ? observation.bundle.specRevision : observation.specRevision;
+    if (observationRequirementId !== workItem.requirementId
+      || !workItem.specRevision.equals(observationSpecRevision)) {
+      throw new Error("Requirement test lifecycle observation has stale Requirement or Spec identity");
+    }
+    const observationKind = isCandidate ? "candidate_saved" : observation.kind;
+    let boundCandidate = candidateBundle;
+    if (isCandidate) {
+      boundCandidate = observation;
+      const producerAttempt = observation.bundle.lineage.sourceAttempt;
+      if (producerAttempt.id !== authority.attempt.id
+        || producerAttempt.sequence !== authority.attempt.sequence) {
+        throw new Error("Requirement test candidate lineage does not match its active producer Attempt");
+      }
+      if (leaf === "test-generate") {
+        if (workItem.status !== "in_progress" || observation.bundle.revision !== 1) {
+          throw new Error("Requirement test generation candidate requires in-progress revision 1 facts");
+        }
+      } else if (workItem.status !== "reviewed"
+        || observation.bundle.revision !== workItem.bundleRevision.revision + 1
+        || observation.bundle.lineage.predecessorRevision !== workItem.bundleRevision.revision) {
+        throw new Error("Requirement test repair candidate must immediately succeed the reviewed bundle");
+      }
+    } else {
+      const expectedBundleRevision = workItem.bundleRevision?.revision ?? null;
+      if (observation.bundleRevision !== expectedBundleRevision) {
+        throw new Error("Requirement test lifecycle observation has a stale bundle revision");
+      }
+    }
+    const permitted = new Map([
+      ["test-generate", new Map([["candidate_saved", "in_progress"], ["tooling_failure", "in_progress"]])],
+      ["test-review", new Map([
+        ["review_pass", "candidate_saved"], ["review_advisory", "candidate_saved"],
+        ["semantic_rejection", "candidate_saved"], ["tooling_failure", "candidate_saved"],
+      ])],
+      ["test-repair", new Map([
+        ["candidate_saved", "reviewed"], ["tooling_failure", "reviewed"],
+      ])],
+      ["test-gate", new Map([
+        ["assertion_failed", "reviewed"], ["assertion_passed", "reviewed"], ["invalid_test", "reviewed"],
+        ["skipped", "reviewed"], ["missing", "reviewed"], ["tooling_failure", "reviewed"],
+      ])],
+    ]);
+    if (permitted.get(leaf).get(observationKind) !== workItem.status) {
+      throw new Error("Requirement test lifecycle leaf, observation, and status do not match");
+    }
+    if (leaf !== "test-generate" && !isCandidate) {
+      if (!(boundCandidate instanceof RequirementTestCandidateBundle)
+        || JSON.stringify(boundCandidate.bundle.toJSON()) !== JSON.stringify(workItem.bundleRevision.toJSON())) {
+        throw new Error("Requirement test lifecycle candidate bundle is not current");
+      }
+    }
+    if ((leaf === "test-review" || leaf === "test-repair") && !isCandidate && (
+      observation.candidateDigest !== boundCandidate.digest
+      || observation.sourceAttempt?.id !== workItem.bundleRevision.lineage.sourceAttempt.id
+      || observation.sourceAttempt?.sequence !== workItem.bundleRevision.lineage.sourceAttempt.sequence
+    )) {
+      throw new Error("Requirement test lifecycle observation is not bound to current candidate lineage");
+    }
+    if (isGate) {
+      const lineageAttempt = workItem.bundleRevision.lineage.sourceAttempt;
+      if (observation.candidateDigest !== boundCandidate.digest
+        || observation.sourceAttempt.id !== lineageAttempt.id
+        || observation.sourceAttempt.sequence !== lineageAttempt.sequence) {
+        throw new Error("Requirement test Gate observation is not bound to current candidate lineage");
+      }
+    }
+    this.authority = authority;
+    this.plan = plan;
+    this.leaf = leaf;
+    this.workItem = workItem;
+    this.observation = observation;
+    this.observationKind = observationKind;
+    this.candidateBundle = boundCandidate;
+    Object.freeze(this);
+  }
+}
+
+export function initializeRequirementTestLifecycle({ spec, specRevision } = {}) {
+  let plan = RequirementTestPlan.fromApprovedSpec({ spec, specRevision });
+  const first = plan.nextPendingWorkItem();
+  if (first === null) {
+    return new RequirementTestInitializationDecision({
+      plan,
+      target: "implement",
+      skippedLeafIds: [...REQUIREMENT_TEST_LEAVES],
+    });
+  }
+  plan = plan.withWorkItem(first.withState({ status: "in_progress" }));
+  return new RequirementTestInitializationDecision({ plan, target: "test-generate" });
+}
+
+function requirementTestDecision(facts, input) {
+  return new RequirementTestLifecycleDecision({ requirementId: facts.workItem.requirementId, ...input, facts });
+}
+
+function requirementTestTerminalDecision(facts, disposition) {
+  const next = facts.plan.nextPendingWorkItem();
+  return requirementTestDecision(facts, {
+    disposition,
+    target: next ? "test-generate" : "implement",
+    nextStatus: disposition === "promote" ? "promoted" : "deferred",
+    nextRequirementId: next?.requirementId ?? null,
+    acceptanceHandoff: disposition === "defer",
+  });
+}
+
+function requirementTestSemanticRetry(facts) {
+  const budget = facts.workItem.budget;
+  if (!(budget instanceof RequirementTestBudget)) throw new Error("Requirement test lifecycle budget must be typed");
+  if (budget.autoSemantic < REQUIREMENT_TEST_SEMANTIC_LIMIT) {
+    return requirementTestDecision(facts, {
+      disposition: "semantic_retry", target: "test-repair", nextStatus: "reviewed",
+      budgetIncrement: "autoSemantic", repairRequired: true,
+    });
+  }
+  if (budget.manualSemantic < REQUIREMENT_TEST_SEMANTIC_LIMIT) {
+    return requirementTestDecision(facts, {
+      disposition: "semantic_retry", target: "test-repair", nextStatus: "reviewed",
+      budgetIncrement: "manualSemantic", repairRequired: true,
+    });
+  }
+  return requirementTestTerminalDecision(facts, "defer");
+}
+
+/** Sole Requirement-test route, compatibility, and retry-budget policy. */
+export function resolveRequirementTestLifecycle(input) {
+  const facts = input instanceof RequirementTestLifecycleFacts
+    ? input
+    : new RequirementTestLifecycleFacts(input);
+  const observation = facts.observationKind;
+  if (observation === "candidate_saved") {
+    return requirementTestDecision(facts, {
+      disposition: "advance", target: "test-review", nextStatus: "candidate_saved",
+      candidateBundle: facts.candidateBundle,
+    });
+  }
+  if (observation === "review_pass" || observation === "review_advisory") {
+    return requirementTestDecision(facts, {
+      disposition: "advance", target: "test-gate", nextStatus: "reviewed", repairRequired: false,
+    });
+  }
+  if (observation === "tooling_failure") {
+    if (facts.workItem.budget.tooling < REQUIREMENT_TEST_TOOLING_LIMIT) {
+      return requirementTestDecision(facts, {
+        disposition: "tooling_retry", target: facts.leaf, nextStatus: facts.workItem.status,
+        budgetIncrement: "tooling", repairRequired: facts.leaf === "test-repair" ? true : null,
+      });
+    }
+    return requirementTestTerminalDecision(facts, "defer");
+  }
+  if (facts.leaf === "test-gate") {
+    const expected = facts.workItem.expectation.value === "fail" ? "assertion_failed" : "assertion_passed";
+    if (observation === expected) return requirementTestTerminalDecision(facts, "promote");
+  }
+  return requirementTestSemanticRetry(facts);
+}
 
 /** Definition-owned response to verified source handoff failure facts. */
 export class SourceHandoffTransitionPlan {
@@ -948,16 +1188,13 @@ export function resolveActiveNonblockingEligibility({ sourceStep, evidence, flow
       disposition: resolveReviewTransition({ stepId: sourceStep, flowState, facts }),
     });
   }
-  if (sourceStep === "scenario-validity" || sourceStep === "test-result-review") {
+  if (sourceStep === "test-result-review") {
     const observed = reader.testChainFacts(route);
     if (observed === null) return null;
     const facts = observed.nonblocking
       ? new NonGateTransitionFacts({ ...observed.toJSON(), nonblocking: false, stepFacts: observed.stepFacts })
       : observed;
-    const stepDefinition = sourceStep === "scenario-validity"
-      ? scenarioValidityTransitionDefinition
-      : testResultReviewTransitionDefinition;
-    return nonGateNonblockingEligibilityForDecision(resolveNonGateTransition(facts, stepDefinition));
+    return nonGateNonblockingEligibilityForDecision(resolveNonGateTransition(facts, testResultReviewTransitionDefinition));
   }
   if (route.kind === "regression") {
     const observed = reader.finalRegressionFacts(route);
@@ -1970,27 +2207,6 @@ export class NonGateRecordNonblockingAction extends NonGateStepAction {
   toJSON() { return { action: "record-nonblocking", stepId: this.stepId }; }
 }
 
-function immutableTransitionEvidence(value) {
-  if (value === null || typeof value !== "object") return value;
-  for (const entry of Object.values(value)) immutableTransitionEvidence(entry);
-  return Object.freeze(value);
-}
-
-/** Immutable repair evidence is appended only after Definition accepts it. */
-export class NonGateAppendRepairEvidenceAction extends NonGateStepAction {
-  constructor(token, { stepId, summary, testSourceRevision } = {}) {
-    super();
-    if (token !== NON_GATE_TRANSITION_TOKEN) throw new Error("non-Gate repair evidence action requires the definition resolver");
-    this.stepId = requireString(stepId, "non-Gate repair evidence stepId");
-    if (!Array.isArray(summary)) throw new Error("non-Gate repair evidence summary must be an array");
-    this.summary = immutableTransitionEvidence(structuredClone(summary));
-    this.testSourceRevision = requireString(testSourceRevision, "non-Gate repair evidence testSourceRevision");
-    Object.freeze(this);
-  }
-  apply(adapter, plan) { return adapter.appendRepairEvidence(this, plan); }
-  toJSON() { return { action: "append-repair-evidence", stepId: this.stepId, summary: structuredClone(this.summary), testSourceRevision: this.testSourceRevision }; }
-}
-
 /** Sealed typed authority consumed by persistence and command admission only. */
 export class NonGateTransitionPlan {
   constructor(token, { action, actions, userActions = [] } = {}) {
@@ -2604,32 +2820,6 @@ export class TestChainProcessFacts {
   toJSON() { return { started: this.started, exitCode: this.exitCode, signal: this.signal, timedOut: this.timedOut, spawnError: this.spawnError }; }
 }
 
-export class ScenarioValidityStepFacts extends NonGateStepFacts {
-  constructor({ result, summary = [], rawAvailable = false, blockingEvidence = [], testSourceRevision = "unavailable", catalogDigest = "unavailable", repairFingerprint = "unavailable", process = null } = {}) {
-    if (!["pass", "block"].includes(result)) throw new Error("scenario-validity result is invalid");
-    if (!Array.isArray(summary) || !Array.isArray(blockingEvidence)) throw new Error("scenario-validity observations require arrays");
-    const hasBlockingObservation = blockingEvidence.some((entry) => entry?.classification !== "expected_fail");
-    if ((result === "block") !== hasBlockingObservation) {
-      throw new Error("scenario-validity result must match its blocking observations");
-    }
-    for (const [value, field] of [[testSourceRevision, "test source revision"], [catalogDigest, "catalog digest"], [repairFingerprint, "repair fingerprint"]]) {
-      if (typeof value !== "string" || value === "") throw new Error(`scenario-validity ${field} is required`);
-    }
-    if (typeof rawAvailable !== "boolean") throw new Error("scenario-validity rawAvailable must be boolean");
-    const processFacts = TestChainProcessFacts.from(process);
-    const invalidTest = blockingEvidence.some((entry) => entry?.classification === "invalid_test");
-    super({ kind: "scenario-validity", values: { result, summary, rawAvailable, blockingEvidence, testSourceRevision, catalogDigest, repairFingerprint, process: processFacts.toJSON(), toolingFailure: processFacts.toolingFailure, invalidTest } });
-  }
-
-  get result() { return this.value("result"); }
-  get toolingFailure() { return this.value("toolingFailure"); }
-  get invalidTest() { return this.value("invalidTest"); }
-  get summary() { return this.value("summary"); }
-  get rawAvailable() { return this.value("rawAvailable"); }
-  get testSourceRevision() { return this.value("testSourceRevision"); }
-  get process() { return TestChainProcessFacts.from(this.value("process")); }
-}
-
 export class TestExecuteStepFacts extends NonGateStepFacts {
   constructor({ summary = [], regression = {}, rawAvailable = false, testSourceRevision = "unavailable", repairFingerprint = "unavailable", rawEvidenceFingerprint = "unavailable", catalogDigest = "unavailable", process = null } = {}) {
     if (!Array.isArray(summary) || regression === null || typeof regression !== "object" || Array.isArray(regression)) throw new Error("test-execute observations are invalid");
@@ -2673,7 +2863,7 @@ function failureAction({ category, code, retryable, retryKind = null, message })
   return new NonGateFailCurrentAttemptAction(NON_GATE_TRANSITION_TOKEN, { category, code, retryable, retryKind, message });
 }
 
-function testChainSelection({ stepId, failed, toolingFailure, invalidTest = false, nonblocking, summary = [], testSourceRevision = "unavailable" }) {
+function testChainSelection({ stepId, failed, toolingFailure, nonblocking }) {
   if (toolingFailure) return new NonGateTransitionSelection({
     operation: "external-blocked",
     reason: "tooling_failure",
@@ -2687,37 +2877,12 @@ function testChainSelection({ stepId, failed, toolingFailure, invalidTest = fals
     operation: "await-user-input",
     beforeActions: [new NonGateRecordNonblockingAction(NON_GATE_TRANSITION_TOKEN, { stepId })],
   });
-  if (stepId === "scenario-validity") return new NonGateTransitionSelection({
-    operation: "repair", reason: invalidTest ? "invalid_test" : "test_design_block",
-    actions: [
-      new NonGateAppendRepairEvidenceAction(NON_GATE_TRANSITION_TOKEN, {
-        stepId, summary, testSourceRevision,
-      }),
-      failureAction({ category: "semantic", code: "SCENARIO_VALIDITY_REJECTED", retryable: false, message: "Scenario validity rejected the current test evidence." }),
-    ],
-  });
   return new NonGateTransitionSelection({
     operation: "retry", reason: "semantic_test_failure",
     actions: [failureAction({ category: "semantic", code: "TEST_CHAIN_REJECTED", retryable: true, retryKind: "semantic", message: "Test-chain evidence was rejected." })],
     exhaustedActions: [failureAction({ category: "semantic", code: "TEST_CHAIN_RETRY_EXHAUSTED", retryable: false, message: "Test-chain semantic retry budget is exhausted." })],
   });
 }
-
-export const scenarioValidityTransitionDefinition = new NonGateStepDefinition({
-  stepId: "scenario-validity",
-  factsType: ScenarioValidityStepFacts,
-  select(stepFacts, facts) {
-    return testChainSelection({
-      stepId: "scenario-validity",
-      failed: stepFacts.result === "block",
-      toolingFailure: stepFacts.toolingFailure,
-      invalidTest: stepFacts.invalidTest,
-      nonblocking: false,
-      summary: stepFacts.summary,
-      testSourceRevision: stepFacts.testSourceRevision,
-    });
-  },
-});
 
 export const testExecuteTransitionDefinition = new NonGateStepDefinition({
   stepId: "test-execute",
@@ -3018,6 +3183,10 @@ export function resolveReviewTransition({
   // three workers always advance the same revision-scoped review in order;
   // transport recovery remains at the execution boundary.
   if (phase === "spec") return null;
+  // Requirement-scoped test reviews are governed exclusively by
+  // resolveRequirementTestLifecycle(). The generic flow-review policy must
+  // not expose the retired whole-flow test repair route.
+  if (phase === "test") return null;
   if (flowState?.policy?.nonblocking?.enabled === true) return null;
   if (facts.toolingOutcome) {
     return new DefinitionReviewDisposition({ operation: "external-blocked", phase });
@@ -3037,12 +3206,6 @@ export function resolveReviewTransition({
     throw new Error("review transition facts have no usable attempt count");
   }
   if (attempts < maxAttempts) {
-    if (facts.scope === "flow" && phase === "test") {
-      return new DefinitionReviewDisposition({
-        operation: facts.repairEvidence.available ? "repair-test-review" : "repair-evidence-blocked",
-        phase,
-      });
-    }
     return new DefinitionReviewDisposition({ operation: "retry", phase });
   }
   if (facts.deferralEvidence.available) {
@@ -3539,7 +3702,6 @@ export function resolveLifecycle(input = {}) {
     "definition:keep-in-progress",
     "definition:skip-steps",
     "test-execute:post",
-    "scenario-validity:post",
     "test-result-review:post",
     "retro:post",
     "final-regression:post",
@@ -3920,32 +4082,45 @@ const FLOW_DEFINITION = Object.freeze([
         sideEffects: ["syncSpecTasks"],
       }),
       new FlowNode({
-        id: "test",
-        label: "Test",
+        id: "test-generate",
+        label: "Generate Requirement Test",
         action: "write-tests",
         instructionsKey: "plan.test",
         contextKinds: ["spec", "guardrail"],
         outputSchemaRef: "next-action/worker-artifact-handoff.schema.json",
       }),
       new FlowNode({
-        id: "scenario-validity",
-        label: "Scenario Validity",
-        action: "run-scenario-validity",
-        instructionsKey: "plan.scenario-validity",
-        contextKinds: ["spec", "test"],
-        outputSchemaRef: "next-action/scenario-validity.schema.json",
-        maxAttempts: 3,
-        failurePolicy: "test-chain-repair",
-        failureTargetId: "test",
-        definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("scenario-validity"),
-        failureOwnership: DefinitionFailureOwnership.dispatcherPrimary(),
-      }),
-      createPlanReviewNode({
         id: "test-review",
-        label: "Review (test)",
-        contextKinds: ["spec", "guardrail"],
+        label: "Review Requirement Test",
+        action: "run-review",
+        instructionsKey: "plan.test-review",
+        contextKinds: ["spec", "test", "guardrail"],
+        outputSchemaRef: "next-action/review.schema.json",
+        maxAttempts: 1,
+        definitionLifecycleOwned: true,
         executionCommand: new FlowExecutionCommand("review", "--phase", "test"),
+        failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
+      }),
+      new FlowNode({
+        id: "test-repair",
+        label: "Repair Requirement Test",
+        action: "write-tests",
+        instructionsKey: "plan.test-repair",
+        contextKinds: ["spec", "test", "guardrail"],
+        outputSchemaRef: "next-action/worker-artifact-handoff.schema.json",
+        maxAttempts: 1,
+      }),
+      new FlowNode({
+        id: "test-gate",
+        label: "Gate Requirement Test",
+        action: "run-requirement-test-gate",
+        instructionsKey: "plan.test-gate",
+        contextKinds: ["spec", "test"],
+        outputSchemaRef: "next-action/requirement-test-gate.schema.json",
+        maxAttempts: 3,
+        definitionLifecycleOwned: true,
+        executionCommand: new FlowExecutionCommand("requirement-test-gate"),
+        failureOwnership: DefinitionFailureOwnership.dispatcherPrimary(),
       }),
     ],
   }),
@@ -4313,16 +4488,14 @@ function definitionNodeIsSkippable(scope, stepId) {
  * legacy-schema fallback or a double-write bridge.
  */
 export function buildCurrentFlowDefinition() {
-  // These two leaves may be bypassed only by the fixed,
-  // evidence-consuming preimplementation bootstrap Activity.  The reachable
-  // states remain part of the definition so journal replay can validate that
-  // Activity without accepting an unmodelled persistence exception.
-  const preimplementationBootstrapSkippable = new Set(["scenario-validity", "test-review"]);
+  // These fixed leaves may be bypassed only by the typed Requirement-test
+  // initialization Activity when the approved Spec has no testable work.
+  const requirementTestInitializationSkippable = new Set(REQUIREMENT_TEST_LEAF_IDS);
   const existingImplementationCompletion = new Set(["implement"]);
   const finalizationRouteLeaves = new Set(["finalize-sync", "finalize-cleanup"]);
   const taskOverrunRecoveryLeaves = new Set(["task-review", "task-triage", "task-repair"]);
   const taskStageBypassLeaves = new Set(["task-triage", "task-repair", "task-gate"]);
-  const transitionsFor = ({ skippable = false, triageNoRepair = false, taskStageBypass = false, preimplementationBootstrap = false, existingImplementation = false, finalizationRoute = false, taskOverrunRecovery = false, failurePolicy = null } = {}) => [
+  const transitionsFor = ({ skippable = false, triageNoRepair = false, taskStageBypass = false, requirementTestInitialization = false, existingImplementation = false, finalizationRoute = false, taskOverrunRecovery = false, failurePolicy = null } = {}) => [
     "pending:in_progress",
     "in_progress:done",
     ...(skippable ? ["in_progress:skipped"] : []),
@@ -4331,7 +4504,10 @@ export function buildCurrentFlowDefinition() {
     // review route or invalidated on the acceptance-repair route.
     ...(triageNoRepair ? ["pending:skipped", "invalidated:skipped"] : []),
     ...(taskStageBypass ? ["pending:skipped", "invalidated:skipped"] : []),
-    ...(preimplementationBootstrap ? ["pending:skipped", "in_progress:skipped"] : []),
+    // Reopening a draft invalidates every downstream leaf. Approval of the
+    // revised Spec must still be able to apply the same typed empty-lifecycle
+    // decision without manufacturing an intermediate pending state.
+    ...(requirementTestInitialization ? ["pending:skipped", "invalidated:skipped"] : []),
     // This is consumed only by the Definition-selected stale Task-overrun
     // recovery Activity, which closes an accidentally opened extra round.
     ...(taskOverrunRecovery ? ["invalidated:done"] : []),
@@ -4362,7 +4538,7 @@ export function buildCurrentFlowDefinition() {
       ...node,
       triageNoRepair: node.id === "impl-repair",
       skippable: definitionNodeIsSkippable(scope, node.id),
-      preimplementationBootstrap: preimplementationBootstrapSkippable.has(node.id),
+      requirementTestInitialization: requirementTestInitializationSkippable.has(node.id),
       existingImplementation: existingImplementationCompletion.has(node.id),
       finalizationRoute: finalizationRouteLeaves.has(node.id),
       taskOverrunRecovery: scope === "task" && taskOverrunRecoveryLeaves.has(node.id),

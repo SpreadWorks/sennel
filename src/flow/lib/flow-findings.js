@@ -260,21 +260,47 @@ function sourceLogicalKey(sourceArtifact) {
   throw new Error(`sourceArtifact has no canonical catalog contract: ${normalized}`);
 }
 
-function sourcePayload({ logicalKey, bytes }) {
+function sourcePayloads({ logicalKey, bytes }) {
   if (logicalKey === "spec.review") {
     const review = jsonFromArtifact(bytes, "canonical spec review");
     const findings = Array.isArray(review.findings) ? review.findings : [];
-    return {
+    return [{
       verdict: findings.some((finding) => finding?.kind === "blocking") ? "REJECTED" : "PASS",
       blockingFindings: findings.filter((finding) => finding?.kind === "blocking"),
       nonBlockingImprovements: findings.filter((finding) => finding?.kind !== "blocking"),
       canonicalReview: review,
-    };
+    }];
   }
   try {
-    return CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes }).current.payload;
+    return CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes })
+      .attempts.map((attempt) => attempt.payload);
   } catch {
-    return jsonFromArtifact(bytes, `canonical ${logicalKey}`);
+    return [jsonFromArtifact(bytes, `canonical ${logicalKey}`)];
+  }
+}
+
+/** Cataloged finding source retaining every immutable producer Attempt. */
+export class CanonicalFlowFindingSourceArtifact {
+  constructor({ logicalKey, relativePath, descriptor, bytes, payloads } = {}) {
+    this.logicalKey = requireString(logicalKey, "finding source logicalKey");
+    this.relativePath = requireString(relativePath, "finding source relativePath");
+    if (!Buffer.isBuffer(bytes)) throw new Error("finding source bytes must be a Buffer");
+    if (!Array.isArray(payloads) || payloads.length === 0) {
+      throw new Error("finding source must retain at least one producer payload");
+    }
+    this.descriptor = descriptor;
+    this.bytes = Buffer.from(bytes);
+    this.payloads = Object.freeze(payloads.map((payload) => structuredClone(payload)));
+    this.payload = this.payloads.at(-1);
+    Object.freeze(this);
+  }
+
+  findFinding(sourceStep, sourceFindingId) {
+    for (const payload of this.payloads.toReversed()) {
+      const finding = findSourceFinding(payload, sourceStep, sourceFindingId);
+      if (finding !== null) return finding;
+    }
+    return null;
   }
 }
 
@@ -352,12 +378,13 @@ export class CanonicalFlowFindingsStore {
         consumerNodeId: this.nodeId,
       });
       const bytes = Buffer.from(current.bytes);
-      return Object.freeze({
+      const payloads = sourcePayloads({ logicalKey, bytes });
+      return new CanonicalFlowFindingSourceArtifact({
         logicalKey,
         relativePath: current.descriptor.relativePath,
         descriptor: current.descriptor,
         bytes,
-        payload: sourcePayload({ logicalKey, bytes }),
+        payloads,
       });
     }
     const contract = FLOW_ARTIFACT_CONTRACTS.require(logicalKey);
@@ -385,12 +412,13 @@ export class CanonicalFlowFindingsStore {
         optional: true,
       });
     if (resolved === null) return null;
-    return Object.freeze({
+    const bytes = Buffer.from(resolved.bytes);
+    return new CanonicalFlowFindingSourceArtifact({
       logicalKey,
       relativePath: resolved.relativePath,
       descriptor: resolved.descriptor,
-      bytes: Buffer.from(resolved.bytes),
-      payload: sourcePayload({ logicalKey, bytes: resolved.bytes }),
+      bytes,
+      payloads: sourcePayloads({ logicalKey, bytes }),
     });
   }
 }
@@ -633,9 +661,19 @@ export function buildDeferredSemanticFindingsPublication({
   attempts,
   round = attempts,
   fingerprints = null,
+  sourcePayload = null,
+  sourceRelativePath = null,
 } = {}) {
   const store = new CanonicalFlowFindingsStore({ flowManager, flowState, nodeId });
-  const source = store.sourceArtifact(sourceArtifact);
+  if (sourcePayload !== null && (typeof sourceRelativePath !== "string" || sourceRelativePath === "")) {
+    throw new Error("deferred source payload requires its canonical relative path");
+  }
+  const source = sourcePayload === null
+    ? store.sourceArtifact(sourceArtifact)
+    : Object.freeze({
+        payload: structuredClone(sourcePayload),
+        relativePath: sourceRelativePath,
+      });
   const artifact = source?.payload ?? null;
   const selectedFingerprints = fingerprints instanceof Set ? fingerprints : null;
   const sourceFindings = sourceFindingsForArtifact(artifact, sourceStep).filter((finding) => (

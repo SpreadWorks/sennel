@@ -47,26 +47,26 @@ import { TaskLifecycleFixture, confirmCanonicalFixtureStep } from "../../support
 const digest = "a".repeat(64);
 const spec = {
   tasks: [
-    { id: "T-1", title: "First", goal: "First concern" },
-    { id: "T-2", title: "Second", goal: "Second concern" },
+    { id: "T-1", title: "First", goal: "First concern", origin: "plan", added_round: 0, status: "pending" },
+    { id: "T-2", title: "Second", goal: "Second concern", origin: "plan", added_round: 0, status: "pending" },
   ],
   requirements: [
-    { id: "R-1", desc: "Shared", task_ids: ["T-1", "T-2"] },
-    { id: "R-2", desc: "First only", task_ids: ["T-1"] },
+    { id: "R-1", desc: "Shared", task_ids: ["T-1", "T-2"], testable: false },
+    { id: "R-2", desc: "First only", task_ids: ["T-1"], testable: false },
   ],
   overview: { modules: [], data_flow: [], decisions: [] },
 };
 
 const taskScopedSpec = {
   tasks: [
-    { id: "T-2", title: "Second", goal: "Second concern" },
-    { id: "T-4", title: "Fourth", goal: "Fourth concern" },
-    { id: "T-6", title: "Sixth", goal: "Sixth concern" },
+    { id: "T-2", title: "Second", goal: "Second concern", origin: "plan", added_round: 0, status: "pending" },
+    { id: "T-4", title: "Fourth", goal: "Fourth concern", origin: "plan", added_round: 0, status: "pending" },
+    { id: "T-6", title: "Sixth", goal: "Sixth concern", origin: "plan", added_round: 0, status: "pending" },
   ],
   requirements: [
-    { id: "R-2", desc: "Second only", task_ids: ["T-2"] },
-    { id: "R-4", desc: "Fourth only", task_ids: ["T-4"] },
-    { id: "R-4-6", desc: "Shared by Fourth and Sixth", task_ids: ["T-4", "T-6"] },
+    { id: "R-2", desc: "Second only", task_ids: ["T-2"], testable: false },
+    { id: "R-4", desc: "Fourth only", task_ids: ["T-4"], testable: false },
+    { id: "R-4-6", desc: "Shared by Fourth and Sixth", task_ids: ["T-4", "T-6"], testable: false },
   ],
   overview: { modules: [], data_flow: [], decisions: [] },
 };
@@ -212,12 +212,12 @@ describe("canonical Task context", () => {
     assert.doesNotThrow(() => validateSpecJsonObject(emptySpecStub()));
     assert.throws(() => validateSpecJsonObject({
       ...emptySpecStub(),
-      requirements: [{ id: "R-1", desc: "Cannot point at an unknown Task.", task_ids: ["T-ghost"] }],
+      requirements: [{ id: "R-1", desc: "Cannot point at an unknown Task.", task_ids: ["T-ghost"], testable: false }],
     }), /unknown Task/);
     assert.throws(() => validateSpecJsonObject({
       ...emptySpecStub(),
       tasks: [{ id: "T-1", title: "Mapped", goal: "Mapped", origin: "plan", added_round: 0, status: "pending" }],
-      requirements: [{ id: "", desc: "Empty identities are invalid.", task_ids: ["T-1"] }],
+      requirements: [{ id: "", desc: "Empty identities are invalid.", task_ids: ["T-1"], testable: false }],
     }), /requirements\[0\]\.id: minLength 1/);
     const missingTasks = emptySpecStub();
     delete missingTasks.tasks;
@@ -227,7 +227,7 @@ describe("canonical Task context", () => {
       tasks: [{
         id: "T-1", title: "Mapped", goal: "A mapped Task", origin: "plan", added_round: 0, status: "pending",
       }],
-      requirements: [{ id: "R-1", desc: "A mapping is mandatory." }],
+      requirements: [{ id: "R-1", desc: "A mapping is mandatory.", testable: false }],
     }), /task_ids: required field is missing/);
     assert.throws(() => new CurrentFlowSpecRecord(emptySpecStub(), { specId: "mapping-boundary" }).withTask({
       id: "T-1", title: "Unmapped", goal: "Must not persist.",

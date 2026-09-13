@@ -5,7 +5,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../support/builders/tmp-dir.js";
 import { initGitRepo, commitAll, checkoutNewBranch } from "../support/infrastructure/git-repo.js";
-import { CanonicalFlowFixture, makeFlowManager } from "../support/infrastructure/flow-setup.js";
+import {
+  CanonicalFlowFixture,
+  makeFlowManager,
+  promoteCanonicalRequirementTest,
+} from "../support/infrastructure/flow-setup.js";
 import { completeCanonicalSourceHandoff } from "../support/builders/source-handoff-scenario.js";
 
 const CMD = path.resolve("src/sennel.js");
@@ -221,7 +225,13 @@ function setupFixture(tmp) {
       goal: "Implement numeric addition through the complete CLI lifecycle.",
       background: "CLI-only lifecycle fixture.",
       scope: { in: ["src/value.js"], out: [] },
-      requirements: [{ id: "R1", desc: "add returns the arithmetic sum of two numeric operands", priority: "must", task_ids: ["T-1"] }],
+      requirements: [{
+        id: "R1",
+        desc: "add returns the arithmetic sum of two numeric operands",
+        priority: "must",
+        task_ids: ["T-1"],
+        preimplementation_test_expectation: "fail",
+      }],
       acceptance_criteria: ["add(2, 3) returns 5"],
       user_approval: { approved: true, confirmed_at: "2026-01-01T00:00:00.000Z", notes: "E2E fixture approval" },
     },
@@ -235,25 +245,22 @@ function setupFixture(tmp) {
     origin: "plan",
     added_round: 0,
     status: "pending",
-  }]).activate("test");
-  fm.publishArtifacts({
+  }]).registerActive().activate("approval");
+  fixture.settle("approval");
+  promoteCanonicalRequirementTest({
+    flowManager: fm,
     specId: SPEC_ID,
-    nodeId: "test",
-    artifactWrites: [{
-      logicalKey: "tests.source",
-      parameters: { testPath: "r1.test.js" },
-      mediaType: "text/javascript",
-      bytes: Buffer.from([
-        "// spec: R1",
-        "import assert from 'node:assert/strict';",
-        "import { test } from 'node:test';",
-        "import { add } from '../../../../../src/value.js';",
-        "test('R1: add returns the arithmetic sum', () => assert.equal(add(2, 3), 5));",
-        "",
-      ].join("\n"), "utf8"),
-    }],
+    requirementId: "R1",
+    testPath: "r1.test.js",
+    source: [
+      "// spec: R1",
+      "import assert from 'node:assert/strict';",
+      "import { test } from 'node:test';",
+      "import { add } from '../../../../../src/value.js';",
+      "test('R1: add returns the arithmetic sum', () => assert.equal(add(2, 3), 5));",
+      "",
+    ].join("\n"),
   });
-  fixture.settle("test").activate("scenario-validity", { settlePredecessors: false }).registerActive();
   for (const segment of ["impl", "review", "triage", "repair", "gate"]) {
     assert.equal(
       fixture.location().taskArtifactLocation("T-1")[`${segment}Directory`],
@@ -270,24 +277,6 @@ describe("231: full lifecycle through CLI and the typed source handoff boundary"
     tmp = createTmpDir("sennel-cli-lifecycle-");
     setupFixture(tmp);
 
-    // The command creates both scenario-validity artifacts. The test never
-    // writes generated flow artifacts or mutates flow.json directly.
-    const scenarioValidity = runEnvelope(tmp, ["flow", "run", "scenario-validity"]);
-    const scenarioValidityHistory = JSON.parse(makeFlowManager(tmp).readArtifact({
-      specId: SPEC_ID,
-      logicalKey: "scenario.validity",
-      consumerNodeId: "acceptance-review",
-    }).bytes.toString("utf8"));
-    assert.equal(
-      scenarioValidity.data.result,
-      "pass",
-      JSON.stringify({ scenarioValidity, scenarioValidityHistory }, null, 2),
-    );
-    assert.equal(scenarioValidityHistory.attempts.at(-1).artifact.payload.result, "pass");
-
-    assertNext(tmp, "test-review", null);
-    const testDesignReview = runEnvelope(tmp, ["flow", "run", "review", "--phase", "test"]);
-    assert.equal(testDesignReview.data.artifacts.verdict, "PASS");
     assertNext(tmp, "implement", null);
 
     writeFile(tmp, "src/value.js", [

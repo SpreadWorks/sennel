@@ -26,20 +26,36 @@ function requiredText(value, field) {
 // producer Attempt. They are the primary evidence contract; switch targets
 // only link that evidence to its consumers and do not make optional outputs
 // (such as nonblocking.handoffs) required.
+class AttemptHistoryRoute {
+  constructor(logicalKey, { directConsumers = [] } = {}) {
+    this.logicalKey = requiredText(logicalKey, "attempt history logicalKey");
+    this.directConsumers = Object.freeze(new Set(directConsumers));
+    Object.freeze(this);
+  }
+
+  directlyConnects(consumerNodeId) {
+    return this.directConsumers.has(consumerNodeId);
+  }
+
+  get directOnly() {
+    return this.directConsumers.size > 0;
+  }
+}
+
 const ATTEMPT_HISTORY_ARTIFACTS = new Map([
-  ["draft-questions-review", "draft.questions.review"],
-  ["draft-coverage-review", "draft.coverage.review"],
-  ["draft-gate", "draft.gate"],
-  ["spec-gate", "spec.gate"],
-  ["scenario-validity", "scenario.validity"],
-  ["test-review", "test.review"],
-  ["test-execute", "test.execute"],
-  ["test-result-review", "test.result.review"],
-  ["impl-review", "impl.review"],
-  ["impl-gate", "impl.gate"],
-  ["acceptance-review", "acceptance.review"],
-  ["acceptance-decision", "acceptance.decision"],
-  ["final-regression", "final.regression"],
+  ["draft-questions-review", new AttemptHistoryRoute("draft.questions.review")],
+  ["draft-coverage-review", new AttemptHistoryRoute("draft.coverage.review")],
+  ["draft-gate", new AttemptHistoryRoute("draft.gate")],
+  ["spec-gate", new AttemptHistoryRoute("spec.gate")],
+  ["test-review", new AttemptHistoryRoute("test.requirement.review", { directConsumers: ["test-repair", "test-gate"] })],
+  ["test-gate", new AttemptHistoryRoute("test.requirement.gate", { directConsumers: ["test-generate", "implement"] })],
+  ["test-execute", new AttemptHistoryRoute("test.execute")],
+  ["test-result-review", new AttemptHistoryRoute("test.result.review")],
+  ["impl-review", new AttemptHistoryRoute("impl.review")],
+  ["impl-gate", new AttemptHistoryRoute("impl.gate")],
+  ["acceptance-review", new AttemptHistoryRoute("acceptance.review")],
+  ["acceptance-decision", new AttemptHistoryRoute("acceptance.decision")],
+  ["final-regression", new AttemptHistoryRoute("final.regression")],
 ]);
 const FLOW_TRIAGE_REPAIR_NODES = new Set([
   "draft-questions-triage", "draft-questions-repair",
@@ -53,8 +69,8 @@ export function attemptHistoryTargetForNode(nodeId) {
   // The spec review has a typed revision-scoped source below; it must not be
   // parsed by the generic task suffix grammar.
   if (normalized === "spec-review") return null;
-  const logicalKey = ATTEMPT_HISTORY_ARTIFACTS.get(normalized);
-  if (logicalKey !== undefined) return Object.freeze({ logicalKey, parameters: Object.freeze({}) });
+  const route = ATTEMPT_HISTORY_ARTIFACTS.get(normalized);
+  if (route !== undefined) return Object.freeze({ logicalKey: route.logicalKey, parameters: Object.freeze({}) });
   if (FLOW_TRIAGE_REPAIR_NODES.has(normalized)) return null;
   if (flowArtifactAuthorityForStep(normalized) !== null) return null;
   const task = normalized.match(/^(.+)-(review|triage|repair|gate)$/);
@@ -173,6 +189,17 @@ function isConnectorConsumerHandoff(producerNodeId, consumerNodeId) {
 function producerHandoffs(producerNodeId, consumerNodeId) {
   if (producerNodeId === "spec-review" && consumerNodeId === "spec-triage") {
     return [new RevisionScopedSpecReviewReadinessTarget({ producerNodeId, consumerNodeId })];
+  }
+  const attemptHistoryRoute = ATTEMPT_HISTORY_ARTIFACTS.get(producerNodeId) ?? null;
+  if (attemptHistoryRoute?.directOnly) {
+    if (!attemptHistoryRoute.directlyConnects(consumerNodeId)) return [];
+    const artifact = FLOW_ARTIFACT_CONTRACTS.resolve(attemptHistoryRoute.logicalKey, {});
+    return [Object.freeze({
+      logicalKey: attemptHistoryRoute.logicalKey,
+      parameters: Object.freeze({}),
+      relativePath: artifact.relativePath,
+      contract: artifact.contract,
+    })];
   }
   const primary = attemptHistoryTargetForNode(producerNodeId);
   if (primary === null) return [];

@@ -187,7 +187,7 @@ export class SpecTestBootstrapValidation {
 /**
  * Latest canonical observation of test bootstrap validity. A clean observation
  * deliberately replaces a prior deferred one, preventing stale imports from
- * being presented to scenario-validity or test-review after a later repair.
+ * being presented to Requirement review or Gate after a later repair.
  */
 export class SpecTestBootstrapObservation {
   constructor({ actionDigest, inputDigest, inputRevision, handoffDigest, issues }) {

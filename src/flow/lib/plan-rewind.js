@@ -24,7 +24,6 @@ export const PLAN_REWIND_REVIEW_PHASES = Object.freeze([
   "draft-questions",
   "draft-coverage",
   "spec",
-  "test",
   "impl",
 ]);
 
@@ -39,8 +38,6 @@ export const PLAN_REWIND_EVIDENCE_KINDS = Object.freeze([
   "draft-review",
   "spec-review",
   "plan-gate",
-  "scenario-validity",
-  "test-review",
   "test-execute",
   "test-result-review",
   "implementation",

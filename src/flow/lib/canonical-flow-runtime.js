@@ -39,18 +39,15 @@ const TYPE_FOR_OPERATION = Object.freeze({
   complete_draft_completion: "result_confirmed",
   complete_task_review_stage: "result_confirmed",
   advance_task_review_stage: "result_confirmed",
+  initialize_requirement_test_lifecycle: "result_confirmed",
+  advance_requirement_test_lifecycle: "result_confirmed",
   complete_acceptance_decision_noop: "result_confirmed",
   rewind: "recovery",
   rewind_test_evidence: "recovery",
-  repair_test_review: "recovery",
-  settle_test_review_repair_timeout: "result_confirmed",
-  repair_scenario_validity: "recovery",
   repair_implementation: "recovery",
   triage_implementation_for_repair: "recovery",
   triage_implementation_no_repair: "recovery",
   repair_acceptance_review: "recovery",
-  preimplementation_bootstrap: "recovery",
-  recover_existing_implementation: "recovery",
   reopen_draft_preimplementation: "recovery",
   reopen_draft_task_addition: "recovery",
   reopen_draft_spec_correction: "recovery",
@@ -468,6 +465,41 @@ export class CanonicalFlowRuntime {
     });
   }
 
+  /** Publish the initial Requirement plan, confirm approval, and claim the selected first target. */
+  initializeRequirementTestLifecycle({ specId, activityId, result, decision, targetAttempt, specRecord, artifactWrites, artifactBaselines, admission = undefined } = {}) {
+    const state = this.#state(specId);
+    return this.#applyAttemptTransition(specId, state, {
+      id: activityId,
+      nodeId: this.#currentNodeId(state),
+      operation: "initialize_requirement_test_lifecycle",
+      attempt: targetAttempt,
+      result,
+      specRecord,
+      artifactWrites,
+      artifactBaselines,
+      admission,
+      requirementTestInitialization: decision?.toJSON?.() ?? decision,
+    });
+  }
+
+  /** Apply one sealed Requirement test connector in the same artifact/state transaction. */
+  completeRequirementTestLifecycle({ specId, activityId, result, decision, targetAttempt, artifactWrites, artifactRemovals, artifactBaselines, testSourceBaseline, admission = undefined } = {}) {
+    const state = this.#state(specId);
+    return this.#applyAttemptTransition(specId, state, {
+      id: activityId,
+      nodeId: this.#currentNodeId(state),
+      operation: "advance_requirement_test_lifecycle",
+      attempt: targetAttempt,
+      result,
+      artifactWrites,
+      artifactRemovals,
+      artifactBaselines,
+      testSourceBaseline,
+      admission,
+      requirementTestLifecycle: decision?.toJSON?.() ?? decision,
+    });
+  }
+
   /** One journal entry: publish connector output, confirm source, and expose the target. */
   completeDraftCompletion({ specId, activityId, result, receipt, references, artifactWrites, artifactRemovals, artifactBaselines, admission } = {}) {
     const state = this.#state(specId);
@@ -539,57 +571,6 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  /** Atomically replace rejected test-review evidence with a new test Attempt. */
-  repairTestReview({ specId, activityId, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references } = {}) {
-    const state = this.#state(specId);
-    const now = new Date().toISOString();
-    return this.#applyAttemptTransition(specId, state, {
-      id: activityId,
-      nodeId: "test",
-      operation: "repair_test_review",
-      attempt: requiredAttempt(attempt, "repairTestReview"),
-      timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 },
-      provider,
-      model,
-      effort,
-      usage,
-      references,
-    });
-  }
-
-  settleTimedOutTestReviewRepair({ specId, activityId, attempt, result, timing = null, references } = {}) {
-    const state = this.#state(specId);
-    const now = new Date().toISOString();
-    return this.#applyAttemptTransition(specId, state, {
-      id: activityId,
-      nodeId: "test",
-      operation: "settle_test_review_repair_timeout",
-      attempt: requiredAttempt(attempt, "settleTimedOutTestReviewRepair"),
-      result,
-      timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 },
-      references,
-    });
-  }
-
-  /** Atomically retain scenario repair evidence and reopen the test handoff. */
-  repairScenarioValidity({ specId, activityId, attempt, failure, result, timing = null, references, artifactWrites = undefined, artifactBaselines = undefined, admission = undefined } = {}) {
-    const state = this.#state(specId);
-    const now = new Date().toISOString();
-    return this.#applyAttemptTransition(specId, state, {
-      id: activityId,
-      nodeId: "scenario-validity",
-      operation: "repair_scenario_validity",
-      attempt: requiredAttempt(attempt, "repairScenarioValidity"),
-      failure,
-      result,
-      timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 },
-      references,
-      artifactWrites,
-      artifactBaselines,
-      admission,
-    });
-  }
-
   /** Atomically record a material implementation repair and restart test execution. */
   repairImplementation({ specId, activityId, attempt, result, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, sourceWorkerUpgrade = undefined } = {}) {
     const state = this.#state(specId);
@@ -650,42 +631,6 @@ export class CanonicalFlowRuntime {
       id: activityId, nodeId: "acceptance-review", operation: "repair_acceptance_review",
       attempt: requiredAttempt(attempt, "repairAcceptanceReview"), result,
       timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 }, references, artifactWrites, admission,
-    });
-  }
-
-  /** Atomically apply the definition-owned scenario-validity bootstrap route. */
-  preimplementationBootstrap({ specId, activityId, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references } = {}) {
-    const state = this.#state(specId);
-    const now = new Date().toISOString();
-    return this.#applyAttemptTransition(specId, state, {
-      id: activityId,
-      nodeId: "implement",
-      operation: "preimplementation_bootstrap",
-      attempt: requiredAttempt(attempt, "preimplementationBootstrap"),
-      timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 },
-      provider,
-      model,
-      effort,
-      usage,
-      references,
-    });
-  }
-
-  /** Atomically revalidate an existing implementation and start test execution. */
-  recoverExistingImplementation({ specId, activityId, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references } = {}) {
-    const state = this.#state(specId);
-    const now = new Date().toISOString();
-    return this.#applyAttemptTransition(specId, state, {
-      id: activityId,
-      nodeId: "test-execute",
-      operation: "recover_existing_implementation",
-      attempt: requiredAttempt(attempt, "recoverExistingImplementation"),
-      timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 },
-      provider,
-      model,
-      effort,
-      usage,
-      references,
     });
   }
 
@@ -1246,18 +1191,20 @@ export class CanonicalFlowRuntime {
     gateTaskLifecycle = null,
     stepConnectionReceipt = null,
     taskReviewStagePlan = null,
+    requirementTestInitialization = null,
+    requirementTestLifecycle = null,
   }) {
     const target = requiredText(nodeId, "transition nodeId");
     const node = state.findNode(target);
     if (node === null) throw new CurrentFlowStateInvariantError(`transition node is not part of this Flow: ${target}`);
-    const transitionAttempt = ["start_attempt", "rewind", "rewind_test_evidence", "repair_test_review", "settle_test_review_repair_timeout", "repair_scenario_validity", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "preimplementation_bootstrap", "recover_existing_implementation", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "continue_nonblocking", "advance_task_review_stage"].includes(operation)
+    const transitionAttempt = ["start_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "continue_nonblocking", "advance_task_review_stage", "initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle"].includes(operation)
       ? attempt
       : null;
     const activityAttempt = operation === "complete_draft_completion"
       ? stepConnectionReceipt?.sourceAttempt ?? null
-      : new Set(["repair_scenario_validity", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "recover_missing_producer_artifact", "recover_task_execution_overrun", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage"]).has(operation)
+      : new Set(["repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "recover_missing_producer_artifact", "recover_task_execution_overrun", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", "initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle"]).has(operation)
       ? state.attempt ?? attempt
-      : ["start_attempt", "rewind", "rewind_test_evidence", "repair_test_review", "settle_test_review_repair_timeout", "preimplementation_bootstrap", "recover_existing_implementation", "reopen_draft_preimplementation", "recover_existing_implementation", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "retry_recovery_attempt", "accept_final_regression_failure"].includes(operation)
+      : ["start_attempt", "rewind", "rewind_test_evidence", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "retry_recovery_attempt", "accept_final_regression_failure"].includes(operation)
       ? attempt
       : state.attempt;
     if (activityAttempt === null) {
@@ -1286,6 +1233,8 @@ export class CanonicalFlowRuntime {
         gateTaskLifecycle,
         stepConnectionReceipt,
         taskReviewStagePlan,
+        requirementTestInitialization,
+        requirementTestLifecycle,
       },
     });
     const resolvedArtifactWrites = retryRecoveryPublication == null

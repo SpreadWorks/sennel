@@ -82,14 +82,32 @@ export function createCanonicalTokenMetricsFlow(tmp, {
     throw new TypeError("canonical token metrics fixture draftQuestions must be a non-negative safe integer");
   }
   const flowManager = makeFlowManager(tmp);
+  const normalizedRequirements = requirements.map((requirement, index) => ({
+    ...requirement,
+    task_ids: requirement.task_ids ?? [`T-metrics-${index + 1}`],
+    ...(requirement.testable === undefined && requirement.preimplementation_test_expectation === undefined
+      ? { testable: false }
+      : {}),
+  }));
   const flow = new CanonicalFlowFixture({
     flowManager,
     specId,
     runId: `token-metrics-${specId}`,
     request,
     execution: { mode: "direct" },
-    specRecord: { goal, requirements },
+    specRecord: { goal, requirements: normalizedRequirements },
   }).create();
+  const taskIds = new Set(normalizedRequirements.flatMap((requirement) => requirement.task_ids));
+  for (const taskId of taskIds) {
+    flow.addTask({
+      id: taskId,
+      title: `Metrics fixture Task ${taskId}`,
+      goal: `Provide canonical ownership for ${taskId}.`,
+      origin: "plan",
+      added_round: 0,
+      status: "pending",
+    });
+  }
 
   for (let index = 0; index < draftQuestions; index += 1) {
     flowManager.incrementMetric("draft", "question", { specId });

@@ -75,25 +75,24 @@ describe("Flow artifact contract registry", () => {
     assert.deepEqual(
       FLOW_ARTIFACT_SWITCH_TARGETS.filter((entry) => entry.action === "new").map((entry) => entry.logicalKey),
       [
-        "flow.activities", "spec.snapshot", "spec.review", "artifact.catalog", "test.review.repair.progress", "test.bootstrap.observation", "acceptance.decision",
+        "flow.activities", "spec.snapshot", "spec.review", "artifact.catalog",
+        "test.requirement.plan", "test.requirement.failure", "test.requirement.candidate.bundle",
+        "test.requirement.candidate.source", "test.requirement.review", "test.requirement.repair.progress",
+        "test.requirement.gate", "test.requirement.deferred", "acceptance.decision",
         "retry.recovery.baseline", "retry.recovery.receipt",
         "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement",
         "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.review.aborted.work-unit",
         "task.triage", "task.repair",
-        "task.review", "task.mutation.lineage", "activity.evidence", "runtime.step-metadata",
+        "task.review", "task.mutation.lineage", "activity.evidence", "test.requirement.gate.raw-log",
+        "runtime.step-metadata",
       ],
     );
     assert.equal(paths.get("draft.gate.source"), "steps/draft-gate/source.json");
     assert.equal(paths.get("spec.gate.source"), "steps/spec-gate/source.json");
     assert.equal(paths.has("test.coverage"), false);
-    assert.equal(paths.get("test.review"), "steps/test-review/result.json");
-    assert.equal(paths.get("test.review.repair.progress"), "steps/test/repair-progress.json");
-    assert.equal(paths.get("test.bootstrap.observation"), "steps/test/bootstrap-observation.json");
-    assert.deepEqual(
-      FLOW_ARTIFACT_CONTRACTS.require("test.bootstrap.observation").ownership.consumers,
-      ["test", "scenario-validity", "test-review"],
-    );
-    assert.equal(paths.get("placeholder.permission"), "steps/test/permission.json");
+    assert.equal(paths.get("test.requirement.review"), "steps/test-review/result.json");
+    assert.equal(paths.get("test.requirement.repair.progress"), "steps/test-repair/progress/:{requirementId}.json");
+    assert.equal(paths.get("placeholder.permission"), "steps/test-generate/permission.json");
     assert.equal(paths.get("acceptance.review.evidence"), "steps/acceptance-review/dispositions.json");
     assert.equal(paths.get("repair.fingerprint"), "steps/impl/repair/fingerprint.json");
     assert.equal(paths.get("repair.delta"), "steps/impl/repair/deltas/:{deltaId}.json");
@@ -104,7 +103,7 @@ describe("Flow artifact contract registry", () => {
     assert.equal(paths.has("worker.handoff"), false);
     assert.equal(paths.get("flow.findings"), "steps/flow-findings.json");
     assert.equal(paths.get("nonblocking.handoffs"), "steps/nonblocking-handoffs.json");
-    assert.equal(paths.get("scenario.validity.raw-log"), "steps/scenario-validity/output.log");
+    assert.equal(paths.get("test.requirement.gate.raw-log"), "steps/test-gate/output.log");
     assert.equal(paths.get("test.execute.raw-log"), "steps/test-execute/output.log");
     assert.equal(paths.get("final.regression.raw-log"), "steps/final-regression/attempt-:{attempt}.log");
     assert.equal(paths.get("finalize.cleanup.agent-metrics"), "steps/finalize-cleanup/agent-metrics.json");
@@ -118,25 +117,25 @@ describe("Flow artifact contract registry", () => {
     const gitignore = fs.readFileSync(new URL("../../../.gitignore", import.meta.url), "utf8");
     const patterns = new Set(gitignore.split("\n"));
     for (const pattern of [
-      "**/[0-9][0-9][0-9]/steps/scenario-validity/output.log",
+      "**/[0-9][0-9][0-9]/steps/test-gate/output.log",
       "**/[0-9][0-9][0-9]/steps/test-execute/output.log",
       "**/[0-9][0-9][0-9]/steps/final-regression/attempt-*.log",
     ]) assert.equal(patterns.has(pattern), true, pattern);
     for (const broadPattern of [
-      "**/steps/scenario-validity/output.log",
+      "**/steps/test-gate/output.log",
       "**/steps/test-execute/output.log",
       "**/steps/final-regression/attempt-*.log",
     ]) assert.equal(patterns.has(broadPattern), false, broadPattern);
   });
 
   it("keeps raw logs diagnostic-only while test source serves every dependent step", () => {
-    assert.deepEqual(FLOW_ARTIFACT_CONTRACTS.require("scenario.validity.raw-log").ownership.consumers, ["scenario-validity", "acceptance-review"]);
+    assert.deepEqual(FLOW_ARTIFACT_CONTRACTS.require("test.requirement.gate.raw-log").ownership.consumers, ["test-gate"]);
     assert.deepEqual(FLOW_ARTIFACT_CONTRACTS.require("test.execute.raw-log").ownership.consumers, ["test-execute", "test-result-review", "impl-gate"]);
     assert.deepEqual(FLOW_ARTIFACT_CONTRACTS.require("final.regression.raw-log").ownership.consumers, ["final-regression"]);
     const testsSource = FLOW_ARTIFACT_CONTRACTS.require("tests.source");
-    assert.deepEqual(testsSource.ownership.consumers, ["test", "scenario-validity", "test-review", "implement", "test-execute", "final-regression"]);
-    assert.deepEqual(testsSource.ownership.updaters, ["system", "test"]);
-    for (const actor of ["scenario-validity", "test-execute", "acceptance-review", "retro"]) {
+    assert.deepEqual(testsSource.ownership.consumers, ["test-generate", "test-review", "test-repair", "test-gate", "implement", "test-execute", "final-regression"]);
+    assert.deepEqual(testsSource.ownership.updaters, ["test-gate"]);
+    for (const actor of ["test-gate", "test-execute", "acceptance-review", "retro"]) {
       assert.equal(FLOW_ARTIFACT_CONTRACTS.require("spec.record").ownership.consumers.includes(actor), true, actor);
     }
     for (const key of ["test.execute", "test.result.review"]) {
@@ -144,7 +143,7 @@ describe("Flow artifact contract registry", () => {
         assert.equal(FLOW_ARTIFACT_CONTRACTS.require(key).ownership.consumers.includes(actor), true, `${key}/${actor}`);
       }
     }
-    assert.equal(FLOW_ARTIFACT_CONTRACTS.require("scenario.validity").ownership.consumers.includes("acceptance-review"), true);
+    assert.equal(FLOW_ARTIFACT_CONTRACTS.require("test.requirement.deferred").ownership.consumers.includes("acceptance-review"), true);
     for (const key of ["upgrade.result"]) {
       assert.equal(FLOW_ARTIFACT_CONTRACTS.require(key).ownership.consumers.includes("acceptance-review"), true, key);
     }
@@ -178,7 +177,7 @@ describe("Flow artifact contract registry", () => {
   it("assigns shared finding records to every materializing route", () => {
     const findingPublishers = [
       "draft-questions-review", "draft-coverage-review", "draft-gate", "spec-review", "spec-gate",
-      "scenario-validity", "test-review", "test-result-review", "task-review", "task-gate",
+      "test-generate", "test-review", "test-repair", "test-gate", "test-result-review", "task-review", "task-gate",
       "impl-review", "impl-gate", "retro", "acceptance-review", "final-regression",
     ];
     const findings = FLOW_ARTIFACT_CONTRACTS.require("flow.findings");
@@ -191,7 +190,7 @@ describe("Flow artifact contract registry", () => {
     const handoffs = FLOW_ARTIFACT_CONTRACTS.require("nonblocking.handoffs");
     const handoffSources = [
       "draft-questions-review", "draft-coverage-review", "draft-gate", "spec-gate",
-      "scenario-validity", "test-review", "test-result-review", "task-review", "task-gate",
+      "test-result-review", "task-review", "task-gate",
       "impl-review", "impl-gate", "retro", "acceptance-review", "final-regression",
     ];
     assert.deepEqual(handoffs.ownership.producers, handoffSources);
@@ -230,8 +229,7 @@ describe("Flow artifact contract registry", () => {
       ["draft-coverage-triage.json", "draft.coverage.triage"],
       ["spec.json", "spec.record"],
       ["review.json", "spec.review"],
-      ["scenario-validity-result.json", "scenario.validity"],
-      ["test-review.json", "test.review"],
+      ["requirement-test-review.json", "test.requirement.review"],
     ]);
     const logicalKeyByPayload = new Map([
       ["draft.json", "draft"],
@@ -256,7 +254,9 @@ describe("Flow artifact contract registry", () => {
         assert.equal(FLOW_ARTIFACT_CONTRACTS.require(logicalKey).ownership.consumers.includes(stepId), true, `${logicalKey}/${stepId}`);
       }
       for (const payload of policy.payloads) {
-        const logicalKey = logicalKeyByPayload.get(payload.logicalName);
+        const logicalKey = payload.logicalName === "spec-tests" && stepId.startsWith("test-")
+          ? "test.requirement.candidate.source"
+          : logicalKeyByPayload.get(payload.logicalName);
         assert.notEqual(logicalKey, undefined, `${stepId}/${payload.logicalName}`);
         if (logicalKey === null) {
           assert.equal(["spec-triage", "spec-repair"].includes(stepId), true, `${stepId} owns only a transient review delta`);
@@ -278,7 +278,7 @@ describe("Flow artifact contract registry", () => {
     assert.deepEqual(targets.get("draft.gate.source").legacyPaths.map(String), ["draft-gate-source.json"]);
     assert.deepEqual(targets.get("task.gate").legacyPaths.map(String), ["task-impl-gate-result.json"]);
     assert.deepEqual(targets.get("acceptance.review.evidence").legacyPaths.map(String), ["acceptance-review-evidence.json"]);
-    assert.deepEqual(targets.get("test.review").legacyPaths.map(String), ["test-review.json", "test-coverage.json"]);
+    assert.deepEqual(targets.get("legacy.test.review").legacyPaths.map(String), ["test-review.json", "test-coverage.json"]);
     assert.deepEqual(targets.get("issue.log").legacyPaths.map(String), ["issue-log.json", "redolog.json"]);
     assert.deepEqual(targets.get("ideas").legacyPaths.map(String), ["ideas.json", "plugin-artifacts/workflow/ideas.json"]);
     assert.deepEqual(targets.get("plugin.lifecycle.artifact").legacyPatterns.map(String), ["plugin-artifacts/:{pluginArtifactPath}"]);
@@ -685,7 +685,7 @@ describe("Flow artifact contract registry", () => {
     for (const [logicalKey, reviewStep] of [
       ["draft.questions.review", "draft-questions-review"],
       ["draft.coverage.review", "draft-coverage-review"],
-      ["test.review", "test-review"],
+      ["test.requirement.review", "test-review"],
       ["impl.review", "impl-review"],
     ]) {
       const resultDirectory = path.posix.dirname(FLOW_ARTIFACT_CONTRACTS.require(logicalKey).canonicalPath.toString());

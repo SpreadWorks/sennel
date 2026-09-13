@@ -21,7 +21,24 @@ import { FlowArtifactCatalog } from "../../../src/lib/flow-version.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
 import { resolveGateTransition } from "../../../src/flow/definition.js";
+import {
+  RequirementTestLifecycleFacts,
+  RequirementTestStepObservation,
+  resolveRequirementTestLifecycle,
+} from "../../../src/flow/definition.js";
 import { ReviewFindingFingerprint } from "../../../src/flow/lib/finding-disposition-policy.js";
+import {
+  RequirementTestCandidateBundle,
+  RequirementTestCandidateSource,
+  RequirementTestGateObservation,
+  RequirementTestGateResult,
+} from "../../../src/flow/lib/requirement-test-artifacts.js";
+import {
+  RequirementTestBundleLineage,
+  RequirementTestBundleRevision,
+  RequirementTestLifecycleAuthority,
+} from "../../../src/flow/lib/requirement-test-lifecycle.js";
+import { RequirementTestArtifactStore } from "../../../src/flow/lib/requirement-test-store.js";
 import { completeCanonicalSourceHandoff } from "../builders/source-handoff-scenario.js";
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
 import { appendIssueLogFromGateResult } from "../../../src/flow/lib/run-gate.js";
@@ -108,6 +125,13 @@ export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status 
   const task = current.tasks.find((candidate) => (
     candidate.steps.some((step) => step.id === nodeId)
   )) ?? null;
+  if (nodeId === "approval" && status === "done") {
+    flowManager.approveSpecContinuation({
+      specId: resolvedSpecId,
+      approval: { confirmedAt: "2026-01-02T03:04:05.000Z" },
+    });
+    return flowManager.loadReadOnly(resolvedSpecId);
+  }
   if (status === "done" && task !== null && nodeId === `${task.id}-impl`) {
     completeCanonicalSourceHandoff({
       root: flowManager.executionRoot(),
@@ -513,9 +537,15 @@ export class CanonicalFlowFixture {
     if (supplied.tasks != null && (!Array.isArray(supplied.tasks) || supplied.tasks.length !== 0)) {
       throw new Error("CanonicalFlowFixture fresh Spec tasks must be added with addTask");
     }
+    const requirements = (supplied.requirements ?? []).map((requirement) => (
+      requirement.testable === undefined && requirement.preimplementation_test_expectation === undefined
+        ? { ...requirement, testable: false }
+        : requirement
+    ));
     const specRecord = new CurrentFlowSpecRecord({
       ...emptySpecStub(),
       ...structuredClone(supplied),
+      requirements,
       tasks: [],
     }, { specId: this.specId });
     this.flowManager.createFresh(new CanonicalFlowCreateRequest({
@@ -574,12 +604,25 @@ export class CanonicalFlowFixture {
 
   /** Confirm every definition leaf before `nodeId`, leaving no active Attempt. */
   settleBefore(nodeId) {
-    const index = this.#leafIndex(nodeId);
-    for (const step of this.leaves().slice(0, index)) {
-      if (["done", "skipped"].includes(step.status)) continue;
-      this.settle(step.id);
+    for (let iteration = 0; iteration < 500; iteration += 1) {
+      const state = this.state();
+      const currentLeaves = flattenSteps(state.steps);
+      const targetIndex = currentLeaves.findIndex((step) => step.id === nodeId);
+      if (targetIndex < 0) throw new Error(`canonical fixture node is absent: ${nodeId}`);
+      if (state.currentNodeId === nodeId) return this;
+      if (state.currentNodeId !== null) {
+        const activeIndex = currentLeaves.findIndex((step) => step.id === state.currentNodeId);
+        if (activeIndex < 0 || activeIndex >= targetIndex) {
+          throw new Error(`canonical fixture cannot settle ${state.currentNodeId} before ${nodeId}`);
+        }
+        this.settle(state.currentNodeId);
+        continue;
+      }
+      const next = currentLeaves.slice(0, targetIndex).find((step) => !["done", "skipped"].includes(step.status));
+      if (next === undefined) return this;
+      this.settle(next.id);
     }
-    return this;
+    throw new Error(`canonical fixture exceeded its settlement bound before ${nodeId}`);
   }
 
   /** Confirm one named definition leaf through an explicit typed Attempt. */
@@ -604,7 +647,9 @@ export class CanonicalFlowFixture {
   /** Start one ordinary Flow leaf after settling all definition predecessors. */
   activate(nodeId, { settlePredecessors = true } = {}) {
     if (settlePredecessors) this.settleBefore(nodeId);
-    const task = this.#firstTaskForNode(this.state(), nodeId);
+    const state = this.state();
+    if (state.currentNodeId === nodeId) return this;
+    const task = this.#firstTaskForNode(state, nodeId);
     if (task !== null) {
       this.flowManager.startTask(task.id, { specId: this.specId });
     } else {
@@ -621,6 +666,7 @@ export class CanonicalFlowFixture {
     const firstStep = task.steps[0] ?? null;
     if (firstStep === null) throw new Error(`canonical fixture Task has no Steps: ${taskId}`);
     if (settlePredecessors) this.settleBefore(firstStep.id);
+    if (this.state().currentNodeId === firstStep.id) return this;
     this.flowManager.startTask(taskId, { specId: this.specId });
     return this;
   }
@@ -649,6 +695,153 @@ export class CanonicalFlowFixture {
   #assertCreated() {
     if (!this.created) throw new Error("canonical fixture Flow must be created first");
   }
+}
+
+/**
+ * Drive one testable Requirement through the real generate/review/Gate
+ * connector. The helper is intentionally a lifecycle operation, not an alias
+ * for a retired Step, and leaves the promoted source under Gate ownership.
+ */
+export function promoteCanonicalRequirementTest({
+  flowManager,
+  specId,
+  requirementId,
+  testPath = `${requirementId.toLowerCase()}.test.js`,
+  source = null,
+  completion = "gate",
+} = {}) {
+  if (!["generate", "review", "gate"].includes(completion)) {
+    throw new Error("Requirement test fixture completion must be generate, review, or gate");
+  }
+  let state = flowManager.canonicalState(specId);
+  if (state.current?.at(-1) !== "test-generate") {
+    throw new Error("Requirement test fixture requires active test-generate");
+  }
+  const generateStore = new RequirementTestArtifactStore({ flowManager, state });
+  const generatePlan = generateStore.readPlan("test-generate");
+  const item = generatePlan.artifact.plan.activeWorkItem();
+  if (item?.requirementId !== requirementId) {
+    throw new Error(`Requirement test fixture expected active ${requirementId}`);
+  }
+  const normalizedPath = testPath.startsWith("tests/") ? testPath : `tests/${testPath}`;
+  const bytes = Buffer.from(source ?? `// spec: ${requirementId}\nimport test from "node:test";\nimport assert from "node:assert/strict";\ntest("${requirementId}: preimplementation expectation", () => assert.fail("expected before implementation"));\n`);
+  const candidateSource = RequirementTestCandidateSource.fromBytes({ testPath: normalizedPath, bytes });
+  const bundle = new RequirementTestBundleRevision({
+    requirementId,
+    specRevision: item.specRevision,
+    revision: 1,
+    paths: [normalizedPath],
+    lineage: new RequirementTestBundleLineage({
+      requirementId,
+      specRevision: item.specRevision,
+      bundleRevision: 1,
+      predecessorRevision: null,
+      sourceAttempt: { id: state.attempt.id, sequence: state.attempt.sequence },
+      sourceFindingFingerprints: [],
+    }),
+  });
+  const candidate = new RequirementTestCandidateBundle({ bundle, sources: [candidateSource] });
+  let facts = new RequirementTestLifecycleFacts({
+    authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: generatePlan.descriptor }),
+    plan: generatePlan.artifact.plan,
+    leaf: "test-generate",
+    observation: candidate,
+  });
+  const parameters = { requirementId, bundleRevision: "1" };
+  flowManager.completeRequirementTestLifecycle({
+    specId,
+    decision: resolveRequirementTestLifecycle(facts),
+    artifactWrites: [{
+      logicalKey: "test.requirement.candidate.source",
+      parameters: { ...parameters, testPath: normalizedPath.slice("tests/".length) },
+      mediaType: "text/javascript",
+      bytes,
+    }, {
+      logicalKey: "test.requirement.candidate.bundle",
+      parameters,
+      mediaType: "application/json",
+      bytes: Buffer.from(`${JSON.stringify(candidate.toJSON())}\n`),
+    }],
+  });
+  if (completion === "generate") return Object.freeze({ candidate, bytes });
+
+  state = flowManager.canonicalState(specId);
+  const reviewStore = new RequirementTestArtifactStore({ flowManager, state });
+  const reviewPlan = reviewStore.readPlan("test-review");
+  const reviewObservation = new RequirementTestStepObservation({
+    requirementId,
+    specRevision: item.specRevision,
+    bundleRevision: 1,
+    candidateDigest: candidate.digest,
+    sourceAttempt: bundle.lineage.sourceAttempt,
+    kind: "review_pass",
+  });
+  facts = new RequirementTestLifecycleFacts({
+    authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: reviewPlan.descriptor }),
+    plan: reviewPlan.artifact.plan,
+    leaf: "test-review",
+    observation: reviewObservation,
+    candidateBundle: candidate,
+  });
+  const reviewPayload = {
+    version: 1,
+    phase: "test",
+    requirementId,
+    specRevision: item.specRevision.toJSON(),
+    bundleRevision: 1,
+    candidateDigest: candidate.digest,
+    sourceAttempt: bundle.lineage.sourceAttempt.toJSON(),
+    verdict: "PASS",
+    blockingFindings: [],
+    advisoryFindings: [],
+  };
+  const reviewResult = { result: "fixture Requirement test review" };
+  attachCanonicalCommandResultArtifact(reviewResult, {
+    logicalKey: "test.requirement.review",
+    payload: reviewPayload,
+  });
+  flowManager.completeRequirementTestLifecycle({
+    specId,
+    decision: resolveRequirementTestLifecycle(facts),
+    commandResult: reviewResult,
+  });
+  if (completion === "review") return Object.freeze({ candidate, bytes });
+
+  state = flowManager.canonicalState(specId);
+  const gateStore = new RequirementTestArtifactStore({ flowManager, state });
+  const gatePlan = gateStore.readPlan("test-gate");
+  const gateObservation = new RequirementTestGateObservation({
+    requirementId,
+    specRevision: item.specRevision,
+    bundleRevision: 1,
+    candidateDigest: candidate.digest,
+    testName: `${requirementId}: preimplementation expectation`,
+    kind: "assertion_failed",
+    sourceAttempt: bundle.lineage.sourceAttempt,
+  });
+  facts = new RequirementTestLifecycleFacts({
+    authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: gatePlan.descriptor }),
+    plan: gatePlan.artifact.plan,
+    leaf: "test-gate",
+    observation: gateObservation,
+    candidateBundle: candidate,
+  });
+  const gateResult = { result: "fixture Requirement test Gate" };
+  attachCanonicalCommandResultArtifact(gateResult, {
+    logicalKey: "test.requirement.gate",
+    payload: new RequirementTestGateResult({
+      observation: gateObservation,
+      command: null,
+      rawOutputPath: "steps/test-gate/output.log",
+      process: { started: true, exitCode: 1, signal: null, timedOut: false, spawnError: null },
+    }).toJSON(),
+  });
+  flowManager.completeRequirementTestLifecycle({
+    specId,
+    decision: resolveRequirementTestLifecycle(facts),
+    commandResult: gateResult,
+  });
+  return Object.freeze({ candidate, bytes });
 }
 
 function assertFixtureFields(input, allowed, fixtureName) {
@@ -692,17 +885,45 @@ export class FlowAtStepFixture {
       throw new TypeError("FlowAtStepFixture requires a targetStep");
     }
     this.targetStep = input.targetStep;
-    this.taskDocuments = input.taskDocuments ?? [];
+    this.taskDocuments = structuredClone(input.taskDocuments ?? []);
     if (!Array.isArray(this.taskDocuments)) {
       throw new TypeError("FlowAtStepFixture taskDocuments must be an array");
     }
     const { taskDocuments, targetStep, ...flowInput } = input;
+    if (flowInput.specRecord != null) {
+      const suppliedSpec = flowInput.specRecord?.toJSON?.() ?? flowInput.specRecord;
+      const knownTaskIds = new Set(this.taskDocuments.map((task) => task.id));
+      const requirements = (suppliedSpec.requirements ?? []).map((requirement, index) => {
+        const mappedTaskIds = requirement.task_ids ?? [`T-fixture-${index + 1}`];
+        for (const taskId of mappedTaskIds) {
+          if (knownTaskIds.has(taskId)) continue;
+          this.taskDocuments.push({
+            id: taskId,
+            title: `Fixture Task ${taskId}`,
+            goal: `Provide canonical ownership for ${taskId}.`,
+            origin: "plan",
+            added_round: 0,
+            status: "pending",
+          });
+          knownTaskIds.add(taskId);
+        }
+        return {
+          ...requirement,
+          task_ids: mappedTaskIds,
+          ...(requirement.testable === undefined && requirement.preimplementation_test_expectation === undefined
+            ? { testable: false }
+            : {}),
+        };
+      });
+      flowInput.specRecord = { ...structuredClone(suppliedSpec), requirements, tasks: [] };
+    }
     if (flowInput.specRecord == null && this.taskDocuments.length > 0) {
       flowInput.specRecord = {
         requirements: this.taskDocuments.map((task) => ({
           id: `R-${task.id}`,
           desc: `Exercise canonical Task ${task.id}.`,
           task_ids: [task.id],
+          testable: false,
         })),
       };
     }
@@ -743,6 +964,7 @@ export class TaskLifecycleFixture {
           id: `R-${task.id}`,
           desc: `Exercise canonical Task ${task.id}.`,
           task_ids: [task.id],
+          testable: false,
         })),
       };
     }
@@ -805,7 +1027,12 @@ export class CanonicalAutoCheckScenario {
       autoApprove,
       specRecord: {
         goal: "canonical auto-check fixture",
-        requirements: [{ id: "R-T-1", desc: "Exercise the auto-check Task.", task_ids: ["T-1"] }],
+        requirements: [{
+          id: "R-T-1",
+          desc: "Exercise the auto-check Task.",
+          task_ids: ["T-1"],
+          testable: false,
+        }],
       },
     });
     this.flowManager = flowManager;
@@ -925,6 +1152,7 @@ export class CanonicalNextActionScenario {
           id: `R-${task.id}`,
           desc: `Exercise canonical Task ${task.id}.`,
           task_ids: [task.id],
+          testable: false,
         })),
       };
     }

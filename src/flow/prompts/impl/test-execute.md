@@ -1,4 +1,4 @@
-   - **Post-implementation execution point:** `impl/test-execute` verifies spec-local tests against implemented code. Earlier, `plan/test` writes tests only, `plan/scenario-validity` performs the pre-implementation runtime check, and `plan/test-review` performs static anti-pattern review.
+   - **Post-implementation execution point:** `impl/test-execute` verifies promoted spec-local tests against implemented code. Earlier, each testable Requirement passes through `plan/test-generate`, `plan/test-review`, optional `plan/test-repair`, and `plan/test-gate`; only Gate promotes a compatible candidate.
    - **Project regression responsibilities:** `test-execute` owns four cases:
      - `spec-local`: always run spec-local requirement tests and write per-requirement evidence.
      - `targeted`: run targeted project regression only when changed files are configured by `test.projectPaths`.

@@ -308,3 +308,109 @@ test("R12: validateTestHeaders fails uncovered when tests dir absent and testabl
     assert.equal(result.uncoveredRequirements.length, 1);
   });
 });
+
+test("assigned validation counts only the assigned Requirement and allows a secondary Requirement", async () => {
+  withTmpDir(async (root) => {
+    const { validateAssignedRequirementTestHeaders, AssignedRequirementTestValidation } = await loadModule();
+    const specDir = path.join(root, "specs", "249-foo");
+    writeFile(specDir, "tests/a.test.js", "// spec: R6 R8\nit('R6: primary', ()=>{});\nit('R8: secondary', ()=>{});\n");
+    const result = validateAssignedRequirementTestHeaders({
+      specDir,
+      spec: specWithReqs([{ id: "R6", desc: "..." }, { id: "R8", desc: "..." }]),
+      assignedRequirementId: "R6",
+      secondaryRequirementIds: ["R8"],
+      candidatePaths: ["tests/a.test.js"],
+    });
+    assert.equal(result instanceof AssignedRequirementTestValidation, true);
+    assert.equal(result.ok, true);
+    assert.equal(result.assignedCovered, true);
+    assert.deepEqual(result.secondaryRequirementIds, ["R8"]);
+    assert.deepEqual(result.validationResult.uncoveredRequirements, []);
+    assert.deepEqual(result.recoverableIssueCodes, []);
+  });
+});
+
+test("assigned validation ignores pre-existing active tests outside the candidate bundle", async () => {
+  withTmpDir(async (root) => {
+    const { validateAssignedRequirementTestHeaders } = await loadModule();
+    const specDir = path.join(root, "specs", "249-foo");
+    writeFile(specDir, "tests/active.test.js", "// spec: R6\nit('R6: active', ()=>{});\n");
+    writeFile(specDir, "tests/candidate.test.js", "// spec: R8\nit('R8: secondary', ()=>{});\n");
+    const result = validateAssignedRequirementTestHeaders({
+      specDir,
+      spec: specWithReqs([{ id: "R6", desc: "..." }, { id: "R8", desc: "..." }]),
+      assignedRequirementId: "R6",
+      secondaryRequirementIds: ["R8"],
+      candidatePaths: ["tests/candidate.test.js"],
+    });
+    assert.equal(result.assignedCovered, false);
+    assert.equal(result.recoverableIssueCodes.includes("assigned_requirement_uncovered"), true);
+  });
+});
+
+test("assigned validation rejects escaped and non-test candidate paths", async () => {
+  withTmpDir(async (root) => {
+    const { validateAssignedRequirementTestHeaders } = await loadModule();
+    const specDir = path.join(root, "specs", "249-foo");
+    writeFile(specDir, "tests/candidate.test.js", "// spec: R6\nit('R6: primary', ()=>{});\n");
+    const args = {
+      specDir,
+      spec: specWithReqs([{ id: "R6", desc: "..." }]),
+      assignedRequirementId: "R6",
+    };
+    assert.throws(() => validateAssignedRequirementTestHeaders({ ...args, candidatePaths: ["tests/../tests/candidate.test.js"] }), /canonical repository-relative/);
+    assert.throws(() => validateAssignedRequirementTestHeaders({ ...args, candidatePaths: ["spec.json"] }), /canonical repository-relative/);
+  });
+});
+
+test("assigned validation rejects a bundle containing only a secondary Requirement", async () => {
+  withTmpDir(async (root) => {
+    const { validateAssignedRequirementTestHeaders } = await loadModule();
+    const specDir = path.join(root, "specs", "249-foo");
+    writeFile(specDir, "tests/a.test.js", "// spec: R8\nit('R8: secondary', ()=>{});\n");
+    const result = validateAssignedRequirementTestHeaders({
+      specDir,
+      spec: specWithReqs([{ id: "R6", desc: "..." }, { id: "R8", desc: "..." }]),
+      assignedRequirementId: "R6",
+      secondaryRequirementIds: ["R8"],
+      candidatePaths: ["tests/a.test.js"],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.assignedCovered, false);
+    assert.equal(result.recoverableIssues.some((issue) => issue.code === "assigned_requirement_uncovered"), true);
+    assert.deepEqual(result.validationResult.uncoveredRequirements.map((entry) => entry.id), ["R6"]);
+  });
+});
+
+test("assigned validation reports missing primary header or test name as recoverable issues", async () => {
+  withTmpDir(async (root) => {
+    const { validateAssignedRequirementTestHeaders } = await loadModule();
+    const specDir = path.join(root, "specs", "249-foo");
+    writeFile(specDir, "tests/a.test.js", "// spec: R6\nit('R8: secondary', ()=>{});\n");
+    const result = validateAssignedRequirementTestHeaders({
+      specDir,
+      spec: specWithReqs([{ id: "R6", desc: "..." }, { id: "R8", desc: "..." }]),
+      assignedRequirementId: "R6",
+      secondaryRequirementIds: ["R8"],
+      candidatePaths: ["tests/a.test.js"],
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.recoverableIssues.some((issue) => issue.code === "assigned_requirement_missing_test_name"), true);
+    assert.equal(result.validationResult.headerNoTest.some((entry) => entry.id === "R6"), true);
+  });
+});
+
+test("assigned recoverable issues are immutable value objects", async () => {
+  const { AssignedRequirementRecoverableIssue } = await loadModule();
+  const issue = new AssignedRequirementRecoverableIssue({
+    code: "assigned_requirement_uncovered",
+    requirementId: "R6",
+  });
+  assert.equal(Object.isFrozen(issue), true);
+  assert.deepEqual(issue.toJSON(), {
+    code: "assigned_requirement_uncovered",
+    requirementId: "R6",
+    file: null,
+  });
+  assert.throws(() => new AssignedRequirementRecoverableIssue({ code: "uncovered_requirement", requirementId: "R6" }), /invalid assigned requirement issue code/);
+});

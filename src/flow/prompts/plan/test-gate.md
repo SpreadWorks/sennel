@@ -1,0 +1,6 @@
+   - Run `sennel flow run requirement-test-gate` for the active Requirement work item.
+   - Gate executes only the exact assigned named test from the immutable candidate bundle. It does not execute active `tests.source` or the project regression suite.
+   - The observation is bound to Requirement id, approved Spec revision, bundle revision, candidate digest, named test, and source Attempt.
+   - Only Gate may atomically promote a compatible candidate into active `tests.source`.
+   - Missing, skipped, duplicate, invalid, unexpected assertion, and tooling observations remain non-pass evidence. Definition alone selects repair, retry, defer, the next Requirement, or implementation.
+   - Do not edit candidate, active tests, plan, Gate history, deferred receipts, or Flow state manually.

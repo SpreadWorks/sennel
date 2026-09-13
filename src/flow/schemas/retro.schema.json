@@ -11,7 +11,7 @@
         "additionalProperties": true,
         "properties": {
           "desc": { "type": "string" },
-          "status": { "type": "string", "enum": ["done", "not_done", "not_applicable"] },
+          "status": { "type": "string", "enum": ["done", "not_done", "deferred", "not_applicable"] },
           "note": { "type": "string" }
         }
       }
@@ -24,6 +24,7 @@
         "done": { "type": "integer", "minimum": 0 },
         "not_done": { "type": "integer", "minimum": 0 },
         "not_applicable_count": { "type": "integer", "minimum": 0 },
+        "deferred_count": { "type": "integer", "minimum": 0 },
         "rate": { "type": "number" }
       }
     },

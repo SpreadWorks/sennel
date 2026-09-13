@@ -15,7 +15,6 @@ import path from "node:path";
 import {
   buildCurrentFlowDefinition,
   InterruptedFinalizeSyncRuntimeLogFact,
-  NonGateAppendRepairEvidenceAction,
   NonGateFailCurrentAttemptAction,
   NonGateIncrementRetryAction,
   NonGateRecordNonblockingAction,
@@ -27,7 +26,6 @@ import {
   resolveGateTransition,
   resolveNonGateTransition,
   resolveTaskExecutionOverrun,
-  scenarioValidityTransitionDefinition,
   testExecuteTransitionDefinition,
   testResultReviewTransitionDefinition,
   DraftCoverageRepairCompletionDecision,
@@ -36,6 +34,10 @@ import {
   TaskReviewStageBinding, TaskReviewStageFacts, resolveTaskReviewStageTransition,
   resolveTaskReviewStageCompletion,
   TaskNoChangeContinuationFacts, selectTaskNoChangeContinuation,
+  initializeRequirementTestLifecycle,
+  RequirementTestLifecycleFacts,
+  RequirementTestStepObservation,
+  resolveRequirementTestLifecycle,
 } from "../definition.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { normalizeAgentMetricDimension } from "../../lib/agent-metrics.js";
@@ -98,13 +100,24 @@ import {
 import { IssueLogDocument } from "./issue-log-store.js";
 import { finalizationOutboxIdentity } from "./flow-outbox.js";
 import { FinalizeSyncInterruptedError } from "./finalize-sync-diagnostics.js";
-import { CanonicalScenarioValidityRepairEvidence } from "./scenario-validity-repair-evidence.js";
 import { CanonicalTestSourceRevision } from "./canonical-test-artifacts.js";
 import { buildRepairFingerprint } from "./repair-fingerprint.js";
 import { sameNonGateTransitionDecision } from "./non-gate-transition-application.js";
 import { readTestChainTransitionFactsFromSnapshot, TestChainTransitionSnapshot } from "./test-chain-transition-facts.js";
 import { CanonicalOverviewUpdate } from "./canonical-overview-update.js";
 import { CanonicalSpecApproval } from "./canonical-spec-approval.js";
+import {
+  RequirementTestCandidateBundle,
+  RequirementTestDeferredReceipt,
+  RequirementTestGateResult,
+  RequirementTestPlanArtifact,
+} from "./requirement-test-artifacts.js";
+import { RequirementTestArtifactStore } from "./requirement-test-store.js";
+import {
+  RequirementTestLifecycleDecision,
+  sameRequirementTestLifecycleDecision,
+} from "./requirement-test-transition.js";
+import { RequirementTestLifecycleAuthority } from "./requirement-test-lifecycle.js";
 import { CanonicalFileMapUpdate, CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { CanonicalRequirementDefinitions } from "./canonical-requirement-definitions.js";
@@ -164,7 +177,6 @@ import {
   taskGateSettlementIssueLogId,
   taskGateSettlementMetricActivityId,
 } from "./canonical-gate-artifacts.js";
-import { TestReviewRepairWorkerTimeout } from "./test-review-repair-timeout.js";
 import { TaskGateClassificationRecoveryIdentity } from "./task-gate-classification-recovery.js";
 import {
   MissingProducerArtifactRecoveryAdmission,
@@ -377,6 +389,285 @@ class TestChainPlanAdmission {
     }
     if (!sameNonGateTransitionDecision(this.decision, current)) {
       throw new CurrentFlowStateConflictError("Definition plan changed before test-chain settlement");
+    }
+  }
+}
+
+/** One catalog slot observed before a Requirement lifecycle publication. */
+class RequirementTestPublicationIdentity {
+  constructor({ logicalKey, parameters = {}, descriptor = null, pendingBytes = null } = {}) {
+    this.artifact = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
+    if (descriptor !== null && (descriptor.logicalKey !== this.artifact.logicalKey
+      || descriptor.relativePath !== this.artifact.relativePath)) {
+      throw new CurrentFlowStateInvariantError("Requirement test publication descriptor has the wrong identity");
+    }
+    this.current = descriptor === null ? null : Object.freeze({
+      logicalKey: descriptor.logicalKey,
+      relativePath: descriptor.relativePath,
+      hash: descriptor.hash,
+      size: descriptor.size,
+      activityId: descriptor.activityId,
+    });
+    if (pendingBytes !== null && !Buffer.isBuffer(pendingBytes)) {
+      throw new CurrentFlowStateInvariantError("Requirement test pending publication requires Buffer bytes");
+    }
+    this.pending = pendingBytes === null ? null : Object.freeze({
+      hash: crypto.createHash("sha256").update(pendingBytes).digest("hex"),
+      size: pendingBytes.length,
+    });
+    Object.freeze(this);
+  }
+
+  assert(catalog) {
+    const descriptors = Array.isArray(catalog) ? catalog : catalog.artifacts;
+    const descriptor = descriptors.find((entry) => entry.relativePath === this.artifact.relativePath) ?? null;
+    const unchanged = this.current === null
+      ? descriptor === null
+      : descriptor !== null
+        && descriptor.logicalKey === this.current.logicalKey
+        && descriptor.relativePath === this.current.relativePath
+        && descriptor.hash === this.current.hash
+        && descriptor.size === this.current.size
+        && descriptor.activityId === this.current.activityId;
+    if (!unchanged) {
+      throw new CurrentFlowStateConflictError(
+        `Requirement test publication changed before settlement: ${this.artifact.relativePath}`,
+      );
+    }
+  }
+}
+
+/** Requirement-only artifact reader whose coherent lifetime is the Store lock. */
+class LockedRequirementTestArtifactReader {
+  constructor(view) {
+    this.view = view;
+    Object.freeze(this);
+  }
+
+  readArtifact({ logicalKey, parameters = {}, optional = false } = {}) {
+    const artifact = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
+    const descriptor = this.view.catalog.artifacts
+      .find((entry) => entry.relativePath === artifact.relativePath) ?? null;
+    if (descriptor === null) {
+      if (optional) return null;
+      throw new CurrentFlowStateConflictError(`Requirement test artifact is no longer cataloged: ${artifact.relativePath}`);
+    }
+    if (descriptor.logicalKey !== artifact.logicalKey) {
+      throw new CurrentFlowStateConflictError("Requirement test catalog identity changed before settlement");
+    }
+    return Object.freeze({ descriptor, bytes: this.view.readCatalogedArtifact(descriptor) });
+  }
+
+  artifactCatalog() { return this.view.catalog; }
+}
+
+function catalogDescriptor(manager, specId, logicalKey, parameters = {}) {
+  const artifact = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
+  return manager.artifactCatalog(specId).artifacts
+    .find((entry) => entry.relativePath === artifact.relativePath) ?? null;
+}
+
+function exactRequirementTestWrite(artifactWrites, logicalKey, parameters = {}) {
+  const artifact = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
+  const matches = artifactWrites.filter((write) => {
+    try {
+      return FLOW_ARTIFACT_CONTRACTS.resolve(write.logicalKey, write.parameters ?? {}).relativePath
+        === artifact.relativePath;
+    } catch {
+      return false;
+    }
+  });
+  if (matches.length !== 1 || !Buffer.isBuffer(matches[0].bytes)) {
+    throw new CurrentFlowStateInvariantError(`Requirement test settlement requires one ${artifact.relativePath} publication`);
+  }
+  return matches[0];
+}
+
+function sameRequirementTestObservation(left, right) {
+  const normalized = (value) => {
+    if (value instanceof RequirementTestCandidateBundle) return value.toJSON();
+    if (value?.toJSON instanceof Function) return value.toJSON();
+    return {
+      requirementId: value?.requirementId,
+      specRevision: value?.specRevision?.toJSON?.() ?? value?.specRevision,
+      bundleRevision: value?.bundleRevision,
+      candidateDigest: value?.candidateDigest,
+      sourceAttempt: value?.sourceAttempt,
+      kind: value?.kind,
+    };
+  };
+  return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
+}
+
+function reviewObservationFromPublication(payload, facts) {
+  const kind = payload?.toolingOutcome != null ? "tooling_failure"
+    : payload?.verdict === "PASS" ? "review_pass"
+      : payload?.verdict === "ADVISORY" ? "review_advisory"
+        : payload?.verdict === "REJECTED" ? "semantic_rejection" : null;
+  if (kind === null) throw new CurrentFlowStateInvariantError("Requirement test review publication verdict is invalid");
+  return new RequirementTestStepObservation({
+    requirementId: payload.requirementId,
+    specRevision: facts.workItem.specRevision,
+    bundleRevision: payload.bundleRevision,
+    candidateDigest: payload.candidateDigest,
+    sourceAttempt: payload.sourceAttempt,
+    kind,
+  });
+}
+
+/**
+ * Re-resolves the sole Definition decision from the exact state and catalog
+ * snapshot held by the Version Store publication lock.
+ */
+class RequirementTestLifecycleAdmission {
+  constructor({ manager, state, decision, artifactWrites, commandResult, currentCandidateRead = null } = {}) {
+    if (!(decision instanceof RequirementTestLifecycleDecision)
+      || !(decision.facts instanceof RequirementTestLifecycleFacts)) {
+      throw new CurrentFlowStateInvariantError("Requirement test settlement requires a typed Definition decision with facts");
+    }
+    const facts = decision.facts;
+    const authority = facts.authority;
+    if (state.runId !== authority.runId || state.specId !== authority.specId
+      || state.current?.at(-1) !== authority.leaf
+      || state.attempt?.id !== authority.attempt.id
+      || state.attempt?.sequence !== authority.attempt.sequence) {
+      throw new CurrentFlowStateConflictError("Requirement test decision no longer addresses the active Attempt");
+    }
+    this.decision = decision;
+    this.facts = facts;
+    this.planIdentity = new RequirementTestPublicationIdentity({
+      logicalKey: "test.requirement.plan",
+      descriptor: catalogDescriptor(manager, state.specId, "test.requirement.plan"),
+    });
+    if (!authority.planPublication.matches(this.planIdentity.current)) {
+      throw new CurrentFlowStateConflictError("Requirement test plan changed after Definition selected its decision");
+    }
+    const catalog = manager.artifactCatalog(state.specId);
+    const candidateIdentities = [];
+    if (currentCandidateRead !== null) {
+      candidateIdentities.push(new RequirementTestPublicationIdentity({
+        logicalKey: "test.requirement.candidate.bundle",
+        parameters: {
+          requirementId: currentCandidateRead.candidate.bundle.requirementId,
+          bundleRevision: String(currentCandidateRead.candidate.bundle.revision),
+        },
+        descriptor: currentCandidateRead.descriptor,
+      }));
+      for (const source of currentCandidateRead.sources) {
+        candidateIdentities.push(new RequirementTestPublicationIdentity({
+          logicalKey: "test.requirement.candidate.source",
+          parameters: {
+            requirementId: currentCandidateRead.candidate.bundle.requirementId,
+            bundleRevision: String(currentCandidateRead.candidate.bundle.revision),
+            testPath: source.targetRelativePath.slice("tests/".length),
+          },
+          descriptor: source.descriptor,
+        }));
+      }
+    }
+    let observation = facts.observation;
+    if (new Set(["test-generate", "test-repair"]).has(authority.leaf)
+      && observation instanceof RequirementTestCandidateBundle) {
+      const parameters = {
+        requirementId: observation.bundle.requirementId,
+        bundleRevision: String(observation.bundle.revision),
+      };
+      const manifestWrite = exactRequirementTestWrite(artifactWrites, "test.requirement.candidate.bundle", parameters);
+      const published = RequirementTestCandidateBundle.fromJSON(JSON.parse(manifestWrite.bytes.toString("utf8")));
+      if (!sameRequirementTestObservation(observation, published)) {
+        throw new CurrentFlowStateInvariantError("Requirement test candidate publication does not match Definition facts");
+      }
+      candidateIdentities.push(new RequirementTestPublicationIdentity({
+        logicalKey: "test.requirement.candidate.bundle",
+        parameters,
+        descriptor: catalogDescriptor(manager, state.specId, "test.requirement.candidate.bundle", parameters),
+        pendingBytes: manifestWrite.bytes,
+      }));
+      for (const source of observation.sources) {
+        const sourceParameters = { ...parameters, testPath: source.testPath.slice("tests/".length) };
+        const write = exactRequirementTestWrite(artifactWrites, "test.requirement.candidate.source", sourceParameters);
+        if (write.bytes.length !== source.byteLength
+          || crypto.createHash("sha256").update(write.bytes).digest("hex") !== source.digest) {
+          throw new CurrentFlowStateInvariantError(`Requirement test candidate source publication changed: ${source.testPath}`);
+        }
+        candidateIdentities.push(new RequirementTestPublicationIdentity({
+          logicalKey: "test.requirement.candidate.source",
+          parameters: sourceParameters,
+          descriptor: catalogDescriptor(manager, state.specId, "test.requirement.candidate.source", sourceParameters),
+          pendingBytes: write.bytes,
+        }));
+      }
+    } else if (authority.leaf === "test-review" || authority.leaf === "test-gate") {
+      const attached = attachedCanonicalCommandResultArtifact(commandResult);
+      const logicalKey = authority.leaf === "test-review" ? "test.requirement.review" : "test.requirement.gate";
+      if (attached?.logicalKey !== logicalKey) {
+        throw new CurrentFlowStateInvariantError(`Requirement test ${authority.leaf} settlement lacks its canonical result publication`);
+      }
+      const publishedObservation = authority.leaf === "test-review"
+        ? reviewObservationFromPublication(attached.payload, facts)
+        : RequirementTestGateResult.fromJSON(attached.payload).observation;
+      if (!sameRequirementTestObservation(observation, publishedObservation)) {
+        throw new CurrentFlowStateInvariantError("Requirement test result publication does not match Definition facts");
+      }
+      const resultWrite = exactRequirementTestWrite(artifactWrites, logicalKey);
+      const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes: resultWrite.bytes });
+      const published = history.current;
+      if (published.attempt !== authority.attempt.sequence
+        || JSON.stringify(published.payload) !== JSON.stringify(attached.payload)) {
+        throw new CurrentFlowStateInvariantError("Requirement test result history does not bind the selected Attempt and observation");
+      }
+      candidateIdentities.push(new RequirementTestPublicationIdentity({
+        logicalKey,
+        descriptor: catalogDescriptor(manager, state.specId, logicalKey),
+        pendingBytes: resultWrite.bytes,
+      }));
+    }
+    this.observation = observation;
+    this.candidateIdentities = Object.freeze(candidateIdentities);
+    this.currentCandidate = currentCandidateRead?.candidate ?? null;
+    this.catalogHash = catalog.hash;
+    Object.freeze(this);
+  }
+
+  assert(view) {
+    const authority = this.facts.authority;
+    const { state, catalog } = view;
+    if (state.runId !== authority.runId || state.specId !== authority.specId
+      || state.current?.at(-1) !== authority.leaf
+      || state.attempt?.id !== authority.attempt.id
+      || state.attempt?.sequence !== authority.attempt.sequence) {
+      throw new CurrentFlowStateConflictError("Requirement test decision Attempt changed before settlement");
+    }
+    this.planIdentity.assert(catalog);
+    for (const identity of this.candidateIdentities) identity.assert(catalog);
+    const lockedManager = new LockedRequirementTestArtifactReader(view);
+    const store = new RequirementTestArtifactStore({ flowManager: lockedManager, state });
+    const planRead = store.readPlan(authority.leaf);
+    if (!authority.planPublication.matches(planRead.descriptor)) {
+      throw new CurrentFlowStateConflictError("Requirement test plan publication changed before settlement");
+    }
+    const active = planRead.artifact.plan.activeWorkItem();
+    const candidateRead = active?.bundleRevision === null || active?.bundleRevision === undefined
+      ? null
+      : store.readCandidate({ bundle: active.bundleRevision, consumerNodeId: authority.leaf });
+    const candidateBundle = this.observation instanceof RequirementTestCandidateBundle
+      ? null
+      : candidateRead?.candidate ?? null;
+    let current;
+    try {
+      const facts = new RequirementTestLifecycleFacts({
+        authority,
+        plan: planRead.artifact.plan,
+        leaf: authority.leaf,
+        observation: this.observation,
+        candidateBundle,
+      });
+      current = resolveRequirementTestLifecycle(facts);
+    } catch (error) {
+      throw new CurrentFlowStateConflictError(`Requirement test Definition facts changed before settlement: ${error.message}`);
+    }
+    if (!sameRequirementTestLifecycleDecision(this.decision, current)) {
+      throw new CurrentFlowStateConflictError("Requirement test Definition decision changed before settlement");
     }
   }
 }
@@ -597,7 +888,6 @@ class TaskSourceHandoffPreparationAdmission {
 }
 
 const TEST_CHAIN_TRANSITION_DEFINITIONS = Object.freeze({
-  "scenario-validity": scenarioValidityTransitionDefinition,
   "test-execute": testExecuteTransitionDefinition,
   "test-result-review": testResultReviewTransitionDefinition,
 });
@@ -1245,6 +1535,10 @@ export class CanonicalFlowManagerStore {
     return this.runtime.location(resolved);
   }
 
+  specLocation(specId) {
+    return canonicalFlowVersionLocation(this, specId);
+  }
+
   pathFor(specId) {
     const resolved = this.#resolveSpecId(specId);
     return resolved === null ? null : this.location(resolved).flowStateFile;
@@ -1642,13 +1936,7 @@ export class CanonicalFlowManagerStore {
     if (first === null || next?.nodeId !== first.id) {
       throw new CurrentFlowStateInvariantError(`canonical Task is not the next executable Task: ${taskId}`);
     }
-    return this.runtime.startAttempt({
-      specId,
-      activityId: activityId("task-attempt-started"),
-      nodeId: first.id,
-      attempt: commandContextAttempt(state, first.id),
-      admission: this.#consumerAdmission(state, first.id),
-    });
+    return this.#beginExecutableNode(state, specId, first.id);
   }
 
   /**
@@ -2120,79 +2408,6 @@ export class CanonicalFlowManagerStore {
     return this.runtime.rewindTestEvidence({
       specId: resolved,
       activityId: activityId("retro-stale-test-evidence-rewound"),
-      attempt: commandContextAttempt(state, "test-execute"),
-    });
-  }
-
-  /** Replace a rejected test-review with a catalog-evidence-bound test Attempt. */
-  repairTestReview({ specId = null, references } = {}) {
-    const resolved = this.#resolveSpecId(specId);
-    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const state = this.runtime.load(resolved);
-    if (state.current?.at(-1) !== "test-review") {
-      throw new CurrentFlowStateInvariantError("canonical test-review repair requires active test-review");
-    }
-    return this.runtime.repairTestReview({
-      specId: resolved,
-      activityId: activityId("test-review-repaired"),
-      attempt: commandContextAttempt(state, "test"),
-      references,
-    });
-  }
-
-  /**
-   * A repair worker whose handoff was not accepted cannot be replayed. Its
-   * failed Attempt remains auditable while the retained canonical test source
-   * enters the normal scenario-validity and fresh test-review path.
-   */
-  settleTimedOutTestReviewRepair({ specId = null, references = undefined } = {}) {
-    const resolved = this.#resolveSpecId(specId);
-    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const state = this.runtime.load(resolved);
-    if (state.current?.at(-1) !== "test"
-      || !TestReviewRepairWorkerTimeout.isFailureCode(state.attempt?.failure?.code)) {
-      throw new CurrentFlowStateInvariantError("test-review repair timeout settlement requires its failed test Attempt");
-    }
-    return this.runtime.settleTimedOutTestReviewRepair({
-      specId: resolved,
-      activityId: activityId("test-review-repair-timeout-settled"),
-      attempt: commandContextAttempt(state, "test"),
-      result: {
-        outcome: "passed",
-        summary: "Test-review repair timed out without an accepted handoff; retained test evidence proceeds to scenario validity.",
-        confirmedAt: new Date().toISOString(),
-        artifactRefs: [],
-      },
-      references: references ?? { evaluations: [], findings: [], repairs: [], artifacts: [] },
-    });
-  }
-
-  /** Enter the fixed scenario-validity → implementation bootstrap route. */
-  preimplementationBootstrap({ specId = null } = {}) {
-    const resolved = this.#resolveSpecId(specId);
-    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const state = this.runtime.load(resolved);
-    if (state.current?.at(-1) !== "scenario-validity") {
-      throw new CurrentFlowStateInvariantError("canonical preimplementation bootstrap requires active scenario-validity");
-    }
-    return this.runtime.preimplementationBootstrap({
-      specId: resolved,
-      activityId: activityId("preimplementation-bootstrapped"),
-      attempt: commandContextAttempt(state, "implement"),
-    });
-  }
-
-  /** Revalidate the fixed existing-implementation route after scenario validity. */
-  recoverExistingImplementation({ specId = null } = {}) {
-    const resolved = this.#resolveSpecId(specId);
-    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const state = this.runtime.load(resolved);
-    if (state.current?.at(-1) !== "scenario-validity") {
-      throw new CurrentFlowStateInvariantError("canonical existing implementation recovery requires active scenario-validity");
-    }
-    return this.runtime.recoverExistingImplementation({
-      specId: resolved,
-      activityId: activityId("existing-implementation-recovered"),
       attempt: commandContextAttempt(state, "test-execute"),
     });
   }
@@ -2809,7 +3024,19 @@ export class CanonicalFlowManagerStore {
       : null;
     const approvedDocument = existingApproval === null ? update.apply(document) : document;
     const confirmedAt = existingApproval?.confirmed_at ?? update.confirmedAt;
-    this.runtime.confirmAttempt({
+    const review = this.readCurrentSpecReview({
+      specId: resolved,
+      consumerNodeId: "approval",
+    });
+    if (review === null) {
+      throw new CurrentFlowStateInvariantError("Requirement test initialization requires the canonical Spec review revision");
+    }
+    const initialization = initializeRequirementTestLifecycle({
+      spec: approvedDocument,
+      specRevision: review.review.identity,
+    });
+    const planArtifact = new RequirementTestPlanArtifact({ plan: initialization.plan });
+    this.runtime.initializeRequirementTestLifecycle({
       specId: resolved,
       activityId: activityId("spec-approval-confirmed"),
       result: {
@@ -2819,6 +3046,13 @@ export class CanonicalFlowManagerStore {
         artifactRefs: [],
       },
       specRecord: new CurrentFlowSpecRecord(approvedDocument, { specId: resolved }),
+      artifactWrites: [{
+        logicalKey: "test.requirement.plan",
+        mediaType: "application/json",
+        bytes: planArtifact.toBytes(),
+      }],
+      decision: initialization.effect,
+      targetAttempt: commandContextAttempt(state, initialization.target),
     });
     return Object.freeze({ user_approval: update.toJSON(), added: Object.freeze(added) });
   }
@@ -3141,6 +3375,244 @@ export class CanonicalFlowManagerStore {
         this.#producerCompletionAdmission(nodeId, artifactWrites),
         sealedTaskLifecycle === null ? null : new TaskGateSettlementAdmission(gateTransitionDecision, "terminal"),
       ) }),
+    });
+  }
+
+  /** Apply a Definition-selected Requirement test connector and its publications atomically. */
+  completeRequirementTestLifecycle({
+    specId = null,
+    decision,
+    commandResult = null,
+    result = null,
+    references = undefined,
+    artifactWrites = [],
+    artifactRemovals = [],
+    artifactBaselines = [],
+    admission = undefined,
+    deferredReceipt = null,
+    findingsPublication = null,
+  } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const state = this.runtime.load(resolved);
+    const nodeId = state.current?.at(-1) ?? null;
+    if (nodeId === null) throw new CurrentFlowStateInvariantError("Requirement test completion requires an active Attempt");
+    const selected = decision instanceof RequirementTestLifecycleDecision
+      ? decision
+      : RequirementTestLifecycleDecision.fromJSON(decision);
+    const store = new RequirementTestArtifactStore({ flowManager: this, state });
+    const currentPlan = store.readPlan(nodeId);
+    const activeBefore = currentPlan.artifact.plan.activeWorkItem();
+    const currentCandidateRead = activeBefore?.bundleRevision === null || activeBefore?.bundleRevision === undefined
+      ? null
+      : store.readCandidate({ bundle: activeBefore.bundleRevision, consumerNodeId: nodeId });
+    const nextPlan = selected.apply(currentPlan.artifact.plan);
+    let writes = [
+      ...(commandResult === null ? [] : this.#attemptHistoryWrites({
+        specId: resolved,
+        state,
+        nodeId,
+        commandResult,
+      })),
+      ...(commandResult === null ? [] : this.#commandPublicationWrites(commandResult)),
+      ...artifactWrites,
+    ];
+    let removals = [...artifactRemovals];
+    let baselines = [currentPlan.baseline, ...artifactBaselines];
+    let testSourceBaseline;
+    if (selected.disposition === "promote") {
+      if (nodeId !== "test-gate") {
+        throw new CurrentFlowStateInvariantError("only test-gate may promote a Requirement candidate");
+      }
+      const active = currentPlan.artifact.plan.activeWorkItem();
+      const candidateRead = store.readCandidate({ bundle: active.bundleRevision, consumerNodeId: nodeId });
+      const promotion = store.promotion(candidateRead);
+      writes = [...writes, ...promotion.artifactWrites];
+      removals = [...removals, ...promotion.artifactRemovals];
+      baselines = [...baselines, ...promotion.artifactBaselines];
+      testSourceBaseline = promotion.testSourceBaseline;
+    }
+    if (selected.disposition === "defer") {
+      if (!(deferredReceipt instanceof RequirementTestDeferredReceipt)
+        || !(findingsPublication instanceof DeferredFlowFindingsPublication)) {
+        throw new CurrentFlowStateInvariantError("Requirement test deferral requires its exact receipt and deferred findings publication");
+      }
+      const active = currentPlan.artifact.plan.activeWorkItem();
+      const candidateRead = active.bundleRevision === null
+        ? null
+        : store.readCandidate({ bundle: active.bundleRevision, consumerNodeId: nodeId });
+      const expectedFingerprints = findingsPublication.deferred.map((finding) => finding.fingerprint).sort();
+      if (deferredReceipt.requirementId !== active.requirementId
+        || !deferredReceipt.specRevision.equals(active.specRevision)
+        || deferredReceipt.expectation.toString() !== active.expectation.toString()
+        || JSON.stringify(deferredReceipt.budget.toJSON()) !== JSON.stringify(active.budget.toJSON())
+        || deferredReceipt.sourceAttempt.id !== state.attempt.id
+        || deferredReceipt.sourceAttempt.sequence !== state.attempt.sequence
+        || deferredReceipt.bundleRevision !== (active.bundleRevision?.revision ?? null)
+        || deferredReceipt.candidateDigest !== (candidateRead?.candidate.digest ?? null)
+        || JSON.stringify([...deferredReceipt.sourceFindingFingerprints].sort()) !== JSON.stringify(expectedFingerprints)) {
+        throw new CurrentFlowStateInvariantError("Requirement test deferred receipt does not match its active canonical evidence");
+      }
+      const settlement = findingsPublication.settlementArtifacts();
+      writes = [
+        ...writes,
+        ...settlement.artifactWrites,
+        {
+          logicalKey: "test.requirement.deferred",
+          parameters: { requirementId: active.requirementId },
+          mediaType: "application/json",
+          bytes: Buffer.from(`${JSON.stringify(deferredReceipt.toJSON(), null, 2)}\n`, "utf8"),
+        },
+      ];
+      baselines = [...baselines, ...settlement.artifactBaselines];
+    } else if (deferredReceipt !== null || findingsPublication !== null) {
+      throw new CurrentFlowStateInvariantError("non-deferred Requirement test transition forbids acceptance handoff evidence");
+    }
+    writes.unshift({
+      logicalKey: "test.requirement.plan",
+      mediaType: "application/json",
+      bytes: new RequirementTestPlanArtifact({ plan: nextPlan }).toBytes(),
+    });
+    const confirmation = result ?? {
+      outcome: "passed",
+      summary: `Requirement test lifecycle ${selected.disposition}`,
+      confirmedAt: new Date().toISOString(),
+      artifactRefs: [],
+    };
+    const lifecycleAdmission = new RequirementTestLifecycleAdmission({
+      manager: this,
+      state,
+      decision: selected,
+      artifactWrites: writes,
+      commandResult,
+      currentCandidateRead,
+    });
+    return this.runtime.completeRequirementTestLifecycle({
+      specId: resolved,
+      activityId: activityId("requirement-test-lifecycle-completed"),
+      result: confirmation,
+      references,
+      decision: selected,
+      targetAttempt: commandContextAttempt(state, selected.target),
+      artifactWrites: writes,
+      artifactRemovals: removals,
+      artifactBaselines: baselines,
+      testSourceBaseline,
+      admission: new CombinedAdmission(
+        lifecycleAdmission,
+        admission ?? this.#producerCompletionAdmission(nodeId, writes),
+      ),
+    });
+  }
+
+  /** Convert a generate/repair tooling failure into the bounded Definition-owned lifecycle. */
+  completeRequirementTestToolingFailure({ specId = null, message } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const state = this.runtime.load(resolved);
+    const nodeId = state.current?.at(-1) ?? null;
+    if (!new Set(["test-generate", "test-repair"]).has(nodeId) || state.attempt === null) {
+      throw new CurrentFlowStateInvariantError("Requirement test tooling failure requires an active generate or repair Attempt");
+    }
+    const reason = requiredText(message, "Requirement test tooling failure message");
+    const store = new RequirementTestArtifactStore({ flowManager: this, state });
+    const planRead = store.readPlan(nodeId);
+    const plan = planRead.artifact.plan;
+    const workItem = plan.activeWorkItem();
+    const candidateRead = workItem.bundleRevision === null
+      ? null
+      : store.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: nodeId });
+    const facts = new RequirementTestLifecycleFacts({
+      authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
+      plan,
+      leaf: nodeId,
+      observation: new RequirementTestStepObservation({
+        requirementId: workItem.requirementId,
+        specRevision: workItem.specRevision,
+        bundleRevision: workItem.bundleRevision?.revision ?? null,
+        candidateDigest: candidateRead?.candidate.digest ?? null,
+        sourceAttempt: candidateRead?.candidate.bundle.lineage.sourceAttempt ?? null,
+        kind: "tooling_failure",
+      }),
+      candidateBundle: candidateRead?.candidate ?? null,
+    });
+    const decision = resolveRequirementTestLifecycle(facts);
+    let deferredReceipt = null;
+    let findingsPublication = null;
+    const artifactWrites = [];
+    const artifactRemovals = [];
+    const artifactBaselines = [];
+    if (nodeId === "test-repair") {
+      const parameters = { requirementId: workItem.requirementId };
+      const progress = this.readArtifact({
+        specId: resolved,
+        logicalKey: "test.requirement.repair.progress",
+        parameters,
+        consumerNodeId: nodeId,
+        optional: true,
+      });
+      if (progress !== null) {
+        artifactRemovals.push({ logicalKey: "test.requirement.repair.progress", parameters });
+        artifactBaselines.push(new CanonicalFlowArtifactBaseline({
+          logicalKey: "test.requirement.repair.progress",
+          parameters,
+          digest: progress.descriptor.hash,
+          byteLength: progress.descriptor.size,
+        }));
+      }
+    }
+    if (decision.disposition === "defer") {
+      const sourceArtifact = `steps/test-gate/deferred-source/${workItem.requirementId}.json`;
+      const sourcePayload = {
+        blockingFindings: [{
+          findingId: `${nodeId}:${workItem.requirementId}:tooling`,
+          requirementId: workItem.requirementId,
+          category: "tooling_failure",
+          reason,
+        }],
+      };
+      artifactWrites.push({
+        logicalKey: "test.requirement.failure",
+        parameters: { requirementId: workItem.requirementId },
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(sourcePayload, null, 2)}\n`, "utf8"),
+      });
+      findingsPublication = buildDeferredSemanticFindingsPublication({
+        flowManager: this,
+        flowState: this.loadReadOnly(resolved),
+        nodeId,
+        sourceStep: nodeId,
+        sourceArtifact,
+        sourcePayload,
+        sourceRelativePath: sourceArtifact,
+        attempts: workItem.budget.autoSemantic + workItem.budget.manualSemantic + workItem.budget.tooling + 1,
+      });
+      deferredReceipt = new RequirementTestDeferredReceipt({
+        requirementId: workItem.requirementId,
+        specRevision: workItem.specRevision,
+        bundleRevision: workItem.bundleRevision?.revision ?? null,
+        candidateDigest: candidateRead?.candidate.digest ?? null,
+        expectation: workItem.expectation,
+        budget: workItem.budget,
+        sourceAttempt: { id: state.attempt.id, sequence: state.attempt.sequence },
+        sourceArtifact,
+        sourceFindingFingerprints: findingsPublication.deferred.map((finding) => finding.fingerprint),
+      });
+    }
+    return this.completeRequirementTestLifecycle({
+      specId: resolved,
+      decision,
+      result: {
+        outcome: "passed",
+        summary: `Requirement test tooling failure handled: ${reason}`,
+        confirmedAt: new Date().toISOString(),
+        artifactRefs: [],
+      },
+      deferredReceipt,
+      findingsPublication,
+      artifactWrites,
+      artifactRemovals,
+      artifactBaselines,
     });
   }
 
@@ -4237,10 +4709,9 @@ export class CanonicalFlowManagerStore {
     const statuses = actions.filter((action) => action instanceof NonGateSetStepStatusAction);
     const increments = actions.filter((action) => action instanceof NonGateIncrementRetryAction);
     const failures = actions.filter((action) => action instanceof NonGateFailCurrentAttemptAction);
-    const repairs = actions.filter((action) => action instanceof NonGateAppendRepairEvidenceAction);
     const nonblocking = actions.filter((action) => action instanceof NonGateRecordNonblockingAction);
-    if (statuses.length + increments.length + failures.length + repairs.length + nonblocking.length !== actions.length
-      || statuses.length > 1 || increments.length > 1 || failures.length > 1 || repairs.length > 1 || nonblocking.length > 1) {
+    if (statuses.length + increments.length + failures.length + nonblocking.length !== actions.length
+      || statuses.length > 1 || increments.length > 1 || failures.length > 1 || nonblocking.length > 1) {
       throw new CurrentFlowStateInvariantError("test-chain Definition plan has an unsupported action composition");
     }
     if (actions.length === 0) return state;
@@ -4249,75 +4720,6 @@ export class CanonicalFlowManagerStore {
     }
     if (increments.some((action) => action.stepId !== decision.facts.stepId)) {
       throw new CurrentFlowStateInvariantError("test-chain Definition plan retry targets another Step");
-    }
-
-    if (repairs.length === 1) {
-      const repair = repairs[0];
-      const failure = failures[0] ?? null;
-      if (repair.stepId !== "scenario-validity" || failure === null
-        || failure.code !== "SCENARIO_VALIDITY_REJECTED" || failure.category !== "semantic"
-        || failure.retryable || failure.retryKind !== null
-        || nonblocking.length !== 0 || increments.length !== 0
-        || !hasExactTestChainStatus(statuses, { stepId: decision.facts.stepId, status: "in_progress" })) {
-        throw new CurrentFlowStateInvariantError("scenario repair must use its exact Definition-selected settlement actions");
-      }
-      const catalog = this.runtime.catalog(resolved);
-      const activities = this.runtime.activities(resolved);
-      const revision = CanonicalTestSourceRevision.fromCatalog({ state, catalog, activities });
-      if (revision.digest !== repair.testSourceRevision) {
-        throw new CurrentFlowStateConflictError("scenario repair test source revision changed before settlement");
-      }
-      const evidence = new CanonicalScenarioValidityRepairEvidence({
-        state,
-        summary: repair.summary,
-        testSourceRevision: revision,
-        timestamp: testChainPlanTiming(state).finishedAt,
-      });
-      const existingIssueLog = this.readArtifact({
-        specId: resolved,
-        logicalKey: "issue.log",
-        consumerNodeId: "scenario-validity",
-        optional: true,
-      });
-      const document = new IssueLogDocument(existingIssueLog === null
-        ? { entries: [] }
-        : JSON.parse(existingIssueLog.bytes.toString("utf8")));
-      const appended = evidence.exists
-        ? document.append(canonicalIssueLogEntry(evidence.toIssueLogEntry()), evidence.idempotencyKey)
-        : { appended: false };
-      const artifactWrites = appended.appended ? [{
-        logicalKey: "issue.log",
-        mediaType: "application/json",
-        bytes: Buffer.from(`${JSON.stringify(document.toJSON(), null, 2)}\n`, "utf8"),
-      }] : [];
-      const artifactBaselines = [new CanonicalFlowArtifactBaseline({
-        logicalKey: "issue.log",
-        digest: existingIssueLog?.descriptor.hash ?? null,
-        byteLength: existingIssueLog?.bytes.length ?? 0,
-      })];
-      return this.runtime.repairScenarioValidity({
-        specId: resolved,
-        activityId: id,
-        attempt: testChainReplacementAttempt(state, "test", decision),
-        failure: {
-          category: failure.category,
-          code: failure.code,
-          message: failure.message,
-          retryable: failure.retryable,
-          retryKind: failure.retryKind,
-        },
-        result: testChainPlanResult(state, { outcome: "failed", summary: failure.message }),
-        timing: testChainPlanTiming(state),
-        references: {
-          evaluations: [],
-          findings: [],
-          repairs: evidence.exists ? [{ id: evidence.idempotencyKey, label: evidence.idempotencyKey }] : [],
-          artifacts: [],
-        },
-        artifactWrites,
-        artifactBaselines,
-        admission,
-      });
     }
 
     if (nonblocking.length === 1) {

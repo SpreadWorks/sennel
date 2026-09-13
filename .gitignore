@@ -23,7 +23,7 @@ logs/
 pnpm-lock.yaml
 
 # Canonical Flow Version transient raw-log artifacts.
-**/[0-9][0-9][0-9]/steps/scenario-validity/output.log
+**/[0-9][0-9][0-9]/steps/test-gate/output.log
 **/[0-9][0-9][0-9]/steps/test-execute/output.log
 **/[0-9][0-9][0-9]/steps/final-regression/attempt-*.log
 

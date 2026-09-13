@@ -27,7 +27,7 @@ describe("canonical next-action policy projection", () => {
       specId: "001-test",
       runId: "run-next-action-policy",
       request: "Create canonical test sources.",
-      targetStep: "test",
+      targetStep: "draft",
       specRecord: { goal: "test fixture", requirements: [] },
     }).create();
 

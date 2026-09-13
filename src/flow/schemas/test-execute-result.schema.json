@@ -24,12 +24,28 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "result", "evidence"],
+        "required": ["id", "result"],
         "additionalProperties": false,
         "properties": {
           "id": { "type": "string" },
-          "result": { "type": "string", "enum": ["pass", "fail", "not_applicable"] },
+          "result": { "type": "string", "enum": ["pass", "fail", "deferred", "not_applicable"] },
           "reason": { "type": "string", "enum": ["no_tests_declared"] },
+          "deferred_receipt": {
+            "type": "object",
+            "required": ["requirementId", "specRevision", "bundleRevision", "candidateDigest", "expectation", "budget", "sourceAttempt", "sourceArtifact", "sourceFindingFingerprints"],
+            "additionalProperties": false,
+            "properties": {
+              "requirementId": { "type": "string" },
+              "specRevision": { "type": "object" },
+              "bundleRevision": { "type": ["integer", "null"] },
+              "candidateDigest": { "type": ["string", "null"] },
+              "expectation": { "type": "string", "enum": ["fail", "pass"] },
+              "budget": { "type": "object" },
+              "sourceAttempt": { "type": "object" },
+              "sourceArtifact": { "type": "string" },
+              "sourceFindingFingerprints": { "type": "array", "items": { "type": "string" } }
+            }
+          },
           "error": { "type": "string" },
           "evidence": {
             "type": "object",

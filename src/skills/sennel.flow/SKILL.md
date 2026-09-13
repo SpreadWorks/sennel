@@ -31,7 +31,7 @@ All flow step IDs are defined in the CLI schema. The dispatcher obtains the curr
 - During draft work after reading `docs/` files: `sennel flow set metric draft docsRead`
 - During draft work after reading `src/` files: `sennel flow set metric draft srcRead`
 
-Use a phase accepted by `sennel flow set metric`. Accepted phases are defined by the CLI's `VALID_PHASES` list. Step keys returned by next-action, such as `test`, `scenario-validity`, `test-review`, `impl-review`, `impl-gate`, and `retro`, are not phase arguments.
+Use a phase accepted by `sennel flow set metric`. Accepted phases are defined by the CLI's `VALID_PHASES` list. Step keys returned by next-action, such as `test-generate`, `test-review`, `test-repair`, `test-gate`, `impl-review`, `impl-gate`, and `retro`, are not phase arguments.
 
 Note: `sennel flow get context` automatically records these metrics via hooks — manual recording is only needed for direct Read tool usage.
 
@@ -167,7 +167,7 @@ B.4. **Prepare spec (silent)**
 Proceed to **C. Dispatcher loop**.
 
 Note:
-- Plan-phase test flow: next-action selects `test`, `scenario-validity`, and `test-review`. `test` publishes spec-local tests below `artifacts/tests/`, `scenario-validity` publishes the cataloged `scenario.validity` result at `steps/scenario-validity/result.json` and keeps its non-cataloged raw log at `steps/scenario-validity/output.log`, and `test-review` performs static test review.
+- Plan-phase test flow: next-action processes each testable Requirement sequentially through the fixed `test-generate`, `test-review`, `test-repair`, and `test-gate` leaves. Generate and repair publish immutable candidates; only Gate promotes a candidate into active test sources. Bounded exhaustion records an exact deferred acceptance handoff before moving to the next Requirement.
 - Upgrade artifact flow: when `src/skills/**`, `src/presets/**`, or upgrade source files are changed, run `sennel upgrade` after those edits. In an active Flow, the cataloged `upgrade.result` artifact (`steps/upgrade-result.json`) is the sole upgrade evidence authority; integration gate rejects missing, failed, or stale checked paths.
 - Impl-phase test flow: `test-execute` runs after `implement`, owns spec-local evidence, and publishes the cataloged `test.execute` attempt history at `steps/test-execute/result.json`; its raw output remains a non-cataloged transient log. It runs targeted project regression only for configured `test.projectPaths` changes unless `test.testExecuteRegression` explicitly overrides that policy. Full project regression is deferred to `final-regression` after `retro`.
 - Subsequent steps (`test-result-review`, `impl-review`, flow-level `impl-gate`, `retro`) read those impl-phase artifacts and do not re-run tests. `final-regression` runs the full project command once after retro and before finalize.
@@ -397,7 +397,7 @@ sennel flow run dispatch --expect-binding <token> [--approve <approvalToken>]
 sennel flow run gate [--phase <draft|spec|task-spec|task-impl|integration>] [--agent-work-dir <path>]
 sennel flow run review [--phase <draft|spec|test|impl>] [--agent-work-dir <path>]
 sennel flow get runtime-log [--format json] [--sequence <n>] [--run-id <runId[#sequence]>]
-sennel flow run scenario-validity
+sennel flow run requirement-test-gate
 sennel flow run test-execute
 sennel flow run test-result-review
 sennel flow run retro [--dry-run]

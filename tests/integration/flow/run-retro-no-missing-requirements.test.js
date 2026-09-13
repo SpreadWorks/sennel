@@ -22,6 +22,7 @@ import { findStepById } from "../../../src/flow/lib/step-tree.js";
 import {
   FlowAtStepFixture,
   makeFlowManager,
+  promoteCanonicalRequirementTest,
   removeCatalogedArtifactForCorruptionFixture,
 } from "../../support/infrastructure/flow-setup.js";
 
@@ -107,21 +108,26 @@ function createRetroContext(root, {
     execution: { mode: "branch", baseBranch: "main", featureBranch: "feature/001-test" },
     specRecord: {
       goal: "retro fixture",
-      requirements: [{ id: "R1", desc: "first", priority: "must" }],
+      requirements: [{
+        id: "R1", desc: "first", priority: "must", task_ids: ["T1"],
+        preimplementation_test_expectation: "fail",
+      }],
     },
-    targetStep: "test",
-  }).create();
-  flowManager.publishArtifacts({
-    specId,
-    nodeId: "test",
-    artifactWrites: [{
-      logicalKey: "tests.source",
-      parameters: { testPath: "retro.fixture.test.js" },
-      mediaType: "text/javascript",
-      bytes: Buffer.from("// spec: R1\n", "utf8"),
+    taskDocuments: [{
+      id: "T1", title: "Fixture Task", goal: "Exercise retro evidence.",
+      origin: "plan", added_round: 0, status: "pending",
     }],
+    targetStep: "approval",
+  }).create();
+  fixture.flow.flow.settle("approval");
+  promoteCanonicalRequirementTest({
+    flowManager,
+    specId,
+    requirementId: "R1",
+    testPath: "retro.fixture.test.js",
+    source: "// spec: R1\nimport test from \"node:test\";\ntest(\"R1: retro fixture\", () => { throw new Error(\"expected before implementation\"); });\n",
   });
-  fixture.flow.flow.settle("test").activate("test-execute");
+  fixture.flow.flow.activate("test-execute");
   const store = new CanonicalTestArtifactStore({ flowManager, state: flowManager.loadReadOnly(specId) });
   const testSourceRevision = store.testSourceRevision().digest;
   const evidenceRepairFingerprint = repairFingerprint ?? buildRepairFingerprint({

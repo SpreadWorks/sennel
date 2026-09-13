@@ -26,7 +26,10 @@ import {
   attachCanonicalCommandResultArtifact,
   attachCanonicalCommandResultPublications,
 } from "./canonical-command-result.js";
-import { FlowFindingsArtifact } from "./flow-findings.js";
+import {
+  FlowFindingsArtifact,
+  readCatalogedSourceArtifact,
+} from "./flow-findings.js";
 import { collectUntrackedDiff } from "./run-gate.js";
 import { matchUpgradeRequiredSourcePaths, validateCanonicalUpgradeEvidence } from "./test-artifacts.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
@@ -37,7 +40,6 @@ const DECISION_NODE_ID = "acceptance-decision";
 const DECISION_CHOICES = new Set(["accept_risk_and_continue", "abort"]);
 const MAX_CANONICAL_ACCEPTANCE_DIFF_CHARS = 900_000;
 const REQUIRED_EVIDENCE = Object.freeze([
-  Object.freeze({ logicalKey: "scenario.validity", alias: "scenario-validity-result.json" }),
   Object.freeze({ logicalKey: "test.execute", alias: "test-execute-result.json" }),
   Object.freeze({ logicalKey: "test.result.review", alias: "test-result-review.json" }),
   Object.freeze({ logicalKey: "impl.review", alias: "impl-review.json" }),
@@ -154,16 +156,9 @@ class CanonicalAcceptanceInputPaths {
       throw new Error("canonical acceptance input paths require a Version location");
     }
     this.specDirectory = path.posix.join(location.specRoot, location.specId.toString());
-    this.scenarioRawOutput = path.posix.join(this.specDirectory, "tests/.raw/scenario-validity.log");
     this.testExecuteResult = path.posix.join(this.specDirectory, "test-execute-result.json");
     this.testExecuteRawOutput = path.posix.join(this.specDirectory, "tests/.raw/test-execution.log");
     Object.freeze(this);
-  }
-
-  projectScenario(payload, location) {
-    return this.#replace(payload, {
-      raw_output_path: [location.relativeArtifact("scenario.validity.raw-log"), this.scenarioRawOutput],
-    });
   }
 
   projectTestExecute(payload, location) {
@@ -187,26 +182,6 @@ class CanonicalAcceptanceInputPaths {
     }
     return Object.freeze(projected);
   }
-}
-
-function findSourceFinding(value, findingId) {
-  const source = jsonObject(value, "canonical deferred source");
-  const candidates = [
-    source.findings,
-    source.blockingFindings,
-    source.advisoryFindings,
-    source.issues,
-    source.evaluations,
-  ];
-  for (const entries of candidates) {
-    if (!Array.isArray(entries)) continue;
-    const found = entries.find((entry) => (
-      entry?.findingId === findingId || entry?.id === findingId || entry?.proposalId === findingId
-    ));
-    if (found) return structuredClone(found);
-  }
-  if (source.findingId === findingId || source.id === findingId) return structuredClone(source);
-  return null;
 }
 
 function decisionEntry({ state, reviewAttempt, review, choice, decidedAt }) {
@@ -322,18 +297,18 @@ export class CanonicalAcceptanceArtifactStore {
       findings.push(finding);
       let source = null;
       try {
-        source = this.flowManager.readCatalogArtifact({
-          specId: this.specId,
-          relativePath: finding.sourceArtifact,
-          consumerNodeId: this.nodeId,
-          optional: true,
+        source = readCatalogedSourceArtifact({
+          flowManager: this.flowManager,
+          flowState: this.state,
+          nodeId: this.nodeId,
+          sourceArtifact: finding.sourceArtifact,
         });
       } catch (_) {
         source = null;
       }
       const sourceFinding = source === null
         ? null
-        : findSourceFinding(jsonFromBytes(source.bytes, "canonical deferred source"), finding.sourceFindingId);
+        : source.findFinding(finding.sourceStep, finding.sourceFindingId);
       if (sourceFinding === null) {
         blocker(
           blockers,
@@ -385,9 +360,6 @@ export class CanonicalAcceptanceArtifactStore {
     if (testExecute !== null && (!Array.isArray(testExecute.summary) || testExecute.summary.some((entry) => entry?.result === "fail"))) {
       blocker(blockers, "failed_tests", "Test evidence contains failures.");
     }
-    if (inputs["scenario.validity"]?.result !== "pass") {
-      blocker(blockers, "failed_tests", "Scenario-validity evidence is not passing.");
-    }
     if (inputs["test.result.review"]?.verdict !== "pass") {
       blocker(blockers, "failed_tests", "Test-result-review evidence is not passing.");
     }
@@ -415,7 +387,6 @@ export class CanonicalAcceptanceArtifactStore {
     if (!upgradeValidation.ok) blocker(blockers, "invalid_upgrade", `Upgrade result evidence is invalid: ${upgradeValidation.reason}`);
     const inputPaths = new CanonicalAcceptanceInputPaths(this.location);
     const evidenceArtifacts = {
-      "scenario-validity-result.json": inputPaths.projectScenario(inputs["scenario.validity"], this.location),
       "test-execute-result.json": inputPaths.projectTestExecute(testExecute, this.location),
       "test-result-review.json": inputPaths.projectTestResultReview(inputs["test.result.review"], this.location),
       "impl-review.json": inputs["impl.review"],

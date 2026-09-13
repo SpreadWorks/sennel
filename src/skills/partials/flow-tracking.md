@@ -10,11 +10,11 @@ Post-hook-managed exceptions:
 
 | Step | Command | Auto-advance condition |
 |---|---|---|
-| `scenario-validity` | `sennel flow run scenario-validity` | every testable requirement is `expected_fail`; any other classification keeps the step active |
+| `test-gate` | `sennel flow run requirement-test-gate` | the assigned named test matches its approved preimplementation expectation; Gate alone promotes the candidate |
 | `test-execute` | `sennel flow run test-execute` | valid v2 artifact is written |
 | `test-result-review` | `sennel flow run test-result-review` | review verdict is `pass` |
 | `retro` | `sennel flow run retro` | command succeeds |
 | `final-regression` | `sennel flow run final-regression` | final project regression passes |
 | `finalize-*` leaves | `sennel flow run finalize-commit`, `finalize-merge`, `finalize-sync`, `finalize-cleanup` | each command succeeds for its own leaf |
 
-Do not advance these manually. Manual completion must not mask blocked scenario-validity classifications, prerequisite failures, invalid v2 test artifacts, deferred full regression, or failed final-regression evidence.
+Do not advance these manually. Manual completion must not mask Requirement test Gate failures, prerequisite failures, invalid v2 test artifacts, deferred full regression, or failed final-regression evidence.

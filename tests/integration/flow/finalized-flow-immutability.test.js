@@ -5,10 +5,6 @@ import { afterEach, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import {
-  FlowArtifactAttemptHistory,
-  FlowArtifactAttemptRecord,
-} from "../../../src/lib/flow-artifact-contract.js";
-import {
   CanonicalFlowArtifactWrite,
   CurrentFlowState,
   FlowActivity,
@@ -36,32 +32,6 @@ function leaves(nodes, values = []) {
   return values;
 }
 
-function scenarioValidityArtifact(location) {
-  const payload = {
-    version: "1",
-    command: "node --test artifacts/tests/scenario.test.js",
-    process: { started: true, exitCode: 0, signal: null, timedOut: false, spawnError: null },
-    result: "pass",
-    raw_output_path: location.relativeArtifact("scenario.validity.raw-log"),
-    summary: [],
-  };
-  return {
-    logicalKey: "scenario.validity",
-    mediaType: "application/json",
-    bytes: Buffer.from(`${JSON.stringify(new FlowArtifactAttemptHistory([
-      new FlowArtifactAttemptRecord({
-        attempt: 1,
-        payload: {
-          nodeId: "scenario-validity",
-          outcome: "completed",
-          result: { result: "ok" },
-          artifact: { logicalKey: "scenario.validity", payload },
-        },
-      }),
-    ]).toJSON(), null, 2)}\n`, "utf8"),
-  };
-}
-
 function confirmFixtureStep(manager, specId, stepId) {
   return confirmCanonicalFixtureStep(manager, specId, stepId);
 }
@@ -75,19 +45,7 @@ function finalizedFixture() {
     runId: "finalized-contract-run",
   }).create();
   const ordered = leaves(manager.load(fixture.specId).steps);
-  const scenarioIndex = ordered.findIndex((step) => step.id === "scenario-validity");
-  assert.ok(scenarioIndex >= 0, "the canonical definition must include scenario-validity");
-  for (const step of ordered.slice(0, scenarioIndex)) {
-    confirmFixtureStep(manager, fixture.specId, step.id);
-  }
-  manager.updateStepStatus({ stepId: "scenario-validity", requestedStatus: "in_progress" }, { specId: fixture.specId });
-  manager.publishArtifacts({
-    specId: fixture.specId,
-    nodeId: "scenario-validity",
-    artifactWrites: [scenarioValidityArtifact(manager.specLocation(fixture.specId))],
-  });
-  confirmFixtureStep(manager, fixture.specId, "scenario-validity");
-  for (const step of leaves(manager.load(fixture.specId).steps)) {
+  for (const step of ordered) {
     if (step.status === "pending") {
       confirmFixtureStep(manager, fixture.specId, step.id);
     }
@@ -123,7 +81,7 @@ function assertUnchanged(actual, expected, operation) {
 
 function postFinalizationNonblockingActivity(manager, specId) {
   const state = manager.canonicalState(specId);
-  const producer = state.findNode("scenario-validity");
+  const producer = state.findNode("test-result-review");
   return new FlowActivity({
     id: "post-finalization-nonblocking-record",
     nodeId: producer.id,
@@ -143,9 +101,9 @@ function postFinalizationNonblockingActivity(manager, specId) {
       approval: null,
       nonblocking: {
         kind: "observation",
-        sourceStep: "scenario-validity",
+        sourceStep: "test-result-review",
         sourceAttempt: 1,
-        evidenceRef: "steps/scenario-validity/result.json",
+        evidenceRef: "steps/test-result-review/result.json",
         evidenceDigest: "c".repeat(64),
         definitionDigest: "d".repeat(64),
         resultKind: "unavailable",
@@ -312,7 +270,7 @@ describe("finalized canonical Flow contract", () => {
         policy: { autoApprove: false, nonblocking: {
           enabled: true,
           activatedAt: "2026-08-15T00:00:00.000Z",
-          activatedStep: "scenario-validity",
+          activatedStep: "test-result-review",
           reason: "This must not create a post-finalization policy Activity.",
         } },
         nonblocking: {

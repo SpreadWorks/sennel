@@ -38,14 +38,23 @@ function createProject() {
 }
 
 function setupFlow(tmp, specId, specRecord) {
-  return new CanonicalFlowFixture({
+  const requirements = specRecord.requirements.map((requirement, index) => ({
+    ...requirement,
+    task_ids: requirement.task_ids ?? [`T${index + 1}`],
+    testable: false,
+  }));
+  const fixture = new CanonicalFlowFixture({
     flowManager: makeFlowManager(tmp),
     specId,
     runId: `run-${specId}`,
     request: "Verify canonical requirements authority",
     execution: { mode: "direct" },
-    specRecord,
-  }).create().registerActive();
+    specRecord: { ...specRecord, requirements },
+  }).create();
+  for (const taskId of new Set(requirements.flatMap((requirement) => requirement.task_ids))) {
+    fixture.addTask({ id: taskId, title: `Fixture Task ${taskId}`, goal: `Own ${taskId}.`, origin: "plan", added_round: 0, status: "pending" });
+  }
+  return fixture.registerActive();
 }
 
 function run(tmp, argv) {
@@ -191,17 +200,10 @@ describe("resume and resolve-context do not reference flow state requirements", 
   it("reads implementation and resume context from the cataloged spec.record", () => {
     tmp = createProject();
     const manager = makeFlowManager(tmp);
-    const fixture = new CanonicalFlowFixture({
-      flowManager: manager,
-      specId: "001-test",
-      runId: "run-001-test",
-      request: "Verify cataloged spec record consumers",
-      execution: { mode: "direct", baseBranch: "main", featureBranch: "feature/001-test" },
-      specRecord: minimalSpec([
+    const fixture = setupFlow(tmp, "001-test", minimalSpec([
         { id: "R1", desc: "first cataloged requirement", priority: "must", status: "done" },
         { id: "R2", desc: "second cataloged requirement", priority: "must", status: "pending" },
-      ]),
-    }).create().registerActive();
+      ]));
     const state = fixture.state();
     const ctx = { root: tmp, mainRoot: tmp, flowManager: manager, flowState: state };
 
@@ -212,8 +214,8 @@ describe("resume and resolve-context do not reference flow state requirements", 
       assert.equal(context.goal, "test");
       assert.deepEqual(context.scope, { in: [], out: [] });
       assert.deepEqual(context.requirements, [
-        { id: "R1", desc: "first cataloged requirement", priority: "must" },
-        { id: "R2", desc: "second cataloged requirement", priority: "must" },
+        { id: "R1", desc: "first cataloged requirement", priority: "must", task_ids: ["T1"], testable: false },
+        { id: "R2", desc: "second cataloged requirement", priority: "must", task_ids: ["T2"], testable: false },
       ]);
     }
   });

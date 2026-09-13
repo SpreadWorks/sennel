@@ -1,31 +1,7 @@
-   - Run `sennel flow run review --phase test` after `scenario-validity` has passed.
-   - Phase split: `plan/test` writes tests only, `plan/scenario-validity` performs pre-implementation runtime validity, this `plan/test-review` step performs static anti-pattern review, `impl/test-execute` performs post-implementation spec-local verification, and `impl/final-regression` runs the full project regression.
-   - The review writes a requirement-to-test coverage artifact and performs static review of actual test code.
-   - The `test-review` step is static anti-pattern review. Runtime pre-implementation validity belongs to `scenario-validity`.
-   - Check for these anti-pattern classes:
-     - assertions that do not go through production code
-     - input-as-expected round trips
-     - always-matching regex
-     - existence-only checks
-     - catch-all PASS handling
-     - split-removed separator literal assertions
-     - module paths, exports, methods, constants, or artifact shapes invented by the test but not fixed by the spec or an existing public API
-   - Verdicts:
-     - `PASS`: no blocking or advisory findings. The post hook marks `test-review` done.
-     - `ADVISORY`: non-blocking findings were recorded, but implementation may proceed. The post hook marks `test-review` done.
-     - `REJECTED`: blocking findings exist. Refresh guarded next-action and run its `repair-test-review` transition. The repair returns to the dispatcher-owned `test` handoff; never edit canonical tests or review artifacts directly from this step.
-     - `TOOLING_ERROR`: subprocess/parser/coverage-artifact failure. Do not treat this as test quality failure; recover the tooling issue or record explicit evidence before proceeding.
-   - **TOOLING_ERROR evidence recovery:**
-     - `TOOLING_ERROR` is not a test-quality failure and does not complete `test-review` by itself.
-     - Follow the single `reviewAction` returned by next-action/status. Do not infer a retry from process exit status.
-     - For `retry_review`, fix the tooling boundary and rerun only while `remainingToolingAttempts` permits it.
-     - For `register_alternative_evidence`, place a finalized version-1 audit document inside the active spec directory and run `sennel flow set review-evidence --file <path>` with the normal target guards.
-     - For `move_to_acceptance`, keep the canonical handoff and continue normal lifecycle ordering; acceptance owns final finding disposition.
-     - For `stop_as_blocker`, stop and report the persisted blocker. Completion overrides do not substitute for canonical review evidence.
-   - `test-review` uses a command-owned guarded repair transition between separate review invocations. It freezes the canonical blocking findings and source test revision, republishes a changed spec-test tree through the normal handoff, then requires `scenario-validity` before a fresh `test-review`. The rerun regenerates `test-coverage.json` from the published canonical tests.
-   - Each semantic `REJECTED` invocation consumes `reviewRetry`. At semantic retry exhaustion, unresolved findings are recorded in `flow-findings.json`, the review step completes as deferred, and `acceptance-review` owns final disposition.
-   - After the ordinary route has stopped with durable non-pass evidence, explicit nonblocking continuation is available. It never skips acceptance disposition: `continue` advances to implementation with canonical semantic findings, or with a typed verification/tooling handoff, still open until acceptance resolves it.
-   - `TOOLING_ERROR` is non-semantic. It must normally be recovered; an explicit nonblocking continuation records it as an acceptance risk rather than treating it as a passing review.
-   - Recovery reason is required for manual retry reset, records an audit entry, grants one re-evaluation, and rejects unchanged evidence.
-   - Quality gates after implementation (`test-execute`, `test-result-review`, `impl-review`, `impl-gate`, `acceptance-review`, `final-regression`) remain mandatory and are not weakened by deferred semantic review findings.
-   - Use the resolved numeric maxAttempts from the next-action envelope as this stage's semantic review limit.
+   - Review only the current immutable Requirement candidate identified by `context.requirementTest`.
+   - Verify the exact Requirement id, approved Spec revision, bundle revision, candidate digest, and source Attempt before reviewing.
+   - Check the assigned named `R-N:` test for production-code reachability, meaningful assertions, stable public surfaces, and consistency with the approved `preimplementation_test_expectation`.
+   - Report `PASS`, `ADVISORY`, `REJECTED`, or `TOOLING_ERROR`. Preserve stable finding fingerprints and exact candidate paths for repair.
+   - Do not mutate candidate files, active `tests.source`, the work plan, retry counters, or Flow state. Definition selects the next fixed checkpoint and budget disposition from the persisted observation.
+   - A non-blocking result advances directly to Gate; the parent atomically records `test-repair` as skipped in the same connector transaction.
+   - Unresolved work at the Definition-owned budget limit is deferred with its exact canonical receipt; it is never reported as passing evidence.

@@ -42,6 +42,7 @@ import {
   SpecReviewDelta,
 } from "../../../src/flow/lib/spec-review-artifacts.js";
 import { CanonicalTaskContext } from "../../../src/flow/lib/task-canonical-context.js";
+import { RequirementTestReviewSource } from "../../../src/flow/lib/requirement-test-artifacts.js";
 
 const roots = [];
 
@@ -69,6 +70,18 @@ function createWorkUnit(executionRoot, overrides = {}) {
   });
 }
 
+function requirementTestReviewSource() {
+  return new RequirementTestReviewSource({
+    runId: "review-run",
+    requirementId: "R1",
+    specRevision: { specId: "001-review-work-unit", revision: 1, digest: "c".repeat(64), byteLength: 1 },
+    bundleRevision: 1,
+    candidateDigest: "e".repeat(64),
+    sourceAttempt: { id: "test-generate-attempt", sequence: 1 },
+    candidatePaths: ["tests/a.test.js"],
+  });
+}
+
 afterEach(() => {
   while (roots.length > 0) removeTmpDir(roots.pop());
 });
@@ -79,7 +92,7 @@ describe("ReviewWorkUnit", () => {
       ["draft-questions", null, "draft-review-questions.json"],
       ["draft-coverage", null, "draft-review-coverage.json"],
       ["spec", null, "review.delta.json"],
-      ["test", null, "test-review.json"],
+      ["test", null, "requirement-test-review.json"],
       ["impl", null, "impl-review.json"],
       ["impl", "task-1", "impl-review.json"],
     ]) {
@@ -487,6 +500,7 @@ describe("ReviewWorkUnit", () => {
           treeSha: "a".repeat(40),
           targetStateDigest: "b".repeat(64),
           ...(specReview === null ? {} : { specReviewSource: { revision: 1, review: specReview } }),
+          ...(phase === "test" ? { requirementTestReviewSource: requirementTestReviewSource() } : {}),
           ...(taskId === null ? {} : {
             taskSource,
             taskContext,
@@ -553,8 +567,8 @@ describe("ReviewWorkUnit", () => {
       nodeId: "test-review",
       attemptId: "test-review-repair-binding",
       output: new ReviewWorkUnitOutput({
-        logicalKey: "test.review",
-        basename: "test-review.json",
+        logicalKey: "test.requirement.review",
+        basename: "requirement-test-review.json",
         mediaType: "application/json",
       }),
     });
@@ -588,6 +602,7 @@ describe("ReviewWorkUnit", () => {
     const promotion = new CanonicalReviewPromotion({
       workUnit: ReviewWorkUnit.fromEnvironment({ [REVIEW_WORK_UNIT_MANIFEST_ENV]: surface.manifestPath }),
       phase: "test",
+      requirementTestReviewSource: requirementTestReviewSource(),
       treeSha: "a".repeat(40),
       targetStateDigest: "b".repeat(64),
     });

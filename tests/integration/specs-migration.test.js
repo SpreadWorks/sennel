@@ -1754,7 +1754,7 @@ describe("migrate specs --to 2", () => {
       report.generated.filter((entry) => entry.reason === "DIRECT_ACTIVITY_EVIDENCE").map((entry) => entry.target).sort(),
       [...directEvidencePaths].sort(),
     );
-    assert.equal(report.preserved.find((entry) => entry.source === "test-review.json").reason, "INSUFFICIENT_EVENT_DETAIL");
+    assert.equal(report.preserved.find((entry) => entry.source === "test-review.json").reason, "NO_CANONICAL_TARGET");
     assert.ok(report.migration.identityBasis.every((entry) => entry.source.path === "flow.json"));
     assert.equal(report.migration.creationAuthority.status, "unavailable");
     assert.equal(JSON.parse(fs.readFileSync(path.join(version, "spec.json"), "utf8")).specId, id);
@@ -1868,7 +1868,7 @@ describe("migrate specs --to 2", () => {
     );
   });
 
-  it("consolidates review history and current result variants into one append-only artifact", () => {
+  it("rejects retired aggregate test-review history instead of converting it to the Requirement lifecycle", () => {
     const root = project();
     const id = seedContinuableLegacy(root, "515-result-history-aggregation");
     const base = `specs/${id}`;
@@ -1885,26 +1885,9 @@ describe("migrate specs --to 2", () => {
     writeFile(root, `${base}/review.md`, "# Historical review view\n");
 
     const applied = run(root);
-    assert.equal(applied.status, 0, applied.stderr);
-    const version = path.join(root, base, "001");
-    const result = JSON.parse(fs.readFileSync(path.join(version, "steps/test-review/result.json"), "utf8"));
-    assert.deepEqual(result.attempts.map((entry) => entry.attempt), [1, 2, 3]);
-    assert.equal(result.attempts[0].detail.verdict, "REPAIR_REQUIRED");
-    assert.equal(result.attempts[1].legacySource, "test-coverage.json");
-    assert.equal(result.attempts.at(-1).legacySource, "test-review.json");
-    assert.equal(result.attempts.at(-1).detail.source, "current");
-    assert.equal(
-      fs.readFileSync(path.join(version, "artifacts/migration/legacy-files/review-history/test-attempt-001.md"), "utf8"),
-      "# Historical test evidence\n",
-    );
-    assert.equal(fs.existsSync(path.join(version, "artifacts/migration/legacy-files/spec.md")), true);
-    assert.equal(fs.existsSync(path.join(version, "artifacts/migration/legacy-files/review.md")), true);
-    const report = JSON.parse(fs.readFileSync(path.join(version, "flow-migration-report.json"), "utf8"));
-    const converted = report.converted.filter((entry) => entry.destination === "steps/test-review/result.json");
-    assert.deepEqual(converted.map((entry) => entry.source).sort(), [
-      "review-history/test-attempt-001.json", "test-coverage.json", "test-review.json",
-    ]);
-    assert.equal(report.preserved.some((entry) => entry.source === "review-history/test-attempt-001.md"), true);
+    assert.equal(applied.status, 1);
+    assert.match(applied.stderr, /unknown artifact logical key: test\.review/);
+    assert.equal(fs.existsSync(path.join(root, base, "001")), false);
   });
 
   it("checks candidate identities against every production-readable canonical Version in the repository", () => {

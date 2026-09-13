@@ -31,13 +31,15 @@ import {
   projectGatePublicOutcome,
   resolveNonGateTransition,
   NonGateRecordNonblockingAction,
-  scenarioValidityTransitionDefinition,
   testExecuteTransitionDefinition,
   testResultReviewTransitionDefinition,
   CompleteDraftCoverageRepair,
   resolveDraftCoverageRepairCompletion,
   SetStepStatus,
   taskIdForResolvedStep,
+  RequirementTestLifecycleFacts,
+  RequirementTestStepObservation,
+  resolveRequirementTestLifecycle,
 } from "./definition.js";
 import { readCurrentGateTransitionFacts } from "./lib/gate-transition-facts.js";
 import { applyGatePublicOutcomeProjection } from "./lib/gate-transition-application.js";
@@ -68,11 +70,8 @@ import { DefinitionFailureOwnership } from "./lib/definition-failure-ownership.j
 import { RepositoryFlowOperationLock } from "../lib/repository-maintenance-lock.js";
 import { readCurrentNonGateTransitionFacts } from "./lib/non-gate-transition-facts.js";
 import { readCurrentTestChainTransitionFacts } from "./lib/test-chain-transition-facts.js";
-import {
-  validateScenarioValidityArtifactShape,
-  validateScenarioValidityObservationCoherence,
-} from "./lib/test-artifacts.js";
 import { CurrentTaskSourceSnapshot, TaskMutationLineageSet } from "./lib/task-mutation-lineage.js";
+import { RequirementTestLifecycleAuthority } from "./lib/requirement-test-lifecycle.js";
 
 /**
  * Successful command-result statuses that map to a flow step status of 'done'.
@@ -216,7 +215,7 @@ function canonicalResultProducerStep(provenance, result) {
     }
   }
   if (event === "test-execute:post") return "test-execute";
-  if (event === "scenario-validity:post") return "scenario-validity";
+  if (event === "requirement-test-gate:post") return "test-gate";
   if (event === "test-result-review:post") return "test-result-review";
   if (event === "final-regression:post") return "final-regression";
   if (event === "retro:post") return "retro";
@@ -426,7 +425,6 @@ function tryAppendIssueLog(fn) {
 }
 
 const TEST_CHAIN_DEFINITIONS = Object.freeze({
-  "scenario-validity": scenarioValidityTransitionDefinition,
   "test-execute": testExecuteTransitionDefinition,
   "test-result-review": testResultReviewTransitionDefinition,
 });
@@ -1530,23 +1528,6 @@ export const FLOW_COMMANDS = {
         ...FLOW_TARGET_GUARD_HELP_LINES,
       ].join("\n"),
     },
-    "recover-existing-implementation": {
-      helpKey: "flow.run.recover-existing-implementation",
-      command: () => import("./lib/run-recover-existing-implementation.js"),
-      args: {
-        flags: FLOW_TARGET_GUARD_FLAGS,
-        options: FLOW_RUN_OPTIONS,
-      },
-      help: [
-        `Usage: sennel flow run recover-existing-implementation [--agent-work-dir <path>] ${FLOW_TARGET_GUARD_USAGE}`,
-        "",
-        "Record an audited transition from a post-acceptance-rewind scenario-validity preflight block to post-implementation test execution. The command requires exact target guards, the latest rewind from acceptance-review, and preflight evidence of implementation-target changes.",
-        "",
-        "Options:",
-        "  --agent-work-dir <path>  Set the agent/tmp/log base directory for this invocation.",
-        ...FLOW_TARGET_GUARD_HELP_LINES,
-      ].join("\n"),
-    },
     "recover-review-pass": {
       helpKey: "flow.run.recover-review-pass",
       command: () => import("./lib/run-recover-review-pass.js"),
@@ -1564,23 +1545,6 @@ export const FLOW_COMMANDS = {
         "",
         "Options:",
         "  --phase <phase>       Exact flow-level review phase to recover.",
-        ...FLOW_TARGET_GUARD_HELP_LINES,
-      ].join("\n"),
-    },
-    "preimplementation-bootstrap": {
-      helpKey: "flow.run.preimplementation-bootstrap",
-      command: () => import("./lib/run-preimplementation-bootstrap.js"),
-      args: {
-        flags: FLOW_TARGET_GUARD_FLAGS,
-        options: FLOW_RUN_OPTIONS,
-      },
-      help: [
-        `Usage: sennel flow run preimplementation-bootstrap [--agent-work-dir <path>] ${FLOW_TARGET_GUARD_USAGE}`,
-        "",
-        "Record an audited recovery from a scenario-validity preflight block caused by existing implementation-target changes. Exact target guards, an immutable repair baseline, and the persisted preflight evidence are required; the command skips only scenario-validity and test-review, then resumes implement.",
-        "",
-        "Options:",
-        "  --agent-work-dir <path>  Set the agent/tmp/log base directory for this invocation.",
         ...FLOW_TARGET_GUARD_HELP_LINES,
       ].join("\n"),
     },
@@ -1742,6 +1706,86 @@ export const FLOW_COMMANDS = {
           && result?.artifacts?.evidenceRefresh?.recovered === true
         ) return;
         assertCurrentTaskReviewSource(ctx, result);
+        if (result?.artifacts?.phase === "test" && result?.artifacts?.taskId == null) {
+          const { attachedCanonicalCommandResultArtifact } = await import("./lib/canonical-command-result.js");
+          const { RequirementTestArtifactStore } = await import("./lib/requirement-test-store.js");
+          const attached = attachedCanonicalCommandResultArtifact(result);
+          if (attached?.logicalKey !== "test.requirement.review") {
+            throw new Error("Requirement test review canonical result artifact is missing");
+          }
+          const specId = ctx.specId ?? ctx.flowState.specId;
+          const state = ctx.flowManager.canonicalState(specId);
+          const store = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state });
+          const planRead = store.readPlan("test-review");
+          const workItem = planRead.artifact.plan.activeWorkItem();
+          const candidateRead = store.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: "test-review" });
+          const payload = attached.payload;
+          if (payload.requirementId !== workItem.requirementId
+            || payload.bundleRevision !== workItem.bundleRevision.revision
+            || payload.candidateDigest !== candidateRead.candidate.digest
+            || JSON.stringify(payload.specRevision) !== JSON.stringify(workItem.specRevision.toJSON())
+            || payload.sourceAttempt?.id !== workItem.bundleRevision.lineage.sourceAttempt.id
+            || payload.sourceAttempt?.sequence !== workItem.bundleRevision.lineage.sourceAttempt.sequence) {
+            throw new Error("Requirement test review result does not match the active candidate");
+          }
+          const kind = payload.toolingOutcome != null ? "tooling_failure"
+            : payload.verdict === "PASS" ? "review_pass"
+            : payload.verdict === "ADVISORY" ? "review_advisory"
+              : payload.verdict === "REJECTED" ? "semantic_rejection" : null;
+          if (kind === null) throw new Error("Requirement test review verdict is invalid");
+          const observation = new RequirementTestStepObservation({
+            requirementId: workItem.requirementId,
+            specRevision: workItem.specRevision,
+            bundleRevision: workItem.bundleRevision.revision,
+            candidateDigest: candidateRead.candidate.digest,
+            sourceAttempt: workItem.bundleRevision.lineage.sourceAttempt,
+            kind,
+          });
+          const facts = new RequirementTestLifecycleFacts({
+            authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
+            plan: planRead.artifact.plan,
+            leaf: "test-review",
+            observation,
+            candidateBundle: candidateRead.candidate,
+          });
+          const decision = resolveRequirementTestLifecycle(facts);
+          let deferredReceipt = null;
+          let findingsPublication = null;
+          if (decision.disposition === "defer") {
+            const { RequirementTestDeferredReceipt } = await import("./lib/requirement-test-artifacts.js");
+            const { buildDeferredSemanticFindingsPublication } = await import("./lib/flow-findings.js");
+            const sourceArtifact = "steps/test-review/result.json";
+            findingsPublication = buildDeferredSemanticFindingsPublication({
+              flowManager: ctx.flowManager,
+              flowState: ctx.flowManager.loadReadOnly(specId),
+              nodeId: "test-review",
+              sourceStep: "test-review",
+              sourceArtifact,
+              sourcePayload: payload,
+              sourceRelativePath: sourceArtifact,
+              attempts: workItem.budget.autoSemantic + workItem.budget.manualSemantic + workItem.budget.tooling + 1,
+            });
+            const fingerprints = findingsPublication.deferred.map((finding) => finding.fingerprint);
+            deferredReceipt = new RequirementTestDeferredReceipt({
+              requirementId: workItem.requirementId,
+              specRevision: workItem.specRevision,
+              bundleRevision: workItem.bundleRevision.revision,
+              candidateDigest: candidateRead.candidate.digest,
+              expectation: workItem.expectation,
+              budget: workItem.budget,
+              sourceAttempt: { id: state.attempt.id, sequence: state.attempt.sequence },
+              sourceArtifact,
+              sourceFindingFingerprints: fingerprints,
+            });
+          }
+          ctx.flowManager.completeRequirementTestLifecycle({
+            specId, decision, commandResult: result, deferredReceipt, findingsPublication,
+          });
+          ctx.flowState = ctx.flowManager.loadReadOnly(specId);
+          const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
+          attachedCanonicalReviewWorkUnit(result)?.cleanup();
+          return decision;
+        }
         if (result?.artifacts?.phase === "impl"
           && result?.artifacts?.taskId != null
           && result?.artifacts?.toolingOutcome == null) {
@@ -2038,7 +2082,7 @@ export const FLOW_COMMANDS = {
       help: [
         `Usage: sennel flow run repair-plan-gate ${FLOW_TARGET_GUARD_USAGE}`,
         "",
-        "Rewind a failed draft/spec gate or scenario-validity check to its worker-artifact handoff step.",
+        "Rewind a failed draft or spec Gate to its worker-artifact handoff step.",
         "The command freezes the canonical blocking observations in Flow state;",
         "the worker may publish only through the normal handoff authority.",
         "",
@@ -2183,27 +2227,6 @@ export const FLOW_COMMANDS = {
       args: { flags: FLOW_TARGET_GUARD_FLAGS, options: [...FLOW_RUN_OPTIONS] },
       help: "Persist the Definition-selected exhausted Draft or Spec Gate finding and settle its current Attempt.",
     },
-    "repair-test-review": {
-      helpKey: "flow.run.repair-test-review",
-      runtimeLog: { stepMetadata: false },
-      explicitTargetResolution: true,
-      command: () => import("./lib/run-repair-test-review.js"),
-      args: {
-        flags: FLOW_TARGET_GUARD_FLAGS,
-        options: [...FLOW_RUN_OPTIONS],
-      },
-      help: [
-        `Usage: sennel flow run repair-test-review ${FLOW_TARGET_GUARD_USAGE}`,
-        "",
-        "Freeze the current canonical rejected test-review findings and test revision,",
-        "then rewind test, scenario-validity, and test-review without changing review budgets.",
-        "The repaired test tree must return through the dispatcher worker-artifact handoff.",
-        "",
-        "Options:",
-        ...FLOW_TARGET_GUARD_HELP_LINES,
-        "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
-      ].join("\n"),
-    },
     "start-task": {
       helpKey: "flow.run.start-task",
       explicitTargetResolution: true,
@@ -2287,27 +2310,86 @@ export const FLOW_COMMANDS = {
         await applyTestChainTransition(ctx, result, "test-execute");
       },
     },
-    "scenario-validity": {
-      helpKey: "flow.run.scenario-validity",
+    "requirement-test-gate": {
+      helpKey: "flow.run.requirement-test-gate",
       failureOwnership: DefinitionFailureOwnership.dispatcherPrimary(),
-      runtimeLog: { stepId: "scenario-validity" },
+      runtimeLog: { stepId: "test-gate" },
       internal: true,
       requiresFlow: true,
-      command: () => import("./lib/run-scenario-validity.js"),
+      command: () => import("./lib/run-requirement-test-gate.js"),
       args: { flags: FLOW_TARGET_GUARD_FLAGS, options: [...FLOW_RUN_OPTIONS] },
       help: [
-        "Usage: sennel flow run scenario-validity",
+        "Usage: sennel flow run requirement-test-gate",
         "",
-        "Execute pre-implementation spec-local tests and publish to the active Version:",
-        "  steps/scenario-validity/result.json",
-        "  steps/scenario-validity/output.log (transient raw output)",
+        "Execute the active Requirement's exact named candidate test.",
+        "Only a compatible Gate observation may promote the candidate to active tests.source.",
+        "Publishes atomically through the active Version:",
+        "  steps/test-gate/result.json",
+        "  steps/test-gate/output.log (transient raw output)",
       ].join("\n"),
-      post(ctx, result) {
+      async post(ctx, result) {
+        const {
+          RequirementTestDeferredReceipt,
+          RequirementTestGateResult,
+        } = await import("./lib/requirement-test-artifacts.js");
+        const { RequirementTestArtifactStore } = await import("./lib/requirement-test-store.js");
+        const { buildDeferredSemanticFindingsPublication } = await import("./lib/flow-findings.js");
         const attached = attachedCanonicalCommandResultArtifact(result);
-        if (attached?.logicalKey !== "scenario.validity") throw new Error("scenario-validity canonical result artifact is missing");
-        validateScenarioValidityArtifactShape(attached.payload);
-        validateScenarioValidityObservationCoherence(attached.payload);
-        return applyTestChainTransition(ctx, result, "scenario-validity");
+        if (attached?.logicalKey !== "test.requirement.gate") {
+          throw new Error("Requirement test Gate canonical result artifact is missing");
+        }
+        const gateResult = RequirementTestGateResult.fromJSON(attached.payload);
+        const specId = ctx.specId ?? ctx.flowState.specId;
+        const state = ctx.flowManager.canonicalState(specId);
+        const store = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state });
+        const planRead = store.readPlan("test-gate");
+        const workItem = planRead.artifact.plan.activeWorkItem();
+        const candidateRead = store.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: "test-gate" });
+        const facts = new RequirementTestLifecycleFacts({
+          authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
+          plan: planRead.artifact.plan,
+          leaf: "test-gate",
+          observation: gateResult.observation,
+          candidateBundle: candidateRead.candidate,
+        });
+        const decision = resolveRequirementTestLifecycle(facts);
+        let deferredReceipt = null;
+        let findingsPublication = null;
+        if (decision.disposition === "defer") {
+          const sourceArtifact = "steps/test-gate/result.json";
+          const fingerprints = new Set(gateResult.findings.map((finding) => finding.fingerprint));
+          findingsPublication = buildDeferredSemanticFindingsPublication({
+            flowManager: ctx.flowManager,
+            flowState: ctx.flowManager.loadReadOnly(specId),
+            nodeId: "test-gate",
+            sourceStep: "test-gate",
+            sourceArtifact,
+            sourcePayload: gateResult.toJSON(),
+            sourceRelativePath: sourceArtifact,
+            attempts: workItem.budget.autoSemantic + workItem.budget.manualSemantic + workItem.budget.tooling + 1,
+            fingerprints,
+          });
+          deferredReceipt = new RequirementTestDeferredReceipt({
+            requirementId: workItem.requirementId,
+            specRevision: workItem.specRevision,
+            bundleRevision: workItem.bundleRevision.revision,
+            candidateDigest: candidateRead.candidate.digest,
+            expectation: workItem.expectation,
+            budget: workItem.budget,
+            sourceAttempt: { id: state.attempt.id, sequence: state.attempt.sequence },
+            sourceArtifact,
+            sourceFindingFingerprints: [...fingerprints],
+          });
+        }
+        ctx.flowManager.completeRequirementTestLifecycle({
+          specId,
+          decision,
+          commandResult: result,
+          deferredReceipt,
+          findingsPublication,
+        });
+        ctx.flowState = ctx.flowManager.loadReadOnly(specId);
+        return decision;
       },
     },
     "test-result-review": {

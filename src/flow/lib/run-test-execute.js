@@ -52,6 +52,8 @@ import {
 import { attachCanonicalCommandResultArtifact } from "./canonical-command-result.js";
 import { buildRepairFingerprint } from "./repair-fingerprint.js";
 import { admitTestChainDirectExecution } from "./test-chain-transition-facts.js";
+import { RequirementTestArtifactStore } from "./requirement-test-store.js";
+import { scanFileHeader } from "./test-headers.js";
 
 const MAX_TEST_EXECUTE_REQUIREMENTS = 500;
 const NO_TESTS_DECLARED_REASON = "no_tests_declared";
@@ -96,10 +98,10 @@ function extractRequirementTestName(filePath, reqId) {
 function findSpecTestFileForReq(specDir, reqId, files = null) {
   const candidates = files ?? listSpecTestFiles(specDir);
   for (const file of candidates) {
-    const firstLine = fs.readFileSync(file, "utf8").split(/\r?\n/, 1)[0];
-    if (new RegExp(`\\b${reqId}\\b`).test(firstLine)) return file;
+    const header = scanFileHeader(file);
+    if (header.kind === "valid" && header.ids.includes(reqId)) return file;
   }
-  return candidates[0] || null;
+  return null;
 }
 
 function appendRaw(lines, sectionLines) {
@@ -108,7 +110,7 @@ function appendRaw(lines, sectionLines) {
   return { start_line: start, end_line: lines.length };
 }
 
-export async function runSpecLocalTests({ repositoryRoot, executionRoot, specDir, timeoutMs, files = null }) {
+export async function runSpecLocalTests({ repositoryRoot, executionRoot, specDir, timeoutMs, files = null, testNamePattern = null }) {
   const selected = files ?? listSpecTestFiles(specDir);
   if (selected.length === 0) {
     return {
@@ -122,7 +124,11 @@ export async function runSpecLocalTests({ repositoryRoot, executionRoot, specDir
     executionRoot,
     specRoot: path.dirname(specDir),
   });
-  const argv = execution.nodeArgv(["--test", ...selected.map((file) => path.relative(executionRoot, file))]);
+  const argv = execution.nodeArgv([
+    "--test",
+    ...(testNamePattern ? [`--test-name-pattern=${testNamePattern}`] : []),
+    ...selected.map((file) => path.relative(executionRoot, file)),
+  ]);
   const result = await runProcessDetailed(
     { argv, env: execution.environment, source: "spec-local-tests" },
     { cwd: executionRoot, timeoutMs },
@@ -172,9 +178,12 @@ function requirementRawResultLine(req, specLocal, failedIds) {
     : `[sennel] requirement ${req.id} result ${result}`;
 }
 
-function buildSummary({ root, specDir, testableRequirements, specLocal, range, failedIds = null, files = null }) {
+function buildSummary({ root, specDir, testableRequirements, specLocal, range, failedIds = null, files = null, deferredReceipts = [] }) {
   const resolvedFailedIds = failedIds ?? failedRequirementIdsFromSpecLocal(specLocal, testableRequirements);
+  const deferredById = new Map(deferredReceipts.map((receipt) => [receipt.requirementId, receipt]));
   return testableRequirements.map((req) => {
+    const deferred = deferredById.get(req.id);
+    if (deferred) return { id: req.id, result: "deferred", deferred_receipt: deferred };
     const result = requirementSummaryResult(req.id, specLocal, resolvedFailedIds);
     if (result === "not_applicable") {
       return {
@@ -201,6 +210,34 @@ function buildSummary({ root, specDir, testableRequirements, specLocal, range, f
       },
     };
   });
+}
+
+function requirementExecutionLifecycle({ planArtifact, receipts, requirements }) {
+  const workItems = planArtifact.plan.workItems;
+  const expected = requirements.filter((requirement) => requirement.testable !== false).map((requirement) => requirement.id);
+  const ids = workItems.map((item) => item.requirementId);
+  const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
+  const unknown = ids.filter((id) => !expected.includes(id));
+  const missing = expected.filter((id) => !ids.includes(id));
+  if (duplicates.length || unknown.length || missing.length) {
+    throw new Error(`Requirement test plan membership invalid: missing=${missing.join(",")} unknown=${unknown.join(",")} duplicate=${duplicates.join(",")}`);
+  }
+  const deferredById = new Map(receipts.map((receipt) => [receipt.requirementId, receipt]));
+  if (deferredById.size !== receipts.length) throw new Error("Requirement deferred receipts contain duplicate requirements");
+  const promoted = [];
+  for (const item of workItems) {
+    if (item.status === "promoted") promoted.push(item.requirementId);
+    else if (item.status !== "deferred") throw new Error(`Requirement ${item.requirementId} is not promoted or deferred`);
+    if (item.status === "deferred") {
+      const receipt = deferredById.get(item.requirementId);
+      if (!receipt || !item.specRevision.equals(receipt.specRevision)) throw new Error(`Requirement ${item.requirementId} deferred receipt is missing or stale`);
+    } else if (deferredById.has(item.requirementId)) {
+      throw new Error(`Requirement ${item.requirementId} is both promoted and deferred`);
+    }
+  }
+  const unknownReceipts = receipts.filter((receipt) => !ids.includes(receipt.requirementId));
+  if (unknownReceipts.length) throw new Error(`Requirement deferred receipts contain unknown requirements: ${unknownReceipts.map((receipt) => receipt.requirementId).join(",")}`);
+  return { promotedIds: new Set(promoted), deferredReceipts: receipts };
 }
 
 function specLocalPassed(specLocal) {
@@ -272,6 +309,13 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
   const spec = artifacts.readSpec("test-execute");
   const requirements = Array.isArray(spec.requirements) ? spec.requirements : [];
   const testableRequirements = testableRequirementsForSummary(requirements);
+  const requirementStore = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state });
+  const planRead = requirementStore.readPlan("test-execute");
+  const lifecycle = requirementExecutionLifecycle({
+    planArtifact: planRead.artifact,
+    receipts: requirementStore.deferredReceipts("test-execute"),
+    requirements,
+  });
   const analysisPath = path.join(managedOutputDir(executionRoot), "analysis.json");
   if (!fs.existsSync(analysisPath)) {
     throw new Error(`analysis.json not found at ${analysisPath}: run docs scan before test-execute`);
@@ -281,7 +325,11 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
   const sources = artifacts.testSources("test-execute");
   const files = sources
     .map((source) => source.absolutePath)
-    .filter((file) => /\.(test|spec)\.(js|mjs|ts)$/.test(file));
+    .filter((file) => /\.(test|spec)\.(js|mjs|ts)$/.test(file))
+    .filter((file) => {
+      const header = scanFileHeader(file);
+      return header.kind === "valid" && header.ids.some((id) => lifecycle.promotedIds.has(id));
+    });
   const rawLines = [];
   const specLocal = await runSpecLocal({
     repositoryRoot,
@@ -289,13 +337,18 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
     specDir: artifacts.directory,
     timeoutMs,
     files,
+    testNamePattern: lifecycle.promotedIds.size > 0
+      ? `^(?:${[...lifecycle.promotedIds].map((id) => `${id}:`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`
+      : null,
   });
   const specLocalFailedIds = failedRequirementIdsFromSpecLocal(specLocal, testableRequirements);
   const specRange = appendRaw(rawLines, [
     "[sennel] spec-local tests start",
     `command: ${specLocal.command}`,
     ...processOutputLines(specLocal.result),
-    ...testableRequirements.map((req) => requirementRawResultLine(req, specLocal, specLocalFailedIds)),
+    ...testableRequirements.map((req) => lifecycle.promotedIds.has(req.id)
+      ? requirementRawResultLine(req, specLocal, specLocalFailedIds)
+      : `[sennel] requirement ${req.id} result deferred receipt=${JSON.stringify(lifecycle.deferredReceipts.find((receipt) => receipt.requirementId === req.id)?.toJSON())}`),
     "[sennel] spec-local tests end",
   ]);
   const summary = buildSummary({
@@ -306,6 +359,7 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
     range: specRange,
     failedIds: specLocalFailedIds,
     files,
+    deferredReceipts: lifecycle.deferredReceipts,
   });
   // Validate before writing any runtime diagnostic.  The test source paths
   // were catalog-resolved above, so this is a consumer validation rather than
@@ -315,6 +369,7 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
     rawText: rawLines.join("\n"),
     rawLines,
     requirements,
+    deferredReceipts: lifecycle.deferredReceipts,
   });
 
   const changedFiles = listRegressionChangedFiles({ root: executionRoot, state });

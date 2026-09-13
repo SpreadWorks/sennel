@@ -112,13 +112,16 @@ function completeManagedWorktreeFlow(root, flow) {
     mergedFromSha: git(root, ["rev-parse", mergeState.featureBranch]),
   });
   for (const step of flattenSteps(manager.load(flow.specId).steps)) {
+    const state = manager.load(flow.specId);
+    const currentStep = flattenSteps(state.steps).find((candidate) => candidate.id === step.id);
+    if (["done", "skipped"].includes(currentStep.status)) continue;
     if (step.id === "finalize-cleanup") {
-      if (step.status === "pending") {
+      if (currentStep.status === "pending") {
         manager.updateStepStatus({ stepId: step.id, requestedStatus: "in_progress" }, { specId: flow.specId });
       }
       break;
     }
-    if (step.status === "pending") {
+    if (currentStep.status === "pending") {
       manager.updateStepStatus({ stepId: step.id, requestedStatus: "in_progress" }, { specId: flow.specId });
     }
     if (manager.load(flow.specId).currentNodeId === step.id) {

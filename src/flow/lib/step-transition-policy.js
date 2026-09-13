@@ -9,10 +9,7 @@ const TERMINAL_STATUSES = new Set(["done", "skipped"]);
 const LIFECYCLE_STATUSES = new Set(["in_progress", "done", "skipped"]);
 const REOPEN_DRAFT_ENTRYPOINT = "reopen-draft";
 const RESET_SKIPPED_ENTRYPOINT = "reset-skipped-downstream";
-const EXISTING_IMPLEMENTATION_REVALIDATION_ENTRYPOINT = "existing-implementation-revalidation";
-const PREIMPLEMENTATION_BOOTSTRAP_ENTRYPOINT = "preimplementation-bootstrap";
 export const PLAN_GATE_REPAIR_ENTRYPOINT = "plan-gate-repair";
-export const TEST_REVIEW_REPAIR_ENTRYPOINT = "test-review-repair";
 
 export class StepTransitionError extends Error {
   constructor(message) {
@@ -206,37 +203,6 @@ export class ExplicitRecoveryTransition {
       ) {
         transitionError("branch merge restore requires finalize-merge pending to in_progress");
       }
-    } else if (this.entrypoint === EXISTING_IMPLEMENTATION_REVALIDATION_ENTRYPOINT) {
-      const expected = new Map([
-        ["scenario-validity", ["in_progress", "skipped"]],
-        ["test-review", ["pending", "skipped"]],
-        ["implement", ["pending", "done"]],
-        ["test-execute", ["pending", "in_progress"]],
-      ]);
-      if (recoveryChanges.length !== expected.size) {
-        transitionError("existing implementation revalidation requires its complete lifecycle transition");
-      }
-      for (const change of recoveryChanges) {
-        const required = expected.get(change.stepId);
-        if (!required || change.currentStatus !== required[0] || change.requestedStatus !== required[1]) {
-          transitionError(`existing implementation revalidation has invalid change for ${change.stepId}`);
-        }
-      }
-    } else if (this.entrypoint === PREIMPLEMENTATION_BOOTSTRAP_ENTRYPOINT) {
-      const expected = new Map([
-        ["scenario-validity", ["in_progress", "skipped"]],
-        ["test-review", ["pending", "skipped"]],
-        ["implement", ["pending", "in_progress"]],
-      ]);
-      if (recoveryChanges.length !== expected.size) {
-        transitionError("preimplementation bootstrap requires its complete lifecycle transition");
-      }
-      for (const change of recoveryChanges) {
-        const required = expected.get(change.stepId);
-        if (!required || change.currentStatus !== required[0] || change.requestedStatus !== required[1]) {
-          transitionError(`preimplementation bootstrap has invalid change for ${change.stepId}`);
-        }
-      }
     } else if (this.entrypoint === PLAN_GATE_REPAIR_ENTRYPOINT) {
       const route = planGateRepairRouteForTargetStep(this.stepId);
       if (!route || this.requestedStatus !== "in_progress") {
@@ -257,32 +223,6 @@ export class ExplicitRecoveryTransition {
         if (stepId !== route.gateStepId && change.currentStatus !== "done") {
           transitionError(`plan gate repair requires completed upstream step ${stepId}`);
         }
-      }
-    } else if (this.entrypoint === TEST_REVIEW_REPAIR_ENTRYPOINT) {
-      const expected = new Map([
-        ["test", ["done", "in_progress"]],
-        ["scenario-validity", ["done", "pending"]],
-        ["test-review", ["in_progress", "pending"]],
-      ]);
-      if (
-        this.stepId !== "test"
-        || this.requestedStatus !== "in_progress"
-        || recoveryChanges.length !== expected.size
-      ) {
-        transitionError("test review repair requires its complete test validation rewind");
-      }
-      const seen = new Set();
-      for (const change of recoveryChanges) {
-        const required = expected.get(change.stepId);
-        if (
-          seen.has(change.stepId)
-          || !required
-          || change.currentStatus !== required[0]
-          || change.requestedStatus !== required[1]
-        ) {
-          transitionError(`test review repair has invalid change for ${change.stepId}`);
-        }
-        seen.add(change.stepId);
       }
     } else {
       transitionError(`unsupported recovery entrypoint: ${this.entrypoint}`);
@@ -316,10 +256,7 @@ export function isStepTransition(value) {
       && [
         RESET_SKIPPED_ENTRYPOINT,
         "impl-repair-invalidation",
-        EXISTING_IMPLEMENTATION_REVALIDATION_ENTRYPOINT,
-        PREIMPLEMENTATION_BOOTSTRAP_ENTRYPOINT,
         PLAN_GATE_REPAIR_ENTRYPOINT,
-        TEST_REVIEW_REPAIR_ENTRYPOINT,
       ].includes(value.entrypoint)
     );
 }

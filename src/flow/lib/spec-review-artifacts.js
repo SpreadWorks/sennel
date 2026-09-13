@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { FlowSpecRevision } from "../../lib/flow-version.js";
+import { SpecRevisionIdentity } from "./spec-revision-identity.js";
 
 const TRIAGE_DISPOSITIONS = new Set(["apply", "invalid", "already_resolved", "downgraded_to_non_blocking"]);
 const BLOCKING_FINDING_KEYS = ["body", "findingId", "issue", "kind", "requiredChange", "target", "title", "whyBlocking"];
@@ -118,23 +119,7 @@ function optionalKeys(value, required, optional, field) {
 }
 
 export { FlowSpecRevision as SpecRevision };
-
-export class SpecRevisionIdentity {
-  constructor(value) {
-    exactKeys(value, ["specId", "revision", "digest", "byteLength"], "spec revision identity");
-    this.specId = requiredText(value.specId, "spec revision identity.specId");
-    try {
-      this.revision = FlowSpecRevision.from(value.revision);
-    } catch {
-      throw artifactError(["spec revision must be a positive safe integer"]);
-    }
-    if (typeof value.digest !== "string" || !/^[a-f0-9]{64}$/.test(value.digest)) throw artifactError(["spec revision identity requires a SHA-256 digest"]);
-    if (!Number.isSafeInteger(value.byteLength) || value.byteLength < 0) throw artifactError(["spec revision identity requires byteLength"]);
-    this.digest = value.digest; this.byteLength = value.byteLength; Object.freeze(this);
-  }
-  equals(other) { return other instanceof SpecRevisionIdentity && this.specId === other.specId && this.revision.value === other.revision.value && this.digest === other.digest && this.byteLength === other.byteLength; }
-  toJSON() { return { specId: this.specId, revision: this.revision.value, digest: this.digest, byteLength: this.byteLength }; }
-}
+export { SpecRevisionIdentity } from "./spec-revision-identity.js";
 
 /**
  * The first review of a revision is derived by the parent from its immutable

@@ -17,6 +17,10 @@
   "additionalProperties": false,
   "properties": {
     "goal": { "type": "string" },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
     "background": { "type": "string" },
     "scope": {
       "type": "object",
@@ -89,6 +93,24 @@
         "type": "object",
         "required": ["id", "desc", "task_ids"],
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": ["testable"],
+              "properties": { "testable": { "const": false } }
+            },
+            "then": { "not": { "required": ["preimplementation_test_expectation"] } }
+          },
+          {
+            "if": {
+              "not": {
+                "required": ["testable"],
+                "properties": { "testable": { "const": false } }
+              }
+            },
+            "then": { "required": ["preimplementation_test_expectation"] }
+          }
+        ],
         "properties": {
           "id": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$" },
           "desc": { "type": "string", "maxLength": 119999 },
@@ -104,7 +126,8 @@
             }
           },
           "priority": { "type": "string", "enum": ["must", "should", "nice-to-have"] },
-          "testable": { "type": "boolean" }
+          "testable": { "type": "boolean" },
+          "preimplementation_test_expectation": { "type": "string", "enum": ["fail", "pass"] }
         }
       }
     },
