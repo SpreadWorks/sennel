@@ -1584,8 +1584,17 @@ const FLOW_FINDING_SOURCE_ACTORS = Object.freeze([
   "scenario-validity", "test-review", "test-result-review", "task-review", "task-gate",
   "impl-review", "impl-gate", "retro",
 ]);
+// Acceptance and final-regression can continue an unavailable check. That
+// continuation atomically publishes the same deferred finding as its handoff.
+const FLOW_FINDING_PUBLICATION_ACTORS = Object.freeze([
+  ...FLOW_FINDING_SOURCE_ACTORS,
+  "acceptance-review",
+  "final-regression",
+]);
 const NONBLOCKING_HANDOFF_SOURCE_ACTORS = Object.freeze([
-  "scenario-validity", "test-result-review", "retro",
+  "draft-questions-review", "draft-coverage-review", "draft-gate", "spec-gate",
+  "scenario-validity", "test-review", "test-result-review", "task-review", "task-gate",
+  "impl-review", "impl-gate", "retro", "acceptance-review", "final-regression",
 ]);
 const SOURCE_HANDOFF_ACTORS = Object.freeze([
   "implement", "impl-triage", "impl-repair", "task-triage", "task-repair", "task-impl",
@@ -1731,14 +1740,14 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   ), "permanent", "collection"),
   contract("tests.source", "artifacts/tests/:{testPath}", "test-source", "canonical-flow-artifacts", "system", own("test", ["system", "test"], ["test", "scenario-validity", "test-review", "implement", "test-execute", "final-regression"]), "permanent", "collection"),
   contract("flow.findings", "steps/flow-findings.json", "flow-findings", "canonical-flow-artifacts", "impl-review", own(
-    FLOW_FINDING_SOURCE_ACTORS,
-    [...FLOW_FINDING_SOURCE_ACTORS, "acceptance-review"],
-    ["system", ...FLOW_FINDING_SOURCE_ACTORS, "acceptance-review", "final-regression"],
+    FLOW_FINDING_PUBLICATION_ACTORS,
+    FLOW_FINDING_PUBLICATION_ACTORS,
+    ["system", ...FLOW_FINDING_PUBLICATION_ACTORS],
   )),
   contract("nonblocking.handoffs", "steps/nonblocking-handoffs.json", "nonblocking-handoffs", "canonical-flow-artifacts", "scenario-validity", own(
     NONBLOCKING_HANDOFF_SOURCE_ACTORS,
     NONBLOCKING_HANDOFF_SOURCE_ACTORS,
-    [...NONBLOCKING_HANDOFF_SOURCE_ACTORS, "acceptance-review"],
+    NONBLOCKING_HANDOFF_SOURCE_ACTORS,
   )),
   // Transient records are non-cataloged. Transactions and worker state are
   // runtime-only; execution logs remain next to the step that produced them.

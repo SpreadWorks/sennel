@@ -176,22 +176,31 @@ describe("Flow artifact contract registry", () => {
   });
 
   it("assigns shared finding records to every materializing route", () => {
-    const findingSources = [
+    const findingPublishers = [
       "draft-questions-review", "draft-coverage-review", "draft-gate", "spec-review", "spec-gate",
       "scenario-validity", "test-review", "test-result-review", "task-review", "task-gate",
-      "impl-review", "impl-gate", "retro",
+      "impl-review", "impl-gate", "retro", "acceptance-review", "final-regression",
     ];
     const findings = FLOW_ARTIFACT_CONTRACTS.require("flow.findings");
-    assert.deepEqual(findings.ownership.producers, findingSources);
-    assert.deepEqual(findings.ownership.updaters, [...findingSources, "acceptance-review"]);
-    for (const actor of ["system", ...findingSources, "acceptance-review", "final-regression"]) {
+    assert.deepEqual(findings.ownership.producers, findingPublishers);
+    assert.deepEqual(findings.ownership.updaters, findingPublishers);
+    for (const actor of ["system", ...findingPublishers]) {
       assert.equal(findings.ownership.consumers.includes(actor), true, actor);
     }
 
     const handoffs = FLOW_ARTIFACT_CONTRACTS.require("nonblocking.handoffs");
-    assert.deepEqual(handoffs.ownership.producers, ["scenario-validity", "test-result-review", "retro"]);
-    assert.deepEqual(handoffs.ownership.updaters, ["scenario-validity", "test-result-review", "retro"]);
-    assert.deepEqual(handoffs.ownership.consumers, ["scenario-validity", "test-result-review", "retro", "acceptance-review"]);
+    const handoffSources = [
+      "draft-questions-review", "draft-coverage-review", "draft-gate", "spec-gate",
+      "scenario-validity", "test-review", "test-result-review", "task-review", "task-gate",
+      "impl-review", "impl-gate", "retro", "acceptance-review", "final-regression",
+    ];
+    assert.deepEqual(handoffs.ownership.producers, handoffSources);
+    assert.deepEqual(handoffs.ownership.updaters, handoffSources);
+    assert.deepEqual(handoffs.ownership.consumers, handoffSources);
+    for (const actor of handoffSources) {
+      assert.equal(findings.ownership.producers.includes(actor), true, `flow.findings producer: ${actor}`);
+      assert.equal(findings.ownership.updaters.includes(actor), true, `flow.findings updater: ${actor}`);
+    }
   });
 
   it("keeps dispatcher-owned worker handoffs outside the durable artifact inventory", () => {

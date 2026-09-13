@@ -76,6 +76,7 @@ const RETRY_RECOVERY_TASK_ARTIFACTS = new Set([
   "retry.recovery.baseline",
   "retry.recovery.receipt",
 ]);
+const TASK_NONBLOCKING_ACCEPTANCE_ARTIFACTS = new Set(["nonblocking.handoffs"]);
 const SOURCE_HANDOFF_TASK_ARTIFACTS = new Set([
   "source.handoff.rollback-blob",
   "source.handoff.checkpoint",
@@ -1100,6 +1101,9 @@ export class FlowArtifactActivityAssociation {
       return this;
     }
     if (updaterStep.startsWith("task-") && SOURCE_HANDOFF_TASK_ARTIFACTS.has(artifact.logicalKey)) return this;
+    if (updaterStep.startsWith("task-")
+      && this.operation === "continue_nonblocking"
+      && TASK_NONBLOCKING_ACCEPTANCE_ARTIFACTS.has(artifact.logicalKey)) return this;
     if (updaterStep.startsWith("task-") && !FLOW_WIDE_TASK_ACTIVITY_ARTIFACTS.has(artifact.logicalKey)) {
       const taskPath = artifact.relativePath.match(/^steps\/impl\/([^/]+)\/(?:impl|review|triage|repair|gate)(?:\/|$)/);
       if (taskPath === null) throw new Error(`task-scoped updater Activity is not bound to a task artifact: ${artifact.relativePath}`);

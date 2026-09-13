@@ -172,7 +172,12 @@ import {
   canonicalTestReviewRepairProgress,
 } from "../../../src/flow/lib/test-review-repair.js";
 import { buildRepairFingerprint } from "../../../src/flow/lib/repair-fingerprint.js";
-import { decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
+import {
+  activateNonBlockingPolicy,
+  decisionContextForActiveFlow,
+  definitionNonblockingEligibilityForActiveFlow,
+  recordNonBlockingDecision,
+} from "../../../src/flow/lib/nonblocking.js";
 import { readCurrentTestChainTransitionFacts } from "../../../src/flow/lib/test-chain-transition-facts.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
 import { ReviewFindingFingerprint } from "../../../src/flow/lib/finding-disposition-policy.js";
@@ -1311,6 +1316,191 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(fs.existsSync(path.join(location.directory, "spec-gate-source.json")), false);
   });
 
+  it("carries a normal local Task Gate stop through canonical advisory continuation", async () => {
+    const repository = root();
+    fs.writeFileSync(path.join(repository, "README.md"), "local Task Gate advisory fixture\n");
+    initGitRepo(repository);
+    commitAll(repository, "initial local Task Gate fixture");
+    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const specId = "001-local-task-gate-advisory";
+    new TaskLifecycleFixture({
+      flowManager: manager,
+      specId,
+      runId: "run-local-task-gate-advisory",
+      request: "Retain a local Task Gate stop for acceptance before continuing.",
+      specRecord: {
+        requirements: [
+          { id: "R-1", desc: "The first task is evaluated through its canonical source.", task_ids: ["T-1"] },
+          { id: "R-2", desc: "The next task remains pending until the advisory decision.", task_ids: ["T-2"] },
+        ],
+        acceptance_criteria: ["A local Task Gate stop is retained for acceptance."],
+      },
+      taskDocuments: [
+        { id: "T-1", title: "No-change task", goal: "Reach the normal empty-source Task Gate refusal.", parent: null, origin: "plan", added_round: 0, status: "pending" },
+        { id: "T-2", title: "Successor task", goal: "Become the next canonical Task only after acceptance continuation.", parent: null, origin: "plan", added_round: 0, status: "pending" },
+      ],
+      taskId: "T-1",
+      targetStep: "task-gate",
+    }).create();
+
+    const context = (flowManager = manager) => ({
+      root: repository,
+      mainRoot: repository,
+      executionRoot: repository,
+      specId,
+      phase: "task-impl",
+      config: {},
+      flowManager,
+      flowState: flowManager.loadReadOnly(specId),
+      expectRunId: flowManager.loadReadOnly(specId).runId,
+      flowCommandBoundary: false,
+    });
+    const result = await new RunGateCommand().execute(context());
+    assert.equal(result.result, "fail", JSON.stringify(result));
+    assert.equal(result.artifacts.failureKind, "mechanical");
+    assert.equal(result.artifacts.failureCode, "GATE_LOCAL_INPUT_INVALID");
+
+    await FLOW_COMMANDS.run.gate.post(context(), result);
+    const published = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const gateArtifact = published.readProducerArtifact({
+      specId,
+      nodeId: "T-1-gate",
+      logicalKey: "task.gate",
+      parameters: { taskId: "T-1" },
+    });
+    const gateBytes = Buffer.from(gateArtifact.bytes);
+    const facts = readCurrentGateTransitionFacts({
+      flowManager: published,
+      flowState: published.loadReadOnly(specId),
+      phase: "task-impl",
+    });
+    assert.equal(facts.failure.category, "local");
+    assert.equal(facts.failure.code, "GATE_LOCAL_INPUT_INVALID");
+    assert.equal(resolveGateTransition(facts).disposition.operation, "blocked");
+    assert.equal(published.canonicalState(specId).attempt.failure.category, "local");
+    assert.equal(published.loadReadOnly(specId).tasks.find((task) => task.id === "T-1").status, "in_progress");
+    const postActivities = published.activityLedger(specId);
+    assert.equal(postActivities.some((activity) => (
+      activity.nodeId === "T-1-gate"
+      && activity.transition.operation === "fail_attempt"
+      && activity.failure?.code === "GATE_LOCAL_INPUT_INVALID"
+    )), true);
+    const issueLog = JSON.parse(published.readArtifact({
+      specId,
+      logicalKey: "issue.log",
+      consumerNodeId: "T-1-gate",
+    }).bytes.toString("utf8"));
+    assert.equal(issueLog.entries.at(-1).step, "T-1-gate");
+    assert.equal(issueLog.entries.at(-1).gateReceipt.catalogFingerprint, gateArtifact.descriptor.hash);
+
+    const eligibility = definitionNonblockingEligibilityForActiveFlow(
+      repository,
+      published.loadReadOnly(specId),
+      published,
+    );
+    assert.equal(eligibility.sourceStep, "task-gate");
+    assert.equal(eligibility.resultKind, "unavailable");
+    assert.deepEqual(eligibility.allowedActions, ["retry", "continue"]);
+    const strict = await new GetNextActionCommand().execute(context(published));
+    assert.equal(strict.directive.kind, "await_user_decision");
+    assert.deepEqual(strict.directive.actionPrompt.choices.map((choice) => choice.actionId), [
+      "KEEP_STRICT_FLOW",
+      "ENABLE_NONBLOCKING",
+    ]);
+
+    const policy = activateNonBlockingPolicy({
+      root: repository,
+      flowManager: published,
+      reason: "The normal Task Gate found no mutation manifest to evaluate.",
+    });
+    assert.equal(policy.activatedStep, "task-gate");
+    const activated = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const decision = decisionContextForActiveFlow(repository, activated.loadReadOnly(specId), activated);
+    const enabled = await new GetNextActionCommand().execute(context(activated));
+    assert.equal(enabled.nonblockingDecision.sourceStep, "task-gate");
+    assert.equal(enabled.nonblockingDecision.evidenceDigest, decision.evidenceDigest);
+
+    let decisionCalls = 0;
+    let nextActionReads = 0;
+    let dispatcherReload = null;
+    const dispatcher = new RunDispatchCommand({
+      nextAction: {
+        async run() {
+          nextActionReads += 1;
+          if (nextActionReads === 1) return enabled;
+          assert.equal(nextActionReads, 2, "the bounded dispatcher must reload next-action only after its advisory decision");
+          const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+          dispatcherReload = await new GetNextActionCommand().execute(context(reloaded));
+          // The production read above proves the dispatcher sees the new
+          // canonical action. Return terminal only to prevent this bounded
+          // test from launching T-2's ordinary worker.
+          return {
+            taskId: null,
+            step: null,
+            action: "completed",
+            instructions: null,
+            context: null,
+            output_schema: null,
+            requires_approval: false,
+            directive: { kind: "completed", terminal: true, requiresUserAction: false },
+          };
+        },
+      },
+      agent: {
+        async call(_prompt, options) {
+          assert.equal(options.commandId, "flow.dispatch.nonblocking-decision");
+          decisionCalls += 1;
+          return JSON.stringify({
+            choice: "continue",
+            reason: "Continue to the next admitted Task while preserving the local Gate evidence.",
+            remainingRisk: "Acceptance must retain that no semantic Task Gate judgment was available.",
+          });
+        },
+      },
+      leaseFactory: () => ({ acquire() {}, release() {} }),
+      handoffCoordinator: { recoverPending() {}, createRequest() { return null; } },
+    });
+    dispatcher.container = {};
+    const dispatched = await dispatcher.execute(context(activated));
+    assert.equal(dispatched.dispatch.boundary, "completed");
+    assert.equal(decisionCalls, 1);
+    assert.equal(nextActionReads, 2);
+    assert.equal(dispatcherReload.taskId, "T-2");
+    assert.equal(dispatcherReload.step, "task-impl");
+
+    const settled = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const settledState = settled.canonicalState(specId);
+    assert.equal(settledState.current, null);
+    assert.equal(settledState.nextAction().nodeId, "T-2-impl");
+    assert.equal(settled.loadReadOnly(specId).tasks.find((task) => task.id === "T-1").status, "done");
+    assert.equal(settled.loadReadOnly(specId).tasks.find((task) => task.id === "T-2").status, "pending");
+    assert.deepEqual(settled.readArtifact({
+      specId,
+      logicalKey: "task.gate",
+      parameters: { taskId: "T-1" },
+      consumerNodeId: "T-1-impl",
+    }).bytes, gateBytes);
+    const handoffs = JSON.parse(settled.readArtifact({
+      specId,
+      logicalKey: "nonblocking.handoffs",
+      consumerNodeId: "acceptance-review",
+    }).bytes.toString("utf8"));
+    assert.equal(handoffs.findings.at(-1).sourceStep, "task-gate");
+    assert.equal(handoffs.findings.at(-1).evidenceDigest, decision.evidenceDigest);
+    const findings = JSON.parse(settled.readArtifact({
+      specId,
+      logicalKey: "flow.findings",
+      consumerNodeId: "acceptance-review",
+    }).bytes.toString("utf8"));
+    assert.equal(findings.entries.at(-1).sourceArtifact, "steps/nonblocking-handoffs.json");
+    assert.equal(findings.entries.at(-1).finalDisposition, "still_open");
+    assert.equal(settled.activityLedger(specId)
+      .filter((activity) => activity.transition.nonblocking?.kind === "decision").length, 1);
+    const next = await new GetNextActionCommand().execute(context(settled));
+    assert.equal(next.taskId, "T-2");
+    assert.equal(next.step, "task-impl");
+  });
+
   it("keeps a mechanically blocked acceptance review in its V1 Attempt while cataloging its evidence", async () => {
     const repository = root();
     fs.writeFileSync(path.join(repository, "README.md"), "canonical acceptance\n");
@@ -2370,6 +2560,19 @@ describe("FlowManager canonical Version-1 runtime", () => {
         } }],
       },
     });
+    const scenarioToolingResult = ({ manager, created, testSourceRevision }) => attachCanonicalCommandResultArtifact({ result: "block", artifacts: {} }, {
+      logicalKey: "scenario.validity",
+      payload: {
+        version: "1", testSourceRevision, command: "node --test",
+        process: { started: false, exitCode: null, signal: null, timedOut: false, spawnError: "ENOENT" },
+        result: "block",
+        raw_output_path: manager.specLocation(created.specId).relativeArtifact("scenario.validity.raw-log"),
+        summary: [{ id: "R1", classification: "invalid_test", evidence: {
+          test_file: "fixture.test.js", test_name: "R1: fixture", command: "node --test",
+          raw_output_lines: { start_line: 1, end_line: 1 },
+        } }],
+      },
+    });
 
     const retries = setup("001-test-chain-retry-routes");
     await FLOW_COMMANDS.run["test-execute"].post(contextFor(retries, "test-execute"), executionResult(retries));
@@ -2401,6 +2604,28 @@ describe("FlowManager canonical Version-1 runtime", () => {
         assert.equal(state.attempt.failure.code, "TEST_CHAIN_RETRY_EXHAUSTED");
       }
     }
+    activateNonBlockingPolicy({
+      root: retries.repository,
+      flowManager: retries.manager,
+      reason: "The canonical result-review retry budget is exhausted.",
+    });
+    const reviewReload = new FlowManager({
+      root: retries.repository, mainRoot: retries.repository, inWorktree: false,
+    });
+    const reviewContext = decisionContextForActiveFlow(
+      retries.repository, reviewReload.load(retries.created.specId), reviewReload,
+    );
+    assert.equal(reviewContext.resultKind, "quality");
+    recordNonBlockingDecision({
+      root: retries.repository,
+      flowManager: reviewReload,
+      choice: "continue",
+      reason: "Continue with the exhausted canonical review result.",
+      remainingRisk: "Acceptance retains the failed result review.",
+      expectEvidenceDigest: reviewContext.evidenceDigest,
+      expectIdentity: reviewContext.identity().toJSON(),
+    });
+    assert.equal(reviewReload.canonicalState(retries.created.specId).nextAction().nodeId, "impl-review");
 
     const tooling = setup("001-test-chain-tooling-route");
     const toolingResult = executionResult(tooling, { started: false, exitCode: null, signal: null, timedOut: false, spawnError: "ENOENT" });
@@ -2423,6 +2648,42 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(repair.manager.readArtifact({
       specId: repair.created.specId, logicalKey: "issue.log", consumerNodeId: "test",
     }) !== null, true);
+
+    const unavailable = setup("001-scenario-tooling-nonblocking", "scenario-validity");
+    unavailable.manager.writeRuntimeArtifact({
+      specId: unavailable.created.specId,
+      nodeId: "scenario-validity",
+      artifact: {
+        logicalKey: "scenario.validity.raw-log", mediaType: "text/plain",
+        bytes: Buffer.from("scenario provider unavailable\n", "utf8"),
+      },
+    });
+    const unavailableResult = scenarioToolingResult(unavailable);
+    await FLOW_COMMANDS.run["scenario-validity"].post(
+      contextFor(unavailable, "scenario-validity"), unavailableResult,
+    );
+    activateNonBlockingPolicy({
+      root: unavailable.repository,
+      flowManager: unavailable.manager,
+      reason: "Scenario tooling could not obtain a semantic judgment.",
+    });
+    const scenarioReload = new FlowManager({
+      root: unavailable.repository, mainRoot: unavailable.repository, inWorktree: false,
+    });
+    const scenarioContext = decisionContextForActiveFlow(
+      unavailable.repository, scenarioReload.load(unavailable.created.specId), scenarioReload,
+    );
+    assert.equal(scenarioContext.resultKind, "tooling");
+    recordNonBlockingDecision({
+      root: unavailable.repository,
+      flowManager: scenarioReload,
+      choice: "continue",
+      reason: "Continue despite unavailable scenario tooling.",
+      remainingRisk: "Acceptance retains the unavailable scenario judgment.",
+      expectEvidenceDigest: scenarioContext.evidenceDigest,
+      expectIdentity: scenarioContext.identity().toJSON(),
+    });
+    assert.equal(scenarioReload.canonicalState(unavailable.created.specId).nextAction().nodeId, "test-review");
 
     let failScenarioSettlement = true;
     const interrupted = setup("001-scenario-repair-atomicity", "scenario-validity", ({ phase, activity }) => {
@@ -2506,15 +2767,19 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(restarted.manager.canonicalState(restarted.created.specId).current.at(-1), "test");
 
     const advisory = setup("001-test-chain-nonblocking-route", "scenario-validity");
-    advisory.manager.activateNonblockingPolicy({ specId: advisory.created.specId, policy: {
-      enabled: true, activatedAt: "2026-08-24T00:00:00.000Z", activatedStep: "scenario-validity", reason: "fixture advisory decision",
-    } });
+    advisory.manager._store.runtime.setPolicy({
+      specId: advisory.created.specId,
+      activityId: "fixture-advisory-policy",
+      policy: { autoApprove: false, nonblocking: {
+        enabled: true, activatedAt: "2026-08-24T00:00:00.000Z", activatedStep: "impl-review", reason: "fixture policy already activated by an earlier eligible stop",
+      } },
+    });
     advisory.manager.writeRuntimeArtifact({ specId: advisory.created.specId, nodeId: "scenario-validity", artifact: {
       logicalKey: "scenario.validity.raw-log", mediaType: "text/plain", bytes: Buffer.from("R1 advisory scenario\n", "utf8"),
     } });
     await FLOW_COMMANDS.run["scenario-validity"].post(
       contextFor(advisory, "scenario-validity"),
-      scenarioBlockResult(advisory),
+      scenarioToolingResult(advisory),
     );
     assert.equal(advisory.manager.canonicalState(advisory.created.specId).nextAction().operation, "resume");
     assert.equal(advisory.manager.activityLedger(advisory.created.specId).at(-1).transition.operation, "record_nonblocking");
@@ -2533,9 +2798,13 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const stalePolicyDecision = resolveNonGateTransition(readCurrentTestChainTransitionFacts({
       flowManager: stalePolicy.manager, specId: stalePolicy.created.specId,
     }), scenarioValidityTransitionDefinition);
-    stalePolicy.manager.activateNonblockingPolicy({ specId: stalePolicy.created.specId, policy: {
-      enabled: true, activatedAt: "2026-08-24T00:00:00.000Z", activatedStep: "scenario-validity", reason: "stale plan fixture",
-    } });
+    stalePolicy.manager._store.runtime.setPolicy({
+      specId: stalePolicy.created.specId,
+      activityId: "fixture-stale-plan-policy",
+      policy: { autoApprove: false, nonblocking: {
+        enabled: true, activatedAt: "2026-08-24T00:00:00.000Z", activatedStep: "impl-review", reason: "fixture policy already activated by an earlier eligible stop",
+      } },
+    });
     const afterPolicyActivation = {
       state: stalePolicy.manager.canonicalState(stalePolicy.created.specId).toJSON(),
       activities: stalePolicy.manager.activityLedger(stalePolicy.created.specId),
@@ -5625,24 +5894,22 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const created = manager.createFresh(request());
     manager.addActiveFlow(created.specId, "direct");
     manager.beginNextAction(created.specId);
-    const activeNodeId = manager.load(created.specId).currentNodeId;
-
-    manager.activateNonblockingPolicy({
-      policy: {
+    manager._store.runtime.activateNonblockingPolicy({
+      specId: created.specId,
+      activityId: "fixture-atomic-nonblocking-activation",
+      policy: { autoApprove: false, nonblocking: {
         enabled: true,
         activatedAt: "2026-08-14T00:00:00.000Z",
         activatedStep: "scenario-validity",
         reason: "A durable acceptance decision is required.",
-      },
-    });
-    manager.recordNonblocking({
-      nodeId: activeNodeId,
-      record: {
+      } },
+      nonblocking: {
         kind: "observation",
         sourceStep: "scenario-validity",
         sourceAttempt: 1,
         evidenceRef: "steps/scenario-validity/result.json",
         evidenceDigest: "a".repeat(64),
+        definitionDigest: "b".repeat(64),
         resultKind: "unavailable",
         action: null,
         rationale: null,
@@ -5656,7 +5923,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(persisted.policy.nonblocking.enabled, true);
     assert.equal(Object.hasOwn(persisted, "nonblocking"), false);
     assert.equal(Object.hasOwn(persisted, "stepAttempts"), false);
-    assert.equal(activities.at(-1).type, "nonblocking_recorded");
+    assert.equal(activities.at(-1).type, "policy_updated");
+    assert.equal(activities.at(-1).transition.operation, "activate_nonblocking");
     assert.equal(activities.at(-1).transition.nonblocking.sourceStep, "scenario-validity");
   });
 
@@ -7334,7 +7602,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
   });
 
   for (const repairedReviewStages of [false, true]) {
-    it(`converges one Task across two bounded Gate rounds with ${repairedReviewStages ? "completed" : "skipped"} review stages and advances with deferred findings`, async () => {
+    it(`converges one Task across two bounded Gate rounds with ${repairedReviewStages ? "completed review stages and a persisted advisory repair" : "skipped review stages and deferred advancement"}`, async () => {
     const repository = root();
     initializeReviewSource(repository);
     const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
@@ -7733,23 +8001,74 @@ describe("FlowManager canonical Version-1 runtime", () => {
       successorStepId: "T-2-impl",
       resetStepIds: [],
     });
+    const originalSemanticGate = manager.readProducerArtifact({
+      specId,
+      nodeId: "T-1-gate",
+      logicalKey: "task.gate",
+      parameters: { taskId: "T-1" },
+    });
 
-    const settled = new RunSettleGateTransitionCommand().execute(context());
-    assert.equal(settled.ok, true, JSON.stringify(settled));
-    const state = manager.canonicalState(specId);
+    activateNonBlockingPolicy({
+      root: repository,
+      flowManager: manager,
+      reason: "The second Task Gate round is exhausted with acceptance-backed semantic evidence.",
+    });
+    const advisoryManager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const advisory = decisionContextForActiveFlow(
+      repository,
+      advisoryManager.load(specId),
+      advisoryManager,
+    );
+    assert.equal(advisory.sourceStep, "task-gate");
+    assert.equal(advisory.resultKind, "quality");
+    assert.deepEqual(advisory.allowedActions, ["repair", "continue"]);
+    const advisoryAction = repairedReviewStages ? "repair" : "continue";
+    recordNonBlockingDecision({
+      root: repository,
+      flowManager: advisoryManager,
+      choice: advisoryAction,
+      reason: repairedReviewStages
+        ? "Repair after the bounded Task Gate semantic recovery is exhausted."
+        : "Continue after the bounded Task Gate semantic recovery is exhausted.",
+      remainingRisk: repairedReviewStages
+        ? null
+        : "Acceptance retains the unresolved Task Gate semantic finding.",
+      expectEvidenceDigest: advisory.evidenceDigest,
+      expectIdentity: advisory.identity().toJSON(),
+    });
+    if (repairedReviewStages) {
+      const repairedManager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+      const repairedState = repairedManager.canonicalState(specId);
+      assert.equal(repairedState.current.at(-1), "T-1-gate");
+      assert.equal(repairedState.attempt.sequence, advisory.sourceAttempt + 1);
+      assert.equal(repairedState.attempt.failure, null);
+      assert.equal(repairedState.findNode("T-1").status, "in_progress");
+      assert.equal(repairedManager.readProducerArtifact({
+        specId,
+        nodeId: "T-1-gate",
+        logicalKey: "task.gate",
+        parameters: { taskId: "T-1" },
+      }).descriptor.hash, originalSemanticGate.descriptor.hash);
+      return;
+    }
+    const state = advisoryManager.canonicalState(specId);
     assert.equal(state.findNode("T-1").status, "done");
     assert.equal(state.findNode("T-2").status, "pending");
     assert.equal(state.nextAction().nodeId, "T-2-impl");
-    const findings = JSON.parse(manager.readArtifact({
+    const findings = JSON.parse(advisoryManager.readArtifact({
       specId,
       logicalKey: "flow.findings",
       consumerNodeId: "acceptance-review",
     }).bytes.toString("utf8"));
     assert.equal(findings.entries.length, 1);
-    assert.equal(findings.entries[0].sourceStep, "T-1-gate");
+    assert.equal(findings.entries[0].sourceStep, "task-gate");
     assert.equal(findings.entries[0].attempts, 5);
     assert.equal(findings.entries[0].round, 2);
-    const next = await new GetNextActionCommand().execute(context());
+    const next = await new GetNextActionCommand().execute({
+      ...context(),
+      flowManager: advisoryManager,
+      flowState: advisoryManager.load(specId),
+    });
     assert.equal(next.step, "task-impl");
     assert.equal(next.taskId, "T-2");
     });

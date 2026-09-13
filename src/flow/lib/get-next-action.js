@@ -94,6 +94,11 @@ import { CanonicalTaskContext, canonicalTaskContextKinds } from "./task-canonica
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { readTaskExecutionOverrunFacts } from "./task-execution-overrun.js";
 import { assertReconciledTaskReviewInput } from "./task-review-reconciliation.js";
+import {
+  decisionContextForActiveFlow,
+  definitionNonblockingEligibilityForActiveFlow,
+  nonblockingActivationOfferForStrictStop,
+} from "./nonblocking.js";
 
 // New non-Gate Step migrations use this shared read → Definition → route
 // validation → Action projection contract. Existing Step migrations retain
@@ -737,10 +742,13 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     "impl-review",
     "task-review",
   ]).has(target.stepId);
+  const strictReviewState = state.policy?.nonblocking?.enabled === true
+    ? { ...state, policy: { ...state.policy, nonblocking: null } }
+    : state;
   const reviewSelection = reviewStep && ["resume", "retry", "record", "blocked"].includes(descriptor.operation)
     ? resolveCurrentReviewTransition({
         flowManager: ctx.flowManager,
-        flowState: state,
+        flowState: strictReviewState,
         typedState,
         scope: target.scope,
         stepId: target.stepId,
@@ -778,6 +786,20 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     .withDraftDisposition(draftDisposition);
   const gateSelection = definitionOwnedGateSelection(ctx, state, target);
   const gateDirective = definitionOwnedGateDirective(gateSelection, { state, binding });
+  const strictDirective = target.scope === "flow"
+    ? buildPreimplementationBootstrapDirective(ctx, state, target, binding)
+    : null;
+  const definitionEligibility = strictDirective === null
+    ? definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager)
+    : null;
+  const activationOffer = nonblockingActivationOfferForStrictStop({
+    state,
+    eligibility: definitionEligibility,
+    binding,
+  });
+  const nonblockingDecision = state.policy?.nonblocking?.enabled === true && definitionEligibility !== null
+    ? decisionContextForActiveFlow(ctx.root, state, ctx.flowManager)
+    : null;
   const derived = deriveNextAction({
     scope: target.scope,
     stepId: target.stepId,
@@ -793,9 +815,6 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const instruction = canonicalInstruction(derived, target, state);
   const outboxRecovery = target.scope === "flow"
     ? resolveFinalizationOutboxRecovery(ctx, state, target, null, interruptedRuntimeLog)
-    : null;
-  const strictDirective = target.scope === "flow"
-    ? buildPreimplementationBootstrapDirective(ctx, state, target, binding)
     : null;
   const routePlan = definitionRoutePlanForNextAction(ctx, state, typedState, target);
   const approvalDirective = approvalDecisionDirective({
@@ -834,7 +853,17 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     planGateRepairRoute: planGateRepair?.route ?? null,
     planGateRepairReason: planGateRepair?.reason ?? null,
   }).resolve();
-  let selectedDirective = userDecisionDirective ?? draftDecisionDirective ?? approvalDirective ?? strictDirective ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
+  const activationDirective = activationOffer === null
+    ? null
+    : new AwaitUserDecisionDirective({
+      prompt: activationOffer.prompt,
+      reason: activationOffer.blocker,
+      continuation: lifecycleDirective instanceof ExecuteCommandDirective
+        ? lifecycleDirective.continuation
+        : null,
+      });
+  let selectedDirective = userDecisionDirective ?? draftDecisionDirective ?? approvalDirective ?? activationDirective
+    ?? strictDirective ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
   if (selectedDirective instanceof ExecuteStepDirective && target.scope === "task" && target.stepId === "task-review" && typedState.attempt?.failure === null) {
     try { assertReconciledTaskReviewInput({ flowManager: ctx.flowManager, state: typedState, taskId: target.taskId, root: ctx.executionRoot || ctx.root }); }
     catch (error) {
@@ -872,6 +901,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     }),
     maxAttempts: derived.maxAttempts,
     directive: claimDirective.toJSON(),
+    ...(nonblockingDecision && { nonblockingDecision: nonblockingDecision.toJSON() }),
     ...(selectedFinalRegressionAction?.decision && {
       definitionTransition: {
         action: selectedFinalRegressionAction.decision.plan.action.toJSON(),
@@ -962,6 +992,16 @@ export default class GetNextActionCommand extends FlowCommand {
     if (nonGateBlocked !== null) {
       result ??= buildCanonicalNextActionResult(ctx, ctx.flowState, typedState, descriptor, binding, null);
       const awaitingNonblockingDecision = nonGateBlocked.decision.disposition.operation === "await-user-input";
+      const eligibility = definitionNonblockingEligibilityForActiveFlow(
+        ctx.root,
+        ctx.flowState,
+        ctx.flowManager,
+      );
+      const activationOffer = nonblockingActivationOfferForStrictStop({
+        state: ctx.flowState,
+        eligibility,
+        binding,
+      });
       const reason = nonGateBlocked.decision.disposition.reason
         ?? (awaitingNonblockingDecision
           ? "the nonblocking observation requires an explicit advisory decision"
@@ -969,7 +1009,12 @@ export default class GetNextActionCommand extends FlowCommand {
       return {
         ...result,
         definitionTransition: nonGateBlocked.action.toJSON(),
-        directive: new BlockedDirective({
+        ...(awaitingNonblockingDecision && {
+          nonblockingDecision: decisionContextForActiveFlow(ctx.root, ctx.flowState, ctx.flowManager).toJSON(),
+        }),
+        directive: activationOffer !== null
+          ? new AwaitUserDecisionDirective({ prompt: activationOffer.prompt, reason: activationOffer.blocker }).toJSON()
+          : new BlockedDirective({
           code: awaitingNonblockingDecision ? "TEST_CHAIN_NONBLOCKING_DECISION_REQUIRED" : "TEST_CHAIN_EVIDENCE_BLOCKED",
           reason: awaitingNonblockingDecision ? `Definition selected an explicit nonblocking decision boundary: ${reason}` : `Definition selected blocked: ${reason}`,
           resumeInstruction: awaitingNonblockingDecision

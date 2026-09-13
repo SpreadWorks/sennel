@@ -132,7 +132,7 @@ const FLOW_CREATION_ACTIVITY_TYPE = "flow_created";
 const LIFECYCLE_TRANSITION_OPERATIONS = new Set(["park_flow", "resume_flow", "finalize_flow"]);
 // Policy is authoritative flow state.  Its mutations use the same journal as
 // lifecycle and Attempt transitions; a command must never patch flow.json.
-const POLICY_TRANSITION_OPERATIONS = new Set(["set_policy"]);
+const POLICY_TRANSITION_OPERATIONS = new Set(["set_policy", "activate_nonblocking"]);
 // Publishing a producer-owned durable artifact is an Activity in its own
 // right. It does not alter the lifecycle tree, but it must share the state
 // journal and catalog transaction with the descriptor that makes the bytes
@@ -151,6 +151,10 @@ const ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS = new Set([
 const OUTBOX_TRANSITION_OPERATIONS = new Set(["begin_outbox", "reopen_outbox", "complete_outbox", "fail_outbox"]);
 const INTERRUPTED_FINALIZE_SYNC_OPERATION = "recover_interrupted_finalize_sync";
 const ATTEMPT_INTRODUCTION_OPERATIONS = new Set(["start_attempt", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "rewind", "rewind_test_evidence", "repair_test_review", "settle_test_review_repair_timeout", "repair_scenario_validity", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "preimplementation_bootstrap", "recover_existing_implementation", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", INTERRUPTED_FINALIZE_SYNC_OPERATION]);
+function transitionIntroducesAttempt(transition) {
+  return ATTEMPT_INTRODUCTION_OPERATIONS.has(transition.operation)
+    || (transition.operation === "continue_nonblocking" && transition.attempt !== null);
+}
 // Explicit dispatch approval is a durable authorization fact, not a mutable
 // field on flow.json.  Its append-only Activity can be replayed and checked
 // against the exact action digest on a later dispatcher process.
@@ -183,7 +187,7 @@ const OBSERVATION_TRANSITION_OPERATIONS = new Set(["record_metric", "record_note
 // Advisory policy evidence is a first-class ledger fact.  It deliberately
 // stays out of flow.json so a resumed Flow replays the same immutable
 // observation/decision history rather than a mutable side-channel.
-const NONBLOCKING_TRANSITION_OPERATIONS = new Set(["record_nonblocking", "continue_nonblocking"]);
+const NONBLOCKING_TRANSITION_OPERATIONS = new Set(["record_nonblocking", "continue_nonblocking", "activate_nonblocking"]);
 const FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS = new Set(["skip_finalize_downstream", "reset_finalize_downstream"]);
 const STATE_CHANGING_TRANSITION_OPERATIONS = new Set([
   FLOW_CREATION_TRANSITION_OPERATION,
@@ -4805,10 +4809,75 @@ export class CurrentFlowState {
     return this.#resumeHistoricalContinuation({ root, current: path, attempt: restoredAttempt });
   }
 
+  /** Complete the observed episode and open one replacement Attempt atomically. */
+  restartNonblockingAttempt({ result, attempt }) {
+    const currentPath = this.current;
+    if (currentPath === null || this.attempt === null) {
+      throw new CurrentFlowStateInvariantError("nonblocking restart requires an active Attempt");
+    }
+    const replacement = attempt instanceof CurrentAttempt ? attempt : new CurrentAttempt(attempt);
+    const leaf = nodeAtPath(this.root, currentPath);
+    if (replacement.nodeId !== leaf.id
+      || replacement.sequence !== this.attempt.sequence + 1
+      || replacement.sequence !== leaf.attemptSequence + 1
+      || replacement.id === this.attempt.id
+      || replacement.failure !== null
+      || replacement.consumption.semantic !== 0
+      || replacement.consumption.tooling !== 0) {
+      throw new CurrentFlowStateInvariantError("nonblocking restart replacement Attempt identity is invalid");
+    }
+    this.#assertAttemptContractForLeaf(leaf, replacement);
+    if (this.attempt.failure !== null) {
+      return this.#resumeHistoricalContinuation({
+        root: replaceNode(this.root, leaf.id, leaf.with({ attemptSequence: replacement.sequence })),
+        current: currentPath,
+        attempt: replacement,
+      });
+    }
+    const completed = this.confirmCurrentAttempt({
+      result: result instanceof NodeResult ? result : new NodeResult(result),
+      status: "done",
+    });
+    return completed.rewind({ path: currentPath, attempt: replacement });
+  }
+
   /** Apply the route-specific skips authorized by an immutable advisory decision. */
-  continueNonblockingAttempt({ result, skippedNodeIds }) {
+  continueNonblockingAttempt({ result, skippedNodeIds, gateTaskLifecycle = null, attempt = null }) {
     const continuationResult = result instanceof NodeResult ? result : new NodeResult(result);
-    const confirmed = this.confirmCurrentAttempt({ result: continuationResult, status: "done" });
+    const leafId = this.current?.at(-1) ?? null;
+    const taskGateLifecycle = leafId === null ? null : this.#assertTaskGateLifecycle({
+      leafId,
+      gateTaskLifecycle,
+      operation: "defer-and-advance",
+    });
+    let confirmed;
+    if (this.attempt?.failure === null) {
+      if (attempt !== null) {
+        throw new CurrentFlowStateInvariantError("nonblocking continuation of a live Attempt cannot replace its identity");
+      }
+      confirmed = this.confirmCurrentAttempt({ result: continuationResult, status: "done" });
+    } else {
+      const leaf = nodeAtPath(this.root, this.current);
+      const replacement = attempt instanceof CurrentAttempt ? attempt : new CurrentAttempt(attempt);
+      if (replacement.nodeId !== leaf.id
+        || replacement.sequence !== this.attempt.sequence + 1
+        || replacement.sequence !== leaf.attemptSequence + 1
+        || replacement.id === this.attempt.id
+        || replacement.failure !== null
+        || replacement.consumption.semantic !== 0
+        || replacement.consumption.tooling !== 0) {
+        throw new CurrentFlowStateInvariantError("nonblocking failed Attempt replacement identity is invalid");
+      }
+      this.#assertAttemptContractForLeaf(leaf, replacement);
+      const root = reconcileCompletedParents(
+        replaceNode(this.root, leaf.id, transitionNode(leaf, "done", this.definition, {
+          attemptSequence: replacement.sequence,
+          result: continuationResult,
+        })),
+        this.definition,
+      );
+      confirmed = this.#replaceRoot(root, null, null);
+    }
     if (!Array.isArray(skippedNodeIds)) {
       throw new CurrentFlowStateInvariantError("nonblocking continuation skipped nodes must be an array");
     }
@@ -4829,7 +4898,9 @@ export class CurrentFlowState {
         }),
       }));
     }
-    return confirmed.#replaceRoot(reconcileCompletedParents(root, confirmed.definition), null, null);
+    const continued = confirmed.#replaceRoot(reconcileCompletedParents(root, confirmed.definition), null, null);
+    this.#assertTaskGateSuccessor(continued, taskGateLifecycle);
+    return continued;
   }
 
   rewind({ path: currentPath, attempt }) {
@@ -6005,7 +6076,7 @@ export class ActivityNonBlockingRecord {
   constructor(value) {
     requireExactFields(value, new Set([
       "kind", "sourceStep", "sourceAttempt", "evidenceRef", "evidenceDigest", "resultKind",
-      "action", "rationale", "remainingRisk",
+      "definitionDigest", "action", "rationale", "remainingRisk",
     ]), "activity.nonblocking");
     if (!["observation", "decision"].includes(value.kind)) {
       throw new CurrentFlowStateInvariantError("activity.nonblocking.kind is invalid");
@@ -6018,6 +6089,10 @@ export class ActivityNonBlockingRecord {
       throw new CurrentFlowStateInvariantError("activity.nonblocking.evidenceDigest must be SHA-256");
     }
     this.evidenceDigest = value.evidenceDigest;
+    if (!/^[a-f0-9]{64}$/.test(value.definitionDigest || "")) {
+      throw new CurrentFlowStateInvariantError("activity.nonblocking.definitionDigest must be SHA-256");
+    }
+    this.definitionDigest = value.definitionDigest;
     if (!["quality", "tooling", "unavailable"].includes(value.resultKind)) {
       throw new CurrentFlowStateInvariantError("activity.nonblocking.resultKind is invalid");
     }
@@ -6047,6 +6122,7 @@ export class ActivityNonBlockingRecord {
       sourceAttempt: this.sourceAttempt,
       evidenceRef: this.evidenceRef,
       evidenceDigest: this.evidenceDigest,
+      definitionDigest: this.definitionDigest,
       resultKind: this.resultKind,
       action: this.action,
       rationale: this.rationale,
@@ -6132,9 +6208,9 @@ export class ActivityTransition {
       );
     }
     this.policy = policy == null ? null : policy instanceof CurrentFlowPolicy ? policy : new CurrentFlowPolicy(policy);
-    const policyRequired = operation === "set_policy";
+    const policyRequired = POLICY_TRANSITION_OPERATIONS.has(operation);
     if (policyRequired !== (this.policy !== null)) {
-      throw new CurrentFlowStateInvariantError("set_policy is the only transition that requires a policy payload");
+      throw new CurrentFlowStateInvariantError("policy transitions require exactly one policy payload");
     }
     this.outbox = outbox == null ? null : outbox instanceof ActivityOutbox ? outbox : new ActivityOutbox(outbox);
     const outboxRequired = OUTBOX_TRANSITION_OPERATIONS.has(operation) || operation === INTERRUPTED_FINALIZE_SYNC_OPERATION;
@@ -6214,7 +6290,7 @@ export class ActivityTransition {
       ? "repair-task-impl"
       : operation === "confirm_attempt"
         ? "complete-and-advance"
-        : operation === "defer_failed_gate"
+        : operation === "defer_failed_gate" || operation === "continue_nonblocking"
           ? "defer-and-advance"
           : null;
     if (lifecycle !== null && lifecycle.operation !== requiredTaskLifecycleOperation) {
@@ -6222,7 +6298,8 @@ export class ActivityTransition {
     }
     this.gateTaskLifecycle = lifecycle;
     const attemptRequired = TRANSITION_ATTEMPT_OPERATIONS.has(operation);
-    if (attemptRequired !== (this.attempt !== null)) {
+    const attemptOptional = operation === "continue_nonblocking";
+    if (!attemptOptional && attemptRequired !== (this.attempt !== null)) {
       throw new CurrentFlowStateInvariantError(
         attemptRequired
           ? `activity.transition ${operation} requires an Attempt payload`
@@ -6324,17 +6401,25 @@ export class ActivityTransition {
       return state;
     }
     if (this.operation === "continue_nonblocking") {
-      if (this.nonblocking?.kind !== "decision" || this.nonblocking.action !== "continue") {
-        throw new CurrentFlowStateInvariantError("continue_nonblocking requires a continue decision");
+      if (this.nonblocking?.kind !== "decision") {
+        throw new CurrentFlowStateInvariantError("continue_nonblocking requires a decision");
       }
       if (state.current == null || state.current.at(-1) !== targetId) {
         throw new CurrentFlowStateInvariantError("continue_nonblocking Activity must target the active current leaf");
       }
       if (activity.result == null) throw new CurrentFlowStateInvariantError("continue_nonblocking Activity requires a result");
-      return state.continueNonblockingAttempt({
-        result: activity.result,
-        skippedNodeIds: activity.references.repairs.map((reference) => reference.id),
-      });
+      if (this.nonblocking.action === "continue") {
+        return state.continueNonblockingAttempt({
+          result: activity.result,
+          skippedNodeIds: activity.references.repairs.map((reference) => reference.id),
+          gateTaskLifecycle: this.gateTaskLifecycle,
+          attempt: this.attempt,
+        });
+      }
+      if (this.gateTaskLifecycle !== null || activity.references.repairs.length !== 0 || this.attempt === null) {
+        throw new CurrentFlowStateInvariantError("nonblocking restart carries invalid continuation effects");
+      }
+      return state.restartNonblockingAttempt({ result: activity.result, attempt: this.attempt });
     }
     if (this.operation === "accept_final_regression_failure") {
       if (!REPLACEMENT_ATTEMPT_OPERATIONS.has(this.operation) && (activity.attemptId !== this.attempt.id || activity.sequence !== this.attempt.sequence)) {
@@ -6658,6 +6743,7 @@ export class FlowActivity {
       resume_flow: "flow_resumed",
       finalize_flow: "flow_finalized",
       set_policy: "policy_updated",
+      activate_nonblocking: "policy_updated",
       publish_artifacts: "artifacts_published",
       publish_plugin_artifacts: "artifacts_published",
       publish_upgrade_result: "artifacts_published",
@@ -6818,7 +6904,7 @@ export class FlowActivity {
 
   startsAttempt({ nodeId, id, sequence }) {
     const attempt = this.transition.attempt;
-    return ATTEMPT_INTRODUCTION_OPERATIONS.has(this.transition.operation)
+    return transitionIntroducesAttempt(this.transition)
       && attempt?.nodeId === nodeId && attempt.id === id && attempt.sequence === sequence
       && (this.nodeId === nodeId || this.transition.taskReviewStagePlan?.targetStepId === nodeId);
   }
@@ -7174,7 +7260,7 @@ function assertJournalAttemptIdentities(entries) {
         );
       }
     }
-    if (ATTEMPT_INTRODUCTION_OPERATIONS.has(entry.transition.operation)) {
+    if (transitionIntroducesAttempt(entry.transition)) {
       const introduced = entry.transition.attempt;
       const replacement = REPLACEMENT_ATTEMPT_OPERATIONS.has(entry.transition.operation);
       if (introduced.nodeId !== entry.nodeId && !replacement) {

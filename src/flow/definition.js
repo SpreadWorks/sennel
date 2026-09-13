@@ -13,6 +13,7 @@
 
 import { createHash } from "node:crypto";
 import { SourceHandoffFailureFacts } from "./lib/source-handoff-failure.js";
+import { NonblockingFailureClassification } from "./lib/nonblocking-evidence.js";
 
 import {
   ActivityFailure,
@@ -349,10 +350,22 @@ function requireStepList(value, field) {
   return Object.freeze(value.map((step) => requireString(step, field)));
 }
 
+function requireOptionalStepList(value, field) {
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  const steps = value.map((step) => requireString(step, field));
+  if (new Set(steps).size !== steps.length) throw new Error(`${field} must not contain duplicates`);
+  return Object.freeze(steps);
+}
+
+function nonblockingSelectionDigest(value) {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
 const GATE_DISPOSITIONS = new Set([
   "pass", "retry", "repair", "defer", "external-blocked", "blocked", "recovery", "reconcile", "nonblocking", "advance",
 ]);
 const GATE_TRANSITION_TOKEN = Symbol("definition-gate-transition");
+const NONBLOCKING_ELIGIBILITY_TOKEN = Symbol("definition-nonblocking-eligibility");
 const DRAFT_COVERAGE_REPAIR_COMPLETION_TOKEN = Symbol("definition-draft-coverage-repair-completion");
 export { DraftCompletionConnector } from "./lib/draft-completion-connector.js";
 
@@ -566,15 +579,304 @@ export class GateRecoveryEffect {
 
 /** The exact acceptance-backed route selected for an advisory Gate result. */
 export class GateNonblockingHandoff {
-  constructor({ sourceStepId, targetStepId } = {}) {
+  constructor({ sourceStepId, targetStepId, taskId = null } = {}) {
     this.sourceStepId = requireString(sourceStepId, "gate nonblocking source Step");
     this.targetStepId = requireString(targetStepId, "gate nonblocking target Step");
-    if (this.sourceStepId !== "impl-gate" || this.targetStepId !== "retro") {
-      throw new Error("gate nonblocking handoff is invalid");
+    this.taskId = taskId == null ? null : requireString(taskId, "gate nonblocking Task id");
+    const route = nonblockingRouteFor(this.sourceStepId);
+    if (route?.kind !== "gate" || route.taskScoped !== (this.taskId !== null)) {
+      throw new Error("gate nonblocking handoff is not acceptance-backed");
+    }
+    if (route.targetStep !== null && route.targetStep !== this.targetStepId) {
+      throw new Error("gate nonblocking handoff target is invalid");
     }
     Object.freeze(this);
   }
-  toJSON() { return { sourceStepId: this.sourceStepId, targetStepId: this.targetStepId }; }
+  toJSON() {
+    return {
+      sourceStepId: this.sourceStepId,
+      targetStepId: this.targetStepId,
+      ...(this.taskId === null ? {} : { taskId: this.taskId }),
+    };
+  }
+}
+
+/** Stable identity of the recovery facts that authorized a Gate advisory. */
+class GateNonblockingSelectionIdentity {
+  constructor(token, { strictDecision, handoff, resultKind } = {}) {
+    if (token !== GATE_TRANSITION_TOKEN
+      || !(strictDecision instanceof GateTransitionDecision)
+      || !(handoff instanceof GateNonblockingHandoff)) {
+      throw new Error("Gate nonblocking selection identity requires a Definition decision and handoff");
+    }
+    if (!["quality", "tooling", "unavailable"].includes(resultKind)) {
+      throw new Error("Gate nonblocking selection identity result kind is invalid");
+    }
+    this.strictDecision = strictDecision;
+    this.handoff = handoff;
+    this.resultKind = resultKind;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    const {
+      snapshotRevision: _snapshotRevision,
+      nonblocking: _nonblocking,
+      ...recoveryFacts
+    } = this.strictDecision.facts.toJSON();
+    return {
+      disposition: this.strictDecision.disposition.toJSON(),
+      recoveryFacts,
+      resultKind: this.resultKind,
+      handoff: this.handoff.toJSON(),
+    };
+  }
+}
+
+/** One sealed action effect selected for an eligible advisory decision. */
+export class DefinitionNonblockingDecisionEffect {
+  constructor(token, { action, sourceStepId, targetStepId, skippedStepIds = [] } = {}) {
+    if (token !== NONBLOCKING_ELIGIBILITY_TOKEN) {
+      throw new Error("nonblocking decision effects are created only by Definition");
+    }
+    if (!["repair", "retry", "continue"].includes(action)) {
+      throw new Error("nonblocking decision effect action is invalid");
+    }
+    this.action = action;
+    this.operation = action === "continue" ? "continue" : "restart-source";
+    this.sourceStepId = requireString(sourceStepId, "nonblocking decision effect source Step");
+    this.targetStepId = requireString(targetStepId, "nonblocking decision effect target Step");
+    this.skippedStepIds = requireOptionalStepList(skippedStepIds, "nonblocking decision effect skipped Steps");
+    if (this.operation === "restart-source"
+      && (this.targetStepId !== this.sourceStepId || this.skippedStepIds.length !== 0)) {
+      throw new Error("nonblocking restart effect must target only its source Step");
+    }
+    this.nextAction = action === "continue" ? "refresh-next-action" : `run-${this.sourceStepId}`;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      action: this.action,
+      operation: this.operation,
+      sourceStepId: this.sourceStepId,
+      targetStepId: this.targetStepId,
+      skippedStepIds: this.skippedStepIds,
+      nextAction: this.nextAction,
+    };
+  }
+}
+
+/** Typed proof that Definition selected an acceptance-backed strict stop. */
+export class DefinitionNonblockingEligibility {
+  constructor(token, {
+    sourceStep,
+    resultKind,
+    blocker,
+    continueTargetStepId = null,
+    skippedStepIds = null,
+    selectedFindingFingerprints = [],
+    gateDecision = null,
+    selection = null,
+  } = {}) {
+    if (token !== NONBLOCKING_ELIGIBILITY_TOKEN) {
+      throw new Error("nonblocking eligibility is created only by Definition");
+    }
+    this.sourceStep = requireString(sourceStep, "nonblocking eligibility source Step");
+    if (nonblockingRouteFor(this.sourceStep) === null) {
+      throw new Error("nonblocking eligibility requires an acceptance-backed route");
+    }
+    if (!["quality", "tooling", "unavailable"].includes(resultKind)) {
+      throw new Error("nonblocking eligibility result kind is invalid");
+    }
+    this.resultKind = resultKind;
+    this.blocker = requireString(blocker, "nonblocking eligibility blocker");
+    if (selection === null || typeof selection !== "object") {
+      throw new Error("nonblocking eligibility requires its Definition selection");
+    }
+    this.definitionDigest = nonblockingSelectionDigest(selection);
+    const route = nonblockingRouteFor(this.sourceStep);
+    this.continueTargetStepId = requireString(
+      continueTargetStepId ?? route.targetStep,
+      "nonblocking continuation target Step",
+    );
+    const skipped = skippedStepIds ?? route.skippedSteps;
+    this.skippedStepIds = requireOptionalStepList(skipped, "nonblocking continuation skipped Steps");
+    this.selectedFindingFingerprints = requireOptionalStepList(
+      selectedFindingFingerprints,
+      "nonblocking selected finding fingerprints",
+    );
+    this.allowedActions = Object.freeze(resultKind === "quality"
+      ? ["repair", "continue"]
+      : ["retry", "continue"]);
+    this.acceptancePublication = resultKind === "quality" && ["gate", "review"].includes(route.kind)
+      ? "semantic-findings"
+      : "nonblocking-handoff";
+    if (!["semantic-findings", "nonblocking-handoff"].includes(this.acceptancePublication)) {
+      throw new Error("nonblocking acceptance publication is invalid");
+    }
+    if (gateDecision !== null && !(gateDecision instanceof GateTransitionDecision)) {
+      throw new Error("nonblocking Gate decision must be typed or null");
+    }
+    this.gateDecision = gateDecision;
+    if (new.target === DefinitionNonblockingEligibility) Object.freeze(this);
+  }
+
+  effectFor(action) {
+    if (!this.allowedActions.includes(action)) {
+      throw new Error(`nonblocking action ${action} is not selected by Definition`);
+    }
+    return new DefinitionNonblockingDecisionEffect(NONBLOCKING_ELIGIBILITY_TOKEN, {
+      action,
+      sourceStepId: this.sourceStep,
+      targetStepId: action === "continue" ? this.continueTargetStepId : this.sourceStep,
+      skippedStepIds: action === "continue" ? this.skippedStepIds : Object.freeze([]),
+    });
+  }
+
+  toJSON() {
+    return {
+      sourceStep: this.sourceStep,
+      resultKind: this.resultKind,
+      blocker: this.blocker,
+      allowedActions: this.allowedActions,
+      continueTargetStepId: this.continueTargetStepId,
+      skippedStepIds: this.skippedStepIds,
+      ...(this.selectedFindingFingerprints.length > 0 && {
+        selectedFindingFingerprints: this.selectedFindingFingerprints,
+      }),
+      acceptancePublication: this.acceptancePublication,
+      definitionDigest: this.definitionDigest,
+    };
+  }
+}
+
+export function reviewNonblockingEligibilityForDisposition({ stepId, disposition } = {}) {
+  if (!(disposition instanceof DefinitionReviewDisposition)
+    || !["external-blocked", "defer"].includes(disposition.operation)) return null;
+  if (nonblockingRouteFor(stepId)?.kind !== "review") return null;
+  return new DefinitionNonblockingEligibility(NONBLOCKING_ELIGIBILITY_TOKEN, {
+    sourceStep: stepId,
+    resultKind: disposition.operation === "external-blocked" ? "tooling" : "quality",
+    blocker: disposition.operation === "external-blocked"
+      ? "Review tooling recovery is unavailable."
+      : "Review recovery is exhausted with acceptance-backed findings.",
+    selection: disposition.toJSON(),
+    selectedFindingFingerprints: disposition.operation === "defer"
+      ? disposition.sourceFingerprints
+      : [],
+  });
+}
+
+/** Definition policy for acceptance-backed checks without a retry reducer. */
+export function acceptanceBoundaryNonblockingEligibility({ sourceStep, resultKind } = {}) {
+  if (!["retro", "acceptance-review"].includes(sourceStep)) return null;
+  if (nonblockingRouteFor(sourceStep) === null) return null;
+  return new DefinitionNonblockingEligibility(NONBLOCKING_ELIGIBILITY_TOKEN, {
+    sourceStep,
+    resultKind,
+    blocker: sourceStep === "acceptance-review"
+      ? "Acceptance requires an explicit disposition of the recorded blocker."
+      : "Retrospective completion has unresolved acceptance evidence and no ordinary retry route.",
+    selection: { sourceStep, resultKind, disposition: "acceptance-boundary" },
+  });
+}
+
+/**
+ * Select advisory eligibility for the active canonical Step. The supplied
+ * reader may only expose typed facts; this Definition owns every route and
+ * disposition branch.
+ */
+export function resolveActiveNonblockingEligibility({ sourceStep, evidence, flowState, reader } = {}) {
+  const route = nonblockingRouteFor(sourceStep);
+  if (route === null || reader === null || typeof reader !== "object") return null;
+  if (route.kind === "gate") {
+    const observed = reader.gateFacts(route);
+    if (observed === null) return null;
+    const facts = observed.nonblocking
+      ? GateTransitionFacts.fromPersisted({ ...observed.toJSON(), nonblocking: false })
+      : observed;
+    const strictDecision = resolveTaskGateSettlementRecovery(facts)
+      ?? resolveGatePublicationRecovery(facts)
+      ?? resolveGateTransition(facts);
+    return gateNonblockingEligibilityForDecision(strictDecision);
+  }
+  if (route.kind === "review") {
+    const facts = reader.reviewFacts(route);
+    if (facts === null) return null;
+    return reviewNonblockingEligibilityForDisposition({
+      stepId: sourceStep,
+      disposition: resolveReviewTransition({ stepId: sourceStep, flowState, facts }),
+    });
+  }
+  if (sourceStep === "scenario-validity" || sourceStep === "test-result-review") {
+    const observed = reader.testChainFacts(route);
+    if (observed === null) return null;
+    const facts = observed.nonblocking
+      ? new NonGateTransitionFacts({ ...observed.toJSON(), nonblocking: false, stepFacts: observed.stepFacts })
+      : observed;
+    const stepDefinition = sourceStep === "scenario-validity"
+      ? scenarioValidityTransitionDefinition
+      : testResultReviewTransitionDefinition;
+    return nonGateNonblockingEligibilityForDecision(resolveNonGateTransition(facts, stepDefinition));
+  }
+  if (route.kind === "regression") {
+    const observed = reader.finalRegressionFacts(route);
+    if (observed === null) return null;
+    const facts = observed.nonblocking
+      ? new NonGateTransitionFacts({ ...observed.toJSON(), nonblocking: false, stepFacts: observed.stepFacts })
+      : observed;
+    return nonGateNonblockingEligibilityForDecision(resolveNonGateTransition(
+      facts,
+      FINAL_REGRESSION_STEP_DEFINITION,
+    ));
+  }
+  return acceptanceBoundaryNonblockingEligibility({
+    sourceStep,
+    resultKind: evidence?.resultKind,
+  });
+}
+
+/** Definition-owned proof that one strict Gate stop has an acceptance route. */
+export class GateNonblockingEligibility extends DefinitionNonblockingEligibility {
+  constructor(token, { strictDecision, gateDecision, resultKind, handoff } = {}) {
+    if (token !== GATE_TRANSITION_TOKEN
+      || !(strictDecision instanceof GateTransitionDecision)
+      || !(gateDecision instanceof GateTransitionDecision)
+      || gateDecision.disposition.operation !== "nonblocking") {
+      throw new Error("Gate nonblocking eligibility is created only by the definition resolver");
+    }
+    const strictDisposition = strictDecision.disposition;
+    if (!["defer", "external-blocked", "blocked"].includes(strictDisposition.operation)) {
+      throw new Error("Gate nonblocking eligibility requires an exhausted or unavailable strict disposition");
+    }
+    if (!(handoff instanceof GateNonblockingHandoff)) {
+      throw new Error("Gate nonblocking eligibility requires an acceptance-backed handoff");
+    }
+    super(NONBLOCKING_ELIGIBILITY_TOKEN, {
+      sourceStep: handoff.sourceStepId,
+      resultKind,
+      blocker: strictDisposition.reason || "Strict Gate recovery is exhausted.",
+      continueTargetStepId: handoff.targetStepId,
+      gateDecision,
+      selection: new GateNonblockingSelectionIdentity(GATE_TRANSITION_TOKEN, {
+        strictDecision,
+        handoff,
+        resultKind,
+      }),
+    });
+    this.strictDisposition = strictDisposition;
+    this.handoff = handoff;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      strictDisposition: this.strictDisposition.toJSON(),
+      ...super.toJSON(),
+      handoff: this.handoff.toJSON(),
+    };
+  }
 }
 
 export class GateStepUpdatePlan {
@@ -754,7 +1056,7 @@ function taskLifecycleEffect(facts, disposition) {
   if (disposition.operation === "pass") return new GateTaskLifecycleEffect({
     operation: "complete-and-advance", taskId: lifecycle.taskId, successorStepId: lifecycle.successorStepId,
   });
-  if (disposition.operation === "defer") return new GateTaskLifecycleEffect({
+  if (disposition.operation === "defer" || disposition.operation === "nonblocking") return new GateTaskLifecycleEffect({
     operation: "defer-and-advance", taskId: lifecycle.taskId, successorStepId: lifecycle.successorStepId,
   });
   if (disposition.operation === "repair") return new GateTaskLifecycleEffect({
@@ -802,6 +1104,66 @@ function gateDecision(facts, disposition, options = {}) {
   });
 }
 
+function gateNonblockingSourceStep(facts) {
+  if (facts.scope === "task") return "task-gate";
+  if (facts.phase === "draft") return "draft-gate";
+  if (facts.phase === "spec" || facts.phase === "task-spec") return "spec-gate";
+  if (facts.phase === "integration") return "impl-gate";
+  return null;
+}
+
+/**
+ * Select advisory eligibility only from the sealed strict decision. Callers
+ * may project this proof, but cannot manufacture it from a blocked directive.
+ */
+export function gateNonblockingEligibilityForDecision(decision) {
+  if (!(decision instanceof GateTransitionDecision)) {
+    throw new Error("Gate nonblocking eligibility requires a Definition decision");
+  }
+  const facts = decision.facts;
+  if (facts.result !== "fail" || facts.integrityFailure !== null) return null;
+  if (!["defer", "external-blocked", "blocked"].includes(decision.disposition.operation)) return null;
+  const sourceStepId = gateNonblockingSourceStep(facts);
+  const route = sourceStepId === null ? null : nonblockingRouteFor(sourceStepId);
+  if (route?.kind !== "gate") return null;
+  const targetStepId = facts.scope === "task"
+    ? facts.taskLifecycle?.successorStepId ?? null
+    : route.targetStep;
+  if (targetStepId === null) return null;
+  const category = facts.failure?.category;
+  const resultKind = category === "semantic"
+    ? "quality"
+    : category === "local" ? "unavailable" : "tooling";
+  const enabledFacts = facts.nonblocking
+    ? facts
+    : GateTransitionFacts.fromPersisted({ ...facts.toJSON(), nonblocking: true });
+  const handoff = new GateNonblockingHandoff({
+    sourceStepId,
+    targetStepId,
+    taskId: facts.target.taskId,
+  });
+  const selectedGateDecision = gateDecision(
+    enabledFacts,
+    new GateNonblockingDisposition(GATE_TRANSITION_TOKEN),
+    { nonblockingHandoff: handoff },
+  );
+  return new GateNonblockingEligibility(GATE_TRANSITION_TOKEN, {
+    strictDecision: decision,
+    gateDecision: selectedGateDecision,
+    resultKind,
+    handoff,
+  });
+}
+
+function selectGateNonblockingDecision(facts, strictDecision) {
+  if (facts.nonblocking !== true) return strictDecision;
+  const eligibility = gateNonblockingEligibilityForDecision(strictDecision);
+  if (eligibility === null) return strictDecision;
+  return gateDecision(facts, new GateNonblockingDisposition(GATE_TRANSITION_TOKEN), {
+    nonblockingHandoff: eligibility.handoff,
+  });
+}
+
 /**
  * The definition's phase-neutral Gate policy. Phase migrations may add their
  * own facts, but execution and projection layers cannot choose a disposition.
@@ -836,23 +1198,17 @@ function resolveGateClassification(facts) {
       updates: [], recoveryEffect,
     });
   }
-  if (facts.phase === "integration" && facts.nonblocking) {
-    const nonblockingHandoff = facts.phase === "integration"
-      ? new GateNonblockingHandoff({ sourceStepId: facts.target.stepId, targetStepId: "retro" })
-      : null;
-    return gateDecision(facts, new GateNonblockingDisposition(GATE_TRANSITION_TOKEN), {
-      nonblockingHandoff,
-    });
-  }
   if (facts.failure.category === "tooling") {
-    return gateDecision(facts, new GateExternalBlockedDisposition(
+    const strict = gateDecision(facts, new GateExternalBlockedDisposition(
       GATE_TRANSITION_TOKEN, facts.failure.code || "tooling_failure",
     ));
+    return selectGateNonblockingDecision(facts, strict);
   }
   if (facts.failure.category === "local") {
-    return gateDecision(facts, new GateBlockedDisposition(
+    const strict = gateDecision(facts, new GateBlockedDisposition(
       GATE_TRANSITION_TOKEN, facts.failure.code || "local_input_invalid",
     ));
+    return selectGateNonblockingDecision(facts, strict);
   }
   // Task Gates consume their semantic retry budget before considering a
   // plan-repair receipt. A gate:post receipt is emitted after every failed
@@ -877,7 +1233,8 @@ function resolveGateClassification(facts) {
   }
   // The failed Attempt remains current until the canonical settlement command
   // records its finding.  `defer` therefore has no premature status advance.
-  return gateDecision(facts, new GateDeferDisposition(GATE_TRANSITION_TOKEN));
+  const strict = gateDecision(facts, new GateDeferDisposition(GATE_TRANSITION_TOKEN));
+  return selectGateNonblockingDecision(facts, strict);
 }
 
 export function resolveGateTransition(facts) {
@@ -1548,6 +1905,49 @@ export class NonGateTransitionDecision {
   toJSON() { return { facts: this.facts.toJSON(), disposition: this.disposition.toJSON(), plan: this.plan.toJSON() }; }
 }
 
+/**
+ * Stable identity of the strict recovery facts that authorized a non-Gate
+ * advisory. Version revision and the enabled policy bit describe the
+ * transaction carrying the selection, not the selection itself.
+ */
+class NonGateNonblockingSelectionIdentity {
+  constructor(token, { decision, resultKind } = {}) {
+    if (token !== NON_GATE_TRANSITION_TOKEN || !(decision instanceof NonGateTransitionDecision)) {
+      throw new Error("non-Gate nonblocking selection identity requires a Definition decision");
+    }
+    if (!["quality", "tooling", "unavailable"].includes(resultKind)) {
+      throw new Error("non-Gate nonblocking selection identity result kind is invalid");
+    }
+    this.decision = decision;
+    this.resultKind = resultKind;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    const {
+      snapshotRevision: _snapshotRevision,
+      nonblocking: _nonblocking,
+      ...recoveryFacts
+    } = this.decision.facts.toJSON();
+    if (recoveryFacts.stepFacts?.values !== undefined) {
+      const { catalogDigest: _catalogDigest, nonblocking: _stepPolicy, ...stepValues } = recoveryFacts.stepFacts.values;
+      recoveryFacts.stepFacts = { ...recoveryFacts.stepFacts, values: stepValues };
+    }
+    const route = nonblockingRouteFor(this.decision.facts.stepId);
+    return {
+      disposition: this.decision.disposition.toJSON(),
+      recoveryFacts,
+      resultKind: this.resultKind,
+      actions: this.decision.plan.actions.map((action) => action.toJSON()),
+      userActions: this.decision.plan.userActions.map((action) => action.actionId),
+      continuation: {
+        targetStepId: route.targetStep,
+        skippedStepIds: route.skippedSteps,
+      },
+    };
+  }
+}
+
 /** Retrieve only a user action sealed into the selected Definition plan. */
 export function selectedNonGateUserAction(decision, actionId) {
   if (!(decision instanceof NonGateTransitionDecision)) {
@@ -1639,12 +2039,22 @@ export function resolveNonGateTransition(facts, stepDefinition) {
     return nonGateDecision(facts, new NonGateBlockedDisposition(NON_GATE_TRANSITION_TOKEN, "partial_completion"), { noEffects: true });
   }
   const selection = stepDefinition.selectionFor(facts);
-  const selectedDecision = (disposition, options = {}) => nonGateDecision(facts, disposition, {
-    ...options,
-    beforeActions: options.beforeActions ?? selection.beforeActions,
-    stepActions: options.stepActions ?? selection.actions,
-    userActions: options.userActions ?? selection.userActions,
-  });
+  const selectedDecision = (disposition, options = {}) => {
+    const strictDecision = nonGateDecision(facts, disposition, {
+      ...options,
+      beforeActions: options.beforeActions ?? selection.beforeActions,
+      stepActions: options.stepActions ?? selection.actions,
+      userActions: options.userActions ?? selection.userActions,
+    });
+    const eligibility = nonGateNonblockingEligibilityForDecision(strictDecision);
+    if (!facts.nonblocking || eligibility === null) return strictDecision;
+    return nonGateDecision(facts, new NonGateAwaitUserInputDisposition(
+      NON_GATE_TRANSITION_TOKEN,
+      eligibility.blocker,
+    ), {
+      beforeActions: [new NonGateRecordNonblockingAction(NON_GATE_TRANSITION_TOKEN, { stepId: facts.stepId })],
+    });
+  };
   if (selection.operation === "advance") {
     if (!facts.completion.completed) return selectedDecision(new NonGateBlockedDisposition(NON_GATE_TRANSITION_TOKEN, "completion_unconfirmed"));
     return selectedDecision(new NonGateAdvanceDisposition(NON_GATE_TRANSITION_TOKEN), { status: "done" });
@@ -1668,6 +2078,33 @@ export function resolveNonGateTransition(facts, stepDefinition) {
     return selectedDecision(new NonGateParkDisposition(NON_GATE_TRANSITION_TOKEN, selection.reason), { status: "done" });
   }
   return selectedDecision(new NonGateBlockedDisposition(NON_GATE_TRANSITION_TOKEN, selection.reason || "blocked"));
+}
+
+export function nonGateNonblockingEligibilityForDecision(decision) {
+  if (!(decision instanceof NonGateTransitionDecision)) {
+    throw new Error("non-Gate nonblocking eligibility requires a Definition decision");
+  }
+  if (decision.facts.integrityFailure !== null || decision.facts.completion.partial) return null;
+  if (!["external-blocked", "blocked"].includes(decision.disposition.operation)) return null;
+  const sourceStep = decision.facts.stepId;
+  if (sourceStep === "final-regression"
+    && ["stale_changed_file_snapshot", "retry_history_mismatch"].includes(decision.disposition.reason)) {
+    return null;
+  }
+  if (nonblockingRouteFor(sourceStep) === null) return null;
+  const resultKind = NonblockingFailureClassification.fromStepFacts(
+    sourceStep,
+    decision.facts.stepFacts,
+  ).resultKind;
+  return new DefinitionNonblockingEligibility(NONBLOCKING_ELIGIBILITY_TOKEN, {
+    sourceStep,
+    resultKind,
+    blocker: decision.disposition.reason || "Strict recovery is exhausted or unavailable.",
+    selection: new NonGateNonblockingSelectionIdentity(NON_GATE_TRANSITION_TOKEN, {
+      decision,
+      resultKind,
+    }),
+  });
 }
 
 function requireDigest(value, field) {
@@ -2136,7 +2573,7 @@ export const scenarioValidityTransitionDefinition = new NonGateStepDefinition({
       failed: stepFacts.result === "block",
       toolingFailure: stepFacts.toolingFailure,
       invalidTest: stepFacts.invalidTest,
-      nonblocking: facts.nonblocking,
+      nonblocking: false,
       summary: stepFacts.summary,
       testSourceRevision: stepFacts.testSourceRevision,
     });
@@ -2162,7 +2599,7 @@ export const testResultReviewTransitionDefinition = new NonGateStepDefinition({
       stepId: "test-result-review",
       failed: stepFacts.verdict === "fail",
       toolingFailure: stepFacts.toolingFailure,
-      nonblocking: facts.nonblocking,
+      nonblocking: false,
     });
   },
 });
