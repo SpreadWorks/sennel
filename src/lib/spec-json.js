@@ -27,6 +27,81 @@ const SCHEMA_PATH = path.resolve(
 
 let cachedSchema = null;
 
+const REQUIREMENT_NUMBER_PATTERN = "[1-9]\\d*";
+const REQUIREMENT_ID_PATTERN = `R${REQUIREMENT_NUMBER_PATTERN}`;
+const CANONICAL_REQUIREMENT_ID = new RegExp(`^${REQUIREMENT_ID_PATTERN}$`);
+const GENERATED_REQUIREMENT_ID = new RegExp(`^R-?(${REQUIREMENT_NUMBER_PATTERN})$`);
+
+/**
+ * Canonical identity for a Requirement published in spec.json.
+ *
+ * Generated spec payloads have one deliberately narrow compatibility boundary:
+ * `R-<positive integer>` is rewritten to this canonical form before sealing.
+ * Persisted specs are never rewritten while being read.
+ */
+export class CanonicalRequirementId {
+  constructor(value, label = "requirement id") {
+    if (typeof value !== "string" || !CANONICAL_REQUIREMENT_ID.test(value)) {
+      throw new Error(`${label} must be a canonical requirement id (R1, R2, ...)`);
+    }
+    this.value = value;
+    Object.freeze(this);
+  }
+
+  static fromGenerated(value, label = "generated requirement id") {
+    if (typeof value !== "string") {
+      throw new Error(`${label} must be R1, R2, ... or the supported external form R-1, R-2, ...`);
+    }
+    const match = GENERATED_REQUIREMENT_ID.exec(value);
+    if (!match) {
+      throw new Error(`${label} must be R1, R2, ... or the supported external form R-1, R-2, ...`);
+    }
+    return new CanonicalRequirementId(`R${match[1]}`, label);
+  }
+
+  static is(value) {
+    return typeof value === "string" && CANONICAL_REQUIREMENT_ID.test(value);
+  }
+
+  static get patternSource() {
+    return REQUIREMENT_ID_PATTERN;
+  }
+
+  static get numberPatternSource() {
+    return REQUIREMENT_NUMBER_PATTERN;
+  }
+
+  toString() {
+    return this.value;
+  }
+}
+
+/**
+ * Normalize a worker-produced spec document at its sealing boundary only.
+ * No mutation is made when every ID is already canonical, preserving the
+ * source bytes that will be digested. Callers must validate a changed result,
+ * then persist it before digesting and sealing it.
+ */
+export function normalizeGeneratedSpecRequirementIds(spec) {
+  if (!Array.isArray(spec?.requirements)) return spec;
+  const ids = new Set();
+  let changed = false;
+  const requirements = spec.requirements.map((requirement, index) => {
+    const id = CanonicalRequirementId.fromGenerated(
+      requirement?.id,
+      `generated spec requirements[${index}].id`,
+    ).toString();
+    if (ids.has(id)) {
+      throw new Error(`generated spec Requirement ids collide after normalization: ${id}`);
+    }
+    ids.add(id);
+    if (requirement.id === id) return requirement;
+    changed = true;
+    return { ...requirement, id };
+  });
+  return changed ? { ...spec, requirements } : spec;
+}
+
 function loadSchema() {
   if (!cachedSchema) {
     cachedSchema = JSON.parse(fs.readFileSync(SCHEMA_PATH, "utf8"));

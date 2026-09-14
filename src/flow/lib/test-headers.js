@@ -12,14 +12,15 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { CanonicalRequirementId } from "../../lib/spec-json.js";
 
 const SPEC_TEST_EXT_RE = /\.(test|spec)\.(js|ts|mjs)$/;
-const STRICT_HEADER_RE = /^\s*(\/\/|#)\s+spec:\s+(R\d+(?:\s+R\d+)*)\s*$/;
+const STRICT_HEADER_RE = new RegExp(`^\\s*(//|#)\\s+spec:\\s+(${CanonicalRequirementId.patternSource}(?:\\s+${CanonicalRequirementId.patternSource})*)\\s*$`);
 // Candidate detection: any line containing `spec` keyword in a comment-like prefix.
 const CANDIDATE_RE = /^\s*(\/\/+|#+)\s*spec\b/;
 const SHEBANG_RE = /^#!/;
 const NON_COMMENT_RE = /^\s*[^\s/#]/;
-const TEST_NAME_RE = /(it|test)\s*\(\s*['"`]R(\d+):/g;
+const TEST_NAME_RE = new RegExp(`(it|test)\\s*\\(\\s*['\"\`]R(${CanonicalRequirementId.numberPatternSource}):`, "g");
 const JS_EXTS = new Set([".js", ".mjs", ".ts"]);
 
 function uniqueIds(ids) {
@@ -141,7 +142,7 @@ export function getSpecTestFiles(specDir) {
 }
 
 /**
- * Extract test-name R-IDs from a file (i.e., test() / it() with `R<N>:` prefix).
+ * Extract test-name requirement IDs from a file (i.e., test() / it() with an `R1:` prefix).
  */
 export function extractTestNameReqIds(absPath) {
   const content = fs.readFileSync(absPath, "utf8");
@@ -295,10 +296,7 @@ export function validateTestHeaders({ specDir, spec }) {
 }
 
 function requiredRequirementId(value, label) {
-  if (typeof value !== "string" || !/^R\d+$/.test(value)) {
-    throw new Error(`${label} must be a requirement id`);
-  }
-  return value;
+  return new CanonicalRequirementId(value, label).toString();
 }
 
 /**
@@ -310,7 +308,7 @@ export class AssignedRequirementTestValidation {
   constructor({ assignedRequirementId, secondaryRequirementIds = [], validationResult, recoverableIssues = [], assignedCovered = false }) {
     this.assignedRequirementId = requiredRequirementId(assignedRequirementId, "assignedRequirementId");
     if (!Array.isArray(secondaryRequirementIds)
-      || !secondaryRequirementIds.every((id) => typeof id === "string" && /^R\d+$/.test(id))) {
+      || !secondaryRequirementIds.every((id) => CanonicalRequirementId.is(id))) {
       throw new Error("secondaryRequirementIds must contain requirement ids");
     }
     const secondary = [...new Set(secondaryRequirementIds)];
@@ -361,14 +359,12 @@ export class AssignedRequirementRecoverableIssue {
     if (!["assigned_requirement_missing_header", "assigned_requirement_missing_test_name", "assigned_requirement_uncovered"].includes(code)) {
       throw new Error(`invalid assigned requirement issue code: ${code}`);
     }
-    if (typeof requirementId !== "string" || !/^R\d+$/.test(requirementId)) {
-      throw new Error("requirementId must be a requirement id");
-    }
+    const canonicalRequirementId = requiredRequirementId(requirementId, "requirementId");
     if (file !== null && (typeof file !== "string" || file.length === 0)) {
       throw new Error("file must be a non-empty string or null");
     }
     this.code = code;
-    this.requirementId = requirementId;
+    this.requirementId = canonicalRequirementId;
     this.file = file;
     Object.freeze(this);
   }
@@ -497,10 +493,10 @@ export function formatValidationMessages(result) {
     msgs.push(`use // (not #) for spec header in JS-like files: ${result.mismatchedMarker.map((m) => m.file).join(", ")}`);
   }
   if (result.headerNoTest.length > 0) {
-    msgs.push(`header declares R-ID but no \`R-N:\` test name in same file: ${result.headerNoTest.map((h) => `${h.file}:${h.id}`).join(", ")}`);
+    msgs.push(`header declares a Requirement ID but no \`R1:\`-style test name in same file: ${result.headerNoTest.map((h) => `${h.file}:${h.id}`).join(", ")}`);
   }
   if (result.testNoHeader.length > 0) {
-    msgs.push(`\`R-N:\` test name without header declaration: ${result.testNoHeader.map((h) => `${h.file}:${h.id}`).join(", ")}`);
+    msgs.push(`\`R1:\`-style test name without header declaration: ${result.testNoHeader.map((h) => `${h.file}:${h.id}`).join(", ")}`);
   }
   return msgs;
 }

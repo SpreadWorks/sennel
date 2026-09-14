@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateSchema } from "../../../src/lib/schema-validate.js";
+import { validateSpecJsonObject } from "../../../src/lib/spec-json.js";
 
 const SCHEMA_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -87,6 +88,17 @@ describe("spec.schema.json", () => {
     const schema = loadSchema();
     const errors = validateSchema(minimalValidSpec(), schema);
     assert.deepEqual(errors, []);
+  });
+
+  it("does not rewrite legacy persisted Requirement IDs during ordinary validation", () => {
+    const spec = minimalValidSpec();
+    spec.requirements[0] = {
+      ...spec.requirements[0],
+      id: "R-1",
+      testable: false,
+    };
+
+    assert.equal(validateSpecJsonObject(spec).requirements[0].id, "R-1");
   });
 
   it("rejects a retired lifecycle status on a requirement definition", () => {

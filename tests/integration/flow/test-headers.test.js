@@ -101,6 +101,12 @@ test("R4: parseHeader rejects `// spec: R1a`", async () => {
   assert.equal(result.kind, "malformed");
 });
 
+test("R4: parseHeader rejects non-canonical `R0` IDs", async () => {
+  const { parseHeader } = await loadModule();
+  const result = parseHeader("// spec: R0", { ext: ".js", lineNumber: 1 });
+  assert.equal(result.kind, "malformed");
+});
+
 // R4: duplicate IDs in single header
 test("R4: scanFileHeader detects duplicate IDs", async () => {
   withTmpDir(async (root) => {
@@ -360,6 +366,23 @@ test("assigned validation rejects escaped and non-test candidate paths", async (
     };
     assert.throws(() => validateAssignedRequirementTestHeaders({ ...args, candidatePaths: ["tests/../tests/candidate.test.js"] }), /canonical repository-relative/);
     assert.throws(() => validateAssignedRequirementTestHeaders({ ...args, candidatePaths: ["spec.json"] }), /canonical repository-relative/);
+  });
+});
+
+test("assigned validation rejects non-canonical Requirement IDs", async () => {
+  withTmpDir(async (root) => {
+    const { validateAssignedRequirementTestHeaders } = await loadModule();
+    const specDir = path.join(root, "specs", "249-foo");
+    writeFile(specDir, "tests/candidate.test.js", "// spec: R1\nit('R1: primary', ()=>{});\n");
+    assert.throws(
+      () => validateAssignedRequirementTestHeaders({
+        specDir,
+        spec: specWithReqs([{ id: "R1", desc: "..." }]),
+        assignedRequirementId: "R-1",
+        candidatePaths: ["tests/candidate.test.js"],
+      }),
+      /canonical requirement id/,
+    );
   });
 });
 

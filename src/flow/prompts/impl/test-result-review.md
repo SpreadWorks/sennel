@@ -6,7 +6,7 @@
      - actual test files under `<configured-spec-root>/<specId>/tests/`
    - **Required check items (verify ALL):**
      1. **file_path_exists** — every `evidence.test_file` exists in the actual code; `evidence.test_name` appears in that file.
-     2. **req_id_in_output** — every requirement reported as `pass` has its requirement ID (R-N) appearing in the raw output (test name or output line).
+     2. **req_id_in_output** — every requirement reported as `pass` has its canonical requirement ID (`R1`, `R2`, ...) appearing in the raw output (test name or output line).
      3. **test_count_consistency** — total number of tests reported (sum of `summary[]` entries) matches the test count in the raw output.
      4. **stack_trace_validity** — for `result: "fail"` entries with stack traces, the file/line referenced exists in the actual code.
      5. **summary_completeness** — every testable requirement (from `spec.json`, `requirements[].testable !== false`) is present in `summary[]` exactly once. No missing IDs, no duplicates, no unknown IDs.

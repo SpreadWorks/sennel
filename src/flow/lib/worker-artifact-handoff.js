@@ -6,7 +6,10 @@ import path from "node:path";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { FlowHandoffAuthorityLease } from "../../lib/flow-handoff-authority-lease.js";
 import { PRODUCT } from "../../lib/product.js";
-import { validateSpecJsonObject } from "../../lib/spec-json.js";
+import {
+  normalizeGeneratedSpecRequirementIds,
+  validateSpecJsonObject,
+} from "../../lib/spec-json.js";
 import { validateSchema } from "../../lib/schema-validate.js";
 import {
   CanonicalFlowArtifactBaseline,
@@ -5508,7 +5511,7 @@ export class WorkerArtifactHandoffSubmission {
       const source = request.payloadPath(rule.logicalName);
       if (rule.kind === "file") {
         if (!fs.existsSync(source) && !rule.required) continue;
-        validateFilePayloadAtCliBoundary(request, rule, source);
+        validateFilePayloadAtCliBoundary(request, rule, source, { normalizeGeneratedSpecRequirements: true });
         const snapshot = readRegularFile(source, `handoff payload ${rule.logicalName}`);
         const relativePath = path.relative(request.payloadDirectory, source).split(path.sep).join("/");
         manifest.push(new WorkerArtifactManifestEntry({
@@ -5621,12 +5624,12 @@ function validateSpecRepairPayloadAtProducerBoundary(request, document) {
   });
 }
 
-function validateFilePayloadAtCliBoundary(request, rule, source) {
+function validateFilePayloadAtCliBoundary(request, rule, source, { normalizeGeneratedSpecRequirements = false } = {}) {
   try {
     // Every file payload is JSON. Parsing it here keeps malformed worker
     // output outside the sealed handoff protocol and gives the parent a
     // retryable producer error before any publication journal can exist.
-    const { document } = boundedJson(
+    let { document } = boundedJson(
       source,
       `handoff payload ${rule.logicalName}`,
       { retryableMalformedJson: true, transport: "worker-payload" },
@@ -5639,7 +5642,15 @@ function validateFilePayloadAtCliBoundary(request, rule, source) {
       rule.logicalName === "spec.json"
       && ["spec", "spec-repair"].includes(request.stepId)
     ) {
-      validateSpecJsonObject(document);
+      const normalized = normalizeGeneratedSpecRequirementIds(document);
+      validateSpecJsonObject(normalized);
+      if (normalized !== document) {
+        if (normalizeGeneratedSpecRequirements) {
+          new AtomicFile(source, { phaseNamespace: "worker-spec-requirement-id-normalization" })
+            .write(`${JSON.stringify(normalized, null, 2)}\n`);
+        }
+        document = normalized;
+      }
     }
     if (rule.logicalName === "review.delta.json") {
       if (request.stepId === "spec-triage") validateSpecTriagePayloadAtProducerBoundary(request, document);

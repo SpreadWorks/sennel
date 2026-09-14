@@ -18,6 +18,7 @@
      - If `reopen-draft` fails or the flow presents a recovery choice, use Choice Format for that recovery decision.
    - Do not render or edit `spec.md` in this step. `spec.json` is the source of truth; the approval prompt renders the human-readable `spec.md` view when the user needs to read it.
    - Fill spec.json fields: `goal`, `scope`, `constraints`, `requirements`, `acceptance_criteria`, `alternatives_considered` (if applicable).
+   - **Requirement IDs:** assign `requirements[]` IDs exactly as `R1`, `R2`, `R3`, ... in array order. Never use `R-1`, `R_1`, `R0`, or arbitrary identifiers.
    - Every `requirements[]` entry must include a non-empty, duplicate-free `task_ids` array containing only existing `tasks[].id` values. This is the sole Requirement-to-Task mapping; do not infer mappings from prose, order, parent links, or implementation notes.
    - **Requirement testability:** each `requirements[]` entry may carry an optional `testable` boolean. Default behavior is testable (omit the field, or set `testable: true`). Every testable Requirement must also set `preimplementation_test_expectation` to `fail` when its named test must initially fail or `pass` when current behavior must already satisfy it. Set `testable: false` only when the Requirement is inherently not verifiable through automated tests; in that case `preimplementation_test_expectation` must be omitted.
      - Example:

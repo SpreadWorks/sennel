@@ -27,6 +27,7 @@ import {
 import RunDispatchCommand, * as runDispatchModule from "../../../src/flow/lib/run-dispatch.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { canonicalTaskReviewFileMap } from "../../../src/flow/commands/review.js";
+import { validateAssignedRequirementTestHeaders } from "../../../src/flow/lib/test-headers.js";
 import SetStepCommand from "../../../src/flow/lib/set-step.js";
 import SetMetricCommand from "../../../src/flow/lib/set-metric.js";
 import { loadSpecJsonSchema } from "../../../src/lib/spec-json.js";
@@ -232,6 +233,21 @@ function readCatalogJson(value, logicalKey, consumerNodeId) {
 
 function draftDocument(goal) {
   return canonicalDraftDocument({ goal });
+}
+
+function generatedSpecPayload(requirementIds) {
+  return {
+    ...validSpec(),
+    requirements: requirementIds.map((id) => ({
+      ...validSpec().requirements[0],
+      id,
+      task_ids: ["T1"],
+    })),
+    tasks: [{
+      id: "T1", title: "Publish generated Spec", goal: "Exercise generated Requirement IDs.",
+      origin: "plan", added_round: 0, status: "pending",
+    }],
+  };
 }
 
 function draftWithQuestionLedger(questions) {
@@ -3418,6 +3434,151 @@ describe("worker artifact handoff", () => {
       removeTmpDir(specValue.mainRoot);
     }
 
+  });
+
+  it("normalizes generated R-1 Requirement IDs before sealing, publication, and assigned test validation", () => {
+    const value = fixture("spec", {
+      beforeActivate(input) {
+        publishDraftBeforeTarget(input, draftDocument("draft input"));
+      },
+    });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      const proposed = generatedSpecPayload(["R-1"]);
+      proposed.requirements[0] = {
+        ...proposed.requirements[0],
+        testable: true,
+        preimplementation_test_expectation: "fail",
+      };
+      fs.writeFileSync(request.payloadPath("spec.json"), json(proposed));
+
+      seal(request);
+
+      const normalizedBytes = fs.readFileSync(request.payloadPath("spec.json"));
+      const sealed = JSON.parse(fs.readFileSync(request.submissionPath, "utf8"));
+      const manifest = sealed.payloadManifest.find((entry) => entry.logicalName === "spec.json");
+      assert.equal(JSON.parse(normalizedBytes.toString("utf8")).requirements[0].id, "R1");
+      assert.equal(manifest.digest, crypto.createHash("sha256").update(normalizedBytes).digest("hex"));
+
+      value.coordinator.reconcile({ ctx: value.ctx, request });
+      const published = JSON.parse(fs.readFileSync(value.flowManager.specLocation(value.specId).specFile, "utf8"));
+      assert.equal(published.requirements[0].id, "R1");
+
+      fs.mkdirSync(path.join(canonicalSpecDir(value), "tests"), { recursive: true });
+      fs.writeFileSync(
+        path.join(canonicalSpecDir(value), "tests", "generated.test.js"),
+        "// spec: R1\nit('R1: generated requirement remains assigned', () => {});\n",
+      );
+      const assigned = validateAssignedRequirementTestHeaders({
+        specDir: canonicalSpecDir(value),
+        spec: published,
+        assignedRequirementId: "R1",
+        candidatePaths: ["tests/generated.test.js"],
+      });
+      assert.equal(assigned.ok, true);
+      assert.equal(assigned.assignedRequirementId, "R1");
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("seals canonical R1 Requirement IDs without rewriting their worker payload", () => {
+    const value = fixture("spec", {
+      beforeActivate(input) {
+        publishDraftBeforeTarget(input, draftDocument("draft input"));
+      },
+    });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      const bytes = Buffer.from(json(generatedSpecPayload(["R1"])));
+      fs.writeFileSync(request.payloadPath("spec.json"), bytes);
+
+      seal(request);
+
+      assert.deepEqual(fs.readFileSync(request.payloadPath("spec.json")), bytes);
+      value.coordinator.reconcile({ ctx: value.ctx, request });
+      assert.equal(
+        JSON.parse(fs.readFileSync(value.flowManager.specLocation(value.specId).specFile, "utf8")).requirements[0].id,
+        "R1",
+      );
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("rejects generated Requirement IDs that collide after normalization or are not supported", () => {
+    for (const { requirementIds, expected } of [
+      { requirementIds: ["R1", "R-1"], expected: /collide after normalization: R1/ },
+      { requirementIds: ["R_1"], expected: /must be R1, R2, \.\.\. or the supported external form/ },
+      { requirementIds: ["R01"], expected: /must be R1, R2, \.\.\. or the supported external form/ },
+    ]) {
+      const value = fixture("spec", {
+        beforeActivate(input) {
+          publishDraftBeforeTarget(input, draftDocument("draft input"));
+        },
+      });
+      try {
+        const request = value.coordinator.createRequest({
+          ctx: value.ctx,
+          state: value.flowManager.load(),
+          invocation: value.invocation,
+        });
+        const originalBytes = Buffer.from(json(generatedSpecPayload(requirementIds)));
+        fs.writeFileSync(request.payloadPath("spec.json"), originalBytes);
+
+        assert.throws(
+          () => seal(request),
+          (error) => error instanceof WorkerArtifactHandoffError
+            && error.code === "FLOW_ARTIFACT_HANDOFF_INVALID"
+            && expected.test(error.message),
+        );
+        assert.deepEqual(fs.readFileSync(request.payloadPath("spec.json")), originalBytes);
+        assert.equal(fs.existsSync(request.submissionPath), false);
+      } finally {
+        removeTmpDir(value.mainRoot);
+      }
+    }
+  });
+
+  it("does not rewrite an unsealed generated Spec when validation fails after Requirement ID normalization", () => {
+    const value = fixture("spec", {
+      beforeActivate(input) {
+        publishDraftBeforeTarget(input, draftDocument("draft input"));
+      },
+    });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      const proposed = generatedSpecPayload(["R-1"]);
+      proposed.requirements[0] = {
+        ...proposed.requirements[0],
+        task_ids: ["missing-task"],
+      };
+      const originalBytes = Buffer.from(json(proposed));
+      fs.writeFileSync(request.payloadPath("spec.json"), originalBytes);
+
+      assert.throws(
+        () => seal(request),
+        (error) => error instanceof WorkerArtifactHandoffError
+          && error.code === "FLOW_ARTIFACT_HANDOFF_INVALID"
+          && /references unknown Task: missing-task/.test(error.message),
+      );
+      assert.deepEqual(fs.readFileSync(request.payloadPath("spec.json")), originalBytes);
+      assert.equal(fs.existsSync(request.submissionPath), false);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
   });
 
   it("replays approval Task admission after a definition-owned draft recovery", () => {
