@@ -24,12 +24,13 @@
               "maxItems": 256,
               "items": {
                 "type": "object",
-                "required": ["fingerprint", "strategy", "summary", "priorInsufficiency"],
+                "required": ["fingerprint", "strategy", "summary", "priorRepairInsufficiency", "paths"],
                 "properties": {
                   "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
                   "strategy": { "type": "string", "minLength": 1 },
                   "summary": { "type": "string", "minLength": 1 },
-                  "priorInsufficiency": { "type": ["string", "null"] }
+                  "priorRepairInsufficiency": { "type": ["string", "null"] },
+                  "paths": { "type": "array", "maxItems": 256, "items": { "type": "string", "minLength": 1 } }
                 },
                 "additionalProperties": false
               }

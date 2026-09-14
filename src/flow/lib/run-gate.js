@@ -1642,9 +1642,7 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
 
 import {
   gateReportPrescription,
-  resolveGatePublicationRecovery,
-  resolveGateTransition,
-  resolveTaskGateSettlementRecovery,
+  resolveGateEvaluationAdmission,
 } from "../definition.js";
 
 const GATE_OBSERVATION_PHASES = VALID_GATE_PHASES;
@@ -3700,11 +3698,10 @@ export class RunGateCommand extends FlowCommand {
       // Task settlement is considered before the generic publication
       // recovery so a saved Task Gate result is reconciled without invoking
       // its worker again.
-      const taskSettlementRecovery = resolveTaskGateSettlementRecovery(existingFacts);
-      const recovery = taskSettlementRecovery ?? resolveGatePublicationRecovery(existingFacts);
-      if (recovery !== null) {
+      const admission = resolveGateEvaluationAdmission(existingFacts);
+      if (admission.recoveryDecision !== null) {
         const selected = state.nextAction();
-        if (taskSettlementRecovery === null
+        if (existingFacts.scope !== "task"
           && (selected?.operation !== "resume" || selected.action?.action !== "run-gate")) {
           throw new Error(
             `canonical Gate publication recovery rejected; state selected ${selected?.operation ?? "no action"}`,
@@ -3717,10 +3714,10 @@ export class RunGateCommand extends FlowCommand {
           nodeId,
           activeTaskId,
           facts: existingFacts,
-          recoveryDecision: recovery,
+          recoveryDecision: admission.recoveryDecision,
         }).rehydrate();
       }
-      const decision = resolveGateTransition(existingFacts);
+      const decision = admission.transitionDecision;
       throw new Error(
         `canonical gate admission rejected evaluation; definition selected ${decision.disposition.operation}`,
       );
@@ -3754,7 +3751,8 @@ export class RunGateCommand extends FlowCommand {
         root: executionRoot,
       });
       if (facts !== null) {
-        const decision = resolveGateTransition(facts);
+        const admission = resolveGateEvaluationAdmission(facts);
+        const decision = admission.selectedDecision;
         const error = new Error(
           `Gate provider admission denied evaluation; Definition selected ${decision.disposition.operation}`,
         );

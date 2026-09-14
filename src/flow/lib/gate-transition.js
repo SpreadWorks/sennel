@@ -379,6 +379,7 @@ export class GateObservationConvergenceFacts {
     occurrenceCount,
     repairCount,
     recurrenceCount,
+    recurringObservationCount,
     latestOutcomeDisposition = null,
     latestOutcomeChangedEvidence = false,
     finalRound = false,
@@ -395,8 +396,18 @@ export class GateObservationConvergenceFacts {
     this.occurrenceCount = positiveInteger(occurrenceCount, "Gate convergence occurrenceCount");
     this.repairCount = nonNegativeInteger(repairCount, "Gate convergence repairCount");
     this.recurrenceCount = nonNegativeInteger(recurrenceCount, "Gate convergence recurrenceCount");
+    this.recurringObservationCount = nonNegativeInteger(
+      recurringObservationCount,
+      "Gate convergence recurringObservationCount",
+    );
     if (this.recurrenceCount > this.occurrenceCount - 1) {
       throw new Error("Gate convergence recurrenceCount exceeds its occurrences");
+    }
+    if (this.recurringObservationCount > this.observationFingerprints.length) {
+      throw new Error("Gate convergence recurringObservationCount exceeds its observations");
+    }
+    if (this.recurringObservationCount > this.recurrenceCount) {
+      throw new Error("Gate convergence recurring observations exceed recurrence occurrences");
     }
     this.latestOutcomeDisposition = optionalText(
       latestOutcomeDisposition,
@@ -421,10 +432,33 @@ export class GateObservationConvergenceFacts {
       occurrenceCount: this.occurrenceCount,
       repairCount: this.repairCount,
       recurrenceCount: this.recurrenceCount,
+      recurringObservationCount: this.recurringObservationCount,
+      freshObservationCount: this.freshObservationCount,
       latestOutcomeDisposition: this.latestOutcomeDisposition,
       latestOutcomeChangedEvidence: this.latestOutcomeChangedEvidence,
+      sameEvidence: this.sameEvidence,
+      recurring: this.recurring,
+      appliedChangedRepair: this.appliedChangedRepair,
       finalRound: this.finalRound,
     };
+  }
+
+  get sameEvidence() {
+    return this.latestOutcomeDisposition !== null && !this.appliedChangedRepair;
+  }
+
+  get recurring() { return this.recurrenceCount > 0; }
+
+  get allRecurring() {
+    return this.recurringObservationCount === this.observationFingerprints.length;
+  }
+
+  get freshObservationCount() {
+    return this.observationFingerprints.length - this.recurringObservationCount;
+  }
+
+  get appliedChangedRepair() {
+    return this.latestOutcomeDisposition === "applied" && this.latestOutcomeChangedEvidence;
   }
 }
 

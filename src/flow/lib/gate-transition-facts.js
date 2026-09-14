@@ -634,6 +634,7 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
         occurrenceCount: cycles.reduce((total, cycle) => total + cycle.occurrenceCount, 0),
         repairCount: cycles.reduce((total, cycle) => total + cycle.repairCount, 0),
         recurrenceCount: cycles.reduce((total, cycle) => total + cycle.recurrenceCount, 0),
+        recurringObservationCount: cycles.filter((cycle) => cycle.recurrenceCount > 0).length,
         latestOutcomeDisposition: latestOutcome?.disposition ?? null,
         latestOutcomeChangedEvidence: latestOutcome === null
           ? false

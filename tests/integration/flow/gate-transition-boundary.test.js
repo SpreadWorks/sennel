@@ -11,6 +11,7 @@ import {
   GateReviewFindingReadiness,
   GateRetryMetrics,
   GateFailureCategory,
+  GateObservationConvergenceFacts,
   GateProducerOwnership,
   GateTargetBinding,
   GateTransitionDecision,
@@ -28,6 +29,7 @@ import {
   resolveLifecycle,
   resolveLifecyclePlan,
   resolveGatePublicationRecovery,
+  resolveGateEvaluationAdmission,
   resolveGateTransition,
 } from "../../../src/flow/definition.js";
 import { ReviewTransitionFacts } from "../../../src/flow/lib/review-transition-facts.js";
@@ -408,6 +410,84 @@ describe("definition-owned Gate transition boundary", () => {
     }));
     assert.equal(repairBeforeExhaustion.disposition.operation, "repair");
     assert.equal(repairBeforeExhaustion.plan.retryMetric, null);
+  });
+
+  it("admits only fresh Gate evidence and converges final-round recurrence without misclassifying a new observation", () => {
+    const semanticFailure = new GateFailureCategory({ category: "semantic", code: "TASK_GATE_REJECTED" });
+    const convergence = (overrides = {}) => new GateObservationConvergenceFacts({
+      evidenceKey: "task.gate:attempt-7:7:activity-spec-gate:revision-7",
+      observationFingerprints: ["a".repeat(64)],
+      occurrenceCount: 2,
+      repairCount: 1,
+      recurrenceCount: 1,
+      recurringObservationCount: 1,
+      latestOutcomeDisposition: "applied",
+      latestOutcomeChangedEvidence: true,
+      finalRound: true,
+      ...overrides,
+    });
+    const recurring = facts({
+      phase: "task-impl",
+      result: "fail",
+      failure: semanticFailure,
+      retry: new GateRetryMetrics({ used: 0, maximum: 4 }),
+      taskBudget: { round: 2, maximumRounds: 2 },
+      observationConvergence: convergence(),
+    });
+    const recurringAdmission = resolveGateEvaluationAdmission(recurring);
+    assert.equal(recurringAdmission.admitted, false);
+    assert.equal(recurringAdmission.selectedDecision.disposition.operation, "defer");
+    assert.equal(recurringAdmission.selectedDecision.plan.retryMetric, null);
+
+    const freshObservation = facts({
+      phase: "task-impl",
+      result: "fail",
+      failure: semanticFailure,
+      retry: new GateRetryMetrics({ used: 0, maximum: 4 }),
+      taskBudget: { round: 2, maximumRounds: 2 },
+      observationConvergence: convergence({
+        occurrenceCount: 1,
+        repairCount: 0,
+        recurrenceCount: 0,
+        recurringObservationCount: 0,
+        latestOutcomeDisposition: null,
+        latestOutcomeChangedEvidence: false,
+      }),
+    });
+    assert.equal(resolveGateEvaluationAdmission(freshObservation).selectedDecision.disposition.operation, "retry");
+    assert.equal(resolveGateEvaluationAdmission(null).admitted, true,
+      "only a Gate with no published canonical result can invoke its evaluator");
+
+    const noProgress = facts({
+      result: "fail",
+      failure: semanticFailure,
+      observationConvergence: convergence({
+        occurrenceCount: 1,
+        repairCount: 1,
+        recurrenceCount: 0,
+        recurringObservationCount: 0,
+        latestOutcomeDisposition: "rejected-no-progress",
+        latestOutcomeChangedEvidence: false,
+        finalRound: false,
+      }),
+    });
+    assert.equal(resolveGateEvaluationAdmission(noProgress).selectedDecision.disposition.operation, "blocked");
+
+    const mixed = facts({
+      phase: "task-impl",
+      result: "fail",
+      failure: semanticFailure,
+      retry: new GateRetryMetrics({ used: 0, maximum: 4 }),
+      taskBudget: { round: 2, maximumRounds: 2 },
+      observationConvergence: convergence({
+        observationFingerprints: ["a".repeat(64), "b".repeat(64)],
+        occurrenceCount: 3,
+        recurrenceCount: 1,
+        recurringObservationCount: 1,
+      }),
+    });
+    assert.equal(resolveGateEvaluationAdmission(mixed).selectedDecision.disposition.operation, "retry",
+      "one recurring observation must not classify its fresh sibling as recurring");
   });
 
   it("selects the Task Gate advisory matrix from typed failure, retry, and successor facts", () => {

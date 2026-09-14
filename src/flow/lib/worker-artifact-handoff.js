@@ -1260,13 +1260,27 @@ export class SourceRepairReport {
 }
 
 class GateRepairWorkerObservationResult {
-  constructor({ fingerprint, strategy, summary, priorInsufficiency = null } = {}) {
+  constructor({ fingerprint, strategy, summary, priorRepairInsufficiency = null, paths = null } = {}) {
     this.fingerprint = requiredDigest(fingerprint, "Gate repair worker observation fingerprint");
     this.strategy = requiredString(strategy, "Gate repair worker observation strategy");
     this.summary = requiredString(summary, "Gate repair worker observation summary");
-    this.priorInsufficiency = priorInsufficiency === null
+    this.priorRepairInsufficiency = priorRepairInsufficiency === null
       ? null
-      : requiredString(priorInsufficiency, "Gate repair worker prior insufficiency");
+      : requiredString(priorRepairInsufficiency, "Gate repair worker priorRepairInsufficiency");
+    if (paths !== null && (!Array.isArray(paths) || paths.length > MAX_PAYLOAD_FILES)) {
+      throw new Error("Gate repair worker observation paths must be a bounded array");
+    }
+    this.paths = paths === null ? null : Object.freeze(paths.map((entry) => (
+      normalizedRelativePath(entry, "Gate repair worker observation path")
+    )));
+    if (this.paths !== null && duplicateValues(this.paths).length > 0) {
+      throw new WorkerArtifactHandoffError(
+        "invalid",
+        "FLOW_GATE_REPAIR_OBSERVATION_MUTATION_CLAIM_DUPLICATE",
+        "Gate repair observation paths must not duplicate within one observation",
+        { retryable: false, data: { fingerprint: this.fingerprint } },
+      );
+    }
     Object.freeze(this);
   }
   toJSON() {
@@ -1274,7 +1288,8 @@ class GateRepairWorkerObservationResult {
       fingerprint: this.fingerprint,
       strategy: this.strategy,
       summary: this.summary,
-      priorInsufficiency: this.priorInsufficiency,
+      priorRepairInsufficiency: this.priorRepairInsufficiency,
+      ...(this.paths === null ? {} : { paths: [...this.paths] }),
     };
   }
 }
@@ -1289,7 +1304,8 @@ export class GateRepairWorkerReport {
       throw new Error("Gate repair worker report requires bounded observation results");
     }
     this.results = Object.freeze(results.map((entry) => {
-      exactObjectKeys(entry, ["fingerprint", "strategy", "summary", "priorInsufficiency"], "Gate repair worker observation result");
+      const hasPaths = Object.hasOwn(entry ?? {}, "paths");
+      exactObjectKeys(entry, ["fingerprint", "strategy", "summary", "priorRepairInsufficiency", ...(hasPaths ? ["paths"] : [])], "Gate repair worker observation result");
       return new GateRepairWorkerObservationResult(entry);
     }));
     if (new Set(this.results.map((entry) => entry.fingerprint)).size !== this.results.length) {
@@ -1304,6 +1320,9 @@ export class GateRepairWorkerReport {
   }
 
   bindArtifact({ repair, beforeEvidenceDigest, outputEvidenceDigest, deltaIds }) {
+    if (this.results.some((entry) => entry.paths !== null)) {
+      throw new Error("artifact Gate repair report must not claim source mutation paths");
+    }
     const lineage = new ArtifactGateRepairLineage({ deltaIds });
     return this.#bind({
       repair, beforeEvidenceDigest, outputEvidenceDigest, lineage,
@@ -1316,6 +1335,66 @@ export class GateRepairWorkerReport {
     if (!(manifest instanceof SourceMutationManifest)) {
       throw new Error("Gate repair source report requires a SourceMutationManifest");
     }
+    if (this.results.some((entry) => entry.paths === null)) {
+      throw new WorkerArtifactHandoffError(
+        "invalid",
+        "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID",
+        "source Gate repair report requires a path claim for every observation",
+        { retryable: false, data: {} },
+      );
+    }
+    const duplicatePaths = duplicateValues(this.results.flatMap((entry) => entry.paths));
+    if (duplicatePaths.length > 0) {
+      throw new WorkerArtifactHandoffError(
+        "invalid",
+        "FLOW_GATE_REPAIR_OBSERVATION_MUTATION_CLAIM_DUPLICATE",
+        "Gate repair observations must not claim the same source mutation path",
+        { retryable: false, data: { duplicatePaths: duplicatePaths.slice(0, 20) } },
+      );
+    }
+    const mutationIdsByFingerprint = new Map();
+    if (manifest.mutations.length === 0) {
+      if (this.results.some((entry) => entry.paths.length !== 0)) {
+        throw new WorkerArtifactHandoffError(
+          "invalid",
+          "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID",
+          "no-progress Gate repair may not claim a source mutation",
+          { retryable: false, data: { unknown: this.results.flatMap((entry) => entry.paths) } },
+        );
+      }
+      for (const entry of this.results) mutationIdsByFingerprint.set(entry.fingerprint, []);
+    } else {
+      const unboundFingerprints = this.results
+        .filter((entry) => entry.paths.length === 0)
+        .map((entry) => entry.fingerprint);
+      if (unboundFingerprints.length > 0) {
+        const claimed = new Set(this.results.flatMap((entry) => entry.paths));
+        throw new WorkerArtifactHandoffError(
+          "invalid",
+          "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID",
+          "changed source Gate repair requires a mutation claim for every observation",
+          {
+            retryable: false,
+            data: {
+              missing: manifest.paths().filter((relativePath) => !claimed.has(relativePath)).slice(0, 20),
+              unboundFingerprints: unboundFingerprints.slice(0, 20),
+            },
+          },
+        );
+      }
+      let claims;
+      try {
+        claims = new RepairFindingPathClaims(this.results.map((entry) => ({
+          findingKey: entry.fingerprint,
+          paths: entry.paths,
+        }))).bind(manifest);
+      } catch (cause) {
+        rethrowRepairContractViolation(cause);
+      }
+      for (const entry of claims.toJSON()) {
+        mutationIdsByFingerprint.set(entry.findingKey, entry.mutationIds);
+      }
+    }
     const mutations = manifest.mutations.map((mutation) => new GateRepairMutationLineageEntry({
       mutationId: mutation.mutationId,
       path: mutation.path,
@@ -1324,11 +1403,11 @@ export class GateRepairWorkerReport {
     return this.#bind({
       repair, beforeEvidenceDigest, outputEvidenceDigest, lineage,
       Result: SourceGateRepairObservationResult,
-      changes: { mutationIds: lineage.changeIds() },
+      changesFor: (entry) => ({ mutationIds: mutationIdsByFingerprint.get(entry.fingerprint) }),
     });
   }
 
-  #bind({ repair, beforeEvidenceDigest, outputEvidenceDigest, lineage, Result, changes }) {
+  #bind({ repair, beforeEvidenceDigest, outputEvidenceDigest, lineage, Result, changes = null, changesFor = null }) {
     const requests = repair.requests;
     const expected = requests.map((entry) => entry.fingerprint.toString());
     const reported = this.results.map((entry) => entry.fingerprint);
@@ -1341,7 +1420,10 @@ export class GateRepairWorkerReport {
       summary: this.summary,
       requests,
       lineage,
-      results: this.results.map((entry) => new Result({ ...entry.toJSON(), ...changes })),
+      results: this.results.map((entry) => new Result({
+        ...entry.toJSON(),
+        ...(changesFor === null ? changes : changesFor(entry)),
+      })),
     });
   }
 
@@ -4522,7 +4604,9 @@ function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
         recurrenceCount: entry.recurrenceCount,
         priorStrategy: entry.priorStrategy,
       }))),
-      "Each result must contain fingerprint, strategy, summary, and priorInsufficiency.",
+      sourceResponseContract
+        ? "Each result must contain fingerprint, strategy, summary, priorRepairInsufficiency, and normalized project-relative paths that exactly claim the source mutations it made (an empty claim only when it made no source mutation)."
+        : "Each result must contain fingerprint, strategy, summary, and priorRepairInsufficiency.",
       "For a recurring observation, explain why the prior strategy was insufficient and use a different strategy.",
     ].join("\n");
   }
@@ -6558,7 +6642,7 @@ function planGateRepairArtifactOutcomeDraft(request, submission, state, logicalN
   return draft;
 }
 
-function planGateRepairSourceOutcomeDraft(request, submission, state, effect) {
+function planGateRepairSourceOutcomeDraft(request, state, effect) {
   const selected = currentPlanGateObservationRepair({ request, state });
   if ((selected !== null) !== (effect.gateRepair !== null)) {
     throw new WorkerArtifactHandoffError(
@@ -6571,7 +6655,7 @@ function planGateRepairSourceOutcomeDraft(request, submission, state, effect) {
     );
   }
   if (selected === null) return null;
-  const changed = submission.sourceMutationManifest.mutations.length > 0;
+  const changed = effect.gateRepair.beforeEvidenceDigest !== effect.gateRepair.outputEvidenceDigest;
   const draft = new PlanGateRepairOutcomeDraft({
     repair: selected.repair,
     disposition: changed ? "applied" : "rejected-no-progress",
@@ -6662,7 +6746,7 @@ function validatePayload(request, submission, state) {
         payloadDocument(request, submission, "effects.json"),
         request.stepId,
       );
-      planGateRepairSourceOutcomeDraft(request, submission, state, effect);
+      planGateRepairSourceOutcomeDraft(request, state, effect);
       if (request.taskId !== null && ["task-triage", "task-repair"].includes(request.stepId)) {
         try {
           const stage = new TaskReviewStageInputs({ flowManager: request.flowManager, state: request.flowManager.canonicalState(request.specId), taskId: request.taskId, context: request.contextSnapshot.context, stage: request.stepId });
@@ -8811,7 +8895,6 @@ export class WorkerArtifactHandoffCoordinator {
     });
     const planGateRepairOutcome = planGateRepairSourceOutcomeDraft(
       request,
-      submission,
       request.state,
       effect,
     );

@@ -347,11 +347,11 @@ export class GateRepairObservationRequest {
 }
 
 class GateRepairObservationResult {
-  constructor({ fingerprint, strategy, summary, priorInsufficiency = null } = {}) {
+  constructor({ fingerprint, strategy, summary, priorRepairInsufficiency = null } = {}) {
     this.fingerprint = new GateObservationFingerprint(fingerprintValue(fingerprint));
     this.strategy = requiredText(strategy, "Gate repair observation strategy");
     this.summary = requiredText(summary, "Gate repair observation summary");
-    this.priorInsufficiency = optionalText(priorInsufficiency, "Gate repair observation priorInsufficiency");
+    this.priorRepairInsufficiency = optionalText(priorRepairInsufficiency, "Gate repair observation priorRepairInsufficiency");
   }
 
   validateRequest(request) {
@@ -360,8 +360,8 @@ class GateRepairObservationResult {
       throw new Error("Gate repair observation result does not match its request");
     }
     if (request.recurrenceCount > 0
-      && (this.priorInsufficiency === null || this.strategy === request.priorStrategy)) {
-      throw new Error("recurring Gate repair result requires priorInsufficiency and a different strategy");
+      && (this.priorRepairInsufficiency === null || this.strategy === request.priorStrategy)) {
+      throw new Error("recurring Gate repair result requires priorRepairInsufficiency and a different strategy");
     }
   }
 }
@@ -382,7 +382,7 @@ export class ArtifactGateRepairObservationResult extends GateRepairObservationRe
   toJSON() {
     return {
       fingerprint: this.fingerprint.toString(), strategy: this.strategy, summary: this.summary,
-      priorInsufficiency: this.priorInsufficiency, deltaIds: [...this.deltaIds],
+      priorRepairInsufficiency: this.priorRepairInsufficiency, deltaIds: [...this.deltaIds],
     };
   }
 }
@@ -403,7 +403,7 @@ export class SourceGateRepairObservationResult extends GateRepairObservationResu
   toJSON() {
     return {
       fingerprint: this.fingerprint.toString(), strategy: this.strategy, summary: this.summary,
-      priorInsufficiency: this.priorInsufficiency, mutationIds: [...this.mutationIds],
+      priorRepairInsufficiency: this.priorRepairInsufficiency, mutationIds: [...this.mutationIds],
     };
   }
 }
@@ -513,7 +513,7 @@ export class GateRepairReport {
       Result = ArtifactGateRepairObservationResult;
       for (const result of value.results) {
         exactKeys(result, [
-          "fingerprint", "strategy", "summary", "priorInsufficiency", "deltaIds",
+          "fingerprint", "strategy", "summary", "priorRepairInsufficiency", "deltaIds",
         ], "artifact Gate repair observation result");
       }
     } else if (value.lineage.kind === "source") {
@@ -527,7 +527,7 @@ export class GateRepairReport {
       }
       for (const result of value.results) {
         exactKeys(result, [
-          "fingerprint", "strategy", "summary", "priorInsufficiency", "mutationIds",
+          "fingerprint", "strategy", "summary", "priorRepairInsufficiency", "mutationIds",
         ], "source Gate repair observation result");
       }
     } else {
@@ -635,11 +635,12 @@ export class PlanGateRepairOutcome {
         throw new Error("applied artifact Gate repair requires a changed evidence digest and delta lineage");
       }
       if (this.report.lineage instanceof SourceGateRepairLineage
-        && (!this.report.lineage.currentCheckout || changes.length === 0)) {
-        throw new Error("applied source Gate repair requires non-empty current-checkout mutation lineage");
+        && (!changedDigest || !this.report.lineage.currentCheckout || changes.length === 0)) {
+        throw new Error("applied source Gate repair requires changed evidence and non-empty current-checkout mutation lineage");
       }
-    } else if (changedDigest || changes.length > 0) {
-      throw new Error("rejected-no-progress Gate repair must not contain changed evidence or change lineage");
+    } else if (changedDigest
+      || (this.report.lineage instanceof ArtifactGateRepairLineage && changes.length > 0)) {
+      throw new Error("rejected-no-progress Gate repair must not contain changed evidence or artifact deltas");
     }
     Object.freeze(this);
   }

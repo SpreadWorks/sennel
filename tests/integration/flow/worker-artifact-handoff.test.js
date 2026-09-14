@@ -53,6 +53,7 @@ import {
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { sourceWorkerEffectJsonSchema } from "../../../src/flow/lib/source-worker-effect-schema.js";
 import { CanonicalSourceRequirementAuthority } from "../../../src/flow/lib/canonical-file-map.js";
+import { GateRepairObservationRequest } from "../../../src/flow/lib/gate-observation-convergence.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import {
   ApprovalTaskAdmission,
@@ -2312,6 +2313,118 @@ describe("worker artifact handoff", () => {
         && error.code === "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID"
         && JSON.stringify(error.data.missing) === JSON.stringify(["two.js"]),
       "the parent rejects an observed mutation omitted from finding repair claims",
+    );
+  });
+
+  it("binds each parsed source Gate repair observation to its exact parent-observed mutation", () => {
+    const attempt = { id: "task-gate-repair-attempt", nodeId: "task-impl", sequence: 2 };
+    const manifest = new SourceMutationManifest({
+      attempt,
+      baselineDigest: "b".repeat(64),
+      mutations: ["one.js", "two.js"].map((relativePath, index) => ({
+        mutationId: SourceMutationManifest.mutationId(attempt, relativePath),
+        path: relativePath,
+        changeKind: "content",
+        beforeKind: "file",
+        beforeMode: 0o644,
+        beforeDigest: String(index + 1).repeat(64),
+        afterKind: "file",
+        afterMode: 0o644,
+        afterDigest: String(index + 3).repeat(64),
+      })),
+    });
+    const fingerprints = ["a".repeat(64), "c".repeat(64)];
+    const document = {
+      version: 1,
+      stepId: "task-impl",
+      completionStatus: "done",
+      issues: [],
+      overview: { modules: [], data_flow: [], decisions: [] },
+      triage: null,
+      repair: null,
+      gateRepair: {
+        version: 1,
+        summary: "Applied each selected Gate repair to its separately observed source mutation.",
+        results: fingerprints.map((fingerprint, index) => ({
+          fingerprint,
+          strategy: `repair source mutation ${index + 1}`,
+          summary: `The source mutation ${index + 1} resolves its assigned observation.`,
+          priorRepairInsufficiency: null,
+          paths: [index === 0 ? "one.js" : "two.js"],
+        })),
+      },
+      noChangeReason: null,
+    };
+    assert.deepEqual(validateSchema(document, sourceWorkerEffectJsonSchema("task-impl")), []);
+    const effect = SourceWorkerEffectReport.fromDocument(document, "task-impl").bind(
+      manifest,
+      new CanonicalSourceRequirementAuthority(["R1"]),
+      {
+        repair: { requests: fingerprints.map((fingerprint) => new GateRepairObservationRequest({ fingerprint })) },
+        beforeEvidenceDigest: "d".repeat(64),
+        outputEvidenceDigest: "e".repeat(64),
+      },
+    );
+    assert.deepEqual(effect.gateRepair.toJSON().results.map(({ fingerprint, mutationIds }) => ({ fingerprint, mutationIds })), [
+      { fingerprint: fingerprints[0], mutationIds: [SourceMutationManifest.mutationId(attempt, "one.js")] },
+      { fingerprint: fingerprints[1], mutationIds: [SourceMutationManifest.mutationId(attempt, "two.js")] },
+    ]);
+
+    const invalidDocument = (results) => ({ ...document, gateRepair: { ...document.gateRepair, results } });
+    assert.throws(
+      () => SourceWorkerEffectReport.fromDocument(invalidDocument([
+        { ...document.gateRepair.results[0], paths: ["one.js"] },
+        { ...document.gateRepair.results[1], paths: ["one.js"] },
+      ]), "task-impl").bind(manifest, new CanonicalSourceRequirementAuthority(["R1"]), {
+        repair: { requests: fingerprints.map((fingerprint) => new GateRepairObservationRequest({ fingerprint })) },
+        beforeEvidenceDigest: "d".repeat(64), outputEvidenceDigest: "e".repeat(64),
+      }),
+      (error) => error.code === "FLOW_GATE_REPAIR_OBSERVATION_MUTATION_CLAIM_DUPLICATE",
+      "two observations cannot claim one source mutation",
+    );
+    assert.throws(
+      () => SourceWorkerEffectReport.fromDocument(invalidDocument([
+        { ...document.gateRepair.results[0], paths: ["one.js"] },
+        { ...document.gateRepair.results[1], paths: ["unknown.js"] },
+      ]), "task-impl").bind(manifest, new CanonicalSourceRequirementAuthority(["R1"]), {
+        repair: { requests: fingerprints.map((fingerprint) => new GateRepairObservationRequest({ fingerprint })) },
+        beforeEvidenceDigest: "d".repeat(64), outputEvidenceDigest: "e".repeat(64),
+      }),
+      (error) => error.code === "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID"
+        && error.data.missing.includes("two.js") && error.data.unknown.includes("unknown.js"),
+      "the parent rejects unknown and unclaimed observed mutations",
+    );
+    const unchangedManifest = new SourceMutationManifest({
+      attempt,
+      baselineDigest: "b".repeat(64),
+      mutations: [],
+    });
+    const unchangedEffect = SourceWorkerEffectReport.fromDocument(invalidDocument([{
+      ...document.gateRepair.results[0], paths: [],
+    }]), "task-impl").bind(
+        unchangedManifest,
+        new CanonicalSourceRequirementAuthority(["R1"]),
+        {
+          repair: { requests: [new GateRepairObservationRequest({ fingerprint: fingerprints[0] })] },
+          beforeEvidenceDigest: "d".repeat(64), outputEvidenceDigest: "d".repeat(64),
+        },
+      );
+    assert.deepEqual(unchangedEffect.gateRepair.toJSON().results[0].mutationIds, [],
+      "an empty claim preserves the canonical no-progress repair outcome");
+    assert.throws(
+      () => SourceWorkerEffectReport.fromDocument(invalidDocument([{
+        ...document.gateRepair.results[0], paths: [],
+      }]), "task-impl").bind(
+        manifest,
+        new CanonicalSourceRequirementAuthority(["R1"]),
+        {
+          repair: { requests: [new GateRepairObservationRequest({ fingerprint: fingerprints[0] })] },
+          beforeEvidenceDigest: "d".repeat(64), outputEvidenceDigest: "e".repeat(64),
+        },
+      ),
+      (error) => error.code === "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID"
+        && error.data.missing.includes("one.js"),
+      "a changed source mutation must be claimed before it can become Gate repair evidence",
     );
   });
 

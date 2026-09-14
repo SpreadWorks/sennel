@@ -95,6 +95,7 @@ import {
   GateCatalogPublication,
   GateFailureCategory,
   GateLineage,
+  GateObservationConvergenceFacts,
   GatePostPublicationState,
   GateRecoveryEvidence,
   GateReviewFindingReadiness,
@@ -278,6 +279,7 @@ export {
   GateCatalogPublication,
   GateFailureCategory,
   GateLineage,
+  GateObservationConvergenceFacts,
   GatePostPublicationState,
   GateRecoveryEvidence,
   GateReviewFindingReadiness,
@@ -1540,6 +1542,44 @@ export class GateTransitionDecision {
   }
 }
 
+/** One Definition-owned answer to whether a Gate provider may be called. */
+export class GateEvaluationAdmission {
+  constructor({ facts = null, recoveryDecision = null, transitionDecision = null } = {}) {
+    if (facts !== null && !(facts instanceof GateTransitionFacts)) {
+      throw new Error("Gate evaluation admission requires typed facts or no published Gate result");
+    }
+    if (recoveryDecision !== null && !(recoveryDecision instanceof GateTransitionDecision)) {
+      throw new Error("Gate evaluation admission recovery decision must be typed");
+    }
+    if (transitionDecision !== null && !(transitionDecision instanceof GateTransitionDecision)) {
+      throw new Error("Gate evaluation admission transition decision must be typed");
+    }
+    if (facts === null && (recoveryDecision !== null || transitionDecision !== null)) {
+      throw new Error("unpublished Gate evaluation admission cannot select a decision");
+    }
+    if (recoveryDecision !== null && transitionDecision !== null) {
+      throw new Error("Gate evaluation admission selects one recovery or transition decision");
+    }
+    this.facts = facts;
+    this.recoveryDecision = recoveryDecision;
+    this.transitionDecision = transitionDecision;
+    Object.freeze(this);
+  }
+
+  get admitted() { return this.facts === null; }
+  get selectedDecision() { return this.recoveryDecision ?? this.transitionDecision; }
+
+  toJSON() {
+    return {
+      admitted: this.admitted,
+      ...(this.selectedDecision === null ? {} : {
+        selectedOperation: this.selectedDecision.disposition.operation,
+        recovery: this.recoveryDecision !== null,
+      }),
+    };
+  }
+}
+
 /** Public command outcome derived from a sealed Gate decision, not runner policy. */
 export class GatePublicOutcomeProjection {
   constructor({ failureCode = null, nextStepId = null } = {}) {
@@ -1768,6 +1808,25 @@ function resolveGateClassification(facts) {
     const strict = gateDecision(facts, new GateDeferDisposition(GATE_TRANSITION_TOKEN));
     return selectGateNonblockingDecision(facts, strict);
   }
+  // A new Task observation may still use its bounded round. A recurrence in
+  // the final round cannot: the same semantic observation already survived a
+  // changed repair, so another provider retry cannot add evidence.
+  if (facts.scope === "task"
+    && facts.taskBudget.finalRound
+    && facts.observationConvergence?.allRecurring) {
+    const strict = gateDecision(facts, new GateDeferDisposition(GATE_TRANSITION_TOKEN));
+    return selectGateNonblockingDecision(facts, strict);
+  }
+  // A no-progress repair leaves the original evidence in force. Preserve the
+  // Definition-selected stop rather than creating a fresh Attempt, metric or
+  // provider call for that same observation.
+  if (facts.observationConvergence?.sameEvidence) {
+    const strict = gateDecision(facts, new GateBlockedDisposition(
+      GATE_TRANSITION_TOKEN,
+      "same_gate_observation_without_changed_repair",
+    ));
+    return selectGateNonblockingDecision(facts, strict);
+  }
   if (!facts.retry.exhausted) {
     return gateDecision(facts, new GateRetryDisposition(GATE_TRANSITION_TOKEN), {
       retryMetric: new GateRetryMetricEffect({ operation: "increment", phase: facts.phase }),
@@ -1827,6 +1886,23 @@ export function resolveGatePublicationRecovery(facts) {
 export function resolveTaskGateSettlementRecovery(facts) {
   if (!(facts instanceof GateTransitionFacts) || facts.scope !== "task") return null;
   return resolveGatePublicationRecovery(facts);
+}
+
+/**
+ * Gate commands and their provider-call guard share this exact admission
+ * decision. Only absence of a canonical published result admits evaluation.
+ */
+export function resolveGateEvaluationAdmission(facts = null) {
+  if (facts === null) return new GateEvaluationAdmission();
+  if (!(facts instanceof GateTransitionFacts)) {
+    throw new Error("resolveGateEvaluationAdmission requires GateTransitionFacts or null");
+  }
+  const recovery = resolveTaskGateSettlementRecovery(facts)
+    ?? resolveGatePublicationRecovery(facts);
+  if (recovery !== null) {
+    return new GateEvaluationAdmission({ facts, recoveryDecision: recovery });
+  }
+  return new GateEvaluationAdmission({ facts, transitionDecision: resolveGateTransition(facts) });
 }
 
 // Non-Gate transition policy is intentionally independent from the Gate

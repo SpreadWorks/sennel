@@ -71,7 +71,7 @@ function artifactReport(fingerprint, {
   recurrenceCount = 0,
   priorStrategy = null,
   strategy = "change the producer contract",
-  priorInsufficiency = null,
+  priorRepairInsufficiency = null,
 } = {}) {
   return new GateRepairReport({
     beforeEvidenceDigest,
@@ -83,7 +83,7 @@ function artifactReport(fingerprint, {
       fingerprint,
       strategy,
       summary: "Updated the authoritative artifact",
-      priorInsufficiency,
+      priorRepairInsufficiency,
       deltaIds: resultDeltaIds,
     })],
   });
@@ -204,18 +204,18 @@ describe("Gate repair report and outcome", () => {
       recurrenceCount: 1,
       priorStrategy: "change the producer contract",
       strategy: "change the producer contract",
-      priorInsufficiency: "The prior change missed one branch",
+      priorRepairInsufficiency: "The prior change missed one branch",
     }), /different strategy/);
     assert.throws(() => artifactReport(fingerprint, {
       recurrenceCount: 1,
       priorStrategy: "first strategy",
       strategy: "second strategy",
-    }), /priorInsufficiency/);
+    }), /priorRepairInsufficiency/);
     assert.doesNotThrow(() => artifactReport(fingerprint, {
       recurrenceCount: 1,
       priorStrategy: "first strategy",
       strategy: "second strategy",
-      priorInsufficiency: "The first strategy did not update the canonical producer",
+      priorRepairInsufficiency: "The first strategy did not update the canonical producer",
     }));
   });
 
@@ -243,6 +243,31 @@ describe("Gate repair report and outcome", () => {
       })],
     });
     assert.throws(() => outcome(repair(sourceOccurrence, sourceReport), sourceReport), /non-empty current-checkout/);
+
+    const mutationWithoutEvidenceChange = new GateRepairReport({
+      beforeEvidenceDigest: DIGEST_A,
+      outputEvidenceDigest: DIGEST_A,
+      summary: "Changed source metadata only",
+      requests: [new GateRepairObservationRequest({ fingerprint })],
+      lineage: new SourceGateRepairLineage({
+        currentCheckout: true,
+        mutations: [new GateRepairMutationLineageEntry({ mutationId: DIGEST_D, path: "src/feature.js" })],
+      }),
+      results: [new SourceGateRepairObservationResult({
+        fingerprint,
+        strategy: "change source mode",
+        summary: "The evaluated source content remained unchanged",
+        mutationIds: [DIGEST_D],
+      })],
+    });
+    const metadataRepair = repair(sourceOccurrence, mutationWithoutEvidenceChange);
+    assert.throws(
+      () => outcome(metadataRepair, mutationWithoutEvidenceChange),
+      /requires changed evidence/,
+    );
+    assert.equal(outcome(metadataRepair, mutationWithoutEvidenceChange, {
+      disposition: "rejected-no-progress",
+    }).disposition, "rejected-no-progress");
   });
 
   it("accepts applied current-checkout source lineage and rejected no-progress evidence", () => {
@@ -303,7 +328,7 @@ describe("Gate observation cycle reader", () => {
       recurrenceCount: 1,
       priorStrategy: "change the producer contract",
       strategy: "replace the incomplete branch",
-      priorInsufficiency: "The first strategy left the alternate branch unchanged",
+      priorRepairInsufficiency: "The first strategy left the alternate branch unchanged",
     });
     const secondRepair = repair(second, secondReport, {
       repairId: "repair-2",

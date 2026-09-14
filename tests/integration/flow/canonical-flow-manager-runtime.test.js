@@ -5443,7 +5443,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
         fingerprint: request.fingerprint.toString(),
         strategy: "revise the canonical draft goal",
         summary: "Made the retained behavior explicit in the canonical draft.",
-        priorInsufficiency: null,
+        priorRepairInsufficiency: null,
       })),
     }, null, 2)}\n`);
     sealWorkerArtifactHandoff({
@@ -6399,7 +6399,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
           fingerprint: request.fingerprint.toString(),
           strategy: "replace the incomplete Task source with the second-round implementation",
           summary: "The current checkout now contains the second-round implementation evidence.",
-          priorInsufficiency: null,
+          priorRepairInsufficiency: null,
+          paths: ["README.md"],
         })),
       },
     });
@@ -7011,9 +7012,10 @@ describe("FlowManager canonical Version-1 runtime", () => {
             fingerprint: request.fingerprint.toString(),
             strategy: "inspect without changing source",
             summary: "No source mutation was produced for this observation.",
-            priorInsufficiency: request.recurrenceCount === 0
+            priorRepairInsufficiency: request.recurrenceCount === 0
               ? null
               : "The previous strategy did not resolve the observation.",
+            paths: [],
           })),
         },
         noChangeReason: "The unchanged source cannot satisfy the Gate repair.",
@@ -7040,7 +7042,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     });
     assert.equal(status.gateObservationConvergence.occurrenceCount, 1);
     assert.equal(status.gateObservationConvergence.repairCount, 1);
-    assert.equal(status.gateObservationConvergence.entries[0].finalDisposition, "rejected-no-progress");
+    assert.equal(status.gateObservationConvergence.entries[0].finalDisposition, "blocked-no-progress");
   });
 
   it("settles only definition-owned record and rewind failure dispositions", async () => {
