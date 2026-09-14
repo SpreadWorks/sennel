@@ -264,6 +264,16 @@ export class GateRetryMetrics {
   toJSON() { return { used: this.used, maximum: this.maximum, remaining: this.remaining }; }
 }
 
+/** Durable Spec cycle progress derived exclusively from confirmed repair Activities. */
+export class SpecGateCycleProgress {
+  constructor({ completedRepairs } = {}) {
+    this.completedRepairs = nonNegativeInteger(completedRepairs, "Spec Gate completed repairs");
+    Object.freeze(this);
+  }
+  get cycle() { return this.completedRepairs + 1; }
+  toJSON() { return { cycle: this.cycle, completedRepairs: this.completedRepairs }; }
+}
+
 /** Persisted producer ownership prevents a consumer from claiming another gate's result. */
 export class GateProducerOwnership {
   constructor({ runId, specId, activityId, phase, scope, taskId = null, stepId } = {}) {
@@ -580,6 +590,7 @@ export class GateTransitionFacts {
     taskBudget = null,
     taskSettlementProgress = null,
     observationConvergence = null,
+    specCycle = null,
   } = {}) {
     this.phase = requiredText(phase, "gate phase");
     if (!GATE_PHASES.has(this.phase)) throw new Error("gate phase is invalid");
@@ -653,6 +664,14 @@ export class GateTransitionFacts {
       && this.observationConvergence.finalRound !== (this.taskBudget?.finalRound ?? false)) {
       throw new Error("Gate observation convergence final round does not match Task budget");
     }
+    this.specCycle = specCycle === null
+      ? null
+      : (specCycle instanceof SpecGateCycleProgress
+        ? specCycle
+        : new SpecGateCycleProgress(specCycle));
+    if ((this.phase === "spec") !== (this.specCycle !== null)) {
+      throw new Error("Spec Gate cycle progress must exist exactly for the spec phase");
+    }
     Object.freeze(this);
   }
 
@@ -704,6 +723,7 @@ export class GateTransitionFacts {
       taskLifecycle: this.taskLifecycle?.toJSON() ?? null,
       taskBudget: this.taskBudget?.toJSON() ?? null,
       observationConvergence: this.observationConvergence?.toJSON() ?? null,
+      specCycle: this.specCycle?.toJSON() ?? null,
       ...(this.scope === "task" ? { taskSettlementProgress: this.taskSettlementProgress.toJSON() } : {}),
     };
   }

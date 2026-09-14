@@ -10,6 +10,7 @@ import {
   GateRecoveryEvidence,
   GateReviewFindingReadiness,
   GateRetryMetrics,
+  SpecGateCycleProgress,
   GateFailureCategory,
   GateObservationConvergenceFacts,
   GateProducerOwnership,
@@ -105,6 +106,7 @@ function facts(overrides = {}) {
       ? { taskId, nextTaskId: null, integrationStepId: "test-execute" }
       : null,
     taskBudget: scope === "task" ? { round: 1, maximumRounds: 2 } : null,
+    specCycle: phase === "spec" ? new SpecGateCycleProgress({ completedRepairs: 0 }) : null,
     taskSettlementProgress: scope === "task"
       ? new TaskGateSettlementProgress({
         classificationRecorded: true,
@@ -158,6 +160,90 @@ describe("definition-owned Gate transition boundary", () => {
     });
     const stored = JSON.parse(JSON.stringify(original.toJSON()));
     assert.deepEqual(resolveGateTransition(reload(stored)).toJSON(), resolveGateTransition(original).toJSON());
+  });
+
+  it("bounds semantic Spec repair cycles before retry, repair, defer, or advisory selection", () => {
+    const semanticFailure = {
+      result: "fail",
+      failure: new GateFailureCategory({ category: "semantic", code: "GATE_REJECTED" }),
+    };
+    const binding = {
+      attempt: { id: "attempt-7", sequence: 7 },
+      fingerprint: "revision-7",
+    };
+    const underLimit = resolveGateTransition(facts({
+      ...semanticFailure,
+      specCycle: new SpecGateCycleProgress({ completedRepairs: 2 }),
+      recoveryEvidence: new GateRecoveryEvidence({ kind: "repair", ...binding }),
+    }));
+    assert.equal(underLimit.disposition.operation, "repair");
+
+    const atLimitProgress = new SpecGateCycleProgress({ completedRepairs: 3 });
+    assert.equal(resolveGateTransition(facts({ specCycle: atLimitProgress })).disposition.operation, "pass");
+    const tooling = resolveGateTransition(facts({
+      ...semanticFailure,
+      failure: new GateFailureCategory({ category: "tooling", code: "SPEC_GATE_PROVIDER_FAILURE" }),
+      specCycle: atLimitProgress,
+    }));
+    assert.equal(tooling.disposition.operation, "external-blocked");
+    assert.equal(tooling.disposition.reason, "SPEC_GATE_PROVIDER_FAILURE");
+    const local = resolveGateTransition(facts({
+      ...semanticFailure,
+      failure: new GateFailureCategory({ category: "local", code: "SPEC_GATE_INPUT_INVALID" }),
+      specCycle: atLimitProgress,
+    }));
+    assert.equal(local.disposition.operation, "blocked");
+    assert.equal(local.disposition.reason, "SPEC_GATE_INPUT_INVALID");
+
+    for (const input of [
+      { cycle: 4, retry: new GateRetryMetrics({ used: 0, maximum: 2 }) },
+      { cycle: 5, retry: new GateRetryMetrics({ used: 2, maximum: 2 }) },
+      {
+        cycle: 4,
+        nonblocking: true,
+        recoveryEvidence: new GateRecoveryEvidence({ kind: "repair", ...binding }),
+      },
+    ]) {
+      const decision = resolveGateTransition(facts({
+        ...semanticFailure,
+        ...input,
+        specCycle: new SpecGateCycleProgress({ completedRepairs: input.cycle - 1 }),
+      }));
+      assert.equal(decision.disposition.operation, input.nonblocking ? "nonblocking" : "blocked");
+      if (input.nonblocking) {
+        assert.deepEqual(decision.plan.nonblockingHandoff.toJSON(), {
+          sourceStepId: "spec-gate", targetStepId: "approval",
+        });
+      }
+      if (!input.nonblocking) {
+        assert.equal(decision.disposition.reason, `Spec Gate cycle ${input.cycle} reached maximum 4.`);
+      }
+    }
+  });
+
+  it("persists Spec cycle progress and includes it in stale action identity", () => {
+    const original = facts({
+      result: "fail",
+      failure: new GateFailureCategory({ category: "semantic", code: "GATE_REJECTED" }),
+      specCycle: new SpecGateCycleProgress({ completedRepairs: 3 }),
+    });
+    const reloaded = reload(JSON.parse(JSON.stringify(original.toJSON())));
+    assert.deepEqual(reloaded.specCycle.toJSON(), { cycle: 4, completedRepairs: 3 });
+    const stale = resolveGateTransition(facts({
+      result: "fail",
+      failure: new GateFailureCategory({ category: "semantic", code: "GATE_REJECTED" }),
+      specCycle: new SpecGateCycleProgress({ completedRepairs: 2 }),
+    }));
+    const current = resolveGateTransition(reloaded);
+    assert.equal(stale.plan.action.identity.matches(current.plan.action.identity), false);
+    const overLimit = reload(JSON.parse(JSON.stringify(facts({
+      result: "fail",
+      failure: new GateFailureCategory({ category: "semantic", code: "GATE_REJECTED" }),
+      specCycle: new SpecGateCycleProgress({ completedRepairs: 4 }),
+    }).toJSON())));
+    assert.deepEqual(overLimit.specCycle.toJSON(), { cycle: 5, completedRepairs: 4 });
+    assert.equal(resolveGateTransition(overLimit).disposition.operation, "blocked");
+    assert.equal(resolveGateTransition(overLimit).disposition.reason, "Spec Gate cycle 5 reached maximum 4.");
   });
 
   it("projects one stable reconciliation action for unclassified or unfinished Task Gate publication", () => {

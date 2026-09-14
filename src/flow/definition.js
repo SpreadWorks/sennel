@@ -100,6 +100,7 @@ import {
   GateRecoveryEvidence,
   GateReviewFindingReadiness,
   GateRetryMetrics,
+  SpecGateCycleProgress,
   GateProducerOwnership,
   GateTargetBinding,
   GateTaskLifecycle,
@@ -284,6 +285,7 @@ export {
   GateRecoveryEvidence,
   GateReviewFindingReadiness,
   GateRetryMetrics,
+  SpecGateCycleProgress,
   GateProducerOwnership,
   GateTargetBinding,
   GateTaskLifecycle,
@@ -854,6 +856,7 @@ const GATE_DISPOSITIONS = new Set([
   "pass", "retry", "repair", "defer", "external-blocked", "blocked", "recovery", "reconcile", "nonblocking", "advance",
 ]);
 const GATE_TRANSITION_TOKEN = Symbol("definition-gate-transition");
+export const SPEC_GATE_MAXIMUM_CYCLE = 4;
 const NONBLOCKING_ELIGIBILITY_TOKEN = Symbol("definition-nonblocking-eligibility");
 const DRAFT_COVERAGE_REPAIR_COMPLETION_TOKEN = Symbol("definition-draft-coverage-repair-completion");
 export { DraftCompletionConnector } from "./lib/draft-completion-connector.js";
@@ -1791,6 +1794,13 @@ function resolveGateClassification(facts) {
   if (facts.failure.category === "local") {
     const strict = gateDecision(facts, new GateBlockedDisposition(
       GATE_TRANSITION_TOKEN, facts.failure.code || "local_input_invalid",
+    ));
+    return selectGateNonblockingDecision(facts, strict);
+  }
+  if (facts.phase === "spec" && facts.specCycle.cycle >= SPEC_GATE_MAXIMUM_CYCLE) {
+    const strict = gateDecision(facts, new GateBlockedDisposition(
+      GATE_TRANSITION_TOKEN,
+      `Spec Gate cycle ${facts.specCycle.cycle} reached maximum ${SPEC_GATE_MAXIMUM_CYCLE}.`,
     ));
     return selectGateNonblockingDecision(facts, strict);
   }

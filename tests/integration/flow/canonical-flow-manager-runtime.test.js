@@ -1195,6 +1195,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     // semantic retry budget.
     assert.equal(facts.failure.category, "local");
     assert.equal(facts.failure.code, "GATE_LOCAL_INPUT_INVALID");
+    assert.deepEqual(facts.specCycle.toJSON(), { cycle: 1, completedRepairs: 0 });
     assert.equal(facts.lineage.sourceFingerprint.length, 64);
     assert.equal(facts.lineage.canonicalFingerprint.length, 64);
     assert.equal(facts.lineage.sourceFingerprint, facts.lineage.canonicalFingerprint);
@@ -1225,6 +1226,144 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const location = manager.specLocation(created.specId);
     assert.equal(fs.existsSync(path.join(location.directory, "spec-gate-result.json")), false);
     assert.equal(fs.existsSync(path.join(location.directory, "spec-gate-source.json")), false);
+  });
+
+  it("stops the fourth semantic Spec Gate cycle after three committed repairs", async () => {
+    const repository = root();
+    fs.writeFileSync(path.join(repository, "README.md"), "Spec cycle limit fixture\n");
+    initGitRepo(repository);
+    commitAll(repository, "initial Spec cycle limit fixture");
+    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const created = manager.createFresh(request("001-spec-gate-cycle-limit", {
+      specRecord: new CurrentFlowSpecRecord({
+        ...emptySpecStub(),
+        requirements: [{
+          id: "R-1", desc: "Bound repeated Spec repair cycles.", task_ids: ["T-1"], testable: false,
+        }],
+        tasks: [],
+      }, { specId: "001-spec-gate-cycle-limit" }),
+    }));
+    manager.addActiveFlow(created.specId, "direct");
+    advanceTo(manager, created.specId, "spec-gate");
+    const context = () => ({
+      root: repository,
+      mainRoot: repository,
+      executionRoot: repository,
+      specId: created.specId,
+      phase: "spec",
+      flowManager: manager,
+      flowState: manager.load(created.specId),
+    });
+    const failCurrentCycle = (cycle, { recordRepairEvidence = true, observation = `spec-cycle-${cycle}` } = {}) => {
+      const result = new CanonicalGatePromotion({
+        state: manager.canonicalState(created.specId), phase: "spec", nodeId: "spec-gate",
+      }).promote({
+        result: "fail",
+        artifacts: {
+          failureKind: "ai_semantic_fail",
+          failureCode: "SPEC_GATE_REJECTED",
+          nextAction: { diagnosis: { observations: [{
+            kind: "violation",
+            failureMode: observation,
+            requirementRef: "R-1",
+            where: { file: "spec.json", locator: `requirements[${cycle - 1}]` },
+            observed: `Spec cycle ${cycle} requires a distinct correction.`,
+            severity: "blocking",
+            refs: ["R-1"],
+          }] } },
+        },
+      });
+      manager.failCurrentAttempt({
+        specId: created.specId,
+        failure: {
+          category: "semantic", code: "SPEC_GATE_REJECTED",
+          message: `Spec cycle ${cycle} failed.`, retryable: true, retryKind: "semantic",
+        },
+        commandResult: result,
+      });
+      let decision = resolveGateTransition(readCurrentGateTransitionFacts({
+        flowManager: manager, flowState: manager.load(created.specId), phase: "spec",
+      }));
+      if (!recordRepairEvidence) return decision;
+      appendIssueLogFromGateResult({
+        ...context(), gateTransitionDecision: decision,
+      }, result);
+      decision = resolveGateTransition(readCurrentGateTransitionFacts({
+        flowManager: manager, flowState: manager.load(created.specId), phase: "spec",
+      }));
+      return decision;
+    };
+
+    const retry = failCurrentCycle(1, {
+      recordRepairEvidence: false,
+      observation: "spec-cycle-1-retry-probe",
+    });
+    assert.equal(retry.disposition.operation, "retry");
+    assert.equal(retry.facts.specCycle.cycle, 1);
+    manager.retryGateTransition({ specId: created.specId, decision: retry });
+    assert.equal(manager.activityLedger(created.specId).at(-1).transition.operation, "retry_gate_attempt");
+    assert.equal(manager.activityLedger(created.specId).filter((activity) => (
+      activity.nodeId === "spec" && activity.transition.operation === "plan_gate_repair"
+    )).length, 0);
+
+    for (let cycle = 1; cycle <= 3; cycle += 1) {
+      const decision = failCurrentCycle(cycle);
+      assert.equal(decision.facts.specCycle.cycle, cycle);
+      assert.equal(decision.disposition.operation, "repair");
+      const repaired = new RunRepairPlanGateCommand().execute(context());
+      assert.equal(repaired.ok, true, JSON.stringify(repaired));
+      assert.equal(manager.canonicalState(created.specId).current.at(-1), "spec");
+      advanceTo(manager, created.specId, "spec-gate");
+    }
+
+    manager.setAutoApprove(true, { specId: created.specId });
+    assert.equal(manager.canonicalState(created.specId).policy.autoApprove, true);
+    const blocked = failCurrentCycle(4);
+    assert.deepEqual(blocked.facts.specCycle.toJSON(), { cycle: 4, completedRepairs: 3 });
+    assert.equal(blocked.disposition.operation, "blocked");
+    assert.equal(blocked.disposition.reason, "Spec Gate cycle 4 reached maximum 4.");
+    const next = await new GetNextActionCommand().execute(context());
+    assert.equal(next.directive.kind, "await_user_decision");
+    assert.equal(next.directive.reason, "Spec Gate cycle 4 reached maximum 4.");
+    const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const reloadedDecision = resolveGateTransition(readCurrentGateTransitionFacts({
+      flowManager: reloaded, flowState: reloaded.load(created.specId), phase: "spec",
+    }));
+    assert.deepEqual(reloadedDecision.toJSON(), blocked.toJSON());
+    const before = {
+      state: manager.canonicalState(created.specId).toJSON(),
+      activities: manager.activityLedger(created.specId),
+      catalog: manager.artifactCatalog(created.specId).toJSON(),
+    };
+    const rejected = new RunRepairPlanGateCommand().execute(context());
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.errors[0].code, "PLAN_GATE_REPAIR_NOT_ADMITTED");
+    assert.deepEqual(manager.canonicalState(created.specId).toJSON(), before.state);
+    assert.deepEqual(manager.activityLedger(created.specId), before.activities);
+    assert.deepEqual(manager.artifactCatalog(created.specId).toJSON(), before.catalog);
+
+    activateNonBlockingPolicy({
+      root: repository,
+      flowManager: manager,
+      reason: "Continue with explicit acceptance of the capped Spec Gate evidence.",
+    });
+    const advisory = decisionContextForActiveFlow(repository, manager.loadReadOnly(created.specId), manager);
+    recordNonBlockingDecision({
+      root: repository,
+      flowManager: manager,
+      choice: "continue",
+      reason: "Continue after the bounded Spec Gate repair cycle is exhausted.",
+      remainingRisk: "Approval retains the unresolved Spec Gate semantic findings.",
+      expectEvidenceDigest: advisory.evidenceDigest,
+      expectIdentity: advisory.identity().toJSON(),
+    });
+    const continued = manager.canonicalState(created.specId);
+    assert.equal(continued.nextAction().nodeId, "approval");
+    assert.equal(continued.findNode("approval").status, "invalidated");
+    assert.equal(continued.findNode("spec").attemptSequence, 4);
+    assert.equal(manager.activityLedger(created.specId).filter((activity) => (
+      activity.nodeId === "spec" && activity.transition.operation === "plan_gate_repair"
+    )).length, 3);
   });
 
   it("carries a normal local Task Gate stop through canonical advisory continuation", async () => {

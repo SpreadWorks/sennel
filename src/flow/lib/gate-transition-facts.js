@@ -12,6 +12,7 @@ import {
   GateTaskBudget,
   GateTaskLifecycle,
   GateTransitionFacts,
+  SpecGateCycleProgress,
   TaskGateClassificationRecoveryProgress,
   TaskGateSettlementProgress,
 } from "./gate-transition.js";
@@ -524,6 +525,15 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
     }
   }
   const activities = flowManager.activityLedger(state.specId);
+  const completedSpecRepairs = activities.filter((activity) => (
+    activity.nodeId === "spec"
+    && activity.transition?.operation === "plan_gate_repair"
+  )).length;
+  const specCycle = persistedPhase === "spec"
+    ? new SpecGateCycleProgress({
+      completedRepairs: completedSpecRepairs,
+    })
+    : null;
   const producerActivities = currentGateActivity({ activities, nodeId, attempt });
   const publication = producerActivities.find((activity) => activity.id === resultSource.descriptor.activityId) ?? null;
   if (publication === null) throw new Error("gate catalog publication is not owned by the current Attempt");
@@ -662,6 +672,7 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
     postPublication,
     retry,
     taskBudget,
+    specCycle,
     observationConvergence,
     lineage,
     recoveryEvidence: payload.result === "recovered"
