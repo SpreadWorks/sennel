@@ -98,6 +98,8 @@ describe("getStepInstructions (loader contract)", () => {
       assert.match(content, /Classify only findings supplied in the immutable canonical review/);
       assert.match(content, /Do not require a finding to be classified, do not invent findings, and do not remove unhandled findings/);
       assert.match(content, /permissions are explicit `\{ target, operationKinds \}` capabilities/);
+      assert.match(content, /local finding in a string field grants only `edit-text-field`/);
+      assert.match(content, /full-field redesign or replacement/);
       assert.match(content, /valid empty delta is a semantic no-op and the Flow continues/);
       assert.doesNotMatch(content, /spec-triage\.json/);
     });
@@ -152,6 +154,8 @@ describe("getStepInstructions (loader contract)", () => {
       assert.match(content, /findingIds/);
       assert.match(content, /replace-field/);
       assert.match(content, /replace-entity-field/);
+      assert.match(content, /edit-text-field/);
+      assert.match(content, /submit only `edits\[\]`/);
       assert.match(content, /add-array-element/);
       assert.match(content, /replace-array-element/);
       assert.match(content, /delete-array-element/);

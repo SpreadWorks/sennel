@@ -438,7 +438,7 @@ function rewriteSubmission(request, mutate) {
   fs.writeFileSync(request.submissionPath, `${JSON.stringify(document, null, 2)}\n`);
 }
 
-function prepareSpecRepairFixture() {
+function prepareSpecRepairFixture({ operationKinds = ["replace-entity-field"] } = {}) {
   const value = fixture("spec-review", {
     specRecord: validSpec(),
     beforeActivate(candidate) {
@@ -467,7 +467,7 @@ function prepareSpecRepairFixture() {
   );
   value.flow.activate("spec-triage");
   const triageInput = value.flowManager.readCurrentSpecReview({ specId: value.specId, consumerNodeId: "spec-triage" });
-  const triageDelta = new SpecReviewDelta({ version: 2, stage: "spec-triage", identity: triageInput.review.identity.toJSON(), baseReviewDigest: triageInput.review.digest, operations: [], findings: [{ findingId: "spec-review-blocking-1", disposition: "apply", evidence: "The reviewed requirement is incomplete.", allowedTargets: [{ target: { entity: "requirement", id: "R1", field: "desc" }, operationKinds: ["replace-entity-field"] }] }] });
+  const triageDelta = new SpecReviewDelta({ version: 2, stage: "spec-triage", identity: triageInput.review.identity.toJSON(), baseReviewDigest: triageInput.review.digest, operations: [], findings: [{ findingId: "spec-review-blocking-1", disposition: "apply", evidence: "The reviewed requirement is incomplete.", allowedTargets: [{ target: { entity: "requirement", id: "R1", field: "desc" }, operationKinds }] }] });
   const triaged = mergeSpecReviewDelta({ review: triageInput.review, delta: triageDelta });
   const triageResult = attachCanonicalCommandResultPublications({ result: "fixture spec triage", artifacts: { phase: "spec" } }, [{ logicalKey: "spec.review", parameters: { revision: String(triageInput.revision).padStart(3, "0") }, payload: triaged.toJSON() }]);
   value.flowManager.updateStepStatus(
@@ -573,6 +573,29 @@ function specRepairPayload(request, { scopeExpansion = false, valid = false } = 
 
 function validSpecRepairPayload(request) {
   return specRepairPayload(request, { valid: true });
+}
+
+function specRepairTextEditPayload(request, {
+  findingId = "spec-review-blocking-1",
+  expectedDigest = repairDigest("Publish a validated artifact."),
+  replacement = "canonical",
+} = {}) {
+  const startByte = Buffer.byteLength("Publish a ", "utf8");
+  return {
+    version: 2,
+    stage: "spec-repair",
+    identity: structuredClone(request.inputs.find((entry) => entry.name === "review.json").document.identity),
+    baseReviewDigest: crypto.createHash("sha256").update(`${JSON.stringify(request.inputs.find((entry) => entry.name === "review.json").document, null, 2)}\n`).digest("hex"),
+    findings: [],
+    operations: [{
+      findingIds: [findingId],
+      kind: "edit-text-field",
+      target: { entity: "requirement", id: "R1", field: "desc" },
+      expectedDigest,
+      edits: [{ startByte, endByte: startByte + Buffer.byteLength("validated", "utf8"), replacement }],
+      reason: "Correct only the reviewed word in the immutable description.",
+    }],
+  };
 }
 
 function specRepairSnapshot(value) {
@@ -3375,6 +3398,177 @@ describe("worker artifact handoff", () => {
         discarded.filter((entry) => entry.findingId === "F-conflict" && entry.reason === "conflicting duplicate triage update").length,
         2,
       );
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("publishes parent-constructed text edits and preserves their audit across replay and fresh readback", () => {
+    const value = prepareSpecRepairFixture({ operationKinds: ["edit-text-field"] });
+    try {
+      const beforeReview = value.flowManager.readCurrentSpecReview({
+        specId: value.specId,
+        consumerNodeId: "spec-repair",
+      }).review;
+      const beforeRevision = beforeReview.identity.toJSON().revision;
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: {
+          ...value.invocation,
+          action: { ...value.invocation.action, nextAction: { step: "spec-repair" } },
+        },
+      });
+      fs.writeFileSync(request.payloadPath("review.delta.json"), json(specRepairTextEditPayload(request)));
+      seal(request);
+
+      assert.equal(value.coordinator.reconcile({ ctx: value.ctx, request }).completed, true);
+      const published = readCatalogJson(value, "spec.record", "spec-gate");
+      assert.equal(published.requirements.find((requirement) => requirement.id === "R1").desc, "Publish a canonical artifact.");
+      const review = value.flowManager.readCurrentSpecReview({ specId: value.specId, consumerNodeId: "spec-gate" }).review;
+      assert.equal(review.identity.toJSON().revision, beforeRevision + 1);
+      assert.equal(review.audit.at(-1).stage, "spec-repair");
+      assert.equal(review.audit.at(-1).acceptedOperations[0].kind, "edit-text-field");
+      const publishedCatalog = value.flowManager.artifactCatalog(value.specId).toJSON();
+      assert.equal(value.coordinator.reconcile({ ctx: value.ctx, request }).replayed, true);
+      assert.deepEqual(value.flowManager.artifactCatalog(value.specId).toJSON(), publishedCatalog);
+
+      const restarted = new FlowManager({
+        root: value.executionRoot,
+        mainRoot: value.mainRoot,
+        inWorktree: true,
+        specId: value.specId,
+      });
+      const readback = restarted.readCurrentSpecReview({ specId: value.specId, consumerNodeId: "spec-gate" }).review;
+      const readbackSpec = JSON.parse(restarted.readArtifact({
+        specId: value.specId,
+        logicalKey: "spec.record",
+        consumerNodeId: "spec-gate",
+      }).bytes.toString("utf8"));
+      assert.equal(readback.identity.toJSON().revision, beforeRevision + 1);
+      assert.equal(readbackSpec.requirements.find((requirement) => requirement.id === "R1").desc, "Publish a canonical artifact.");
+      assert.equal(readback.audit.at(-1).acceptedOperations[0].kind, "edit-text-field");
+      assert.equal(readback.audit.filter((entry) => entry.stage === "spec-repair").length, 1);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("retains an all-discard text-edit audit without publishing a Spec revision", () => {
+    const value = prepareSpecRepairFixture({ operationKinds: ["edit-text-field"] });
+    try {
+      const beforeReview = value.flowManager.readCurrentSpecReview({
+        specId: value.specId,
+        consumerNodeId: "spec-repair",
+      }).review;
+      const beforeRevision = beforeReview.identity.toJSON().revision;
+      const before = value.flowManager.readArtifact({
+        specId: value.specId,
+        logicalKey: "spec.record",
+        consumerNodeId: "spec-repair",
+      }).bytes;
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: {
+          ...value.invocation,
+          action: { ...value.invocation.action, nextAction: { step: "spec-repair" } },
+        },
+      });
+      fs.writeFileSync(request.payloadPath("review.delta.json"), json(specRepairTextEditPayload(request, {
+        expectedDigest: "0".repeat(64),
+      })));
+      seal(request);
+
+      assert.equal(value.coordinator.reconcile({ ctx: value.ctx, request }).completed, true);
+      const after = value.flowManager.readArtifact({
+        specId: value.specId,
+        logicalKey: "spec.record",
+        consumerNodeId: "spec-gate",
+      }).bytes;
+      assert.deepEqual(after, before);
+      const review = value.flowManager.readCurrentSpecReview({ specId: value.specId, consumerNodeId: "spec-gate" }).review;
+      assert.equal(review.identity.toJSON().revision, beforeRevision);
+      assert.equal(review.audit.at(-1).acceptedOperations.length, 0);
+      assert.equal(review.audit.at(-1).discardedOperations[0].reason, "stale target digest");
+      const publishedCatalog = value.flowManager.artifactCatalog(value.specId).toJSON();
+      assert.equal(value.coordinator.reconcile({ ctx: value.ctx, request }).replayed, true);
+      assert.deepEqual(value.flowManager.artifactCatalog(value.specId).toJSON(), publishedCatalog);
+      const restarted = new FlowManager({
+        root: value.executionRoot,
+        mainRoot: value.mainRoot,
+        inWorktree: true,
+        specId: value.specId,
+      });
+      const readback = restarted.readCurrentSpecReview({ specId: value.specId, consumerNodeId: "spec-gate" }).review;
+      const readbackSpec = restarted.readArtifact({
+        specId: value.specId,
+        logicalKey: "spec.record",
+        consumerNodeId: "spec-gate",
+      });
+      assert.equal(readback.identity.toJSON().revision, beforeRevision);
+      assert.deepEqual(readbackSpec.bytes, before);
+      assert.equal(readback.audit.at(-1).discardedOperations[0].reason, "stale target digest");
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("audits an accepted semantic no-op text edit without publishing a Spec revision", () => {
+    const value = prepareSpecRepairFixture({ operationKinds: ["edit-text-field"] });
+    try {
+      const beforeReview = value.flowManager.readCurrentSpecReview({
+        specId: value.specId,
+        consumerNodeId: "spec-repair",
+      }).review;
+      const beforeRevision = beforeReview.identity.toJSON().revision;
+      const before = value.flowManager.readArtifact({
+        specId: value.specId,
+        logicalKey: "spec.record",
+        consumerNodeId: "spec-repair",
+      }).bytes;
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: {
+          ...value.invocation,
+          action: { ...value.invocation.action, nextAction: { step: "spec-repair" } },
+        },
+      });
+      fs.writeFileSync(request.payloadPath("review.delta.json"), json(specRepairTextEditPayload(request, {
+        replacement: "validated",
+      })));
+      seal(request);
+
+      assert.equal(value.coordinator.reconcile({ ctx: value.ctx, request }).completed, true);
+      const review = value.flowManager.readCurrentSpecReview({ specId: value.specId, consumerNodeId: "spec-gate" }).review;
+      assert.equal(review.identity.toJSON().revision, beforeRevision);
+      assert.equal(review.audit.at(-1).acceptedOperations.length, 1);
+      assert.equal(review.audit.at(-1).acceptedOperations[0].kind, "edit-text-field");
+      const after = value.flowManager.readArtifact({
+        specId: value.specId,
+        logicalKey: "spec.record",
+        consumerNodeId: "spec-gate",
+      }).bytes;
+      assert.deepEqual(after, before);
+      const publishedCatalog = value.flowManager.artifactCatalog(value.specId).toJSON();
+      assert.equal(value.coordinator.reconcile({ ctx: value.ctx, request }).replayed, true);
+      assert.deepEqual(value.flowManager.artifactCatalog(value.specId).toJSON(), publishedCatalog);
+
+      const restarted = new FlowManager({
+        root: value.executionRoot,
+        mainRoot: value.mainRoot,
+        inWorktree: true,
+        specId: value.specId,
+      });
+      const readback = restarted.readCurrentSpecReview({ specId: value.specId, consumerNodeId: "spec-gate" }).review;
+      assert.equal(readback.identity.toJSON().revision, beforeRevision);
+      assert.equal(readback.audit.at(-1).acceptedOperations[0].kind, "edit-text-field");
+      assert.deepEqual(restarted.readArtifact({
+        specId: value.specId,
+        logicalKey: "spec.record",
+        consumerNodeId: "spec-gate",
+      }).bytes, before);
     } finally {
       removeTmpDir(value.mainRoot);
     }

@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 
 import { validWorkerHandoffTaskSpec } from "../../support/infrastructure/worker-artifact.js";
 import { applySpecRepairOperations } from "../../../src/flow/lib/spec-repair-operations.js";
+import { specRepairIncidentR6Description } from "./fixtures/spec-repair-r6-description.js";
 
 const INPUT_DIGEST = "b".repeat(64);
 const IDENTITY = { specId: "001-repair", revision: 1, digest: INPUT_DIGEST, byteLength: 1 };
@@ -37,6 +38,21 @@ function replace(findingIds, target, replacement, expectedDigest) {
     replacement,
     reason: "A bounded correction authorised by triage.",
   };
+}
+function textEdit(findingIds, target, edits, expectedDigest) {
+  return {
+    findingIds,
+    kind: "edit-text-field",
+    target,
+    expectedDigest,
+    edits,
+    reason: "A local UTF-8 correction authorised by triage.",
+  };
+}
+function byteOffset(text, fragment) {
+  const offset = Buffer.from(text, "utf8").indexOf(Buffer.from(fragment, "utf8"));
+  assert.notEqual(offset, -1, `missing fixture fragment: ${fragment}`);
+  return offset;
 }
 function apply(spec, findings, operations, scopeExpansions = []) {
   return applySpecRepairOperations({
@@ -200,5 +216,131 @@ describe("revision-scoped spec repair operations", () => {
     ], operations);
     assert.deepEqual(result.spec.constraints, ["same", "last only"]);
     assert.ok(result.audit.discardedOperations.some((entry) => entry.reason === "operation produces an invalid Spec schema"));
+  });
+
+  it("reconstructs the incident R6 UTF-8 text from non-contiguous immutable-base edits without losing 65 inventory leaves", () => {
+    const spec = sourceSpec();
+    const original = specRepairIncidentR6Description;
+    spec.requirements[0].desc = original;
+    assert.equal(Buffer.byteLength(original, "utf8"), 9506);
+    const inventory = original.match(/@src\/flow\/[^、。 ]+/g) ?? [];
+    assert.equal(inventory.length, 65);
+    const prefix = byteOffset(original, "R6 の全 probe");
+    const suffix = byteOffset(original, "placeholder は表示専用");
+    const result = apply(spec, [applyFinding("F-local", [permission(requirementTarget, ["edit-text-field"])])], [
+      textEdit(["F-local"], requirementTarget, [
+        { startByte: prefix, endByte: prefix + Buffer.byteLength("R6 の全 probe"), replacement: "R6 の対象 probe" },
+        { startByte: suffix, endByte: suffix + Buffer.byteLength("placeholder は表示専用"), replacement: "placeholder literal は表示専用" },
+      ], valueDigest(original)),
+    ]);
+    assert.equal(result.spec.requirements[0].desc, original.replace("R6 の全 probe", "R6 の対象 probe").replace("placeholder は表示専用", "placeholder literal は表示専用"));
+    for (const leaf of inventory) assert.ok(result.spec.requirements[0].desc.includes(leaf), `lost inventory leaf ${leaf}`);
+  });
+
+  it("discards each invalid text edit while retaining an independent valid sibling", () => {
+    const spec = sourceSpec();
+    const original = "é local target";
+    spec.requirements[0].desc = original;
+    const local = byteOffset(original, "local");
+    const invalidRange = textEdit(["F-text"], requirementTarget, [{ startByte: 0, endByte: Buffer.byteLength(original) + 1, replacement: "bad" }], valueDigest(original));
+    const splitUtf8 = textEdit(["F-text"], requirementTarget, [{ startByte: 1, endByte: 2, replacement: "bad" }], valueDigest(original));
+    const overlapping = textEdit(["F-text"], requirementTarget, [{ startByte: local, endByte: local + 3, replacement: "one" }, { startByte: local + 2, endByte: local + 5, replacement: "two" }], valueDigest(original));
+    const ambiguousInsertions = textEdit(["F-text"], requirementTarget, [{ startByte: local, endByte: local, replacement: "one" }, { startByte: local, endByte: local, replacement: "two" }], valueDigest(original));
+    const replacementIncluded = { ...textEdit(["F-text"], requirementTarget, [{ startByte: local, endByte: local + 5, replacement: "fixed" }], valueDigest(original)), replacement: "forbidden" };
+    for (const [operation, expectedReason] of [
+      [invalidRange, "invalid UTF-8 text edit target or range"],
+      [splitUtf8, "invalid UTF-8 text edit target or range"],
+      [overlapping, /overlapping or ambiguous/],
+      [ambiguousInsertions, /overlapping or ambiguous/],
+      [replacementIncluded, /invalid schema/],
+    ]) {
+      const result = apply(spec, [
+        applyFinding("F-text", [permission(requirementTarget, ["edit-text-field"])]),
+        applyFinding("F-background", [permission(rootTarget, ["replace-field"])]),
+      ], [operation, replace(["F-background"], rootTarget, "Independent correction.", valueDigest(spec.background))]);
+      assert.equal(result.spec.requirements[0].desc, original);
+      assert.equal(result.spec.background, "Independent correction.");
+      assert.ok(result.audit.discardedOperations.some((entry) => typeof expectedReason === "string" ? entry.reason === expectedReason : expectedReason.test(entry.reason)));
+    }
+    const large = sourceSpec();
+    large.requirements[0].desc = "x".repeat((32 * 1024) - 3);
+    const oversized = apply(large, [applyFinding("F-text", [permission(requirementTarget, ["edit-text-field"])])], [
+      textEdit(["F-text"], requirementTarget, [{ startByte: 0, endByte: 0, replacement: "more" }], valueDigest(large.requirements[0].desc)),
+    ]);
+    assert.equal(oversized.spec.requirements[0].desc, large.requirements[0].desc);
+    assert.equal(oversized.audit.discardedOperations[0].reason, "text edit result is oversized");
+  });
+
+  it("keeps whole-field and text-edit capabilities distinct and rejects their same-target conflict", () => {
+    const spec = sourceSpec();
+    const original = spec.requirements[0].desc;
+    const result = apply(spec, [
+      applyFinding("F-text", [permission(requirementTarget, ["edit-text-field"])]),
+      applyFinding("F-whole", [permission(requirementTarget, ["replace-entity-field"])]),
+      applyFinding("F-background", [permission(rootTarget, ["replace-field"])]),
+    ], [
+      textEdit(["F-text"], requirementTarget, [{ startByte: 0, endByte: 0, replacement: "Prefix. " }], valueDigest(original)),
+      replace(["F-whole"], requirementTarget, "A competing whole replacement.", valueDigest(original)),
+      replace(["F-background"], rootTarget, "Independent correction.", valueDigest(spec.background)),
+    ]);
+    assert.equal(result.spec.requirements[0].desc, original);
+    assert.equal(result.spec.background, "Independent correction.");
+    assert.equal(result.audit.discardedOperations.filter((entry) => entry.reason === "conflicting operation").length, 2);
+
+    const unauthorized = apply(sourceSpec(), [applyFinding("F-whole", [permission(requirementTarget, ["replace-entity-field"])])], [
+      textEdit(["F-whole"], requirementTarget, [{ startByte: 0, endByte: 0, replacement: "Prefix. " }], valueDigest(original)),
+    ]);
+    assert.equal(unauthorized.spec.requirements[0].desc, original);
+    assert.equal(unauthorized.audit.discardedOperations[0].reason, "unauthorized operation");
+
+    const localCannotReplace = apply(sourceSpec(), [applyFinding("F-text", [permission(requirementTarget, ["edit-text-field"])])], [
+      replace(["F-text"], requirementTarget, "A forbidden whole replacement.", valueDigest(original)),
+    ]);
+    assert.equal(localCannotReplace.spec.requirements[0].desc, original);
+    assert.equal(localCannotReplace.audit.discardedOperations[0].reason, "unauthorized operation");
+  });
+
+  it("requires canonical byte ordering and bounded edit payloads, while allowing adjacent immutable-base ranges", () => {
+    const spec = sourceSpec();
+    spec.background = "abcdef";
+    const expected = valueDigest(spec.background);
+    const adjacent = apply(spec, [applyFinding("F-root", [permission(rootTarget, ["edit-text-field"])])], [
+      textEdit(["F-root"], rootTarget, [
+        { startByte: 0, endByte: 3, replacement: "first" },
+        { startByte: 3, endByte: 6, replacement: "second" },
+      ], expected),
+    ]);
+    assert.equal(adjacent.spec.background, "firstsecond");
+
+    const stale = apply(spec, [applyFinding("F-root", [permission(rootTarget, ["edit-text-field"])])], [
+      textEdit(["F-root"], rootTarget, [{ startByte: 0, endByte: 0, replacement: "prefix " }], "0".repeat(64)),
+    ]);
+    assert.equal(stale.spec.background, "abcdef");
+    assert.equal(stale.audit.discardedOperations[0].reason, "stale target digest");
+
+    const unordered = textEdit(["F-root"], rootTarget, [
+      { startByte: 3, endByte: 6, replacement: "second" },
+      { startByte: 0, endByte: 3, replacement: "first" },
+    ], expected);
+    const tooMany = textEdit(["F-root"], rootTarget, Array.from({ length: 65 }, () => ({ startByte: 0, endByte: 0, replacement: "x" })), expected);
+    const tooLarge = textEdit(["F-root"], rootTarget, [{ startByte: 0, endByte: 0, replacement: "x".repeat(32 * 1024) }], expected);
+    for (const [operation, message] of [[unordered, /canonical stable byte order/], [tooMany, /at most 64 edits/], [tooLarge, /replacements are oversized/]]) {
+      const rejected = apply(spec, [applyFinding("F-root", [permission(rootTarget, ["edit-text-field"])])], [operation]);
+      assert.equal(rejected.spec.background, "abcdef");
+      assert.ok(message.test(rejected.audit.discardedOperations[0].reason));
+    }
+  });
+
+  it("rejects text-edit capability for a non-string entity field", () => {
+    const spec = sourceSpec();
+    const target = { entity: "requirement", id: "R1", field: "testable" };
+    assert.throws(() => apply(spec, [
+      applyFinding("F-non-text", [permission(target, ["edit-text-field"])]),
+    ], [textEdit(
+      ["F-non-text"],
+      target,
+      [{ startByte: 0, endByte: 0, replacement: "not text" }],
+      valueDigest(spec.requirements[0].testable),
+    )]), (error) => error.code === "FLOW_SPEC_REPAIR_TRIAGE_TARGETS_INVALID");
   });
 });

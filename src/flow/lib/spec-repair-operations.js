@@ -5,6 +5,7 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const SHA256_REVISION = /^sha256:([a-f0-9]{64})$/;
 const MAX_OPERATIONS = 64;
 const MAX_VALUE_BYTES = 32 * 1024;
+const MAX_TEXT_EDITS = 64;
 const MAX_ATTEMPT_ERROR_BYTES = 1024;
 const COLLECTION_TARGETS = new Set([
   "scope.in", "scope.out", "constraints", "design_principles", "acceptance_criteria",
@@ -34,6 +35,7 @@ function semanticOperationDigest(operation) {
   return crypto.createHash("sha256").update(canonicalJson({
     kind: json.kind, target: json.target, expectedDigest: json.expectedDigest,
     ...(Object.hasOwn(json, "replacement") ? { replacement: json.replacement } : {}),
+    ...(Object.hasOwn(json, "edits") ? { edits: json.edits } : {}),
   })).digest("hex");
 }
 function revisionFor(inputRevision) { return `sha256:${inputRevision}`; }
@@ -175,9 +177,10 @@ export class SpecRepairPermission {
 }
 
 export class SpecRepairOperation {
-  constructor(input, index, { replacementRequired = true } = {}) {
+  constructor(input, index, { replacementRequired = true, editsRequired = false } = {}) {
     const keys = ["findingIds", "kind", "target", "expectedDigest", "reason"];
     if (replacementRequired) keys.push("replacement");
+    if (editsRequired) keys.push("edits");
     exactKeys(input, keys, `spec-repair.operations[${index}]`);
     if (!Array.isArray(input.findingIds) || input.findingIds.length === 0 || new Set(input.findingIds).size !== input.findingIds.length) {
       throw new Error(`spec-repair.operations[${index}].findingIds must be a non-empty unique array`);
@@ -193,6 +196,28 @@ export class SpecRepairOperation {
     if (replacementRequired && stableBytes(input.replacement) > MAX_VALUE_BYTES) throw new Error(`spec-repair.operations[${index}].replacement is oversized`);
     this.replacement = replacementRequired ? frozen(input.replacement) : null;
     this.replacementRequired = replacementRequired;
+    if (editsRequired) {
+      if (!Array.isArray(input.edits) || input.edits.length === 0 || input.edits.length > MAX_TEXT_EDITS) {
+        throw new Error(`spec-repair.operations[${index}].edits must contain at most ${MAX_TEXT_EDITS} edits`);
+      }
+      const edits = input.edits.map((edit, editIndex) => new SpecRepairTextEdit(edit, `spec-repair.operations[${index}].edits[${editIndex}]`));
+      if (stableBytes(input.edits) > MAX_VALUE_BYTES) {
+        throw new Error(`spec-repair.operations[${index}].edits replacements are oversized`);
+      }
+      for (let editIndex = 0; editIndex < edits.length; editIndex += 1) {
+        if (editIndex > 0 && (edits[editIndex - 1].startByte > edits[editIndex].startByte
+          || (edits[editIndex - 1].startByte === edits[editIndex].startByte && edits[editIndex - 1].endByte > edits[editIndex].endByte))) {
+          throw new Error(`spec-repair.operations[${index}].edits must use canonical stable byte order`);
+        }
+        for (let otherIndex = editIndex + 1; otherIndex < edits.length; otherIndex += 1) {
+          if (edits[editIndex].conflictsWith(edits[otherIndex])) {
+            throw new Error(`spec-repair.operations[${index}].edits contain overlapping or ambiguous edits`);
+          }
+        }
+      }
+      this.edits = Object.freeze(edits);
+    } else this.edits = null;
+    this.editsRequired = editsRequired;
     if (input.expectedDigest !== null && !SHA256.test(input.expectedDigest)) throw new Error(`spec-repair.operations[${index}].expectedDigest must be SHA-256 or null`);
     this.expectedDigest = input.expectedDigest;
   }
@@ -200,6 +225,7 @@ export class SpecRepairOperation {
     return {
       findingIds: [...this.findingIds], kind: this.kind, target: this.target.toJSON(), expectedDigest: this.expectedDigest,
       ...(this.replacementRequired ? { replacement: clone(this.replacement) } : {}), reason: this.reason,
+      ...(this.editsRequired ? { edits: this.edits.map((edit) => edit.toJSON()) } : {}),
     };
   }
   conflictKey() { return this.target.conflictKey(this.expectedDigest); }
@@ -207,6 +233,32 @@ export class SpecRepairOperation {
   resolve(context) { return this.target.resolve(context, this.expectedDigest); }
   apply() { throw new Error("SpecRepairOperation subclasses implement apply"); }
   static supportsTarget() { return false; }
+}
+/** One byte-addressed edit against an immutable UTF-8 text field. */
+export class SpecRepairTextEdit {
+  constructor(value, field) {
+    exactKeys(value, ["startByte", "endByte", "replacement"], field);
+    if (!Number.isSafeInteger(value.startByte) || value.startByte < 0
+      || !Number.isSafeInteger(value.endByte) || value.endByte < value.startByte
+      || typeof value.replacement !== "string") {
+      throw new Error(`${field} has an invalid UTF-8 byte edit`);
+    }
+    this.startByte = value.startByte;
+    this.endByte = value.endByte;
+    this.replacement = value.replacement;
+    Object.freeze(this);
+  }
+  conflictsWith(other) {
+    if (!(other instanceof SpecRepairTextEdit)) throw new Error("text edit comparison requires a text edit");
+    if (this.startByte === this.endByte && other.startByte === other.endByte) return this.startByte === other.startByte;
+    if (this.startByte === this.endByte || other.startByte === other.endByte) {
+      const insertion = this.startByte === this.endByte ? this : other;
+      const range = insertion === this ? other : this;
+      return insertion.startByte > range.startByte && insertion.startByte < range.endByte;
+    }
+    return this.startByte < other.endByte && other.startByte < this.endByte;
+  }
+  toJSON() { return { startByte: this.startByte, endByte: this.endByte, replacement: this.replacement }; }
 }
 /** The closed operation classes own semantic application. Batch orchestration
  * has no operation-specific instanceof switching. */
@@ -219,6 +271,19 @@ export class SpecRepairIdEntityFieldReplace extends SpecRepairOperation {
   constructor(input, index) { super(input, index); if (this.kind !== "replace-entity-field" || !SpecRepairIdEntityFieldReplace.supportsTarget(this.target) || this.expectedDigest === null) throw new Error(`spec-repair.operations[${index}] replace-entity-field target or digest is invalid`); Object.freeze(this); }
   static supportsTarget(target) { return target instanceof SpecRepairIdEntityTarget; }
   apply(context) { return context.replace(this.resolve(context), this); }
+}
+/** Applies one or more immutable-base UTF-8 byte edits to a string field. */
+export class SpecRepairTextFieldEdit extends SpecRepairOperation {
+  constructor(input, index) {
+    super(input, index, { replacementRequired: false, editsRequired: true });
+    if (this.kind !== "edit-text-field" || !SpecRepairTextFieldEdit.supportsTarget(this.target) || this.expectedDigest === null) {
+      throw new Error(`spec-repair.operations[${index}] edit-text-field target or digest is invalid`);
+    }
+    Object.freeze(this);
+  }
+  static supportsTarget(target) { return target instanceof SpecRepairRootTarget || target instanceof SpecRepairIdEntityTarget; }
+  static requiresStringTarget = true;
+  apply(context) { return context.replaceText(this.resolve(context), this); }
 }
 export class SpecRepairArrayAdd extends SpecRepairOperation {
   constructor(input, index) { super(input, index); if (this.kind !== "add-array-element" || !SpecRepairArrayAdd.supportsTarget(this.target) || this.expectedDigest !== null || this.target.position !== null) throw new Error(`spec-repair.operations[${index}] add-array-element target or digest is invalid`); Object.freeze(this); }
@@ -239,6 +304,7 @@ export class SpecRepairArrayDelete extends SpecRepairOperation {
 }
 OPERATION_TYPES.set("replace-field", SpecRepairFieldReplace);
 OPERATION_TYPES.set("replace-entity-field", SpecRepairIdEntityFieldReplace);
+OPERATION_TYPES.set("edit-text-field", SpecRepairTextFieldEdit);
 OPERATION_TYPES.set("add-array-element", SpecRepairArrayAdd);
 OPERATION_TYPES.set("replace-array-element", SpecRepairArrayReplace);
 OPERATION_TYPES.set("delete-array-element", SpecRepairArrayDelete);
@@ -335,6 +401,29 @@ class SpecRepairApplicationContext {
     if (valueDigest(reference.value) !== operation.expectedDigest) return { status: "stale" };
     reference.object[reference.key] = clone(operation.replacement); return { status: "ok" };
   }
+  replaceText(reference, operation) {
+    if (reference.status !== "ok") return reference;
+    if (typeof reference.value !== "string") return { status: "invalid" };
+    if (valueDigest(reference.value) !== operation.expectedDigest) return { status: "stale" };
+    const source = Buffer.from(reference.value, "utf8");
+    if (operation.edits.some((edit) => edit.endByte > source.length
+      || (edit.startByte > 0 && (source[edit.startByte] & 0xc0) === 0x80)
+      || (edit.endByte > 0 && edit.endByte < source.length && (source[edit.endByte] & 0xc0) === 0x80))) {
+      return { status: "invalid" };
+    }
+    const chunks = [];
+    let cursor = 0;
+    for (const edit of operation.edits) {
+      chunks.push(source.subarray(cursor, edit.startByte), Buffer.from(edit.replacement, "utf8"));
+      cursor = edit.endByte;
+    }
+    chunks.push(source.subarray(cursor));
+    const replacement = Buffer.concat(chunks);
+    const value = replacement.toString("utf8");
+    if (stableBytes(value) > MAX_VALUE_BYTES) return { status: "oversized" };
+    reference.object[reference.key] = value;
+    return { status: "ok" };
+  }
   append(target, replacement) { const lineage = this.arrayLineage(target); if (!lineage) return { status: "stale" }; lineage.append(replacement); return { status: "ok" }; }
   replaceArrayElement(reference, operation) { if (reference.status !== "ok") return reference; this.arrayLineage(operation.target).replace(reference, operation.replacement); return { status: "ok" }; }
   deleteArrayElement(reference) {
@@ -349,10 +438,24 @@ function collectionReference(spec, collection) {
   const key = parts.at(-1); return Array.isArray(object?.[key]) ? { object, key, value: object[key] } : null;
 }
 function unique(values) { return new Set(values).size === values.length; }
+/** Immutable-spec field lookup shared by triage existence and text capability checks. */
+function immutableFieldReference(spec, target) {
+  if (target instanceof SpecRepairRootTarget) {
+    return Object.hasOwn(spec, target.field) ? { object: spec, key: target.field, value: spec[target.field] } : null;
+  }
+  if (target instanceof SpecRepairIdEntityTarget) {
+    const entries = spec[target.domain];
+    const matches = Array.isArray(entries) ? entries.filter((entry) => entry?.id === target.id) : [];
+    return matches.length === 1 ? { object: matches[0], key: target.field, value: matches[0][target.field] } : null;
+  }
+  return null;
+}
 function targetExists(spec, target) {
-  if (target instanceof SpecRepairRootTarget) return Object.hasOwn(spec, target.field);
+  if (target instanceof SpecRepairRootTarget || target instanceof SpecRepairIdEntityTarget) return immutableFieldReference(spec, target) !== null;
   if (target instanceof SpecRepairArrayTarget) return collectionReference(spec, target.collection) !== null;
-  const entries = spec[target.domain]; return Array.isArray(entries) && entries.filter((entry) => entry?.id === target.id).length === 1;
+}
+function textTargetExists(spec, target) {
+  return typeof immutableFieldReference(spec, target)?.value === "string";
 }
 function triageMap(triage, spec) {
   const values = new Map();
@@ -363,7 +466,10 @@ function triageMap(triage, spec) {
       if (!Array.isArray(item.allowedTargets) || item.allowedTargets.length === 0) throw new Error("must declare allowedTargets");
       const permissions = item.allowedTargets.map((permission, permissionIndex) => new SpecRepairPermission(permission, `spec-triage apply item ${findingId}.allowedTargets[${permissionIndex}]`));
       if (!unique(permissions.map((permission) => permission.target.permissionKey()))) throw new Error("has duplicate allowed target permissions");
-      if (spec != null && permissions.map((permission) => permission.target).some((target) => !targetExists(spec, target))) throw new Error("declares impossible targets");
+      if (spec != null && permissions.some((permission) => !targetExists(spec, permission.target)
+        || permission.operationKinds.some((kind) => OPERATION_TYPES.get(kind).requiresStringTarget && !textTargetExists(spec, permission.target)))) {
+        throw new Error("declares impossible targets");
+      }
       values.set(findingId, Object.freeze({ permissions: Object.freeze(permissions) }));
     } catch (cause) { throw new SpecRepairOperationsError("FLOW_SPEC_REPAIR_TRIAGE_TARGETS_INVALID", `spec-triage apply item ${findingId} ${cause.message}`, { retryable: false }); }
   }
@@ -461,7 +567,11 @@ export function applySpecRepairOperations({ spec, triage, repair, inputRevision 
     }
     const result = operation.apply(context);
     if (result.status !== "ok") {
-      discarded.push(discardedOperation(operation.toJSON(), result.status === "conflict" ? "conflicting target resolution" : "stale target digest")); continue;
+      const reason = result.status === "conflict" ? "conflicting target resolution"
+        : result.status === "invalid" ? "invalid UTF-8 text edit target or range"
+          : result.status === "oversized" ? "text edit result is oversized"
+            : "stale target digest";
+      discarded.push(discardedOperation(operation.toJSON(), reason)); continue;
     }
     try {
       validateSpecJsonObject(candidate);
