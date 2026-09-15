@@ -13,10 +13,12 @@ import { AgentProcessStopEvidence } from "../../lib/agent-failure.js";
 import { AgentRuntimeDirectorySet } from "../../lib/agent.js";
 import { AgentFailure } from "../../lib/agent-failure.js";
 import { FlowCommand } from "./base-command.js";
-import { ReviewProviderTimeoutFailure } from "./current-flow-state.js";
+import { CurrentFlowStateConflictError, CurrentFlowStateInvariantError, ReviewProviderTimeoutFailure } from "./current-flow-state.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import {
   flowLeafIdsBetween,
+  TaskReviewFailureFacts,
+  resolveTaskReviewFailure,
 } from "../definition.js";
 import { flattenSteps } from "./step-tree.js";
 import path from "path";
@@ -915,11 +917,12 @@ class TaskReviewPartialEffectEvidence {
  * disagreeing about retry eligibility after reload.
  */
 class ReviewExecutionFailureFacts {
-  constructor({ error, executionRoot } = {}) {
+  constructor({ error, executionRoot, classification = null } = {}) {
     this.failureCode = typeof error?.code === "string" && error.code !== ""
       ? error.code
       : "REVIEW_EXECUTION_FAILED";
     this.message = String(error?.message || error);
+    this.classification = classification;
     this.sourceIntegrityFailure = error instanceof TaskReviewSourceEffectRejection
       || error?.code === "TASK_REVIEW_SOURCE_EFFECT_OBSERVED"
       || error?.code === "TASK_REVIEW_PARTIAL_EFFECT";
@@ -1515,7 +1518,10 @@ export class RunReviewCommand extends FlowCommand {
           return this.#canonicalFailure(ctx, persistedPhase, observationError);
         }
         const stoppedFailure = stoppedTaskReviewFailure({ error, state, taskId, workUnit, baseline: taskRecoveryBaseline });
-        return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, { taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint });
+        return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, {
+          taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint,
+          taskReviewWorkUnit: workUnit.workUnit,
+        });
       }
       try {
         taskCanonicalObservationBoundary?.assertMetricSettlementOnly();
@@ -1524,12 +1530,12 @@ export class RunReviewCommand extends FlowCommand {
       }
       if (!res.ok) {
         const failure = ReviewFailure.fromSubprocessResult({ phase: persistedPhase, result: res });
-        const error = new Error(failure.reason || "review subprocess failed");
-        error.code = failure.toEnvelopeCode();
-        error.retryable = failure.retryable;
-        if (failure.agentStopEvidence !== null) error.stopEvidence = failure.agentStopEvidence;
+        const error = failure.toExecutionError();
         const stoppedFailure = stoppedTaskReviewFailure({ error, state, taskId, workUnit, baseline: taskRecoveryBaseline });
-        return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, { taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint });
+        return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, {
+          taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint,
+          taskReviewWorkUnit: workUnit.workUnit,
+        });
       }
       try {
         sealedWorkUnit = ReviewWorkUnit.fromEnvironment(
@@ -1538,7 +1544,16 @@ export class RunReviewCommand extends FlowCommand {
         );
         sealedWorkUnit.readSealedOutput();
       } catch (error) {
-        return this.#canonicalFailure(ctx, persistedPhase, error);
+        const failure = ReviewFailure.schemaFailure({
+          phase: persistedPhase,
+          targetReview: "Task Review transport",
+          validationError: error.message || String(error),
+        });
+        const stoppedFailure = stoppedTaskReviewFailure({ error: failure.toExecutionError(error), state, taskId, workUnit, baseline: taskRecoveryBaseline });
+        return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, {
+          taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint,
+          taskReviewWorkUnit: workUnit.workUnit,
+        });
       }
     }
     let promotion;
@@ -1595,6 +1610,7 @@ export class RunReviewCommand extends FlowCommand {
       );
     }
 
+    let publicationStarted = false;
     try {
       const taskReviewPublicationBinding = taskId === null ? null : new TaskReviewPublicationBinding({
         executionIdentity: taskReviewExecution,
@@ -1620,30 +1636,86 @@ export class RunReviewCommand extends FlowCommand {
         taskReviewPublicationBinding,
       });
       const result = promotion.resultFromSealedArtifact();
+      publicationStarted = true;
       promotion.promote(result);
       return result;
     } catch (error) {
-      return this.#canonicalFailure(ctx, persistedPhase, error);
+      const publicationUnavailable = publicationStarted && taskId !== null
+        && !(error instanceof CurrentFlowStateConflictError)
+        && !(error instanceof CurrentFlowStateInvariantError)
+        && !(error instanceof TaskReviewSourceEffectRejection);
+      if (!publicationUnavailable) return this.#canonicalFailure(ctx, persistedPhase, error);
+      const failure = ReviewFailure.publicationFailure({ phase: persistedPhase, reason: error.message || String(error) });
+      let checkpoint = null;
+      try {
+        checkpoint = TaskReviewUnsealedCheckpoint.capture({
+          runId: state.runId, specId: state.specId, taskId, attempt: state.attempt,
+          manifestDigest: sealedWorkUnit.manifestDocument.digest,
+          taskSourceFingerprint: workUnit.captureCurrentTaskSource().fingerprint,
+          baseline: taskRecoveryBaseline,
+        });
+      } catch (_) {
+        return this.#canonicalFailure(ctx, persistedPhase, error);
+      }
+      return this.#canonicalFailure(ctx, persistedPhase, failure.toExecutionError(error), {
+        taskReviewUnsealedCheckpoint: checkpoint,
+        taskReviewWorkUnit: sealedWorkUnit,
+      });
     }
   }
 
-  #canonicalFailure(ctx, phase, error, { taskReviewUnsealedCheckpoint = null } = {}) {
+  #canonicalFailure(ctx, phase, error, {
+    taskReviewUnsealedCheckpoint = null,
+    taskReviewWorkUnit = null,
+  } = {}) {
+    const classified = error?.reviewFailure instanceof ReviewFailure
+      ? error.reviewFailure
+      : error instanceof AgentFailure
+        ? ReviewFailure.fromAgentFailure({ phase, failure: error })
+        : null;
     const failureFacts = new ReviewExecutionFailureFacts({
       error,
       executionRoot: ctx.executionRoot || ctx.root,
+      classification: classified?.classification ?? null,
     });
+    const canonicalState = ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId);
+    const activeNode = canonicalState.findNode(`${taskReviewUnsealedCheckpoint?.taskId ?? ""}-review`);
+    const toolingRetryLimit = activeNode === null
+      ? 0
+      : canonicalState.definition.contractForNode(activeNode).toolingRetryLimit ?? 0;
+    const failureDecision = resolveTaskReviewFailure(new TaskReviewFailureFacts({
+      taskReview: phase === IMPL_REVIEW_PHASE,
+      sourceIntegrityFailure: failureFacts.sourceIntegrityFailure,
+      workerStopped: failureFacts.agentStopEvidence === null || failureFacts.agentStopEvidence.confirmed === true,
+      canonicalEvidenceAvailable: taskReviewUnsealedCheckpoint instanceof TaskReviewUnsealedCheckpoint,
+      retryable: failureFacts.retryable,
+      toolingRecoveryAvailable: failureFacts.retryable
+        && canonicalState.attempt.consumption.tooling < toolingRetryLimit,
+      classification: failureFacts.classification,
+      code: failureFacts.failureCode,
+      message: failureFacts.message,
+    }));
+    const canConvergeTaskReview = failureDecision.disposition === "publish-unavailable";
     try {
-      ctx.flowManager.failCurrentAttempt({
-        specId: ctx.specId ?? ctx.flowState.specId,
-        taskReviewUnsealedCheckpoint,
-        failure: failureFacts.toCanonicalFailure(),
-        result: {
-          outcome: "failed",
-          summary: failureFacts.message,
-          confirmedAt: new Date().toISOString(),
-          artifactRefs: [],
-        },
-      });
+      if (canConvergeTaskReview) {
+        ctx.flowManager.confirmTaskReviewUnavailable({
+          specId: ctx.specId ?? ctx.flowState.specId,
+          checkpoint: taskReviewUnsealedCheckpoint,
+          decision: failureDecision,
+        });
+      } else {
+        ctx.flowManager.failCurrentAttempt({
+          specId: ctx.specId ?? ctx.flowState.specId,
+          taskReviewUnsealedCheckpoint,
+          failure: failureFacts.toCanonicalFailure(),
+          result: {
+            outcome: "failed",
+            summary: failureFacts.message,
+            confirmedAt: new Date().toISOString(),
+            artifactRefs: [],
+          },
+        });
+      }
     } catch (failureError) {
       return Envelope.fail(
         "run",
@@ -1652,12 +1724,18 @@ export class RunReviewCommand extends FlowCommand {
         `${failureFacts.message}; unable to record the canonical Attempt failure: ${failureError.message}`,
       );
     }
+    if (canConvergeTaskReview && taskReviewWorkUnit instanceof ReviewWorkUnit) {
+      try { taskReviewWorkUnit.cleanup(); }
+      catch { /* canonical reconciliation owns interrupted post-commit cleanup */ }
+    }
     return Envelope.fail(
       "run",
       "review",
       "REVIEW_TOOLING_ERROR",
       `review tooling error for ${phase}: ${failureFacts.message}`,
-      failureFacts.toEnvelopeData(),
+      {
+        ...failureFacts.toEnvelopeData(),
+      },
     );
   }
 

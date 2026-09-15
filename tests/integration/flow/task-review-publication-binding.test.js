@@ -145,7 +145,7 @@ test("an unpublished sealed Task Review is archived with its tooling failure and
   }), 0, "archive retirement is idempotent after a fresh Store reload");
 });
 
-test("a post-hook throw after Review publication leaves the committed result for exact-once reload cleanup", async (t) => {
+test("a post-hook throw after Review publication reuses the committed result on exact-once replay", async (t) => {
   const scenario = scenarioFor(t);
   const result = await executeReview(scenario);
   const state = scenario.state();
@@ -157,7 +157,8 @@ test("a post-hook throw after Review publication leaves the committed result for
     confirm(input);
     throw new Error("post-publication cleanup interruption");
   };
-  await assert.rejects(() => FLOW_COMMANDS.run.review.post(scenario.context(), result), /post-publication cleanup interruption/);
+  await FLOW_COMMANDS.run.review.post(scenario.context(), result);
+  await FLOW_COMMANDS.run.review.post(scenario.context(), result);
   const error = new Error("post-publication cleanup interruption");
   error.code = "POST_HOOK_FAILED";
   assert.equal(binding.toolingFailure(error, "POST_HOOK_FAILED", result), false);
@@ -168,8 +169,37 @@ test("a post-hook throw after Review publication leaves the committed result for
     specId: scenario.specId, logicalKey: TASK_REVIEW_ABORTED_WORK_UNIT_KEY,
     parameters: { taskId: scenario.taskId, attemptId: state.attempt.id }, consumerNodeId: "T-1-review", optional: true,
   }), null);
-  assert.equal(reconcileCompletedReviewWorkUnits({ flowManager: scenario.manager, specId: scenario.specId, executionRoot: scenario.root }), 1);
   assert.equal(reconcileCompletedReviewWorkUnits({ flowManager: scenario.manager, specId: scenario.specId, executionRoot: scenario.root }), 0);
+  assert.equal(reconcileCompletedReviewWorkUnits({ flowManager: scenario.manager, specId: scenario.specId, executionRoot: scenario.root }), 0);
+});
+
+test("a pre-commit Review publication I/O failure atomically records unavailable and replays exactly once", async (t) => {
+  const scenario = scenarioFor(t);
+  const result = await executeReview(scenario);
+  const confirm = scenario.manager.confirmTaskReviewResult.bind(scenario.manager);
+  let first = true;
+  scenario.manager.confirmTaskReviewResult = (input) => {
+    if (first) {
+      first = false;
+      const error = new Error("deterministic pre-commit I/O failure");
+      error.code = "EIO";
+      throw error;
+    }
+    return confirm(input);
+  };
+  await FLOW_COMMANDS.run.review.post(scenario.context(), result);
+  scenario.reload();
+  assert.equal(scenario.state().current?.at(-1), "T-1-gate");
+  assert.equal(taskReviewCatalog(scenario).length, 0);
+  const unavailable = scenario.manager.activityLedger(scenario.specId).filter((activity) => (
+    activity.transition?.taskReviewStagePlan?.operation === "review-unavailable-to-gate"
+  ));
+  assert.equal(unavailable.length, 1);
+  await FLOW_COMMANDS.run.review.post(scenario.context(), result);
+  scenario.reload();
+  assert.equal(scenario.manager.activityLedger(scenario.specId).filter((activity) => (
+    activity.transition?.taskReviewStagePlan?.operation === "review-unavailable-to-gate"
+  )).length, 1);
 });
 
 test("an archived old Review unit retires after a replacement Review advances to Triage", async (t) => {

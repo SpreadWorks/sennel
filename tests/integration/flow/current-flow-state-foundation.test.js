@@ -657,14 +657,14 @@ describe("Current Flow state foundation", () => {
     };
 
     advanceStage("review", {
-      taskRound: 1, reviewResultCount: 1, verdict: "REJECTED", mustFixCount: 1,
+      taskRound: 1, reviewResultCount: 1, verdict: "REJECTED", mustFixCount: 1, findingCount: 1,
     }, "T-historical-triage");
     advanceStage("triage", {
-      taskRound: 1, reviewResultCount: 1, verdict: "REJECTED", mustFixCount: 1,
+      taskRound: 1, reviewResultCount: 1, verdict: "REJECTED", mustFixCount: 1, findingCount: 1,
       triageDisposition: "apply", sameReviewBinding: true, reason: "The finding requires a repair.",
     }, "T-historical-repair");
     advanceStage("repair", {
-      taskRound: 1, reviewResultCount: 4, verdict: "REJECTED", mustFixCount: 1,
+      taskRound: 1, reviewResultCount: 4, verdict: "REJECTED", mustFixCount: 1, findingCount: 1,
       triageDisposition: "apply", repairChanged: true, sameReviewBinding: true, acceptanceCarryForwardReady: true,
     }, "T-historical-gate");
     assert.equal(state.nextAction().operation, "resume");

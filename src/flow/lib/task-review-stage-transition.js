@@ -2,17 +2,19 @@ import { createHash } from "node:crypto";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const STAGES = new Set(["review", "triage", "repair"]);
-const VERDICTS = new Set(["PASS", "ADVISORY", "REJECTED"]);
+const SEMANTIC_VERDICTS = new Set(["PASS", "ADVISORY", "REJECTED"]);
+const VERDICTS = new Set([...SEMANTIC_VERDICTS, "UNAVAILABLE"]);
 const TRIAGE_DISPOSITIONS = new Set(["apply", "all-reject"]);
 const OPERATIONS = new Set([
   "review-to-gate",
+  "review-unavailable-to-gate",
   "review-to-triage",
   "review-no-change-complete",
   "triage-to-repair",
   "triage-all-reject-to-gate",
   "triage-no-change-correction",
+  "triage-no-change-to-gate",
   "triage-no-change-complete",
-  "task-rounds-exhausted",
   "repair-to-review",
   "repair-unreviewed-to-gate",
 ]);
@@ -92,7 +94,7 @@ export class TaskNoChangeContinuationFacts {
       reasons: Object.freeze(source.reasons.map((reason) => reason.trim())),
     });
     if (review === null || typeof review !== "object" || Array.isArray(review)
-      || !VERDICTS.has(review.verdict) || review.canonical !== true) {
+      || !SEMANTIC_VERDICTS.has(review.verdict) || review.canonical !== true) {
       throw new Error("Task no-change continuation review is invalid");
     }
     this.review = Object.freeze({
@@ -199,6 +201,7 @@ export class TaskReviewStageFacts {
     reviewResultCount,
     verdict = null,
     mustFixCount = null,
+    findingCount = null,
     sourceNoChange = false,
     triageDisposition = null,
     repairChanged = null,
@@ -206,15 +209,19 @@ export class TaskReviewStageFacts {
     noChangeContinuation = null,
     acceptanceCarryForwardReady = false,
     reason = null,
+    unavailable = null,
   } = {}) {
     this.binding = binding instanceof TaskReviewStageBinding ? binding : new TaskReviewStageBinding(binding);
     if (!Number.isSafeInteger(taskRound) || taskRound < 1 || taskRound > 2) throw new Error("Task Review stage round must be 1 or 2");
-    if (!Number.isSafeInteger(reviewResultCount) || reviewResultCount < 1 || reviewResultCount > 4) {
-      throw new Error("Task Review stage result count must be between 1 and 4");
+    if (!Number.isSafeInteger(reviewResultCount) || reviewResultCount < 0 || reviewResultCount > 4) {
+      throw new Error("Task Review stage result count must be between 0 and 4");
     }
     if (verdict !== null && !VERDICTS.has(verdict)) throw new Error("Task Review stage verdict is invalid");
     if (mustFixCount !== null && (!Number.isSafeInteger(mustFixCount) || mustFixCount < 0)) {
       throw new Error("Task Review stage mustFixCount is invalid");
+    }
+    if (findingCount !== null && (!Number.isSafeInteger(findingCount) || findingCount < 0 || findingCount < (mustFixCount ?? 0))) {
+      throw new Error("Task Review stage findingCount is invalid");
     }
     if (typeof sourceNoChange !== "boolean" || typeof sameReviewBinding !== "boolean"
       || typeof acceptanceCarryForwardReady !== "boolean") {
@@ -228,6 +235,7 @@ export class TaskReviewStageFacts {
     this.reviewResultCount = reviewResultCount;
     this.verdict = verdict;
     this.mustFixCount = mustFixCount;
+    this.findingCount = findingCount;
     this.sourceNoChange = sourceNoChange;
     this.triageDisposition = triageDisposition;
     this.repairChanged = repairChanged;
@@ -239,6 +247,7 @@ export class TaskReviewStageFacts {
         : taskNoChangeContinuationFromJSON(noChangeContinuation);
     this.acceptanceCarryForwardReady = acceptanceCarryForwardReady;
     this.reason = reason == null ? null : text(reason, "Task Review stage reason");
+    this.unavailable = unavailable === null ? null : new TaskReviewUnavailableEvidence(unavailable);
     this.#assertStageShape();
     this.#assertContinuationBinding();
     Object.freeze(this);
@@ -267,26 +276,35 @@ export class TaskReviewStageFacts {
   #assertStageShape() {
     const stage = this.binding.stage;
     if (stage === "review") {
-      if (this.verdict === null || this.mustFixCount === null || this.triageDisposition !== null || this.repairChanged !== null) {
+      if (this.verdict === null || this.mustFixCount === null || this.findingCount === null || this.triageDisposition !== null || this.repairChanged !== null) {
         throw new Error("Task Review facts do not match the review stage");
       }
-      if ((this.verdict === "REJECTED") !== (this.mustFixCount > 0)) {
+      if (this.verdict === "UNAVAILABLE") {
+        if (this.reviewResultCount > 3 || this.mustFixCount !== 0 || this.findingCount !== 0 || this.reason === null
+          || this.unavailable === null || this.binding.artifactDigest !== this.unavailable.digest) {
+          throw new Error("unavailable Task Review facts require zero semantic results and bound failure evidence");
+        }
+        return;
+      }
+      if (this.reviewResultCount < 1 || this.unavailable !== null
+        || (this.verdict === "REJECTED") !== (this.mustFixCount > 0)) {
         throw new Error("Task Review REJECTED verdict must carry must-fix findings");
       }
       return;
     }
     if (stage === "triage") {
-      if (this.verdict !== "REJECTED" || this.mustFixCount === null || this.mustFixCount < 1
+      if (!SEMANTIC_VERDICTS.has(this.verdict) || this.findingCount === null || this.findingCount < 1
         || this.triageDisposition === null || this.repairChanged !== null || !this.sameReviewBinding) {
         throw new Error("Task Review facts do not match the triage stage");
       }
       if (this.reason === null) throw new Error("Task Review triage requires a canonical reason");
       return;
     }
-    if (this.verdict !== "REJECTED" || this.mustFixCount === null || this.mustFixCount < 1
-      || this.triageDisposition !== "apply" || this.repairChanged !== true || !this.sameReviewBinding) {
+    if (!SEMANTIC_VERDICTS.has(this.verdict) || this.findingCount === null || this.findingCount < 1
+      || this.triageDisposition !== "apply" || typeof this.repairChanged !== "boolean" || !this.sameReviewBinding) {
       throw new Error("Task Review facts do not match the repair stage");
     }
+    if (this.repairChanged === false && this.reason === null) throw new Error("Task repair no-change requires a canonical reason");
   }
 
   fingerprint() { return createHash("sha256").update(stableJson(this.toJSON())).digest("hex"); }
@@ -298,6 +316,7 @@ export class TaskReviewStageFacts {
       reviewResultCount: this.reviewResultCount,
       verdict: this.verdict,
       mustFixCount: this.mustFixCount,
+      findingCount: this.findingCount,
       sourceNoChange: this.sourceNoChange,
       triageDisposition: this.triageDisposition,
       repairChanged: this.repairChanged,
@@ -305,6 +324,7 @@ export class TaskReviewStageFacts {
       noChangeContinuation: this.noChangeContinuation?.toJSON() ?? null,
       acceptanceCarryForwardReady: this.acceptanceCarryForwardReady,
       reason: this.reason,
+      unavailable: this.unavailable?.toJSON() ?? null,
     };
   }
 }
@@ -332,7 +352,7 @@ export class TaskReviewStageTransitionPlan {
     }
     if (targetStepId !== null) text(targetStepId, "Task Review stage plan targetStepId");
     if (![0, 1].includes(reviewBudgetConsumed)) throw new Error("Task Review stage review budget effect is invalid");
-    if (reviewBudgetConsumed !== (facts.binding.stage === "review" ? 1 : 0)) {
+    if (reviewBudgetConsumed !== (facts.binding.stage === "review" && facts.verdict !== "UNAVAILABLE" ? 1 : 0)) {
       throw new Error("only Task Review result publication consumes the Review semantic budget");
     }
     if (typeof acceptanceUnreviewed !== "boolean") throw new Error("Task Review acceptance handoff must be boolean");
@@ -365,6 +385,96 @@ export class TaskReviewStageTransitionPlan {
       terminalReason: this.terminalReason, identity: this.identity,
     };
   }
+}
+
+/** Parent-observed, zero-result failure evidence used by Definition. */
+export class TaskReviewUnavailableEvidence {
+  constructor({ code, message, checkpointDigest, workUnitManifestDigest, specDigest, contextDigest, sourceFingerprint, reviewCycle, digest: expectedDigest = null } = {}) {
+    this.code = text(code, "Task Review unavailable code");
+    this.message = text(message, "Task Review unavailable message");
+    this.checkpointDigest = digest(checkpointDigest, "Task Review unavailable checkpointDigest");
+    this.workUnitManifestDigest = digest(workUnitManifestDigest, "Task Review unavailable workUnitManifestDigest");
+    this.specDigest = digest(specDigest, "Task Review unavailable specDigest");
+    this.contextDigest = digest(contextDigest, "Task Review unavailable contextDigest");
+    this.sourceFingerprint = digest(sourceFingerprint, "Task Review unavailable sourceFingerprint");
+    if (reviewCycle === null || typeof reviewCycle !== "object" || Array.isArray(reviewCycle)
+      || (reviewCycle.runId !== undefined && reviewCycle.runId !== null && typeof reviewCycle.runId !== "string")
+      || (reviewCycle.planRewindAt !== null && typeof reviewCycle.planRewindAt !== "string")) {
+      throw new Error("Task Review unavailable Review cycle is invalid");
+    }
+    this.reviewCycle = Object.freeze({
+      ...(reviewCycle.runId == null ? {} : { runId: text(reviewCycle.runId, "Task Review unavailable cycle runId") }),
+      planRewindAt: reviewCycle.planRewindAt,
+    });
+    this.digest = createHash("sha256").update(stableJson(this.unsignedJSON())).digest("hex");
+    if (expectedDigest !== null && digest(expectedDigest, "Task Review unavailable digest") !== this.digest) {
+      throw new Error("Task Review unavailable digest does not match its evidence");
+    }
+    Object.freeze(this);
+  }
+
+  unsignedJSON() {
+    return {
+      code: this.code, message: this.message, checkpointDigest: this.checkpointDigest,
+      workUnitManifestDigest: this.workUnitManifestDigest,
+      specDigest: this.specDigest, contextDigest: this.contextDigest,
+      sourceFingerprint: this.sourceFingerprint,
+      reviewCycle: { ...this.reviewCycle },
+    };
+  }
+
+  toJSON() { return { ...this.unsignedJSON(), digest: this.digest }; }
+}
+
+export class TaskReviewFailureFacts {
+  constructor({ taskReview, sourceIntegrityFailure, workerStopped, canonicalEvidenceAvailable, retryable, toolingRecoveryAvailable = false, classification = null, code, message } = {}) {
+    for (const [field, value] of Object.entries({ taskReview, sourceIntegrityFailure, workerStopped, canonicalEvidenceAvailable, retryable, toolingRecoveryAvailable })) {
+      if (typeof value !== "boolean") throw new Error(`Task Review failure ${field} must be boolean`);
+    }
+    this.taskReview = taskReview;
+    this.sourceIntegrityFailure = sourceIntegrityFailure;
+    this.workerStopped = workerStopped;
+    this.canonicalEvidenceAvailable = canonicalEvidenceAvailable;
+    this.retryable = retryable;
+    this.toolingRecoveryAvailable = toolingRecoveryAvailable;
+    this.code = text(code, "Task Review failure code");
+    this.message = text(message, "Task Review failure message");
+    const classifications = new Set(["provider_failure", "input_size_failure", "schema_failure", "subprocess_failure", "publication_failure"]);
+    if (classification !== null && !classifications.has(classification)) {
+      throw new Error("Task Review failure classification is invalid");
+    }
+    this.classification = classification;
+    this.category = classification ?? "internal";
+    Object.freeze(this);
+  }
+  toJSON() {
+    return {
+      taskReview: this.taskReview, sourceIntegrityFailure: this.sourceIntegrityFailure,
+      workerStopped: this.workerStopped, canonicalEvidenceAvailable: this.canonicalEvidenceAvailable,
+      retryable: this.retryable, toolingRecoveryAvailable: this.toolingRecoveryAvailable,
+      code: this.code, message: this.message, classification: this.classification, category: this.category,
+    };
+  }
+}
+
+export class TaskReviewFailurePlan {
+  constructor(token, facts, disposition) {
+    if (token !== TOKEN || !(facts instanceof TaskReviewFailureFacts)
+      || !["publish-unavailable", "stop"].includes(disposition)) {
+      throw new Error("Task Review failure plans are created only by Definition");
+    }
+    this.facts = facts;
+    this.disposition = disposition;
+    Object.freeze(this);
+  }
+}
+
+export function resolveTaskReviewFailure(facts) {
+  if (!(facts instanceof TaskReviewFailureFacts)) throw new Error("Task Review failure resolution requires typed facts");
+  const safe = facts.taskReview && facts.classification !== null
+    && (!facts.retryable || !facts.toolingRecoveryAvailable)
+    && !facts.sourceIntegrityFailure && facts.workerStopped && facts.canonicalEvidenceAvailable;
+  return new TaskReviewFailurePlan(TOKEN, facts, safe ? "publish-unavailable" : "stop");
 }
 
 function effects(taskId, entries) {

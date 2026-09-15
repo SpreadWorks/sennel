@@ -36,7 +36,7 @@ import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/cano
 const NOW = "2026-09-09T00:00:00.000Z";
 const SOURCE_POLICIES = Object.freeze([
   "implement", "impl-triage", "impl-repair",
-  "task-impl", "task-triage", "task-repair",
+  "task-impl", "task-repair",
 ]);
 
 function moduleUrlFor(relativePath) {
@@ -79,12 +79,6 @@ function sourceEffect(stepId, paths = []) {
   }
   if (stepId === "task-impl") {
     return { ...base, overview: { modules: ["Task source"], data_flow: [], decisions: [] } };
-  }
-  if (stepId === "task-triage") {
-    return { ...base, triage: { version: 1, dispositions: [{
-      findingKey: "task-F1", disposition: "apply", basis: "repair-required",
-      rationale: "The canonical Task review requires repair.",
-    }] } };
   }
   if (stepId === "task-repair") {
     return { ...base, repair: { version: 1, findings: [{ findingKey: "task-F1", paths }], summary: "Applied the Task repair.", recurrenceResolutions: [] } };
@@ -150,8 +144,7 @@ class SourceCheckpointScenario {
       this.flow.settleBefore("T1-impl");
       this.flow.activateTask("T1", { settlePredecessors: false });
       if (stepId !== "task-impl") this.completeTaskImplementation();
-      if (stepId === "task-triage" || stepId === "task-repair") this.publishTaskReview();
-      if (stepId === "task-repair") this.completeSourceAttempt("task-triage", [], sourceEffect("task-triage"));
+      if (stepId === "task-repair") this.publishTaskReview();
       return;
     }
     this.flow.activate("implement");
@@ -270,15 +263,6 @@ function taskFinding() {
 }
 
 function taskStageEffect(stepId) {
-  if (stepId === "task-triage") {
-    return {
-      ...sourceEffect(stepId),
-      triage: { version: 1, dispositions: [{
-        findingKey: "missing-behavior", disposition: "apply", basis: "repair-required",
-        rationale: "The requirement confirms this missing behavior.",
-      }] },
-    };
-  }
   return {
     ...sourceEffect(stepId, ["README.md"]),
     repair: {
@@ -296,10 +280,8 @@ async function taskReviewPolicyScenario(t, stepId) {
   const reviewed = await scenario.publishReview([taskFinding()]);
   assert.notEqual(reviewed.ok, false, JSON.stringify(reviewed));
   if (stepId === "task-repair") {
-    const triage = scenario.stageHandoff("triage");
-    scenario.sealHandoff(triage, taskStageEffect("task-triage"));
+    assert.notEqual((await scenario.filter([])).ok, false);
     scenario.reload();
-    assert.equal(new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() })?.completed, true);
   }
   const role = stepId.slice("task-".length);
   const work = (() => {
@@ -375,7 +357,7 @@ describe("durable source handoff checkpoints", () => {
   it("recovers every source policy from a fresh disk-backed manager exactly once", async (t) => {
     for (const stepId of SOURCE_POLICIES) {
       await t.test(stepId, async () => {
-        const taskReviewStage = new Set(["task-triage", "task-repair"]).has(stepId);
+        const taskReviewStage = stepId === "task-repair";
         const staged = taskReviewStage
           ? await taskReviewPolicyScenario(t, stepId)
           : (() => {
@@ -1151,15 +1133,17 @@ describe("durable source handoff checkpoints", () => {
     t.after(() => container.reset());
     const reviewed = await scenario.publishReview([taskFinding()]);
     assert.notEqual(reviewed.ok, false, JSON.stringify(reviewed));
+    assert.notEqual((await scenario.filter([])).ok, false);
+    scenario.reload();
     const sourceBefore = fs.readFileSync(scenario.sourcePath);
     let request;
     {
-      const work = scenario.stageHandoff("triage");
+      const work = scenario.stageHandoff("repair");
       request = work.request;
       try {
         work.coordinator.finishSourceWorker({ ctx: work.ctx, request });
         const failure = new WorkerArtifactHandoffError(
-          "invalid", "TASK_TRIAGE_SEMANTIC_FAILURE", "triage response was semantically invalid",
+          "invalid", "TASK_REPAIR_SEMANTIC_FAILURE", "repair response was semantically invalid",
           { retryable: true, data: { failureKind: "semantic" } },
         );
         const facts = SourceHandoffFailureFacts.fromError(failure, {

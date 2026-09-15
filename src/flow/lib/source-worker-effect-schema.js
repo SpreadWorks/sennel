@@ -11,7 +11,6 @@ const SCHEMA_REF_BY_STEP = Object.freeze({
   implement: "next-action/source-worker-effect-implement.schema.json",
   "impl-triage": "next-action/source-worker-effect-impl-triage.schema.json",
   "impl-repair": "next-action/source-worker-effect-impl-repair.schema.json",
-  "task-triage": "next-action/source-worker-effect-task-triage.schema.json",
   "task-repair": "next-action/source-worker-effect-task-repair.schema.json",
   "task-impl": "next-action/source-worker-effect-task-impl.schema.json",
 });

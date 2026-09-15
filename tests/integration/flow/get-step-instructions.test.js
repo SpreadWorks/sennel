@@ -37,6 +37,16 @@ describe("getStepInstructions (loader contract)", () => {
       assert.ok(taskContent.length > 0, "task-scope key resolves");
     });
 
+    it("exposes the Task Review filter as a typed host action", () => {
+      const content = getStepInstructions("task.task-review-filter");
+
+      assert.match(content, /host action, not a worker step or user approval/);
+      assert.match(content, /stable `findingId`/);
+      assert.match(content, /specific non-empty reason/);
+      assert.match(content, /Use `\[\]` when no finding is excluded/);
+      assert.match(content, /atomically publishing the canonical filter audit/);
+    });
+
     it("returns expanded prompt content (not just a placeholder)", () => {
       const expandedPrompt = getStepInstructions("plan.draft");
       const filePath = path.join(PROMPTS_DIR, "plan", "draft.md");
@@ -74,7 +84,6 @@ describe("getStepInstructions (loader contract)", () => {
         "impl.impl-triage",
         "impl.impl-repair",
         "task.task-impl",
-        "task.task-triage",
         "task.task-repair",
       ]) {
         const content = getStepInstructions(key);
@@ -216,6 +225,14 @@ describe("getStepInstructions (loader contract)", () => {
           key,
         );
       }
+    });
+
+    it("routes every Task Review finding through the host filter regardless of verdict label", () => {
+      const content = getStepInstructions("task.task-review");
+
+      assert.match(content, /verdict is `PASS` or the result contains no findings[\s\S]*Definition-selected no-finding continuation/i);
+      assert.match(content, /one or more findings—including an `ADVISORY` result[\s\S]*typed host filter boundary regardless of their disposition/i);
+      assert.doesNotMatch(content, /ADVISORY.*(?:advance|advances).*task-gate/i);
     });
 
     it("flow skill source documents runtime log options instead of env prefixes", () => {

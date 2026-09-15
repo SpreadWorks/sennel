@@ -17,6 +17,7 @@ const CLASSIFICATIONS = Object.freeze([
   "provider_failure",
   "input_size_failure",
   "schema_failure",
+  "publication_failure",
   "max_attempts_exceeded",
 ]);
 
@@ -265,6 +266,11 @@ export class ReviewFailure {
     });
   }
 
+  static publicationFailure({ phase = "impl", reason } = {}) {
+    return new ReviewFailure({ phase, classification: "publication_failure", reason: requireString(reason, "reason"),
+      failureCode: "TASK_REVIEW_PUBLICATION_UNAVAILABLE", retryable: false, retryBudgetConsumed: false });
+  }
+
   static fromMarkerLine(line) {
     if (typeof line !== "string" || !line.startsWith(REVIEW_FAILURE_MARKER_PREFIX)) return null;
     try {
@@ -372,6 +378,15 @@ export class ReviewFailure {
 
   toEnvelopeCode() {
     return this.failureCode || this.classification.toUpperCase();
+  }
+
+  toExecutionError(cause = null) {
+    const error = new Error(this.reason || `${this.classification} during ${this.phase} Review`, cause === null ? undefined : { cause });
+    error.code = this.toEnvelopeCode();
+    error.retryable = this.retryable;
+    error.reviewFailure = this;
+    if (this.agentStopEvidence !== null) error.stopEvidence = this.agentStopEvidence;
+    return error;
   }
 
   toEnvelopeData() {

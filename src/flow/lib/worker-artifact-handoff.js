@@ -36,6 +36,7 @@ import {
   resolvePlanGateRepairWorkerTransition,
   resolveRequirementTestLifecycle,
   resolveSourceHandoffTransitionPlan,
+  SourceHandoffTransitionPlan,
 } from "../definition.js";
 import { SourceHandoffFailureFacts } from "./source-handoff-failure.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
@@ -869,7 +870,7 @@ export class WorkerArtifactHandoffPolicy {
     Object.freeze(this);
   }
 
-  get preservesRejectedSource() { return ["task-triage", "task-repair"].includes(this.stepId); }
+  get preservesRejectedSource() { return this.stepId === "task-repair"; }
 }
 
 const POLICIES = Object.freeze([
@@ -984,10 +985,10 @@ const POLICIES = Object.freeze([
     ],
     kind: "source",
   }),
-  ...["triage", "repair"].map((role) => new WorkerArtifactHandoffPolicy({
+  ...["repair"].map((role) => new WorkerArtifactHandoffPolicy({
     stepId: `task-${role}`,
     inputs: [],
-    virtualInputs: ["task-review.json", ...(role === "repair" ? ["task-triage.json", "task-review-recurrence.json"] : []), "task-review-binding.json", "task-source-authority.json", "task-approved-finding-exceptions.json"],
+    virtualInputs: ["task-review.json", "task-triage.json", "task-review-filter.json", "task-review-recurrence.json", "task-review-binding.json", "task-source-authority.json", "task-approved-finding-exceptions.json"],
     payloads: [{ logicalName: "effects.json", targetRelativePath: "effects.json" }],
     kind: "source",
   })),
@@ -1458,6 +1459,30 @@ export class SourceNoChangeReason {
   toJSON() { return this.text; }
 }
 
+/** Canonical no-change/unrepairable outcome for every selected Task finding. */
+export class TaskRepairNoChangeEffect {
+  constructor({ classification, findingKeys, reason } = {}) {
+    if (!new Set(["no-change", "unrepairable"]).has(classification)) {
+      throw new Error("Task repair no-change classification is invalid");
+    }
+    this.classification = classification;
+    if (!Array.isArray(findingKeys) || findingKeys.length === 0 || findingKeys.length > MAX_PAYLOAD_FILES) {
+      throw new Error("Task repair no-change requires bounded findingKeys");
+    }
+    this.findingKeys = Object.freeze(findingKeys.map((key) => requiredString(key, "Task repair no-change findingKey")));
+    if (new Set(this.findingKeys).size !== this.findingKeys.length) throw new Error("Task repair no-change findingKeys must be unique");
+    this.reason = requiredString(reason, "Task repair no-change reason");
+    Object.freeze(this);
+  }
+  assertManifest(manifest) {
+    if (!(manifest instanceof SourceMutationManifest) || manifest.paths().length !== 0) {
+      throw new Error("Task repair no-change requires zero observed source mutations");
+    }
+    return this;
+  }
+  toJSON() { return { classification: this.classification, findingKeys: [...this.findingKeys], reason: this.reason }; }
+}
+
 function assertSourceEffectShape({ stepId, completionStatus, files, issues, overview, triage, repair, gateRepair, noChangeReason }) {
   if (!new Set(["done", "skipped"]).has(completionStatus)) throw new Error("source worker completionStatus is invalid");
   if (completionStatus === "skipped" && stepId !== "implement") {
@@ -1465,15 +1490,21 @@ function assertSourceEffectShape({ stepId, completionStatus, files, issues, over
   }
   if (stepId === "task-impl" && overview === null) throw new Error("task-impl source effect requires overview additions");
   if (stepId !== "task-impl" && overview !== null) throw new Error("only task-impl may submit overview additions");
-  if ((new Set(["impl-triage", "task-triage"]).has(stepId)) !== (triage !== null)) throw new Error("source triage effect is required only for impl-triage");
-  if ((new Set(["impl-repair", "task-repair"]).has(stepId)) !== (repair !== null)) throw new Error("source repair effect is required only for impl-repair");
+  if ((stepId === "impl-triage") !== (triage !== null)) throw new Error("source triage effect is required only for impl-triage");
+  const repairStep = stepId === "impl-repair" || stepId === "task-repair";
+  if (repair !== null && !repairStep) throw new Error("source repair effect is allowed only for repair steps");
+  if (stepId === "impl-repair" && repair === null) throw new Error("source repair effect is required for impl-repair");
   if (stepId !== "task-impl" && gateRepair !== null) {
     throw new Error("only task-impl may submit a Gate repair report");
   }
-  if (stepId !== "task-impl" && noChangeReason !== null) {
-    throw new Error("only task-impl may submit a source no-change reason");
+  if (stepId === "task-repair") {
+    if ((repair === null) === (noChangeReason === null) || (noChangeReason !== null && !(noChangeReason instanceof TaskRepairNoChangeEffect))) {
+      throw new Error("task-repair requires exactly one changed repair or typed no-change outcome");
+    }
+  } else if (stepId !== "task-impl" && noChangeReason !== null) {
+    throw new Error("only task-impl and task-repair may submit a source no-change reason");
   }
-  if (new Set(["impl-triage", "task-triage"]).has(stepId) && (files.length > 0 || issues.length > 0 || overview !== null || repair !== null)) {
+  if (stepId === "impl-triage" && (files.length > 0 || issues.length > 0 || overview !== null || repair !== null)) {
     throw new Error("impl-triage source effect may contain only typed triage dispositions");
   }
   if (new Set(["impl-repair", "task-repair"]).has(stepId) && (overview !== null || triage !== null)) {
@@ -1504,7 +1535,9 @@ export class SourceWorkerEffect {
     this.triage = triage === null ? null : new SourceTriageEffect(triage);
     this.repair = repair === null ? null : new SourceRepairEffect(repair);
     this.gateRepair = gateRepair === null ? null : GateRepairReport.fromJSON(gateRepair);
-    this.noChangeReason = noChangeReason === null ? null : new SourceNoChangeReason(noChangeReason);
+    this.noChangeReason = noChangeReason === null ? null : this.stepId === "task-repair"
+      ? new TaskRepairNoChangeEffect(noChangeReason)
+      : new SourceNoChangeReason(noChangeReason);
     assertSourceEffectShape(this);
     Object.freeze(this);
   }
@@ -1550,7 +1583,9 @@ export class SourceWorkerEffectReport {
     this.triage = triage === null ? null : new SourceTriageEffect(triage);
     this.repair = repair === null ? null : new SourceRepairReport(repair);
     this.gateRepair = gateRepair === null ? null : GateRepairWorkerReport.fromDocument(gateRepair);
-    this.noChangeReason = noChangeReason === null ? null : new SourceNoChangeReason(noChangeReason);
+    this.noChangeReason = noChangeReason === null ? null : this.stepId === "task-repair"
+      ? new TaskRepairNoChangeEffect(noChangeReason)
+      : new SourceNoChangeReason(noChangeReason);
     assertSourceEffectShape({ ...this, files: [] });
     Object.freeze(this);
   }
@@ -1577,6 +1612,7 @@ export class SourceWorkerEffectReport {
       outputEvidenceDigest: gateRepairBinding.outputEvidenceDigest,
       manifest,
     });
+    this.noChangeReason?.assertManifest?.(manifest);
     return new SourceWorkerEffect({
       version: this.version, stepId: this.stepId, completionStatus: this.completionStatus,
       files: files.map((entry) => entry.toJSON()),
@@ -1615,7 +1651,7 @@ function sourceRequirementAuthorityForRequest(request) {
   return CanonicalSourceRequirementAuthority.fromSpec(specInput.document);
 }
 
-function sourceEffectDocumentFromResponse(responseText, request, manifest) {
+function sourceResponseDocument(responseText, request) {
   if (typeof responseText !== "string" || responseText.trim() === "") {
     throw new WorkerArtifactHandoffError(
       "invalid",
@@ -1644,6 +1680,10 @@ function sourceEffectDocumentFromResponse(responseText, request, manifest) {
       { retryable: false, data: { stepId: request.stepId } },
     );
   }
+  return document;
+}
+
+function sourceEffectDocumentFromDocument(document, request, manifest) {
   try {
     const requirementAuthority = sourceRequirementAuthorityForRequest(request);
     const selected = currentPlanGateObservationRepair({ request, state: request.state });
@@ -1701,8 +1741,9 @@ function assertParentOwnsSourceEffectMaterialization(request) {
 export function materializeSourceWorkerEffect({ request, responseText } = {}) {
   const effectPath = assertParentOwnsSourceEffectMaterialization(request);
   request.assertCurrent(request.flowManager.load(request.specId));
+  const document = sourceResponseDocument(responseText, request);
   const manifest = captureSourceMutationManifestForParent({ request });
-  const effect = sourceEffectDocumentFromResponse(responseText, request, manifest);
+  const effect = sourceEffectDocumentFromDocument(document, request, manifest);
   new AtomicFile(effectPath, { phaseNamespace: "parent-source-effect" })
     .write(`${JSON.stringify(effect.toJSON(), null, 2)}\n`);
   return effect;
@@ -4473,7 +4514,7 @@ function workerContextKind(policy) {
 }
 
 function taskReviewStageHandoffInputs({ flowManager, state, policy, contextSnapshot }) {
-  if (!["task-triage", "task-repair"].includes(policy.stepId)) return [];
+  if (policy.stepId !== "task-repair") return [];
   const canonical = flowManager.canonicalState(state.specId);
   const stage = new TaskReviewStageInputs({ flowManager, state: canonical, taskId: contextSnapshot.context.taskId, context: contextSnapshot.context, stage: policy.stepId });
   return stage.workerDocuments().map(({ name, document }) => {
@@ -4625,6 +4666,10 @@ export class TaskRepairSourceResponseContract {
       type: "string",
       enum: [...this.allowedPaths],
     };
+    const noChangeFindingKeys = schema.properties.noChangeReason.properties.findingKeys;
+    noChangeFindingKeys.minItems = this.findingKeys.length;
+    noChangeFindingKeys.maxItems = this.findingKeys.length;
+    noChangeFindingKeys.items = { type: "string", enum: [...this.findingKeys] };
     return schema;
   }
 
@@ -4637,8 +4682,32 @@ export class TaskRepairSourceResponseContract {
       "Authorized project-source path allow-list for repair.findings paths:",
       JSON.stringify(this.allowedPaths),
       "For every selected finding, report only the authorized source paths that this worker actually edits.",
+      "If no safe source mutation is possible, set repair to null and report noChangeReason with classification no-change or unrepairable, this exact finding key set, and a specific reason. Do not edit source in that outcome.",
       "Never report request.json, action.json, .sennel handoff runtime, or another dispatcher-owned path as a repair mutation.",
     ].join("\n");
+  }
+
+  /** Canonical zero-mutation outcome used after a safely stopped producer cannot return a usable response. */
+  failureNoChangeResponse(plan) {
+    if (!(plan instanceof SourceHandoffTransitionPlan) || plan.disposition !== "converge-no-change") {
+      throw new Error("Task repair failure response requires the Definition-selected no-change plan");
+    }
+    const code = plan.facts.code;
+    const message = plan.facts.message;
+    return new SourceWorkerEffectReport({
+      version: 1,
+      stepId: "task-repair",
+      completionStatus: "done",
+      issues: [],
+      overview: null,
+      triage: null,
+      repair: null,
+      noChangeReason: {
+        classification: "unrepairable",
+        findingKeys: this.findingKeys,
+        reason: `The safely stopped Task repair producer could not publish a usable response (${code}): ${message}`,
+      },
+    }).toJSON();
   }
 }
 
@@ -4711,18 +4780,6 @@ function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
         ? "Each result must contain fingerprint, strategy, summary, priorRepairInsufficiency, and normalized project-relative paths that exactly claim the source mutations it made (an empty claim only when it made no source mutation)."
         : "Each result must contain fingerprint, strategy, summary, and priorRepairInsufficiency.",
       "For a recurring observation, explain why the prior strategy was insufficient and use a different strategy.",
-    ].join("\n");
-  }
-  if (stepId === "task-triage") {
-    const review = inputs.find((input) => input.name === "task-review.json").document;
-    const findingKeys = [
-      ...review.blockingFindings,
-      ...review.nonBlockingImprovements,
-    ].map((finding) => finding.findingKey);
-    return [
-      "The parent-derived canonical task-triage findingKey sequence is:",
-      JSON.stringify(findingKeys),
-      `triage.dispositions must contain exactly ${findingKeys.length} entries with this exact key set.`,
     ].join("\n");
   }
   if (stepId === "task-repair") {
@@ -7015,11 +7072,11 @@ function validatePayload(request, submission, state) {
         request.stepId,
       );
       planGateRepairSourceOutcomeDraft(request, state, effect);
-      if (request.taskId !== null && ["task-triage", "task-repair"].includes(request.stepId)) {
+      if (request.taskId !== null && request.stepId === "task-repair") {
         try {
           const stage = new TaskReviewStageInputs({ flowManager: request.flowManager, state: request.flowManager.canonicalState(request.specId), taskId: request.taskId, context: request.contextSnapshot.context, stage: request.stepId });
           if (effect.triage !== null) stage.assertTriage(effect.triage);
-          if (effect.repair !== null) stage.assertRepair(effect.repair, submission.sourceMutationManifest);
+          if (request.stepId === "task-repair") stage.assertRepair(effect.repair, submission.sourceMutationManifest, effect.noChangeReason);
         } catch (cause) {
           throw new WorkerArtifactHandoffError(
             "invalid",
@@ -9222,7 +9279,7 @@ export class WorkerArtifactHandoffCoordinator {
           : null,
         result: canonicalHandoffResult(request, submission, this.now, {
           status: effect.completionStatus,
-          noChangeReason: effect.noChangeReason?.text ?? null,
+          noChangeReason: effect.noChangeReason?.text ?? effect.noChangeReason?.reason ?? null,
         }),
         planGateRepairOutcome,
         ...(upgradeResult === null ? {} : { upgradeResult }),

@@ -40,13 +40,40 @@ for (const [kind, ownershipProven, workerStopped, disposition] of [
   });
 }
 
-test("preserving source policies retain rejected edits without overriding unsafe recovery", () => {
-  for (const stepId of ["task-triage", "task-repair"]) {
-    for (const [kind, expected] of [["rejected", "preserve"], ["start-uncertain", "block"], ["recovery-untrusted", "block"]]) {
-      const facts = new SourceHandoffFailureFacts({ kind, code: "FAILURE", message: "Observed failure", workerStopped: true });
-      assert.equal(resolveSourceHandoffTransitionPlan({ facts, policy: workerArtifactHandoffPolicy(stepId) }).disposition, expected);
-    }
+test("the Task repair source policy retains rejected edits without overriding unsafe recovery", () => {
+  for (const [kind, expected] of [["rejected", "preserve"], ["start-uncertain", "block"], ["recovery-untrusted", "block"]]) {
+    const facts = new SourceHandoffFailureFacts({ kind, code: "FAILURE", message: "Observed failure", workerStopped: true });
+    assert.equal(resolveSourceHandoffTransitionPlan({ facts, policy: workerArtifactHandoffPolicy("task-repair") }).disposition, expected);
   }
+});
+
+test("Definition converges only a stopped owned terminal Task repair response failure", () => {
+  const identity = { stepId: "task-repair", toJSON: () => ({ stepId: "task-repair" }) };
+  for (const [code, retryable, ownershipProven, workerStopped, expected] of [
+    ["FLOW_SOURCE_HANDOFF_RESPONSE_INVALID", false, true, true, "converge-no-change"],
+    ["FLOW_SOURCE_HANDOFF_RESPONSE_INVALID", true, true, true, "preserve"],
+    ["FLOW_SOURCE_HANDOFF_RESPONSE_INVALID", false, false, true, "preserve"],
+    ["FLOW_SOURCE_HANDOFF_RESPONSE_INVALID", false, true, false, "block"],
+    ["FLOW_SOURCE_HANDOFF_PARENT_AUTHORITY_VIOLATION", false, true, true, "preserve"],
+  ]) {
+    const facts = new SourceHandoffFailureFacts({
+      kind: "rejected", code, message: "Observed Task repair producer failure",
+      identity, retryable, ownershipProven, workerStopped,
+    });
+    assert.equal(
+      resolveSourceHandoffTransitionPlan({ facts, policy: workerArtifactHandoffPolicy("task-repair") }).disposition,
+      expected,
+      code,
+    );
+  }
+  const exhaustedProvider = new SourceHandoffFailureFacts({
+    kind: "rejected", code: "AGENT_TEMPORARY_NETWORK", message: "Provider retry budget exhausted",
+    identity, retryable: true, ownershipProven: true, workerStopped: true,
+    providerFailed: true, toolingRecoveryAvailable: false,
+  });
+  assert.equal(resolveSourceHandoffTransitionPlan({
+    facts: exhaustedProvider, policy: workerArtifactHandoffPolicy("task-repair"),
+  }).disposition, "converge-no-change");
 });
 
 test("unknown or corrupt lock owners are not classified as temporary contention", () => {

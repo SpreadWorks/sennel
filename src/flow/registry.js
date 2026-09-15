@@ -89,6 +89,7 @@ const FLOW_TARGET_GUARD_HELP_LINES = [
   "  --expect-spec <spec>     Require the selected flow to match this spec.",
   "  --expect-run-id <runId>  Require the selected flow to match this runId.",
 ];
+const TASK_REVIEW_PUBLICATION_IO_FAILURE_CODES = new Set(["EIO", "ENOSPC", "EROFS", "EMFILE", "ENFILE"]);
 const FLOW_RUN_OPTIONS = [...FLOW_RUN_RUNTIME_OPTIONS, ...FLOW_TARGET_GUARD_OPTIONS];
 function withTargetGuardOptions(options = []) {
   return [...options, ...FLOW_TARGET_GUARD_OPTIONS];
@@ -1835,7 +1836,20 @@ export const FLOW_COMMANDS = {
           && result?.artifacts?.taskId != null
           && result?.artifacts?.toolingOutcome == null) {
           const specId = ctx.specId ?? ctx.flowState.specId;
-          ctx.flowManager.confirmTaskReviewResult({ specId, commandResult: result });
+          try {
+            ctx.flowManager.confirmTaskReviewResult({ specId, commandResult: result });
+          } catch (error) {
+            const current = ctx.flowManager.loadReadOnly(specId);
+            const taskId = result.artifacts.taskId;
+            const committed = current.currentNodeId !== `${taskId}-review`
+              && ctx.flowManager.artifactCatalog(specId).artifacts.some((entry) => entry.logicalKey === "task.review"
+                && entry.relativePath === `steps/impl/${taskId}/review/result.json`);
+            if (!committed) {
+              if (current.currentNodeId === `${taskId}-review`
+                && !TASK_REVIEW_PUBLICATION_IO_FAILURE_CODES.has(error?.code)) throw error;
+              ctx.flowManager.confirmTaskReviewPublicationUnavailable({ specId, commandResult: result, error });
+            }
+          }
           ctx.flowState = ctx.flowManager.loadReadOnly(specId);
           const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
           attachedCanonicalReviewWorkUnit(result)?.cleanup();
@@ -2211,6 +2225,31 @@ export const FLOW_COMMANDS = {
         "Explicitly adopt current unreviewed input for an orphaned, unpublished recovered Task Review Attempt.",
         "Preview first, then supply --yes --expect-digest <preview-digest> --reason <20-500 characters>.",
         "Preserves failed evidence and retained work units, grants one reevaluation, and never executes Review or advances to Gate.",
+        ...FLOW_TARGET_GUARD_HELP_LINES,
+      ].join("\n"),
+    },
+    "filter-task-review": {
+      helpKey: "flow.run.filter-task-review",
+      runtimeLog: { stepMetadata: false },
+      explicitTargetResolution: true,
+      command: () => import("./lib/run-filter-task-review.js"),
+      args: {
+        flags: FLOW_TARGET_GUARD_FLAGS,
+        options: [
+          ...FLOW_RUN_OPTIONS,
+          "--exclusions",
+          "--expect-attempt-id",
+          "--expect-review-digest",
+          "--expect-source-fingerprint",
+          "--expect-catalog-fingerprint",
+        ],
+      },
+      help: [
+        `Usage: sennel flow run filter-task-review --exclusions <json-array> --expect-attempt-id <id> --expect-review-digest <sha256> --expect-source-fingerprint <sha256> --expect-catalog-fingerprint <sha256> ${FLOW_TARGET_GUARD_USAGE}`,
+        "",
+        "Confirm the host-selected Task Review exclusions exactly once.",
+        "Each JSON entry must contain findingId and a non-empty reason; [] explicitly selects every finding for repair.",
+        "The command binds the decision to the current Attempt, Review artifact, source fingerprint, and catalog publication.",
         ...FLOW_TARGET_GUARD_HELP_LINES,
       ].join("\n"),
     },

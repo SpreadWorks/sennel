@@ -5,6 +5,8 @@ import { container } from "../../../src/lib/container.js";
 import { TaskReviewAccounting } from "../../../src/flow/lib/task-review-accounting.js";
 import { TaskStageArtifact } from "../../../src/flow/lib/task-review-stage-artifacts.js";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
+import { ReviewFindingCycle } from "../../../src/flow/lib/finding-disposition-policy.js";
+import { TaskReviewConvergenceEvidence } from "../../../src/flow/lib/review-recurrence.js";
 
 const finding = {
   findingKey: "missing-behavior",
@@ -18,54 +20,29 @@ const finding = {
   rationale: "The mapped requirement requires this behavior.",
 };
 
-function triageEffect() {
-  return {
-    version: 1,
-    stepId: "task-triage",
-    completionStatus: "done",
-    issues: [],
-    overview: null,
-    triage: {
-      version: 1,
-      dispositions: [{
-        findingKey: finding.findingKey,
-        disposition: "apply",
-        basis: "repair-required",
-        rationale: "The requirement confirms this missing behavior.",
-      }],
-    },
-    repair: null,
-    noChangeReason: null,
-  };
-}
-
-function completeTriage(scenario) {
-  return scenario.completeHandoff(scenario.stageHandoff("triage"), triageEffect());
-}
-
-test("Task rejected no-change correction stops after the second bounded round", async (t) => {
+test("Task rejected no-change correction reaches Gate after the second bounded round", async (t) => {
   const scenario = new TaskReviewScenario(t, { noChange: true });
   container.reset();
   container.register("root", scenario.root);
   t.after(() => container.reset());
 
   await scenario.publishReview([finding]);
-  assert.equal(completeTriage(scenario).completed, true);
+  const firstFilter = await scenario.filter([]);
+  assert.equal(firstFilter.ok, true, JSON.stringify(firstFilter));
   scenario.reload();
   assert.equal(scenario.state().current?.at(-1), "T-1-impl");
   assert.equal(scenario.state().findNode("T-1-review").status, "invalidated");
 
   scenario.confirmNoChangeImplementation();
   await scenario.publishReview([finding]);
-  assert.equal(completeTriage(scenario).completed, true);
+  const secondFilter = await scenario.filter([]);
+  assert.equal(secondFilter.ok, true, JSON.stringify(secondFilter));
   scenario.reload();
 
   const stopped = scenario.state();
-  assert.equal(stopped.current?.at(-1), "T-1-triage");
-  assert.equal(stopped.attempt.failure.code, "TASK_ROUNDS_EXHAUSTED");
-  assert.equal(stopped.attempt.failure.retryable, false);
-  assert.equal(stopped.failureDisposition().operation, "blocked");
-  assert.equal(stopped.nextAction().operation, "blocked");
+  assert.equal(stopped.current?.at(-1), "T-1-gate");
+  assert.equal(stopped.attempt.failure, null);
+  assert.equal(stopped.nextAction().nodeId, "T-1-gate");
   const review = new TaskStageArtifact({
     flowManager: scenario.manager,
     state: stopped,
@@ -77,9 +54,16 @@ test("Task rejected no-change correction stops after the second bounded round", 
     taskId: scenario.taskId,
   }).at(-1).budget;
   assert.equal(new TaskReviewAccounting({ taskId: scenario.taskId, budget, history: review.history }).completedReviewCount, 1);
+  const handoff = new TaskReviewConvergenceEvidence({
+    flowManager: scenario.manager,
+    state: stopped,
+    cycle: ReviewFindingCycle.fromActivityLedger({ runId: stopped.runId, activities: scenario.manager.activityLedger(scenario.specId) }),
+  }).handoffs().find((entry) => entry.taskId === scenario.taskId && entry.implementationNoChange === true);
+  assert.ok(handoff);
+  assert.equal(handoff.toJSON().hostFilter.repairFindingIds.length, 1);
 
   const beforeReload = scenario.snapshot();
   scenario.reload();
   assert.equal(scenario.snapshot(), beforeReload);
-  assert.equal(scenario.state().nextAction().operation, "blocked");
+  assert.equal(scenario.state().nextAction().nodeId, "T-1-gate");
 });

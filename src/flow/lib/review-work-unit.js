@@ -762,6 +762,20 @@ export class TaskReviewUnsealedWorkUnitSet {
       workUnits: recovered,
     });
   }
+
+  static recoverCanonical({ executionRoot, state, activities, taskId, nodeId } = {}) {
+    if (state === null || typeof state !== "object" || !Array.isArray(activities)) {
+      throw new Error("Task Review unsealed work unit recovery requires canonical state and activities");
+    }
+    return TaskReviewUnsealedWorkUnitSet.recover({
+      executionRoot,
+      runId: state.runId,
+      specId: state.specId,
+      taskId,
+      nodeId,
+      acceptedAttemptIds: canonicalTaskReviewAttemptIds({ state, nodeId, activities }),
+    });
+  }
 }
 
 function canonicalTaskReviewAttemptIds({ state, nodeId, activities }) {
@@ -775,6 +789,19 @@ function canonicalTaskReviewAttemptIds({ state, nodeId, activities }) {
     }
   }
   return attemptIds;
+}
+
+function confirmedTaskReviewUnavailable({ worker, activities }) {
+  const manifest = worker.manifestDocument;
+  return activities.some((activity) => {
+    const plan = activity.transition?.taskReviewStagePlan ?? null;
+    const facts = plan?.facts ?? null;
+    return plan?.operation === "review-unavailable-to-gate"
+      && activity.nodeId === manifest.nodeId
+      && activity.attemptId === manifest.attemptId
+      && facts?.binding?.attemptId === manifest.attemptId
+      && facts?.unavailable?.workUnitManifestDigest === manifest.digest;
+  });
 }
 
 /**
@@ -812,6 +839,10 @@ export function reconcileCompletedReviewWorkUnits({ flowManager, specId, executi
                 activities,
               }),
             });
+            if (confirmedTaskReviewUnavailable({ worker, activities })) {
+              worker.cleanup();
+              cleaned += 1;
+            }
             continue;
           }
         }

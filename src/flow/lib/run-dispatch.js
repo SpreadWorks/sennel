@@ -25,6 +25,7 @@ import {
   AbortedDirective,
   AwaitDraftQuestionDirective,
   AwaitUserDecisionDirective,
+  AwaitTaskReviewFilterDirective,
   BlockedDirective,
   CompletedDirective,
   ExecuteCommandDirective,
@@ -83,6 +84,7 @@ const RESUMABLE_DISPATCH_BOUNDARIES = new Set([
   "approval_required",
   "auto_upgrade_decision",
   "await_user_decision",
+  "host_action",
   "blocked",
 ]);
 const DISPATCHER_OWNED_REPAIR_COMMANDS = new Set([
@@ -720,6 +722,8 @@ export class FlowDispatchAction {
       || this.directive instanceof AwaitDraftQuestionDirective;
   }
 
+  get awaitsHostAction() { return this.directive instanceof AwaitTaskReviewFilterDirective; }
+
   get nonblockingDecision() {
     return this.nextAction.nonblockingDecision == null
       ? null
@@ -1279,21 +1283,35 @@ export default class RunDispatchCommand extends FlowCommand {
     dispatchCount,
     stalledDispatches,
     owner,
+    requiresCanonicalActionProgress = false,
   }) {
     const refreshed = await this.fetchNextAction(target);
     if (refreshed instanceof Envelope) {
-      return { current: refreshed, stalledDispatches, failure: null };
+      return { current: refreshed, stalledDispatches, failure: null, progressed: false };
     }
-    const refreshedIdentity = this.captureAction(
-      ctx,
-      session,
-      refreshed,
-      dispatchCount,
-      "post-handoff-progress",
-    );
-    const nextStalledDispatches = invocation.hasProgressedTo(refreshedIdentity)
+    const refreshedIdentity = requiresCanonicalActionProgress
+      ? session.captureCanonicalAction(refreshed, invocation.action)
+      : this.captureAction(
+        ctx,
+        session,
+        refreshed,
+        dispatchCount,
+        "post-handoff-progress",
+      );
+    const hasProgressed = requiresCanonicalActionProgress
+      ? invocation.hasCanonicalActionProgressedTo(refreshedIdentity)
+      : invocation.hasProgressedTo(refreshedIdentity);
+    const nextStalledDispatches = hasProgressed
       ? 0
       : stalledDispatches + 1;
+    if (requiresCanonicalActionProgress && nextStalledDispatches > 0) {
+      return {
+        current: refreshed,
+        stalledDispatches: nextStalledDispatches,
+        failure: null,
+        progressed: false,
+      };
+    }
     if (nextStalledDispatches >= this.maxStalledDispatches) {
       return {
         current: refreshed,
@@ -1311,7 +1329,12 @@ export default class RunDispatchCommand extends FlowCommand {
         ),
       };
     }
-    return { current: refreshed, stalledDispatches: nextStalledDispatches, failure: null };
+    return {
+      current: refreshed,
+      stalledDispatches: nextStalledDispatches,
+      failure: null,
+      progressed: nextStalledDispatches === 0,
+    };
   }
 
   runApprovalContinuation(ctx, invocation) {
@@ -1528,7 +1551,33 @@ export default class RunDispatchCommand extends FlowCommand {
       }
 
       let reconciliation = null;
+      const sourceState = handoffRequest?.policy.kind === "source"
+        ? ctx.flowManager.canonicalState(handoffRequest.specId) : null;
+      const sourceNode = sourceState?.findNode(handoffRequest?.stepId) ?? null;
+      const toolingRetryLimit = sourceNode === null
+        ? 0 : sourceState.definition.contractForNode(sourceNode).toolingRetryLimit ?? 0;
+      const toolingRecoveryAvailable = sourceState?.attempt !== null
+        && sourceState?.attempt !== undefined
+        && sourceState.attempt.consumption.tooling < toolingRetryLimit;
       try {
+        const responseFailurePlan = sourceResponseError === null ? null : resolveSourceHandoffTransitionPlan({
+          facts: SourceHandoffFailureFacts.fromError(sourceResponseError, {
+            request: handoffRequest,
+            ownershipProven: workerArtifactAuthority !== null,
+            workerStopped: sourceWorkerStopped,
+            agentError,
+            toolingRecoveryAvailable,
+          }),
+          policy: handoffRequest.policy,
+        });
+        if (responseFailurePlan?.disposition === "converge-no-change") {
+          materializeSourceWorkerEffect({
+            request: handoffRequest,
+            responseText: JSON.stringify(handoffRequest.sourceResponseContract.failureNoChangeResponse(responseFailurePlan)),
+          });
+          sealParentMaterializedSourceWorkerEffect({ request: handoffRequest });
+          sourceResponseError = null;
+        }
         if (sourceResponseError !== null) throw sourceResponseError;
         reconciliation = this.handoffCoordinator.reconcile({
           ctx,
@@ -1544,6 +1593,7 @@ export default class RunDispatchCommand extends FlowCommand {
                 ownershipProven: workerArtifactAuthority !== null,
                 workerStopped: sourceWorkerStopped,
                 agentError,
+                toolingRecoveryAvailable,
               }),
               policy: handoffRequest.policy,
             })
@@ -1771,6 +1821,15 @@ export default class RunDispatchCommand extends FlowCommand {
         dispatchCount += 1;
         current = await this.fetchNextAction(target);
         continue;
+      }
+
+      if (action.awaitsHostAction) {
+        return new FlowDispatchBoundary({
+          kind: "host_action",
+          target,
+          nextAction: current,
+          dispatchCount,
+        }).toJSON();
       }
 
       if (action.awaitsUserDecision) {
@@ -2083,17 +2142,37 @@ export default class RunDispatchCommand extends FlowCommand {
       if (dispatcherOwnedCommand != null) {
         dispatchCount += 1;
         if (commandFailed(dispatcherOwnedCommand.result)) {
-          return this.failure(
+          // A command can return operational failure after its Store-owned
+          // transaction commits. Do not trust a command-side marker: reload
+          // canonical authority and continue only when the guarded Action has
+          // durably progressed. Otherwise preserve the command failure.
+          const progressed = await this.parentCommandProgress({
             ctx,
-            errorCode(dispatcherOwnedCommand.result),
-            errorMessages(dispatcherOwnedCommand.result),
-            blockedBoundary({
-              target,
-              nextAction: validated,
-              dispatchCount,
-              message: "The dispatcher-owned Flow command did not complete the guarded Flow transition.",
-            }),
-          );
+            session,
+            target,
+            invocation,
+            dispatchCount,
+            stalledDispatches,
+            owner: "failed Flow command",
+            requiresCanonicalActionProgress: true,
+          });
+          if (progressed.failure) return progressed.failure;
+          if (!progressed.progressed) {
+            return this.failure(
+              ctx,
+              errorCode(dispatcherOwnedCommand.result),
+              errorMessages(dispatcherOwnedCommand.result),
+              blockedBoundary({
+                target,
+                nextAction: progressed.current instanceof Envelope ? validated : progressed.current,
+                dispatchCount,
+                message: "The dispatcher-owned Flow command failed without a durable canonical transition.",
+              }),
+            );
+          }
+          stalledDispatches = progressed.stalledDispatches;
+          current = progressed.current;
+          continue;
         }
         if (dispatcherOwnedCommand.command.removesExecutionRoot) {
           try {
@@ -2131,7 +2210,6 @@ export default class RunDispatchCommand extends FlowCommand {
         current = progressed.current;
         continue;
       }
-
       let attempt = await this.runWorkerAttempt(ctx, invocation);
       dispatchCount += 1;
       const deferredMetrics = attempt.deferredMetric ? [attempt.deferredMetric] : [];
@@ -2265,7 +2343,7 @@ export default class RunDispatchCommand extends FlowCommand {
       }
       if (agentError) {
         const refreshedAction = new FlowDispatchAction(refreshed);
-        if (refreshedAction.isTerminal || refreshedAction.awaitsUserDecision) {
+        if (refreshedAction.isTerminal || refreshedAction.awaitsUserDecision || refreshedAction.awaitsHostAction) {
           current = refreshed;
           continue;
         }

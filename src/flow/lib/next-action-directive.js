@@ -24,6 +24,7 @@ const DIRECTIVE_KINDS = new Set([
   "repair_evidence",
   "await_user_decision",
   "await_draft_question",
+  "await_task_review_filter",
   "blocked",
   "completed",
   "aborted",
@@ -85,6 +86,7 @@ export class NextActionDirective {
     if (value.kind === "repair_evidence") return new RepairEvidenceDirective(value);
     if (value.kind === "await_user_decision") return new AwaitUserDecisionDirective(value);
     if (value.kind === "await_draft_question") return new AwaitDraftQuestionDirective(value);
+    if (value.kind === "await_task_review_filter") return new AwaitTaskReviewFilterDirective(value);
     if (value.kind === "blocked") return new BlockedDirective(value);
     if (value.kind === "completed") return new CompletedDirective();
     if (value.kind === "aborted") return new AbortedDirective(value);
@@ -227,6 +229,25 @@ export class AwaitDraftQuestionDirective extends NextActionDirective {
       questionRevision: this.questionRevision,
       reason: this.reason,
     };
+  }
+}
+
+/** User/host boundary for one exact canonical Task Review exclusion set. */
+export class AwaitTaskReviewFilterDirective extends NextActionDirective {
+  constructor({ command, binding, findings } = {}) {
+    super({ kind: "await_task_review_filter", terminal: false, requiresUserAction: false });
+    this.command = requireString(command, "Task Review filter directive command");
+    if (binding === null || typeof binding !== "object" || Array.isArray(binding)) {
+      throw new Error("Task Review filter directive binding is required");
+    }
+    this.binding = Object.freeze(structuredClone(binding));
+    if (!Array.isArray(findings) || findings.length === 0) throw new Error("Task Review filter directive findings are required");
+    this.findings = Object.freeze(findings.map((finding) => Object.freeze(structuredClone(finding))));
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return { ...super.toJSON(), command: this.command, binding: structuredClone(this.binding), findings: structuredClone(this.findings) };
   }
 }
 

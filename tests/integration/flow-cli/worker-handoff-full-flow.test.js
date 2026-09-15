@@ -5,6 +5,8 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
+import RunFilterTaskReviewCommand from "../../../src/flow/lib/run-filter-task-review.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import {
   flowArtifactAuthorityForStep,
@@ -48,6 +50,7 @@ const PREPARATION_LEAVES = new Set([
 ]);
 const USER_DECISION_LEAF = "acceptance-decision";
 const TASK_REVIEW_FINDING_KEY = "task-repair-f1";
+const TASK_REVIEW_FINDING_ID = "d".repeat(64);
 
 function plannedTask(taskId) {
   return {
@@ -101,20 +104,6 @@ function sourceEffect(stepId, paths) {
     return {
       ...base,
       overview: { modules: ["Task implementation module."], data_flow: [], decisions: [] },
-    };
-  }
-  if (stepId === "task-triage") {
-    return {
-      ...base,
-      triage: {
-        version: 1,
-        dispositions: [{
-          findingKey: TASK_REVIEW_FINDING_KEY,
-          disposition: "apply",
-          basis: "repair-required",
-          rationale: "The deterministic Task Review finding requires repair.",
-        }],
-      },
     };
   }
   if (stepId === "task-repair") {
@@ -280,6 +269,8 @@ async function commandArtifacts(stepId, flowManager, specId, implReviewRuns, his
     taskReviewRuns.set(taskId, reviewRun);
     const blockingFindings = reviewRun === 1 ? [{
       findingKey: TASK_REVIEW_FINDING_KEY,
+      fingerprint: TASK_REVIEW_FINDING_ID,
+      findingId: TASK_REVIEW_FINDING_ID,
       title: "Repair the Task implementation",
       failureMode: "missing_requirement_behavior",
       file: "src/task.js",
@@ -388,6 +379,21 @@ async function commandArtifacts(stepId, flowManager, specId, implReviewRuns, his
 function actionFor(route) {
   const derived = deriveNextAction({ scope: route.taskId === null ? "flow" : "task", stepId: route.stepId });
   assert.notEqual(derived, null, `${route.taskId ?? "flow"}.${route.stepId}`);
+  if (route.stepId === "task-triage") {
+    return {
+      taskId: route.taskId,
+      step: route.stepId,
+      action: derived.action,
+      instructions: { key: derived.instructionsKey, content: "Inspect and filter the canonical Task Review findings." },
+      context: {}, output_schema: null, requires_approval: false,
+      directive: {
+        kind: "await_task_review_filter", terminal: false, requiresUserAction: false,
+        command: "sennel flow run filter-task-review",
+        binding: { taskId: route.taskId },
+        findings: [{ findingId: TASK_REVIEW_FINDING_ID }],
+      },
+    };
+  }
   if (route.stepId === USER_DECISION_LEAF) {
     return {
       taskId: null,
@@ -647,7 +653,28 @@ describe("deterministic full Flow worker handoff", () => {
       assert.equal(beforeApproval.dispatch?.boundary, "approval_required", JSON.stringify(beforeApproval, null, 2));
       assert.equal(beforeApproval.dispatch.binding, binding);
       assert.equal(workerSteps.includes("approval"), false);
-      const afterApproval = await dispatcher.execute({ ...baseCtx, approve: beforeApproval.dispatch.approvalToken });
+      let afterApproval = await dispatcher.execute({ ...baseCtx, approve: beforeApproval.dispatch.approvalToken });
+      let hostBoundaryDispatchCount = 0;
+      while (afterApproval.dispatch?.boundary === "host_action") {
+        hostBoundaryDispatchCount += afterApproval.dispatch.dispatchCount;
+        parentCommands.push("task-triage");
+        const projected = await new GetNextActionCommand().execute({
+          ...baseCtx, flowState: flowManager.loadReadOnly(specId),
+        });
+        const filter = projected.context.taskReviewFilter;
+        const filtered = new RunFilterTaskReviewCommand().execute({
+          ...baseCtx,
+          flowState: flowManager.loadReadOnly(specId),
+          exclusions: "[]",
+          expectAttemptId: filter.attemptId,
+          expectReviewDigest: filter.reviewDigest,
+          expectSourceFingerprint: filter.sourceFingerprint,
+          expectCatalogFingerprint: filter.catalogFingerprint,
+        });
+        assert.equal(filtered.ok, true, JSON.stringify(filtered));
+        position += 1;
+        afterApproval = await dispatcher.execute({ ...baseCtx, flowState: flowManager.loadReadOnly(specId) });
+      }
       assert.equal(afterApproval.dispatch?.boundary, "await_user_decision", JSON.stringify({ afterApproval, workerSteps, parentCommands, position }, null, 2));
       assert.equal(afterApproval.dispatch.binding, binding);
       assert.equal(workerSteps.includes(USER_DECISION_LEAF), false);
@@ -714,10 +741,11 @@ describe("deterministic full Flow worker handoff", () => {
       assert.equal(
         beforeApproval.dispatch.dispatchCount
           + afterApproval.dispatch.dispatchCount
+          + hostBoundaryDispatchCount
           + beforeFinalize.dispatch.dispatchCount
           + completed.dispatch.dispatchCount,
-        handoffCount + parentCommands.length + 1,
-        "dispatch count must include each worker/parent action and the parent Spec-approval continuation, but not user-boundary prompts",
+        handoffCount + parentCommands.filter((stepId) => stepId !== "task-triage").length + 1,
+        "dispatch count must include each worker/parent action and the parent Spec-approval continuation, but not host/user-boundary prompts",
       );
       const repairPublication = flowManager.activityLedger(specId).find((activity) => (
         activity.reviewPublication?.stage === "spec-repair"

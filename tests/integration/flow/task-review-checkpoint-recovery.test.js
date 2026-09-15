@@ -52,7 +52,13 @@ function runtimeBoundReview(scenario, worker) {
 
 async function produceStoppedSurface(scenario) {
   let directory;
-  const result = await runtimeBoundReview(scenario, stoppedWorker((options) => { directory = options.env.SENNEL_REVIEW_OUTPUT_DIR; }))
+  const result = await runtimeBoundReview(scenario, (_command, _args, options) => {
+    directory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
+    const error = new Error("unknown internal Review fixture failure");
+    error.code = "INTERNAL_REVIEW_FIXTURE_FAILURE";
+    error.retryable = false;
+    throw error;
+  })
     .execute(scenario.context());
   assert.equal(result.ok, false, JSON.stringify(result));
   assert.ok(fs.existsSync(directory), "the stopped worker surface is retained until a parent-authorized recovery");
@@ -150,18 +156,14 @@ function recoverSplitCheckout(input) {
   });
 }
 
-function exhaustSplitCheckout({ manager, specId }) {
+async function exhaustSplitCheckout({ executionRoot, mainRoot, manager, specId }) {
   for (;;) {
-    manager.failCurrentAttempt({
-      specId,
-      failure: {
-        category: "tooling",
-        retryKind: "tooling",
-        retryable: true,
-        code: "REVIEW_PROVIDER_UNAVAILABLE",
-        message: "Deterministic split-checkout tooling failure.",
-      },
-    });
+    await splitCheckoutReview(() => {
+      const error = new Error("unknown internal split-checkout Review failure");
+      error.code = "INTERNAL_REVIEW_FIXTURE_FAILURE";
+      error.retryable = false;
+      throw error;
+    }).execute(splitCheckoutContext({ executionRoot, mainRoot, manager, specId }));
     if (manager.canonicalState(specId).failureDisposition().operation !== "retry") return;
     manager.retryCurrentAttempt({ specId });
   }
@@ -369,14 +371,18 @@ test("an external execution checkout cleans the exact authorized worker", async 
     },
   });
   manager.updateStepStatus({ stepId: `${taskId}-review`, requestedStatus: "in_progress" }, { specId });
-  exhaustSplitCheckout({ manager, specId });
+  await exhaustSplitCheckout({ executionRoot, mainRoot, manager, specId });
   commitRuntimeEvidenceAt(executionRoot, 1);
   assert.equal(recoverSplitCheckout({ executionRoot, mainRoot, manager, specId }).reset, true);
 
   let directory;
-  const stopped = await splitCheckoutReview(stoppedWorker((options) => {
+  const stopped = await splitCheckoutReview((_command, _args, options) => {
     directory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
-  })).execute(splitCheckoutContext({ executionRoot, mainRoot, manager, specId }));
+    const error = new Error("unknown internal split-checkout Review failure");
+    error.code = "INTERNAL_REVIEW_FIXTURE_FAILURE";
+    error.retryable = false;
+    throw error;
+  }).execute(splitCheckoutContext({ executionRoot, mainRoot, manager, specId }));
   assert.equal(stopped.ok, false, JSON.stringify(stopped));
   assert.ok(fs.existsSync(directory), "the external checkout owns the stopped worker surface");
   commitRuntimeEvidenceAt(executionRoot, 2);

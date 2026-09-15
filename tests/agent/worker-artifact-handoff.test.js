@@ -9,6 +9,7 @@ import { describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import GetNextActionCommand from "../../src/flow/lib/get-next-action.js";
+import RunFilterTaskReviewCommand from "../../src/flow/lib/run-filter-task-review.js";
 import RunClaimNextActionCommand from "../../src/flow/lib/run-claim-next-action.js";
 import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
 import RunReviewCommand from "../../src/flow/lib/run-review.js";
@@ -599,7 +600,7 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
     }
   });
 
-  it("keeps Task review and triage read-only before a real repair and re-review", async () => {
+  it("keeps Task review and host filtering read-only before a real repair and re-review", async () => {
     const root = createTmpDir("task-review-triage-repair-agent-");
     const originalPath = process.env.PATH;
     try {
@@ -647,7 +648,7 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       }).registerActive().prepareTaskFrontier();
       flowManager.startTask(taskId, { specId });
 
-      // Establish the real Task source lineage that Review, triage, and repair
+      // Establish the real Task source lineage that Review, host filtering, and repair
       // consume. The deliberately incomplete implementation is the only seed;
       // no Review, triage, or repair artifact is preconstructed.
       completeCanonicalSourceHandoff({
@@ -694,12 +695,12 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       assert.equal(firstReviewArtifact.verdict, "REJECTED");
       assert.ok(firstReviewArtifact.blockingFindings.length > 0, JSON.stringify(firstReviewArtifact, null, 2));
 
-      const triageDispatcher = new RunDispatchCommand({
+      const filterDispatcher = new RunDispatchCommand({
         nextAction: taskStageOnly("task-triage"),
         agent,
       });
-      triageDispatcher.container = container;
-      const triageResult = await triageDispatcher.execute({
+      filterDispatcher.container = container;
+      const filterBoundary = await filterDispatcher.execute({
         ...context(),
         expectRunId: flowManager.loadReadOnly(specId).runId,
         expectSpec: specId,
@@ -707,9 +708,19 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         _envelopeKey: "dispatch",
         flowCommandBoundary: true,
       });
-      assert.equal(triageResult.dispatch?.boundary, "completed", JSON.stringify(triageResult, null, 2));
-      assert.equal(triageResult.dispatch.dispatchCount, 1);
-      assert.equal(fs.readFileSync(sourcePath, "utf8"), incompleteSource, "Task triage must not edit Task source");
+      assert.equal(filterBoundary.dispatch?.boundary, "host_action", JSON.stringify(filterBoundary, null, 2));
+      const projectedFilter = await new GetNextActionCommand().execute(context());
+      const filterBinding = projectedFilter.context.taskReviewFilter;
+      const filtered = new RunFilterTaskReviewCommand().execute({
+        ...context(),
+        exclusions: "[]",
+        expectAttemptId: filterBinding.attemptId,
+        expectReviewDigest: filterBinding.reviewDigest,
+        expectSourceFingerprint: filterBinding.sourceFingerprint,
+        expectCatalogFingerprint: filterBinding.catalogFingerprint,
+      });
+      assert.equal(filtered.ok, true, JSON.stringify(filtered, null, 2));
+      assert.equal(fs.readFileSync(sourcePath, "utf8"), incompleteSource, "Task host filtering must not edit Task source");
       const afterTriage = flowManager.canonicalState(specId);
       assert.equal(afterTriage.current.at(-1), `${taskId}-repair`);
       const triageArtifact = new TaskStageArtifact({
@@ -722,21 +733,18 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         ...firstReviewArtifact.blockingFindings,
         ...firstReviewArtifact.nonBlockingImprovements,
       ];
-      const mustFixFindingKeys = reviewedFindings
-        .filter((finding) => finding.disposition === "must-fix")
-        .map((finding) => finding.findingKey)
-        .sort();
+      const selectedFindingKeys = reviewedFindings.map((finding) => finding.findingKey).sort();
       assert.equal(triageArtifact.dispositions.length, reviewedFindings.length);
       assert.deepEqual(
         triageArtifact.dispositions
           .filter((entry) => entry.disposition === "apply")
           .map((entry) => entry.findingKey)
           .sort(),
-        mustFixFindingKeys,
+        selectedFindingKeys,
       );
       assert.equal(
         triageArtifact.dispositions
-          .filter((entry) => !mustFixFindingKeys.includes(entry.findingKey))
+          .filter((entry) => !selectedFindingKeys.includes(entry.findingKey))
           .every((entry) => entry.disposition === "reject"),
         true,
         JSON.stringify(triageArtifact, null, 2),
@@ -774,7 +782,7 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       }).document;
       assert.deepEqual(
         repairArtifact.repair.findingMutations.map((entry) => entry.findingKey).sort(),
-        mustFixFindingKeys,
+        selectedFindingKeys,
       );
       assert.deepEqual(
         repairArtifact.reviewFindings.map((finding) => finding.findingKey).sort(),

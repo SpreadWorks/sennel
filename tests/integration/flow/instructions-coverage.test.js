@@ -29,6 +29,8 @@ const INCLUDE_DIRECTIVE_RE = /<!--\s*include\("([^"]+)"\)\s*-->/g;
  * Collect instructionsKey values from leaf nodes that require AI prompts.
  * Branch nodes (children != null) and automated steps (no outputSchemaRef)
  * are excluded — they have instructionsKey for metadata but no prompt file.
+ * Typed host actions have no worker output schema, but their dispatcher-facing
+ * instructions are still a registered prompt contract.
  */
 function collectInstructionKeys(definition) {
   const keys = [];
@@ -36,7 +38,7 @@ function collectInstructionKeys(definition) {
     for (const node of nodes) {
       if (node.children) {
         walk(node.children);
-      } else if (node.instructionsKey && node.outputSchemaRef) {
+      } else if (node.instructionsKey && (node.outputSchemaRef || node.action === "filter-task-review")) {
         keys.push(node.instructionsKey);
       }
     }

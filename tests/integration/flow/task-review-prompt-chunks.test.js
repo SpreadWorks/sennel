@@ -106,8 +106,13 @@ test("a later Task chunk protocol failure leaves no final artifact, seal, or can
   assert.equal(agent.calls.length, 3, "one success and two bounded invalid protocol responses");
   scenario.reload();
   assert.equal(publications(scenario).length, 0);
-  assert.equal(scenario.state().attempt.failure.code, "TASK_REVIEW_PROTOCOL_INVALID_RESPONSE");
-  assert.equal(scenario.state().current.at(-1), "T-1-review");
+  assert.equal(scenario.state().attempt.failure, null);
+  assert.equal(scenario.state().attempt.consumption.semantic, 0);
+  assert.equal(scenario.state().current.at(-1), "T-1-gate");
+  assert.equal(scenario.manager.activityLedger(scenario.specId).some((activity) => (
+    activity.transition?.taskReviewStagePlan?.operation === "review-unavailable-to-gate"
+    && activity.transition.taskReviewStagePlan.facts.unavailable.code === "TASK_REVIEW_PROTOCOL_INVALID_RESPONSE"
+  )), true);
   assert.equal(fs.readFileSync(scenario.sourcePath, "utf8"), SOURCE);
 });
 

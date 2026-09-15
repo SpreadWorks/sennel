@@ -32,6 +32,7 @@ import {
   BlockedDirective,
   AwaitDraftQuestionDirective,
   AwaitUserDecisionDirective,
+  AwaitTaskReviewFilterDirective,
   CompletedDirective,
   ExecuteCommandDirective,
   ExecuteStepDirective,
@@ -91,6 +92,7 @@ import { CanonicalTaskContext, canonicalTaskContextKinds } from "./task-canonica
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { readTaskExecutionOverrunFacts } from "./task-execution-overrun.js";
 import { assertReconciledTaskReviewInput } from "./task-review-reconciliation.js";
+import { TaskReviewStageInputs } from "./task-review-stage-artifacts.js";
 import {
   decisionContextForActiveFlow,
   definitionNonblockingEligibilityForActiveFlow,
@@ -496,6 +498,19 @@ function canonicalWorkerContext(ctx, derived, target, state, typedState) {
         sourceFingerprint: source.fingerprint,
       });
       context = taskContextProjection({ taskContext, derived, target, state, source });
+      if (target.stepId === "task-triage") {
+        const inputs = new TaskReviewStageInputs({
+          flowManager: ctx.flowManager, state: typedState, taskId: target.taskId,
+          context: taskContext, stage: "task-triage",
+        });
+        extensions.taskReviewFilter = Object.freeze({
+          attemptId: typedState.attempt?.id ?? null,
+          reviewDigest: inputs.review.reference.digest,
+          sourceFingerprint: inputs.binding.sourceFingerprint,
+          catalogFingerprint: ctx.flowManager.artifactCatalog(state.specId).hash,
+          findings: inputs.findings.map(({ findingKey: _internalFindingKey, ...finding }) => structuredClone(finding)),
+        });
+      }
     } catch (cause) {
       throw new NextActionPlanError(
         "TASK_CONTEXT_INVALID",
@@ -856,8 +871,29 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
         ? lifecycleDirective.continuation
         : null,
       });
+  const workerContext = canonicalWorkerContext(ctx, derived, target, state, typedState);
   let selectedDirective = userDecisionDirective ?? draftDecisionDirective ?? conditionalDirective ?? approvalDirective ?? activationDirective
     ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
+  if (target.scope === "task" && target.stepId === "task-triage" && typedState.attempt?.failure === null) {
+    const filter = workerContext.taskReviewFilter;
+    const quoted = (value) => `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+    selectedDirective = new AwaitTaskReviewFilterDirective({
+      command: guardedCommand([
+        "sennel flow run filter-task-review --exclusions '<json-array>'",
+        `--expect-attempt-id ${quoted(filter.attemptId)}`,
+        `--expect-review-digest ${quoted(filter.reviewDigest)}`,
+        `--expect-source-fingerprint ${quoted(filter.sourceFingerprint)}`,
+        `--expect-catalog-fingerprint ${quoted(filter.catalogFingerprint)}`,
+      ].join(" "), state, binding),
+      binding: {
+        attemptId: filter.attemptId,
+        reviewDigest: filter.reviewDigest,
+        sourceFingerprint: filter.sourceFingerprint,
+        catalogFingerprint: filter.catalogFingerprint,
+      },
+      findings: filter.findings,
+    });
+  }
   if (selectedDirective instanceof ExecuteStepDirective && target.scope === "task" && target.stepId === "task-review" && typedState.attempt?.failure === null) {
     try { assertReconciledTaskReviewInput({ flowManager: ctx.flowManager, state: typedState, taskId: target.taskId, root: ctx.executionRoot || ctx.root }); }
     catch (error) {
@@ -886,7 +922,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     step: target.stepId,
     action: derived.action,
     instructions: instruction,
-    context: canonicalWorkerContext(ctx, derived, target, state, typedState),
+    context: workerContext,
     output_schema: outputSchema,
     requires_approval: approvalProjection.requiresApproval,
     ...(binding && { binding: binding.serialize() }),

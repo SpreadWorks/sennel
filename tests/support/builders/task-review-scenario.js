@@ -17,13 +17,18 @@ import { runTaskReviewProtocol, parseImplReviewFindings, formatImplReviewJson } 
 import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
 import { completeCanonicalSourceHandoff } from "./source-handoff-scenario.js";
 import { FlowHandoffAuthorityLease } from "../../../src/lib/flow-handoff-authority-lease.js";
+import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
+import RunFilterTaskReviewCommand from "../../../src/flow/lib/run-filter-task-review.js";
 
 class TaskReviewScenarioAgent {
   constructor(findings, edit) { this.findings = findings; this.edit = edit; }
   providerRetryPolicy() { return { retryCount: 0, retryDelayMs: 1, backoffFactor: 2 }; }
   async call() {
     this.edit?.();
-    return JSON.stringify({ blockingFindings: this.findings, nonBlockingImprovements: [] });
+    return JSON.stringify({
+      blockingFindings: this.findings.filter((finding) => finding.disposition === "must-fix"),
+      nonBlockingImprovements: this.findings.filter((finding) => finding.disposition !== "must-fix"),
+    });
   }
 }
 
@@ -213,6 +218,20 @@ export class TaskReviewScenario {
       specId: this.specId,
       taskId: this.taskId,
       role,
+    });
+  }
+
+  async filter(exclusions = [], overrides = {}) {
+    const { binding: expectedBinding, ...commandOverrides } = overrides;
+    const binding = expectedBinding ?? (await new GetNextActionCommand().execute(this.context())).context.taskReviewFilter;
+    return new RunFilterTaskReviewCommand().execute({
+      ...this.context(),
+      exclusions: JSON.stringify(exclusions),
+      expectAttemptId: binding.attemptId,
+      expectReviewDigest: binding.reviewDigest,
+      expectSourceFingerprint: binding.sourceFingerprint,
+      expectCatalogFingerprint: binding.catalogFingerprint,
+      ...commandOverrides,
     });
   }
 

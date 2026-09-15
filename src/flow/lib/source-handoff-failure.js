@@ -29,6 +29,7 @@ export class SourceHandoffFailureFacts {
     rollbackPlanDigest = null, handoffDigest = null,
     ownershipProven = false, workerStopped = false, retryable = false, failureKind = null,
     providerFailed = false,
+    toolingRecoveryAvailable = false,
   } = {}) {
     if (!FAILURE_KINDS.has(kind)) throw new Error("invalid source handoff failure kind");
     if (typeof code !== "string" || code.trim() === ""
@@ -36,7 +37,7 @@ export class SourceHandoffFailureFacts {
       throw new Error("source handoff failure requires its code and message");
     }
     if (typeof ownershipProven !== "boolean" || typeof workerStopped !== "boolean"
-      || typeof retryable !== "boolean" || typeof providerFailed !== "boolean") {
+      || typeof retryable !== "boolean" || typeof providerFailed !== "boolean" || typeof toolingRecoveryAvailable !== "boolean") {
       throw new Error("source handoff failure requires explicit ownership and process facts");
     }
     if (identity !== null && typeof identity.toJSON !== "function") {
@@ -54,11 +55,12 @@ export class SourceHandoffFailureFacts {
     this.retryable = retryable;
     this.failureKind = failureKind === null ? null : requiredString(String(failureKind), "failure kind");
     this.providerFailed = providerFailed;
+    this.toolingRecoveryAvailable = toolingRecoveryAvailable;
     Object.freeze(this);
   }
 
   static fromError(error, {
-    request = null, ownershipProven = false, workerStopped = false, agentError = null,
+    request = null, ownershipProven = false, workerStopped = false, agentError = null, toolingRecoveryAvailable = false,
   } = {}) {
     const code = error.code ?? "FLOW_SOURCE_HANDOFF_INVALID";
     let kind = "rejected";
@@ -79,6 +81,7 @@ export class SourceHandoffFailureFacts {
       ownershipProven, workerStopped, retryable: error.retryable === true,
       failureKind: error.data?.failureKind ?? null,
       providerFailed: agentError !== null,
+      toolingRecoveryAvailable,
     });
   }
 
@@ -91,6 +94,7 @@ export class SourceHandoffFailureFacts {
       ownershipProven: this.ownershipProven, workerStopped: this.workerStopped,
       retryable: this.retryable, failureKind: this.failureKind,
       providerFailed: this.providerFailed,
+      toolingRecoveryAvailable: this.toolingRecoveryAvailable,
     };
   }
 }
