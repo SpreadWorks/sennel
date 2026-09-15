@@ -37,6 +37,7 @@ const TYPE_FOR_OPERATION = Object.freeze({
   record_failure: "failure_recorded",
   confirm_attempt: "result_confirmed",
   complete_draft_completion: "result_confirmed",
+  settle_conditional_worker: "result_confirmed",
   complete_task_review_stage: "result_confirmed",
   advance_task_review_stage: "result_confirmed",
   initialize_requirement_test_lifecycle: "result_confirmed",
@@ -441,6 +442,23 @@ export class CanonicalFlowRuntime {
       admission,
       gateTaskLifecycle,
     });
+  }
+
+  settleConditionalWorker({ specId, activityId, stepId, result, admission = undefined } = {}) {
+    const state = this.#state(specId);
+    return this.apply(specId, this.#activity(state, {
+      id: activityId,
+      nodeId: stepId,
+      result,
+      transition: {
+        operation: "settle_conditional_worker",
+        nodeId: stepId,
+        task: null,
+        attempt: null,
+        status: "skipped",
+        nonblocking: null,
+      },
+    }), { admission });
   }
 
   /** Publish one Task review-funnel result and apply its sealed connector atomically. */

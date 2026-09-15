@@ -244,8 +244,8 @@ const ROUTES = Object.freeze([
   new PlanGateRepairRoute({
     phase: "draft",
     gateStepId: "draft-gate",
-    targetStepId: "draft-refine",
-    resetStepIds: ["draft-refine", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate"],
+    targetStepId: "draft-gate-repair",
+    resetStepIds: ["draft-gate-repair", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate"],
   }),
   new PlanGateRepairRoute({
     phase: "spec",

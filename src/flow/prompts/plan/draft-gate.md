@@ -1,8 +1,7 @@
    - This is a command-owned validation step. Do not edit `draft.json`, another spec directory, or any canonical Flow artifact from this step.
-   - `sennel flow run gate --phase draft` (step status is automatically managed by hooks: pre sets draft-gate to in_progress, post sets done on PASS)
+   - Run `sennel flow run gate --phase draft`, then refresh next-action and follow its Definition-selected transition.
    - Checks draft.json for: devType enum, goal, analysis (problem/proposedApproach/validation), decisionMap shape, questionLedger lifecycle shape, and guardrail AI compliance.
-   - If FAIL (`data.result === "fail"`): show every row in `data.artifacts.reasons` (one per violation on FAIL article entries) and every entry in `data.artifacts.issues`.
-   - The draft gate is strict. Do not acknowledge exceptions in draft.json. On FAIL, refresh next-action and follow the guarded repair transition back to `draft-refine`; that step receives the exact persisted observations and owns mutation through worker-artifact handoff.
-   - At semantic retry exhaustion, unresolved gate findings are recorded in `flow-findings.json`, the gate step completes as deferred, and `acceptance-review` owns final disposition before final-regression.
-   - Non-semantic failures such as schema, malformed artifact, failed command, no-progress guard, or missing mechanical evidence are not deferred. Follow the next-action recovery route; never repair them by directly editing canonical artifacts from this step.
-   - Do not proceed until PASS (`data.result === "pass"`).
+   - Draft Gate findings do not require another user decision or a PASS-only stop. The command may retain an internal failure result as evidence; that result does not authorize the worker to block progression.
+   - Follow the guarded repair transition to `draft-gate-repair` when selected. That worker proposes bounded field replacements for the exact persisted observations. The parent validates and applies the complete batch atomically, then coverage runs before the next Gate.
+   - When repair cannot make progress or the semantic retry budget is exhausted, follow the selected settlement route. Unresolved findings are persisted in `flow-findings.json` and carried into spec; `acceptance-review` owns final disposition before final-regression.
+   - Invalid worker output must not change the canonical draft. Follow the recovery or settlement route supplied by next-action; never bypass canonical validation or directly edit artifacts to force progression.

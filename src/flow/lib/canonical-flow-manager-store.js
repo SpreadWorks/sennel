@@ -14,6 +14,8 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   buildCurrentFlowDefinition,
+  ConditionalWorkerSettlementPlan,
+  DraftGateRepairTerminalPlan,
   InterruptedFinalizeSyncRuntimeLogFact,
   NonGateFailCurrentAttemptAction,
   NonGateIncrementRetryAction,
@@ -897,6 +899,66 @@ export class TaskGateSettlementAdmission {
 class CombinedAdmission {
   constructor(...admissions) { this.admissions = admissions.filter(Boolean); Object.freeze(this.admissions); Object.freeze(this); }
   assert(view) { for (const admission of this.admissions) admission.assert(view); }
+}
+
+class ConditionalWorkerSettlementAdmission {
+  constructor(plan) {
+    if (!(plan instanceof ConditionalWorkerSettlementPlan)) {
+      throw new CurrentFlowStateInvariantError("conditional worker settlement requires a typed Definition plan");
+    }
+    this.plan = plan;
+    Object.freeze(this);
+  }
+
+  assert(view) {
+    const { plan } = this;
+    const state = view.state;
+    const node = state.findNode(plan.stepId);
+    const statusMatches = plan.status === "skipped"
+      ? ["pending", "invalidated"].includes(node?.status)
+      : node?.status === "in_progress";
+    if (state.runId !== plan.runId || state.specId !== plan.specId
+      || state.confirmationOrder !== plan.confirmationOrder || !statusMatches) {
+      throw new CurrentFlowStateConflictError("conditional worker settlement facts changed before commit");
+    }
+    if (plan.status === "skipped" && state.nextAction()?.nodeId !== plan.stepId) {
+      throw new CurrentFlowStateConflictError("conditional worker is no longer the canonical frontier");
+    }
+    if (plan.status === "done" && state.current?.at(-1) !== plan.stepId) {
+      throw new CurrentFlowStateConflictError("conditional worker no longer owns the active Attempt");
+    }
+    if (plan.evidenceDigest !== null) {
+      const descriptor = view.catalog.artifacts.find((entry) => entry.logicalKey === "draft") ?? null;
+      if (descriptor?.hash !== plan.evidenceDigest) {
+        throw new CurrentFlowStateConflictError("conditional worker evidence changed before commit");
+      }
+    }
+  }
+}
+
+class DraftGateRepairTerminalAdmission {
+  constructor(plan) {
+    if (!(plan instanceof DraftGateRepairTerminalPlan)) {
+      throw new CurrentFlowStateInvariantError("draft Gate repair terminal settlement requires its Definition plan");
+    }
+    this.plan = plan;
+    Object.freeze(this);
+  }
+
+  assert(view) {
+    const { plan } = this;
+    const state = view.state;
+    if (state.runId !== plan.runId
+      || state.specId !== plan.specId
+      || state.confirmationOrder !== plan.confirmationOrder
+      || state.current?.at(-1) !== "draft-gate-repair"
+      || state.findNode("draft-gate-repair")?.status !== "in_progress"
+      || state.attempt?.id !== plan.attemptId
+      || state.attempt?.sequence !== plan.attemptSequence
+      || state.attempt?.failure !== null) {
+      throw new CurrentFlowStateConflictError("draft Gate repair terminal facts changed before commit");
+    }
+  }
 }
 
 /** Optimistic lock for a Definition-selected nonblocking identity. */
@@ -3428,7 +3490,7 @@ export class CanonicalFlowManagerStore {
    * and replaces the catalog descriptors.  It deliberately accepts no
    * mutable flow-state callback.
    */
-  confirmCurrentAttempt({ specId = null, status = "done", result = null, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null } = {}) {
+  confirmCurrentAttempt({ specId = null, status = "done", result = null, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null, admission = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
@@ -3481,9 +3543,82 @@ export class CanonicalFlowManagerStore {
       testSourceBaseline,
       gateTaskLifecycle: sealedTaskLifecycle,
       ...(status === "done" && { admission: new CombinedAdmission(
+        admission,
         this.#producerCompletionAdmission(nodeId, writes),
         sealedTaskLifecycle === null ? null : new TaskGateSettlementAdmission(gateTransitionDecision, "terminal"),
       ) }),
+    });
+  }
+
+  /** Apply one Definition-selected conditional worker settlement atomically. */
+  settleConditionalWorker({ specId = null, plan, artifactWrites = [], artifactBaselines = [] } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    if (!(plan instanceof ConditionalWorkerSettlementPlan) || plan.specId !== resolved) {
+      throw new CurrentFlowStateInvariantError("conditional worker settlement requires its typed Definition plan");
+    }
+    const admission = new ConditionalWorkerSettlementAdmission(plan);
+    if (plan.status === "done") {
+      return this.confirmCurrentAttempt({
+        specId: resolved,
+        artifactWrites,
+        artifactBaselines,
+        admission,
+      });
+    }
+    if (artifactWrites.length !== 0 || artifactBaselines.length !== 0) {
+      throw new CurrentFlowStateInvariantError("skipped conditional worker settlement cannot publish artifacts");
+    }
+    return this.runtime.settleConditionalWorker({
+      specId: resolved,
+      activityId: activityId("conditional-worker-settled"),
+      stepId: plan.stepId,
+      result: resultFor("skipped", plan.stepId),
+      admission,
+    });
+  }
+
+  /** Complete a bounded draft Gate repair whose output cannot change the draft. */
+  completeDraftGateRepairTerminal({ specId = null, plan, outcome = null, confirmedAt = null } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    if (!(plan instanceof DraftGateRepairTerminalPlan) || plan.specId !== resolved) {
+      throw new CurrentFlowStateInvariantError("draft Gate repair terminal completion requires its typed Definition plan");
+    }
+    if ((plan.kind === "rejected-no-progress") !== (outcome instanceof PlanGateRepairOutcomeDraft)
+      || (outcome !== null && (outcome.disposition !== "rejected-no-progress"
+        || outcome.repair.repairId !== plan.repairId
+        || outcome.repair.recordFingerprint !== plan.repairRecordFingerprint))) {
+      throw new CurrentFlowStateInvariantError("draft Gate repair terminal outcome does not match its Definition plan");
+    }
+    const confirmationActivityId = activityId("draft-gate-repair-terminal");
+    const artifactWrites = [];
+    const artifactRefs = [
+      { kind: "plan-gate-repair-terminal", id: plan.repairId },
+      { kind: "plan-gate-repair-handoff-revision", id: plan.handoffRevision },
+    ];
+    if (outcome !== null) {
+      const sealed = outcome.seal(confirmationActivityId);
+      artifactWrites.push({
+        logicalKey: "plan.gate.repair.outcome",
+        parameters: { repairId: sealed.repairId },
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(sealed.toJSON(), null, 2)}\n`, "utf8"),
+      });
+      artifactRefs.push({ kind: "plan-gate-repair-outcome", id: sealed.repairId });
+    }
+    return this.runtime.confirmAttempt({
+      specId: resolved,
+      activityId: confirmationActivityId,
+      status: "done",
+      result: {
+        outcome: "passed",
+        summary: plan.summary,
+        confirmedAt: confirmedAt ?? new Date().toISOString(),
+        artifactRefs,
+      },
+      artifactWrites,
+      admission: new DraftGateRepairTerminalAdmission(plan),
     });
   }
 

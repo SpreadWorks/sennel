@@ -28,8 +28,12 @@ import {
   getFlowNode,
   PromoteDraftQuestionAndKeepRefineActive,
   RequirementTestLifecycleFacts,
+  DraftGateRepairTerminalFacts,
+  resolveDraftTransition,
   resolveDraftCoverageRepairCompletion,
+  resolveDraftGateRepairTerminal,
   resolveLifecyclePlan,
+  resolvePlanGateRepairWorkerTransition,
   resolveRequirementTestLifecycle,
   resolveSourceHandoffTransitionPlan,
 } from "../definition.js";
@@ -39,7 +43,8 @@ import {
   DraftCompletionFacts,
   readDraftCompletionCatalogDigest,
 } from "./draft-completion-connector.js";
-import { DraftTransitionFacts } from "./draft-transition-facts.js";
+import { DraftTransitionFacts, readDraftTransitionFacts } from "./draft-transition-facts.js";
+import { CanonicalFlowFindingsStore } from "./flow-findings.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { findStepById } from "./step-tree.js";
 import {
@@ -61,7 +66,11 @@ import {
   SpecRepairOperationsError,
   validateSpecRepairTriageFinding,
 } from "./spec-repair-operations.js";
-import { applyDraftRepairOperations } from "./draft-repair-operations.js";
+import {
+  applyDraftRepairOperations,
+  DraftGateRepairAuthority,
+  DraftRepairOperationsError,
+} from "./draft-repair-operations.js";
 import {
   flowArtifactAuthorityForStep,
   requiresWorkerArtifactHandoff,
@@ -886,10 +895,14 @@ const POLICIES = Object.freeze([
   new WorkerArtifactHandoffPolicy({
     stepId: "draft-refine",
     inputs: ["draft.json"],
-    payloads: [
-      { logicalName: "draft.json", targetRelativePath: "draft.json" },
-      { logicalName: "gate-repair-report.json", targetRelativePath: "gate-repair-report.json", required: false },
-    ],
+    payloads: [{ logicalName: "draft.json", targetRelativePath: "draft.json" }],
+    revisionKind: "draft",
+  }),
+  new WorkerArtifactHandoffPolicy({
+    stepId: "draft-gate-repair",
+    inputs: ["draft.json"],
+    virtualInputs: ["plan-gate-repair.json"],
+    payloads: [{ logicalName: "draft-gate-repair.json", targetRelativePath: "draft-gate-repair.json" }],
     revisionKind: "draft",
   }),
   new WorkerArtifactHandoffPolicy({
@@ -907,6 +920,7 @@ const POLICIES = Object.freeze([
   new WorkerArtifactHandoffPolicy({
     stepId: "spec",
     inputs: ["draft.json"],
+    virtualInputs: ["flow-findings.json"],
     repairInputs: { spec: ["draft.json", "spec.json"] },
     payloads: [
       { logicalName: "spec.json", targetRelativePath: "spec.json" },
@@ -2059,12 +2073,91 @@ function gateObservationRecurrenceHandoffInput({ flowManager, state, policy }) {
   })];
 }
 
+/** Exact persisted Gate repair authority exposed only to its selected worker. */
+function draftGateRepairWorkerAuthorityDocument(record) {
+  return Object.freeze({
+    ...record.toWorkerJSON(),
+    authoringPaths: DraftGateRepairAuthority.authoringPaths(),
+  });
+}
+
+function planGateRepairHandoffInput({ flowManager, state, policy }) {
+  if (!policy.inputContract.virtualInputs.includes("plan-gate-repair.json")) return [];
+  const record = currentPlanGateRepair({ flowManager, state, stepId: policy.stepId });
+  if (record === null) {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_PLAN_GATE_REPAIR_EVIDENCE_MISSING",
+      "draft Gate repair worker requires its exact canonical repair evidence",
+      { retryable: false, data: { stepId: policy.stepId } },
+    );
+  }
+  const document = draftGateRepairWorkerAuthorityDocument(record);
+  const bytes = Buffer.from(stableStringify(document), "utf8");
+  return [new WorkerArtifactInputSnapshot({
+    name: "plan-gate-repair.json",
+    targetRelativePath: "plan-gate-repair.json",
+    snapshot: { digest: digest(bytes), byteLength: bytes.length },
+    document,
+  })];
+}
+
+class SpecDeferredFindingsDocument {
+  constructor({ store, artifact } = {}) {
+    if (!(store instanceof CanonicalFlowFindingsStore) || artifact?.version !== 2
+      || !Array.isArray(artifact.entries)) {
+      throw new Error("spec deferred findings input requires typed canonical findings");
+    }
+    this.version = artifact.version;
+    this.entries = Object.freeze(artifact.entries
+      .filter((entry) => entry.sourceStep === "draft-gate" && entry.finalDisposition === "still_open")
+      .map((entry) => {
+        const source = store.sourceArtifact(entry.sourceArtifact);
+        const sourceObservation = source?.findFinding(
+          entry.sourceStep,
+          entry.sourceFindingId,
+          entry.fingerprint,
+        ) ?? null;
+        if (sourceObservation === null) {
+          throw new WorkerArtifactHandoffError(
+            "invalid",
+            "FLOW_FINDING_SOURCE_MISSING",
+            `deferred finding ${entry.findingId} has no exact canonical source observation`,
+            { retryable: false, data: { findingId: entry.findingId } },
+          );
+        }
+        return Object.freeze({ ...entry.toJSON(), sourceObservation });
+      }));
+    Object.freeze(this);
+  }
+}
+
+function deferredFindingsHandoffInput({ flowManager, state, policy }) {
+  if (!policy.inputContract.virtualInputs.includes("flow-findings.json")) return [];
+  const store = new CanonicalFlowFindingsStore({
+    flowManager, flowState: state, nodeId: policy.stepId,
+  });
+  const document = new SpecDeferredFindingsDocument({
+    store,
+    artifact: store.read({ filterCurrentRun: true }),
+  });
+  const bytes = Buffer.from(stableStringify(document), "utf8");
+  return [new WorkerArtifactInputSnapshot({
+    name: "flow-findings.json",
+    targetRelativePath: "flow-findings.json",
+    snapshot: { digest: digest(bytes), byteLength: bytes.length },
+    document,
+  })];
+}
+
 function workerVirtualHandoffInputs({ flowManager, state, policy, contextSnapshot = null, executionRoot }) {
   const available = new Map([
     ...taskReviewStageHandoffInputs({ flowManager, state, policy, contextSnapshot }),
     ...approvedFindingExceptionHandoffInputs({ flowManager, state, policy, executionRoot }),
     ...reviewRecurrenceHandoffInput({ flowManager, state, policy }),
     ...gateObservationRecurrenceHandoffInput({ flowManager, state, policy }),
+    ...planGateRepairHandoffInput({ flowManager, state, policy }),
+    ...deferredFindingsHandoffInput({ flowManager, state, policy }),
   ].map((input) => [input.targetRelativePath, input]));
   return policy.inputContract.virtualInputs.map((relativePath) => {
     const input = available.get(relativePath) ?? null;
@@ -4598,9 +4691,16 @@ function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
   if (Array.isArray(gateRecurrence?.entries) && gateRecurrence.entries.length > 0) {
     const target = stepId === "task-impl"
       ? "Populate the gateRepair field in the structured source response."
-      : "Write gate-repair-report.json in the declared payload path.";
+      : stepId === "draft-gate-repair"
+        ? "Populate the report field in the declared draft-gate-repair.json payload."
+        : "Write gate-repair-report.json in the declared payload path.";
     return [
       target,
+      ...(stepId === "draft-gate-repair" ? [
+        "The payload must have exactly version, baseRevision, operations, and report. Each operation must have exactly kind, path, expectedDigest, replacement, and reason; kind must be replace-value.",
+        "Use the request inputRevision as baseRevision with the sha256: prefix. Do not emit draft.json or a separate report file.",
+        `The fixed authoring paths are ${JSON.stringify(inputs.find((input) => input.name === "plan-gate-repair.json")?.document?.authoringPaths ?? [])}. A replacement path must equal or descend from one of them.`,
+      ] : []),
       "Use version 1 with summary and exactly one results entry for every fingerprint below.",
       JSON.stringify(gateRecurrence.entries.map((entry) => ({
         fingerprint: entry.fingerprint,
@@ -4632,6 +4732,44 @@ function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
     return sourceResponseContract.workerGuidance();
   }
   return null;
+}
+
+function assertConditionalWorkerExecutionSelected({ flowManager, state, policy }) {
+  if (!["draft-refine", "draft-gate-repair"].includes(policy.stepId)) return state;
+  const canonical = flowManager.loadReadOnly(state.specId);
+  if (canonical.currentNodeId !== policy.stepId || canonical.attempt === null) {
+    throw new WorkerArtifactHandoffError(
+      "stale",
+      "FLOW_WORKER_ACTION_NOT_SELECTED",
+      `Definition has not selected ${policy.stepId} for worker execution`,
+      { retryable: false, data: { stepId: policy.stepId } },
+    );
+  }
+  let disposition;
+  if (policy.stepId === "draft-refine") {
+    const facts = readDraftTransitionFacts({ flowManager, flowState: canonical });
+    disposition = facts === null ? null : resolveDraftTransition({
+      stepId: policy.stepId,
+      flowState: canonical,
+      facts,
+    });
+  } else {
+    const repair = currentPlanGateRepair({ flowManager, state: canonical, stepId: policy.stepId });
+    disposition = resolvePlanGateRepairWorkerTransition({
+      stepId: policy.stepId,
+      workerStatus: findStepById(canonical.steps, policy.stepId)?.status,
+      repair,
+    });
+  }
+  if (disposition?.operation !== "execute-worker") {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_WORKER_ACTION_NOT_SELECTED",
+      `Definition selected ${disposition?.operation ?? "no action"} for ${policy.stepId}`,
+      { retryable: false, data: { stepId: policy.stepId, operation: disposition?.operation ?? null } },
+    );
+  }
+  return canonical;
 }
 
 export class WorkerArtifactHandoffRequest {
@@ -4833,7 +4971,9 @@ export class WorkerArtifactHandoffRequest {
         "canonical worker handoff requires the Version Store catalog reader",
       );
     }
-    const planGateRepair = currentPlanGateRepair({ flowManager, state, stepId: policy.stepId });
+    const admittedState = assertConditionalWorkerExecutionSelected({ flowManager, state, policy });
+    state = admittedState;
+    const planGateRepair = currentPlanGateRepair({ flowManager, state: admittedState, stepId: policy.stepId });
     const testReviewRepair = currentTestReviewRepair({ flowManager, state, stepId: policy.stepId });
     const testReviewRepairProgress = currentTestReviewRepairProgress({
       flowManager, state, repair: testReviewRepair,
@@ -6537,6 +6677,119 @@ function draftRepairResult(request, submission) {
   });
 }
 
+class DraftGateRepairResult {
+  constructor({ request, submission, state } = {}) {
+    if (request?.stepId !== "draft-gate-repair") {
+      throw new Error("draft Gate repair result requires the dedicated worker step");
+    }
+    const selected = currentPlanGateObservationRepair({ request, state });
+    if (selected === null) {
+      throw new WorkerArtifactHandoffError(
+        "invalid",
+        "FLOW_PLAN_GATE_REPAIR_EVIDENCE_MISSING",
+        "draft Gate repair result has no selected canonical repair evidence",
+        { retryable: false, data: { stepId: request.stepId } },
+      );
+    }
+    const draftInput = request.inputs.find((input) => input.name === "draft.json") ?? null;
+    const repairInput = request.inputs.find((input) => input.name === "plan-gate-repair.json") ?? null;
+    if (draftInput === null || repairInput === null
+      || stableStringify(repairInput.document) !== stableStringify(draftGateRepairWorkerAuthorityDocument(selected.record))) {
+      throw new WorkerArtifactHandoffError(
+        "stale",
+        "FLOW_PLAN_GATE_REPAIR_EVIDENCE_STALE",
+        "draft Gate repair inputs do not match the current canonical repair evidence",
+        { retryable: false, data: { stepId: request.stepId } },
+      );
+    }
+    const payload = payloadDocument(request, submission, "draft-gate-repair.json");
+    const applied = applyDraftRepairOperations({
+      draft: draftInput.document,
+      repair: payload,
+      inputRevision: request.inputRevision,
+      phase: request.stepId,
+      authority: new DraftGateRepairAuthority(selected.repair),
+    });
+    let workerReport;
+    try {
+      workerReport = GateRepairWorkerReport.fromDocument(payload.report);
+    } catch (cause) {
+      throw new WorkerArtifactHandoffError(
+        "invalid",
+        "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID",
+        `draft-gate-repair.json report violates its canonical contract: ${cause.message}`,
+        { cause, retryable: false, data: { stepId: request.stepId } },
+      );
+    }
+    this.draft = applied.draft;
+    this.draftBytes = Buffer.from(`${JSON.stringify(this.draft, null, 2)}\n`, "utf8");
+    this.beforeDigest = draftInput.digest;
+    this.changed = stableStringify(this.draft) !== stableStringify(draftInput.document);
+    this.outputDigest = this.changed ? digest(this.draftBytes) : this.beforeDigest;
+    this.report = workerReport.bindArtifact({
+      repair: selected.repair,
+      beforeEvidenceDigest: this.beforeDigest,
+      outputEvidenceDigest: this.outputDigest,
+      deltaIds: this.changed ? [this.outputDigest] : [],
+    });
+    this.outcome = new PlanGateRepairOutcomeDraft({
+      repair: selected.repair,
+      disposition: this.changed ? "applied" : "rejected-no-progress",
+      report: this.report,
+    });
+    this.outcome.seal("plan-gate-repair-outcome-validation");
+    this.audit = Object.freeze({
+      ...applied.audit,
+      sourceIssueLogId: selected.record.sourceIssueLogId,
+      sourceEntryDigest: selected.record.sourceEntryDigest,
+      resultLogicalKey: selected.record.connector.resultLogicalKey,
+      catalogFingerprint: selected.record.connector.catalogFingerprint,
+      report: this.report.toJSON(),
+    });
+    Object.freeze(this);
+  }
+}
+
+function draftGateRepairResult(request, submission, state) {
+  return request.stepId === "draft-gate-repair"
+    ? new DraftGateRepairResult({ request, submission, state })
+    : null;
+}
+
+function settleDraftGateRepairTerminal({ ctx, request, state, submission, kind, outcome = null, failure = null, now }) {
+  const selected = currentPlanGateObservationRepair({ request, state });
+  if (selected === null) {
+    throw new WorkerArtifactHandoffError(
+      "stale", "FLOW_PLAN_GATE_REPAIR_EVIDENCE_MISSING",
+      "draft Gate repair terminal settlement has no selected canonical repair evidence",
+      { retryable: false, data: { stepId: request.stepId } },
+    );
+  }
+  const canonical = ctx.flowManager.canonicalState(request.specId);
+  const facts = new DraftGateRepairTerminalFacts({
+    kind,
+    repair: selected.repair,
+    ...(failure === null ? {} : { failureCode: failure.code, failureMessage: failure.message }),
+  });
+  const plan = resolveDraftGateRepairTerminal({ facts, flowState: canonical });
+  ctx.flowManager.completeDraftGateRepairTerminal({
+    specId: request.specId,
+    plan,
+    outcome,
+    confirmedAt: now().toISOString(),
+  });
+  const receipt = canonicalHandoffReceipt(request, submission, now);
+  cleanupCompletedHandoff(request.handoffRoot, receipt);
+  return {
+    completed: true,
+    rejected: true,
+    replayed: false,
+    stepId: receipt.stepId,
+    handoffDigest: receipt.handoffDigest,
+    payloadDigest: receipt.payloadDigest,
+  };
+}
+
 /** Build facts only; the Definition decides whether a connector is eligible. */
 function draftCoverageRepairCompletion(request, route, repair) {
   if (route?.retryPhase !== "draft-coverage" || repair === null) return null;
@@ -6576,6 +6829,10 @@ function draftCoverageRepairCompletion(request, route, repair) {
 }
 
 function validateDraftPayload(request, submission, state) {
+  if (request.stepId === "draft-gate-repair") {
+    draftGateRepairResult(request, submission, state);
+    return;
+  }
   const route = draftRepairRouteForRequest(request);
   if (route !== null) {
     const repair = draftRepairResult(request, submission).audit;
@@ -6826,9 +7083,6 @@ function validatePayload(request, submission, state) {
         if (result.issues.length > 0) throw new Error(result.issues.join("; "));
       } else {
         validateDraftPayload(request, submission, state);
-        if (request.stepId === "draft-refine") {
-          planGateRepairArtifactOutcomeDraft(request, submission, state, "draft.json");
-        }
       }
       return;
     }
@@ -6935,6 +7189,18 @@ function validatePayload(request, submission, state) {
             handoffDirectory: request.directory,
             ...(cause.audit ? { specRepairAudit: cause.audit } : {}),
           },
+        },
+      );
+    }
+    if (cause instanceof DraftRepairOperationsError) {
+      throw new WorkerArtifactHandoffError(
+        "invalid",
+        cause.code,
+        `worker artifact payload failed ${request.stepId} validation: ${cause.message}`,
+        {
+          cause,
+          retryable: false,
+          data: { stepId: request.stepId, draftRepairAudit: cause.audit },
         },
       );
     }
@@ -7323,6 +7589,7 @@ function canonicalHandoffPublications(request, submission) {
   let testSourceBaseline;
   let requirementTestCandidate;
   const testEntries = [];
+  const draftGateRepairResultValue = draftGateRepairResult(request, submission, request.state);
   const repairRoute = draftRepairRouteForRequest(request);
   const draftRepairResultValue = repairRoute === null ? null : draftRepairResult(request, submission);
   const draftCoverageRepairDecision = draftCoverageRepairCompletion(
@@ -7369,7 +7636,9 @@ function canonicalHandoffPublications(request, submission) {
     // immutable repair outcome. It is never a catalog publication itself.
     if (entry.logicalName === "gate-repair-report.json") continue;
     const bytes = draftRepairResultValue !== null && entry.logicalName === repairRoute.repairArtifact
-        ? Buffer.from(`${JSON.stringify(draftRepairResultValue.audit, null, 2)}\n`, "utf8")
+      ? Buffer.from(`${JSON.stringify(draftRepairResultValue.audit, null, 2)}\n`, "utf8")
+      : draftGateRepairResultValue !== null && entry.logicalName === "draft-gate-repair.json"
+        ? Buffer.from(`${JSON.stringify(draftGateRepairResultValue.audit, null, 2)}\n`, "utf8")
         : manifestPayloadBytes(request, entry, "canonical handoff payload");
     if (entry.targetRelativePath.startsWith("tests/")) {
       testEntries.push({
@@ -7420,6 +7689,12 @@ function canonicalHandoffPublications(request, submission) {
     const address = new CanonicalWorkerArtifactAddress("draft.json");
     artifactWrites.push(address.publication(
       Buffer.from(`${JSON.stringify(draftRepairResultValue.draft, null, 2)}\n`, "utf8"),
+      "application/json",
+    ));
+  }
+  if (draftGateRepairResultValue?.changed) {
+    artifactWrites.push(new CanonicalWorkerArtifactAddress("draft.json").publication(
+      draftGateRepairResultValue.draftBytes,
       "application/json",
     ));
   }
@@ -8644,13 +8919,11 @@ export class WorkerArtifactHandoffCoordinator {
         payloadDigest: null,
       };
     }
-    let recoverableValidation = null;
     try {
       const resolvedSubmission = submission ?? readSubmission(request);
       if (submission === null) validateSubmission(request, resolvedSubmission);
       submission = resolvedSubmission;
       request.assertCurrent(state);
-      recoverableValidation = validatePayload(request, submission, state) ?? null;
     } catch (cause) {
       throw cause instanceof WorkerArtifactHandoffError
         ? cause
@@ -8660,6 +8933,25 @@ export class WorkerArtifactHandoffCoordinator {
             `canonical worker artifact handoff is invalid: ${cause.message}`,
             { cause },
           );
+    }
+    let recoverableValidation = null;
+    try {
+      recoverableValidation = validatePayload(request, submission, state) ?? null;
+    } catch (cause) {
+      const failure = cause instanceof WorkerArtifactHandoffError
+        ? cause
+        : new WorkerArtifactHandoffError(
+            "invalid",
+            "FLOW_ARTIFACT_HANDOFF_INVALID",
+            `canonical worker artifact handoff is invalid: ${cause.message}`,
+            { cause },
+          );
+      if (request.stepId === "draft-gate-repair" && failure.classification === "invalid") {
+        return settleDraftGateRepairTerminal({
+          ctx, request, state, submission, kind: "invalid-payload", failure, now: this.now,
+        });
+      }
+      throw failure;
     }
     if (recoverableValidation instanceof RequirementTestStructuralHandoffResult) {
       throw new RequirementTestStructuralHandoffError(recoverableValidation);
@@ -8703,8 +8995,8 @@ export class WorkerArtifactHandoffCoordinator {
         `test-review repair progress could not be prepared: ${cause.message}`, { cause },
       );
     }
-    const planGateRepairOutcome = request.stepId === "draft-refine"
-      ? planGateRepairArtifactOutcomeDraft(request, submission, state, "draft.json")
+    const planGateRepairOutcome = request.stepId === "draft-gate-repair"
+      ? draftGateRepairResult(request, submission, state).outcome
       : request.stepId === "spec"
         ? planGateRepairArtifactOutcomeDraft(request, submission, state, "spec.json")
         : null;
@@ -8712,21 +9004,10 @@ export class WorkerArtifactHandoffCoordinator {
       let promotionApplied = false;
       this.faultInjector({ phase: "before-worker-handoff-publication", stepId: request.stepId });
       if (planGateRepairOutcome?.disposition === "rejected-no-progress") {
-        ctx.flowManager.rejectPlanGateRepairHandoff({
-          specId: request.specId,
-          outcome: planGateRepairOutcome,
-          result: canonicalHandoffResult(request, submission, this.now),
+        return settleDraftGateRepairTerminal({
+          ctx, request, state, submission,
+          kind: "rejected-no-progress", outcome: planGateRepairOutcome, now: this.now,
         });
-        const receipt = canonicalHandoffReceipt(request, submission, this.now);
-        cleanupCompletedHandoff(request.handoffRoot, receipt, this.faultInjector);
-        return {
-          completed: true,
-          rejected: true,
-          replayed: false,
-          stepId: receipt.stepId,
-          handoffDigest: receipt.handoffDigest,
-          payloadDigest: receipt.payloadDigest,
-        };
       }
       if (request.stepId === "draft-refine") {
         const draftPayload = submission.payloadManifest.find((entry) => entry.targetRelativePath === "draft.json");

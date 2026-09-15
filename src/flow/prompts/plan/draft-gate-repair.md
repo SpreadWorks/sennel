@@ -1,0 +1,9 @@
+   <!-- include("/flow/prompts/partials/worker-artifact-handoff.md") -->
+   - Repair only the blocking observations selected by the failed draft Gate. Read the immutable complete draft and the exact plan-Gate repair evidence from the handoff inputs.
+   - Treat every blocking observation and recurrence entry as mandatory. Preserve the source issue-log identity, result identity, and observation fingerprints; they are evidence to resolve, never worker-authored authority.
+   - Write only `draft-gate-repair.json` to its exact payload path. Never write a complete draft, a separate report, canonical Flow files, or source files. The parent owns validation, atomic application, canonical publication, and the repair outcome.
+   - Propose a bounded set of existing-value replacements within the parent-declared authoring scope. Bind every target to the immutable value digest. Do not add fields, use overlapping paths, alter question state, alter user-owned decisions, or introduce a choice that needs user judgment.
+   - If the correction needs a new candidate question, an unanswered question, or any user decision, stop without writing or sealing. The non-interactive worker cannot choose, ask, or create that decision.
+   - The report must cover every supplied blocking fingerprint exactly once. For recurrence, explain why the prior repair was insufficient and use a different strategy. Do not derive or replace fingerprints from titles, paths, summaries, or proposed operations.
+   - Use the exact envelope and operation fields declared in the handoff instructions. An empty or semantically unchanged valid batch is recorded by the parent as rejected-no-progress; an invalid batch publishes nothing.
+   - **On complete**: run the exact handoff `sealCommand` once after the one declared payload is complete.

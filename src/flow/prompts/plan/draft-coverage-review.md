@@ -1,6 +1,6 @@
    - Use the resolved numeric maxAttempts from the next-action envelope as this stage's semantic review limit.
    - Run `sennel flow run review --phase draft` once to perform the draft coverage review.
-   - This stage is a one-shot final check after `draft-refine`, not a follow-up question loop. It reads `draft.json.questionLedger.questions[]` and checks only whether a blocking user decision is still required before the spec can be written.
+   - This stage checks the latest canonical draft revision after question resolution or Gate repair, including when `draft-refine` was skipped. It reads `draft.json.questionLedger.questions[]` and checks only whether a blocking user decision is still required before the spec can be written.
    - The review command writes a machine-readable detection artifact to `draft-review-coverage.json`.
    - The review step is detection only: it must not edit `draft.json`, mutate the question ledger, collect answers, or write repair audit files.
    - `repairTargets[]` identifies detection-only candidates consumed by triage/repair; review must not apply them.

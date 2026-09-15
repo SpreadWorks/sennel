@@ -1878,6 +1878,7 @@ const PLAN_GATE_EVIDENCE_LOGICAL_KEYS = Object.freeze({
     "draft.questions.review",
     "draft.questions.triage",
     "draft.questions.repair",
+    "draft.gate.repair",
     "draft.coverage.review",
     "draft.coverage.triage",
     "draft.coverage.repair",

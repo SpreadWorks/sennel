@@ -77,7 +77,7 @@ export const DRAFT_REVIEW_ROUTES = Object.freeze([
     triageArtifact: "draft-coverage-triage.json",
     repairArtifact: "draft-coverage-repair.json",
     passNextStepId: "draft-gate",
-    sourceStepIds: ["draft-refine", "draft-coverage-repair"],
+    sourceStepIds: ["draft", "draft-questions-repair", "draft-refine", "draft-gate-repair", "draft-coverage-repair"],
   }),
 ]);
 

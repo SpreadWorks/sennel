@@ -52,15 +52,15 @@ test("canonical question ids reject exhausted next sequence", () => {
   assert.throws(() => nextDraftQaId(draft(ledger([max]))), /exhausted/);
 });
 
-test("Definition applies candidate promotion but candidate-only remains execute-refine", () => {
+test("Definition applies candidate promotion while only candidate or auto-approved awaiting work executes", () => {
   const value = ledger([new CandidateQuestion({ id: "q1", question: "Choose behavior?", revision: 2, ...base })]);
   const facts = new DraftTransitionFacts({ ledger: value, candidateQuestion: new DraftQuestionFact(value.nextCandidate()) });
-  assert.equal(resolveDraftTransition({ stepId: "draft-refine", flowState: { autoApprove: false }, facts }).operation, "execute-refine");
+  assert.equal(resolveDraftTransition({ stepId: "draft-refine", flowState: { autoApprove: false }, facts }).operation, "execute-worker");
   const promoted = resolveDraftQuestionPromotion({ facts }).apply(value);
   const waiting = promoted.nextAwaiting();
   const waitFacts = new DraftTransitionFacts({ ledger: promoted, nextQuestion: new DraftQuestionFact(waiting) });
   assert.equal(resolveDraftTransition({ stepId: "draft-refine", flowState: { autoApprove: false }, facts: waitFacts }).operation, "await-user-answer");
-  assert.equal(resolveDraftTransition({ stepId: "draft-refine", flowState: { autoApprove: true }, facts: waitFacts }).operation, "execute-refine");
+  assert.equal(resolveDraftTransition({ stepId: "draft-refine", flowState: { autoApprove: true }, facts: waitFacts }).operation, "execute-worker");
 });
 
 test("Definition exclusively selects matching answer and discard ledger actions", () => {
@@ -105,22 +105,23 @@ test("qa-count counts only AnsweredQuestion and treats a missing draft as zero",
   assert.deepEqual(command.execute({ flowState: { specId: "spec-1" }, flowManager: { readArtifact: () => null } }), { count: 0 });
 });
 
-test("Definition waits only for an awaiting entry", () => {
-  const decision = (questions, autoApprove = false) => {
+test("Definition waits, executes, skips, or completes draft-refine from its canonical ledger", () => {
+  const decision = (questions, autoApprove = false, workerStatus = "pending") => {
     const value = ledger(questions);
     const next = value.nextAwaiting();
     return resolveDraftTransition({
       stepId: "draft-refine", flowState: { autoApprove },
-      facts: new DraftTransitionFacts({ ledger: value, ...(next && { nextQuestion: new DraftQuestionFact(next) }) }),
+      facts: new DraftTransitionFacts({ ledger: value, workerStatus, ...(next && { nextQuestion: new DraftQuestionFact(next) }), ...(value.nextCandidate() && { candidateQuestion: new DraftQuestionFact(value.nextCandidate()) }) }),
     }).operation;
   };
-  assert.equal(decision([]), "execute-refine");
-  assert.equal(decision([new CandidateQuestion({ id: "q1", question: "Candidate?", revision: 0, ...base })]), "execute-refine");
-  assert.equal(decision([new ResolvedByExistingInformation({ id: "q1", question: "Resolved?", revision: 0, resolution: "Source decides it.", ...base })]), "execute-refine");
-  assert.equal(decision([new AnsweredQuestion({ id: "q1", question: "Answered?", revision: 0, answer: "The user chose this behavior.", why: "It meets the request.", considered: "The incompatible alternative was rejected.", ...base })]), "execute-refine");
-  assert.equal(decision([new DiscardedQuestion({ id: "q1", question: "Discarded?", revision: 0, reason: "Spec owns it.", ...base })]), "execute-refine");
+  assert.equal(decision([]), "skip-worker");
+  assert.equal(decision([], false, "in_progress"), "complete-worker");
+  assert.equal(decision([new CandidateQuestion({ id: "q1", question: "Candidate?", revision: 0, ...base })]), "execute-worker");
+  assert.equal(decision([new ResolvedByExistingInformation({ id: "q1", question: "Resolved?", revision: 0, resolution: "Source decides it.", ...base })]), "skip-worker");
+  assert.equal(decision([new AnsweredQuestion({ id: "q1", question: "Answered?", revision: 0, answer: "The user chose this behavior.", why: "It meets the request.", considered: "The incompatible alternative was rejected.", ...base })]), "skip-worker");
+  assert.equal(decision([new DiscardedQuestion({ id: "q1", question: "Discarded?", revision: 0, reason: "Spec owns it.", ...base })]), "skip-worker");
   assert.equal(decision([new AwaitingUserAnswer({ id: "q1", question: "Awaiting?", revision: 0, ...base })]), "await-user-answer");
-  assert.equal(decision([new AwaitingUserAnswer({ id: "q1", question: "Awaiting?", revision: 0, ...base })], true), "execute-refine");
+  assert.equal(decision([new AwaitingUserAnswer({ id: "q1", question: "Awaiting?", revision: 0, ...base })], true), "execute-worker");
 });
 
 test("answer rejects a stale conditional publication without writing", () => {
@@ -143,7 +144,10 @@ test("answer rejects a stale conditional publication without writing", () => {
 });
 
 test("set draft-answer accepts an omitted optional considered value", () => {
-  const value = ledger([new AwaitingUserAnswer({ id: "q1", question: "Choose behavior?", revision: 0, ...base })]);
+  const value = ledger([
+    new AwaitingUserAnswer({ id: "q1", question: "Choose behavior?", revision: 0, ...base }),
+    new AwaitingUserAnswer({ id: "q2", question: "Choose another behavior?", revision: 0, ...base }),
+  ]);
   const bytes = Buffer.from(JSON.stringify(draft(value)));
   let published = null;
   const manager = {

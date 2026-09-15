@@ -2,7 +2,11 @@ import { FlowCommand } from "./base-command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
 import { DraftTransitionFacts } from "./draft-transition-facts.js";
-import { resolveDraftQuestionResolution } from "../definition.js";
+import {
+  createConditionalWorkerSettlementPlan,
+  resolveDraftQuestionResolution,
+  resolveDraftTransition,
+} from "../definition.js";
 
 function parseDraft(bytes) {
   try { return new DraftLifecycle(JSON.parse(bytes.toString("utf8"))); }
@@ -55,11 +59,34 @@ export default class SetDraftAnswerCommand extends FlowCommand {
     } catch (error) {
       return Envelope.fail("set", "draft-answer", "INVALID_DRAFT_ANSWER", error.message);
     }
+    const artifactBaselines = [{ logicalKey: "draft", digest: source.descriptor.hash, byteLength: source.descriptor.size }];
+    const artifactWrites = [{ logicalKey: "draft", mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(draft, null, 2)}\n`, "utf8") }];
+    const nextFacts = DraftTransitionFacts.fromDraft(new DraftLifecycle(draft), { workerStatus: "in_progress" });
+    const disposition = resolveDraftTransition({ stepId: "draft-refine", flowState: state, facts: nextFacts });
     try {
-      ctx.flowManager.publishArtifacts({ specId: state.specId, nodeId: "draft-refine", artifactBaselines: [{ logicalKey: "draft", digest: source.descriptor.hash, byteLength: source.descriptor.size }], artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(draft, null, 2)}\n`, "utf8") }] });
+      if (disposition.operation === "complete-worker") {
+        const plan = createConditionalWorkerSettlementPlan({
+          disposition,
+          flowState: ctx.flowManager.canonicalState(state.specId),
+          evidenceDigest: source.descriptor.hash,
+        });
+        ctx.flowManager.settleConditionalWorker({
+          specId: state.specId,
+          plan,
+          artifactBaselines,
+          artifactWrites,
+        });
+      } else {
+        ctx.flowManager.publishArtifacts({ specId: state.specId, nodeId: "draft-refine", artifactBaselines, artifactWrites });
+      }
     } catch (error) {
       return Envelope.fail("set", "draft-answer", "DRAFT_ANSWER_STALE_PUBLICATION", error.message);
     }
-    return { questionId: ctx.questionId, status: dropping ? "discarded" : "answered", nextQuestionId: new DraftLifecycle(draft).nextUnresolvedQuestion()?.id ?? null };
+    return {
+      questionId: ctx.questionId,
+      status: dropping ? "discarded" : "answered",
+      nextQuestionId: new DraftLifecycle(draft).nextUnresolvedQuestion()?.id ?? null,
+      draftRefineCompleted: disposition.operation === "complete-worker",
+    };
   }
 }

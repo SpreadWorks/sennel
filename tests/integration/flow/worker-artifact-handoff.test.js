@@ -3027,10 +3027,10 @@ describe("worker artifact handoff", () => {
     }, "implement"), /invalid schema/);
   });
 
-  it("defines one complete authority record for all 37 Flow leaves and 5 task leaves", () => {
+  it("defines one complete authority record for all 38 Flow leaves and 5 task leaves", () => {
     const flowLeaves = flattenSteps(buildInitialNestedSteps()).map((step) => step.id);
     const taskLeaves = buildInitialTaskSteps().map((step) => step.id);
-    assert.equal(flowLeaves.length, 37);
+    assert.equal(flowLeaves.length, 38);
     assert.equal(taskLeaves.length, 5);
     assert.deepEqual(
       FLOW_ARTIFACT_AUTHORITY_MATRIX.map((entry) => entry.stepId).sort(),
@@ -4083,7 +4083,7 @@ describe("worker artifact handoff", () => {
   it("allows an independent issue-log append while draft-refine publishes its declared output", async () => {
     const value = fixture("draft-refine", {
       beforeActivate(candidate) {
-        publishDraftBeforeTarget(candidate, draftWithQuestionLedger([]));
+        publishDraftBeforeTarget(candidate, draftWithQuestionLedger([candidateDraftQuestion()]));
       },
     });
     try {
@@ -4209,9 +4209,30 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("keeps normal draft-refine confirmation and coverage advance when promotion is not selected", async () => {
+  it("rejects a direct no-Candidate draft-refine request before creating handoff state", () => {
+    const value = fixture("draft-refine", {
+      beforeActivate(fixtureValue) {
+        publishDraftBeforeTarget(fixtureValue, draftWithQuestionLedger([]));
+      },
+    });
+    try {
+      const beforeActivities = value.flowManager.activityLedger(value.specId).length;
+      const beforeState = value.flowManager.canonicalState(value.specId).toJSON();
+      assert.throws(() => value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      }), (error) => error instanceof WorkerArtifactHandoffError
+        && error.code === "FLOW_WORKER_ACTION_NOT_SELECTED");
+      assert.equal(value.flowManager.activityLedger(value.specId).length, beforeActivities);
+      assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), beforeState);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("keeps auto-approved draft-refine confirmation and advances to the Gate repair boundary", async () => {
     for (const { name, autoApprove, source } of [
-      { name: "no Candidate", autoApprove: false, source: draftWithQuestionLedger([]) },
       { name: "autoApprove Candidate", autoApprove: true, source: draftWithQuestionLedger([candidateDraftQuestion()]) },
     ]) {
       const value = fixture("draft-refine", {
@@ -4236,7 +4257,7 @@ describe("worker artifact handoff", () => {
         });
 
         assert.equal(findStepById(value.flowManager.load().steps, "draft-refine").status, "done", name);
-        assert.equal(next.step, "draft-coverage-review", name);
+        assert.equal(next.step, "draft-gate-repair", name);
       } finally {
         removeTmpDir(value.mainRoot);
       }
@@ -4245,7 +4266,7 @@ describe("worker artifact handoff", () => {
 
   it("rejects an AwaitingUserAnswer left in draft-refine output for manual and autoApprove flows", () => {
     for (const autoApprove of [false, true]) {
-      const source = draftWithQuestionLedger([]);
+      const source = draftWithQuestionLedger([candidateDraftQuestion()]);
       const awaiting = draftWithQuestionLedger([{
         state: "AwaitingUserAnswer",
         id: "q1",
@@ -5312,7 +5333,11 @@ describe("worker artifact handoff", () => {
   it("rejects cataloged canonical input changes made after sealing as stale", () => {
     const value = fixture("draft-refine", {
       beforeActivate(candidate) {
-        publishDraftBeforeTarget(candidate, draftDocument("sealed input"));
+        publishDraftBeforeTarget(candidate, {
+          ...draftDocument("sealed input"),
+          ...draftWithQuestionLedger([candidateDraftQuestion()]),
+          goal: "sealed input",
+        });
       },
     });
     try {
@@ -5937,7 +5962,11 @@ describe("worker artifact handoff", () => {
   it("rejects a concurrent cataloged worker target update before publishing a stale handoff", () => {
     const value = fixture("draft-refine", {
       beforeActivate(candidate) {
-        publishDraftBeforeTarget(candidate, draftDocument("before concurrent update"));
+        publishDraftBeforeTarget(candidate, {
+          ...draftDocument("before concurrent update"),
+          ...draftWithQuestionLedger([candidateDraftQuestion()]),
+          goal: "before concurrent update",
+        });
       },
     });
     try {

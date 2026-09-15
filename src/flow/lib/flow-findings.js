@@ -295,10 +295,14 @@ export class CanonicalFlowFindingSourceArtifact {
     Object.freeze(this);
   }
 
-  findFinding(sourceStep, sourceFindingId) {
+  findFinding(sourceStep, sourceFindingId, fingerprint = null) {
+    const expectedFingerprint = fingerprint === null
+      ? null
+      : requireFindingFingerprint(fingerprint, "source finding fingerprint");
     for (const payload of this.payloads.toReversed()) {
       const finding = findSourceFinding(payload, sourceStep, sourceFindingId);
-      if (finding !== null) return finding;
+      if (finding !== null && (expectedFingerprint === null
+        || sourceFindingFingerprint(sourceStep, finding) === expectedFingerprint)) return finding;
     }
     return null;
   }

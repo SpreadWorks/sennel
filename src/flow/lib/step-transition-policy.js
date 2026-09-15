@@ -220,7 +220,9 @@ export class ExplicitRecoveryTransition {
         if (stepId === route.gateStepId && change.currentStatus !== "in_progress") {
           transitionError("plan gate repair requires an active gate source");
         }
-        if (stepId !== route.gateStepId && change.currentStatus !== "done") {
+        const completedUpstream = change.currentStatus === "done"
+          || (stepId === "draft-gate-repair" && change.currentStatus === "skipped");
+        if (stepId !== route.gateStepId && !completedUpstream) {
           transitionError(`plan gate repair requires completed upstream step ${stepId}`);
         }
       }

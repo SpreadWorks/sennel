@@ -498,6 +498,55 @@ describe("definition-owned Gate transition boundary", () => {
     assert.equal(repairBeforeExhaustion.plan.retryMetric, null);
   });
 
+  it("carries exhausted or unchanged draft Gate findings to Spec before selecting another repair", () => {
+    const binding = { attempt: { id: "attempt-7", sequence: 7 }, fingerprint: "revision-7" };
+    const convergence = (latestOutcomeDisposition) => new GateObservationConvergenceFacts({
+      evidenceKey: "draft.gate:attempt-7:7:activity-spec-gate:revision-7",
+      observationFingerprints: ["a".repeat(64)],
+      occurrenceCount: 2,
+      repairCount: 1,
+      recurrenceCount: 1,
+      recurringObservationCount: 1,
+      latestOutcomeDisposition,
+      latestOutcomeChangedEvidence: false,
+    });
+    for (const observationConvergence of [
+      convergence("rejected-no-progress"),
+      convergence("rejected-invalid"),
+    ]) {
+      const decision = resolveGateTransition(facts({
+        phase: "draft",
+        result: "fail",
+        failure: new GateFailureCategory({ category: "semantic" }),
+        retry: new GateRetryMetrics({ used: 1, maximum: 4 }),
+        recoveryEvidence: new GateRecoveryEvidence({ kind: "repair", ...binding }),
+        observationConvergence,
+      }));
+      assert.equal(decision.disposition.operation, "defer");
+      assert.equal(decision.plan.repairConnector, null);
+      assert.equal(decision.plan.retryMetric, null);
+    }
+    const exhausted = resolveGateTransition(facts({
+      phase: "draft",
+      result: "fail",
+      failure: new GateFailureCategory({ category: "semantic" }),
+      retry: new GateRetryMetrics({ used: 4, maximum: 4 }),
+      recoveryEvidence: new GateRecoveryEvidence({ kind: "repair", ...binding }),
+    }));
+    assert.equal(exhausted.disposition.operation, "defer");
+    assert.equal(exhausted.plan.repairConnector, null);
+
+    const specNoProgress = resolveGateTransition(facts({
+      phase: "spec",
+      result: "fail",
+      failure: new GateFailureCategory({ category: "semantic" }),
+      retry: new GateRetryMetrics({ used: 1, maximum: 4 }),
+      recoveryEvidence: new GateRecoveryEvidence({ kind: "repair", ...binding }),
+      observationConvergence: convergence("rejected-no-progress"),
+    }));
+    assert.equal(specNoProgress.disposition.operation, "repair");
+  });
+
   it("admits only fresh Gate evidence and converges final-round recurrence without misclassifying a new observation", () => {
     const semanticFailure = new GateFailureCategory({ category: "semantic", code: "TASK_GATE_REJECTED" });
     const convergence = (overrides = {}) => new GateObservationConvergenceFacts({

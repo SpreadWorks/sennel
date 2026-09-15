@@ -6,9 +6,16 @@ import { fileURLToPath } from "node:url";
 
 import {
   applyDraftRepairOperations,
+  DraftGateRepairAuthority,
   DraftRepairOperationBatch,
+  DraftRepairOperationsError,
   DraftRepairPath,
 } from "../../../src/flow/lib/draft-repair-operations.js";
+import {
+  GateEvidenceIdentity,
+  GateObservationRepair,
+  GateRepairObservationRequest,
+} from "../../../src/flow/lib/gate-observation-convergence.js";
 import { checkDraftJson } from "../../../src/flow/lib/run-gate.js";
 import { workerArtifactHandoffPolicy } from "../../../src/flow/lib/worker-artifact-handoff.js";
 
@@ -37,6 +44,57 @@ function repair(operations, baseRevision = `sha256:${INPUT_REVISION}`) { return 
 function apply(input = {}) {
   return applyDraftRepairOperations({ draft: input.draft ?? draft(), triage: input.triage ?? triage(), repair: input.repair ?? repair([]), inputRevision: INPUT_REVISION, phase: "draft-coverage-repair" });
 }
+function gateAuthority() {
+  const attempt = { id: "draft-gate-attempt", sequence: 1 };
+  const catalogFingerprint = "c".repeat(64);
+  return new DraftGateRepairAuthority(new GateObservationRepair({
+    repairId: "plan-gate-repair-fixture",
+    sourceEvidence: new GateEvidenceIdentity({
+      sourceAttempt: attempt,
+      resultLogicalKey: "draft.gate",
+      publicationActivityId: "draft-gate-published",
+      catalogFingerprint,
+      transitionLineage: {
+        sourceAttempt: attempt,
+        canonicalAttempt: attempt,
+        sourceFingerprint: catalogFingerprint,
+        canonicalFingerprint: catalogFingerprint,
+      },
+    }),
+    targetAttempt: { id: "draft-gate-repair-attempt", sequence: 1 },
+    publicationActivityId: "draft-gate-repair-started",
+    recordFingerprint: "d".repeat(64),
+    handoffRevision: INPUT_REVISION,
+    requests: [new GateRepairObservationRequest({ fingerprint: "e".repeat(64) })],
+  }));
+}
+function gateRepair(operations, overrides = {}) {
+  return {
+    version: 1,
+    baseRevision: `sha256:${INPUT_REVISION}`,
+    operations,
+    report: { version: 1, summary: "fixture", results: [] },
+    ...overrides,
+  };
+}
+function gateOperation(overrides = {}) {
+  const { title: _title, target: _target, ...bounded } = operation(overrides);
+  return bounded;
+}
+function validGateDraft() {
+  const source = draft();
+  delete source.unrelated;
+  return source;
+}
+function applyGate(repair, source = validGateDraft()) {
+  return applyDraftRepairOperations({
+    draft: source,
+    repair,
+    inputRevision: INPUT_REVISION,
+    phase: "draft-gate-repair",
+    authority: gateAuthority(),
+  });
+}
 function prompt(name) {
   return fs.readFileSync(fileURLToPath(new URL(`../../../src/flow/prompts/plan/${name}.md`, import.meta.url)), "utf8");
 }
@@ -52,6 +110,8 @@ describe("command-owned draft repair operations", () => {
   it("parses only bounded data paths and v1 proposal envelopes", () => {
     assert.deepEqual(new DraftRepairPath("questionLedger.questions[0].question").segments, ["questionLedger", "questions", 0, "question"]);
     assert.throws(() => new DraftRepairPath("goal.__proto__.value"));
+    assert.throws(() => new DraftRepairPath("goal."));
+    assert.throws(() => new DraftRepairPath("analysis."));
     assert.ok(new DraftRepairOperationBatch(repair([])));
     const malformed = new DraftRepairOperationBatch({ version: 2, baseRevision: "wrong", operations: [] });
     assert.equal(malformed.envelopeErrors.length, 2);
@@ -146,5 +206,46 @@ describe("command-owned draft repair operations", () => {
     assert.deepEqual(result.draft, source);
     assert.ok(result.audit.audit.lifecycleIssues.some((issue) => issue.includes("questions")));
     assert.ok(checkDraftJson(result.draft).some((issue) => issue.includes("questions")));
+  });
+
+  it("applies one strict Gate-authorized batch to the immutable draft", () => {
+    const source = validGateDraft();
+    const result = applyGate(gateRepair([gateOperation()]), source);
+    assert.equal(result.draft.goal, "Corrected goal");
+    assert.equal(source.goal, "Original goal");
+    assert.equal(result.audit.sourceAuthority.kind, "plan-gate-repair");
+    assert.deepEqual(result.audit.audit.lifecycleIssues, []);
+  });
+
+  it("rejects a whole Gate batch when any operation is stale or outside authoring authority", () => {
+    const source = validGateDraft();
+    assert.throws(() => applyGate(gateRepair([
+      gateOperation(),
+      gateOperation({ path: "questionLedger.questions", expectedDigest: digest(source.questionLedger.questions), replacement: [] }),
+    ]), source), (error) => {
+      assert.equal(error instanceof DraftRepairOperationsError, true);
+      assert.equal(error.code, "FLOW_DRAFT_GATE_REPAIR_INVALID");
+      assert.equal(error.audit.acceptedOperations.length, 1);
+      assert.equal(error.audit.discardedOperations.length, 1);
+      return true;
+    });
+    assert.equal(source.goal, "Original goal");
+  });
+
+  it("rejects malformed, stale, duplicate, overlapping, and lifecycle-invalid Gate envelopes", () => {
+    const cases = [
+      gateRepair([], { baseRevision: `sha256:${"f".repeat(64)}` }),
+      { ...gateRepair([]), draft: draft() },
+      gateRepair([gateOperation(), gateOperation()]),
+      gateRepair([
+        gateOperation({ path: "analysis", expectedDigest: digest(draft().analysis), replacement: draft().analysis }),
+        gateOperation({ path: "analysis.problem", expectedDigest: digest("Original problem"), replacement: "Changed" }),
+      ]),
+      gateRepair([gateOperation({ path: "goal", replacement: "", expectedDigest: digest("Original goal") })]),
+      gateRepair([gateOperation({ path: "analysis.missing", expectedDigest: digest(null), replacement: "created" })]),
+    ];
+    for (const candidate of cases) {
+      assert.throws(() => applyGate(candidate), DraftRepairOperationsError);
+    }
   });
 });

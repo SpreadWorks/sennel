@@ -40,7 +40,7 @@ export {
 import {
   ActivityFailure,
   CurrentFlowDefinition,
-  DefinitionDraftDisposition,
+  DefinitionConditionalWorkerDisposition,
   DefinitionReviewDisposition,
   DefinitionFailurePolicy,
   FlowDefinitionNode as CurrentFlowDefinitionNode,
@@ -107,6 +107,7 @@ import {
   TaskGateSettlementProgress,
   GateTransitionFacts,
 } from "./lib/gate-transition.js";
+import { GateObservationRepair } from "./lib/gate-observation-convergence.js";
 import {
   NonGateAttemptIdentity,
   NonGateCatalogPublication,
@@ -1803,6 +1804,14 @@ function resolveGateClassification(facts) {
       `Spec Gate cycle ${facts.specCycle.cycle} reached maximum ${SPEC_GATE_MAXIMUM_CYCLE}.`,
     ));
     return selectGateNonblockingDecision(facts, strict);
+  }
+  // The draft phase is a bounded authoring funnel. Once the same evidence
+  // survives a repair, or all five Gate evaluations have been consumed, the
+  // unresolved finding must continue to the acceptance-backed Spec rather
+  // than selecting another repair or stopping the Flow.
+  if (facts.phase === "draft"
+    && (facts.observationConvergence?.sameEvidence || facts.retry.exhausted)) {
+    return gateDecision(facts, new GateDeferDisposition(GATE_TRANSITION_TOKEN));
   }
   // A current canonical repair receipt is stronger evidence than a raw
   // semantic retry for every repairable Gate. Repeating the evaluator against
@@ -3560,14 +3569,141 @@ export function resolveDraftQuestionPromotion({ facts } = {}) {
 
 export function resolveDraftTransition({ stepId, flowState, facts } = {}) {
   if (stepId !== "draft-refine" || !(facts instanceof DraftTransitionFacts)) return null;
-  if (flowState?.autoApprove === true || facts.nextQuestion === null) {
-    return new DefinitionDraftDisposition({ operation: "execute-refine" });
+  if (flowState?.autoApprove !== true && facts.nextQuestion !== null) {
+    return new DefinitionConditionalWorkerDisposition({
+      stepId,
+      operation: "await-user-answer",
+      questionId: facts.nextQuestion.id,
+      question: facts.nextQuestion.question,
+      questionRevision: facts.nextQuestion.revision,
+    });
   }
-  return new DefinitionDraftDisposition({
-    operation: "await-user-answer",
-    questionId: facts.nextQuestion.id,
-    question: facts.nextQuestion.question,
-    questionRevision: facts.nextQuestion.revision,
+  if (facts.candidateQuestion !== null || (flowState?.autoApprove === true && facts.nextQuestion !== null)) {
+    return new DefinitionConditionalWorkerDisposition({ stepId, operation: "execute-worker" });
+  }
+  return new DefinitionConditionalWorkerDisposition({
+    stepId,
+    operation: facts.workerStatus === "in_progress" ? "complete-worker" : "skip-worker",
+  });
+}
+
+/** Definition-owned admission for a repair-only worker leaf. */
+export function resolvePlanGateRepairWorkerTransition({ stepId, workerStatus, repair } = {}) {
+  if (stepId !== "draft-gate-repair") return null;
+  if (!["pending", "invalidated", "in_progress"].includes(workerStatus)) {
+    throw new Error("plan Gate repair worker status is invalid");
+  }
+  if (repair !== null) {
+    if (repair.targetStepId !== stepId) throw new Error("plan Gate repair does not target its conditional worker");
+    return new DefinitionConditionalWorkerDisposition({ stepId, operation: "execute-worker" });
+  }
+  return new DefinitionConditionalWorkerDisposition({
+    stepId,
+    operation: workerStatus === "in_progress" ? "blocked" : "skip-worker",
+  });
+}
+
+const DRAFT_GATE_REPAIR_TERMINAL_TOKEN = Symbol("definition-draft-gate-repair-terminal");
+
+/** Typed facts for a repair worker that completed without publishable draft bytes. */
+export class DraftGateRepairTerminalFacts {
+  constructor({ kind, repair, failureCode = null, failureMessage = null } = {}) {
+    if (!new Set(["rejected-no-progress", "invalid-payload"]).has(kind)) {
+      throw new Error("draft Gate repair terminal kind is invalid");
+    }
+    if (!(repair instanceof GateObservationRepair)) {
+      throw new Error("draft Gate repair terminal facts require the selected repair");
+    }
+    if (kind === "invalid-payload") {
+      this.failureCode = requireString(failureCode, "draft Gate repair payload failure code");
+      this.failureMessage = requireString(failureMessage, "draft Gate repair payload failure message");
+    } else if (failureCode !== null || failureMessage !== null) {
+      throw new Error("no-progress draft Gate repair cannot carry a payload failure");
+    } else {
+      this.failureCode = null;
+      this.failureMessage = null;
+    }
+    this.kind = kind;
+    this.repair = repair;
+    Object.freeze(this);
+  }
+}
+
+/** Immutable authority to finish the bounded worker and resume draft coverage. */
+export class DraftGateRepairTerminalPlan {
+  constructor(token, { facts, flowState } = {}) {
+    if (token !== DRAFT_GATE_REPAIR_TERMINAL_TOKEN
+      || !(facts instanceof DraftGateRepairTerminalFacts)) {
+      throw new Error("draft Gate repair terminal plan is created only by Definition");
+    }
+    if (flowState?.current?.at(-1) !== "draft-gate-repair"
+      || flowState?.attempt === null
+      || flowState?.findNode?.("draft-gate-repair")?.status !== "in_progress") {
+      throw new Error("draft Gate repair terminal plan requires its active worker Attempt");
+    }
+    if (facts.repair.targetAttempt.id !== flowState.attempt.id
+      || facts.repair.targetAttempt.sequence !== flowState.attempt.sequence) {
+      throw new Error("draft Gate repair terminal facts do not bind the active Attempt");
+    }
+    this.kind = facts.kind;
+    this.runId = requireString(flowState.runId, "draft Gate repair terminal runId");
+    this.specId = requireString(flowState.specId, "draft Gate repair terminal specId");
+    this.confirmationOrder = flowState.confirmationOrder;
+    this.attemptId = flowState.attempt.id;
+    this.attemptSequence = flowState.attempt.sequence;
+    this.repairId = facts.repair.repairId;
+    this.repairRecordFingerprint = facts.repair.recordFingerprint;
+    this.handoffRevision = facts.repair.handoffRevision;
+    this.failureCode = facts.failureCode;
+    this.failureMessage = facts.failureMessage;
+    Object.freeze(this);
+  }
+
+  get summary() {
+    return this.kind === "rejected-no-progress"
+      ? "Plan-Gate repair produced no canonical draft change; the unresolved finding continues to Spec."
+      : `Plan-Gate repair payload was rejected (${this.failureCode}); the unresolved finding continues to Spec.`;
+  }
+}
+
+export function resolveDraftGateRepairTerminal({ facts, flowState } = {}) {
+  if (!(facts instanceof DraftGateRepairTerminalFacts)) return null;
+  return new DraftGateRepairTerminalPlan(DRAFT_GATE_REPAIR_TERMINAL_TOKEN, { facts, flowState });
+}
+
+const CONDITIONAL_WORKER_SETTLEMENT_TOKEN = Symbol("definition-conditional-worker-settlement");
+
+/** Immutable authority for one no-worker settlement at the canonical boundary. */
+export class ConditionalWorkerSettlementPlan {
+  constructor(token, { disposition, flowState, evidenceDigest = null } = {}) {
+    if (token !== CONDITIONAL_WORKER_SETTLEMENT_TOKEN
+      || !(disposition instanceof DefinitionConditionalWorkerDisposition)
+      || !["skip-worker", "complete-worker"].includes(disposition.operation)) {
+      throw new Error("conditional worker settlement requires a Definition-selected terminal disposition");
+    }
+    this.disposition = disposition;
+    this.runId = requireString(flowState?.runId, "conditional worker settlement runId");
+    this.specId = requireString(flowState?.specId, "conditional worker settlement specId");
+    if (!Number.isSafeInteger(flowState?.confirmationOrder) || flowState.confirmationOrder < 1) {
+      throw new Error("conditional worker settlement confirmation order is invalid");
+    }
+    this.confirmationOrder = flowState.confirmationOrder;
+    if (evidenceDigest !== null && !/^[a-f0-9]{64}$/.test(evidenceDigest)) {
+      throw new Error("conditional worker settlement evidence digest is invalid");
+    }
+    this.evidenceDigest = evidenceDigest;
+    Object.freeze(this);
+  }
+
+  get stepId() { return this.disposition.stepId; }
+  get status() { return this.disposition.operation === "skip-worker" ? "skipped" : "done"; }
+}
+
+export function createConditionalWorkerSettlementPlan({ disposition, flowState, evidenceDigest = null } = {}) {
+  return new ConditionalWorkerSettlementPlan(CONDITIONAL_WORKER_SETTLEMENT_TOKEN, {
+    disposition,
+    flowState,
+    evidenceDigest,
   });
 }
 
@@ -4261,6 +4397,15 @@ const FLOW_DEFINITION = Object.freeze([
         outputSchemaRef: "next-action/worker-artifact-handoff.schema.json",
         maxAttempts: 1,
       }),
+      new FlowNode({
+        id: "draft-gate-repair",
+        label: "Draft Gate repair",
+        action: "write-draft",
+        instructionsKey: "plan.draft-gate-repair",
+        contextKinds: ["draft", "issue", "guardrail", "project_overview"],
+        outputSchemaRef: "next-action/worker-artifact-handoff.schema.json",
+        maxAttempts: 1,
+      }),
       createPlanReviewNode({
         id: "draft-coverage-review",
         label: "Review (draft coverage)",
@@ -4753,7 +4898,8 @@ export function buildCurrentFlowDefinition() {
   const finalizationRouteLeaves = new Set(["finalize-sync", "finalize-cleanup"]);
   const taskOverrunRecoveryLeaves = new Set(["task-review", "task-triage", "task-repair"]);
   const taskStageBypassLeaves = new Set(["task-triage", "task-repair", "task-gate"]);
-  const transitionsFor = ({ skippable = false, triageNoRepair = false, taskStageBypass = false, requirementTestInitialization = false, existingImplementation = false, finalizationRoute = false, taskOverrunRecovery = false, failurePolicy = null } = {}) => [
+  const conditionalWorkerLeaves = new Set(["draft-refine", "draft-gate-repair"]);
+  const transitionsFor = ({ skippable = false, conditionalWorker = false, triageNoRepair = false, taskStageBypass = false, requirementTestInitialization = false, existingImplementation = false, finalizationRoute = false, taskOverrunRecovery = false, failurePolicy = null } = {}) => [
     "pending:in_progress",
     "in_progress:done",
     ...(skippable ? ["in_progress:skipped"] : []),
@@ -4762,6 +4908,7 @@ export function buildCurrentFlowDefinition() {
     // review route or invalidated on the acceptance-repair route.
     ...(triageNoRepair ? ["pending:skipped", "invalidated:skipped"] : []),
     ...(taskStageBypass ? ["pending:skipped", "invalidated:skipped"] : []),
+    ...(conditionalWorker ? ["pending:skipped", "invalidated:skipped"] : []),
     // Reopening a draft invalidates every downstream leaf. Approval of the
     // revised Spec must still be able to apply the same typed empty-lifecycle
     // decision without manufacturing an intermediate pending state.
@@ -4796,6 +4943,7 @@ export function buildCurrentFlowDefinition() {
       ...node,
       triageNoRepair: node.id === "impl-repair",
       skippable: definitionNodeIsSkippable(scope, node.id),
+      conditionalWorker: conditionalWorkerLeaves.has(node.id),
       requirementTestInitialization: requirementTestInitializationSkippable.has(node.id),
       existingImplementation: existingImplementationCompletion.has(node.id),
       finalizationRoute: finalizationRouteLeaves.has(node.id),

@@ -158,12 +158,12 @@ describe("flow get next-action", () => {
       stepId: "draft-refine",
       flowState: { autoApprove: true },
       facts: questionFacts,
-    }).operation, "execute-refine");
+    }).operation, "execute-worker");
     assert.equal(resolveDraftTransition({
       stepId: "draft-refine",
       flowState: { autoApprove: false },
       facts: noQuestionFacts,
-    }).operation, "execute-refine");
+    }).operation, "skip-worker");
   });
 
   it("keeps exhausted flow Reviews active before draft/impl rejection routes leave Review", () => {
@@ -378,14 +378,22 @@ describe("flow get next-action", () => {
       "--dropped-reason", "The project contract already fixes this compatibility boundary.",
       "--expect-binding", binding,
     ]);
-    assert.equal(dropped.exitCode, 0);
+    assert.equal(dropped.exitCode, 0, JSON.stringify(dropped.envelope));
     assert.equal(dropped.envelope.data.nextQuestionId, null);
+    assert.equal(dropped.envelope.data.draftRefineCompleted, true);
 
     const ready = runCli(tmp, ["flow", "get", "next-action", "--expect-binding", binding]);
     assert.equal(ready.exitCode, 0);
     assert.equal(ready.envelope.data.binding, binding);
-    assert.equal(ready.envelope.data.directive.kind, "execute_step");
-    assert.equal(ready.envelope.data.step, "draft-refine");
+    assert.equal(ready.envelope.data.directive.kind, "execute_command");
+    assert.equal(ready.envelope.data.directive.actionId, "SKIP_CONDITIONAL_WORKER");
+    assert.equal(ready.envelope.data.step, "draft-gate-repair");
+
+    const skipped = runCli(tmp, ["flow", "run", "claim-next-action", "--expect-binding", binding]);
+    assert.equal(skipped.exitCode, 0, JSON.stringify(skipped.envelope));
+    assert.equal(skipped.envelope.data.status, "skipped");
+    assert.equal(skipped.envelope.data.nextStep, "draft-coverage-review");
+    assert.equal(stateFor(scenario).currentNodeId, null);
 
     const stored = JSON.parse(managerFor(scenario).readArtifact({
       specId: SPEC_ID,
@@ -397,6 +405,42 @@ describe("flow get next-action", () => {
       { id: "q2", state: "DiscardedQuestion" },
     ]);
     assert.deepEqual(stored.decisionMap.requiresUserJudgment, []);
+  });
+
+  it("skips empty draft-refine and absent Gate repair without creating worker requests", () => {
+    tmp = createTmpDir();
+    const scenario = createScenario(tmp).atFlowStep("draft");
+    const emptyDraft = draftDocumentWithPendingQuestions();
+    emptyDraft.questionLedger.questions = [];
+    emptyDraft.decisionMap.requiresUserJudgment = [];
+    publishDraft(scenario, emptyDraft);
+    scenario.beforeFlowStep("draft-refine");
+
+    const refine = runCli(tmp, ["flow", "get", "next-action"]);
+    assert.equal(refine.exitCode, 0);
+    assert.equal(refine.envelope.data.step, "draft-refine");
+    assert.equal(refine.envelope.data.directive.actionId, "SKIP_CONDITIONAL_WORKER");
+    const refineSkip = runCli(tmp, ["flow", "run", "claim-next-action"]);
+    assert.equal(refineSkip.exitCode, 0, JSON.stringify(refineSkip.envelope));
+    assert.equal(refineSkip.envelope.data.status, "skipped");
+
+    const repair = runCli(tmp, ["flow", "get", "next-action"]);
+    assert.equal(repair.exitCode, 0);
+    assert.equal(repair.envelope.data.step, "draft-gate-repair");
+    assert.equal(repair.envelope.data.directive.actionId, "SKIP_CONDITIONAL_WORKER");
+    const repairSkip = runCli(tmp, ["flow", "run", "claim-next-action"]);
+    assert.equal(repairSkip.exitCode, 0, JSON.stringify(repairSkip.envelope));
+    assert.equal(repairSkip.envelope.data.nextStep, "draft-coverage-review");
+
+    const reloaded = managerFor(scenario).canonicalState(SPEC_ID);
+    assert.equal(reloaded.findNode("draft-refine").status, "skipped");
+    assert.equal(reloaded.findNode("draft-gate-repair").status, "skipped");
+    assert.equal(reloaded.nextAction().nodeId, "draft-coverage-review");
+    assert.equal(managerFor(scenario).activityLedger(SPEC_ID).some((activity) => (
+      activity.transition.operation === "start_attempt"
+      && ["draft-refine", "draft-gate-repair"].includes(activity.nodeId)
+    )), false);
+    assert.equal(fs.existsSync(path.join(tmp, ".sennel", "handoffs")), false);
   });
 
   it("rejects an invalid persisted question schema before offering an unusable decision", () => {

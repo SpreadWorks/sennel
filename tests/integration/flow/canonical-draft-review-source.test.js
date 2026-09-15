@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 
 import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
+import {
+  createConditionalWorkerSettlementPlan,
+  resolvePlanGateRepairWorkerTransition,
+} from "../../../src/flow/definition.js";
 import { ReviewTargetAuthority } from "../../../src/flow/lib/review-target-authority.js";
 import {
   canonicalDraftDocument,
@@ -137,6 +141,19 @@ describe("canonical draft review source", () => {
       phase: "draft-coverage",
     });
     assert.equal(coverageSource.sourceNodeId, "draft-refine");
+
+    const gateRepairState = flowManager.canonicalState(SPEC_ID);
+    flowManager.settleConditionalWorker({
+      specId: SPEC_ID,
+      plan: createConditionalWorkerSettlementPlan({
+        disposition: resolvePlanGateRepairWorkerTransition({
+          stepId: "draft-gate-repair",
+          workerStatus: "pending",
+          repair: null,
+        }),
+        flowState: gateRepairState,
+      }),
+    });
 
     completeStep(flowManager, "draft-coverage-review");
     completeStep(flowManager, "draft-coverage-triage");

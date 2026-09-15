@@ -9,7 +9,7 @@ const DRAFT_ARTIFACT_VERSION = 1;
 
 export const DRAFT_ARTIFACT_FAILURE_MARKER_PREFIX = `${PRODUCT.env("DRAFT_ARTIFACT_FAILURE")} `;
 export const DRAFT_ARTIFACT_WRITER_STEPS = Object.freeze([
-  "draft", "draft-questions-repair", "draft-refine", "draft-coverage-repair",
+  "draft", "draft-questions-repair", "draft-refine", "draft-gate-repair", "draft-coverage-repair",
 ]);
 
 function requireString(value, field) {

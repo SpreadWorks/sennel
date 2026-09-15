@@ -22,10 +22,15 @@ import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-art
 import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
 import { resolveGateTransition } from "../../../src/flow/definition.js";
 import {
+  createConditionalWorkerSettlementPlan,
   RequirementTestLifecycleFacts,
   RequirementTestStepObservation,
+  resolveDraftTransition,
+  resolvePlanGateRepairWorkerTransition,
   resolveRequirementTestLifecycle,
 } from "../../../src/flow/definition.js";
+import { readDraftTransitionFacts } from "../../../src/flow/lib/draft-transition-facts.js";
+import { canonicalPlanGateRepairForTarget } from "../../../src/flow/lib/plan-gate-repair.js";
 import { ReviewFindingFingerprint } from "../../../src/flow/lib/finding-disposition-policy.js";
 import {
   RequirementTestCandidateBundle,
@@ -115,6 +120,33 @@ export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status 
   const node = flattenSteps(current.steps).find((entry) => entry.id === nodeId) ?? null;
   if (node === null) throw new Error(`canonical fixture node is absent: ${nodeId}`);
   if (["done", "skipped"].includes(node.status)) return current;
+  if (current.currentNodeId === null && ["draft-refine", "draft-gate-repair"].includes(nodeId)) {
+    const draftFacts = nodeId === "draft-refine"
+      ? readDraftTransitionFacts({ flowManager, flowState: current })
+      : null;
+    const disposition = nodeId === "draft-refine"
+      ? resolveDraftTransition({
+          stepId: nodeId,
+          flowState: current,
+          facts: draftFacts,
+        })
+      : resolvePlanGateRepairWorkerTransition({
+          stepId: nodeId,
+          workerStatus: node.status,
+          repair: canonicalPlanGateRepairForTarget({ flowManager, state: current, targetStepId: nodeId }),
+        });
+    if (disposition?.operation === "skip-worker") {
+      flowManager.settleConditionalWorker({
+        specId: resolvedSpecId,
+        plan: createConditionalWorkerSettlementPlan({
+          disposition,
+          flowState: flowManager.canonicalState(resolvedSpecId),
+          evidenceDigest: draftFacts?.sourceDigest ?? null,
+        }),
+      });
+      return flowManager.loadReadOnly(resolvedSpecId);
+    }
+  }
   if (current.currentNodeId !== nodeId) {
     flowManager.updateStepStatus(
       { stepId: nodeId, requestedStatus: "in_progress" },

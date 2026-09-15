@@ -8,6 +8,7 @@ const SPEC_CORRECTION_CATEGORY = "spec-correction";
 const REOPEN_CATEGORIES = new Set([undefined, "task-addition", SPEC_CORRECTION_CATEGORY]);
 const PREIMPLEMENTATION_STAGES = new Set([
   "draft-refine",
+  "draft-gate-repair",
   "draft-questions-review",
   "draft-questions-triage",
   "draft-questions-repair",

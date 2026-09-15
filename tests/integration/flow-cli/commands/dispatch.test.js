@@ -801,6 +801,8 @@ describe("flow dispatch CLI", () => {
   it("returns and reuses one opaque binding across draft-question decisions", () => {
     root = createTmpDir("sennel-flow-dispatch-draft-question-");
     const scenario = draftQuestionScenario(root);
+    const refineSequence = scenario.manager.canonicalState(scenario.state.specId)
+      .findNode("draft-refine").attemptSequence;
     const first = invokeFlow(root, [
       "run", "dispatch",
       "--expect-run-id", scenario.state.runId,
@@ -856,8 +858,25 @@ describe("flow dispatch CLI", () => {
     ]);
     assert.equal(ready.status, 0, ready.stderr);
     assert.equal(ready.envelope.data.binding, scenario.binding);
-    assert.equal(ready.envelope.data.directive.kind, "execute_step");
-    assert.equal(ready.envelope.data.step, "draft-refine");
+    assert.equal(ready.envelope.data.directive.kind, "execute_command");
+    assert.equal(ready.envelope.data.directive.actionId, "SKIP_CONDITIONAL_WORKER");
+    assert.equal(ready.envelope.data.step, "draft-gate-repair");
+    const answered = scenario.manager.canonicalState(scenario.state.specId);
+    assert.equal(answered.findNode("draft-refine").status, "done");
+    assert.equal(answered.findNode("draft-refine").attemptSequence, refineSequence);
+    assert.equal(answered.attempt, null);
+
+    const skipped = invokeFlow(root, [
+      "run", "claim-next-action",
+      "--expect-binding", ready.envelope.data.binding,
+    ]);
+    assert.equal(skipped.status, 0, skipped.stderr);
+    const coverage = invokeFlow(root, [
+      "get", "next-action", "--expect-binding", ready.envelope.data.binding,
+    ]);
+    assert.equal(coverage.status, 0, coverage.stderr);
+    assert.equal(coverage.envelope.data.binding, scenario.binding);
+    assert.equal(coverage.envelope.data.step, "draft-coverage-review");
   });
 
   it("reclaims a lease whose dispatcher owner exited", () => {

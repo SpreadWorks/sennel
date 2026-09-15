@@ -344,8 +344,7 @@ export class ProducerArtifactReadiness {
         consumerNodeId: this.consumerNodeId,
         logicalKey: handoff.logicalKey,
       });
-      const deferredIntegrationSettlement = producer.id === "impl-gate"
-        && producer.status === "done"
+      const deferredGateSettlement = producer.status === "done"
         && (activities.find((activity) => (
           activity.nodeId === producer.id
           && activity.transition.operation === "defer_failed_gate"
@@ -383,16 +382,16 @@ export class ProducerArtifactReadiness {
           // for a Definition-owned route.
               || activity.transition.operation === "publish_artifacts"
             ))
-          // Integration exhaustion introduces a settlement Attempt that
-          // records flow.findings. Its immutable failed Gate artifact stays
-          // on the immediately preceding producer Attempt, and only that
-          // exact deferred settlement may advance retro.
+          // Deferral introduces a settlement Attempt that records
+          // flow.findings. Its immutable failed Gate artifact stays on the
+          // immediately preceding producer Attempt, and only that exact
+          // definition-validated settlement may admit a downstream consumer.
           || (
-            deferredIntegrationSettlement !== null
+            deferredGateSettlement !== null
             && activity.transition.operation === "fail_attempt"
             && activity.result?.outcome === "failed"
-            && activity.sequence === deferredIntegrationSettlement.sequence
-            && activity.attemptId === deferredIntegrationSettlement.attemptId
+            && activity.sequence === deferredGateSettlement.sequence
+            && activity.attemptId === deferredGateSettlement.attemptId
           )
           ))
       )) ?? null;

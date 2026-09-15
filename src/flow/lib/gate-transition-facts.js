@@ -593,8 +593,18 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
   // must not be added a second time here.  Thus a limit of four permits the
   // initial evaluation plus four replacement Attempts, and the fifth failed
   // evaluation (consumption=4) is the one that settles.
+  const priorDraftSemanticFailures = persistedPhase === "draft"
+    ? new Set(activities.filter((activity) => (
+      activity.nodeId === nodeId
+      && activity.transition?.operation === "fail_attempt"
+      && activity.failure?.category === "semantic"
+      && (activity.attemptId !== attempt.id || activity.sequence !== attempt.sequence)
+    )).map((activity) => `${activity.attemptId}:${activity.sequence}`)).size
+    : 0;
   const used = failureCategory === "semantic"
-    ? attempt.consumption.semantic
+    ? (persistedPhase === "draft"
+      ? Math.min(contract.semanticRetryLimit, Math.max(attempt.consumption.semantic, priorDraftSemanticFailures))
+      : attempt.consumption.semantic)
     : attempt.consumption.tooling;
   const maximum = failureCategory === "semantic"
     ? contract.semanticRetryLimit
@@ -629,15 +639,21 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
       publication.id,
       resultSource.descriptor.hash,
     ].join(":");
-    const cycleRead = new CanonicalGateObservationCycle({ flowManager, state }).read();
+    const cycleReader = new CanonicalGateObservationCycle({ flowManager, state });
+    const cycleTransition = cycleReader.transitionRead();
+    const cycleRead = cycleTransition.readModel;
     const cycles = cycleRead.cycles.filter((cycle) => cycle.occurrences.some((occurrence) => (
       occurrence.evidence.key() === evidenceKey
     )));
     if (cycles.length > 0) {
-      const outcomes = cycles.flatMap((cycle) => cycle.outcomes)
-        .filter((outcome) => outcome.sourceAttempt.sequence < attempt.sequence)
-        .sort((left, right) => right.sourceAttempt.sequence - left.sourceAttempt.sequence);
-      const latestOutcome = outcomes.at(0) ?? null;
+      const repairs = cycles.flatMap((cycle) => cycle.repairs)
+        .filter((repair) => repair.sourceEvidence.sourceAttempt.sequence < attempt.sequence)
+        .sort((left, right) => right.sourceEvidence.sourceAttempt.sequence - left.sourceEvidence.sourceAttempt.sequence);
+      const latestRepair = repairs.at(0) ?? null;
+      const latestOutcome = latestRepair === null ? null : cycles.flatMap((cycle) => cycle.outcomes)
+        .find((outcome) => outcome.repairId === latestRepair.repairId) ?? null;
+      const latestDisposition = latestOutcome?.disposition
+        ?? (latestRepair === null ? null : cycleTransition.terminalDisposition(latestRepair.repairId));
       observationConvergence = new GateObservationConvergenceFacts({
         evidenceKey,
         observationFingerprints: cycles.map((cycle) => cycle.fingerprint.toString()),
@@ -645,7 +661,7 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
         repairCount: cycles.reduce((total, cycle) => total + cycle.repairCount, 0),
         recurrenceCount: cycles.reduce((total, cycle) => total + cycle.recurrenceCount, 0),
         recurringObservationCount: cycles.filter((cycle) => cycle.recurrenceCount > 0).length,
-        latestOutcomeDisposition: latestOutcome?.disposition ?? null,
+        latestOutcomeDisposition: latestDisposition,
         latestOutcomeChangedEvidence: latestOutcome === null
           ? false
           : latestOutcome.report.beforeEvidenceDigest !== latestOutcome.report.outputEvidenceDigest,

@@ -121,6 +121,7 @@ const TRANSITION_ATTEMPT_OPERATIONS = new Set([
   "advance_requirement_test_lifecycle",
 ]);
 const DRAFT_COMPLETION_TRANSITION_OPERATION = "complete_draft_completion";
+const CONDITIONAL_WORKER_SETTLEMENT_OPERATION = "settle_conditional_worker";
 const TASK_REVIEW_STAGE_TRANSITION_OPERATION = "complete_task_review_stage";
 const REQUIREMENT_TEST_INITIALIZATION_OPERATION = "initialize_requirement_test_lifecycle";
 const REQUIREMENT_TEST_TRANSITION_OPERATION = "advance_requirement_test_lifecycle";
@@ -194,6 +195,7 @@ const FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS = new Set(["skip_finalize_downst
 const STATE_CHANGING_TRANSITION_OPERATIONS = new Set([
   FLOW_CREATION_TRANSITION_OPERATION,
   DRAFT_COMPLETION_TRANSITION_OPERATION,
+  CONDITIONAL_WORKER_SETTLEMENT_OPERATION,
   TASK_REVIEW_STAGE_TRANSITION_OPERATION,
   REQUIREMENT_TEST_INITIALIZATION_OPERATION,
   REQUIREMENT_TEST_TRANSITION_OPERATION,
@@ -3070,10 +3072,11 @@ export class DefinitionReviewDisposition {
 }
 
 /** A definition-owned decision at the manual draft question boundary. */
-export class DefinitionDraftDisposition {
-  constructor({ operation, questionId = null, question = null, questionRevision = null } = {}) {
-    if (!["execute-refine", "await-user-answer"].includes(operation)) {
-      throw new CurrentFlowStateInvariantError("draft disposition operation is invalid");
+export class DefinitionConditionalWorkerDisposition {
+  constructor({ stepId, operation, questionId = null, question = null, questionRevision = null } = {}) {
+    this.stepId = requireString(stepId, "conditional worker disposition stepId");
+    if (!["execute-worker", "await-user-answer", "skip-worker", "complete-worker", "blocked"].includes(operation)) {
+      throw new CurrentFlowStateInvariantError("conditional worker disposition operation is invalid");
     }
     if (operation === "await-user-answer") {
       this.questionId = requireString(questionId, "draft disposition questionId");
@@ -3084,7 +3087,7 @@ export class DefinitionDraftDisposition {
       this.questionRevision = questionRevision;
     } else {
       if (questionId !== null || question !== null || questionRevision !== null) {
-        throw new CurrentFlowStateInvariantError("execute draft disposition must not include a question");
+        throw new CurrentFlowStateInvariantError("non-question draft disposition must not include a question");
       }
       this.questionId = null;
       this.question = null;
@@ -3097,6 +3100,7 @@ export class DefinitionDraftDisposition {
   toJSON() {
     return {
       operation: this.operation,
+      stepId: this.stepId,
       ...(this.questionId === null ? {} : {
         questionId: this.questionId,
         question: this.question,
@@ -3175,7 +3179,7 @@ export class CurrentNextActionDescriptor {
     action,
     failureDisposition = null,
     reviewDisposition = null,
-    draftDisposition = null,
+    conditionalWorkerDisposition = null,
   }) {
     if (!Array.isArray(currentPath) || currentPath.length === 0) {
       throw new CurrentFlowStateInvariantError("next action path must be a non-empty stable-id array");
@@ -3204,14 +3208,14 @@ export class CurrentNextActionDescriptor {
     )) {
       throw new CurrentFlowStateInvariantError("review disposition requires an active review descriptor");
     }
-    if (draftDisposition !== null && !(draftDisposition instanceof DefinitionDraftDisposition)) {
-      throw new CurrentFlowStateInvariantError("next action draft disposition is invalid");
+    if (conditionalWorkerDisposition !== null && !(conditionalWorkerDisposition instanceof DefinitionConditionalWorkerDisposition)) {
+      throw new CurrentFlowStateInvariantError("next action conditional worker disposition is invalid");
     }
-    if (draftDisposition !== null && (
-      node.id !== "draft-refine"
+    if (conditionalWorkerDisposition !== null && (
+      conditionalWorkerDisposition.stepId !== node.id
       || !["start", "recover", "resume", "retry"].includes(operation)
     )) {
-      throw new CurrentFlowStateInvariantError("draft disposition requires an executable draft-refine descriptor");
+      throw new CurrentFlowStateInvariantError("conditional worker disposition requires its executable descriptor");
     }
     this.path = Object.freeze([...currentPath]);
     this.node = node;
@@ -3222,7 +3226,7 @@ export class CurrentNextActionDescriptor {
     this.action = action;
     this.failureDisposition = failureDisposition;
     this.reviewDisposition = reviewDisposition;
-    this.draftDisposition = draftDisposition;
+    this.conditionalWorkerDisposition = conditionalWorkerDisposition;
     Object.freeze(this);
   }
 
@@ -3235,12 +3239,12 @@ export class CurrentNextActionDescriptor {
       action: this.action,
       failureDisposition: this.failureDisposition,
       reviewDisposition,
-      draftDisposition: this.draftDisposition,
+      conditionalWorkerDisposition: this.conditionalWorkerDisposition,
     });
   }
 
-  withDraftDisposition(draftDisposition) {
-    if (draftDisposition === null) return this;
+  withConditionalWorkerDisposition(conditionalWorkerDisposition) {
+    if (conditionalWorkerDisposition === null) return this;
     return new CurrentNextActionDescriptor({
       path: this.path,
       node: this.node,
@@ -3248,7 +3252,7 @@ export class CurrentNextActionDescriptor {
       action: this.action,
       failureDisposition: this.failureDisposition,
       reviewDisposition: this.reviewDisposition,
-      draftDisposition,
+      conditionalWorkerDisposition,
     });
   }
 
@@ -3292,7 +3296,7 @@ export class CurrentNextActionDescriptor {
       action: this.action.toJSON(),
       failureDisposition: this.failureDisposition?.toJSON() ?? null,
       ...(this.reviewDisposition === null ? {} : { reviewDisposition: this.reviewDisposition.toJSON() }),
-      ...(this.draftDisposition === null ? {} : { draftDisposition: this.draftDisposition.toJSON() }),
+      ...(this.conditionalWorkerDisposition === null ? {} : { conditionalWorkerDisposition: this.conditionalWorkerDisposition.toJSON() }),
     };
   }
 }
@@ -4537,6 +4541,36 @@ export class CurrentFlowState {
     return next;
   }
 
+  /** Settle a passive conditional leaf without creating a worker Attempt. */
+  settleConditionalWorker({ stepId, status, confirmedAt }) {
+    this.#assertExecutionActive();
+    if (this.current !== null || this.attempt !== null || status !== "skipped") {
+      throw new CurrentFlowStateInvariantError("passive conditional worker settlement requires skipped with no active Attempt");
+    }
+    if (!["draft-refine", "draft-gate-repair"].includes(stepId)) {
+      throw new CurrentFlowStateInvariantError("conditional worker settlement target is not authorized");
+    }
+    requireIso(confirmedAt, "conditional worker settlement confirmedAt");
+    const node = this.findNode(stepId);
+    if (node === null || !["pending", "invalidated"].includes(node.status)) {
+      throw new CurrentFlowStateInvariantError("conditional worker settlement requires a passive frontier leaf");
+    }
+    if (this.nextAction()?.nodeId !== stepId) {
+      throw new CurrentFlowStateInvariantError("conditional worker settlement target is not the canonical frontier");
+    }
+    const root = reconcileCompletedParents(replaceNode(this.root, stepId, node.with({
+      status: "skipped",
+      attemptSequence: node.attemptSequence + 1,
+      result: new NodeResult({
+        outcome: "skipped",
+        summary: `Definition skipped conditional worker ${stepId}`,
+        confirmedAt,
+        artifactRefs: [],
+      }),
+    })), this.definition);
+    return this.#replaceRoot(root, null, null);
+  }
+
   /** Apply one sealed Task review/triage/repair connector as a single state change. */
   completeTaskReviewStage({ result, plan, targetAttempt = null }) {
     this.assertAttemptConfirmable();
@@ -5367,10 +5401,14 @@ export class CurrentFlowState {
     for (const stepId of route.resetStepIds) {
       const node = this.findNode(stepId);
       if (node === null) throw new CurrentFlowStateInvariantError(`plan gate repair route node is missing: ${stepId}`);
-      const expected = stepId === route.gateStepId ? "in_progress" : "done";
-      if (node.status !== expected) {
+      const expected = stepId === route.gateStepId
+        ? ["in_progress"]
+        : stepId === "draft-gate-repair"
+          ? ["done", "skipped"]
+          : ["done"];
+      if (!expected.includes(node.status)) {
         throw new CurrentFlowStateInvariantError(
-          `plan gate repair requires ${stepId}=${expected}, got ${node.status}`,
+          `plan gate repair requires ${stepId}=${expected.join("|")}, got ${node.status}`,
         );
       }
     }
@@ -6165,7 +6203,7 @@ export class ActivityTransition {
       : value;
     requireExactFields(normalized, ACTIVITY_TRANSITION_FIELDS, "activity.transition");
     const { operation, nodeId, task, attempt, status, policy, outbox, approval, nonblocking, finalizeSteps, gateTaskLifecycle, stepConnectionReceipt, taskReviewStagePlan, requirementTestInitialization, requirementTestLifecycle } = normalized;
-    if (![FLOW_CREATION_TRANSITION_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "advance_task_review_stage", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "fail_attempt", "record_failure", "confirm_attempt", "complete_acceptance_decision_noop", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", INTERRUPTED_FINALIZE_SYNC_OPERATION, ...LIFECYCLE_TRANSITION_OPERATIONS, ...POLICY_TRANSITION_OPERATIONS, ...OUTBOX_TRANSITION_OPERATIONS, ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS, ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS, ...OBSERVATION_TRANSITION_OPERATIONS, ...NONBLOCKING_TRANSITION_OPERATIONS, ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS].includes(operation)) {
+    if (![FLOW_CREATION_TRANSITION_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "advance_task_review_stage", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "fail_attempt", "record_failure", "confirm_attempt", "complete_acceptance_decision_noop", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", INTERRUPTED_FINALIZE_SYNC_OPERATION, ...LIFECYCLE_TRANSITION_OPERATIONS, ...POLICY_TRANSITION_OPERATIONS, ...OUTBOX_TRANSITION_OPERATIONS, ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS, ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS, ...OBSERVATION_TRANSITION_OPERATIONS, ...NONBLOCKING_TRANSITION_OPERATIONS, ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS].includes(operation)) {
       throw new CurrentFlowStateInvariantError(`activity.transition.operation is invalid: ${operation}`);
     }
     this.operation = operation;
@@ -6313,7 +6351,7 @@ export class ActivityTransition {
     if (operation === "complete_acceptance_decision_noop" && status !== "done") {
       throw new CurrentFlowStateInvariantError("acceptance decision no-op transition requires done status");
     }
-    if (["confirm_attempt", "complete_acceptance_decision_noop", DRAFT_COMPLETION_TRANSITION_OPERATION].includes(operation)) {
+    if (["confirm_attempt", "complete_acceptance_decision_noop", DRAFT_COMPLETION_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION].includes(operation)) {
       if (!["done", "skipped"].includes(status)) {
         throw new CurrentFlowStateInvariantError("confirm_attempt transition requires done or skipped status");
       }
@@ -6588,6 +6626,16 @@ export class ActivityTransition {
       }
       return state.completeDraftCompletion({ result: activity.result, receipt: this.stepConnectionReceipt });
     }
+    if (this.operation === CONDITIONAL_WORKER_SETTLEMENT_OPERATION) {
+      if (activity.result == null || activity.attemptId !== null || activity.sequence !== null) {
+        throw new CurrentFlowStateInvariantError("conditional worker settlement Activity must be attempt-free with a result");
+      }
+      return state.settleConditionalWorker({
+        stepId: targetId,
+        status: this.status,
+        confirmedAt: activity.result.confirmedAt,
+      });
+    }
     if (this.operation === TASK_REVIEW_STAGE_TRANSITION_OPERATION) {
       if (activity.result == null) throw new CurrentFlowStateInvariantError("Task Review stage completion requires a result");
       return state.completeTaskReviewStage({ result: activity.result, plan: this.taskReviewStagePlan });
@@ -6712,6 +6760,7 @@ export class FlowActivity {
       record_failure: "failure_recorded",
       confirm_attempt: "result_confirmed",
       [DRAFT_COMPLETION_TRANSITION_OPERATION]: "result_confirmed",
+      [CONDITIONAL_WORKER_SETTLEMENT_OPERATION]: "result_confirmed",
       [TASK_REVIEW_STAGE_TRANSITION_OPERATION]: "result_confirmed",
       advance_task_review_stage: "result_confirmed",
       [REQUIREMENT_TEST_INITIALIZATION_OPERATION]: "result_confirmed",
@@ -6769,10 +6818,10 @@ export class FlowActivity {
       throw new CurrentFlowStateInvariantError("flow_created Activity requires its deterministic first-Activity identity");
     }
     this.result = result == null ? null : result instanceof NodeResult ? result : new NodeResult(result);
-    if (["confirm_attempt", DRAFT_COMPLETION_TRANSITION_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "complete_acceptance_decision_noop", "fail_attempt", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result == null) {
+    if (["confirm_attempt", DRAFT_COMPLETION_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "complete_acceptance_decision_noop", "fail_attempt", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result == null) {
       throw new CurrentFlowStateInvariantError("completed Attempt Activity requires a result");
     }
-    if (!["confirm_attempt", DRAFT_COMPLETION_TRANSITION_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "complete_acceptance_decision_noop", "fail_attempt", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result !== null) {
+    if (!["confirm_attempt", DRAFT_COMPLETION_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "complete_acceptance_decision_noop", "fail_attempt", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result !== null) {
       throw new CurrentFlowStateInvariantError("only completed Attempt Activity may carry a result");
     }
     if (["fail_attempt", "record_failure"].includes(this.transition.operation) && !["failed", "incomplete"].includes(this.result.outcome)) {
@@ -6790,6 +6839,7 @@ export class FlowActivity {
       || DISPATCH_APPROVAL_TRANSITION_OPERATIONS.has(this.transition.operation)
       || OBSERVATION_TRANSITION_OPERATIONS.has(this.transition.operation)
       || this.transition.operation === "record_nonblocking"
+      || this.transition.operation === CONDITIONAL_WORKER_SETTLEMENT_OPERATION
     ) {
       if (this.attemptId !== null || this.sequence !== null) {
         throw new CurrentFlowStateInvariantError("Task, Flow lifecycle/policy/outbox/dispatch approval, artifact publication, and observation Activities must not carry Attempt identity or sequence");

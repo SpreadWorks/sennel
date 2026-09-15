@@ -1,7 +1,5 @@
    <!-- include("/flow/prompts/partials/worker-artifact-handoff.md") -->
    - Refine the existing `draft.json` into a spec-ready draft before coverage review.
-   - When `context.planGateRepair` is present, this is a governed draft-gate repair. Treat every blocking observation in that object as mandatory input, repair the mapped draft content, and scan the other authored draft fields for all instances of the same failure pattern. The source issue-log id and digest identify the exact gate evidence; do not substitute another spec or another issue-log entry.
-   - A governed draft-gate repair must publish a materially changed `draft.json` through this step's handoff. Do not edit any canonical `specs/<id>` path directly and do not seal an unchanged payload.
    - This worker runs only after the definition-owned draft boundary has disposed existing `AwaitingUserAnswer` entries, except in autoApprove mode. Do not create a new question list and do not append review-style follow-up questions.
    - For each existing `CandidateQuestion`, validate and refine it once. If request, Issue, docs, project rules, source context, or conservative policy determines it, replace it with `ResolvedByExistingInformation`. With `autoApprove: true`, resolve genuine choices terminally without a user wait. Without autoApprove, retain a genuine Candidate for the Definition post-handoff promotion plan. Never create `AwaitingUserAnswer` in this worker.
    - For each existing awaiting entry:

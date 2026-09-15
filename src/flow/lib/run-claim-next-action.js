@@ -7,9 +7,40 @@ import {
 } from "./final-regression-transition-facts.js";
 import { beginFinalRegressionRepairTransition } from "./final-regression-transition-application.js";
 import GetNextActionCommand from "./get-next-action.js";
-import { resolveGateTransition } from "../definition.js";
+import {
+  createConditionalWorkerSettlementPlan,
+  resolveDraftTransition,
+  resolveGateTransition,
+  resolvePlanGateRepairWorkerTransition,
+} from "../definition.js";
 import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
+import { readDraftTransitionFacts } from "./draft-transition-facts.js";
+import { canonicalPlanGateRepairForTarget } from "./plan-gate-repair.js";
+
+function conditionalWorkerSettlement({ ctx, state, next }) {
+  const stepId = state.current?.at(-1) ?? next?.nodeId ?? null;
+  let disposition = null;
+  let evidenceDigest = null;
+  if (stepId === "draft-refine") {
+    const facts = readDraftTransitionFacts({ flowManager: ctx.flowManager, flowState: ctx.flowState });
+    disposition = facts === null ? null : resolveDraftTransition({ stepId, flowState: ctx.flowState, facts });
+    evidenceDigest = facts?.sourceDigest ?? null;
+  } else if (stepId === "draft-gate-repair") {
+    const repair = canonicalPlanGateRepairForTarget({
+      flowManager: ctx.flowManager,
+      state: ctx.flowState,
+      targetStepId: stepId,
+    });
+    disposition = resolvePlanGateRepairWorkerTransition({
+      stepId,
+      workerStatus: state.findNode(stepId)?.status,
+      repair,
+    });
+  }
+  if (disposition === null || !["skip-worker", "complete-worker"].includes(disposition.operation)) return null;
+  return createConditionalWorkerSettlementPlan({ disposition, flowState: state, evidenceDigest });
+}
 
 /**
  * The only generic claim boundary for an ordinary Definition-selected worker
@@ -30,6 +61,15 @@ export default class RunClaimNextActionCommand extends FlowCommand {
         throw new Error("Definition does not select a claimable action for an inactive Flow");
       }
       const next = typed?.nextAction() ?? null;
+      const conditionalPlan = conditionalWorkerSettlement({ ctx, state: typed, next });
+      if (conditionalPlan !== null) {
+        const settled = ctx.flowManager.settleConditionalWorker({ specId: ctx.specId, plan: conditionalPlan });
+        return Envelope.ok("run", "claim-next-action", {
+          step: conditionalPlan.stepId,
+          status: conditionalPlan.status,
+          nextStep: settled.nextAction()?.nodeId ?? null,
+        });
+      }
       const projection = await new GetNextActionCommand().execute(ctx);
       const activeTaskStep = TaskStepIdentity.fromStateNode(ctx.flowState, typed?.current?.at(-1));
       const gatePhase = typed?.current?.at(-1) === "draft-gate"

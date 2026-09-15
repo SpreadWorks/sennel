@@ -1,5 +1,6 @@
 import { completeCanonicalSourceHandoff } from "../support/builders/source-handoff-scenario.js";
 import assert from "node:assert/strict";
+import { CanonicalDraftReviewSource } from "../../src/flow/lib/canonical-review-artifacts.js";
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -576,33 +577,22 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         flowState: completed,
       });
       assert.equal(downstream.step, "draft-refine");
-      assert.equal(downstream.context.workerArtifactHandoff.required, true);
-      assert.equal(downstream.directive.actionId, "CLAIM_NEXT_ACTION");
-      const claim = await new RunClaimNextActionCommand().execute({
-        root: executionRoot,
-        executionRoot,
-        mainRoot,
-        specId,
-        flowManager,
-        flowState: completed,
-      });
-      assert.equal(claim.ok, true, JSON.stringify(claim));
-      const claimed = flowManager.load();
-      assert.equal(claimed.currentNodeId, "draft-refine");
-      assert.equal(flowManager.canonicalState(specId).attempt.failure, null);
-      const downstreamRequest = new WorkerArtifactHandoffCoordinator().createRequest({
-        ctx: { root: executionRoot, executionRoot, mainRoot, specId, flowManager },
-        state: claimed,
-        invocation: {
-          id: "downstream-draft-refine",
-          target: { digest: "e".repeat(64) },
-          action: { digest: "d".repeat(64), nextAction: { step: downstream.step } },
-        },
-      });
-      assert.deepEqual(
-        downstreamRequest.inputs[0].document,
-        draftHandoffPayload("Parent publication is canonical."),
-      );
+      assert.equal(downstream.directive.actionId, "SKIP_CONDITIONAL_WORKER");
+      for (const stepId of ["draft-refine", "draft-gate-repair"]) {
+        const claim = await new RunClaimNextActionCommand().execute({
+          root: executionRoot, executionRoot, mainRoot, specId, flowManager,
+          flowState: flowManager.loadReadOnly(specId),
+        });
+        assert.equal(claim.ok, true, JSON.stringify(claim));
+        assert.equal(claim.data.step, stepId);
+        assert.equal(claim.data.status, "skipped");
+      }
+      const claimed = flowManager.loadReadOnly(specId);
+      assert.equal(claimed.currentNodeId, null);
+      assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, "draft-coverage-review");
+      const source = new CanonicalDraftReviewSource({ flowManager, state: claimed, phase: "draft-coverage" });
+      assert.equal(source.sourceNodeId, "draft-questions-repair");
+      assert.deepEqual(JSON.parse(source.bytes), draftHandoffPayload("Parent publication is canonical."));
     } finally {
       process.env.PATH = originalPath;
       removeTmpDir(mainRoot);

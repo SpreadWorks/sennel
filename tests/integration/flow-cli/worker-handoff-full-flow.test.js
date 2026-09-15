@@ -325,7 +325,7 @@ async function commandArtifacts(stepId, flowManager, specId, implReviewRuns, his
     const draft = flowManager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: stepId });
     const revision = {
       version: 1, runId: flowManager.load().runId, specId,
-      sourceStepId: stepId === "draft-coverage-review" ? "draft-refine" : "draft",
+      sourceStepId: draft.descriptor.publicationStep,
       digest: crypto.createHash("sha256").update(draft.bytes).digest("hex"),
       byteLength: draft.bytes.length, finalizedAt: "2026-08-14T00:00:00.000Z",
     };
@@ -475,6 +475,7 @@ describe("deterministic full Flow worker handoff", () => {
       const taskReviewRuns = new Map();
       const taskMutationPaths = [];
       const commandArtifactHistories = new Map();
+      const conditionallySkippedWorkerSteps = new Set(["draft-refine", "draft-gate-repair"]);
       // Keep every durable preparation/start/recovery boundary on the real
       // coordinator; only the fixture's scripted route cursor is observed.
       class FullFlowHandoffCoordinator extends WorkerArtifactHandoffCoordinator {
@@ -538,13 +539,20 @@ describe("deterministic full Flow worker handoff", () => {
           assert.notEqual(current, nodeId, `${nodeId} must not remain active after handoff confirmation`);
         }
         position += 1;
-        if (position < route.length) activate(route[position]);
+        if (position < route.length && !conditionallySkippedWorkerSteps.has(route[position].stepId)) {
+          activate(route[position]);
+        }
       };
 
       const dispatcher = new RunDispatchCommand({
         nextAction: {
           async run() {
-            const entry = route[position];
+            let entry = route[position];
+            while (entry && conditionallySkippedWorkerSteps.has(entry.stepId)) {
+              confirmCanonicalFixtureStep(flowManager, specId, routeNodeId(entry));
+              position += 1;
+              entry = route[position];
+            }
             if (!entry) return { taskId: null, step: null, action: "completed", instructions: null, context: null, output_schema: null, requires_approval: false, binding, directive: { kind: "completed", terminal: true, requiresUserAction: false } };
             const nodeId = routeNodeId(entry);
             if (flowManager.load().currentNodeId !== nodeId && entry.stepId === "approval") {
@@ -652,7 +660,7 @@ describe("deterministic full Flow worker handoff", () => {
       const artifactWorkers = workerSteps.filter((stepId) => WORKER_ARTIFACT_HANDOFF_STEPS.includes(stepId));
       const sourceWorkers = workerSteps.filter((stepId) => WORKER_SOURCE_HANDOFF_STEPS.includes(stepId));
       const routedArtifactWorkers = WORKER_ARTIFACT_HANDOFF_STEPS
-        .filter((stepId) => !PREPARATION_LEAVES.has(stepId));
+        .filter((stepId) => !PREPARATION_LEAVES.has(stepId) && !conditionallySkippedWorkerSteps.has(stepId));
       assert.equal(completed.dispatch?.boundary, "completed", JSON.stringify(completed));
       assert.deepEqual(new Set(artifactWorkers), new Set(routedArtifactWorkers));
       assert.deepEqual(new Set(sourceWorkers), new Set(WORKER_SOURCE_HANDOFF_STEPS));
@@ -670,7 +678,7 @@ describe("deterministic full Flow worker handoff", () => {
         route.filter((entry) => (
           WORKER_ARTIFACT_HANDOFF_STEPS.includes(entry.stepId)
           || WORKER_SOURCE_HANDOFF_STEPS.includes(entry.stepId)
-        )).length,
+        ) && !conditionallySkippedWorkerSteps.has(entry.stepId)).length,
       );
       assert.deepEqual(taskMutationPaths, [
         { taskId: "T1", paths: ["src/task.js"] },
@@ -774,15 +782,9 @@ describe("deterministic full Flow worker handoff", () => {
         specId,
         flowManager,
       };
-      fixture.activate("draft-refine");
-      completeArtifactHandoff({
-        coordinator,
-        ctx,
-        stepId: "draft-refine",
-        invocationId: "draft-coverage-repair-refine",
-        logicalName: "draft.json",
-        payload: sourceDraft,
-      });
+      fixture.settleBefore("draft-refine");
+      confirmCanonicalFixtureStep(flowManager, specId, "draft-refine");
+      confirmCanonicalFixtureStep(flowManager, specId, "draft-gate-repair");
 
       fixture.activate("draft-coverage-review");
       const draftArtifact = flowManager.readArtifact({
@@ -805,7 +807,7 @@ describe("deterministic full Flow worker handoff", () => {
           version: 1,
           runId: flowManager.load(specId).runId,
           specId,
-          sourceStepId: "draft-refine",
+          sourceStepId: draftArtifact.descriptor.publicationStep,
           digest: draftArtifact.descriptor.hash,
           byteLength: draftArtifact.descriptor.size,
           finalizedAt: "2026-08-28T00:00:00.000Z",

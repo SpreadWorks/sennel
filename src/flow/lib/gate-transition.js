@@ -424,7 +424,7 @@ export class GateObservationConvergenceFacts {
       "Gate convergence latest outcome disposition",
     );
     if (this.latestOutcomeDisposition !== null
-      && !new Set(["applied", "rejected-no-progress"]).has(this.latestOutcomeDisposition)) {
+      && !new Set(["applied", "rejected-no-progress", "rejected-invalid"]).has(this.latestOutcomeDisposition)) {
       throw new Error("Gate convergence latest outcome disposition is invalid");
     }
     if (typeof latestOutcomeChangedEvidence !== "boolean" || typeof finalRound !== "boolean") {

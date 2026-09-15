@@ -5,6 +5,7 @@ import { canonicalGateLogicalKeys, canonicalGateRevision } from "./canonical-gat
 import { GateAttemptIdentity } from "./gate-transition.js";
 import {
   GateEvidenceIdentity,
+  GateObservationCycleReadModel,
   GateObservationCycleReader,
   GateObservationOccurrence,
   GateObservationRepair,
@@ -138,16 +139,20 @@ function gateResultPayloadMatchesScope(payload, { phase, route } = {}) {
 }
 
 function gateResultPublicationFor(activities, { nodeId, attempt, currentActivityId = null } = {}) {
-  const publications = activities.filter((activity) => matchingAttemptActivity(activity, {
+  const matching = activities.filter((activity) => matchingAttemptActivity(activity, {
     nodeId,
     attempt,
     operations: ATTEMPT_ARTIFACT_PUBLICATION_OPERATIONS,
   }));
+  // The current attempt-history descriptor identifies its non-terminal
+  // publish_artifacts Activity exactly. Older entries no longer own a catalog
+  // descriptor, so their terminal result-bearing Activity is the durable
+  // publication association.
+  const publications = currentActivityId === null
+    ? matching.filter((activity) => activity.result !== null)
+    : matching.filter((activity) => activity.id === currentActivityId);
   if (publications.length !== 1) {
     throw new Error("canonical post-repair Gate result requires one exact publication Activity");
-  }
-  if (currentActivityId !== null && publications[0].id !== currentActivityId) {
-    throw new Error("current canonical post-repair Gate result does not match its catalog publication");
   }
   return publications[0];
 }
@@ -259,6 +264,29 @@ export class CanonicalGateObservationCycle {
 
   #attemptActivities(nodeId, attempt) {
     return this.#activitiesByAttempt.get(activityAttemptKey(nodeId, attempt)) ?? [];
+  }
+
+  #terminalRepairs(records) {
+    const byId = new Map(records.map((entry) => [entry.record.idempotencyKey, entry]));
+    const terminals = new Map();
+    for (const activity of this.activities) {
+      if (activity.nodeId !== "draft-gate-repair" || activity.transition?.operation !== "confirm_attempt") continue;
+      const refs = activity.result?.artifactRefs ?? [];
+      const repairId = refs.find((ref) => ref.kind === "plan-gate-repair-terminal")?.id ?? null;
+      const handoffRevision = refs.find((ref) => ref.kind === "plan-gate-repair-handoff-revision")?.id ?? null;
+      if (repairId === null && handoffRevision === null) continue;
+      const record = repairId === null ? null : byId.get(repairId) ?? null;
+      if (record === null || !/^[a-f0-9]{64}$/.test(handoffRevision ?? "")
+        || activity.attemptId !== record.targetAttempt.id
+        || activity.sequence !== record.targetAttempt.sequence
+        || activity.nodeId !== record.record.targetStepId
+        || activity.confirmationOrder <= record.activity.confirmationOrder
+        || terminals.has(repairId)) {
+        throw new Error("canonical draft Gate terminal Activity does not match its exact repair Attempt");
+      }
+      terminals.set(repairId, handoffRevision);
+    }
+    return terminals;
   }
 
   #gateResult(keys) {
@@ -476,16 +504,18 @@ export class CanonicalGateObservationCycle {
       throw new Error("canonical Gate repair source result history is unavailable");
     }
     const { descriptor, document, history } = resultHistory;
-    const source = history.attempts.find((entry) => entry.attempt === record.evidenceIdentity.sourceAttempt.sequence) ?? null;
-    if (source === null
-      || source.payload?.result !== "fail"
-      || !gateResultPayloadMatchesScope(source.payload, record)) {
+    const sourceAttempt = record.evidenceIdentity.sourceAttempt;
+    const source = history.attempts.find((entry) => entry.attempt === sourceAttempt.sequence) ?? null;
+    if (source === null) {
       throw new Error("canonical Gate attempt history no longer contains the repair source result");
     }
-    const sourceAttempt = record.evidenceIdentity.sourceAttempt;
     if (source.payload?.artifacts?.gateTransitionAttemptId !== sourceAttempt.id
       || source.payload?.artifacts?.gateTransitionAttemptSequence !== sourceAttempt.sequence) {
-      throw new Error("canonical Gate repair source history has a mismatched Attempt identity");
+      throw new Error("canonical Gate repair source history has mismatched Attempt identity");
+    }
+    if (source.payload?.result !== "fail"
+      || !gateResultPayloadMatchesScope(source.payload, record)) {
+      throw new Error("canonical Gate attempt history no longer contains the repair source result");
     }
     if (source.payload?.artifacts?.gateTransitionLineage
       !== record.evidenceIdentity.transitionLineage.canonicalRevisionFingerprint) {
@@ -556,19 +586,20 @@ export class CanonicalGateObservationCycle {
     }
 
     const completedByRepairId = new Map(outcomes.map((entry) => [entry.outcome.repairId, entry]));
+    const terminalRepairs = this.#terminalRepairs(records);
     const repairs = [];
     for (const recordEntry of records.sort((left, right) => (
       left.record.evidenceIdentity.sourceAttempt.sequence - right.record.evidenceIdentity.sourceAttempt.sequence
     ))) {
       const completed = completedByRepairId.get(recordEntry.record.idempotencyKey);
-      if (completed === undefined) continue;
+      if (completed === undefined && !terminalRepairs.has(recordEntry.record.idempotencyKey)) continue;
       repairs.push(new GateObservationRepair({
         repairId: recordEntry.record.idempotencyKey,
         sourceEvidence: recordEntry.record.evidenceIdentity,
         targetAttempt: recordEntry.targetAttempt,
         publicationActivityId: recordEntry.activity.id,
         recordFingerprint: recordFingerprint(recordEntry.record),
-        handoffRevision: completed.outcome.handoffRevision,
+        handoffRevision: completed?.outcome.handoffRevision ?? terminalRepairs.get(recordEntry.record.idempotencyKey),
         requests: recordEntry.record.observationRequests,
       }));
     }
@@ -578,7 +609,7 @@ export class CanonicalGateObservationCycle {
       outcomes: outcomes.map((entry) => entry.outcome),
     }).read();
     if (!includeStatus) {
-      return Object.freeze({ readModel, postRepairResults: new Map(), occurrenceSettlements: new Map() });
+      return Object.freeze({ readModel, postRepairResults: new Map(), occurrenceSettlements: new Map(), terminalRepairIds: new Set(terminalRepairs.keys()) });
     }
     const sourceResultsByRepairId = new Map(records.map((recordEntry) => ([
       recordEntry.record.idempotencyKey,
@@ -587,7 +618,7 @@ export class CanonicalGateObservationCycle {
     const postRepairResults = new Map();
     for (const recordEntry of records) {
       const completed = completedByRepairId.get(recordEntry.record.idempotencyKey);
-      if (completed?.outcome.disposition === "applied") {
+      if (completed !== undefined || terminalRepairs.has(recordEntry.record.idempotencyKey)) {
         postRepairResults.set(recordEntry.record.idempotencyKey, this.#postRepairGateResult(
           recordEntry,
           sourceResultsByRepairId.get(recordEntry.record.idempotencyKey),
@@ -603,11 +634,16 @@ export class CanonicalGateObservationCycle {
       });
       if (settlement !== null) occurrenceSettlements.set(occurrence.evidence.key(), settlement);
     }
-    return Object.freeze({ readModel, postRepairResults, occurrenceSettlements });
+    return Object.freeze({ readModel, postRepairResults, occurrenceSettlements, terminalRepairIds: new Set(terminalRepairs.keys()) });
   }
 
   read() {
-    return this.#readMaterial().readModel;
+    return this.transitionRead().readModel;
+  }
+
+  transitionRead() {
+    const material = this.#readMaterial();
+    return new CanonicalGateObservationTransitionRead(material.readModel, material.terminalRepairIds);
   }
 
   status() {
@@ -616,17 +652,40 @@ export class CanonicalGateObservationCycle {
       material.readModel,
       material.postRepairResults,
       material.occurrenceSettlements,
+      material.terminalRepairIds,
     );
   }
 }
 
+/** One immutable read of occurrence cycles and terminal repair settlements. */
+export class CanonicalGateObservationTransitionRead {
+  #terminalRepairIds;
+
+  constructor(readModel, terminalRepairIds) {
+    if (!(readModel instanceof GateObservationCycleReadModel) || !(terminalRepairIds instanceof Set)) {
+      throw new Error("canonical Gate transition read requires typed cycle material");
+    }
+    this.readModel = readModel;
+    this.#terminalRepairIds = new Set(terminalRepairIds);
+    Object.freeze(this);
+  }
+
+  terminalDisposition(repairId) {
+    return this.#terminalRepairIds.has(repairId) ? "rejected-invalid" : null;
+  }
+}
+
 class GateObservationConvergenceEntry {
-  constructor(cycle, postRepairResults, occurrenceSettlements) {
+  constructor(cycle, postRepairResults, occurrenceSettlements, terminalRepairIds) {
     const lastOccurrence = cycle.occurrences.at(-1);
     const orderedOutcomes = [...cycle.outcomes].sort((left, right) => (
       left.sourceAttempt.sequence - right.sourceAttempt.sequence
     ));
+    const orderedRepairs = [...cycle.repairs].sort((left, right) => (
+      left.sourceEvidence.sourceAttempt.sequence - right.sourceEvidence.sourceAttempt.sequence
+    ));
     const lastOutcome = orderedOutcomes.at(-1) ?? null;
+    const lastRepair = orderedRepairs.at(-1) ?? null;
     this.phase = lastOccurrence.observation.phase;
     this.taskId = lastOccurrence.observation.taskId;
     this.fingerprint = cycle.fingerprint.toString();
@@ -635,23 +694,26 @@ class GateObservationConvergenceEntry {
     this.recurrenceCount = cycle.recurrenceCount;
     this.sourceAttempt = lastOccurrence.evidence.sourceAttempt;
     this.repair = lastOutcome === null ? null : new GateObservationRepairStatus(lastOutcome);
-    this.nextGate = lastOutcome === null ? null : (postRepairResults.get(lastOutcome.repairId) ?? null);
+    this.nextGate = lastRepair === null ? null : (postRepairResults.get(lastRepair.repairId) ?? null);
     this.finalDisposition = this.#finalDisposition(
       lastOutcome,
       occurrenceSettlements.get(lastOccurrence.evidence.key()) ?? null,
+      cycle.repairs.some((repair) => terminalRepairIds.has(repair.repairId)),
     );
     Object.freeze(this);
   }
 
-  #finalDisposition(lastOutcome, occurrenceSettlement) {
+  #finalDisposition(lastOutcome, occurrenceSettlement, terminalRepair) {
     if (occurrenceSettlement !== null) return occurrenceSettlement;
-    if (lastOutcome === null) return "open";
-    if (lastOutcome.disposition === "rejected-no-progress") return "blocked-no-progress";
+    if (this.nextGate?.settlement === "deferred") return "deferred";
+    if (this.nextGate?.settlement === "nonblocking-advisory") return "nonblocking-advisory";
+    if (lastOutcome === null) return terminalRepair && this.phase === "draft" ? "carried-to-spec" : "open";
+    if (lastOutcome.disposition === "rejected-no-progress") {
+      return this.phase === "draft" ? "carried-to-spec" : "blocked-no-progress";
+    }
     const changedEvidence = lastOutcome.report.beforeEvidenceDigest !== lastOutcome.report.outputEvidenceDigest;
     if (lastOutcome.disposition !== "applied" || !changedEvidence) return "open";
     if (this.nextGate === null) return "repaired-awaiting-gate";
-    if (this.nextGate.settlement === "deferred") return "deferred";
-    if (this.nextGate.settlement === "nonblocking-advisory") return "nonblocking-advisory";
     return this.nextGate.result === "pass" ? "passed" : "open";
   }
 
@@ -673,10 +735,10 @@ class GateObservationConvergenceEntry {
 
 /** Read-only status projection reconstructed from canonical persisted facts. */
 export class GateObservationConvergenceStatus {
-  constructor(readModel, postRepairResults = new Map(), occurrenceSettlements = new Map()) {
+  constructor(readModel, postRepairResults = new Map(), occurrenceSettlements = new Map(), terminalRepairIds = new Set()) {
     this.readModel = readModel;
     this.entries = Object.freeze(readModel.cycles.map((cycle) => (
-      new GateObservationConvergenceEntry(cycle, postRepairResults, occurrenceSettlements)
+      new GateObservationConvergenceEntry(cycle, postRepairResults, occurrenceSettlements, terminalRepairIds)
     )));
     Object.freeze(this);
   }

@@ -3575,14 +3575,14 @@ describe("FlowManager canonical Version-1 runtime", () => {
         };
         const questionsResult = await questions.execute(questionsCtx);
         await FLOW_COMMANDS.run.review.post(questionsCtx, questionsResult);
-        manager.updateStepStatus(
-          { stepId: "draft-refine", requestedStatus: "in_progress" },
-          { specId: created.specId },
-        );
-        manager.confirmCurrentAttempt({
-          specId: created.specId,
-          artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: draft }],
-        });
+        for (const stepId of ["draft-refine", "draft-gate-repair"]) {
+          const skipped = await new RunClaimNextActionCommand().execute({
+            ...questionsCtx, flowState: manager.loadReadOnly(created.specId),
+          });
+          assert.equal(skipped.ok, true, JSON.stringify(skipped));
+          assert.equal(skipped.data.step, stepId);
+          assert.equal(skipped.data.status, "skipped");
+        }
         manager.updateStepStatus(
           { stepId: "draft-coverage-review", requestedStatus: "in_progress" },
           { specId: created.specId },
@@ -5530,7 +5530,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
 
     assert.equal(repaired.ok, true, JSON.stringify(repaired));
     assert.equal(repaired.data.previousStep, "draft-gate");
-    assert.equal(typed.current.at(-1), "draft-refine");
+    assert.equal(typed.current.at(-1), "draft-gate-repair");
     assert.equal(Object.hasOwn(typed.toJSON(), "planGateRepair"), false);
     assert.equal(Object.hasOwn(projected, "planGateRepair"), false);
     assert.equal(activities.at(-1).transition.operation, "plan_gate_repair");
@@ -5539,10 +5539,10 @@ describe("FlowManager canonical Version-1 runtime", () => {
       ...context,
       flowState: manager.load(created.specId),
     });
-    assert.equal(workerAction.step, "draft-refine");
+    assert.equal(workerAction.step, "draft-gate-repair");
     assert.equal(workerAction.context.planGateRepair.version, 2);
     assert.equal(workerAction.context.planGateRepair.phase, "draft");
-    assert.equal(workerAction.context.planGateRepair.targetStepId, "draft-refine");
+    assert.equal(workerAction.context.planGateRepair.targetStepId, "draft-gate-repair");
     assert.equal(workerAction.context.planGateRepair.sourceIssueLogId, source.issueLogId);
     assert.equal(workerAction.context.planGateRepair.evidenceIdentity.resultLogicalKey, "draft.gate");
     assert.equal(workerAction.context.planGateRepair.connector.sourceGateStepId, "draft-gate");
@@ -5561,29 +5561,36 @@ describe("FlowManager canonical Version-1 runtime", () => {
         target: { digest: "b".repeat(64) },
         action: {
           digest: "a".repeat(64),
-          nextAction: { step: "draft-refine", taskId: null },
+          nextAction: { step: "draft-gate-repair", taskId: null },
         },
       },
     });
     const canonicalRepair = canonicalPlanGateRepairForTarget({
       flowManager: manager,
       state: manager.load(created.specId),
-      targetStepId: "draft-refine",
+      targetStepId: "draft-gate-repair",
     });
     const draftInput = handoff.inputs.find((input) => input.name === "draft.json").document;
-    fs.writeFileSync(handoff.payloadPath("draft.json"), `${JSON.stringify({
-      ...draftInput,
-      goal: `${draftInput.goal} The retained behavior is now explicit.`,
-    }, null, 2)}\n`);
-    fs.writeFileSync(handoff.payloadPath("gate-repair-report.json"), `${JSON.stringify({
+    fs.writeFileSync(handoff.payloadPath("draft-gate-repair.json"), `${JSON.stringify({
       version: 1,
-      summary: "Revised the draft to resolve every blocking Gate observation.",
-      results: canonicalRepair.observationRequests.map((request) => ({
-        fingerprint: request.fingerprint.toString(),
-        strategy: "revise the canonical draft goal",
-        summary: "Made the retained behavior explicit in the canonical draft.",
-        priorRepairInsufficiency: null,
-      })),
+      baseRevision: `sha256:${handoff.inputRevision}`,
+      operations: [{
+        kind: "replace-value",
+        path: "goal",
+        expectedDigest: crypto.createHash("sha256").update(JSON.stringify(draftInput.goal)).digest("hex"),
+        replacement: `${draftInput.goal} The retained behavior is now explicit.`,
+        reason: "Preserve the behavior identified by the Gate observations.",
+      }],
+      report: {
+        version: 1,
+        summary: "Revised the draft to resolve every blocking Gate observation.",
+        results: canonicalRepair.observationRequests.map((request) => ({
+          fingerprint: request.fingerprint.toString(),
+          strategy: "revise the canonical draft goal",
+          summary: "Made the retained behavior explicit in the canonical draft.",
+          priorRepairInsufficiency: null,
+        })),
+      },
     }, null, 2)}\n`);
     sealWorkerArtifactHandoff({
       requestPath: handoff.requestPath,

@@ -19,6 +19,7 @@ import {
   deriveNextAction,
   resolveDefinitionRoute,
   resolveDraftTransition,
+  resolvePlanGateRepairWorkerTransition,
   resolveTaskExecutionOverrun,
   selectedNonGateUserAction,
   testExecuteTransitionDefinition,
@@ -590,6 +591,27 @@ function draftQuestionDirective(disposition) {
   });
 }
 
+function conditionalWorkerDirective(disposition, { state, binding }) {
+  if (disposition === null || disposition.operation === "execute-worker" || disposition.operation === "await-user-answer") return null;
+  if (disposition.operation === "blocked") {
+    return new BlockedDirective({
+      code: "CONDITIONAL_WORKER_NOT_ADMITTED",
+      reason: `Definition did not find the canonical input required by ${disposition.stepId}.`,
+      resumeInstruction: "Restore the canonical conditional-worker input before retrying this action.",
+    });
+  }
+  return new ExecuteCommandDirective({
+    actionId: disposition.operation === "skip-worker"
+      ? "SKIP_CONDITIONAL_WORKER"
+      : "COMPLETE_CONDITIONAL_WORKER",
+    nextAction: guardedCommand("sennel flow run claim-next-action", state, binding),
+    instruction: disposition.operation === "skip-worker"
+      ? `Settle ${disposition.stepId} as skipped without starting its worker.`
+      : `Settle ${disposition.stepId} from its canonical completed input.`,
+    reason: "Definition selected the conditional worker lifecycle from canonical persisted facts.",
+  });
+}
+
 /**
  * An ordinary Flow approval remains dispatcher-authorized, but it has a
  * first-class prompt so review is a concrete read-only action rather than an
@@ -724,7 +746,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
         stepId: target.stepId,
       })
     : { facts: null, disposition: null };
-  let draftDisposition = null;
+  let conditionalWorkerDisposition = null;
   if (
     target.scope === "flow"
     && target.stepId === "draft-refine"
@@ -732,7 +754,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   ) {
     try {
       const facts = readDraftTransitionFacts({ flowManager: ctx.flowManager, flowState: state });
-      draftDisposition = facts === null
+      conditionalWorkerDisposition = facts === null
         ? null
         : resolveDraftTransition({ stepId: target.stepId, flowState: state, facts });
     } catch (error) {
@@ -742,9 +764,25 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
       throw error;
     }
   }
+  if (
+    target.scope === "flow"
+    && target.stepId === "draft-gate-repair"
+    && ["start", "recover", "resume", "retry"].includes(descriptor.operation)
+  ) {
+    const repair = canonicalPlanGateRepairForTarget({
+      flowManager: ctx.flowManager,
+      state,
+      targetStepId: target.stepId,
+    });
+    conditionalWorkerDisposition = resolvePlanGateRepairWorkerTransition({
+      stepId: target.stepId,
+      workerStatus: typedState.findNode(target.nodeId)?.status,
+      repair,
+    });
+  }
   const definitionDescriptor = descriptor
     .withReviewDisposition(reviewSelection.disposition)
-    .withDraftDisposition(draftDisposition);
+    .withConditionalWorkerDisposition(conditionalWorkerDisposition);
   const gateSelection = definitionOwnedGateSelection(ctx, state, target);
   const gateDirective = definitionOwnedGateDirective(gateSelection, { state, binding });
   const definitionEligibility = definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager);
@@ -790,7 +828,11 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     config: ctx.config,
     plan: routePlan,
   });
-  const draftDecisionDirective = draftQuestionDirective(definitionDescriptor.draftDisposition);
+  const draftDecisionDirective = draftQuestionDirective(definitionDescriptor.conditionalWorkerDisposition);
+  const conditionalDirective = conditionalWorkerDirective(
+    definitionDescriptor.conditionalWorkerDisposition,
+    { state, binding },
+  );
   const recoveryCommand = retryRecoveryCommandFor({ ctx, state, descriptor, target, binding });
   const missingRoute = missingProducerArtifactRoute
     ?? missingProducerArtifactRouteFor({ ctx, typedState });
@@ -814,7 +856,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
         ? lifecycleDirective.continuation
         : null,
       });
-  let selectedDirective = userDecisionDirective ?? draftDecisionDirective ?? approvalDirective ?? activationDirective
+  let selectedDirective = userDecisionDirective ?? draftDecisionDirective ?? conditionalDirective ?? approvalDirective ?? activationDirective
     ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
   if (selectedDirective instanceof ExecuteStepDirective && target.scope === "task" && target.stepId === "task-review" && typedState.attempt?.failure === null) {
     try { assertReconciledTaskReviewInput({ flowManager: ctx.flowManager, state: typedState, taskId: target.taskId, root: ctx.executionRoot || ctx.root }); }

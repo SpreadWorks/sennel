@@ -93,8 +93,8 @@ function repairFixture() {
     resultLogicalKey: "draft.gate",
     resultArtifactId: "steps/draft-gate/result.json",
     catalogFingerprint: sourceCatalogFingerprint,
-    targetStepId: "draft-refine",
-    resetStepIds: ["draft-refine", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate"],
+    targetStepId: "draft-gate-repair",
+    resetStepIds: ["draft-gate-repair", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate"],
     taskLifecycle: null,
   };
   const evidenceIdentity = new GateEvidenceIdentity({
@@ -125,11 +125,11 @@ function repairFixture() {
   const targetAttempt = { id: "repair-attempt-2", sequence: 2 };
   const repairActivity = {
     id: "plan-repair-activity",
-    nodeId: "draft-refine",
+    nodeId: "draft-gate-repair",
     attemptId: targetAttempt.id,
     sequence: targetAttempt.sequence,
     confirmationOrder: 3,
-    transition: { operation: "plan_gate_repair", attempt: { ...targetAttempt, nodeId: "draft-refine" } },
+    transition: { operation: "plan_gate_repair", attempt: { ...targetAttempt, nodeId: "draft-gate-repair" } },
     references: { repairs: [record.activityReference()] },
   };
   const fingerprint = record.observationFingerprints[0];
@@ -233,7 +233,7 @@ function statusFixture({ outcome = null, nextResult = null, settlement = null, s
     });
     activities.push({
       id: selectedOutcome.publicationActivityId,
-      nodeId: "draft-refine",
+      nodeId: "draft-gate-repair",
       attemptId: fixture.targetAttempt.id,
       sequence: fixture.targetAttempt.sequence,
       transition: { operation: "confirm_attempt" },
@@ -286,7 +286,7 @@ function statusFixture({ outcome = null, nextResult = null, settlement = null, s
   }
   return {
     flowManager: manager({ artifacts, reads, activities }),
-    state: { schemaRevision: 3, specId: "spec-1", runId: "run-1", issue: 1, current: ["draft-refine"], attempt: fixture.targetAttempt },
+    state: { schemaRevision: 3, specId: "spec-1", runId: "run-1", issue: 1, current: ["draft-gate-repair"], attempt: fixture.targetAttempt },
     activities,
     reads,
   };
@@ -384,7 +384,7 @@ describe("canonical Gate observation cycle", () => {
       { name: "later Gate failure", outcome: "applied", nextResult: "fail", expected: "open" },
       { name: "deferred Gate failure", outcome: "applied", nextResult: "fail", settlement: "deferred", expected: "deferred" },
       { name: "nonblocking advisory", outcome: "applied", nextResult: "fail", settlement: "nonblocking", expected: "nonblocking-advisory" },
-      { name: "repair with no canonical progress", outcome: "no-progress", nextResult: null, expected: "blocked-no-progress" },
+      { name: "draft repair with no canonical progress", outcome: "no-progress", nextResult: null, expected: "carried-to-spec" },
     ];
     for (const scenario of cases) {
       const { flowManager, state } = statusFixture(scenario);
@@ -532,7 +532,7 @@ describe("canonical Gate observation cycle", () => {
       }]]),
       activities: [fixture.repairActivity],
     });
-    const state = { schemaRevision: 3, specId: "spec-1", runId: "run-1", issue: 1, current: ["draft-refine"], attempt: fixture.targetAttempt };
+    const state = { schemaRevision: 3, specId: "spec-1", runId: "run-1", issue: 1, current: ["draft-gate-repair"], attempt: fixture.targetAttempt };
 
     assert.throws(
       () => new CanonicalGateObservationCycle({ flowManager, state }).read(),

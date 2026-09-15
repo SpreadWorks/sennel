@@ -16,6 +16,7 @@ describe("FLOW_STEPS ordering (plan rework)", () => {
       "draft-questions-triage",
       "draft-questions-repair",
       "draft-refine",
+      "draft-gate-repair",
     );
     assertStepsAppearInOrder(
       "draft-coverage-review",
@@ -32,7 +33,7 @@ describe("FLOW_STEPS ordering (plan rework)", () => {
 
   it("has the fixed Requirement test lifecycle after approval", () => {
     const expectedPrefix = [
-      "branch", "prepare-spec", "draft", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
+      "branch", "prepare-spec", "draft", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine", "draft-gate-repair",
       "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate",
       "spec", "spec-review", "spec-triage", "spec-repair", "spec-gate", "approval",
       "test-generate", "test-review", "test-repair", "test-gate",

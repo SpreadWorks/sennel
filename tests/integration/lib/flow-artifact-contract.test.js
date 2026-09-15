@@ -149,7 +149,7 @@ describe("Flow artifact contract registry", () => {
     for (const key of ["upgrade.result"]) {
       assert.equal(FLOW_ARTIFACT_CONTRACTS.require(key).ownership.consumers.includes("acceptance-review"), true, key);
     }
-    for (const key of ["draft.questions.repair", "draft.coverage.repair"]) {
+    for (const key of ["draft.questions.repair", "draft.gate.repair", "draft.coverage.repair"]) {
       assert.equal(FLOW_ARTIFACT_CONTRACTS.require(key).ownership.consumers.includes("acceptance-review"), true, key);
     }
     assert.equal(FLOW_ARTIFACT_CONTRACTS.require("draft.questions.triage").ownership.consumers.includes("draft-gate"), true);
@@ -208,10 +208,10 @@ describe("Flow artifact contract registry", () => {
     assert.equal(FLOW_ARTIFACT_CONTRACTS.inventory().some((entry) => entry.logicalKey.toString() === "worker.handoff"), false);
     assert.deepEqual(FLOW_ARTIFACT_CONTRACTS.require("draft").ownership.consumers, [
       "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
-      "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "spec",
+      "draft-gate-repair", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "spec",
     ]);
     assert.deepEqual(FLOW_ARTIFACT_CONTRACTS.require("draft").ownership.updaters, [
-      "system", "draft", "draft-questions-repair", "draft-refine", "draft-coverage-repair",
+      "system", "draft", "draft-questions-repair", "draft-refine", "draft-gate-repair", "draft-coverage-repair",
     ]);
     assert.equal(FLOW_ARTIFACT_CONTRACTS.require("spec.record").ownership.updaters.includes("spec-repair"), true);
     assert.deepEqual(
@@ -237,6 +237,7 @@ describe("Flow artifact contract registry", () => {
       ["draft.json", "draft"],
       ["draft-questions-triage.json", "draft.questions.triage"],
       ["draft-questions-repair.json", "draft.questions.repair"],
+      ["draft-gate-repair.json", "draft.gate.repair"],
       ["draft-coverage-triage.json", "draft.coverage.triage"],
       ["draft-coverage-repair.json", "draft.coverage.repair"],
       ["spec.json", "spec.record"],
@@ -263,7 +264,7 @@ describe("Flow artifact contract registry", () => {
         assert.notEqual(logicalKey, undefined, `${stepId}/${payload.logicalName}`);
         if (logicalKey === null) {
           if (payload.logicalName === "gate-repair-report.json") {
-            assert.equal(["draft-refine", "spec"].includes(stepId), true, `${stepId} owns only a transient Gate repair report`);
+            assert.equal(stepId, "spec", `${stepId} owns only a transient Gate repair report`);
           } else {
             assert.equal(["spec-triage", "spec-repair"].includes(stepId), true, `${stepId} owns only a transient review delta`);
           }

@@ -470,6 +470,18 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  settleConditionalWorker(input = {}) {
+    return this._store.settleConditionalWorker({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  completeDraftGateRepairTerminal(input = {}) {
+    return this._store.completeDraftGateRepairTerminal({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   confirmDraftCoverageRepairCompletion(input = {}) {
     return this._store.confirmDraftCoverageRepairCompletion({
       ...input,
