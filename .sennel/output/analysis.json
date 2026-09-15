@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-15T04:23:30.329Z",
+  "analyzedAt": "2026-09-15T07:26:22.765Z",
   "package": {
     "entries": [
       {
@@ -3609,9 +3609,9 @@
       },
       {
         "file": "src/flow/definition.js",
-        "hash": "0d05831dc49e1ff5e9883f87a69b3c8d",
-        "lines": 5478,
-        "mtime": "2026-09-15T00:04:37.591Z",
+        "hash": "4eaffe503571f95b4f41167ee147ec3a",
+        "lines": 5483,
+        "mtime": "2026-09-15T07:24:49.249Z",
         "className": "definition",
         "methods": [
           "RetryRecoveryBasis",
@@ -3634,6 +3634,7 @@
           "GateRetryDisposition",
           "GateRepairDisposition",
           "GateDeferDisposition",
+          "DraftGateCarryForwardDisposition",
           "GateExternalBlockedDisposition",
           "GateBlockedDisposition",
           "GateRecoveryDisposition",
@@ -3907,6 +3908,7 @@
           "GateRetryDisposition",
           "GateRepairDisposition",
           "GateDeferDisposition",
+          "DraftGateCarryForwardDisposition",
           "GateExternalBlockedDisposition",
           "GateBlockedDisposition",
           "GateRecoveryDisposition",
@@ -4137,23 +4139,23 @@
           "src/flow/registry.js"
         ],
         "id": "2cb27b93",
-        "summary": "Defines the workflow state machine, transition policies, recovery logic, and lifecycle plans for flow and task execution.",
-        "detail": "This module is the central Definition layer for senti’s execution workflow. It models typed facts, dispositions, decisions, actions, and plans for requirement-test generation, source handoff, task review, Gate evaluation, non-Gate steps, finalization recovery, stale-evidence recovery, draft review, and acceptance routing. It validates identity, evidence lineage, attempt counts, retry limits, worker state, publication state, and recovery prerequisites before selecting a route. The module also defines the flow and task node graphs, Gate phases, leaf ordering, prerequisites, active-step resolution, initial step state, phase mapping, skippable steps, lifecycle mutations, retry metrics, outbox effects, and dispatcher-owned actions. Public helpers expose transition resolution, lifecycle planning, definition traversal, node lookup, retry configuration, side-effect metadata, and reconciliation decisions.",
+        "summary": "Defines the core flow, task, gate, review, recovery, and lifecycle decision model.",
+        "detail": "This module centralizes typed domain facts, dispositions, transition plans, action identities, lifecycle effects, flow definitions, retry policies, nonblocking eligibility, recovery handling, and resolvers for executing and reconciling workflow steps. It validates state ownership, evidence lineage, attempt limits, publication recovery, task review progression, draft routes, finalization, and nested flow structure while exposing APIs for definition traversal, active-step detection, prerequisites, next actions, lifecycle planning, and recovery decisions.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-15T04:24:56.696Z",
+          "processedAt": "2026-09-15T07:26:34.646Z",
           "attempts": 1
         },
         "keywords": [
-          "workflow state machine",
-          "transition policies",
-          "Gate evaluation",
-          "recovery logic",
-          "lifecycle plans",
           "flow definition",
+          "state transitions",
+          "gate evaluation",
+          "lifecycle planning",
+          "retry recovery",
           "task review",
-          "evidence validation"
+          "workflow validation",
+          "finalization recovery"
         ]
       },
       {
@@ -25385,9 +25387,9 @@
     ],
     "summary": {
       "total": 435,
-      "totalMethods": 4871
+      "totalMethods": 4872
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-15T04:24:56.696Z"
+  "enrichedAt": "2026-09-15T07:26:34.646Z"
 }
