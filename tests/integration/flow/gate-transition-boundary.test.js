@@ -525,6 +525,10 @@ describe("definition-owned Gate transition boundary", () => {
       assert.equal(decision.disposition.operation, "defer");
       assert.equal(decision.plan.repairConnector, null);
       assert.equal(decision.plan.retryMetric, null);
+      assert.equal(gateNonblockingEligibilityForDecision(decision), null);
+      assert.equal(resolveGateTransition(GateTransitionFacts.fromPersisted({
+        ...decision.facts.toJSON(), nonblocking: true,
+      })).disposition.operation, "defer");
     }
     const exhausted = resolveGateTransition(facts({
       phase: "draft",
@@ -535,6 +539,7 @@ describe("definition-owned Gate transition boundary", () => {
     }));
     assert.equal(exhausted.disposition.operation, "defer");
     assert.equal(exhausted.plan.repairConnector, null);
+    assert.equal(gateNonblockingEligibilityForDecision(exhausted), null);
 
     const specNoProgress = resolveGateTransition(facts({
       phase: "spec",
@@ -545,6 +550,13 @@ describe("definition-owned Gate transition boundary", () => {
       observationConvergence: convergence("rejected-no-progress"),
     }));
     assert.equal(specNoProgress.disposition.operation, "repair");
+
+    const specExhausted = resolveGateTransition(facts({
+      phase: "spec", result: "fail",
+      failure: new GateFailureCategory({ category: "semantic" }),
+      retry: new GateRetryMetrics({ used: 4, maximum: 4 }),
+    }));
+    assert.notEqual(gateNonblockingEligibilityForDecision(specExhausted), null);
   });
 
   it("admits only fresh Gate evidence and converges final-round recurrence without misclassifying a new observation", () => {

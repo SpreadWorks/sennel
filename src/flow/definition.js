@@ -938,6 +938,10 @@ export class GateRepairDisposition extends GateDisposition {
 export class GateDeferDisposition extends GateDisposition {
   constructor(token) { super(token, "defer"); }
 }
+/** Draft semantic exhaustion carries findings forward without offering advisory activation. */
+export class DraftGateCarryForwardDisposition extends GateDeferDisposition {
+  constructor(token) { super(token); }
+}
 export class GateExternalBlockedDisposition extends GateDisposition {
   constructor(token, reason) { super(token, "external-blocked", reason); }
 }
@@ -1710,6 +1714,7 @@ export function gateNonblockingEligibilityForDecision(decision) {
   }
   const facts = decision.facts;
   if (facts.result !== "fail" || facts.integrityFailure !== null) return null;
+  if (decision.disposition instanceof DraftGateCarryForwardDisposition) return null;
   if (!["defer", "external-blocked", "blocked"].includes(decision.disposition.operation)) return null;
   const sourceStepId = gateNonblockingSourceStep(facts);
   const route = sourceStepId === null ? null : nonblockingRouteFor(sourceStepId);
@@ -1811,7 +1816,7 @@ function resolveGateClassification(facts) {
   // than selecting another repair or stopping the Flow.
   if (facts.phase === "draft"
     && (facts.observationConvergence?.sameEvidence || facts.retry.exhausted)) {
-    return gateDecision(facts, new GateDeferDisposition(GATE_TRANSITION_TOKEN));
+    return gateDecision(facts, new DraftGateCarryForwardDisposition(GATE_TRANSITION_TOKEN));
   }
   // A current canonical repair receipt is stronger evidence than a raw
   // semantic retry for every repairable Gate. Repeating the evaluator against
