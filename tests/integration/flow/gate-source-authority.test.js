@@ -26,6 +26,14 @@ import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../../support/
 
 const SPEC_ID = "961-gate-source-authority";
 
+function canonicalSnapshot(flowManager) {
+  return JSON.parse(JSON.stringify({
+    state: flowManager.canonicalState(SPEC_ID),
+    activities: flowManager.activityLedger(SPEC_ID),
+    catalog: flowManager.artifactCatalog(SPEC_ID),
+  }));
+}
+
 function taskGateFixture(root) {
   writeJson(root, ".sennel/config.json", {
     lang: "en",
@@ -274,22 +282,36 @@ describe("Task Gate source authority", () => {
       assert.equal(providerCalls, 2, "changed source evidence admits exactly one fresh provider evaluation");
       flowManager.publishCurrentAttemptResult({ specId: SPEC_ID, commandResult: passed });
 
+      const beforeStatus = canonicalSnapshot(flowManager);
       const status = new GetStatusCommand().execute({
         root, mainRoot: root, executionRoot: root, specId: SPEC_ID,
         flowManager, flowState: flowManager.loadReadOnly(SPEC_ID),
       });
       assert.equal(status.gateObservationConvergence.entries[0].finalDisposition, "passed");
+      assert.deepEqual(canonicalSnapshot(flowManager), beforeStatus, "status read must not mutate canonical records");
+
+      let passDecision = resolveGateTransition(readCurrentGateTransitionFacts({
+        flowManager, flowState: flowManager.loadReadOnly(SPEC_ID), phase: "task-impl", root,
+      }));
 
       const restarted = makeFlowManager(root);
+      const beforeRestartedStatus = canonicalSnapshot(restarted);
       const restartedStatus = new GetStatusCommand().execute({
         root, mainRoot: root, executionRoot: root, specId: SPEC_ID,
         flowManager: restarted, flowState: restarted.loadReadOnly(SPEC_ID),
       });
       assert.deepEqual(restartedStatus.gateObservationConvergence, status.gateObservationConvergence);
-
-      let passDecision = resolveGateTransition(readCurrentGateTransitionFacts({
+      assert.deepEqual(canonicalSnapshot(restarted), beforeRestartedStatus, "reloaded status read must remain read-only");
+      const restartedDecision = resolveGateTransition(readCurrentGateTransitionFacts({
         flowManager: restarted, flowState: restarted.loadReadOnly(SPEC_ID), phase: "task-impl", root,
       }));
+      assert.deepEqual(
+        restartedDecision.toJSON(),
+        passDecision.toJSON(),
+        "status read must not change the Definition-owned disposition",
+      );
+      passDecision = restartedDecision;
+
       restarted.recordTaskGateSettlementMetric({ specId: SPEC_ID, decision: passDecision });
       passDecision = resolveGateTransition(readCurrentGateTransitionFacts({
         flowManager: restarted, flowState: restarted.loadReadOnly(SPEC_ID), phase: "task-impl", root,
@@ -302,6 +324,19 @@ describe("Task Gate source authority", () => {
         flowManager: restarted, flowState: restarted.loadReadOnly(SPEC_ID), phase: "task-impl", root,
       }));
       restarted.confirmCurrentAttempt({ specId: SPEC_ID, status: "done", gateTransitionDecision: passDecision });
+
+      const settled = makeFlowManager(root);
+      const beforeSettledStatus = canonicalSnapshot(settled);
+      const settledStatus = new GetStatusCommand().execute({
+        root, mainRoot: root, executionRoot: root, specId: SPEC_ID,
+        flowManager: settled, flowState: settled.loadReadOnly(SPEC_ID),
+      });
+      assert.equal(settledStatus.gateObservationConvergence.entries[0].finalDisposition, "passed");
+      assert.equal(settled.activityLedger(SPEC_ID).some((activity) => (
+        activity.attemptId === passed.artifacts.gateTransitionAttemptId
+        && activity.transition.operation === "confirm_attempt"
+      )), true);
+      assert.deepEqual(canonicalSnapshot(settled), beforeSettledStatus, "settled status read must remain read-only");
     } finally {
       container.get = originalGet;
     }

@@ -287,6 +287,7 @@ function statusFixture({ outcome = null, nextResult = null, settlement = null, s
   return {
     flowManager: manager({ artifacts, reads, activities }),
     state: { schemaRevision: 3, specId: "spec-1", runId: "run-1", issue: 1, current: ["draft-gate-repair"], attempt: fixture.targetAttempt },
+    artifacts,
     activities,
     reads,
   };
@@ -411,13 +412,142 @@ describe("canonical Gate observation cycle", () => {
     }
   });
 
-  it("rejects a matching Gate PASS that was published before its repair Activity", () => {
-    const { flowManager, state, activities } = statusFixture({ outcome: "applied", nextResult: "pass" });
-    activities.find((activity) => activity.id === "gate-publication-2").confirmationOrder = 3;
-    assert.throws(
-      () => GateObservationConvergenceStatus.fromCanonical({ flowManager, state }),
-      /not subsequent to its repair Activity/,
-    );
+  it("uses only the current descriptor Activity when settlement and shared publication Activities coexist", () => {
+    const cases = [
+      {
+        name: "confirmed PASS",
+        nextResult: "pass",
+        peers: [{
+          id: "gate-confirmed",
+          transition: { operation: "confirm_attempt" },
+          result: { outcome: "passed" },
+        }],
+        expected: "passed",
+      },
+      {
+        name: "settled failure with shared publications",
+        nextResult: "fail",
+        peers: [{
+          id: "gate-failed",
+          transition: { operation: "fail_attempt" },
+          result: { outcome: "failed" },
+        }, {
+          id: "flow-state-publication",
+          transition: { operation: "publish_artifacts" },
+        }, {
+          id: "issue-log-publication",
+          transition: { operation: "publish_artifacts" },
+        }],
+        expected: "open",
+      },
+    ];
+    for (const scenario of cases) {
+      const fixture = statusFixture({ outcome: "applied", nextResult: scenario.nextResult });
+      fixture.activities.push(...scenario.peers.map((activity) => ({
+        ...activity,
+        nodeId: "draft-gate",
+        attemptId: "gate-attempt-2",
+        sequence: 2,
+        confirmationOrder: 6,
+      })));
+      const before = structuredClone(fixture.activities);
+
+      const status = GateObservationConvergenceStatus.fromCanonical(fixture).toJSON();
+
+      assert.equal(status.entries[0].finalDisposition, scenario.expected, scenario.name);
+      assert.equal(status.entries[0].nextGate.publicationActivityId, "gate-publication-2", scenario.name);
+      assert.deepEqual(fixture.activities, before, `${scenario.name} remains read-only`);
+    }
+  });
+
+  it("does not infer a producer for a historical post-repair Gate result", () => {
+    const fixture = statusFixture({ outcome: "applied", nextResult: ["pass", "pass"] });
+    const document = JSON.parse(fixture.reads.get("draft.gate:").bytes.toString("utf8"));
+    document.attempts[2].artifact.payload.artifacts.phase = "spec";
+    fixture.reads.get("draft.gate:").bytes = Buffer.from(JSON.stringify(document));
+    fixture.activities.find((activity) => activity.id === "gate-publication-2").result = { outcome: "passed" };
+    fixture.activities.push({
+      id: "gate-confirmed-2",
+      nodeId: "draft-gate",
+      attemptId: "gate-attempt-2",
+      sequence: 2,
+      confirmationOrder: 7,
+      transition: { operation: "confirm_attempt" },
+      result: { outcome: "passed" },
+    });
+
+    const status = GateObservationConvergenceStatus.fromCanonical(fixture).toJSON();
+
+    assert.equal(status.entries[0].nextGate, null);
+    assert.equal(status.entries[0].finalDisposition, "repaired-awaiting-gate");
+  });
+
+  it("fails closed unless the current descriptor identifies one ordered matching producer Activity", () => {
+    const cases = [
+      {
+        name: "missing descriptor Activity id",
+        mutate({ reads }) {
+          reads.get("draft.gate:").descriptor.activityId = undefined;
+        },
+      },
+      {
+        name: "duplicate descriptor Activity id",
+        mutate({ activities }) {
+          activities.push({ ...activities.find((activity) => activity.id === "gate-publication-2") });
+        },
+      },
+      {
+        name: "duplicate exact catalog descriptor",
+        mutate({ artifacts }) {
+          artifacts.push({ ...artifacts.find((entry) => entry.logicalKey === "draft.gate") });
+        },
+        expected: /does not match one exact catalog descriptor/,
+      },
+      {
+        name: "wrong node",
+        mutate({ activities }) {
+          activities.find((activity) => activity.id === "gate-publication-2").nodeId = "spec-gate";
+        },
+      },
+      {
+        name: "wrong Attempt id",
+        mutate({ activities }) {
+          activities.find((activity) => activity.id === "gate-publication-2").attemptId = "other-attempt";
+        },
+      },
+      {
+        name: "wrong Attempt sequence",
+        mutate({ activities }) {
+          activities.find((activity) => activity.id === "gate-publication-2").sequence = 3;
+        },
+      },
+      {
+        name: "disallowed producer operation",
+        mutate({ activities }) {
+          activities.find((activity) => activity.id === "gate-publication-2").transition = { operation: "record_metric" };
+        },
+      },
+    ];
+    for (const scenario of cases) {
+      const fixture = statusFixture({ outcome: "applied", nextResult: "pass" });
+      scenario.mutate(fixture);
+      assert.throws(
+        () => GateObservationConvergenceStatus.fromCanonical(fixture),
+        scenario.expected ?? /requires one exact publication Activity/,
+        scenario.name,
+      );
+    }
+  });
+
+  it("rejects a matching Gate PASS published before or at its repair Activity order", () => {
+    for (const confirmationOrder of [2, 3]) {
+      const { flowManager, state, activities } = statusFixture({ outcome: "applied", nextResult: "pass" });
+      activities.find((activity) => activity.id === "gate-publication-2").confirmationOrder = confirmationOrder;
+      assert.throws(
+        () => GateObservationConvergenceStatus.fromCanonical({ flowManager, state }),
+        /not subsequent to its repair Activity/,
+      );
+    }
   });
 
   it("rejects a repair whose persisted source Gate identity was altered", () => {

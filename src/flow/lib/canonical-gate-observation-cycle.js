@@ -138,25 +138,6 @@ function gateResultPayloadMatchesScope(payload, { phase, route } = {}) {
       : payload.artifacts.taskId === taskId);
 }
 
-function gateResultPublicationFor(activities, { nodeId, attempt, currentActivityId = null } = {}) {
-  const matching = activities.filter((activity) => matchingAttemptActivity(activity, {
-    nodeId,
-    attempt,
-    operations: ATTEMPT_ARTIFACT_PUBLICATION_OPERATIONS,
-  }));
-  // The current attempt-history descriptor identifies its non-terminal
-  // publish_artifacts Activity exactly. Older entries no longer own a catalog
-  // descriptor, so their terminal result-bearing Activity is the durable
-  // publication association.
-  const publications = currentActivityId === null
-    ? matching.filter((activity) => activity.result !== null)
-    : matching.filter((activity) => activity.id === currentActivityId);
-  if (publications.length !== 1) {
-    throw new Error("canonical post-repair Gate result requires one exact publication Activity");
-  }
-  return publications[0];
-}
-
 function attemptSettlement(activities, { nodeId, attempt } = {}) {
   const matching = activities.filter((activity) => matchingAttemptActivity(activity, { nodeId, attempt }));
   if (matching.some((activity) => activity.transition?.operation === "defer_failed_gate")) return "deferred";
@@ -542,11 +523,9 @@ export class CanonicalGateObservationCycle {
   #postRepairGateResult(recordEntry, resultHistory) {
     const { record, activity: repairActivity } = recordEntry;
     const { descriptor, history } = resultHistory;
-    const next = history.attempts
-      .filter((entry) => entry.attempt > record.evidenceIdentity.sourceAttempt.sequence
-        && gateResultPayloadMatchesScope(entry.payload, record))
-      .at(-1) ?? null;
-    if (next === null) return null;
+    const next = history.current;
+    if (next.attempt <= record.evidenceIdentity.sourceAttempt.sequence
+      || !gateResultPayloadMatchesScope(next.payload, record)) return null;
     const exactAttempt = {
       id: next.payload?.artifacts?.gateTransitionAttemptId,
       sequence: next.payload?.artifacts?.gateTransitionAttemptSequence,
@@ -556,11 +535,15 @@ export class CanonicalGateObservationCycle {
       throw new Error("canonical post-repair Gate result has no exact Attempt binding");
     }
     const attemptActivities = this.#attemptActivities(record.route.gateStepId, exactAttempt);
-    const publication = gateResultPublicationFor(attemptActivities, {
+    const publications = this.activities.filter((activity) => activity.id === descriptor.activityId);
+    if (publications.length !== 1 || !matchingAttemptActivity(publications[0], {
       nodeId: record.route.gateStepId,
       attempt: exactAttempt,
-      ...(next === history.current ? { currentActivityId: descriptor.activityId } : {}),
-    });
+      operations: ATTEMPT_ARTIFACT_PUBLICATION_OPERATIONS,
+    })) {
+      throw new Error("canonical post-repair Gate result requires one exact publication Activity");
+    }
+    const publication = publications[0];
     if (!Number.isSafeInteger(repairActivity.confirmationOrder)
       || !Number.isSafeInteger(publication.confirmationOrder)
       || publication.confirmationOrder <= repairActivity.confirmationOrder) {
