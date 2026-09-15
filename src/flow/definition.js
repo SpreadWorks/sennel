@@ -139,7 +139,7 @@ import {
 
 export class RetryRecoveryBasis {
   constructor(value) {
-    if (!["changed-input", "confirmed-timeout"].includes(value)) {
+    if (!["changed-input", "confirmed-timeout", "transient-provider"].includes(value)) {
       throw new Error("retry recovery basis is invalid");
     }
     this.value = value;
@@ -148,9 +148,11 @@ export class RetryRecoveryBasis {
 
   static changedInput() { return new RetryRecoveryBasis("changed-input"); }
   static confirmedTimeout() { return new RetryRecoveryBasis("confirmed-timeout"); }
+  static transientProvider() { return new RetryRecoveryBasis("transient-provider"); }
   static from(value) { return value instanceof RetryRecoveryBasis ? value : new RetryRecoveryBasis(value); }
   get changedInput() { return this.value === "changed-input"; }
   get confirmedTimeout() { return this.value === "confirmed-timeout"; }
+  get transientProvider() { return this.value === "transient-provider"; }
   equals(other) { return other instanceof RetryRecoveryBasis && other.value === this.value; }
   toString() { return this.value; }
   toJSON() { return this.value; }
@@ -166,6 +168,7 @@ export class RetryRecoveryDecisionFacts {
     evidenceChanged,
     currentArtifactPresent,
     confirmedTimeoutConsumed,
+    transientProviderConsumed,
     taskSourceAvailable,
   } = {}) {
     if (!(failure instanceof ActivityFailure)) throw new Error("retry recovery facts require a typed failure");
@@ -179,6 +182,7 @@ export class RetryRecoveryDecisionFacts {
       evidenceChanged,
       currentArtifactPresent,
       confirmedTimeoutConsumed,
+      transientProviderConsumed,
       taskSourceAvailable,
     })) {
       if (typeof value !== "boolean") throw new Error(`retry recovery facts ${field} must be boolean`);
@@ -191,24 +195,142 @@ export class RetryRecoveryDecisionFacts {
     this.evidenceChanged = evidenceChanged;
     this.currentArtifactPresent = currentArtifactPresent;
     this.confirmedTimeoutConsumed = confirmedTimeoutConsumed;
+    this.transientProviderConsumed = transientProviderConsumed;
     this.taskSourceAvailable = taskSourceAvailable;
     Object.freeze(this);
   }
 }
 
-export class RetryRecoveryPlan {
-  constructor({ basis = null, reason, inputInvalid = false } = {}) {
-    this.basis = basis === null ? null : RetryRecoveryBasis.from(basis);
-    if (typeof reason !== "string" || reason.trim() === "") throw new Error("retry recovery plan reason is required");
-    if (typeof inputInvalid !== "boolean") throw new Error("retry recovery plan inputInvalid must be boolean");
-    if (this.basis !== null && inputInvalid) throw new Error("available retry recovery plan cannot reject its input");
-    this.reason = reason.trim();
-    this.inputInvalid = inputInvalid;
+/** A stable Definition-owned explanation for an unavailable exhausted retry recovery. */
+export class RetryRecoveryBlocker {
+  constructor({ code, resumeInstruction } = {}) {
+    if (![
+      "RETRY_RECOVERY_BASELINE_UNAVAILABLE",
+      "RETRY_RECOVERY_CURRENT_OBSERVATION_UNAVAILABLE",
+      "RETRY_RECOVERY_CURRENT_ARTIFACT_PRESENT",
+      "RETRY_RECOVERY_TRANSIENT_PROVIDER_CONSUMED",
+      "RETRY_RECOVERY_CONFIRMED_TIMEOUT_CONSUMED",
+      "RETRY_RECOVERY_TASK_SOURCE_UNAVAILABLE",
+      "RETRY_RECOVERY_PROVIDER_QUIESCENCE_UNCONFIRMED",
+      "RETRY_RECOVERY_NON_RECOVERABLE_FAILURE",
+      "RETRY_RECOVERY_UNCHANGED_EVIDENCE_UNSUPPORTED",
+      "RETRY_RECOVERY_STATE_CHANGED",
+      "RETRY_RECOVERY_NOT_ACTIVE",
+    ].includes(code)) {
+      throw new Error("retry recovery blocker code is invalid");
+    }
+    if (typeof resumeInstruction !== "string" || resumeInstruction.trim() === "") {
+      throw new Error("retry recovery blocker resume instruction is required");
+    }
+    this.code = code;
+    this.resumeInstruction = resumeInstruction.trim();
     Object.freeze(this);
   }
 
-  static blocked(reason) { return new RetryRecoveryPlan({ reason }); }
-  static invalidInput(reason) { return new RetryRecoveryPlan({ reason, inputInvalid: true }); }
+  static baselineUnavailable() {
+    return new RetryRecoveryBlocker({
+      code: "RETRY_RECOVERY_BASELINE_UNAVAILABLE",
+      resumeInstruction: "Restore the durable retry baseline through the canonical producer path, then refresh next-action. Do not manufacture a baseline or reset retry counters.",
+    });
+  }
+
+  static currentObservationUnavailable() {
+    return new RetryRecoveryBlocker({
+      code: "RETRY_RECOVERY_CURRENT_OBSERVATION_UNAVAILABLE",
+      resumeInstruction: "Restore the current canonical Review observation, then refresh next-action. Do not retry from an unobserved input.",
+    });
+  }
+
+  static currentArtifactPresent() {
+    return new RetryRecoveryBlocker({
+      code: "RETRY_RECOVERY_CURRENT_ARTIFACT_PRESENT",
+      resumeInstruction: "Settle the exact current Attempt through its normal artifact transition, then refresh next-action. Do not use exhausted retry recovery after publication.",
+    });
+  }
+
+  static transientProviderConsumed() {
+    return new RetryRecoveryBlocker({
+      code: "RETRY_RECOVERY_TRANSIENT_PROVIDER_CONSUMED",
+      resumeInstruction: "Resolve the provider issue or change durable canonical input before a new recovery lineage can be considered. Do not reuse the consumed transient-provider recovery.",
+    });
+  }
+
+  static confirmedTimeoutConsumed() {
+    return new RetryRecoveryBlocker({
+      code: "RETRY_RECOVERY_CONFIRMED_TIMEOUT_CONSUMED",
+      resumeInstruction: "Record changed canonical evidence before another recovery can be considered. Do not reuse the consumed confirmed-timeout recovery.",
+    });
+  }
+
+  static taskSourceUnavailable() {
+    return new RetryRecoveryBlocker({
+      code: "RETRY_RECOVERY_TASK_SOURCE_UNAVAILABLE",
+      resumeInstruction: "Restore and verify the Task Review source observation through its canonical checkpoint, then refresh next-action. Do not reset retry counters or edit recovery evidence.",
+    });
+  }
+
+  static providerQuiescenceUnconfirmed() {
+    return new RetryRecoveryBlocker({
+      code: "RETRY_RECOVERY_PROVIDER_QUIESCENCE_UNCONFIRMED",
+      resumeInstruction: "Obtain trusted normal completion evidence with confirmed provider process-tree quiescence before considering unchanged-input recovery.",
+    });
+  }
+
+  static nonRecoverableFailure() {
+    return new RetryRecoveryBlocker({
+      code: "RETRY_RECOVERY_NON_RECOVERABLE_FAILURE",
+      resumeInstruction: "Repair the terminal failure or change canonical evidence, then follow the Definition-selected lifecycle transition. Do not apply exhausted retry recovery to this failure.",
+    });
+  }
+
+  static unchangedEvidenceUnsupported() {
+    return new RetryRecoveryBlocker({
+      code: "RETRY_RECOVERY_UNCHANGED_EVIDENCE_UNSUPPORTED",
+      resumeInstruction: "Provide changed canonical evidence or the required trusted provider-stop evidence, then refresh next-action. Do not retry unchanged unsupported input.",
+    });
+  }
+
+  static stateChanged() {
+    return new RetryRecoveryBlocker({
+      code: "RETRY_RECOVERY_STATE_CHANGED",
+      resumeInstruction: "Refresh next-action from the latest canonical state before selecting a recovery.",
+    });
+  }
+
+  static notActive() {
+    return new RetryRecoveryBlocker({
+      code: "RETRY_RECOVERY_NOT_ACTIVE",
+      resumeInstruction: "Refresh next-action and follow the active canonical Attempt. No exhausted retry recovery is active for this state.",
+    });
+  }
+}
+
+export class RetryRecoveryPlan {
+  constructor({ basis = null, reason, inputInvalid = false, blocker = null } = {}) {
+    this.basis = basis === null ? null : RetryRecoveryBasis.from(basis);
+    if (typeof reason !== "string" || reason.trim() === "") throw new Error("retry recovery plan reason is required");
+    if (typeof inputInvalid !== "boolean") throw new Error("retry recovery plan inputInvalid must be boolean");
+    if (blocker !== null && !(blocker instanceof RetryRecoveryBlocker)) {
+      throw new Error("retry recovery plan blocker must be typed");
+    }
+    if (this.basis !== null && (inputInvalid || blocker !== null)) {
+      throw new Error("available retry recovery plan cannot reject its input");
+    }
+    if (this.basis === null && blocker === null) {
+      throw new Error("unavailable retry recovery plan requires a typed blocker");
+    }
+    this.reason = reason.trim();
+    this.inputInvalid = inputInvalid;
+    this.blocker = blocker;
+    Object.freeze(this);
+  }
+
+  static blocked(reason, blocker = RetryRecoveryBlocker.nonRecoverableFailure()) {
+    return new RetryRecoveryPlan({ reason, blocker });
+  }
+  static invalidInput(reason, blocker = RetryRecoveryBlocker.unchangedEvidenceUnsupported()) {
+    return new RetryRecoveryPlan({ reason, inputInvalid: true, blocker });
+  }
   static available(basis, reason) { return new RetryRecoveryPlan({ basis, reason }); }
   get available() { return this.basis !== null; }
 }
@@ -218,20 +340,41 @@ export function resolveRetryRecovery(facts) {
   if (!(facts instanceof RetryRecoveryDecisionFacts)) {
     throw new Error("retry recovery resolver requires typed facts");
   }
-  if (!facts.baselineAvailable) return RetryRecoveryPlan.blocked("durable retry baseline is unavailable");
+  if (!facts.baselineAvailable) {
+    return RetryRecoveryPlan.blocked("durable retry baseline is unavailable", RetryRecoveryBlocker.baselineUnavailable());
+  }
   if (facts.failure.category === "semantic") {
     return RetryRecoveryPlan.blocked(
       "exhausted retry recovery is limited to tooling failures with changed evidence",
+      RetryRecoveryBlocker.nonRecoverableFailure(),
     );
   }
   const recordableToolingFailure = facts.disposition.operation === "record"
     && facts.disposition.remaining === 0
     && ["tooling", "provider"].includes(facts.failure.category);
   if (!facts.currentObservationAvailable) {
-    return RetryRecoveryPlan.blocked("current retry recovery observation is unavailable");
+    return RetryRecoveryPlan.blocked(
+      "current retry recovery observation is unavailable",
+      RetryRecoveryBlocker.currentObservationUnavailable(),
+    );
+  }
+  if (facts.transientProviderConsumed) {
+    return RetryRecoveryPlan.blocked(
+      "transient provider recovery already consumed this evidence lineage",
+      RetryRecoveryBlocker.transientProviderConsumed(),
+    );
+  }
+  if (facts.confirmedTimeoutConsumed) {
+    return RetryRecoveryPlan.blocked(
+      "confirmed timeout recovery already consumed this evidence lineage",
+      RetryRecoveryBlocker.confirmedTimeoutConsumed(),
+    );
   }
   if (!facts.taskSourceAvailable) {
-    return RetryRecoveryPlan.blocked("Task Review source observation is unavailable");
+    return RetryRecoveryPlan.blocked(
+      "Task Review source observation is unavailable",
+      RetryRecoveryBlocker.taskSourceUnavailable(),
+    );
   }
   if (facts.evidenceChanged && recordableToolingFailure) {
     return RetryRecoveryPlan.available(
@@ -239,12 +382,22 @@ export function resolveRetryRecovery(facts) {
       "Parent-derived canonical evidence changed.",
     );
   }
-  // Unchanged-input timeout recovery is only for a provider that stopped
-  // before it published its current canonical result.  Changed-input recovery
-  // deliberately retains its pre-existing semantics: a user may explicitly
-  // reevaluate new evidence even when the failed Attempt had an artifact.
-  if (facts.currentArtifactPresent && facts.failure.code === "AGENT_TIMEOUT") {
-    return RetryRecoveryPlan.blocked("current Attempt canonical Review artifact is already present");
+  // Unchanged-input provider recovery is only for a provider that stopped
+  // before it published its current canonical result. Changed-input recovery
+  // retains its existing semantics and may explicitly reevaluate new evidence.
+  if (facts.currentArtifactPresent) {
+    return RetryRecoveryPlan.blocked(
+      "current Attempt canonical Review artifact is already present",
+      RetryRecoveryBlocker.currentArtifactPresent(),
+    );
+  }
+  if (!facts.evidenceChanged
+    && facts.failure.code !== "AGENT_TIMEOUT"
+    && facts.failure.retryable !== true) {
+    return RetryRecoveryPlan.blocked(
+      "the current terminal failure does not authorize unchanged exhausted tooling recovery",
+      RetryRecoveryBlocker.nonRecoverableFailure(),
+    );
   }
   if (!facts.evidenceChanged
     && facts.routeKind === "review"
@@ -252,11 +405,28 @@ export function resolveRetryRecovery(facts) {
     && facts.failure.agentStopEvidence?.confirmed !== true) {
     return RetryRecoveryPlan.invalidInput(
       "changed evidence must differ unless unchanged Review input has a trusted confirmed timeout with an observed provider stop",
+      RetryRecoveryBlocker.unchangedEvidenceUnsupported(),
     );
   }
   if (!recordableToolingFailure) {
     return RetryRecoveryPlan.blocked(
       "the Definition disposition does not authorize exhausted tooling recovery; trusted confirmed timeout evidence is required for unchanged Review input",
+      RetryRecoveryBlocker.nonRecoverableFailure(),
+    );
+  }
+  const transientProvider = facts.routeKind === "review"
+    && facts.failure.retryableProviderCompletionBoundary
+    && facts.failure.agentProviderCompletionEvidence?.confirmedQuiescence === true;
+  if (transientProvider) {
+    return RetryRecoveryPlan.available(
+      RetryRecoveryBasis.transientProvider(),
+      "A transient provider failure completed without publishing a Review artifact.",
+    );
+  }
+  if (facts.routeKind === "review" && facts.failure.retryableProviderCompletionBoundary) {
+    return RetryRecoveryPlan.invalidInput(
+      "unchanged transient provider recovery requires trusted normal completion evidence with confirmed process-tree quiescence",
+      RetryRecoveryBlocker.providerQuiescenceUnconfirmed(),
     );
   }
   const confirmedTimeout = facts.routeKind === "review"
@@ -267,10 +437,8 @@ export function resolveRetryRecovery(facts) {
   if (!confirmedTimeout) {
     return RetryRecoveryPlan.invalidInput(
       "changed evidence must differ unless unchanged Review input has a trusted confirmed timeout with an observed provider stop",
+      RetryRecoveryBlocker.unchangedEvidenceUnsupported(),
     );
-  }
-  if (facts.confirmedTimeoutConsumed) {
-    return RetryRecoveryPlan.blocked("confirmed timeout recovery already consumed this evidence lineage");
   }
   return RetryRecoveryPlan.available(
     RetryRecoveryBasis.confirmedTimeout(),

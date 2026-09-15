@@ -9,11 +9,19 @@ import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 import { PKG_DIR } from "../../lib/cli.js";
 import { runCmd } from "../../lib/process.js";
 import { VALID_REVIEW_PHASES } from "../../lib/constants.js";
-import { AgentProcessStopEvidence } from "../../lib/agent-failure.js";
+import {
+  AgentProcessStopEvidence,
+  AgentProviderCompletionEvidence,
+} from "../../lib/agent-failure.js";
 import { AgentRuntimeDirectorySet } from "../../lib/agent.js";
 import { AgentFailure } from "../../lib/agent-failure.js";
 import { FlowCommand } from "./base-command.js";
-import { CurrentFlowStateConflictError, CurrentFlowStateInvariantError, ReviewProviderTimeoutFailure } from "./current-flow-state.js";
+import {
+  CurrentFlowStateConflictError,
+  CurrentFlowStateInvariantError,
+  ReviewProviderCompletionFailure,
+  ReviewProviderTimeoutFailure,
+} from "./current-flow-state.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import {
   flowLeafIdsBetween,
@@ -929,6 +937,14 @@ class ReviewExecutionFailureFacts {
     this.agentStopEvidence = error?.stopEvidence == null
       ? null
       : AgentProcessStopEvidence.from(error.stopEvidence);
+    this.agentProviderCompletionEvidence = error?.providerCompletionEvidence == null
+      ? null
+      : AgentProviderCompletionEvidence.from(error.providerCompletionEvidence);
+    this.agentFailureKind = typeof error?.agentFailureKind === "string" && error.agentFailureKind !== ""
+      ? error.agentFailureKind
+      : null;
+    this.attemptCount = error?.attemptCount ?? null;
+    this.maxAttempts = error?.maxAttempts ?? null;
     this.retryable = this.sourceIntegrityFailure
       ? false
       : this.failureCode === "AGENT_TIMEOUT"
@@ -970,13 +986,25 @@ class ReviewExecutionFailureFacts {
       retryable: this.retryable,
       retryKind: this.retryKind,
       ...(this.agentStopEvidence === null ? {} : { agentStopEvidence: this.agentStopEvidence }),
+      ...(this.agentProviderCompletionEvidence === null ? {} : {
+        agentProviderCompletionEvidence: this.agentProviderCompletionEvidence,
+      }),
+      ...(this.agentFailureKind === null ? {} : { agentFailureKind: this.agentFailureKind }),
+      ...(this.attemptCount === null ? {} : {
+        attemptCount: this.attemptCount,
+        maxAttempts: this.maxAttempts,
+      }),
     };
     // A confirmed or explicitly uncertain supervisor observation is validated
     // at the Review boundary.  Missing evidence is still retained as a
     // canonical timeout fact so Definition can fail it closed after reload.
-    return this.failureCode === "AGENT_TIMEOUT" && this.agentStopEvidence !== null
-      ? new ReviewProviderTimeoutFailure(failure).toJSON()
-      : failure;
+    if (this.failureCode === "AGENT_TIMEOUT" && this.agentStopEvidence !== null) {
+      return new ReviewProviderTimeoutFailure(failure).toJSON();
+    }
+    if (this.agentProviderCompletionEvidence !== null) {
+      return new ReviewProviderCompletionFailure(failure).toJSON();
+    }
+    return failure;
   }
 
   toEnvelopeData() {
@@ -984,6 +1012,14 @@ class ReviewExecutionFailureFacts {
       failureCode: this.failureCode,
       retryable: this.retryable,
       ...(this.agentStopEvidence === null ? {} : { agentStopEvidence: this.agentStopEvidence.toJSON() }),
+      ...(this.agentProviderCompletionEvidence === null ? {} : {
+        agentProviderCompletionEvidence: this.agentProviderCompletionEvidence.toJSON(),
+      }),
+      ...(this.agentFailureKind === null ? {} : { agentFailureKind: this.agentFailureKind }),
+      ...(this.attemptCount === null ? {} : {
+        attemptCount: this.attemptCount,
+        maxAttempts: this.maxAttempts,
+      }),
       workUnit: this.workUnit,
       checkpointSourceFingerprint: this.checkpointSourceFingerprint,
       currentSourceFingerprint: this.currentSourceFingerprint,
@@ -1690,7 +1726,8 @@ export class RunReviewCommand extends FlowCommand {
       canonicalEvidenceAvailable: taskReviewUnsealedCheckpoint instanceof TaskReviewUnsealedCheckpoint,
       retryable: failureFacts.retryable,
       toolingRecoveryAvailable: failureFacts.retryable
-        && canonicalState.attempt.consumption.tooling < toolingRetryLimit,
+        && (canonicalState.attempt.consumption.tooling < toolingRetryLimit
+          || failureFacts.agentProviderCompletionEvidence?.confirmedQuiescence === true),
       classification: failureFacts.classification,
       code: failureFacts.failureCode,
       message: failureFacts.message,

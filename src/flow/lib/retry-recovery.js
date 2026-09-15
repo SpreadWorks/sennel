@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 
 import {
   resolveRetryRecovery,
+  RetryRecoveryBlocker,
   RetryRecoveryBasis,
   RetryRecoveryDecisionFacts,
   RetryRecoveryPlan,
@@ -574,30 +575,27 @@ function recoveryDecisionFacts({ flowManager, state, route, baseline, current, e
   const failure = state.attempt.failure;
   const currentArtifactPresent = !evidenceChanged
     && route.kind === "review"
-    && failure.code === "AGENT_TIMEOUT"
     && hasCurrentReviewArtifact({ view, route, attempt: state.attempt });
   const disposition = state.failureDisposition();
-  // Receipt history matters only for the one unchanged-input exception.  Do
+  // Receipt history matters only for unchanged-input provider recovery. Do
   // not deserialize every historical receipt for ordinary changed-input,
   // non-Review, unavailable-observation, or already-settled paths.
-  const confirmedTimeoutCandidate = baseline !== null
+  const unchangedReviewCandidate = baseline !== null
     && current !== null
     && !evidenceChanged
     && !currentArtifactPresent
     && route.kind === "review"
-    && failure.code === "AGENT_TIMEOUT"
-    && failure.retryable === true
-    && failure.retryKind === "tooling"
-    && failure.agentStopEvidence?.confirmed === true
     && disposition.operation === "record"
-    && disposition.remaining === 0;
+    && disposition.remaining === 0
+    && (failure.confirmedTimeoutRecoveryBoundary
+      || failure.retryableProviderCompletionBoundary);
   let taskSourceAvailable = true;
   if (route.kind === "review" && route.phase === "impl" && route.taskId !== null) {
     const checkpointArtifact = FLOW_ARTIFACT_CONTRACTS.resolve(
       "task.review.unsealed.checkpoint",
       { taskId: route.taskId, attemptId: state.attempt.id },
     );
-    const checkpointExpected = confirmedTimeoutCandidate || view.catalog.artifacts.some((descriptor) => (
+    const checkpointExpected = unchangedReviewCandidate || view.catalog.artifacts.some((descriptor) => (
       descriptor.logicalKey === checkpointArtifact.logicalKey
       && descriptor.relativePath === checkpointArtifact.relativePath
     )) || TaskReviewUnsealedWorkUnitSet.recoverCanonical({
@@ -619,10 +617,15 @@ function recoveryDecisionFacts({ flowManager, state, route, baseline, current, e
       }
     }
   }
-  const confirmedTimeoutConsumed = confirmedTimeoutCandidate
-    && readHistoricalRetryRecoveryReceipts({ flowManager, state, route, view })
-      .some((receipt) => receipt.basis.confirmedTimeout
-        && sameEvidenceLineage(receipt.previous, baseline));
+  const historicalReceipts = unchangedReviewCandidate
+    ? readHistoricalRetryRecoveryReceipts({ flowManager, state, route, view })
+    : [];
+  const confirmedTimeoutConsumed = historicalReceipts.some((receipt) => (
+    receipt.basis.confirmedTimeout && sameEvidenceLineage(receipt.previous, baseline)
+  ));
+  const transientProviderConsumed = historicalReceipts.some((receipt) => (
+    receipt.basis.transientProvider && sameEvidenceLineage(receipt.previous, baseline)
+  ));
   return new RetryRecoveryDecisionFacts({
     failure,
     disposition,
@@ -632,6 +635,7 @@ function recoveryDecisionFacts({ flowManager, state, route, baseline, current, e
     evidenceChanged,
     currentArtifactPresent,
     confirmedTimeoutConsumed,
+    transientProviderConsumed,
     taskSourceAvailable,
   });
 }
@@ -725,10 +729,10 @@ export class ExhaustedReviewRetryRecoveryAdmission {
         );
       }
     }
-    if (this.basis.confirmedTimeout) {
+    if (!this.basis.changedInput) {
       if (previous.route.phase === "impl" && previous.route.taskId !== null
         && this.taskReviewRecoveryAuthorization === null) {
-        throw new Error("Task Review confirmed timeout recovery requires its lock-scoped authorization");
+        throw new Error("Task Review unchanged-input recovery requires its lock-scoped authorization");
       }
     }
   }
@@ -773,13 +777,13 @@ export function inspectRetryRecoveryPlan({ flowManager, state, executionRoot, ar
     : state;
   if (state?.attempt != null
     && (state.attempt.id !== currentState?.attempt?.id || state.runId !== currentState?.runId)) {
-    return RetryRecoveryPlan.blocked("the projected Attempt is stale");
+    return RetryRecoveryPlan.blocked("the projected Attempt is stale", RetryRecoveryBlocker.stateChanged());
   }
   const route = currentState?.attempt?.nodeId == null
     ? null
     : retryEvidenceRouteForNode(currentState, currentState.attempt.nodeId);
   if (route === null || !flowManager || currentState.attempt.failure === null) {
-    return RetryRecoveryPlan.blocked("no failed retry recovery route is active");
+    return RetryRecoveryPlan.blocked("no failed retry recovery route is active", RetryRecoveryBlocker.notActive());
   }
   const baseline = readRetryBaseline(flowManager, currentState, route);
   const current = baseline === null ? null : captureRetryRecoveryBaseline({
@@ -1119,8 +1123,8 @@ export class CanonicalRetryRecovery {
         const checkpoint = readTaskReviewUnsealedCheckpoint({
           flowManager: this.flowManager, state: before, taskId: evidenceRoute.taskId, root: this.executionRoot,
         });
-        if (basis.confirmedTimeout && checkpoint === null) {
-          throw new Error("Task Review confirmed timeout recovery requires its zero-effect checkpoint");
+        if (!basis.changedInput && checkpoint === null) {
+          throw new Error("Task Review unchanged-input recovery requires its zero-effect checkpoint");
         }
         if (checkpoint !== null) {
           checkpoint.assertTaskSource({ flowManager: this.flowManager, state: before, root: this.executionRoot });

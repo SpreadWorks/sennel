@@ -7,6 +7,9 @@ import { execFileSync } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { Agent } from "../../../src/lib/agent.js";
+import { ProviderRegistry } from "../../../src/lib/provider.js";
+import { Logger } from "../../../src/lib/log.js";
 import { GIT_REPOSITORY_LOCATION_ENVIRONMENT } from "../../../src/lib/git-repository-environment.js";
 import { container } from "../../../src/lib/container.js";
 import {
@@ -59,6 +62,7 @@ import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate
 import RunSettleFailureCommand from "../../../src/flow/lib/run-settle-failure.js";
 import RunSettleReviewTransitionCommand from "../../../src/flow/lib/run-settle-review-transition.js";
 import RunSettleGateTransitionCommand from "../../../src/flow/lib/run-settle-gate-transition.js";
+import SetRetryCommand from "../../../src/flow/lib/set-retry.js";
 import RunTestExecuteCommand from "../../../src/flow/lib/run-test-execute.js";
 import RunTestResultReviewCommand from "../../../src/flow/lib/run-test-result-review.js";
 import RunAcceptanceReviewCommand, {
@@ -88,6 +92,8 @@ import {
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
 import { canonicalPlanGateRepairForTarget, inspectCanonicalPlanGateRepair } from "../../../src/flow/lib/plan-gate-repair.js";
+import { TemporaryProviderUnavailableFailure } from "../../../src/lib/agent-failure.js";
+import { ReviewFailure } from "../../../src/flow/lib/review-failure.js";
 
 function confirmTaskImplementationMutation({ repository, manager, specId, relativePath = "README.md", content, gateRepair = null }) {
   completeCanonicalSourceHandoff({
@@ -3136,6 +3142,152 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(leaves(state.steps).find((entry) => entry.id === "spec-review").status, "done");
     assert.equal(fs.existsSync(path.join(location.directory, "spec-review.json")), false);
     assert.equal(fs.existsSync(path.join(location.directory, "review-history")), false);
+  });
+
+  it("carries capacity exhaustion through provider attempts, a Definition retry, reload, publication, and spec-triage admission", async () => {
+    const repository = root();
+    initializeReviewSource(repository);
+    let manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const created = manager.createFresh(request("001-capacity-retry-triage"));
+    manager.addActiveFlow(created.specId, "direct");
+    const ordered = leaves(manager.load(created.specId).steps);
+    const reviewIndex = ordered.findIndex((entry) => entry.id === "spec-review");
+    for (const entry of ordered.slice(0, reviewIndex)) confirmFixtureStep(manager, entry.id);
+    manager.updateStepStatus({ stepId: "spec-review", requestedStatus: "in_progress" });
+
+    const providerCountPath = path.join(repository, ".sennel", "provider-attempt-count.txt");
+    const providerScript = [
+      "const fs=require('node:fs');",
+      "const file=process.argv[1];",
+      "const count=fs.existsSync(file)?Number(fs.readFileSync(file,'utf8'))+1:1;",
+      "fs.writeFileSync(file,String(count));",
+      "process.stderr.write('Selected model is at capacity');",
+      "process.exit(1);",
+    ].join("");
+    const agentConfig = {
+      agent: {
+        default: "test/exec",
+        providers: {
+          "test/exec": {
+            command: process.execPath,
+            args: ["-e", providerScript, providerCountPath, "{{PROMPT}}"],
+          },
+        },
+        timeout: 10,
+      },
+    };
+    const agent = new Agent({
+      config: agentConfig,
+      paths: { root: repository, agentWorkDir: path.join(repository, ".sennel", "agent-work") },
+      registry: new ProviderRegistry(agentConfig.agent.providers),
+      logger: new Logger({ logDir: path.join(repository, ".sennel", "logs"), enabled: false }),
+    });
+    let providerFailure = null;
+    await assert.rejects(
+      agent.call("Review the spec", {
+        commandId: "flow.spec.review.propose",
+        retryCount: 1,
+        retryDelayMs: 1,
+        waitForProcessTree: true,
+      }),
+      (error) => {
+        providerFailure = error;
+        return error instanceof TemporaryProviderUnavailableFailure;
+      },
+    );
+    assert.equal(fs.readFileSync(providerCountPath, "utf8"), "2");
+    const capacityFailure = ReviewFailure.fromAgentFailure({
+      phase: "spec",
+      failure: providerFailure,
+    });
+    let subprocessCalls = 0;
+    const failedReview = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() {
+        subprocessCalls += 1;
+        return {
+          ok: false,
+          status: 1,
+          stdout: "",
+          stderr: capacityFailure.toMarkerLine(),
+          signal: null,
+          killed: false,
+        };
+      },
+    });
+    const context = () => ({
+      root: repository,
+      mainRoot: repository,
+      executionRoot: repository,
+      specId: created.specId,
+      phase: "spec",
+      flowManager: manager,
+      flowState: manager.loadReadOnly(created.specId),
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+    });
+
+    const failed = await failedReview.execute(context());
+    assert.equal(failed.errors[0].code, "REVIEW_TOOLING_ERROR", JSON.stringify(failed));
+    assert.equal(subprocessCalls, 1, "the parent Review transport must not add a second retry loop");
+    let state = manager.canonicalState(created.specId);
+    assert.equal(state.attempt.failure.code, "AGENT_TEMPORARY_PROVIDER_UNAVAILABLE");
+    assert.equal(state.attempt.failure.attemptCount, 2, "provider retries remain durable boundary evidence");
+    assert.equal(state.attempt.consumption.tooling, 0, "provider attempts do not consume Definition retries");
+    const failedAttemptId = state.attempt.id;
+
+    const retried = new SetRetryCommand().execute({
+      ...context(),
+      action: "reset",
+      kind: "review",
+      phase: "spec",
+      reason: "Retry the completed provider capacity failure through the Definition budget.",
+      yes: true,
+    });
+    assert.equal(retried.grants[0].operation, "retry_attempt", JSON.stringify(retried));
+
+    manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    state = manager.canonicalState(created.specId);
+    assert.notEqual(state.attempt.id, failedAttemptId);
+    assert.equal(state.attempt.consumption.tooling, 1);
+    assert.equal(state.attempt.failure, null);
+
+    let successfulInvocation = null;
+    const successfulReview = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand(command, args, options) {
+        successfulInvocation = { command, args, options };
+        writeSpecReviewDeltaOutput(options);
+        ReviewWorkUnit.fromEnvironment(options.env).seal();
+        return {
+          ok: true,
+          status: 0,
+          stdout: "NO_PROPOSALS\n",
+          stderr: "  [spec-review] verdict=PASS proposalCount=0\n",
+          signal: null,
+          killed: false,
+        };
+      },
+    });
+    const succeeded = await successfulReview.execute(context());
+    assert.notEqual(succeeded.ok, false, JSON.stringify(succeeded));
+    assert.equal(Object.hasOwn(successfulInvocation.options, "timeout"), false);
+    assert.equal(attachedCanonicalCommandResultPublications(succeeded)[0].logicalKey, "spec.review");
+    await FLOW_COMMANDS.run.review.post(context(), succeeded);
+
+    const review = manager.readCurrentSpecReview({
+      specId: created.specId,
+      consumerNodeId: "spec-triage",
+    });
+    assert.equal(review.review.audit.at(-1).stage, "spec-review");
+    manager.updateStepStatus(
+      { stepId: "spec-triage", requestedStatus: "in_progress" },
+      { specId: created.specId },
+    );
+    state = manager.canonicalState(created.specId);
+    assert.equal(state.current.at(-1), "spec-triage");
+    assert.equal(state.attempt.failure, null);
   });
 
   it("records triage and repair review receipts in their confirmation Activities", () => {

@@ -552,7 +552,7 @@ function canonicalWorkerContext(ctx, derived, target, state, typedState) {
   return Object.freeze({ ...context, ...extensions });
 }
 
-function retryRecoveryCommandFor({ ctx, state, descriptor, target, binding }) {
+function retryRecoveryPlanFor({ ctx, state, descriptor, target }) {
   const disposition = descriptor.failureDisposition;
   const canonical = typeof ctx.flowManager?.canonicalState === "function"
     ? ctx.flowManager.canonicalState(state.specId)
@@ -570,7 +570,14 @@ function retryRecoveryCommandFor({ ctx, state, descriptor, target, binding }) {
     executionRoot: ctx.executionRoot || ctx.root,
     artifactRoot: ctx.mainRoot || ctx.root,
   });
-  if (!recoveryPlan.available) return null;
+  return recoveryPlan;
+}
+
+function retryRecoveryCommandFor({ state, descriptor, target, binding, recoveryPlan }) {
+  if (recoveryPlan?.available !== true) return null;
+  const disposition = descriptor.failureDisposition;
+  const route = retryEvidenceRouteForNode(state, target.nodeId);
+  if (route === null) return null;
   return guardedCommand(
     `sennel flow set retry reset ${route.kind} ${route.phase} --reason "${disposition.reason.replaceAll('"', "'")}" --yes`,
     state,
@@ -848,7 +855,14 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     definitionDescriptor.conditionalWorkerDisposition,
     { state, binding },
   );
-  const recoveryCommand = retryRecoveryCommandFor({ ctx, state, descriptor, target, binding });
+  const recoveryPlan = retryRecoveryPlanFor({ ctx, state, descriptor, target });
+  const recoveryCommand = retryRecoveryCommandFor({
+    state,
+    descriptor,
+    target,
+    binding,
+    recoveryPlan,
+  });
   const missingRoute = missingProducerArtifactRoute
     ?? missingProducerArtifactRouteFor({ ctx, typedState });
   const planGateRepair = null;
@@ -858,6 +872,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     action: derived.action,
     descriptor: definitionDescriptor,
     recoveryCommand,
+    retryRecoveryPlan: recoveryPlan,
     missingProducerArtifactRoute: missingRoute,
     planGateRepairRoute: planGateRepair?.route ?? null,
     planGateRepairReason: planGateRepair?.reason ?? null,

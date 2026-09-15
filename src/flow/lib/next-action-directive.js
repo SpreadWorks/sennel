@@ -15,6 +15,7 @@ import { guardedCommand } from "./guarded-command.js";
 import { CurrentNextActionDescriptor } from "./current-flow-state.js";
 import { PlanGateRepairRoute } from "./plan-gate-repair.js";
 import { MissingProducerArtifactRoute } from "./producer-artifact-readiness.js";
+import { RetryRecoveryPlan } from "../definition.js";
 
 const ACTION_ID = /^[A-Z][A-Z0-9_]{2,79}$/;
 const MAX_TEXT_LENGTH = 4000;
@@ -316,6 +317,7 @@ export class NextActionDirectiveResolver {
     action,
     descriptor,
     recoveryCommand = null,
+    retryRecoveryPlan = null,
     missingProducerArtifactRoute = null,
     planGateRepairRoute = null,
     planGateRepairReason = null,
@@ -336,6 +338,13 @@ export class NextActionDirectiveResolver {
     this.recoveryCommand = recoveryCommand == null
       ? null
       : requireString(recoveryCommand, "directive resolver recovery command");
+    if (retryRecoveryPlan !== null && !(retryRecoveryPlan instanceof RetryRecoveryPlan)) {
+      throw new Error("directive resolver requires a typed retry recovery plan");
+    }
+    this.retryRecoveryPlan = retryRecoveryPlan;
+    if (this.recoveryCommand !== null && this.retryRecoveryPlan?.available !== true) {
+      throw new Error("directive resolver recovery command requires a Definition-selected available plan");
+    }
     if (missingProducerArtifactRoute !== null
       && !(missingProducerArtifactRoute instanceof MissingProducerArtifactRoute)) {
       throw new Error("directive resolver requires a typed missing producer artifact route");
@@ -353,6 +362,30 @@ export class NextActionDirectiveResolver {
     this.planGateRepairReason = planGateRepairReason;
   }
 
+  recoveryDirective() {
+    if (this.recoveryCommand === null) return null;
+    const instruction = this.retryRecoveryPlan.basis.transientProvider
+      ? "Wait for provider recovery or persist a different model/profile in project config, then apply the single audited retry and refresh next-action."
+      : this.retryRecoveryPlan.basis.changedInput
+        ? "Reevaluate the changed canonical evidence through the single audited retry, then refresh next-action."
+        : "Reevaluate the stopped timeout on the same input through the single audited retry, then refresh next-action.";
+    return new ExecuteCommandDirective({
+      actionId: "RECOVER_EXHAUSTED_TOOLING_RETRY",
+      nextAction: this.recoveryCommand,
+      instruction,
+      reason: this.retryRecoveryPlan.reason,
+    });
+  }
+
+  recoveryBlockedDirective() {
+    if (this.retryRecoveryPlan?.available || this.retryRecoveryPlan === null) return null;
+    return new BlockedDirective({
+      code: this.retryRecoveryPlan.blocker.code,
+      reason: this.retryRecoveryPlan.reason,
+      resumeInstruction: this.retryRecoveryPlan.blocker.resumeInstruction,
+    });
+  }
+
   resolve() {
     if (this.missingProducerArtifactRoute !== null) {
       if (["historical-consumer", "historical-gap"].includes(this.missingProducerArtifactRoute.kind)) {
@@ -367,14 +400,10 @@ export class NextActionDirectiveResolver {
         });
       }
       if (this.recoveryCommand !== null) {
-        return new ExecuteCommandDirective({
-          actionId: "RECOVER_EXHAUSTED_TOOLING_RETRY",
-          nextAction: this.recoveryCommand,
-          instruction: "Apply the single audited tooling recovery after parent-derived evidence changed, then refresh next-action.",
-          reason: this.descriptor.failureDisposition?.reason
-            ?? "The exhausted tooling Attempt has changed canonical evidence.",
-        });
+        return this.recoveryDirective();
       }
+      const recoveryBlockedDirective = this.recoveryBlockedDirective();
+      if (recoveryBlockedDirective !== null) return recoveryBlockedDirective;
       const reason = `The failed ${this.missingProducerArtifactRoute.producerNodeId} Attempt did not publish the required canonical result for ${this.missingProducerArtifactRoute.consumerNodeId}; settlement is intentionally unavailable.`;
       return new BlockedDirective({
         code: "CANONICAL_PRODUCER_ARTIFACT_NOT_READY",
@@ -382,6 +411,8 @@ export class NextActionDirectiveResolver {
         resumeInstruction: "No automatic recovery is admitted. Inspect the failed producer and its durable baseline before choosing a recovery. For an orphaned recovered Task Review without a result or baseline, inspect reconcile-task-review --dry-run with the exact target guards. recover-missing-producer-artifact is only for a historical consumer claim or gap. Do not create an artifact manually.",
       });
     }
+    const recoveryBlockedDirective = this.recoveryBlockedDirective();
+    if (recoveryBlockedDirective !== null) return recoveryBlockedDirective;
     const reviewDisposition = this.descriptor.reviewDisposition;
     if (reviewDisposition?.operation === "blocked") {
       const reason = `The definition exhausted ${reviewDisposition.phase} review retries (${reviewDisposition.attempts}/${reviewDisposition.maxAttempts}) for the current canonical evidence.`;
@@ -421,13 +452,7 @@ export class NextActionDirectiveResolver {
       return new ExecuteStepDirective({ action: this.action });
     }
     if (this.recoveryCommand !== null) {
-      return new ExecuteCommandDirective({
-        actionId: "RECOVER_EXHAUSTED_TOOLING_RETRY",
-        nextAction: this.recoveryCommand,
-        instruction: "Apply the single audited tooling recovery after parent-derived evidence changed, then refresh next-action.",
-        reason: this.descriptor.failureDisposition?.reason
-          ?? "The exhausted tooling Attempt has changed canonical evidence.",
-      });
+      return this.recoveryDirective();
     }
     const disposition = this.descriptor.failureDisposition ?? null;
     const operation = disposition?.operation ?? this.descriptor.operation;

@@ -38,6 +38,7 @@ import { FlowAttributionPolicy } from "./flow-attribution.js";
 import {
   AgentFailure,
   AgentPermissionConfigurationFailure,
+  AgentProviderCompletionEvidence,
   AgentProcessStopEvidence,
   AgentTimeoutFailure,
   EmptyAgentResponseFailure,
@@ -643,9 +644,14 @@ class Agent {
       });
       try {
         const result = await this._callOnce(resolved, prompt, options, materializedInvocation);
-        if (result.text) return result;
-        lastFailure = new EmptyAgentResponseFailure()
-          .recordAttempts(attempt + 1, maxAttempts);
+        const providerCompletionEvidence = result.providerCompletionEvidence
+          .withAttempts(attempt + 1, maxAttempts);
+        if (result.text) return { ...result, providerCompletionEvidence };
+        lastFailure = new EmptyAgentResponseFailure({
+          providerCompletionEvidence,
+          attemptCount: attempt + 1,
+          maxAttempts,
+        });
       } catch (err) {
         lastFailure = AgentFailure.from(err)
           .recordAttempts(attempt + 1, maxAttempts);
@@ -726,7 +732,16 @@ class Agent {
         if (options.activityMonitor) {
           options.activityMonitor.start((timeoutDiagnostic) => supervisor.timeout(timeoutDiagnostic));
         }
-        completion.then(({ code, signal }) => {
+        completion.then(({ code, signal, processTreeQuiescence }) => {
+          const providerCompletionEvidence = new AgentProviderCompletionEvidence({
+            provider: providerKey,
+            profile: profileKey,
+            exitCode: code,
+            signal,
+            stdout,
+            stderr,
+            processTreeQuiescence,
+          });
           if (code === 0 && !signal && !stdinError) {
             const trimmed = String(stdout).trim();
             if (profile.jsonOutputFlag) {
@@ -735,9 +750,16 @@ class Agent {
                 ...(parsed ?? { text: trimmed, usage: null, cacheable: false }),
                 stdout,
                 stderr,
+                providerCompletionEvidence,
               });
             } else {
-              resolve({ text: filterStreamingEvents(trimmed), usage: null, stdout, stderr });
+              resolve({
+                text: filterStreamingEvents(trimmed),
+                usage: null,
+                stdout,
+                stderr,
+                providerCompletionEvidence,
+              });
             }
             return;
           }
@@ -757,6 +779,7 @@ class Agent {
           error.stdinError = stdinError || null;
           error.stdout = stdout;
           error.stderr = stderr;
+          error.providerCompletionEvidence = providerCompletionEvidence;
           reject(error);
         }, (err) => {
           // The supervisor owns timeout rejection after stdout/stderr listeners
@@ -1127,7 +1150,15 @@ class ChildProcessSupervisor {
   _settleClose(code, signal) {
     this._cleanup();
     this._emit({ type: "settled", outcome: "close" });
-    this.resolve({ code, signal });
+    this.resolve({
+      code,
+      signal,
+      processTreeQuiescence: this.waitForProcessTree
+        && this.platform !== "win32"
+        && this.treeDeadObserved
+        ? "confirmed"
+        : "unavailable",
+    });
   }
 
   _settleError(error) {
@@ -1789,8 +1820,11 @@ async function runWithLogging({
     };
     const diagnosticLog = await logger.agent({ phase: "end", requestId, ...payload, ...logAttribution });
     if (err && diagnosticLog) {
-      err.diagnosticLog = diagnosticLog;
-      err.message += ` | diagnosticLog=${diagnosticLog}`;
+      if (err instanceof AgentFailure) err.attachDiagnosticLog(diagnosticLog);
+      else {
+        err.diagnosticLog = diagnosticLog;
+        err.message += ` | diagnosticLog=${diagnosticLog}`;
+      }
     }
 
     // Metric accumulation is the Agent's responsibility: it runs independently

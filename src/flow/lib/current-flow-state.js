@@ -11,7 +11,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { AgentProcessStopEvidence } from "../../lib/agent-failure.js";
+import {
+  AgentFailurePersistenceContract,
+  AgentProcessStopEvidence,
+  AgentProviderCompletionEvidence,
+} from "../../lib/agent-failure.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { GitSnapshot } from "../../lib/git-snapshot.js";
 import { FileLock } from "../../lib/file-lock.js";
@@ -1995,8 +1999,16 @@ export class AttemptOperationClaim {
 export class ActivityFailure {
   constructor(value) {
     const fields = new Set(["category", "code", "message", "retryable", "retryKind"]);
-    if (value !== null && typeof value === "object" && Object.hasOwn(value, "agentStopEvidence")) {
-      fields.add("agentStopEvidence");
+    for (const optional of [
+      "agentStopEvidence",
+      "agentProviderCompletionEvidence",
+      "agentFailureKind",
+      "attemptCount",
+      "maxAttempts",
+    ]) {
+      if (value !== null && typeof value === "object" && Object.hasOwn(value, optional)) {
+        fields.add(optional);
+      }
     }
     requireExactFields(value, fields, "activity.failure");
     const { category, code, message, retryable, retryKind } = value;
@@ -2015,6 +2027,23 @@ export class ActivityFailure {
     this.agentStopEvidence = value.agentStopEvidence == null
       ? null
       : AgentProcessStopEvidence.from(value.agentStopEvidence);
+    this.agentProviderCompletionEvidence = value.agentProviderCompletionEvidence == null
+      ? null
+      : AgentProviderCompletionEvidence.from(value.agentProviderCompletionEvidence);
+    this.agentFailureKind = value.agentFailureKind == null
+      ? null
+      : requireString(value.agentFailureKind, "activity.failure.agentFailureKind");
+    this.attemptCount = value.attemptCount ?? null;
+    this.maxAttempts = value.maxAttempts ?? null;
+    if ((this.attemptCount === null) !== (this.maxAttempts === null)
+      || (this.attemptCount !== null && (
+        !Number.isSafeInteger(this.attemptCount)
+        || this.attemptCount < 1
+        || !Number.isSafeInteger(this.maxAttempts)
+        || this.maxAttempts < this.attemptCount
+      ))) {
+      throw new CurrentFlowStateInvariantError("activity failure provider attempts are invalid");
+    }
     if (this.agentStopEvidence !== null && this.code !== "AGENT_TIMEOUT") {
       throw new CurrentFlowStateInvariantError("agent stop evidence belongs only to AGENT_TIMEOUT failures");
     }
@@ -2022,6 +2051,42 @@ export class ActivityFailure {
       && (this.retryable !== this.agentStopEvidence.confirmed
         || this.retryKind !== (this.agentStopEvidence.confirmed ? "tooling" : null))) {
       throw new CurrentFlowStateInvariantError("AGENT_TIMEOUT retry policy must match its process stop evidence");
+    }
+    if (this.agentProviderCompletionEvidence !== null) {
+      if (this.code === "AGENT_TIMEOUT") {
+        throw new CurrentFlowStateInvariantError("normal provider completion evidence cannot belong to AGENT_TIMEOUT");
+      }
+      if (this.agentFailureKind === null
+        || this.attemptCount !== this.agentProviderCompletionEvidence.attemptCount
+        || this.maxAttempts !== this.agentProviderCompletionEvidence.maxAttempts) {
+        throw new CurrentFlowStateInvariantError("provider completion evidence requires matching failure kind and attempts");
+      }
+      if (this.agentProviderCompletionEvidence.signal !== null && this.retryable) {
+        throw new CurrentFlowStateInvariantError("signaled provider completion evidence cannot be retryable");
+      }
+    }
+    const stableContract = this.code === "AGENT_TIMEOUT" && this.agentStopEvidence === null
+      ? null
+      : AgentFailurePersistenceContract.fromPersisted({
+          code: this.code,
+          message: this.message,
+          attemptCount: this.attemptCount ?? 1,
+          maxAttempts: this.maxAttempts ?? 1,
+          providerCompletionEvidence: this.agentProviderCompletionEvidence,
+          stopEvidence: this.agentStopEvidence,
+        });
+    if (this.agentProviderCompletionEvidence !== null && stableContract === null) {
+      throw new CurrentFlowStateInvariantError(
+        "provider completion evidence requires a recognized stable AgentFailure code",
+      );
+    }
+    try {
+      stableContract?.assertFacts({
+        retryable: this.retryable,
+        agentFailureKind: this.agentFailureKind,
+      });
+    } catch (error) {
+      throw new CurrentFlowStateInvariantError(error.message);
     }
     Object.freeze(this);
   }
@@ -2034,7 +2099,32 @@ export class ActivityFailure {
       retryable: this.retryable,
       retryKind: this.retryKind,
       ...(this.agentStopEvidence === null ? {} : { agentStopEvidence: this.agentStopEvidence.toJSON() }),
+      ...(this.agentProviderCompletionEvidence === null ? {} : {
+        agentProviderCompletionEvidence: this.agentProviderCompletionEvidence.toJSON(),
+      }),
+      ...(this.agentFailureKind === null ? {} : { agentFailureKind: this.agentFailureKind }),
+      ...(this.attemptCount === null ? {} : {
+        attemptCount: this.attemptCount,
+        maxAttempts: this.maxAttempts,
+      }),
     };
+  }
+
+  /** Unchanged-input recovery family admitted by a trusted stopped timeout. */
+  get confirmedTimeoutRecoveryBoundary() {
+    return this.code === "AGENT_TIMEOUT"
+      && this.retryable === true
+      && this.retryKind === "tooling"
+      && this.agentStopEvidence?.confirmed === true;
+  }
+
+  /** Unchanged-input recovery family admitted by a normal provider completion. */
+  get retryableProviderCompletionBoundary() {
+    return this.code !== "AGENT_TIMEOUT"
+      && this.retryable === true
+      && this.retryKind === "tooling"
+      && this.agentProviderCompletionEvidence !== null
+      && this.agentProviderCompletionEvidence.signal === null;
   }
 }
 
@@ -2044,6 +2134,16 @@ export class ReviewProviderTimeoutFailure extends ActivityFailure {
     super(value);
     if (this.code !== "AGENT_TIMEOUT" || this.agentStopEvidence === null) {
       throw new CurrentFlowStateInvariantError("Review provider timeout requires typed process stop evidence");
+    }
+  }
+}
+
+/** Canonical Review failure facts admitted only with normal provider completion evidence. */
+export class ReviewProviderCompletionFailure extends ActivityFailure {
+  constructor(value) {
+    super(value);
+    if (this.agentProviderCompletionEvidence === null) {
+      throw new CurrentFlowStateInvariantError("Review provider completion failure requires typed completion evidence");
     }
   }
 }

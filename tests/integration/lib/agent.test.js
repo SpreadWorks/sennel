@@ -11,13 +11,15 @@ import {
   AgentAuthenticationFailure,
   EmptyAgentResponseFailure,
   AgentPermissionConfigurationFailure,
+  MAX_DURABLE_AGENT_FAILURE_MESSAGE_BYTES,
   TemporaryRateLimitFailure,
-  UnknownProviderFailure,
+  UnclassifiedProviderExitFailure,
 } from "../../../src/lib/agent-failure.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
 import { ReviewExecutionLease } from "../../../src/flow/lib/review-execution-lease.js";
 import { AgentTimeoutDiagnostic } from "../../../src/lib/agent-timeout.js";
+import { MAX_DURABLE_STREAM_EVIDENCE_BYTES } from "../../../src/lib/bounded-stream-evidence.js";
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "agent-test-"));
@@ -549,11 +551,11 @@ describe("Agent.call() — basic invocation", () => {
     await assert.rejects(agent.call("test", { commandId: "test" }));
   });
 
-  it("persists complete failed subprocess output and links the diagnostic log", async (t) => {
+  it("keeps complete failed subprocess output in diagnostics while durable completion evidence is bounded", async (t) => {
     const root = tmpDir();
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const stdout = "stdout-" + "x".repeat(500);
-    const stderr = "stderr-" + "y".repeat(500);
+    const stdout = "stdout-head-" + "界".repeat(4_000) + "-stdout-tail";
+    const stderr = "Selected model is at capacity\n" + "🦊".repeat(4_000) + "\nstderr-tail";
     const script = `process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)}); process.exit(1);`;
     const logger = new Logger({ logDir: path.join(root, ".tmp", "logs"), enabled: true, cwd: root });
     const agent = makeAgent(
@@ -571,7 +573,13 @@ describe("Agent.call() — basic invocation", () => {
     assert.ok(error instanceof Error);
     assert.equal(error.stdout, stdout);
     assert.equal(error.stderr, stderr);
-    assert.match(error.message, /stdoutPreview=stdout-/);
+    assert.match(error.message, /providerOutput=Selected model is at capacity/);
+    assert.ok(Buffer.byteLength(error.message, "utf8") <= MAX_DURABLE_AGENT_FAILURE_MESSAGE_BYTES);
+    assert.ok(error.providerCompletionEvidence);
+    for (const stream of [error.providerCompletionEvidence.stdout, error.providerCompletionEvidence.stderr]) {
+      assert.equal(stream.truncated, true);
+      assert.ok(stream.capturedByteLength <= MAX_DURABLE_STREAM_EVIDENCE_BYTES);
+    }
     assert.ok(error.diagnosticLog);
     assert.match(error.message, /diagnosticLog=/);
     const diagnostic = JSON.parse(fs.readFileSync(error.diagnosticLog, "utf8"));
@@ -627,7 +635,11 @@ describe("ChildProcessSupervisor", () => {
     const completion = supervisor.wait();
     child.emit("exit", 0, null);
 
-    assert.deepEqual(await completion, { code: 0, signal: null });
+    assert.deepEqual(await completion, {
+      code: 0,
+      signal: null,
+      processTreeQuiescence: "unavailable",
+    });
     assert.equal(child.listenerCount("close"), 0);
     assert.equal(child.listenerCount("exit"), 0);
   });
@@ -745,11 +757,14 @@ describe("Agent.call() — retry behavior", () => {
         && error.retryable === true
         && error.attemptCount === 1
         && error.maxAttempts === 1
+        && error.providerCompletionEvidence.exitCode === 0
+        && error.providerCompletionEvidence.signal === null
+        && error.providerCompletionEvidence.attemptCount === 1
       ),
     );
   });
 
-  it("does not retry an unexplained non-zero exit", async (t) => {
+  it("retries a typed unexplained non-zero provider exit within the existing bound", async (t) => {
     const tmp = path.join(os.tmpdir(), `agent-retry-exit-${Date.now()}`);
     t.after(() => fs.rmSync(tmp, { force: true }));
     const script = `
@@ -759,19 +774,50 @@ describe("Agent.call() — retry behavior", () => {
       try { n = Number(fs.readFileSync(f, "utf8")); } catch {}
       n++;
       fs.writeFileSync(f, String(n));
-      process.exit(1);
+      if (n < 3) process.exit(1);
+      process.stdout.write("recovered");
     `;
     const agent = makeAgent({ command: "node", args: ["-e", script, tmp] });
+    const result = await agent.call("", { commandId: "test", retryCount: 2, retryDelayMs: 10 });
+    assert.equal(result, "recovered");
+    assert.equal(fs.readFileSync(tmp, "utf8"), "3");
+  });
+
+  it("preserves typed completion evidence after exhausting unclassified exits", async () => {
+    const agent = makeAgent({ command: "node", args: ["-e", "process.exit(7)"] });
     await assert.rejects(
-      agent.call("", { commandId: "test", retryCount: 2, retryDelayMs: 10 }),
+      agent.call("", { commandId: "test", retryCount: 1, retryDelayMs: 10, waitForProcessTree: true }),
       (error) => (
-        error instanceof UnknownProviderFailure
-        && error.retryable === false
-        && error.attemptCount === 1
-        && error.maxAttempts === 3
+        error instanceof UnclassifiedProviderExitFailure
+        && error.attemptCount === 2
+        && error.maxAttempts === 2
+        && error.providerCompletionEvidence.exitCode === 7
+        && error.providerCompletionEvidence.confirmedQuiescence === true
+        && error.providerCompletionEvidence.attemptCount === 2
       ),
     );
-    assert.equal(fs.readFileSync(tmp, "utf8"), "1");
+  });
+
+  it("retries temporary provider capacity through the existing provider loop", async (t) => {
+    const tmp = path.join(os.tmpdir(), `agent-retry-capacity-${Date.now()}`);
+    t.after(() => fs.rmSync(tmp, { force: true }));
+    const script = `
+      const fs = require("fs");
+      const f = process.argv[1];
+      let n = 0;
+      try { n = Number(fs.readFileSync(f, "utf8")); } catch {}
+      n++;
+      fs.writeFileSync(f, String(n));
+      if (n === 1) {
+        process.stderr.write("Selected model is at capacity");
+        process.exit(1);
+      }
+      process.stdout.write("recovered");
+    `;
+    const agent = makeAgent({ command: "node", args: ["-e", script, tmp] });
+    const result = await agent.call("", { commandId: "test", retryCount: 2, retryDelayMs: 10 });
+    assert.equal(result, "recovered");
+    assert.equal(fs.readFileSync(tmp, "utf8"), "2");
   });
 
   it("retries a rate limit and succeeds", async (t) => {

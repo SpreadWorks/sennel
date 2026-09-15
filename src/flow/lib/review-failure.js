@@ -5,7 +5,12 @@
  */
 
 import { reviewPhaseForFlowStepId } from "./review-route.js";
-import { AgentFailure, AgentProcessStopEvidence } from "../../lib/agent-failure.js";
+import {
+  AgentFailure,
+  AgentFailurePersistenceContract,
+  AgentProcessStopEvidence,
+  AgentProviderCompletionEvidence,
+} from "../../lib/agent-failure.js";
 import { PromptBatchingError } from "../../lib/prompt-batching.js";
 import { PRODUCT } from "../../lib/product.js";
 
@@ -35,7 +40,6 @@ const INPUT_SIZE_PROMPT_FAILURE_CODES = Object.freeze([
   "PROMPT_INVOCATION_PROJECTION_OVERFLOW",
   "PROMPT_BATCH_COUNT_EXCEEDED",
 ]);
-
 function requireString(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`${name} must be a non-empty string`);
@@ -66,10 +70,6 @@ function matchesInputSizeFailure(text) {
   return /prompt.*too large|input.*too large|context.*length|maximum context|token limit/i.test(text);
 }
 
-function matchesProviderFailure(text) {
-  return /rate limit|quota|\b429\b|provider(?:=|\s+(?:error|failure|unavailable)\b)|api error|overloaded|temporarily unavailable/i.test(text);
-}
-
 export class ReviewFailure {
   constructor(input = {}) {
     const classification = requireString(input.classification, "classification");
@@ -91,6 +91,9 @@ export class ReviewFailure {
     this.agentStopEvidence = input.agentStopEvidence == null
       ? null
       : AgentProcessStopEvidence.from(input.agentStopEvidence);
+    this.agentProviderCompletionEvidence = input.agentProviderCompletionEvidence == null
+      ? null
+      : AgentProviderCompletionEvidence.from(input.agentProviderCompletionEvidence);
     if (this.agentStopEvidence !== null && this.failureCode !== "AGENT_TIMEOUT") {
       throw new Error("review agent stop evidence belongs only to AGENT_TIMEOUT failures");
     }
@@ -99,6 +102,17 @@ export class ReviewFailure {
     }
     if (this.failureCode === "AGENT_TIMEOUT" && this.retryable !== this.agentStopEvidence.confirmed) {
       throw new Error("review AGENT_TIMEOUT retry policy must match its process stop evidence");
+    }
+    if (this.agentProviderCompletionEvidence !== null && this.failureCode === "AGENT_TIMEOUT") {
+      throw new Error("normal provider completion evidence cannot belong to AGENT_TIMEOUT");
+    }
+    if (this.agentProviderCompletionEvidence !== null && classification !== "provider_failure") {
+      throw new Error("provider completion evidence belongs only to provider failures");
+    }
+    if (this.agentProviderCompletionEvidence !== null
+      && this.agentProviderCompletionEvidence.signal !== null
+      && this.retryable) {
+      throw new Error("signaled provider completion evidence cannot be retryable");
     }
     this.attemptCount = input.attemptCount ?? null;
     this.maxAttempts = input.maxAttempts ?? null;
@@ -113,6 +127,32 @@ export class ReviewFailure {
     )) {
       throw new Error("review agent attempts must be positive integers within maxAttempts");
     }
+    if (this.agentProviderCompletionEvidence !== null && (
+      this.attemptCount !== this.agentProviderCompletionEvidence.attemptCount
+      || this.maxAttempts !== this.agentProviderCompletionEvidence.maxAttempts
+    )) {
+      throw new Error("review agent attempts must match provider completion evidence");
+    }
+    if (this.agentProviderCompletionEvidence !== null && this.agentFailureKind === null) {
+      throw new Error("provider completion evidence requires an AgentFailure kind");
+    }
+    const stableContract = this.failureCode === null
+      ? null
+      : AgentFailurePersistenceContract.fromPersisted({
+          code: this.failureCode,
+          message: this.reason || "persisted Review Agent failure",
+          attemptCount: this.attemptCount ?? 1,
+          maxAttempts: this.maxAttempts ?? 1,
+          providerCompletionEvidence: this.agentProviderCompletionEvidence,
+          stopEvidence: this.agentStopEvidence,
+        });
+    if (this.agentProviderCompletionEvidence !== null && stableContract === null) {
+      throw new Error("provider completion evidence requires a recognized stable AgentFailure code");
+    }
+    stableContract?.assertFacts({
+      retryable: this.retryable,
+      agentFailureKind: this.agentFailureKind,
+    });
     this.exitCode = input.exitCode ?? null;
     this.signal = input.signal ?? null;
     this.killed = input.killed === true;
@@ -173,6 +213,7 @@ export class ReviewFailure {
     retryable = false,
     agentFailureKind = "unknown_provider",
     agentStopEvidence = null,
+    agentProviderCompletionEvidence = null,
     attemptCount = null,
     maxAttempts = null,
   } = {}) {
@@ -187,6 +228,7 @@ export class ReviewFailure {
       retryable,
       agentFailureKind,
       agentStopEvidence,
+      agentProviderCompletionEvidence,
       attemptCount,
       maxAttempts,
     });
@@ -203,6 +245,7 @@ export class ReviewFailure {
       retryable: failure.retryable,
       agentFailureKind: failure.kind,
       agentStopEvidence: failure.stopEvidence ?? null,
+      agentProviderCompletionEvidence: failure.providerCompletionEvidence ?? null,
       attemptCount: failure.attemptCount,
       maxAttempts: failure.maxAttempts,
     });
@@ -297,6 +340,7 @@ export class ReviewFailure {
         retryable: data.retryable,
         agentFailureKind: data.agentFailureKind,
         agentStopEvidence: data.agentStopEvidence,
+        agentProviderCompletionEvidence: data.agentProviderCompletionEvidence,
         attemptCount: data.attemptCount,
         maxAttempts: data.maxAttempts,
       });
@@ -316,36 +360,16 @@ export class ReviewFailure {
         recoveryCommand: command,
       });
     }
-    if (matchesProviderFailure(text)) {
-      return ReviewFailure.fromAgentFailure({
-        phase,
-        failure: AgentFailure.from(new Error(text)),
-        recoveryCommand: command,
-      });
-    }
     return null;
   }
 
   static fromSubprocessResult({ phase, result } = {}) {
     const stderr = String(result?.stderr || "");
-    let sawMarker = false;
     for (const line of stderr.split(/\r?\n/)) {
       const trimmed = line.trim();
-      if (trimmed.startsWith(REVIEW_FAILURE_MARKER_PREFIX)) sawMarker = true;
       const marker = ReviewFailure.fromMarkerLine(trimmed);
       if (marker) return marker;
     }
-    if (sawMarker) {
-      return ReviewFailure.subprocessFailure({
-        phase,
-        exitCode: result?.status ?? null,
-        signal: result?.signal ?? null,
-        killed: result?.killed === true,
-        stderr,
-      });
-    }
-    const classified = ReviewFailure.fromMessage({ phase: phase || "impl", message: stderr });
-    if (classified) return classified;
     return ReviewFailure.subprocessFailure({
       phase,
       exitCode: result?.status ?? null,
@@ -385,7 +409,13 @@ export class ReviewFailure {
     error.code = this.toEnvelopeCode();
     error.retryable = this.retryable;
     error.reviewFailure = this;
+    error.agentFailureKind = this.agentFailureKind;
+    error.attemptCount = this.attemptCount;
+    error.maxAttempts = this.maxAttempts;
     if (this.agentStopEvidence !== null) error.stopEvidence = this.agentStopEvidence;
+    if (this.agentProviderCompletionEvidence !== null) {
+      error.providerCompletionEvidence = this.agentProviderCompletionEvidence;
+    }
     return error;
   }
 
@@ -401,6 +431,9 @@ export class ReviewFailure {
       retryable: this.retryable,
       ...(this.agentFailureKind && { agentFailureKind: this.agentFailureKind }),
       ...(this.agentStopEvidence !== null && { agentStopEvidence: this.agentStopEvidence.toJSON() }),
+      ...(this.agentProviderCompletionEvidence !== null && {
+        agentProviderCompletionEvidence: this.agentProviderCompletionEvidence.toJSON(),
+      }),
       ...(this.attemptCount != null && { attemptCount: this.attemptCount }),
       ...(this.maxAttempts != null && { maxAttempts: this.maxAttempts }),
     };
@@ -437,6 +470,9 @@ export class ReviewFailure {
         retryable: this.retryable,
         ...(this.agentFailureKind && { agentFailureKind: this.agentFailureKind }),
         ...(this.agentStopEvidence !== null && { agentStopEvidence: this.agentStopEvidence.toJSON() }),
+        ...(this.agentProviderCompletionEvidence !== null && {
+          agentProviderCompletionEvidence: this.agentProviderCompletionEvidence.toJSON(),
+        }),
         ...(this.attemptCount != null && { attemptCount: this.attemptCount }),
         ...(this.maxAttempts != null && { maxAttempts: this.maxAttempts }),
       }),

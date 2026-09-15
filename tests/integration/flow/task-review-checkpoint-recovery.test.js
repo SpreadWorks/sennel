@@ -16,7 +16,12 @@ import { completeCanonicalSourceHandoff } from "../../support/builders/source-ha
 import { SourceMutationBaseline } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
+import {
+  AgentProviderCompletionEvidence,
+  TemporaryProviderUnavailableFailure,
+} from "../../../src/lib/agent-failure.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
+import { ReviewFailure } from "../../../src/flow/lib/review-failure.js";
 import SetRetryCommand from "../../../src/flow/lib/set-retry.js";
 
 function commitRuntimeEvidence(scenario, revision) {
@@ -35,6 +40,27 @@ function stoppedWorker(onRun = null, { stderr = "deterministic worker stop" } = 
     onRun?.(options);
     return { ok: false, status: 1, stdout: "", stderr, signal: null, killed: false };
   };
+}
+
+function transientProviderFailureMarker() {
+  const completionEvidence = new AgentProviderCompletionEvidence({
+    provider: "codex",
+    profile: "review",
+    exitCode: 1,
+    signal: null,
+    stdout: "",
+    stderr: "provider error 429 rate limit",
+    attemptCount: 1,
+    maxAttempts: 1,
+    processTreeQuiescence: "confirmed",
+  });
+  return ReviewFailure.fromAgentFailure({
+    phase: "impl",
+    failure: new TemporaryProviderUnavailableFailure({
+      message: "provider error 429 rate limit",
+      providerCompletionEvidence: completionEvidence,
+    }),
+  }).toMarkerLine();
 }
 
 function runtimeBoundReview(scenario, worker) {
@@ -189,7 +215,9 @@ test("a normal retry removes a zero-effect stopped worker before capturing its n
   let directory;
   const stopped = await runtimeBoundReview(
     scenario,
-    stoppedWorker((options) => { directory = options.env.SENNEL_REVIEW_OUTPUT_DIR; }, { stderr: "provider error 429 rate limit" }),
+    stoppedWorker((options) => { directory = options.env.SENNEL_REVIEW_OUTPUT_DIR; }, {
+      stderr: transientProviderFailureMarker(),
+    }),
   ).execute(scenario.context());
   assert.equal(stopped.ok, false, JSON.stringify(stopped));
   assert.ok(fs.existsSync(directory), "the retryable stopped worker surface is retained before retry");

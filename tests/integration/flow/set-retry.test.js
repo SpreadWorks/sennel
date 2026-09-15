@@ -30,7 +30,15 @@ import {
 } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
-import { AgentProcessStopEvidence, AgentTimeoutFailure } from "../../../src/lib/agent-failure.js";
+import {
+  AgentProcessStopEvidence,
+  AgentProviderCompletionEvidence,
+  AgentTimeoutFailure,
+  EmptyAgentResponseFailure,
+  TemporaryNetworkFailure,
+  TemporaryProviderUnavailableFailure,
+  TemporaryRateLimitFailure,
+} from "../../../src/lib/agent-failure.js";
 import { ReviewFailure } from "../../../src/flow/lib/review-failure.js";
 import {
   readTaskReviewUnsealedCheckpoint,
@@ -158,6 +166,41 @@ function immutableRetryPublicationSnapshot(manager, specId) {
   });
 }
 
+function transientProviderCompletionFailure({ processTreeQuiescence = "confirmed" } = {}) {
+  return {
+    category: "tooling",
+    code: "AGENT_TEMPORARY_PROVIDER_UNAVAILABLE",
+    message: "Selected model is at capacity",
+    retryable: true,
+    retryKind: "tooling",
+    agentFailureKind: "temporary_provider_unavailable",
+    agentProviderCompletionEvidence: new AgentProviderCompletionEvidence({
+      provider: "codex",
+      profile: "review",
+      exitCode: 1,
+      signal: null,
+      stdout: "",
+      stderr: "Selected model is at capacity",
+      attemptCount: 1,
+      maxAttempts: 1,
+      processTreeQuiescence,
+    }),
+    attemptCount: 1,
+    maxAttempts: 1,
+  };
+}
+
+function exhaustedTransientProviderFixture() {
+  const fixture = retryFixture({ nodeId: "impl-review", failureKind: "tooling" });
+  const command = new SetRetryCommand();
+  assert.equal(command.execute(commandInput(fixture)).grants[0].operation, "retry_attempt");
+  fixture.manager.failCurrentAttempt({
+    specId: fixture.flow.specId,
+    failure: transientProviderCompletionFailure(),
+  });
+  return fixture;
+}
+
 test("retry receipt basis is a typed invariant of its evidence lineage", () => {
   const previous = new RetryRecoveryBaseline({
     route: { kind: "review", phase: "test", taskId: null },
@@ -185,6 +228,64 @@ test("retry receipt basis is a typed invariant of its evidence lineage", () => {
     }),
     /basis changed-input does not match/,
   );
+  const transient = new RetryRecoveryReceipt({
+    previous,
+    current,
+    reason: "A transient provider receipt must retain the same evidence lineage.",
+    reevaluationCount: 1,
+    basis: RetryRecoveryBasis.transientProvider(),
+  });
+  assert.equal(transient.basis.transientProvider, true);
+  assert.throws(
+    () => new RetryRecoveryReceipt({
+      previous,
+      current: new RetryRecoveryBaseline({
+        ...current.toJSON(),
+        targetDigest: "d".repeat(64),
+      }),
+      reason: "A transient provider receipt cannot claim changed evidence.",
+      reevaluationCount: 1,
+      basis: RetryRecoveryBasis.transientProvider(),
+    }),
+    /basis transient-provider does not match/,
+  );
+});
+
+test("provider environment changes do not become durable changed-input evidence", () => {
+  const fixture = exhaustedTransientProviderFixture();
+  const previousProfile = process.env.SENNEL_PROFILE;
+  try {
+    process.env.SENNEL_PROFILE = "different-ambient-profile";
+    const state = fixture.manager.canonicalState(fixture.flow.specId);
+    const plan = inspectRetryRecoveryPlan({
+      flowManager: fixture.manager,
+      state,
+      executionRoot: fixture.root,
+      artifactRoot: fixture.root,
+    });
+    assert.equal(plan.available, true);
+    assert.equal(plan.basis.transientProvider, true);
+  } finally {
+    if (previousProfile === undefined) delete process.env.SENNEL_PROFILE;
+    else process.env.SENNEL_PROFILE = previousProfile;
+  }
+});
+
+test("persisted config bytes remain canonical changed-input evidence", () => {
+  for (const filename of ["config.json", "config.local.json"]) {
+    const fixture = exhaustedTransientProviderFixture();
+    const configPath = path.join(fixture.root, ".sennel", filename);
+    fs.writeFileSync(configPath, "{}\n");
+    const state = fixture.manager.canonicalState(fixture.flow.specId);
+    const plan = inspectRetryRecoveryPlan({
+      flowManager: fixture.manager,
+      state,
+      executionRoot: fixture.root,
+      artifactRoot: fixture.root,
+    });
+    assert.equal(plan.available, true, filename);
+    assert.equal(plan.basis.changedInput, true, filename);
+  }
 });
 
 test("a non-Review canonical timeout does not require Review process-stop evidence", () => {
@@ -501,6 +602,7 @@ test("status and next-action project unchanged confirmed-timeout recovery", asyn
   assert.match(status.recoveryDiagnostics.review.recoveryCommand, /set retry reset review impl/);
   assert.equal(next.directive.actionId, "RECOVER_EXHAUSTED_TOOLING_RETRY", JSON.stringify(next));
   assert.match(next.directive.nextAction, /set retry reset review impl/);
+  assert.match(next.directive.instruction, /stopped timeout on the same input/);
 });
 
 test("confirmed-timeout recovery remains consumed after changed evidence returns to its prior lineage", () => {
@@ -703,6 +805,228 @@ test("Task Review converges a confirmed provider stop after its bounded tooling 
   assert.equal(reset().ok, false, "unavailable convergence leaves no failed Review Attempt to recover");
 });
 
+test("Task Review grants one unchanged exhausted recovery for a quiescent transient provider completion", async (t) => {
+  const scenario = new TaskReviewScenario(t);
+  const completionEvidence = new AgentProviderCompletionEvidence({
+    provider: "codex",
+    profile: "review",
+    exitCode: 1,
+    signal: null,
+    stdout: "",
+    stderr: "Selected model is at capacity",
+    attemptCount: 1,
+    maxAttempts: 1,
+    processTreeQuiescence: "confirmed",
+  });
+  const providerFailure = ReviewFailure.fromAgentFailure({
+    phase: "impl",
+    failure: new TemporaryProviderUnavailableFailure({
+      message: "Selected model is at capacity",
+      providerCompletionEvidence: completionEvidence,
+    }),
+  });
+  const review = scenario.review(() => ({
+    ok: false,
+    status: 1,
+    stdout: "",
+    stderr: providerFailure.toMarkerLine(),
+    signal: null,
+    killed: false,
+  }));
+  const reset = () => new SetRetryCommand().execute({
+    ...scenario.context(),
+    flowState: scenario.manager.loadReadOnly(scenario.specId),
+    action: "reset",
+    kind: "review",
+    phase: "impl",
+    reason: "Retry the quiescent transient provider failure without changing its reviewed input.",
+    yes: true,
+  });
+
+  await review.execute(scenario.context());
+  scenario.reload();
+  let failed = scenario.state().attempt.failure;
+  assert.equal(failed.code, "AGENT_TEMPORARY_PROVIDER_UNAVAILABLE");
+  assert.equal(failed.agentFailureKind, "temporary_provider_unavailable");
+  assert.deepEqual(failed.agentProviderCompletionEvidence.toJSON(), completionEvidence.toJSON());
+  assert.equal(failed.attemptCount, 1);
+  assert.equal(failed.maxAttempts, 1);
+  assert.equal(reset().grants[0].operation, "retry_attempt");
+  assert.equal(scenario.state().attempt.consumption.tooling, 1);
+
+  await review.execute({ ...scenario.context(), flowState: scenario.manager.loadReadOnly(scenario.specId) });
+  failed = scenario.state().attempt.failure;
+  assert.equal(failed.agentProviderCompletionEvidence.attemptCount, 1);
+  const next = await new GetNextActionCommand().execute({
+    ...scenario.context(),
+    flowState: scenario.manager.loadReadOnly(scenario.specId),
+  });
+  assert.equal(next.directive.actionId, "RECOVER_EXHAUSTED_TOOLING_RETRY", JSON.stringify(next));
+  assert.match(next.directive.instruction, /Wait for provider recovery or persist a different model\/profile in project config/);
+  const recovered = reset();
+  assert.notEqual(recovered.ok, false, JSON.stringify(recovered));
+  assert.equal(recovered.grants[0].operation, "retry_recovery_attempt");
+  scenario.reload();
+  const receiptArtifact = scenario.manager.readArtifact({
+    specId: scenario.specId,
+    logicalKey: "retry.recovery.receipt",
+    parameters: { routeId: "review-impl-T-1", attemptId: scenario.state().attempt.id },
+    consumerNodeId: scenario.state().attempt.nodeId,
+  });
+  assert.equal(new RetryRecoveryReceipt(JSON.parse(receiptArtifact.bytes)).basis.toString(), "transient-provider");
+
+  scenario.manager.failCurrentAttempt({
+    specId: scenario.specId,
+    failure: {
+      category: "tooling",
+      code: providerFailure.failureCode,
+      message: providerFailure.reason,
+      retryable: true,
+      retryKind: "tooling",
+      agentFailureKind: providerFailure.agentFailureKind,
+      agentProviderCompletionEvidence: providerFailure.agentProviderCompletionEvidence,
+      attemptCount: providerFailure.attemptCount,
+      maxAttempts: providerFailure.maxAttempts,
+    },
+  });
+  const duplicate = reset();
+  const consumedNext = await new GetNextActionCommand().execute({
+    ...scenario.context(),
+    flowState: scenario.manager.loadReadOnly(scenario.specId),
+  });
+  assert.equal(duplicate.ok, false);
+  assert.match(duplicate.errors[0].messages[0], /already consumed this evidence lineage/);
+  assert.equal(consumedNext.directive?.code, "RETRY_RECOVERY_TRANSIENT_PROVIDER_CONSUMED", JSON.stringify(consumedNext));
+  assert.match(consumedNext.directive?.resumeInstruction, /Do not reuse the consumed transient-provider recovery/);
+});
+
+test("Task Review transient-provider recovery is independent of the stable Agent failure code", async (t) => {
+  for (const { label, exitCode, message, Failure } of [
+    { label: "existing rate limit", exitCode: 1, message: "HTTP 429 rate limited", Failure: TemporaryRateLimitFailure },
+    { label: "existing temporary network", exitCode: 1, message: "temporary DNS", Failure: TemporaryNetworkFailure },
+    { label: "empty response", exitCode: 0, message: "agent returned an empty response", Failure: EmptyAgentResponseFailure },
+  ]) {
+    await t.test(label, async (t) => {
+      const scenario = new TaskReviewScenario(t);
+      const completionEvidence = new AgentProviderCompletionEvidence({
+        provider: "codex",
+        profile: "review",
+        exitCode,
+        signal: null,
+        stdout: "",
+        stderr: message,
+        attemptCount: 1,
+        maxAttempts: 1,
+        processTreeQuiescence: "confirmed",
+      });
+      const providerFailure = ReviewFailure.fromAgentFailure({
+        phase: "impl",
+        failure: new Failure({ message, providerCompletionEvidence: completionEvidence }),
+      });
+      const review = scenario.review(() => ({
+        ok: false,
+        status: exitCode,
+        stdout: "",
+        stderr: providerFailure.toMarkerLine(),
+        signal: null,
+        killed: false,
+      }));
+      const reset = () => new SetRetryCommand().execute({
+        ...scenario.context(),
+        flowState: scenario.manager.loadReadOnly(scenario.specId),
+        action: "reset",
+        kind: "review",
+        phase: "impl",
+        reason: `Retry the quiescent ${label} boundary once.`,
+        yes: true,
+      });
+
+      await review.execute(scenario.context());
+      assert.equal(reset().grants[0].operation, "retry_attempt");
+      await review.execute({
+        ...scenario.context(),
+        flowState: scenario.manager.loadReadOnly(scenario.specId),
+      });
+      const canonical = scenario.manager.canonicalState(scenario.specId);
+      const plan = inspectRetryRecoveryPlan({
+        flowManager: scenario.manager,
+        state: canonical,
+        executionRoot: scenario.root,
+        artifactRoot: scenario.root,
+      });
+      assert.equal(plan.basis?.transientProvider, true, plan.reason);
+      assert.deepEqual(
+        canonical.attempt.failure.agentProviderCompletionEvidence.toJSON(),
+        completionEvidence.toJSON(),
+      );
+      assert.equal(reset().grants[0].operation, "retry_recovery_attempt");
+    });
+  }
+});
+
+test("unrelated terminal Review failures do not read unchanged-input recovery receipts", () => {
+  const fixture = retryFixture({ failureKind: "tooling" });
+  const command = new SetRetryCommand();
+  assert.equal(command.execute(commandInput(fixture)).grants[0].operation, "retry_attempt");
+  fixture.manager.failCurrentAttempt({
+    specId: fixture.flow.specId,
+    failure: {
+      category: "tooling",
+      code: "AGENT_AUTHENTICATION_FAILED",
+      message: "Authentication must be repaired outside unchanged-input recovery.",
+      retryable: false,
+      retryKind: null,
+    },
+  });
+  fixture.manager.readCatalogArtifact = () => {
+    throw new Error("unrelated terminal failure reached historical receipt lookup");
+  };
+
+  const plan = inspectRetryRecoveryPlan({
+    flowManager: fixture.manager,
+    state: fixture.manager.loadReadOnly(fixture.flow.specId),
+    executionRoot: fixture.root,
+    artifactRoot: fixture.root,
+  });
+
+  assert.equal(plan.available, false);
+  assert.equal(plan.blocker.code, "RETRY_RECOVERY_NON_RECOVERABLE_FAILURE");
+  assert.equal(plan.reason, "the current terminal failure does not authorize unchanged exhausted tooling recovery");
+});
+
+test("terminal Review failure projects Definition-owned repair guidance", async () => {
+  const fixture = retryFixture({ failureKind: "tooling" });
+  const command = new SetRetryCommand();
+  assert.equal(command.execute(commandInput(fixture)).grants[0].operation, "retry_attempt");
+  fixture.manager.failCurrentAttempt({
+    specId: fixture.flow.specId,
+    failure: {
+      category: "tooling",
+      code: "AGENT_AUTHENTICATION_FAILED",
+      message: "Authentication must be repaired outside exhausted retry recovery.",
+      retryable: false,
+      retryKind: null,
+    },
+  });
+  const context = {
+    ...commandInput(fixture),
+    flowState: fixture.manager.loadReadOnly(fixture.flow.specId),
+  };
+
+  const plan = inspectRetryRecoveryPlan({
+    flowManager: fixture.manager,
+    state: context.flowState,
+    executionRoot: fixture.root,
+    artifactRoot: fixture.root,
+  });
+  const next = await new GetNextActionCommand().execute(context);
+
+  assert.equal(plan.available, false);
+  assert.equal(plan.blocker.code, "RETRY_RECOVERY_NON_RECOVERABLE_FAILURE");
+  assert.equal(next.directive?.code, "RETRY_RECOVERY_NON_RECOVERABLE_FAILURE", JSON.stringify(next));
+  assert.match(next.directive?.resumeInstruction, /Repair the terminal failure/);
+});
+
 test("Task Review blocks unchanged timeout recovery when process-tree termination is uncertain", async (t) => {
   const scenario = new TaskReviewScenario(t);
   const timeout = ReviewFailure.fromAgentFailure({
@@ -774,28 +1098,14 @@ test("Task Review source-integrity unavailability blocks status, next-action, an
   const rejected = new SetRetryCommand().execute(context);
 
   assert.equal(status.recoveryDiagnostics?.review?.recoveryPossible ?? false, false);
-  assert.notEqual(next.directive?.actionId, "RECOVER_EXHAUSTED_TOOLING_RETRY", JSON.stringify(next));
+  assert.equal(next.directive?.code, "RETRY_RECOVERY_TASK_SOURCE_UNAVAILABLE", JSON.stringify(next));
+  assert.match(next.directive?.resumeInstruction, /Restore and verify the Task Review source observation/);
   assert.equal(rejected.ok, false);
   assert.match(rejected.errors[0].messages[0], /Task Review source observation is unavailable/);
   assert.equal(scenario.snapshot(), before);
 });
 
-test("competing confirmed-timeout resets append exactly one exhausted recovery", async () => {
-  const fixture = retryFixture({ failureKind: "tooling" });
-  const command = new SetRetryCommand();
-  const first = command.execute(commandInput(fixture));
-  assert.equal(first.grants[0].operation, "retry_attempt");
-  fixture.manager.failCurrentAttempt({
-    specId: fixture.flow.specId,
-    failure: {
-      category: "tooling",
-      code: "AGENT_TIMEOUT",
-      message: "The provider tree was confirmed stopped after its deadline.",
-      retryable: true,
-      retryKind: "tooling",
-      agentStopEvidence: AgentProcessStopEvidence.confirmed(),
-    },
-  });
+async function runCompetingExhaustedRecovery({ fixture, reason }) {
   const barrierRoot = createTmpDir("set-retry-barrier-");
   roots.push(barrierRoot);
   const releasePath = path.join(barrierRoot, "release");
@@ -810,7 +1120,7 @@ test("competing confirmed-timeout resets append exactly one exhausted recovery",
     "const manager=new FlowManager({root,mainRoot:root,inWorktree:false});",
     "const retryExhaustedAttempt=manager.retryExhaustedAttempt.bind(manager);",
     "manager.retryExhaustedAttempt=(input)=>{fs.writeFileSync(readyPath,'ready');const deadline=Date.now()+10000;while(!fs.existsSync(releasePath)){if(Date.now()>deadline)throw new Error('recovery barrier timed out');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);}return retryExhaustedAttempt(input);};",
-    "const result=new SetRetryCommand().execute({action:'reset',kind:'review',phase:'impl',reason:'Competing confirmed timeout recovery must remain atomic.',yes:true,root,mainRoot:root,executionRoot:root,flowManager:manager,flowState:manager.load(specId)});",
+    `const result=new SetRetryCommand().execute({action:'reset',kind:'review',phase:'impl',reason:${JSON.stringify(reason)},yes:true,root,mainRoot:root,executionRoot:root,flowManager:manager,flowState:manager.load(specId)});`,
     "if (result.ok === false) { process.stderr.write(result.errors[0].messages.join(' ')); process.exitCode=1; }",
     "else process.stdout.write(JSON.stringify(result));",
   ].join("");
@@ -836,6 +1146,36 @@ test("competing confirmed-timeout resets append exactly one exhausted recovery",
   const receipts = fixture.manager.artifactCatalog(fixture.flow.specId).artifacts
     .filter((artifact) => artifact.logicalKey === "retry.recovery.receipt");
   assert.equal(receipts.length, 1);
+}
+
+test("competing confirmed-timeout resets append exactly one exhausted recovery", async () => {
+  const fixture = retryFixture({ failureKind: "tooling" });
+  const command = new SetRetryCommand();
+  const first = command.execute(commandInput(fixture));
+  assert.equal(first.grants[0].operation, "retry_attempt");
+  fixture.manager.failCurrentAttempt({
+    specId: fixture.flow.specId,
+    failure: {
+      category: "tooling",
+      code: "AGENT_TIMEOUT",
+      message: "The provider tree was confirmed stopped after its deadline.",
+      retryable: true,
+      retryKind: "tooling",
+      agentStopEvidence: AgentProcessStopEvidence.confirmed(),
+    },
+  });
+  await runCompetingExhaustedRecovery({
+    fixture,
+    reason: "Competing confirmed timeout recovery must remain atomic.",
+  });
+});
+
+test("competing transient-provider resets append exactly one exhausted recovery", async () => {
+  const fixture = exhaustedTransientProviderFixture();
+  await runCompetingExhaustedRecovery({
+    fixture,
+    reason: "Competing transient provider recovery must remain atomic.",
+  });
 });
 
 test("Store rejects a Review recovery admission bound to a different receipt without mutation", () => {
@@ -1130,14 +1470,15 @@ for (const { nodeId, phase } of [
     const rejected = command.execute(context);
 
     assert.equal(status.recoveryDiagnostics?.review?.recoveryPossible ?? false, false);
-    assert.notEqual(next.directive?.actionId, "RECOVER_EXHAUSTED_TOOLING_RETRY", JSON.stringify(next));
+    assert.equal(next.directive?.code, "RETRY_RECOVERY_CURRENT_ARTIFACT_PRESENT", JSON.stringify(next));
+    assert.match(next.directive?.resumeInstruction, /Settle the exact current Attempt/);
     assert.equal(rejected.ok, false);
     assert.match(rejected.errors[0].messages[0], /current Attempt.*canonical Review artifact/);
     assert.equal(immutableRetryPublicationSnapshot(currentFixture.manager, currentFixture.flow.specId), before);
   });
 }
 
-test("confirmed timeout recovery fails closed when its producer baseline is missing", () => {
+test("confirmed timeout recovery fails closed when its producer baseline is missing", async () => {
   const fixture = retryFixture({ failureKind: "tooling" });
   const command = new SetRetryCommand();
   assert.equal(command.execute(commandInput(fixture)).grants[0].operation, "retry_attempt");
@@ -1161,8 +1502,15 @@ test("confirmed timeout recovery fails closed when its producer baseline is miss
   });
   const before = immutableRetryPublicationSnapshot(fixture.manager, fixture.flow.specId);
 
-  const rejected = command.execute(commandInput(fixture));
+  const context = {
+    ...commandInput(fixture),
+    flowState: fixture.manager.loadReadOnly(fixture.flow.specId),
+  };
+  const next = await new GetNextActionCommand().execute(context);
+  const rejected = command.execute(context);
 
+  assert.equal(next.directive?.code, "RETRY_RECOVERY_BASELINE_UNAVAILABLE", JSON.stringify(next));
+  assert.match(next.directive?.resumeInstruction, /Restore the durable retry baseline/);
   assert.equal(rejected.ok, false);
   assert.match(rejected.errors[0].messages[0], /durable parent-derived baseline/);
   assert.equal(immutableRetryPublicationSnapshot(fixture.manager, fixture.flow.specId), before);
@@ -1216,7 +1564,8 @@ test("Task Review rejects unchanged timeout recovery after its current artifact 
   const rejected = new SetRetryCommand().execute(context);
 
   assert.equal(status.recoveryDiagnostics?.review?.recoveryPossible ?? false, false);
-  assert.notEqual(next.directive?.actionId, "RECOVER_EXHAUSTED_TOOLING_RETRY", JSON.stringify(next));
+  assert.equal(next.directive?.code, "RETRY_RECOVERY_CURRENT_ARTIFACT_PRESENT", JSON.stringify(next));
+  assert.match(next.directive?.resumeInstruction, /Settle the exact current Attempt/);
   assert.equal(rejected.ok, false);
   assert.match(rejected.errors[0].messages[0], /current Attempt.*canonical Review artifact/);
   assert.equal(scenario.snapshot(), before);
@@ -1269,7 +1618,8 @@ test("unavailable current Review observation is not offered as an exhausted time
   assert.equal(plan.available, false);
   assert.match(plan.reason, /current retry recovery observation is unavailable/);
   assert.equal(status.recoveryDiagnostics?.review?.recoveryPossible ?? false, false);
-  assert.notEqual(next.directive?.actionId, "RECOVER_EXHAUSTED_TOOLING_RETRY", JSON.stringify(next));
+  assert.equal(next.directive?.code, "RETRY_RECOVERY_CURRENT_OBSERVATION_UNAVAILABLE", JSON.stringify(next));
+  assert.match(next.directive?.resumeInstruction, /Restore the current canonical Review observation/);
   assert.equal(rejected.ok, false);
   assert.match(rejected.errors[0].messages[0], /current retry recovery observation is unavailable/);
   assert.equal(immutableRetryPublicationSnapshot(fixture.manager, fixture.flow.specId), before);
@@ -1286,6 +1636,23 @@ for (const failure of [
     retryKind: null,
     agentStopEvidence: AgentProcessStopEvidence.uncertain("process-tree-death-not-observed"),
   },
+  {
+    code: "AGENT_TEMPORARY_PROVIDER_UNAVAILABLE",
+    retryable: true,
+    retryKind: "tooling",
+    agentFailureKind: "temporary_provider_unavailable",
+    attemptCount: 1,
+    maxAttempts: 1,
+    agentProviderCompletionEvidence: new AgentProviderCompletionEvidence({
+      provider: "codex",
+      profile: "review",
+      exitCode: 1,
+      signal: null,
+      stdout: "",
+      stderr: "Selected model is at capacity",
+      processTreeQuiescence: "unavailable",
+    }),
+  },
 ]) {
   test(`unchanged exhausted recovery rejects ${failure.code}`, () => {
     const fixture = retryFixture({ failureKind: "tooling" });
@@ -1300,6 +1667,12 @@ for (const failure of [
         retryable: failure.retryable,
         retryKind: failure.retryKind,
         ...(failure.agentStopEvidence === undefined ? {} : { agentStopEvidence: failure.agentStopEvidence }),
+        ...(failure.agentProviderCompletionEvidence === undefined ? {} : {
+          agentProviderCompletionEvidence: failure.agentProviderCompletionEvidence,
+          agentFailureKind: failure.agentFailureKind,
+          attemptCount: failure.attemptCount,
+          maxAttempts: failure.maxAttempts,
+        }),
       },
     });
     const before = immutableRetryPublicationSnapshot(fixture.manager, fixture.flow.specId);
@@ -1308,10 +1681,40 @@ for (const failure of [
 
     assert.equal(rejected.ok, false);
     assert.equal(rejected.errors[0].code, "INVALID_RECOVERY_INPUT");
-    assert.match(rejected.errors[0].messages[0], /trusted confirmed timeout/);
+    assert.match(rejected.errors[0].messages[0], /trusted confirmed timeout|confirmed process-tree quiescence/);
     assert.equal(immutableRetryPublicationSnapshot(fixture.manager, fixture.flow.specId), before);
   });
 }
+
+test("unconfirmed transient-provider quiescence projects its Definition-owned repair guidance", async () => {
+  const fixture = retryFixture({ failureKind: "tooling" });
+  const command = new SetRetryCommand();
+  assert.equal(command.execute(commandInput(fixture)).grants[0].operation, "retry_attempt");
+  fixture.manager.failCurrentAttempt({
+    specId: fixture.flow.specId,
+    failure: transientProviderCompletionFailure({ processTreeQuiescence: "unavailable" }),
+  });
+  const context = {
+    ...commandInput(fixture),
+    flowState: fixture.manager.loadReadOnly(fixture.flow.specId),
+  };
+
+  const plan = inspectRetryRecoveryPlan({
+    flowManager: fixture.manager,
+    state: context.flowState,
+    executionRoot: fixture.root,
+    artifactRoot: fixture.root,
+  });
+  const next = await new GetNextActionCommand().execute(context);
+  const rejected = command.execute(context);
+
+  assert.equal(plan.available, false);
+  assert.equal(plan.blocker.code, "RETRY_RECOVERY_PROVIDER_QUIESCENCE_UNCONFIRMED");
+  assert.equal(next.directive?.code, "RETRY_RECOVERY_PROVIDER_QUIESCENCE_UNCONFIRMED", JSON.stringify(next));
+  assert.match(next.directive?.resumeInstruction, /confirmed provider process-tree quiescence/);
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.errors[0].code, "INVALID_RECOVERY_INPUT");
+});
 
 for (const failure of [
   { label: "rate-limit failure", code: "AGENT_TEMPORARY_RATE_LIMIT", retryable: true, retryKind: "tooling" },
@@ -1349,6 +1752,7 @@ for (const failure of [
 
     assert.equal(status.recoveryDiagnostics.review.recoveryPossible, true);
     assert.equal(next.directive.actionId, "RECOVER_EXHAUSTED_TOOLING_RETRY", JSON.stringify(next));
+    assert.match(next.directive.instruction, /Reevaluate the changed canonical evidence/);
     assert.notEqual(recovered.ok, false, JSON.stringify(recovered));
     assert.equal(recovered.grants[0].operation, "retry_recovery_attempt");
     const state = fixture.manager.canonicalState(fixture.flow.specId);

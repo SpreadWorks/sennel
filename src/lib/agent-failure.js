@@ -6,6 +6,11 @@
  * one by matching free-form provider output.
  */
 
+import { BoundedStreamEvidence, utf8Prefix } from "./bounded-stream-evidence.js";
+
+export const MAX_DURABLE_AGENT_FAILURE_MESSAGE_BYTES = 1024;
+export const MAX_DURABLE_AGENT_FAILURE_MESSAGE_SERIALIZED_BYTES = (6 * MAX_DURABLE_AGENT_FAILURE_MESSAGE_BYTES) + 1024;
+
 function requireString(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`${field} must be a non-empty string`);
@@ -18,6 +23,22 @@ function positiveInteger(value, field) {
     throw new Error(`${field} must be a positive integer`);
   }
   return value;
+}
+
+function durableProviderCompletionMessage(evidence) {
+  const completion = [
+    `provider=${evidence.provider}`,
+    `profile=${evidence.profile}`,
+    evidence.exitCode === null ? null : `exit=${evidence.exitCode}`,
+    evidence.signal === null ? null : `signal=${evidence.signal}`,
+    `stdout=${evidence.stdout.originalByteLength}B/${evidence.stdout.sha256}`,
+    `stderr=${evidence.stderr.originalByteLength}B/${evidence.stderr.sha256}`,
+  ].filter((part) => part !== null);
+  const outputPreview = evidence.stderr.preview() || evidence.stdout.preview();
+  return utf8Prefix(
+    `${completion.join(" | ")}${outputPreview ? ` | providerOutput=${outputPreview}` : ""}`,
+    MAX_DURABLE_AGENT_FAILURE_MESSAGE_BYTES,
+  );
 }
 
 function failureText(error) {
@@ -67,6 +88,8 @@ function restoreStableAgentFailure(error) {
   const constructors = new Map([
     ["AGENT_TEMPORARY_RATE_LIMIT", TemporaryRateLimitFailure],
     ["AGENT_TEMPORARY_NETWORK", TemporaryNetworkFailure],
+    ["AGENT_TEMPORARY_PROVIDER_UNAVAILABLE", TemporaryProviderUnavailableFailure],
+    ["AGENT_UNCLASSIFIED_PROVIDER_EXIT", UnclassifiedProviderExitFailure],
     ["AGENT_TIMEOUT", AgentTimeoutFailure],
     ["AGENT_AUTHENTICATION_FAILED", AgentAuthenticationFailure],
     ["AGENT_PERMISSION_CONFIGURATION_FAILED", AgentPermissionConfigurationFailure],
@@ -82,8 +105,102 @@ function restoreStableAgentFailure(error) {
     attemptCount: error.attemptCount ?? 1,
     maxAttempts: error.maxAttempts ?? 1,
     cause: error,
+    providerCompletionEvidence: error.providerCompletionEvidence ?? null,
     ...(error.code === "AGENT_TIMEOUT" ? { stopEvidence: error.stopEvidence ?? null } : {}),
   });
+}
+
+const PROVIDER_QUIESCENCE_STATUSES = new Set(["confirmed", "unavailable"]);
+
+/** Normal provider-process completion evidence produced by Agent's supervisor. */
+export class AgentProviderCompletionEvidence {
+  constructor({
+    provider,
+    profile,
+    exitCode,
+    signal = null,
+    stdout = "",
+    stderr = "",
+    attemptCount = 1,
+    maxAttempts = 1,
+    processTreeQuiescence = "unavailable",
+  } = {}) {
+    this.provider = requireString(provider, "agent provider completion provider");
+    this.profile = requireString(profile, "agent provider completion profile");
+    if (exitCode !== null && (!Number.isSafeInteger(exitCode) || exitCode < 0)) {
+      throw new Error("agent provider completion exitCode must be a non-negative integer or null");
+    }
+    if (signal !== null) requireString(signal, "agent provider completion signal");
+    if (exitCode === null && signal === null) {
+      throw new Error("agent provider completion requires an exitCode or signal");
+    }
+    this.exitCode = exitCode;
+    this.signal = signal;
+    this.stdout = stdout instanceof BoundedStreamEvidence
+      ? stdout
+      : typeof stdout === "string"
+        ? new BoundedStreamEvidence(stdout)
+        : BoundedStreamEvidence.from(stdout);
+    this.stderr = stderr instanceof BoundedStreamEvidence
+      ? stderr
+      : typeof stderr === "string"
+        ? new BoundedStreamEvidence(stderr)
+        : BoundedStreamEvidence.from(stderr);
+    this.attemptCount = positiveInteger(attemptCount, "agent provider completion attemptCount");
+    this.maxAttempts = positiveInteger(maxAttempts, "agent provider completion maxAttempts");
+    if (this.attemptCount > this.maxAttempts) {
+      throw new Error("agent provider completion attemptCount must not exceed maxAttempts");
+    }
+    this.processTreeQuiescence = requireString(
+      processTreeQuiescence,
+      "agent provider completion processTreeQuiescence",
+    );
+    if (!PROVIDER_QUIESCENCE_STATUSES.has(this.processTreeQuiescence)) {
+      throw new Error("agent provider completion processTreeQuiescence must be confirmed or unavailable");
+    }
+    Object.freeze(this);
+  }
+
+  static from(value) {
+    return value instanceof AgentProviderCompletionEvidence
+      ? value
+      : AgentProviderCompletionEvidence.fromJSON(value);
+  }
+
+  static fromJSON(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("agent provider completion evidence must be an object");
+    }
+    return new AgentProviderCompletionEvidence({
+      ...value,
+      stdout: BoundedStreamEvidence.fromJSON(value.stdout),
+      stderr: BoundedStreamEvidence.fromJSON(value.stderr),
+    });
+  }
+
+  get confirmedQuiescence() { return this.processTreeQuiescence === "confirmed"; }
+
+  withAttempts(attemptCount, maxAttempts) {
+    return new AgentProviderCompletionEvidence({
+      ...this.toJSON(),
+      attemptCount,
+      maxAttempts,
+    });
+  }
+
+  toJSON() {
+    return {
+      provider: this.provider,
+      profile: this.profile,
+      exitCode: this.exitCode,
+      signal: this.signal,
+      stdout: this.stdout.toJSON(),
+      stderr: this.stderr.toJSON(),
+      attemptCount: this.attemptCount,
+      maxAttempts: this.maxAttempts,
+      processTreeQuiescence: this.processTreeQuiescence,
+    };
+  }
 }
 
 const PROCESS_STOP_STATUSES = new Set(["confirmed", "uncertain"]);
@@ -157,9 +274,16 @@ export class AgentFailure extends Error {
     attemptCount = 1,
     maxAttempts = 1,
     cause = null,
+    providerCompletionEvidence = null,
   }) {
     if (new.target === AgentFailure) throw new Error("AgentFailure is abstract");
-    super(requireString(message, "agent failure message"), cause ? { cause } : undefined);
+    const completionEvidence = providerCompletionEvidence == null
+      ? null
+      : AgentProviderCompletionEvidence.from(providerCompletionEvidence);
+    super(requireString(
+      completionEvidence === null ? message : durableProviderCompletionMessage(completionEvidence),
+      "agent failure message",
+    ), cause ? { cause } : undefined);
     this.name = new.target.name;
     this.kind = requireString(kind, "agent failure kind");
     this.code = requireString(code, "agent failure code");
@@ -174,6 +298,17 @@ export class AgentFailure extends Error {
     if (this.attemptCount > this.maxAttempts) {
       throw new Error("agent failure attemptCount must not exceed maxAttempts");
     }
+    this.providerCompletionEvidence = completionEvidence;
+    if (this.providerCompletionEvidence !== null
+      && (this.providerCompletionEvidence.attemptCount !== this.attemptCount
+        || this.providerCompletionEvidence.maxAttempts !== this.maxAttempts)) {
+      throw new Error("agent failure attempts must match provider completion evidence");
+    }
+    if (this.providerCompletionEvidence !== null
+      && this.providerCompletionEvidence.signal !== null
+      && this.retryable) {
+      throw new Error("signaled provider completion evidence cannot be retryable");
+    }
     copyDiagnostics(this, cause);
   }
 
@@ -182,6 +317,25 @@ export class AgentFailure extends Error {
     this.maxAttempts = positiveInteger(maxAttempts, "agent failure maxAttempts");
     if (this.attemptCount > this.maxAttempts) {
       throw new Error("agent failure attemptCount must not exceed maxAttempts");
+    }
+    if (this.providerCompletionEvidence !== null) {
+      this.providerCompletionEvidence = this.providerCompletionEvidence.withAttempts(attemptCount, maxAttempts);
+    }
+    return this;
+  }
+
+  attachDiagnosticLog(diagnosticLog) {
+    if (typeof diagnosticLog !== "string" || diagnosticLog.trim() === "") {
+      throw new Error("agent diagnostic log path must be a non-empty string");
+    }
+    this.diagnosticLog = diagnosticLog;
+    if (this.providerCompletionEvidence !== null) {
+      this.message = utf8Prefix(
+        `diagnosticLog=${diagnosticLog} | ${this.message}`,
+        MAX_DURABLE_AGENT_FAILURE_MESSAGE_BYTES,
+      );
+    } else {
+      this.message += ` | diagnosticLog=${diagnosticLog}`;
     }
     return this;
   }
@@ -201,6 +355,9 @@ export class AgentFailure extends Error {
       attemptCount: this.attemptCount,
       maxAttempts: this.maxAttempts,
       message: this.message,
+      ...(this.providerCompletionEvidence === null ? {} : {
+        providerCompletionEvidence: this.providerCompletionEvidence.toJSON(),
+      }),
       ...(this.providerExitCode != null ? { providerExitCode: this.providerExitCode } : {}),
       ...(this.signal != null ? { signal: this.signal } : {}),
       ...(timeoutDiagnostics && this.timeoutMs != null ? { timeoutMs: this.timeoutMs } : {}),
@@ -231,7 +388,14 @@ export class AgentFailure extends Error {
     if (stable !== null) return stable;
     const text = failureText(error);
     const codes = errorCodeText(error);
-    const input = { message: text || "unknown agent provider failure", cause: error };
+    const providerCompletionEvidence = error?.providerCompletionEvidence == null
+      ? null
+      : AgentProviderCompletionEvidence.from(error.providerCompletionEvidence);
+    const input = {
+      message: text || "unknown agent provider failure",
+      cause: error,
+      providerCompletionEvidence,
+    };
 
     if (
       /(?:api[_ -]?error[_ -]?status|http(?: status)?)\s*[=:]?\s*401\b|\b401\s+unauthorized\b|\boauth\b|failed to authenticate|authentication failed|unauthorized|token (?:has )?expired|login required|not logged in|please (?:run )?\/?login/i.test(text)
@@ -248,30 +412,47 @@ export class AgentFailure extends Error {
       /usage limit|you(?:'ve| have) hit your (?:usage )?limit|quota(?: exceeded| exhausted| reached)?|session limit|credit balance|billing limit|insufficient credits|too many tokens for (?:this )?(?:account|plan)/i.test(text)
     ) return new AgentUsageLimitFailure(input);
 
-    if (/\b429\b|rate[ -]?limit(?:ed|ing)?|too many requests/i.test(text)) {
+    if (/\bENOTFOUND\b/.test(codes) || /could not resolve (?:host|hostname)|name or service not known/i.test(text)) {
+      return new PermanentNetworkFailure(input);
+    }
+
+    const normalProviderCompletion = providerCompletionEvidence === null
+      || providerCompletionEvidence.signal === null;
+
+    if (normalProviderCompletion
+      && /\b429\b|rate[ -]?limit(?:ed|ing)?|too many requests/i.test(text)) {
       return new TemporaryRateLimitFailure(input);
     }
 
-    if (/\bEAI_AGAIN\b/.test(codes) || /temporary failure in name resolution|temporary dns/i.test(text)) {
+    if (normalProviderCompletion
+      && (/\bEAI_AGAIN\b/.test(codes) || /temporary failure in name resolution|temporary dns/i.test(text))) {
       return new TemporaryNetworkFailure(input);
     }
 
     if (
       error?.code === "AGENT_TIMEOUT"
-      || error?.signal === "SIGTERM"
-      || error?.killed === true
-      || /\btimed? out\b|\btimeout\b/i.test(text)
+      || (providerCompletionEvidence === null && (
+        error?.signal === "SIGTERM"
+        || error?.killed === true
+        || /\btimed? out\b|\btimeout\b/i.test(text)
+      ))
     ) return new AgentTimeoutFailure({ ...input, stopEvidence: error?.stopEvidence ?? null });
 
-    if (/\bENOTFOUND\b/.test(codes) || /could not resolve (?:host|hostname)|name or service not known/i.test(text)) {
-      return new PermanentNetworkFailure(input);
-    }
-
-    if (/empty response|no candidates? returned|empty candidates?/i.test(text)) {
+    if (normalProviderCompletion
+      && /empty response|no candidates? returned|empty candidates?/i.test(text)) {
       return new EmptyAgentResponseFailure({
         ...input,
         message: text ? `agent returned no response: ${text}` : "agent returned no response",
       });
+    }
+
+    if (providerCompletionEvidence !== null && providerCompletionEvidence.signal === null) {
+      if (
+        /selected model is at capacity|\bcapacity\b|overloaded|temporarily unavailable|(?:api[_ -]?error[_ -]?status|(?:http|api)(?: status)?)\s*[=:]?\s*(?:503|529)\b|\b(?:503|529)\s+(?:service unavailable|overloaded)\b/i.test(text)
+      ) return new TemporaryProviderUnavailableFailure(input);
+      if (providerCompletionEvidence.exitCode !== 0) {
+        return new UnclassifiedProviderExitFailure(input);
+      }
     }
 
     return new UnknownProviderFailure(input);
@@ -298,6 +479,40 @@ export class TemporaryNetworkFailure extends AgentFailure {
       code: "AGENT_TEMPORARY_NETWORK",
       retryable: true,
       recoveryHint: "Restore temporary DNS connectivity, then retry the same input.",
+    });
+  }
+}
+
+export class TemporaryProviderUnavailableFailure extends AgentFailure {
+  constructor(input = {}) {
+    const evidence = AgentProviderCompletionEvidence.from(input.providerCompletionEvidence);
+    if (evidence.signal !== null || evidence.exitCode === 0) {
+      throw new Error("temporary provider unavailability requires a signal-free non-zero completion");
+    }
+    super({
+      ...input,
+      providerCompletionEvidence: evidence,
+      kind: "temporary_provider_unavailable",
+      code: "AGENT_TEMPORARY_PROVIDER_UNAVAILABLE",
+      retryable: true,
+      recoveryHint: "Wait for provider capacity to become available, then retry the same input.",
+    });
+  }
+}
+
+export class UnclassifiedProviderExitFailure extends AgentFailure {
+  constructor(input = {}) {
+    const evidence = AgentProviderCompletionEvidence.from(input.providerCompletionEvidence);
+    if (evidence.signal !== null || evidence.exitCode === 0) {
+      throw new Error("unclassified provider exit requires a signal-free non-zero completion");
+    }
+    super({
+      ...input,
+      providerCompletionEvidence: evidence,
+      kind: "unclassified_provider_exit",
+      code: "AGENT_UNCLASSIFIED_PROVIDER_EXIT",
+      retryable: true,
+      recoveryHint: "Retry the same input after the completed provider process exited without a known terminal classification.",
     });
   }
 }
@@ -390,5 +605,35 @@ export class EmptyAgentResponseFailure extends AgentFailure {
       retryable: true,
       recoveryHint: "Retry the same input because the provider returned no candidate response.",
     });
+  }
+}
+
+/** Canonical policy projected from the stable AgentFailure subclass registry. */
+export class AgentFailurePersistenceContract {
+  constructor(failure) {
+    if (!(failure instanceof AgentFailure)) {
+      throw new Error("agent failure persistence contract requires an AgentFailure");
+    }
+    this.code = failure.code;
+    this.kind = failure.kind;
+    this.retryable = failure.retryable;
+    Object.freeze(this);
+  }
+
+  static fromPersisted(value) {
+    const failure = restoreStableAgentFailure(value);
+    return failure === null ? null : new AgentFailurePersistenceContract(failure);
+  }
+
+  assertFacts({ retryable, agentFailureKind = null } = {}) {
+    if (typeof retryable !== "boolean") {
+      throw new Error("persisted agent failure retryable must be boolean");
+    }
+    if (retryable !== this.retryable) {
+      throw new Error(`persisted ${this.code} retryability contradicts its stable AgentFailure policy`);
+    }
+    if (agentFailureKind !== null && agentFailureKind !== this.kind) {
+      throw new Error(`persisted ${this.code} kind contradicts its stable AgentFailure policy`);
+    }
   }
 }
