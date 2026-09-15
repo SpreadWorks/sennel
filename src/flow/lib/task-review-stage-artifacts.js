@@ -13,6 +13,15 @@ import {
   SourceWorkerCanonicalObservationAdvance,
 } from "./worker-artifact-handoff.js";
 import { loadMergedGuardrails } from "../../lib/guardrail.js";
+import { TaskReviewHostFilter } from "./task-review-host-filter.js";
+import { TaskReviewEpisodeBinding, TaskStageArtifactReference } from "./task-review-stage-binding.js";
+import {
+  TaskReviewUnsealedCheckpoint,
+  sameTaskReviewRepositorySnapshot,
+} from "./task-review-recovery-checkpoint.js";
+import { WorkerArtifactRepositoryMutationSnapshot } from "./worker-artifact-handoff.js";
+
+export { TaskReviewEpisodeBinding, TaskStageArtifactReference } from "./task-review-stage-binding.js";
 
 function text(value, field) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
@@ -126,21 +135,64 @@ export class TaskReviewSourcePublicationAdmission {
   }
 }
 
-/** Immutable publication identity, including the actual producing Attempt. */
-export class TaskStageArtifactReference {
-  constructor({ logicalKey, digest, activityId, attemptId, sequence, payloadDigest }) {
-    this.logicalKey = text(logicalKey, "Task artifact key");
-    for (const [field, value] of Object.entries({ digest, payloadDigest })) {
-      if (!/^[a-f0-9]{64}$/.test(value)) throw new Error(`Task artifact ${field} is invalid`);
-      this[field] = value;
-    }
-    this.activityId = text(activityId, "Task artifact Activity");
-    this.attemptId = text(attemptId, "Task artifact Attempt");
-    if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error("Task artifact Attempt sequence is invalid");
-    this.sequence = sequence;
+/** Revalidates a stopped zero-effect Review failure inside the catalog transaction. */
+export class TaskReviewUnavailablePublicationAdmission {
+  constructor({ root, lineageSet, checkpoint, specDigest, contextDigest } = {}) {
+    if (!(lineageSet instanceof TaskMutationLineageSet)) throw new Error("Task Review unavailable publication requires canonical lineage");
+    if (!(checkpoint instanceof TaskReviewUnsealedCheckpoint)) throw new Error("Task Review unavailable publication requires its stopped-worker checkpoint");
+    this.root = root;
+    this.lineageSet = lineageSet;
+    this.checkpoint = checkpoint;
+    this.specDigest = digest(specDigest, "Task Review unavailable specDigest");
+    this.contextDigest = digest(contextDigest, "Task Review unavailable contextDigest");
     Object.freeze(this);
   }
-  toJSON() { return { logicalKey: this.logicalKey, digest: this.digest, payloadDigest: this.payloadDigest, activityId: this.activityId, attemptId: this.attemptId, sequence: this.sequence }; }
+
+  assert(view) {
+    view.state.assertAttemptConfirmable();
+    this.checkpoint.assertActiveState(view.state);
+    const currentSource = CurrentTaskSourceSnapshot.capture({ root: this.root, lineageSet: this.lineageSet });
+    if (currentSource.fingerprint !== this.checkpoint.taskSourceFingerprint) {
+      throw new Error("Task Review source changed before unavailable publication");
+    }
+    const { bytes, document } = canonicalSpecFromView(view);
+    if (crypto.createHash("sha256").update(bytes).digest("hex") !== this.specDigest) {
+      throw new Error("Task Review canonical spec changed before unavailable publication");
+    }
+    const context = new CanonicalTaskContext({
+      state: { runId: view.state.runId, specId: view.state.specId, currentTaskId: this.checkpoint.taskId },
+      spec: document,
+      sourceFingerprint: currentSource.fingerprint,
+    });
+    if (context.fingerprint !== this.contextDigest) {
+      throw new Error("Task Review canonical context changed before unavailable publication");
+    }
+    const observed = WorkerArtifactRepositoryMutationSnapshot.capture({
+      root: this.checkpoint.baseline.snapshot.root,
+      authorities: this.checkpoint.baseline.snapshot.authorities,
+      ignoredDirectories: this.checkpoint.baseline.snapshot.ignoredDirectories,
+      runtimeLocks: this.checkpoint.baseline.snapshot.runtimeLocks,
+    });
+    if (!sameTaskReviewRepositorySnapshot(this.checkpoint.observed, observed)) {
+      throw new Error("Task Review unavailable publication observed an unowned repository mutation");
+    }
+  }
+}
+
+/** Reuses the sealed Review's parent-owned publication binding for unavailable settlement. */
+export class TaskReviewUnavailableResultPublicationAdmission {
+  constructor({ publicationBinding } = {}) {
+    if (!(publicationBinding instanceof TaskReviewPublicationBinding)) {
+      throw new Error("Task Review unavailable result publication requires its original binding");
+    }
+    this.publicationBinding = publicationBinding;
+    Object.freeze(this);
+  }
+
+  assert(view) {
+    view.state.assertAttemptConfirmable();
+    this.publicationBinding.assert(view);
+  }
 }
 
 /** A Task stage reads only cataloged history backed by its producer Activity. */
@@ -160,31 +212,6 @@ export class TaskStageArtifact {
     this.document = this.history.current.payload;
     this.reference = new TaskStageArtifactReference({ logicalKey: this.logicalKey, digest: descriptor.hash, payloadDigest: hash(this.document), activityId: descriptor.activityId, attemptId: activity.attemptId, sequence: activity.sequence });
     Object.freeze(this);
-  }
-}
-
-/** Common immutable binding carried by triage and repair, never supplied by a worker. */
-export class TaskReviewEpisodeBinding {
-  constructor({ runId, specId, flowVersion, taskId, taskRound, reviewOrdinal, specDigest, contextDigest, sourceFingerprint, review, triage = null }) {
-    for (const [field, value] of Object.entries({ runId, specId, taskId })) this[field] = text(value, `Task stage ${field}`);
-    if (flowVersion !== 1) throw new Error("Task stage requires Flow Version 1");
-    this.flowVersion = flowVersion;
-    if (![1, 2].includes(taskRound) || ![1, 2, 3, 4].includes(reviewOrdinal)) throw new Error("Task stage semantic budget is invalid");
-    this.taskRound = taskRound;
-    this.reviewOrdinal = reviewOrdinal;
-    for (const [field, value] of Object.entries({ specDigest, contextDigest, sourceFingerprint })) {
-      if (!/^[a-f0-9]{64}$/.test(value)) throw new Error(`Task stage ${field} is invalid`);
-      this[field] = value;
-    }
-    this.review = review instanceof TaskStageArtifactReference ? review : new TaskStageArtifactReference(review);
-    this.triage = triage === null ? null : triage instanceof TaskStageArtifactReference ? triage : new TaskStageArtifactReference(triage);
-    Object.freeze(this);
-  }
-  toJSON() { return { runId: this.runId, specId: this.specId, flowVersion: this.flowVersion, taskId: this.taskId, taskRound: this.taskRound, reviewOrdinal: this.reviewOrdinal, specDigest: this.specDigest, contextDigest: this.contextDigest, sourceFingerprint: this.sourceFingerprint, review: this.review.toJSON(), triage: this.triage?.toJSON() ?? null }; }
-  matches(other, { includeTriage = true } = {}) {
-    const left = this.toJSON(); const right = other.toJSON();
-    if (!includeTriage) { left.triage = null; right.triage = null; }
-    return stable(left) === stable(right);
   }
 }
 
@@ -220,14 +247,30 @@ export class TaskReviewStageInputs {
   }
 
   assertTriage(triage) {
+    if (triage?.hostFilter !== undefined) {
+      const filter = TaskReviewHostFilter.fromStored(triage.hostFilter, this.findings);
+      if (!filter.binding.matches(this.binding, { includeTriage: false })
+        || stable(filter.toTriageEffect().toJSON()) !== stable({ version: triage?.version, dispositions: triage?.dispositions })) {
+        throw new Error("Task Review host filter does not bind its canonical dispositions");
+      }
+      return;
+    }
     const effect = triage instanceof SourceTriageEffect
       ? triage
       : new SourceTriageEffect({ version: triage?.version, dispositions: triage?.dispositions });
     effect.assertCanonicalFindings(this.findings, { approvedExceptions: this.approvedExceptions });
   }
 
-  assertRepair(repair, manifest) {
+  assertRepair(repair, manifest, noChange = null) {
     const apply = this.triage.document.dispositions.filter((entry) => entry.disposition === "apply").map((entry) => entry.findingKey);
+    if (repair === null) {
+      if (noChange === null || apply.length !== noChange.findingKeys.length
+        || apply.some((key) => !noChange.findingKeys.includes(key))) {
+        throw new Error("Task repair no-change must identify exactly the canonical selected findings");
+      }
+      noChange.assertManifest(manifest);
+      return;
+    }
     if (apply.length !== repair.appliedFindingKeys.length || apply.some((key) => !repair.appliedFindingKeys.includes(key))) throw new Error("Task repair must apply exactly the canonical triage findings");
     repair.assertManifest(manifest);
     repair.assertRecurrenceResolutions(this.recurrence.toJSON());
@@ -238,6 +281,7 @@ export class TaskReviewStageInputs {
     return [
       { name: "task-review.json", document: this.review.document },
       ...(this.triage === null ? [] : [{ name: "task-triage.json", document: this.triage.document }, { name: "task-review-recurrence.json", document: this.recurrence.toJSON() }]),
+      ...(this.triage?.document?.hostFilter === undefined ? [] : [{ name: "task-review-filter.json", document: this.triage.document.hostFilter }]),
       { name: "task-review-binding.json", document: this.binding.toJSON() },
       { name: "task-source-authority.json", document: { taskId: this.taskId, sourceFingerprint: this.binding.sourceFingerprint, allowedPaths: [...this.lineageSet.paths], lineageFingerprints: this.lineageSet.lineages.map((lineage) => lineage.fingerprint) } },
       { name: "task-approved-finding-exceptions.json", document: this.approvedExceptions.toJSON() },
@@ -257,6 +301,7 @@ export class TaskReviewStageResult {
     this.handoffDigest = text(handoffDigest, "Task stage handoff digest");
     this.reviewFindings = inputs.findings;
     this.effect = effect;
+    this.hostFilter = effect.hostFilter ?? null;
     this.manifest = manifest;
     this.unreviewedAfterRepair = inputs.stage === "task-repair" && inputs.binding.reviewOrdinal === 4;
     Object.freeze(this);
@@ -266,7 +311,11 @@ export class TaskReviewStageResult {
       version: this.version, taskId: this.taskId, binding: this.binding.toJSON(), attempt: this.attempt,
       handoffDigest: this.handoffDigest, reviewFindings: this.reviewFindings,
       ...(this.effect.triage === null ? {} : this.effect.triage.toJSON()),
+      ...(this.hostFilter === null ? {} : { hostFilter: this.hostFilter.toJSON() }),
       ...(this.effect.repair === null ? {} : { repair: this.effect.repair.toJSON(), sourceMutationManifest: this.manifest.toJSON() }),
+      ...(this.effect.noChangeReason === null || this.effect.noChangeReason === undefined ? {} : {
+        repairNoChange: this.effect.noChangeReason.toJSON(), sourceMutationManifest: this.manifest.toJSON(),
+      }),
       unreviewedAfterRepair: this.unreviewedAfterRepair,
     };
   }

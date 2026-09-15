@@ -2522,7 +2522,7 @@ describe("worker artifact handoff", () => {
   });
 
   it("keeps changed-file classification outside every worker response schema", () => {
-    for (const stepId of ["implement", "impl-triage", "impl-repair", "task-impl", "task-triage", "task-repair"]) {
+    for (const stepId of ["implement", "impl-triage", "impl-repair", "task-impl", "task-repair"]) {
       const schema = sourceWorkerEffectJsonSchema(stepId);
       assert.equal(Object.hasOwn(schema.properties, "files"), false, stepId);
       assert.equal(schema.required.includes("files"), false, stepId);
@@ -2559,7 +2559,7 @@ describe("worker artifact handoff", () => {
       };
       const noChange = { ...document, noChangeReason: "Only task implementation may be unchanged." };
       assert.notDeepEqual(validateSchema(noChange, sourceWorkerEffectJsonSchema(stepId)), [], stepId);
-      assert.throws(() => SourceWorkerEffectReport.fromDocument(noChange, stepId), /only task-impl may submit/);
+      assert.throws(() => SourceWorkerEffectReport.fromDocument(noChange, stepId), /only task-impl and task-repair may submit/);
     }
 
     const triageWithIssues = {
@@ -3058,8 +3058,7 @@ describe("worker artifact handoff", () => {
         ["impl-triage", "forbidden"],
         ["impl-repair", "required"],
         ["task-impl", "optional"],
-        ["task-triage", "forbidden"],
-        ["task-repair", "required"],
+        ["task-repair", "optional"],
       ],
     );
     for (const entry of FLOW_ARTIFACT_AUTHORITY_MATRIX.filter((candidate) => candidate.sourceHandoff)) {

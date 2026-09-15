@@ -37,7 +37,7 @@ describe("Definition-owned Task Review stage transition", () => {
   it("routes canonical review results and consumes only the Review semantic budget", () => {
     const passed = resolveTaskReviewStageTransition(new TaskReviewStageFacts({
       binding: binding("review"), taskRound: 1, reviewResultCount: 1,
-      verdict: "PASS", mustFixCount: 0,
+      verdict: "PASS", mustFixCount: 0, findingCount: 0,
     }));
     assert.equal(passed.operation, "review-to-gate");
     assert.equal(passed.targetStepId, "T-1-gate");
@@ -48,17 +48,27 @@ describe("Definition-owned Task Review stage transition", () => {
 
     const rejected = resolveTaskReviewStageTransition(new TaskReviewStageFacts({
       binding: binding("review"), taskRound: 1, reviewResultCount: 1,
-      verdict: "REJECTED", mustFixCount: 1,
+      verdict: "REJECTED", mustFixCount: 1, findingCount: 1,
     }));
     assert.equal(rejected.operation, "review-to-triage");
     assert.equal(rejected.targetStepId, "T-1-triage");
     assert.equal(rejected.reviewBudgetConsumed, 1);
+    const informational = resolveTaskReviewStageTransition(new TaskReviewStageFacts({
+      binding: binding("review"), taskRound: 1, reviewResultCount: 1,
+      verdict: "ADVISORY", mustFixCount: 0, findingCount: 1,
+    }));
+    assert.equal(informational.operation, "review-to-triage");
   });
 
   it("requires Definition-selected continuation evidence for no-change completion", () => {
+    assert.throws(() => new TaskNoChangeContinuationFacts({
+      source: { fingerprint: DIGEST, allowList: [], reasons: ["Unavailable is not a semantic result."] },
+      review: { verdict: "UNAVAILABLE", canonical: true, artifactDigest: REVIEW_DIGEST, sourceFingerprint: DIGEST },
+      acceptance: { handoffId: "invalid-unavailable", reviewArtifactDigest: REVIEW_DIGEST, sourceFingerprint: DIGEST },
+    }), /review is invalid/);
     assert.throws(() => new TaskReviewStageFacts({
       binding: binding("review"), taskRound: 1, reviewResultCount: 1,
-      verdict: "PASS", mustFixCount: 0, sourceNoChange: true,
+      verdict: "PASS", mustFixCount: 0, findingCount: 0, sourceNoChange: true,
       noChangeContinuation: { eligible: true },
     }), /Definition selection/);
     assert.throws(() => continuation("PASS", {
@@ -68,7 +78,7 @@ describe("Definition-owned Task Review stage transition", () => {
 
     const plan = resolveTaskReviewStageTransition(new TaskReviewStageFacts({
       binding: binding("review"), taskRound: 1, reviewResultCount: 1,
-      verdict: "ADVISORY", mustFixCount: 0, sourceNoChange: true,
+      verdict: "ADVISORY", mustFixCount: 0, findingCount: 0, sourceNoChange: true,
       noChangeContinuation: continuation("ADVISORY"),
     }));
     assert.equal(plan.operation, "review-no-change-complete");
@@ -88,7 +98,7 @@ describe("Definition-owned Task Review stage transition", () => {
     }));
     const triagePlan = resolveTaskReviewStageTransition(new TaskReviewStageFacts({
       binding: binding("triage"), taskRound: 1, reviewResultCount: 1,
-      verdict: "REJECTED", mustFixCount: 1, sourceNoChange: true,
+      verdict: "REJECTED", mustFixCount: 1, findingCount: 1, sourceNoChange: true,
       triageDisposition: "all-reject", sameReviewBinding: true,
       reason: "All findings are already satisfied.", noChangeContinuation: allReject,
     }));
@@ -99,7 +109,7 @@ describe("Definition-owned Task Review stage transition", () => {
   it("bounds repair review episodes and carries the fourth repair to Gate", () => {
     const third = resolveTaskReviewStageTransition(new TaskReviewStageFacts({
       binding: binding("repair"), taskRound: 1, reviewResultCount: 3,
-      verdict: "REJECTED", mustFixCount: 1, triageDisposition: "apply",
+      verdict: "REJECTED", mustFixCount: 1, findingCount: 1, triageDisposition: "apply",
       repairChanged: true, sameReviewBinding: true,
     }));
     assert.equal(third.operation, "repair-to-review");
@@ -108,17 +118,26 @@ describe("Definition-owned Task Review stage transition", () => {
 
     assert.throws(() => resolveTaskReviewStageTransition(new TaskReviewStageFacts({
       binding: binding("repair"), taskRound: 1, reviewResultCount: 4,
-      verdict: "REJECTED", mustFixCount: 1, triageDisposition: "apply",
+      verdict: "REJECTED", mustFixCount: 1, findingCount: 1, triageDisposition: "apply",
       repairChanged: true, sameReviewBinding: true,
     })), /Acceptance handoff/);
     const fourth = resolveTaskReviewStageTransition(new TaskReviewStageFacts({
       binding: binding("repair"), taskRound: 1, reviewResultCount: 4,
-      verdict: "REJECTED", mustFixCount: 1, triageDisposition: "apply",
+      verdict: "REJECTED", mustFixCount: 1, findingCount: 1, triageDisposition: "apply",
       repairChanged: true, sameReviewBinding: true, acceptanceCarryForwardReady: true,
     }));
     assert.equal(fourth.operation, "repair-unreviewed-to-gate");
     assert.equal(fourth.acceptanceUnreviewed, true);
     assert.equal(fourth.targetStepId, "T-1-gate");
+
+    const noChange = resolveTaskReviewStageTransition(new TaskReviewStageFacts({
+      binding: binding("repair"), taskRound: 1, reviewResultCount: 3,
+      verdict: "REJECTED", mustFixCount: 1, findingCount: 1, triageDisposition: "apply",
+      repairChanged: false, sameReviewBinding: true,
+      reason: "The selected finding is unrepairable within this Task scope.",
+    }));
+    assert.equal(noChange.operation, "repair-to-review");
+    assert.equal(noChange.targetStepId, "T-1-review");
   });
 
   it("binds Task repair quality recovery to the same selected Review funnel transition", () => {
@@ -129,7 +148,7 @@ describe("Definition-owned Task Review stage transition", () => {
       const completion = resolveTaskReviewStageCompletion({
         facts: new TaskReviewStageFacts({
           binding: binding("repair"), taskRound: 1, reviewResultCount,
-          verdict: "REJECTED", mustFixCount: 1, triageDisposition: "apply",
+          verdict: "REJECTED", mustFixCount: 1, findingCount: 1, triageDisposition: "apply",
           repairChanged: true, sameReviewBinding: true, acceptanceCarryForwardReady,
         }),
         sourceQualityIssueCount: 1,
@@ -141,10 +160,10 @@ describe("Definition-owned Task Review stage transition", () => {
     }
   });
 
-  it("allows one no-change correction round and then stops deterministically", () => {
+  it("allows one no-change correction round and carries final findings to Gate", () => {
     const common = {
       binding: binding("triage"), reviewResultCount: 1,
-      verdict: "REJECTED", mustFixCount: 1, sourceNoChange: true,
+      verdict: "REJECTED", mustFixCount: 1, findingCount: 1, sourceNoChange: true,
       triageDisposition: "apply", sameReviewBinding: true, reason: "The finding requires source work.",
     };
     const first = resolveTaskReviewStageTransition(new TaskReviewStageFacts({ ...common, taskRound: 1 }));
@@ -153,9 +172,9 @@ describe("Definition-owned Task Review stage transition", () => {
     assert.deepEqual(first.effects.map((effect) => effect.status), Array(5).fill("invalidated"));
 
     const second = resolveTaskReviewStageTransition(new TaskReviewStageFacts({ ...common, taskRound: 2 }));
-    assert.equal(second.operation, "task-rounds-exhausted");
-    assert.equal(second.targetStepId, null);
-    assert.equal(second.effects.length, 0);
-    assert.match(second.terminalReason, /two-round/);
+    assert.equal(second.operation, "triage-no-change-to-gate");
+    assert.equal(second.targetStepId, "T-1-gate");
+    assert.equal(second.acceptanceUnreviewed, true);
+    assert.deepEqual(second.effects.map((effect) => effect.status), ["done", "skipped"]);
   });
 });

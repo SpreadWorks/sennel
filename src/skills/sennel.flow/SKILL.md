@@ -208,7 +208,8 @@ continuation.
 
 Handle the returned `data.dispatch.boundary`:
 
-1. `approval_required`: retain both the private `approvalToken` and the exact
+1. `host_action` with `nextAction.directive.kind=await_task_review_filter`: this is an agent-host action, not a user decision. Retain the exact `data.dispatch.binding`, inspect every canonical finding in `nextAction.directive.findings`, and choose only findings whose stable `findingId` should be excluded from repair. Use the finding's requirement/guardrail evidence and canonical source; do not delegate this decision to a worker and do not edit source. Replace only the `<json-array>` token in `nextAction.directive.command` with one JSON array containing objects of exactly `findingId` and a specific non-empty `reason`. Use `[]` to confirm explicitly that no findings are excluded. Execute that typed command once, unchanged otherwise, then immediately resume `sennel flow run dispatch --expect-binding <binding>`. Unknown/duplicate IDs, an empty reason, or stale Attempt/Review/source/catalog binding are a hard stop; refresh from dispatch rather than weakening or reconstructing the binding.
+2. `approval_required`: retain both the private `approvalToken` and the exact
    `data.dispatch.binding`. Present the current localized approval choices from
    `nextAction.directive.actionPrompt`. If the user selects the specification
    summary or full-review choice, run exactly one of:
@@ -229,11 +230,11 @@ Handle the returned `data.dispatch.boundary`:
    same process. A stale token is not permission to execute anything. When
    autoApprove advances an approval-required action, it has no approval scene;
    never generate a view, cache entry, or summary call for it.
-2. `auto_upgrade_decision`: retain the exact `data.dispatch.binding` and present the standard auto-mode choice. If the user
+3. `auto_upgrade_decision`: retain the exact `data.dispatch.binding` and present the standard auto-mode choice. If the user
    explicitly selects auto, run `sennel flow set auto on --expect-binding <token>`;
    otherwise run `sennel flow set auto off --expect-binding <token>`. Immediately
    resume `sennel flow run dispatch --expect-binding <token>` in the same turn.
-3. `await_user_decision`: retain the exact `data.dispatch.binding` and explain every materially different choice in the
+4. `await_user_decision`: retain the exact `data.dispatch.binding` and explain every materially different choice in the
    user's language without exposing raw action IDs or commands. Wait for the
    user's choice, execute only its current exact action, then immediately
    resume `sennel flow run dispatch --expect-binding <token>`. Adoption/reconciliation,
@@ -264,7 +265,7 @@ Handle the returned `data.dispatch.boundary`:
      never edit canonical `draft.json` directly, and immediately resume dispatch
      with the same binding so the CLI can return the next question or start the
      worker after all questions are resolved.
-4. `blocked`: retain the exact `data.dispatch.binding`, then report the returned reason and resume instruction as the concrete
+5. `blocked`: retain the exact `data.dispatch.binding`, then report the returned reason and resume instruction as the concrete
    blocker. `FLOW_DISPATCH_AGENT_FAILED`, `FLOW_DISPATCH_STALLED`, and
    `FLOW_DISPATCH_LIMIT_REACHED` are failures, not progress summaries and not
    permission to mark a step complete manually.
@@ -274,8 +275,8 @@ Handle the returned `data.dispatch.boundary`:
      have left a detached worker running. Verify that the complete prior
      process tree has ended before explicit lease recovery; never delete or
      reclaim the lease merely because no new artifact has appeared.
-5. `completed`, `aborted`, or `idle`: report the terminal state.
-6. `target_mismatch`, or a top-level `ACTIVE_FLOW_MISMATCH` /
+6. `completed`, `aborted`, or `idle`: report the terminal state.
+7. `target_mismatch`, or a top-level `ACTIVE_FLOW_MISMATCH` /
    `FLOW_TARGET_NOT_FOUND` returned before dispatch acquires the target: exit
    only when the exact guarded target genuinely no longer exists. Ambiguity,
    and state corruption are not successful completion.
@@ -287,9 +288,10 @@ again merely to advance a normal step.
 
 ### Loop exit condition
 
-The loop exits only at a dispatcher boundary described above: a terminal
-directive, real user decision or approval, concrete dispatcher/Flow blocker,
-state corruption, or true/unrecovered target mismatch.
+The loop exits only at a dispatcher boundary described above. A `host_action`
+is handled and resumed in the same turn; it is not a user-facing exit. Terminal
+directives, real user decisions or approval, concrete dispatcher/Flow blockers,
+state corruption, or true/unrecovered target mismatch do exit the loop.
 If `targetRunId`
 is known, use `sennel flow get status <targetRunId> --expect-binding <token>` for final
 readback; the binding validates that the resolved flow still matches the

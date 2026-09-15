@@ -317,24 +317,14 @@ describe("231: full lifecycle through CLI and the typed source handoff boundary"
     assert.equal(failedReview.data.artifacts.taskId, "T-1");
     assertNext(tmp, "task-triage", "T-1");
     const failedFinding = JSON.parse(FAIL_REVIEW).blockingFindings[0];
-    assert.equal(completeTaskStage(tmp, "triage", {
-      version: 1,
-      stepId: "task-triage",
-      completionStatus: "done",
-      issues: [],
-      overview: null,
-      triage: {
-        version: 1,
-        dispositions: [{
-          findingKey: failedFinding.findingKey,
-          disposition: "apply",
-          basis: "repair-required",
-          rationale: "R1 confirms that the zero-value branch must be removed.",
-        }],
-      },
-      repair: null,
-      noChangeReason: null,
-    }).completed, true);
+    const filterAction = runEnvelope(tmp, ["flow", "get", "next-action"]).data.context.taskReviewFilter;
+    runEnvelope(tmp, [
+      "flow", "run", "filter-task-review", "--exclusions", "[]",
+      "--expect-attempt-id", filterAction.attemptId,
+      "--expect-review-digest", filterAction.reviewDigest,
+      "--expect-source-fingerprint", filterAction.sourceFingerprint,
+      "--expect-catalog-fingerprint", filterAction.catalogFingerprint,
+    ]);
     assertNext(tmp, "task-repair", "T-1");
     assert.equal(completeTaskStage(tmp, "repair", {
       version: 1,

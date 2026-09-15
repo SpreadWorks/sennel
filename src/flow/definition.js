@@ -86,6 +86,10 @@ import {
   TaskReviewStageFacts,
   TaskReviewStageStepEffect,
   TaskReviewStageTransitionPlan,
+  TaskReviewUnavailableEvidence,
+  TaskReviewFailureFacts,
+  TaskReviewFailurePlan,
+  resolveTaskReviewFailure,
   createTaskReviewStageTransitionPlan,
   taskReviewStageEffects,
 } from "./lib/task-review-stage-transition.js";
@@ -226,6 +230,9 @@ export function resolveRetryRecovery(facts) {
   if (!facts.currentObservationAvailable) {
     return RetryRecoveryPlan.blocked("current retry recovery observation is unavailable");
   }
+  if (!facts.taskSourceAvailable) {
+    return RetryRecoveryPlan.blocked("Task Review source observation is unavailable");
+  }
   if (facts.evidenceChanged && recordableToolingFailure) {
     return RetryRecoveryPlan.available(
       RetryRecoveryBasis.changedInput(),
@@ -265,7 +272,6 @@ export function resolveRetryRecovery(facts) {
   if (facts.confirmedTimeoutConsumed) {
     return RetryRecoveryPlan.blocked("confirmed timeout recovery already consumed this evidence lineage");
   }
-  if (!facts.taskSourceAvailable) return RetryRecoveryPlan.blocked("Task Review source observation is unavailable");
   return RetryRecoveryPlan.available(
     RetryRecoveryBasis.confirmedTimeout(),
     "Confirmed provider timeout stopped before publishing a Review artifact.",
@@ -321,8 +327,11 @@ export {
   TaskReviewStageFacts,
   TaskReviewStageStepEffect,
   TaskReviewStageTransitionPlan,
+  TaskReviewUnavailableEvidence,
+  TaskReviewFailureFacts,
+  TaskReviewFailurePlan,
 };
-export { selectTaskNoChangeContinuation } from "./lib/task-review-stage-transition.js";
+export { selectTaskNoChangeContinuation, resolveTaskReviewFailure } from "./lib/task-review-stage-transition.js";
 export { resolveTaskExecutionOverrun } from "./lib/task-execution-policy.js";
 
 const REQUIREMENT_TEST_LEAVES = new Set(REQUIREMENT_TEST_LEAF_IDS);
@@ -650,7 +659,7 @@ export function resolveRequirementTestLifecycle(input) {
 export class SourceHandoffTransitionPlan {
   constructor({ facts, disposition }) {
     if (!(facts instanceof SourceHandoffFailureFacts)) throw new Error("source handoff plan requires typed failure facts");
-    if (!["wait", "block", "rollback", "preserve", "quarantine"].includes(disposition)) {
+    if (!["wait", "block", "rollback", "preserve", "quarantine", "converge-no-change"].includes(disposition)) {
       throw new Error("invalid source handoff disposition");
     }
     if (disposition === "rollback" && (facts.kind !== "rejected" || !facts.ownershipProven || !facts.workerStopped)) {
@@ -661,6 +670,12 @@ export class SourceHandoffTransitionPlan {
       || (disposition === "quarantine" && facts.kind !== "authority-violation")) {
       throw new Error("source handoff disposition contradicts its failure facts");
     }
+    if (disposition === "converge-no-change" && (
+      facts.kind !== "rejected" || facts.identity?.stepId !== "task-repair"
+      || !facts.ownershipProven || !facts.workerStopped
+      || !((facts.code === "FLOW_SOURCE_HANDOFF_RESPONSE_INVALID" && !facts.retryable)
+        || (facts.providerFailed && !facts.toolingRecoveryAvailable))
+    )) throw new Error("source handoff no-change convergence contradicts its failure facts");
     this.facts = facts;
     this.disposition = disposition;
     this.retryAfterSettlement = disposition === "rollback" && facts.retryable;
@@ -688,7 +703,11 @@ export function resolveSourceHandoffTransitionPlan({ facts, policy }) {
   if (facts.kind === "temporary-unavailable") disposition = "wait";
   else if (facts.kind === "authority-violation") disposition = "quarantine";
   else if (facts.kind === "rejected") {
-    if (policy.preservesRejectedSource && facts.workerStopped) disposition = "preserve";
+    if (policy.stepId === "task-repair" && facts.identity?.stepId === "task-repair"
+      && facts.ownershipProven && facts.workerStopped
+      && ((facts.code === "FLOW_SOURCE_HANDOFF_RESPONSE_INVALID" && !facts.retryable)
+        || (facts.providerFailed && !facts.toolingRecoveryAvailable))) disposition = "converge-no-change";
+    else if (policy.preservesRejectedSource && facts.workerStopped) disposition = "preserve";
     else if (facts.ownershipProven && facts.workerStopped) disposition = "rollback";
   }
   return new SourceHandoffTransitionPlan({ facts, disposition });
@@ -700,7 +719,7 @@ export function resolveTaskReviewStageTransition(facts) {
     throw new Error("resolveTaskReviewStageTransition requires TaskReviewStageFacts");
   }
   const taskId = facts.binding.taskId;
-  const reviewBudgetConsumed = facts.binding.stage === "review" ? 1 : 0;
+  const reviewBudgetConsumed = facts.binding.stage === "review" && facts.verdict !== "UNAVAILABLE" ? 1 : 0;
   const plan = (operation, entries, targetRole = null, options = {}) => createTaskReviewStageTransitionPlan(facts, {
     operation,
     effects: taskReviewStageEffects(taskId, entries),
@@ -709,7 +728,14 @@ export function resolveTaskReviewStageTransition(facts) {
     ...options,
   });
   if (facts.binding.stage === "review") {
-    if (facts.verdict === "REJECTED") {
+    if (facts.verdict === "UNAVAILABLE") {
+      return plan("review-unavailable-to-gate", [
+        ["review", "done"],
+        ["triage", "skipped", facts.reason],
+        ["repair", "skipped", facts.reason],
+      ], "gate", { acceptanceUnreviewed: true });
+    }
+    if (facts.findingCount > 0) {
       return plan("review-to-triage", [["review", "done"]], "triage");
     }
     if (facts.sourceNoChange) {
@@ -723,8 +749,8 @@ export function resolveTaskReviewStageTransition(facts) {
     }
     return plan("review-to-gate", [
       ["review", "done"],
-      ["triage", "skipped", "Task Review has no must-fix findings."],
-      ["repair", "skipped", "Task Review has no must-fix findings."],
+      ["triage", "skipped", "Task Review has no findings."],
+      ["repair", "skipped", "Task Review has no findings."],
     ], "gate");
   }
   if (facts.binding.stage === "triage") {
@@ -744,9 +770,10 @@ export function resolveTaskReviewStageTransition(facts) {
     }
     if (facts.sourceNoChange) {
       if (facts.taskRound === 2) {
-        return plan("task-rounds-exhausted", [], null, {
-          terminalReason: "Task no-change correction exhausted the two-round execution budget.",
-        });
+        return plan("triage-no-change-to-gate", [
+          ["triage", "done"],
+          ["repair", "skipped", "The final implementation round made no source change; selected findings are carried to Task Gate."],
+        ], "gate", { acceptanceUnreviewed: true });
       }
       return plan("triage-no-change-correction", [
         ["impl", "invalidated"], ["review", "invalidated"], ["triage", "invalidated"],
@@ -754,6 +781,9 @@ export function resolveTaskReviewStageTransition(facts) {
       ], "impl");
     }
     return plan("triage-to-repair", [["triage", "done"]], "repair");
+  }
+  if (facts.repairChanged === false && facts.reviewResultCount === 4 && !facts.acceptanceCarryForwardReady) {
+    throw new Error("fourth Task repair no-change requires the unreviewed Acceptance handoff");
   }
   if (facts.reviewResultCount < 4) {
     return plan("repair-to-review", [
@@ -4768,11 +4798,11 @@ const TASK_DEFINITION = Object.freeze([
   }),
   new FlowNode({
     id: "task-triage",
-    label: "Task triage",
-    action: "write-task-triage",
-    instructionsKey: "task.task-triage",
+    label: "Task review filter",
+    action: "filter-task-review",
+    instructionsKey: "task.task-review-filter",
     contextKinds: canonicalTaskContextKinds("task-triage"),
-    outputSchemaRef: sourceWorkerEffectSchemaRef("task-triage"),
+    outputSchemaRef: null,
     skippable: true,
     maxAttempts: 1,
   }),

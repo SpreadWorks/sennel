@@ -434,7 +434,8 @@ function taskRepairEvidence(stage, triage) {
 class TaskReviewAcceptanceEvidence {
   constructor({ stage, triage }) {
     if (stage?.binding?.reviewOrdinal !== 4 || stage?.unreviewedAfterRepair !== true
-      || stage?.repair === null || typeof stage?.repair !== "object"
+      || ((stage?.repair === null || typeof stage?.repair !== "object")
+        === (stage?.repairNoChange === null || typeof stage?.repairNoChange !== "object"))
       || stage?.sourceMutationManifest === null || typeof stage?.sourceMutationManifest !== "object"
       || !Array.isArray(triage?.dispositions)) {
       throw new Error("Task Review Acceptance evidence requires the fourth canonical Task repair");
@@ -453,10 +454,87 @@ class TaskReviewAcceptanceEvidence {
       unreviewedAfterRepair: true,
       findings: structuredClone(this.stage.reviewFindings),
       dispositions: structuredClone(this.triage.dispositions),
-      repair: structuredClone(this.stage.repair),
+      repair: this.stage.repair === undefined ? null : structuredClone(this.stage.repair),
+      repairNoChange: this.stage.repairNoChange === undefined ? null : structuredClone(this.stage.repairNoChange),
       sourceMutationManifest: structuredClone(this.stage.sourceMutationManifest),
       binding: structuredClone(this.stage.binding),
       handoffDigest: this.stage.handoffDigest,
+    };
+  }
+}
+
+/** Final implementation no-change carries selected, unrepaired findings to Acceptance. */
+class TaskFinalRoundUnrepairedAcceptanceEvidence {
+  constructor({ activity, plan, review, triage }) {
+    if (plan.operation !== "triage-no-change-to-gate"
+      || plan.facts.taskRound !== 2 || plan.facts.sourceNoChange !== true
+      || plan.facts.triageDisposition !== "apply" || plan.acceptanceUnreviewed !== true
+      || review?.taskId !== plan.facts.binding.taskId
+      || triage?.taskId !== review.taskId
+      || triage?.hostFilter === null || typeof triage?.hostFilter !== "object"
+      || !Array.isArray(triage?.dispositions)
+      || !triage.dispositions.some((entry) => entry?.disposition === "apply")) {
+      throw new Error("Task final-round unrepaired evidence requires its exact host filter route");
+    }
+    this.activityId = activity.id;
+    this.taskId = review.taskId;
+    this.unreviewedAfterRepair = true;
+    this.implementationNoChange = true;
+    this.plan = deepFreeze(structuredClone(plan.toJSON()));
+    this.review = deepFreeze(structuredClone(review));
+    this.triage = deepFreeze(structuredClone(triage));
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      taskId: this.review.taskId,
+      taskRound: 2,
+      unreviewedAfterRepair: true,
+      implementationNoChange: true,
+      unavailable: false,
+      unreviewedFindings: true,
+      activityId: this.activityId,
+      findings: [...this.review.blockingFindings, ...this.review.nonBlockingImprovements],
+      dispositions: structuredClone(this.triage.dispositions),
+      hostFilter: structuredClone(this.triage.hostFilter),
+      sourceFingerprint: this.triage.binding.sourceFingerprint,
+      binding: structuredClone(this.triage.binding),
+    };
+  }
+}
+
+/** Tooling-unavailable differs from a semantic Review that left findings unrepaired. */
+class TaskReviewUnavailableAcceptanceEvidence {
+  constructor({ activity, plan }) {
+    if (plan.operation !== "review-unavailable-to-gate" || plan.acceptanceUnreviewed !== true
+      || plan.reviewBudgetConsumed !== 0 || plan.facts.verdict !== "UNAVAILABLE"
+      || plan.facts.unavailable === null || activity.nodeId !== `${plan.facts.binding.taskId}-review`) {
+      throw new Error("Task Review unavailable Acceptance evidence requires its exact Definition route");
+    }
+    this.activityId = activity.id;
+    this.plan = plan;
+    this.taskId = plan.facts.binding.taskId;
+    this.unavailable = true;
+    this.semanticReviewCount = plan.facts.reviewResultCount;
+    this.remainingRisk = plan.facts.unavailable.message;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    const { facts } = this.plan;
+    return {
+      taskId: facts.binding.taskId,
+      unavailable: true,
+      unreviewedAfterRepair: false,
+      unreviewedFindings: false,
+      semanticReviewCount: facts.reviewResultCount,
+      findings: [],
+      remainingRisk: facts.unavailable.message,
+      failure: facts.unavailable.toJSON(),
+      sourceFingerprint: facts.binding.sourceFingerprint,
+      binding: facts.binding.toJSON(),
+      activityId: this.activityId,
     };
   }
 }
@@ -644,6 +722,28 @@ export class TaskReviewConvergenceEvidence {
   handoffs() {
     const handoffs = [];
     const activities = Object.freeze(this.flowManager.activityLedger(this.state.specId));
+    for (const activity of activities) {
+      const storedPlan = activity.transition?.taskReviewStagePlan;
+      if (storedPlan?.operation !== "review-unavailable-to-gate") continue;
+      const plan = taskReviewStagePlanFromJSON(storedPlan);
+      const lineages = this.flowManager.taskMutationLineages({
+        specId: this.state.specId, taskId: plan.facts.binding.taskId,
+      });
+      const currentBudget = lineages.at(-1)?.budget ?? null;
+      const superseded = activities.some((candidate) => {
+        const later = candidate.transition?.taskReviewStagePlan;
+        return candidate.confirmationOrder > activity.confirmationOrder
+          && candidate.nodeId === `${plan.facts.binding.taskId}-review`
+          && later?.facts?.binding?.stage === "review"
+          && later?.facts?.taskRound === plan.facts.taskRound
+          && later?.facts?.verdict !== "UNAVAILABLE";
+      });
+      if (plan.facts.binding.runId !== this.state.runId
+        || currentBudget?.round !== plan.facts.taskRound
+        || stableStringify(plan.facts.unavailable.reviewCycle) !== stableStringify(this.cycle.toJSON())
+        || superseded) continue;
+      handoffs.push(new TaskReviewUnavailableAcceptanceEvidence({ activity, plan }));
+    }
     for (const record of this.records) {
       for (const repair of record.repairHistory?.attempts ?? []) {
         const stage = repair.payload;
@@ -670,6 +770,11 @@ export class TaskReviewConvergenceEvidence {
         const storedPlan = activity.transition?.taskReviewStagePlan;
         if (storedPlan === null || storedPlan === undefined) continue;
         const plan = taskReviewStagePlanFromJSON(storedPlan);
+        if (plan.operation === "triage-no-change-to-gate"
+          && isExactTriageStageCompletion({ activity, plan, stage })) {
+          handoffs.push(new TaskFinalRoundUnrepairedAcceptanceEvidence({ activity, plan, review: review.payload, triage: stage }));
+          continue;
+        }
         if (plan.operation !== "triage-all-reject-to-gate"
           || !isExactTriageStageCompletion({ activity, plan, stage })) continue;
         handoffs.push(new TaskAllRejectAcceptanceEvidence({ activity, plan, review: review.payload, triage: stage }));
@@ -695,7 +800,7 @@ export class TaskReviewConvergenceEvidence {
 
   status() {
     const fourthHandoffs = this.handoffs();
-    return this.records.map((record) => {
+    const statuses = this.records.map((record) => {
       const review = record.history.current;
       const accounting = record.currentBudget === null
         ? null
@@ -708,6 +813,7 @@ export class TaskReviewConvergenceEvidence {
       const fourthRepairUnreviewed = fourthHandoffs.some((handoff) => (
         handoff.taskId === record.taskId && handoff.unreviewedAfterRepair
       ));
+      const unavailable = fourthHandoffs.find((handoff) => handoff.taskId === record.taskId && handoff.unavailable === true) ?? null;
       return {
         taskId: record.taskId,
         reviewAttempts,
@@ -719,10 +825,24 @@ export class TaskReviewConvergenceEvidence {
             recurrenceCount: entry.recurrenceCount - 1,
           })),
         fourthRepairUnreviewed,
+        ...(unavailable === null ? {} : { unavailable: true, remainingRisk: unavailable.remainingRisk }),
         ...(fourthHandoffs.some((handoff) => handoff.taskId === record.taskId && handoff.noChange) && { assurance: "advisory" }),
         finalVerdict: currentReview ? review.payload.verdict : null,
       };
     });
+    for (const handoff of fourthHandoffs) {
+      if (handoff.unavailable !== true || statuses.some((entry) => entry.taskId === handoff.taskId)) continue;
+      statuses.push({
+        taskId: handoff.taskId,
+        reviewAttempts: handoff.semanticReviewCount,
+        recurringFindings: [],
+        fourthRepairUnreviewed: false,
+        unavailable: true,
+        remainingRisk: handoff.remainingRisk,
+        finalVerdict: null,
+      });
+    }
+    return statuses;
   }
 }
 

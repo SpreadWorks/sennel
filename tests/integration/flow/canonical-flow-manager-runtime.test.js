@@ -21,6 +21,7 @@ import {
   CurrentFlowStateStore,
 } from "../../../src/flow/lib/current-flow-state.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
+import RunFilterTaskReviewCommand from "../../../src/flow/lib/run-filter-task-review.js";
 import RunClaimNextActionCommand from "../../../src/flow/lib/run-claim-next-action.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import {
@@ -3879,7 +3880,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const next = await new GetNextActionCommand().execute(context);
     assert.equal(next.taskId, "T-1");
     assert.equal(next.step, "task-triage");
-    assert.equal(next.action, "write-task-triage");
+    assert.equal(next.action, "filter-task-review");
     assert.equal(new RunSettleReviewTransitionCommand().execute(context).ok, false);
     assert.equal(manager.readArtifact({ specId, logicalKey: "flow.findings", consumerNodeId: "acceptance-review", optional: true }), null);
   });
@@ -6592,27 +6593,17 @@ describe("FlowManager canonical Version-1 runtime", () => {
           blockingFindings: [recurringFinding],
         });
         assert.notEqual(rejectedReview.ok, false, JSON.stringify(rejectedReview));
-        const triage = createTaskStageHandoff({
-          root: repository, manager, specId, taskId: "T-1", role: "triage",
+        const projectedFilter = await new GetNextActionCommand().execute(context());
+        const filterBinding = projectedFilter.context.taskReviewFilter;
+        const filtered = new RunFilterTaskReviewCommand().execute({
+          ...context(),
+          exclusions: "[]",
+          expectAttemptId: filterBinding.attemptId,
+          expectReviewDigest: filterBinding.reviewDigest,
+          expectSourceFingerprint: filterBinding.sourceFingerprint,
+          expectCatalogFingerprint: filterBinding.catalogFingerprint,
         });
-        completeTaskStageHandoff(triage, {
-          version: 1,
-          stepId: "task-triage",
-          completionStatus: "done",
-          issues: [],
-          overview: null,
-          triage: {
-            version: 1,
-            dispositions: [{
-              findingKey: recurringFinding.findingKey,
-              disposition: "apply",
-              basis: "repair-required",
-              rationale: "The current Task source still requires this exact correction.",
-            }],
-          },
-          repair: null,
-          noChangeReason: null,
-        });
+        assert.equal(filtered.ok, true, JSON.stringify(filtered));
         const repair = createTaskStageHandoff({
           root: repository, manager, specId, taskId: "T-1", role: "repair",
         });
@@ -7722,6 +7713,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(providerCalls, 1, `unchanged prior evidence must be cleaned before the current provider runs: ${JSON.stringify(result)}`);
     assert.equal(fs.existsSync(safe.stale.directory), false);
     assert.equal(result.errors[0].code, "REVIEW_TOOLING_ERROR");
-    assert.notEqual(safe.manager.canonicalState(safe.specId).attempt.failure.code, "TASK_REVIEW_PARTIAL_EFFECT");
+    assert.equal(safe.manager.canonicalState(safe.specId).attempt.failure, null);
   });
 });

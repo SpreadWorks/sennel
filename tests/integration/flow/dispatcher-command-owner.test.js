@@ -16,6 +16,7 @@ import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-art
 import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
+import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { ExecuteCommandDirective, RepairEvidenceDirective } from "../../../src/flow/lib/next-action-directive.js";
@@ -446,6 +447,180 @@ test("dispatcher preserves a command envelope failure code and does not start a 
     flowCommands.run.review = original;
     removeTmpDir(root);
   }
+});
+
+test("dispatcher continues only after a failed owned command confirms its durable canonical transition", async () => {
+  const root = createTmpDir("dispatcher-command-confirmed-transition-");
+  try {
+    const specId = "503-command-confirmed-transition";
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const flow = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-command-confirmed-transition",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft-questions-review");
+    let commandCalls = 0;
+    let workerCalls = 0;
+    const dispatcher = new RunDispatchCommand({
+      nextAction: {
+        async run() {
+          return flow.state().currentNodeId === "draft-questions-review"
+            ? reviewAction()
+            : completedAction();
+        },
+      },
+      commandRunner: async () => {
+        commandCalls += 1;
+        flow.settle("draft-questions-review");
+        return Envelope.fail(
+          "run",
+          "review",
+          "REVIEW_TOOLING_ERROR",
+          "the command could not produce review evidence",
+        );
+      },
+      agent: { async call() { workerCalls += 1; } },
+      repositoryFingerprint: () => "dispatcher-command-confirmed-transition-fingerprint",
+      leaseFactory: () => ({ acquire() {}, release() {} }),
+      handoffCoordinator: { recoverPending() {} },
+    });
+    dispatcher.container = commandContainer({ root, manager });
+
+    const result = await dispatcher.execute({
+      root, mainRoot: root, executionRoot: root, specId, flowManager: manager,
+      flowState: manager.load(specId), expectRunId: "run-command-confirmed-transition",
+      _envelopeType: "run", _envelopeKey: "dispatch",
+    });
+
+    assert.equal(result.dispatch?.boundary, "completed", JSON.stringify(result));
+    assert.equal(result.dispatch?.dispatchCount, 1);
+    assert.equal(commandCalls, 1);
+    assert.equal(workerCalls, 0);
+    assert.equal(flow.state().currentNodeId, null);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+test("dispatcher blocks a failed owned command when only the repository changes", async () => {
+  const root = createTmpDir("dispatcher-command-repository-only-progress-");
+  try {
+    const specId = "503-command-repository-only-progress";
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const flow = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-command-repository-only-progress",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft-questions-review");
+    let commandCalls = 0;
+    let repositoryRevision = "before-command";
+    const dispatcher = new RunDispatchCommand({
+      nextAction: { async run() { return reviewAction(); } },
+      commandRunner: async () => {
+        commandCalls += 1;
+        repositoryRevision = "after-command";
+        return Envelope.fail("run", "review", "REVIEW_TOOLING_ERROR", "stub failed after a repository-only change");
+      },
+      repositoryFingerprint: () => repositoryRevision,
+      leaseFactory: () => ({ acquire() {}, release() {} }),
+      handoffCoordinator: { recoverPending() {} },
+    });
+    dispatcher.container = commandContainer({ root, manager });
+
+    const result = await dispatcher.execute({
+      root, mainRoot: root, executionRoot: root, specId, flowManager: manager,
+      flowState: manager.load(specId), expectRunId: "run-command-repository-only-progress",
+      _envelopeType: "run", _envelopeKey: "dispatch",
+    });
+
+    assert.equal(result.errors?.[0]?.code, "REVIEW_TOOLING_ERROR", JSON.stringify(result));
+    assert.equal(result.data.dispatch.boundary, "blocked");
+    assert.equal(commandCalls, 1);
+    assert.equal(flow.state().currentNodeId, "draft-questions-review");
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+test("canonical-only failed-command progress does not recapture repository state", async () => {
+  const root = createTmpDir("dispatcher-command-canonical-progress-no-recapture-");
+  try {
+    const specId = "503-command-canonical-progress-no-recapture";
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const flow = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-command-canonical-progress-no-recapture",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft-questions-review");
+    let fingerprintCalls = 0;
+    const dispatcher = new RunDispatchCommand({
+      nextAction: { async run() { return reviewAction(); } },
+      commandRunner: async () => Envelope.fail("run", "review", "REVIEW_TOOLING_ERROR", "stub failed"),
+      repositoryFingerprint: () => {
+        fingerprintCalls += 1;
+        if (fingerprintCalls > 2) throw new Error("repository fingerprint must not be recaptured");
+        return "canonical-progress-fingerprint";
+      },
+      leaseFactory: () => ({ acquire() {}, release() {} }),
+      handoffCoordinator: { recoverPending() {} },
+    });
+    dispatcher.container = commandContainer({ root, manager });
+
+    const result = await dispatcher.execute({
+      root, mainRoot: root, executionRoot: root, specId, flowManager: manager,
+      flowState: manager.load(specId), expectRunId: "run-command-canonical-progress-no-recapture",
+      _envelopeType: "run", _envelopeKey: "dispatch",
+    });
+
+    assert.equal(result.errors?.[0]?.code, "REVIEW_TOOLING_ERROR", JSON.stringify(result));
+    assert.equal(result.data.dispatch.boundary, "blocked");
+    assert.equal(fingerprintCalls, 2, "only action capture and pre-handoff validation need repository state");
+    assert.equal(flow.state().currentNodeId, "draft-questions-review");
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+test("dispatcher follows a real unavailable Task Review transition to Task Gate without a blocked boundary", async (t) => {
+  const scenario = new TaskReviewScenario(t);
+  const nextAction = new GetNextActionCommand();
+  const observedSteps = [];
+  let reviewCalls = 0;
+  let reviewResult = null;
+  const dispatcher = new RunDispatchCommand({
+    nextAction: {
+      async run(_container, input) {
+        const action = await nextAction.execute({ ...scenario.context(), ...input });
+        observedSteps.push(action.step);
+        // This test owns the Review-to-Gate connection. It observes the real
+        // Gate projection but leaves Gate execution to its dedicated suite.
+        return action.step === "task-gate" ? completedAction() : action;
+      },
+    },
+    commandRunner: async ({ command, ctx }) => {
+      assert.equal(command.commandName, "review");
+      reviewCalls += 1;
+      reviewResult = await scenario.review(() => ({
+        ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false,
+      })).execute({ ...ctx, config: {} });
+      return reviewResult;
+    },
+    repositoryFingerprint: () => "dispatcher-real-task-review-unavailable-fingerprint",
+    leaseFactory: () => ({ acquire() {}, release() {} }),
+    handoffCoordinator: { recoverPending() {} },
+  });
+
+  const result = await dispatcher.execute({
+    ...scenario.context(),
+    expectRunId: "review-scenario",
+    _envelopeType: "run",
+    _envelopeKey: "dispatch",
+  });
+
+  assert.equal(result.dispatch?.boundary, "completed", JSON.stringify(result));
+  assert.equal(reviewCalls, 1);
+  assert.equal(reviewResult?.ok, false);
+  assert.ok(observedSteps.includes("task-gate"), JSON.stringify(observedSteps));
+  scenario.reload();
+  assert.equal(scenario.state().current.at(-1), "T-1-gate");
+  assert.equal(scenario.state().attempt.consumption.semantic, 0);
 });
 
 test("dispatcher preserves a fatal registry post-hook code and does not start a worker", async () => {

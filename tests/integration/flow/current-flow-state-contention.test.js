@@ -132,11 +132,15 @@ test("sealed handoff recovery survives external current-state contention and set
     suggestion: "Implement the required behavior.", disposition: "must-fix", rationale: "The mapped requirement requires this behavior.",
   }]);
   assert.notEqual(reviewed.ok, false, JSON.stringify(reviewed));
-  const work = scenario.stageHandoff("triage");
+  assert.notEqual((await scenario.filter([])).ok, false);
+  scenario.reload();
+  const work = scenario.stageHandoff("repair");
+  fs.appendFileSync(scenario.sourcePath, "repaired behavior\n");
   scenario.sealHandoff(work, {
-    version: 1, stepId: "task-triage", completionStatus: "done", issues: [], overview: null,
-    triage: { version: 1, dispositions: [{ findingKey: "missing-behavior", disposition: "apply", basis: "repair-required", rationale: "The requirement confirms this missing behavior." }] },
-    repair: null, noChangeReason: null,
+    version: 1, stepId: "task-repair", completionStatus: "done", issues: [], overview: null,
+    triage: null,
+    repair: { version: 1, findings: [{ findingKey: "missing-behavior", paths: ["README.md"] }], summary: "Implemented the required behavior.", recurrenceResolutions: [] },
+    noChangeReason: null,
   });
   scenario.reload();
   const ctx = scenario.context();
@@ -145,7 +149,7 @@ test("sealed handoff recovery survives external current-state contention and set
   const result = await withContendingWriter(t, scenario.manager.specLocation(scenario.specId).directory, () => recovery.recoverPending({ ctx }));
   assert.equal(result.completed, true);
   scenario.reload();
-  assert.equal(scenario.state().current.at(-1), "T-1-repair");
+  assert.equal(scenario.state().current.at(-1), "T-1-review");
   const settled = scenario.snapshot();
   assert.equal(new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() }), null);
   scenario.reload();

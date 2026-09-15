@@ -35,16 +35,20 @@ function claim(scenario, role) {
   if (scenario.state().current?.at(-1) !== `${scenario.taskId}-${role}`) scenario.manager.updateStepStatus({ stepId: `${scenario.taskId}-${role}`, requestedStatus: "in_progress" }, { specId: scenario.specId });
 }
 
-function triageEffect(keys, disposition = "apply") {
-  return { version: 1, stepId: "task-triage", completionStatus: "done", issues: [], overview: null, triage: { version: 1, dispositions: keys.map((findingKey) => ({ findingKey, disposition, basis: disposition === "apply" ? "repair-required" : "already-satisfied", rationale: disposition === "apply" ? "The requirement confirms this missing behavior." : "The referenced behavior is already covered by the current implementation." })) }, repair: null, noChangeReason: null };
-}
-
 function repairEffect(keys, recurrence = { entries: [] }) {
   return { version: 1, stepId: "task-repair", completionStatus: "done", issues: [], overview: null, triage: null, repair: { version: 1, findings: keys.map((findingKey) => ({ findingKey, paths: ["README.md"] })), summary: "Implemented the missing mapped behavior.", recurrenceResolutions: recurrence.entries.map(({ findingKey, fingerprint }) => ({ findingKey, fingerprint, priorRepairInsufficiency: "The prior change did not cover the required behavior identified by this exact finding.", repairStrategy: "Add the missing requirement branch and preserve the previous correction." })) }, noChangeReason: null };
 }
 
 function artifact(scenario, role) { return new TaskStageArtifact({ flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId, role }); }
 function accounting(scenario) { return new TaskReviewAccounting({ taskId: scenario.taskId, budget: scenario.manager.taskMutationLineages({ specId: scenario.specId, taskId: scenario.taskId }).at(-1).budget, history: artifact(scenario, "review").history }); }
+
+async function excludeAll(scenario, reason = "The host determined this finding does not require a source repair.") {
+  const reviewFindings = [
+    ...(artifact(scenario, "review").document.blockingFindings ?? []),
+    ...(artifact(scenario, "review").document.nonBlockingImprovements ?? []),
+  ];
+  return scenario.filter(reviewFindings.map((entry) => ({ findingId: entry.findingId, reason })));
+}
 
 test("Task review publishes immutable findings before triage; only repair edits and retains both finding mappings after reload", async (t) => {
   const scenario = scenarioFor(t);
@@ -57,11 +61,8 @@ test("Task review publishes immutable findings before triage; only repair edits 
   assert.deepEqual(artifact(scenario, "review").document.blockingFindings.map((entry) => entry.findingKey), keys);
   assert.equal(fs.readFileSync(scenario.sourcePath, "utf8"), original);
   assert.equal(accounting(scenario).completedReviewCount, 1);
-  assert.equal(scenario.state().nextAction().action.action, "write-task-triage");
-  const triage = scenario.stageHandoff("triage");
-  assert.match(triage.request.workerInstructions.schemaGuidance, /\["missing-behavior","missing-validation"\]/);
-  assert.match(triage.request.workerInstructions.schemaGuidance, /exactly 2 entries/);
-  assert.equal(scenario.completeHandoff(triage, triageEffect(keys)).completed, true);
+  assert.equal(scenario.state().nextAction().action.action, "filter-task-review");
+  assert.equal((await scenario.filter([])).ok, true);
   scenario.reload();
   assert.equal(artifact(scenario, "triage").document.binding.review.digest, reviewRef.digest);
   assert.equal(fs.readFileSync(scenario.sourcePath, "utf8"), original);
@@ -99,7 +100,7 @@ test("Task repair rejects runtime path claims without materializing or publishin
   const scenario = scenarioFor(t);
   const keys = ["missing-behavior", "missing-validation"];
   await review(scenario, keys.map(finding));
-  scenario.completeHandoff(scenario.stageHandoff("triage"), triageEffect(keys));
+  assert.equal((await scenario.filter([])).ok, true);
   const repair = scenario.stageHandoff("repair");
   const before = scenario.snapshot();
   const runtimePathClaim = repairEffect(keys);
@@ -122,7 +123,7 @@ test("Task repair forwards its request-bound source response schema to the provi
   const scenario = scenarioFor(t);
   const keys = ["missing-behavior", "missing-validation"];
   await review(scenario, keys.map(finding));
-  scenario.completeHandoff(scenario.stageHandoff("triage"), triageEffect(keys));
+  assert.equal((await scenario.filter([])).ok, true);
 
   let receivedSchema = null;
   let receivedRequest = null;
@@ -189,8 +190,7 @@ test("Task repair forwards its request-bound source response schema to the provi
 test("Task all-reject triage preserves the rejected review and skips repair", async (t) => {
   const scenario = scenarioFor(t);
   await review(scenario, [finding()]);
-  const work = scenario.stageHandoff("triage");
-  scenario.completeHandoff(work, triageEffect(["missing-behavior"], "reject"));
+  assert.equal((await excludeAll(scenario)).ok, true);
   scenario.reload();
   assert.equal(artifact(scenario, "review").document.verdict, "REJECTED");
   assert.equal(artifact(scenario, "triage").document.dispositions[0].disposition, "reject");
@@ -203,7 +203,7 @@ test("normal-source all-reject triage carries its rejected findings and rational
   const scenario = scenarioFor(t);
   const rejected = finding();
   await review(scenario, [rejected]);
-  scenario.completeHandoff(scenario.stageHandoff("triage"), triageEffect([rejected.findingKey], "reject"));
+  assert.equal((await excludeAll(scenario)).ok, true);
   scenario.reload();
 
   const state = scenario.state();
@@ -228,16 +228,19 @@ test("normal-source all-reject triage carries its rejected findings and rational
   assert.match(buildAcceptancePrompt({ evidence: { taskReviewHandoffs: handoffs } }).systemPrompt, /allRejected=true/);
 });
 
-test("Task triage source edits are rejected without publication or automatic rollback", async (t) => {
+test("Task review filtering rejects source drift without publishing its decision", async (t) => {
   const scenario = scenarioFor(t);
   await review(scenario, [finding()]);
-  const work = scenario.stageHandoff("triage");
   const before = scenario.snapshot();
-  fs.appendFileSync(scenario.sourcePath, "forbidden triage change\n");
-  assert.throws(() => scenario.completeHandoff(work, triageEffect(["missing-behavior"])), /source|mutation|diff/i);
+  const projected = await new GetNextActionCommand().execute(scenario.context());
+  fs.appendFileSync(scenario.sourcePath, "forbidden filter-time change\n");
+  const result = await scenario.filter([], {
+    binding: projected.context.taskReviewFilter,
+    expectSourceFingerprint: projected.context.taskReviewFilter.sourceFingerprint,
+  });
+  assert.equal(result.ok, false);
   assert.equal(scenario.snapshot(), before);
-  assert.equal(work.coordinator.rollbackRejectedSourceHandoff({ ctx: scenario.context(), request: work.request, mutationAuthority: work.authority }), false);
-  assert.match(fs.readFileSync(scenario.sourcePath, "utf8"), /forbidden triage change/);
+  assert.match(fs.readFileSync(scenario.sourcePath, "utf8"), /forbidden filter-time change/);
   assert.equal(new TaskStageArtifact({ flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId, role: "triage", optional: true }).reference, null);
 });
 
@@ -251,13 +254,12 @@ test("an empty Task Review response cannot hide source edits or publish a succes
   assert.match(fs.readFileSync(scenario.sourcePath, "utf8"), /forbidden review change/);
 });
 
-test("an incomplete Task triage cannot publish or expose repair", async (t) => {
+test("an unknown Task review exclusion cannot publish or expose repair", async (t) => {
   const scenario = scenarioFor(t);
   await review(scenario, [finding("first"), finding("second")]);
-  const work = scenario.stageHandoff("triage");
-  scenario.finishHandoff(work, triageEffect(["first"]));
   const before = scenario.snapshot();
-  assert.throws(() => scenario.reconcileHandoff(work), /each canonical finding exactly once/);
+  const result = await scenario.filter([{ findingId: "unknown", reason: "Not a canonical finding." }]);
+  assert.equal(result.ok, false);
   assert.equal(scenario.snapshot(), before);
   scenario.reload();
   assert.equal(scenario.state().current.at(-1), "T-1-triage");
@@ -267,7 +269,7 @@ test("an incomplete Task triage cannot publish or expose repair", async (t) => {
 test("Task repair refuses a mapped finding that changes a path outside its implementation lineage", async (t) => {
   const scenario = scenarioFor(t);
   await review(scenario, [finding()]);
-  scenario.completeHandoff(scenario.stageHandoff("triage"), triageEffect(["missing-behavior"]));
+  assert.equal((await scenario.filter([])).ok, true);
   const work = scenario.stageHandoff("repair");
   fs.writeFileSync(path.join(scenario.root, "unrelated.js"), "export const unrelated = true;\n");
   const effect = repairEffect(["missing-behavior"]);
@@ -294,7 +296,7 @@ test("the fourth separately published Task repair advances to Gate with bound un
     assert.notEqual((await review(scenario, [finding()])).ok, false);
     const reviewed = artifact(scenario, "review").reference;
     assert.equal(accounting(scenario).completedReviewCount, ordinal);
-    scenario.completeHandoff(scenario.stageHandoff("triage"), triageEffect(["missing-behavior"]));
+    assert.equal((await scenario.filter([])).ok, true);
     const triaged = artifact(scenario, "triage").reference;
     const work = scenario.stageHandoff("repair");
     const recurrence = work.request.inputs.find((input) => input.name === "task-review-recurrence.json").document;
@@ -345,8 +347,10 @@ test("the fourth separately published Task repair advances to Gate with bound un
 test("a source change after handoff validation is rejected at Task publication without advancing the Attempt", async (t) => {
   const scenario = scenarioFor(t);
   await review(scenario, [finding()]);
-  const work = scenario.stageHandoff("triage");
-  scenario.finishHandoff(work, triageEffect(["missing-behavior"]));
+  assert.equal((await scenario.filter([])).ok, true);
+  const work = scenario.stageHandoff("repair");
+  fs.appendFileSync(scenario.sourcePath, "validated repair\n");
+  scenario.finishHandoff(work, repairEffect(["missing-behavior"]));
   const before = scenario.snapshot();
   const confirm = scenario.manager.confirmSourceWorkerHandoff.bind(scenario.manager);
   scenario.manager.confirmSourceWorkerHandoff = (input) => {
@@ -356,7 +360,7 @@ test("a source change after handoff validation is rejected at Task publication w
   assert.throws(() => scenario.reconcileHandoff(work), /mutation|source/i);
   assert.equal(scenario.snapshot(), before);
   scenario.reload();
-  assert.equal(scenario.state().current.at(-1), "T-1-triage");
+  assert.equal(scenario.state().current.at(-1), "T-1-repair");
   assert.match(fs.readFileSync(scenario.sourcePath, "utf8"), /change at publication boundary/);
 });
 
@@ -366,7 +370,7 @@ test("a rejected no-change Review requires triage and an explicit all-reject con
   assert.notEqual((await review(scenario, [missing])).ok, false);
   assert.equal(scenario.state().current.at(-1), "T-1-triage");
   const reviewed = artifact(scenario, "review").reference;
-  scenario.completeHandoff(scenario.stageHandoff("triage"), triageEffect([missing.findingKey], "reject"));
+  assert.equal((await excludeAll(scenario, "The required behavior is already satisfied by the canonical no-change source.")).ok, true);
   scenario.reload();
   assert.equal(artifact(scenario, "review").reference.digest, reviewed.digest);
   assert.equal(artifact(scenario, "review").document.verdict, "REJECTED");
@@ -383,8 +387,8 @@ test("a rejected no-change Review requires triage and an explicit all-reject con
   assert.deepEqual(handoffs[0].dispositions, [{
     findingKey: missing.findingKey,
     disposition: "reject",
-    basis: "already-satisfied",
-    rationale: "The referenced behavior is already covered by the current implementation.",
+    basis: "host-excluded",
+    rationale: "Host excluded this finding: The required behavior is already satisfied by the canonical no-change source.",
   }]);
 });
 
@@ -407,7 +411,8 @@ test("a Task Review cannot publish success after its Attempt has failed", async 
 test("a Task source handoff cannot publish success after its Attempt has failed", async (t) => {
   const scenario = scenarioFor(t);
   await review(scenario, [finding()]);
-  const work = scenario.stageHandoff("triage");
+  assert.equal((await scenario.filter([])).ok, true);
+  const work = scenario.stageHandoff("repair");
   const confirm = scenario.manager.confirmSourceWorkerHandoff.bind(scenario.manager);
   let failedSnapshot;
   scenario.manager.confirmSourceWorkerHandoff = (input) => {
@@ -415,18 +420,20 @@ test("a Task source handoff cannot publish success after its Attempt has failed"
     failedSnapshot = scenario.snapshot();
     return confirm(input);
   };
-  assert.throws(() => scenario.completeHandoff(work, triageEffect(["missing-behavior"])), /failed Attempt cannot be confirmed/);
+  fs.appendFileSync(scenario.sourcePath, "late repair\n");
+  assert.throws(() => scenario.completeHandoff(work, repairEffect(["missing-behavior"])), /failed Attempt cannot be confirmed/);
   assert.equal(scenario.snapshot(), failedSnapshot);
   scenario.reload();
-  assert.equal(scenario.state().current.at(-1), "T-1-triage");
+  assert.equal(scenario.state().current.at(-1), "T-1-repair");
   assert.equal(scenario.state().attempt.failure.category, "tooling");
-  assert.equal(new TaskStageArtifact({ flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId, role: "triage", optional: true }).reference, null);
+  assert.equal(new TaskStageArtifact({ flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId, role: "triage" }).document.hostFilter.version, 1);
 });
 
 test("a late Task source failure cannot mark the successor Attempt as failed", async (t) => {
   const scenario = scenarioFor(t);
   await review(scenario, [finding()]);
-  const work = scenario.stageHandoff("triage");
+  assert.equal((await scenario.filter([])).ok, true);
+  const work = scenario.stageHandoff("repair");
   const observation = new TaskSourceFailureObservation({
     request: work.request, mutationAuthority: work.authority,
     error: Object.assign(new Error("provider failed after its observation"), { code: "PROVIDER_FAILED" }),
@@ -435,12 +442,13 @@ test("a late Task source failure cannot mark the successor Attempt as failed", a
   scenario.manager.canonicalState = (specId) => {
     scenario.manager.canonicalState = read;
     const previous = read(specId);
-    scenario.completeHandoff(work, triageEffect(["missing-behavior"]));
+    fs.appendFileSync(scenario.sourcePath, "completed repair\n");
+    scenario.completeHandoff(work, repairEffect(["missing-behavior"]));
     return previous;
   };
   assert.equal(observation.record(scenario.manager), false);
   scenario.reload();
-  assert.equal(scenario.state().current.at(-1), "T-1-repair");
+  assert.equal(scenario.state().current.at(-1), "T-1-review");
   assert.equal(scenario.state().attempt.failure, null);
   assert.equal(scenario.manager.activityLedger(scenario.specId).some((activity) => activity.failure?.code === "PROVIDER_FAILED"), false);
 });
@@ -449,12 +457,12 @@ test("a late Task source failure cannot mark the successor Attempt as failed", a
 test("a recurring Task repair cannot publish without the exact prior-repair resolution", async (t) => {
   const scenario = scenarioFor(t);
   await review(scenario, [finding()]);
-  scenario.completeHandoff(scenario.stageHandoff("triage"), triageEffect(["missing-behavior"]));
+  assert.equal((await scenario.filter([])).ok, true);
   const first = scenario.stageHandoff("repair");
   fs.appendFileSync(scenario.sourcePath, "first repair\n");
   scenario.completeHandoff(first, repairEffect(["missing-behavior"]));
   await review(scenario, [finding()]);
-  scenario.completeHandoff(scenario.stageHandoff("triage"), triageEffect(["missing-behavior"]));
+  assert.equal((await scenario.filter([])).ok, true);
   const second = scenario.stageHandoff("repair");
   const prior = artifact(scenario, "repair").reference;
   fs.appendFileSync(scenario.sourcePath, "unexplained repeated repair\n");

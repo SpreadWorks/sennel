@@ -2,11 +2,12 @@ import { requiredText, exactKeys } from "./source-effect-fields.js";
 import { ApprovedFindingExceptionSet } from "./acknowledged-rationale.js";
 
 const MAX_DISPOSITIONS = 256;
+const HOST_FILTER_TOKEN = Symbol("Task Review host filter disposition");
 
 
 
 export class SourceTriageDisposition {
-  constructor(value = {}) {
+  constructor(value = {}, authority = null) {
     exactKeys(value, ["findingKey", "disposition", "basis", "rationale"], "source triage disposition");
     this.findingKey = requiredText(value.findingKey, "source triage findingKey");
     this.disposition = requiredText(value.disposition, "source triage disposition");
@@ -14,7 +15,7 @@ export class SourceTriageDisposition {
     this.basis = requiredText(value.basis, "source triage basis");
     const allowedBases = this.disposition === "apply"
       ? new Set(["repair-required"])
-      : new Set(["not-applicable", "already-satisfied", "finding-invalid", "approved-exception"]);
+      : new Set(["not-applicable", "already-satisfied", "finding-invalid", "approved-exception", ...(authority === HOST_FILTER_TOKEN ? ["host-excluded"] : [])]);
     if (!allowedBases.has(this.basis)) throw new Error("source triage basis is invalid for its disposition");
     this.rationale = requiredText(value.rationale, "source triage rationale");
     if (this.rationale.length < 20) throw new Error("source triage rationale must be at least 20 characters");
@@ -29,6 +30,10 @@ export class SourceTriageDisposition {
       rationale: this.rationale,
     };
   }
+}
+
+export function taskReviewHostExcludedDisposition(value) {
+  return new SourceTriageDisposition(value, HOST_FILTER_TOKEN);
 }
 
 /** Shared semantic contract for Flow and Task finding triage. */

@@ -35,6 +35,7 @@ import {
   captureTaskReviewAbortedWorkUnits,
   TaskReviewAbortedWorkUnit,
 } from "./task-review-aborted-work-unit.js";
+import { TaskReviewUnsealedWorkUnitSet } from "./review-work-unit.js";
 
 export const RECOVERY_REASON_MIN_LENGTH = 20;
 export const RECOVERY_REASON_MAX_LENGTH = 500;
@@ -591,15 +592,31 @@ function recoveryDecisionFacts({ flowManager, state, route, baseline, current, e
     && disposition.operation === "record"
     && disposition.remaining === 0;
   let taskSourceAvailable = true;
-  if (confirmedTimeoutCandidate && route.phase === "impl" && route.taskId !== null) {
-    try {
-      const checkpoint = readTaskReviewUnsealedCheckpoint({
-        flowManager, state, taskId: route.taskId, root: executionRoot,
-      });
-      taskSourceAvailable = checkpoint !== null;
-      checkpoint?.assertTaskSource({ flowManager, state, root: executionRoot });
-    } catch {
-      taskSourceAvailable = false;
+  if (route.kind === "review" && route.phase === "impl" && route.taskId !== null) {
+    const checkpointArtifact = FLOW_ARTIFACT_CONTRACTS.resolve(
+      "task.review.unsealed.checkpoint",
+      { taskId: route.taskId, attemptId: state.attempt.id },
+    );
+    const checkpointExpected = confirmedTimeoutCandidate || view.catalog.artifacts.some((descriptor) => (
+      descriptor.logicalKey === checkpointArtifact.logicalKey
+      && descriptor.relativePath === checkpointArtifact.relativePath
+    )) || TaskReviewUnsealedWorkUnitSet.recoverCanonical({
+      executionRoot,
+      state,
+      activities: view.activities,
+      taskId: route.taskId,
+      nodeId: state.attempt.nodeId,
+    }).workUnits.length > 0;
+    if (checkpointExpected) {
+      try {
+        const checkpoint = readTaskReviewUnsealedCheckpoint({
+          flowManager, state, taskId: route.taskId, root: executionRoot,
+        });
+        taskSourceAvailable = checkpoint !== null;
+        checkpoint?.assertTaskSource({ flowManager, state, root: executionRoot });
+      } catch {
+        taskSourceAvailable = false;
+      }
     }
   }
   const confirmedTimeoutConsumed = confirmedTimeoutCandidate

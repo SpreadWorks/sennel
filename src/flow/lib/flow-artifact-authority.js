@@ -298,8 +298,8 @@ const ENTRIES = Object.freeze([
   commandOwned("finalize-cleanup", "terminal Flow state"),
   workerSourceOwned("task-impl", "optional", "task-review"),
   commandOwned("task-review", "task-triage or task-gate"),
-  workerSourceOwned("task-triage", "forbidden", "task-repair or task-gate"),
-  workerSourceOwned("task-repair", "required", "task-review or task-gate"),
+  commandOwned("task-triage", "task-repair or task-gate"),
+  workerSourceOwned("task-repair", "optional", "task-review or task-gate"),
   commandOwned("task-gate", "next task or implement"),
 ]);
 

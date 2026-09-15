@@ -8,8 +8,27 @@
     "issues": { "type": "array", "maxItems": 256, "items": { "type": "object", "required": ["classification", "reason", "remainingRisk"], "properties": { "classification": { "type": "string", "enum": ["quality"] }, "reason": { "type": "string", "minLength": 20 }, "remainingRisk": { "type": "string", "minLength": 20 } }, "additionalProperties": false } },
     "overview": { "type": "null" },
     "triage": { "type": "null" },
-    "repair": { "type": "object", "required": ["version", "findings", "summary", "recurrenceResolutions"], "properties": { "version": { "type": "integer", "enum": [1] }, "findings": { "type": "array", "minItems": 1, "maxItems": 256, "description": "One path claim for every applied finding. Finding keys are unique; paths are normalized project-relative paths. A path may appear under multiple findings when one mutation repairs each finding, and the union must exactly cover the observed source mutations.", "items": { "type": "object", "required": ["findingKey", "paths"], "properties": { "findingKey": { "type": "string", "minLength": 1 }, "paths": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "type": "string", "minLength": 1 } } }, "additionalProperties": false } }, "summary": { "type": "string", "minLength": 10 }, "recurrenceResolutions": { "type": "array", "maxItems": 256, "items": { "type": "object", "required": ["findingKey", "fingerprint", "priorRepairInsufficiency", "repairStrategy"], "properties": { "findingKey": { "type": "string", "minLength": 1 }, "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "priorRepairInsufficiency": { "type": "string", "minLength": 1 }, "repairStrategy": { "type": "string", "minLength": 1 } }, "additionalProperties": false } } }, "additionalProperties": false },
-    "noChangeReason": { "type": "null" }
+    "repair": {
+      "type": ["object", "null"],
+      "required": ["version", "findings", "summary", "recurrenceResolutions"],
+      "properties": {
+        "version": { "type": "integer", "enum": [1] },
+        "findings": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "type": "object", "required": ["findingKey", "paths"], "properties": { "findingKey": { "type": "string", "minLength": 1 }, "paths": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "type": "string", "minLength": 1 } } }, "additionalProperties": false } },
+        "summary": { "type": "string", "minLength": 10 },
+        "recurrenceResolutions": { "type": "array", "maxItems": 256, "items": { "type": "object", "required": ["findingKey", "fingerprint", "priorRepairInsufficiency", "repairStrategy"], "properties": { "findingKey": { "type": "string", "minLength": 1 }, "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "priorRepairInsufficiency": { "type": "string", "minLength": 1 }, "repairStrategy": { "type": "string", "minLength": 1 } }, "additionalProperties": false } }
+      },
+      "additionalProperties": false
+    },
+    "noChangeReason": {
+      "type": ["object", "null"],
+      "required": ["classification", "findingKeys", "reason"],
+      "properties": {
+        "classification": { "type": "string", "enum": ["no-change", "unrepairable"] },
+        "findingKeys": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "type": "string", "minLength": 1 } },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

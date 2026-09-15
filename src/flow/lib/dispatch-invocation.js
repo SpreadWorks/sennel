@@ -164,6 +164,22 @@ export class FlowDispatchSession {
       repositoryFingerprint,
     });
   }
+
+  /**
+   * Compare a refreshed canonical action against an already guarded action
+   * without recapturing repository state. A caller that needs only canonical
+   * route progress must not turn an unrelated repository scan failure into a
+   * replacement command failure.
+   */
+  captureCanonicalAction(nextAction, priorAction) {
+    if (!(priorAction instanceof FlowDispatchActionIdentity)) {
+      throw new Error("canonical action capture requires a FlowDispatchActionIdentity");
+    }
+    if (priorAction.session !== this) {
+      throw new Error("canonical action capture requires an action from the same dispatch session");
+    }
+    return this.captureAction(nextAction, priorAction.repositoryFingerprint);
+  }
 }
 
 function directiveProgressIdentity(nextAction) {
@@ -175,6 +191,17 @@ function directiveProgressIdentity(nextAction) {
     evidenceKind: directive.evidenceKind ?? null,
     phase: directive.phase ?? null,
     nextAction: directive.nextAction ?? directive.continuation?.nextAction ?? null,
+  };
+}
+
+function actionProgressIdentity(target, nextAction) {
+  return {
+    targetDigest: target.digest,
+    runId: target.runId,
+    taskId: nextAction.taskId ?? null,
+    step: nextAction.step ?? null,
+    action: nextAction.action ?? null,
+    directive: directiveProgressIdentity(nextAction),
   };
 }
 
@@ -199,14 +226,12 @@ export class FlowDispatchActionIdentity {
       nextAction,
       repositoryFingerprint: this.repositoryFingerprint,
     }));
+    this.canonicalActionDigest = flowDispatchDigest(stableStringify(
+      actionProgressIdentity(this.target, nextAction),
+    ));
     this.progressDigest = flowDispatchDigest(stableStringify({
-      targetDigest: this.target.digest,
-      runId: this.target.runId,
-      taskId: nextAction.taskId ?? null,
-      step: nextAction.step ?? null,
-      action: nextAction.action ?? null,
+      ...actionProgressIdentity(this.target, nextAction),
       repositoryFingerprint: this.repositoryFingerprint,
-      directive: directiveProgressIdentity(nextAction),
     }));
     Object.freeze(this);
   }
@@ -220,6 +245,13 @@ export class FlowDispatchActionIdentity {
       throw new Error("Flow dispatch progress requires a FlowDispatchActionIdentity");
     }
     return this.progressDigest !== other.progressDigest;
+  }
+
+  hasCanonicalActionProgressedTo(other) {
+    if (!(other instanceof FlowDispatchActionIdentity)) {
+      throw new Error("Flow dispatch canonical action progress requires a FlowDispatchActionIdentity");
+    }
+    return this.canonicalActionDigest !== other.canonicalActionDigest;
   }
 
   approvalToken() {
@@ -516,6 +548,10 @@ export class FlowDispatchInvocation {
 
   hasProgressedTo(activeAction) {
     return this.action.hasProgressedTo(activeAction);
+  }
+
+  hasCanonicalActionProgressedTo(activeAction) {
+    return this.action.hasCanonicalActionProgressedTo(activeAction);
   }
 
   assertCurrent(activeAction, flowState = null) {

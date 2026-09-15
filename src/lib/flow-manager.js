@@ -542,6 +542,24 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  confirmTaskReviewUnavailable(input = {}) {
+    return this._store.confirmTaskReviewUnavailable({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  confirmTaskReviewPublicationUnavailable(input = {}) {
+    return this._store.confirmTaskReviewPublicationUnavailable({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  confirmTaskReviewHostFilter(input = {}) {
+    return this._store.confirmTaskReviewHostFilter({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   /** Atomically apply one Definition-owned test-chain transition plan. */
   applyTestChainTransitionDecision(input = {}) {
     return this._store.applyTestChainTransitionDecision({

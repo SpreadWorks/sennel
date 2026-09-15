@@ -134,6 +134,22 @@ function taskReviewRetryFixture({ taskId = "T-1" } = {}) {
   return { manager, flow: flow.flow, root };
 }
 
+async function exhaustTaskReviewWithUnknownFailure(scenario) {
+  for (let count = 0; count < 10; count += 1) {
+    const result = await scenario.review(() => {
+      const error = new Error("unknown internal Task Review fixture failure");
+      error.code = "INTERNAL_REVIEW_FIXTURE_FAILURE";
+      error.retryable = false;
+      throw error;
+    }).execute(scenario.context());
+    scenario.reload();
+    if (scenario.state().failureDisposition().operation !== "retry") return result;
+    scenario.manager.retryCurrentAttempt({ specId: scenario.specId });
+    scenario.reload();
+  }
+  assert.fail("Task Review tooling retries must be bounded");
+}
+
 function immutableRetryPublicationSnapshot(manager, specId) {
   return JSON.stringify({
     state: manager.canonicalState(specId).toJSON(),
@@ -649,7 +665,7 @@ test("task review retries recover from the exact exhausted Attempt baseline afte
   assert.equal(receipt.current.specId, reloadedState.specId);
 });
 
-test("Task Review grants one unchanged exhausted recovery only for a confirmed provider stop", async (t) => {
+test("Task Review converges a confirmed provider stop after its bounded tooling retry", async (t) => {
   const scenario = new TaskReviewScenario(t);
   const timeout = ReviewFailure.fromAgentFailure({
     phase: "impl",
@@ -681,38 +697,10 @@ test("Task Review grants one unchanged exhausted recovery only for a confirmed p
 
   const secondFailure = await review.execute({ ...scenario.context(), flowState: scenario.manager.loadReadOnly(scenario.specId) });
   assert.equal(secondFailure.errors[0].code, "REVIEW_TOOLING_ERROR", JSON.stringify(secondFailure));
-  const recovered = reset();
-  assert.notEqual(recovered.ok, false, JSON.stringify(recovered));
-  assert.equal(recovered.grants[0].operation, "retry_recovery_attempt", JSON.stringify(recovered));
   scenario.reload();
-  const receipt = readRetryBaseline(
-    scenario.manager,
-    scenario.state(),
-    retryEvidenceRouteForNode(scenario.state(), scenario.state().attempt.nodeId),
-  );
-  assert.notEqual(receipt, null);
-  const receiptArtifact = scenario.manager.readArtifact({
-    specId: scenario.specId,
-    logicalKey: "retry.recovery.receipt",
-    parameters: { routeId: "review-impl-T-1", attemptId: scenario.state().attempt.id },
-    consumerNodeId: scenario.state().attempt.nodeId,
-  });
-  assert.equal(new RetryRecoveryReceipt(JSON.parse(receiptArtifact.bytes)).basis.toString(), "confirmed-timeout");
-
-  scenario.manager.failCurrentAttempt({
-    specId: scenario.specId,
-    failure: {
-      category: "tooling",
-      code: "AGENT_TIMEOUT",
-      message: "provider timed out again after the one-time recovery",
-      retryable: true,
-      retryKind: "tooling",
-      agentStopEvidence: AgentProcessStopEvidence.confirmed(),
-    },
-  });
-  const duplicate = reset();
-  assert.equal(duplicate.ok, false);
-  assert.match(duplicate.errors[0].messages[0], /already consumed this evidence lineage/);
+  assert.equal(scenario.state().current.at(-1), "T-1-gate");
+  assert.equal(scenario.state().attempt.consumption.semantic, 0);
+  assert.equal(reset().ok, false, "unavailable convergence leaves no failed Review Attempt to recover");
 });
 
 test("Task Review blocks unchanged timeout recovery when process-tree termination is uncertain", async (t) => {
@@ -758,16 +746,6 @@ test("Task Review blocks unchanged timeout recovery when process-tree terminatio
 
 test("Task Review source-integrity unavailability blocks status, next-action, and recovery mutation", async (t) => {
   const scenario = new TaskReviewScenario(t);
-  const timeout = ReviewFailure.fromAgentFailure({
-    phase: "impl",
-    failure: new AgentTimeoutFailure({
-      message: "provider timed out after its process tree stopped",
-      stopEvidence: AgentProcessStopEvidence.confirmed(),
-    }),
-  });
-  const review = scenario.review(() => ({
-    ok: false, status: 1, stdout: "", stderr: timeout.toMarkerLine(), signal: null, killed: false,
-  }));
   const resetInput = () => ({
     ...scenario.context(),
     flowState: scenario.manager.loadReadOnly(scenario.specId),
@@ -778,9 +756,9 @@ test("Task Review source-integrity unavailability blocks status, next-action, an
     yes: true,
   });
 
-  await review.execute(scenario.context());
-  assert.equal(new SetRetryCommand().execute(resetInput()).grants[0].operation, "retry_attempt");
-  await review.execute({ ...scenario.context(), flowState: scenario.manager.loadReadOnly(scenario.specId) });
+  await exhaustTaskReviewWithUnknownFailure(scenario);
+  scenario.changeEvidence(1);
+  scenario.reload();
   const failed = scenario.manager.canonicalState(scenario.specId);
   removeCatalogedArtifactForCorruptionFixture(
     scenario.manager,
@@ -1014,16 +992,6 @@ test("Store rejects a stale runtime digest captured before recovery publication 
 
 test("Task Review authorization rejects checkout changes at the Store lock without mutation", async (t) => {
   const scenario = new TaskReviewScenario(t);
-  const timeout = ReviewFailure.fromAgentFailure({
-    phase: "impl",
-    failure: new AgentTimeoutFailure({
-      message: "provider timed out after its process tree stopped",
-      stopEvidence: AgentProcessStopEvidence.confirmed(),
-    }),
-  });
-  const review = scenario.review(() => ({
-    ok: false, status: 1, stdout: "", stderr: timeout.toMarkerLine(), signal: null, killed: false,
-  }));
   const reset = () => new SetRetryCommand().execute({
     ...scenario.context(),
     flowState: scenario.manager.loadReadOnly(scenario.specId),
@@ -1034,9 +1002,9 @@ test("Task Review authorization rejects checkout changes at the Store lock witho
     yes: true,
   });
 
-  await review.execute(scenario.context());
-  assert.equal(reset().grants[0].operation, "retry_attempt");
-  await review.execute({ ...scenario.context(), flowState: scenario.manager.loadReadOnly(scenario.specId) });
+  await exhaustTaskReviewWithUnknownFailure(scenario);
+  scenario.changeEvidence(1);
+  scenario.reload();
   const before = scenario.snapshot();
   const retryExhaustedAttempt = scenario.manager.retryExhaustedAttempt.bind(scenario.manager);
   scenario.manager.retryExhaustedAttempt = (input) => {
@@ -1053,16 +1021,6 @@ test("Task Review authorization rejects checkout changes at the Store lock witho
 
 test("Store rejects a Task Review admission bound to a different typed authorization", async (t) => {
   const scenario = new TaskReviewScenario(t);
-  const timeout = ReviewFailure.fromAgentFailure({
-    phase: "impl",
-    failure: new AgentTimeoutFailure({
-      message: "provider timed out after its process tree stopped",
-      stopEvidence: AgentProcessStopEvidence.confirmed(),
-    }),
-  });
-  const review = scenario.review(() => ({
-    ok: false, status: 1, stdout: "", stderr: timeout.toMarkerLine(), signal: null, killed: false,
-  }));
   const reset = () => new SetRetryCommand().execute({
     ...scenario.context(),
     flowState: scenario.manager.loadReadOnly(scenario.specId),
@@ -1073,9 +1031,9 @@ test("Store rejects a Task Review admission bound to a different typed authoriza
     yes: true,
   });
 
-  await review.execute(scenario.context());
-  assert.equal(reset().grants[0].operation, "retry_attempt");
-  await review.execute({ ...scenario.context(), flowState: scenario.manager.loadReadOnly(scenario.specId) });
+  await exhaustTaskReviewWithUnknownFailure(scenario);
+  scenario.changeEvidence(1);
+  scenario.reload();
   const before = scenario.snapshot();
   const retryExhaustedAttempt = scenario.manager.retryExhaustedAttempt.bind(scenario.manager);
   scenario.manager.retryExhaustedAttempt = (input) => {

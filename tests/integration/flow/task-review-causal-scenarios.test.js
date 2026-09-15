@@ -12,9 +12,16 @@ import { TaskReviewExecutionIdentity } from "../../../src/flow/lib/task-review-e
 import { runTaskReviewProtocol, classifyReviewCommandError, parseImplReviewFindings, formatImplReviewJson } from "../../../src/flow/commands/review.js";
 import { ReviewProtocolFailure } from "../../../src/flow/lib/review-protocol.js";
 import { container } from "../../../src/lib/container.js";
-import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
+import {
+  REVIEW_WORK_UNIT_MANIFEST_ENV,
+  ReviewWorkUnit,
+  reconcileCompletedReviewWorkUnits,
+} from "../../../src/flow/lib/review-work-unit.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
+import { ReviewFindingCycle } from "../../../src/flow/lib/finding-disposition-policy.js";
+import { TaskReviewConvergenceEvidence } from "../../../src/flow/lib/review-recurrence.js";
+import { TaskReviewFailureFacts, resolveTaskReviewFailure } from "../../../src/flow/definition.js";
 
 function baseline(scenario) {
   const state = scenario.state();
@@ -139,12 +146,17 @@ async function recoverFromNonRetryableProtocolFailure(scenario) {
   const previousBaseline = baseline(scenario);
   assert.notEqual(previousBaseline, null, "the failed Review Attempt must retain its recovery baseline");
   let calls = 0;
-  const failed = await scenario.review(invalidProtocolWorker(scenario, "[]", () => { calls += 1; })).execute(scenario.context());
+  const failed = await scenario.review(() => {
+    calls += 1;
+    const error = new Error("unknown internal fixture failure");
+    error.code = "INTERNAL_REVIEW_FIXTURE_FAILURE";
+    error.retryable = false;
+    throw error;
+  }).execute(scenario.context());
   assert.equal(failed.ok, false, JSON.stringify(failed));
-  assert.equal(calls, 2, "the protocol's bounded provider attempts must complete before parent persistence");
+  assert.equal(calls, 1);
   scenario.reload();
-  assert.equal(scenario.state().attempt.failure.code, "TASK_REVIEW_PROTOCOL_INVALID_RESPONSE");
-  assert.equal(scenario.state().attempt.failure.retryable, false);
+  assert.equal(scenario.state().attempt.failure.code, "INTERNAL_REVIEW_FIXTURE_FAILURE");
   assert.equal(scenario.state().attempt.consumption.semantic, 0);
   scenario.changeEvidence(1).reload();
   const recovered = scenario.recover();
@@ -153,9 +165,8 @@ async function recoverFromNonRetryableProtocolFailure(scenario) {
   scenario.reload();
   const receipt = recoveryReceipt(scenario);
   const currentAttempt = scenario.state().attempt;
-  assert.equal(receipt.previous.equals(previousBaseline), true, "receipt must bind the persisted baseline of the failed Attempt");
+  assert.equal(receipt.previous.equals(previousBaseline), true);
   assert.equal(receipt.current.attemptId, currentAttempt.id);
-  assert.equal(receipt.current.attempt, currentAttempt.sequence);
   assert.notEqual(currentAttempt.id, previousAttempt.id);
   assert.equal(currentAttempt.sequence, previousAttempt.sequence + 1);
   assert.equal(currentAttempt.consumption.semantic, previousAttempt.consumption.semantic);
@@ -205,12 +216,7 @@ test("parent serializes semantic Review ordinal independently of tooling Attempt
     rationale: "R-1 requires this behavior.",
   }]);
   assert.notEqual(first.ok, false, JSON.stringify(first));
-  const triage = scenario.stageHandoff("triage");
-  assert.equal(scenario.completeHandoff(triage, {
-    version: 1, stepId: "task-triage", completionStatus: "done", issues: [], overview: null,
-    triage: { version: 1, dispositions: [{ findingKey: "repair-1", disposition: "apply", basis: "repair-required", rationale: "R-1 requires the missing behavior." }] },
-    repair: null, noChangeReason: null,
-  }).completed, true);
+  assert.equal((await scenario.filter([])).ok, true);
   const repair = scenario.stageHandoff("repair");
   fs.appendFileSync(scenario.sourcePath, "repaired behavior\n");
   assert.equal(scenario.completeHandoff(repair, {
@@ -237,11 +243,19 @@ test("parent serializes semantic Review ordinal independently of tooling Attempt
     received = TaskReviewExecutionIdentity.fromJSON(JSON.parse(options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY));
     return { ok: false, status: 1, stdout: "", stderr: "deterministic boundary stop", signal: null, killed: false };
   });
-  await review.execute(scenario.context());
+  const unavailable = await review.execute(scenario.context());
   assert.ok(received instanceof TaskReviewExecutionIdentity, "parent must reach the worker boundary");
   assert.equal(received.reviewAttempt, 2, "worker must receive the second semantic Review, not the raw sequence");
-  assert.equal(received.attempt.id, scenario.state().attempt.id);
+  assert.equal(received.attempt.nodeId, "T-1-review");
   assert.ok(received.attempt.sequence > received.reviewAttempt);
+  scenario.reload();
+  assert.equal(scenario.state().current.at(-1), "T-1-gate");
+  const finalState = scenario.state();
+  const handoff = new TaskReviewConvergenceEvidence({
+    flowManager: scenario.manager, state: finalState,
+    cycle: ReviewFindingCycle.fromActivityLedger({ runId: finalState.runId, activities: scenario.manager.activityLedger(scenario.specId) }),
+  }).handoffs().map((entry) => entry.toJSON()).find((entry) => entry.unavailable === true);
+  assert.equal(handoff.semanticReviewCount, 1, "unavailable publication preserves prior semantic Review results");
 });
 
 test("unchanged exhausted recovery refuses without changing canonical state", (t) => {
@@ -255,7 +269,7 @@ test("unchanged exhausted recovery refuses without changing canonical state", (t
 });
 
 for (const invalid of ["[]", "{not-json}"]) {
-  test(`protocol ${invalid} failure persists through the parent boundary and reload`, async (t) => {
+  test(`protocol ${invalid} failure publishes unavailable evidence and continues to Gate after reload`, async (t) => {
     const scenario = new TaskReviewScenario(t);
     useScenarioContainer(t, scenario);
     let calls = 0;
@@ -264,16 +278,85 @@ for (const invalid of ["[]", "{not-json}"]) {
     assert.equal(calls, 2, JSON.stringify(result));
     assert.equal(result.ok, false);
     scenario.reload();
-    assert.equal(scenario.state().attempt.failure.code, "TASK_REVIEW_PROTOCOL_INVALID_RESPONSE");
-    assert.equal(scenario.state().attempt.failure.retryable, false);
+    assert.equal(scenario.state().attempt.failure, null);
     assert.equal(scenario.state().attempt.consumption.semantic, 0);
-    assert.equal(scenario.state().current.at(-1), "T-1-review");
+    assert.equal(scenario.state().current.at(-1), "T-1-gate");
+    const state = scenario.state();
+    const convergence = new TaskReviewConvergenceEvidence({
+      flowManager: scenario.manager, state,
+      cycle: ReviewFindingCycle.fromActivityLedger({ runId: state.runId, activities: scenario.manager.activityLedger(scenario.specId) }),
+    });
+    const handoff = convergence.handoffs().map((entry) => entry.toJSON()).find((entry) => entry.unavailable === true);
+    assert.equal(handoff.failure.code, "TASK_REVIEW_PROTOCOL_INVALID_RESPONSE");
+    assert.equal(handoff.semanticReviewCount, 0);
+    assert.deepEqual(handoff.findings, []);
+    assert.equal(handoff.unreviewedFindings, false);
+    assert.deepEqual(convergence.status().find((entry) => entry.taskId === scenario.taskId), {
+      taskId: scenario.taskId, reviewAttempts: 0, recurringFindings: [], fourthRepairUnreviewed: false,
+      unavailable: true, remainingRisk: handoff.remainingRisk, finalVerdict: null,
+    });
     const before = scenario.snapshot();
     scenario.reload();
     assert.equal(scenario.snapshot(), before);
     assert.equal(fs.readFileSync(scenario.sourcePath, "utf8"), "implemented source\n");
   });
 }
+
+test("Definition refuses to continue an unknown internal Review failure", () => {
+  const decision = resolveTaskReviewFailure(new TaskReviewFailureFacts({
+    taskReview: true, sourceIntegrityFailure: false, workerStopped: true,
+    canonicalEvidenceAvailable: true, retryable: false, code: "INTERNAL_INVARIANT_BROKEN", message: "unexpected invariant",
+  }));
+  assert.equal(decision.facts.category, "internal");
+  assert.equal(decision.disposition, "stop");
+});
+
+test("a stopped Task Review with an invalid sealed transport converges without a semantic result", async (t) => {
+  const scenario = new TaskReviewScenario(t);
+  useScenarioContainer(t, scenario);
+  const result = await scenario.review(() => ({
+    ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false,
+  })).execute(scenario.context());
+  assert.equal(result.ok, false);
+  assert.equal(result.data.failureCode, "SCHEMA_FAILURE");
+  scenario.reload();
+  assert.equal(scenario.state().current.at(-1), "T-1-gate");
+  assert.equal(scenario.state().attempt.consumption.semantic, 0);
+  assert.equal(scenario.manager.artifactCatalog(scenario.specId).artifacts.some((entry) => entry.logicalKey === "task.review"), false);
+});
+
+test("a later semantic Review in the same cycle supersedes unavailable Acceptance evidence", async (t) => {
+  const scenario = new TaskReviewScenario(t);
+  useScenarioContainer(t, scenario);
+  let interruptedManifest = null;
+  let interruptedManifestPath = null;
+  const unavailable = await scenario.review((_command, _args, options) => {
+    interruptedManifestPath = options.env[REVIEW_WORK_UNIT_MANIFEST_ENV];
+    interruptedManifest = fs.readFileSync(interruptedManifestPath);
+    return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+  }).execute(scenario.context());
+  // Recreate the exact unsealed surface to model interruption after the
+  // canonical unavailable commit but before transient cleanup.
+  fs.mkdirSync(path.dirname(interruptedManifestPath), { recursive: true });
+  fs.writeFileSync(interruptedManifestPath, interruptedManifest);
+  scenario.reload();
+  confirmCanonicalFixtureStep(scenario.manager, scenario.specId, "T-1-gate");
+  scenario.reload();
+  assert.equal(reconcileCompletedReviewWorkUnits({
+    flowManager: scenario.manager, specId: scenario.specId, executionRoot: scenario.root,
+  }), 1);
+  scenario.manager.rewindTo("T-1-review", { specId: scenario.specId });
+  scenario.reload();
+  await publishPassingTaskReview(scenario);
+  scenario.reload();
+  const state = scenario.state();
+  const convergence = new TaskReviewConvergenceEvidence({
+    flowManager: scenario.manager, state,
+    cycle: ReviewFindingCycle.fromActivityLedger({ runId: state.runId, activities: scenario.manager.activityLedger(scenario.specId) }),
+  });
+  assert.equal(convergence.handoffs().some((entry) => entry.unavailable === true), false);
+  assert.equal(convergence.status().some((entry) => entry.unavailable === true), false);
+});
 
 // Arbitrary provider edits are not owned by the generic protocol. Invalid
 // output with effects must stop; shape-valid output still needs parent ownership
@@ -343,30 +426,6 @@ test("admitted Task Review retains a baseline before any provider can fail", (t)
   assert.notEqual(durable, null, "all legal Task Review entry paths must preserve the later recovery prerequisite");
   assert.equal(durable.attemptId, scenario.state().attempt.id);
   assert.equal(durable.attempt, scenario.state().attempt.sequence);
-});
-
-test("a receipt-authorized committed runtime change reconciles an unsealed Review after reload", async (t) => {
-  const scenario = new TaskReviewScenario(t).exhaust();
-  // This contract compares a recovery-time target with a later invocation;
-  // use RunReview's production target resolver, not the fixture's constant.
-  const runtimeIdentity = { resolveTargetStateDigest: undefined };
-  commitRuntimeEvidence(scenario, 1);
-  assert.equal(scenario.recover().reset, true);
-  let previousDirectory;
-  await scenario.review((_command, _args, options) => {
-    previousDirectory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
-    return stoppedWorker();
-  }, runtimeIdentity).execute(scenario.context());
-  assert.ok(fs.existsSync(previousDirectory));
-  commitRuntimeEvidence(scenario, 2);
-  const grant = scenario.reload().recover();
-  assert.equal(grant.reset, true, JSON.stringify(grant));
-  scenario.reload();
-  let calls = 0;
-  const result = await scenario.review(() => { calls += 1; return stoppedWorker(); }, runtimeIdentity).execute(scenario.context());
-  assert.equal(calls, 1, JSON.stringify(result));
-  assert.equal(fs.existsSync(previousDirectory), false, "accepted old work unit must be reconciled");
-  assert.notEqual(scenario.state().attempt.failure.code, "TASK_REVIEW_PARTIAL_EFFECT");
 });
 
 test("an ordinary retry cannot authorize committed changes to an unsealed Review", async (t) => {

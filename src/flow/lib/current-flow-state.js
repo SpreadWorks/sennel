@@ -4595,26 +4595,6 @@ export class CurrentFlowState {
     if (completed.outcome !== "passed") {
       throw new CurrentFlowStateInvariantError("Task Review stage completion requires a passed producer result");
     }
-    if (plan.operation === "task-rounds-exhausted") {
-      if (plan.effects.length !== 0 || plan.terminalReason === null) {
-        throw new CurrentFlowStateInvariantError("Task round exhaustion must retain its active stage with a reason");
-      }
-      return this.failCurrentAttempt({
-        failure: {
-          category: "semantic",
-          code: "TASK_ROUNDS_EXHAUSTED",
-          message: plan.terminalReason,
-          retryable: false,
-          retryKind: null,
-        },
-        result: {
-          outcome: "failed",
-          summary: plan.terminalReason,
-          confirmedAt: completed.confirmedAt,
-          artifactRefs: [],
-        },
-      });
-    }
     const seen = new Set();
     let root = this.root;
     for (const effect of plan.effects) {
@@ -8605,7 +8585,11 @@ export class CurrentFlowVersionStore {
             write.artifact.logicalKey === logicalKey
             && write.artifact.relativePath === resolvedArtifact(logicalKey, { taskId: binding.taskId }).relativePath
           )) ?? null;
-          if (stageWrite === null || sha256Bytes(stageWrite.bytes) !== binding.artifactDigest) {
+          const unavailable = taskReviewStagePlan.operation === "review-unavailable-to-gate";
+          if (unavailable && stageWrite !== null) {
+            throw new CurrentFlowStateInvariantError("unavailable Task Review must not publish a semantic result artifact");
+          }
+          if (!unavailable && (stageWrite === null || sha256Bytes(stageWrite.bytes) !== binding.artifactDigest)) {
             throw new CurrentFlowStateInvariantError("Task Review stage plan does not bind its producer artifact bytes");
           }
         }
