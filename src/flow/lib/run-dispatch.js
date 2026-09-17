@@ -64,7 +64,7 @@ import {
   FLOW_DISPATCH_INVOCATION_ENV,
 } from "./dispatch-invocation.js";
 import { buildFlowCommandHookContext } from "./flow-context.js";
-import { ConfirmAndAdvance, resolveDefinitionRoute, resolveDispatcherOwnedFlowAction, resolveSourceHandoffTransitionPlan } from "../definition.js";
+import { ConfirmAndAdvance, DRAFT_STEP_ERROR_CATEGORY, resolveDefinitionRoute, resolveDispatcherOwnedFlowAction, resolveSourceHandoffTransitionPlan } from "../definition.js";
 import { CanonicalSpecApproval } from "./canonical-spec-approval.js";
 import { reconcileCompletedReviewWorkUnits } from "./review-work-unit.js";
 import { approvalRouteFacts } from "./definition-route-facts.js";
@@ -256,7 +256,7 @@ function settleDraftStepError(ctx, attempt, error, stepId = attempt?.handoffRequ
   ctx.flowManager.failCurrentAttempt({
     specId: request?.specId ?? ctx.specId,
     failure: {
-      category: "tooling",
+      category: DRAFT_STEP_ERROR_CATEGORY,
       code: error?.code || "FLOW_DRAFT_STEP_ERROR",
       message: stepOutput.error.message,
       retryable: false,

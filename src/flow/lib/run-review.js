@@ -24,6 +24,7 @@ import {
 } from "./current-flow-state.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import {
+  DRAFT_STEP_ERROR_CATEGORY,
   flowLeafIdsBetween,
   TaskReviewFailureFacts,
   resolveTaskReviewFailure,
@@ -87,6 +88,8 @@ import {
   sameTaskReviewRepositorySnapshot,
 } from "./task-review-recovery-checkpoint.js";
 import { readRetryBaseline, readRetryRecoveryReceipt, retryEvidenceRouteForNode } from "./retry-recovery.js";
+import { StepOutput } from "../engine/step-output.js";
+import { DRAFT_STEP_ERROR_PERSISTENCE_FAILURE_CODE } from "./definition-lifecycle-failure.js";
 
 const IMPL_REVIEW_PHASE = "impl";
 const REVIEW_VERDICT_VALUES = Object.freeze(["PASS", "ADVISORY", "REJECTED"]);
@@ -1737,6 +1740,10 @@ export class RunReviewCommand extends FlowCommand {
       message: failureFacts.message,
     }));
     const canConvergeTaskReview = failureDecision.disposition === "publish-unavailable";
+    const draftStepError = ["draft-questions-review", "draft-coverage-review"].includes(canonicalState.current?.at(-1))
+      ? new StepOutput(error)
+      : null;
+    const canonicalFailure = failureFacts.toCanonicalFailure();
     try {
       if (canConvergeTaskReview) {
         ctx.flowManager.confirmTaskReviewUnavailable({
@@ -1748,20 +1755,31 @@ export class RunReviewCommand extends FlowCommand {
         ctx.flowManager.failCurrentAttempt({
           specId: ctx.specId ?? ctx.flowState.specId,
           taskReviewUnsealedCheckpoint,
-          failure: failureFacts.toCanonicalFailure(),
+          failure: draftStepError === null
+            ? canonicalFailure
+            : {
+                ...canonicalFailure,
+                // Source-integrity is a stricter existing terminal category.
+                // Other provider facts retain their original audit evidence;
+                // DefinitionFailurePolicy blocks this Draft Error category.
+                category: canonicalFailure.category === "source-integrity"
+                  ? "source-integrity"
+                  : DRAFT_STEP_ERROR_CATEGORY,
+              },
           result: {
             outcome: "failed",
             summary: failureFacts.message,
             confirmedAt: new Date().toISOString(),
             artifactRefs: [],
           },
+          ...(draftStepError === null ? {} : { stepOutput: draftStepError }),
         });
       }
     } catch (failureError) {
       return Envelope.fail(
         "run",
         "review",
-        "REVIEW_FAILURE_RECORDING_FAILED",
+        draftStepError === null ? "REVIEW_FAILURE_RECORDING_FAILED" : DRAFT_STEP_ERROR_PERSISTENCE_FAILURE_CODE,
         `${failureFacts.message}; unable to record the canonical Attempt failure: ${failureError.message}`,
       );
     }

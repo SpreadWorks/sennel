@@ -2484,6 +2484,16 @@ export class DefinitionFailurePolicy {
         reason: "unaccepted source effects require explicit reconciliation before execution can continue",
       });
     }
+    // A persisted Draft Step Error is a terminal execution boundary. Its
+    // failure record retains the exact Attempt and Error;
+    // retrying or selecting a successor would discard that explicit Step
+    // decision in favor of a generic command failure policy.
+    if (failure.category === "draft-step-error") {
+      return new DefinitionFailureDecision({
+        policy: this, operation: "blocked", retryKind: null, remaining: 0, targetNodeId: null,
+        reason: "the Draft Step returned an Error and requires explicit recovery before execution can continue",
+      });
+    }
     // A Review worker is allowed to retry its own deadline only after its
     // supervisor has durably established that the complete provider process
     // tree stopped.  The action identity comes from the Definition, so a

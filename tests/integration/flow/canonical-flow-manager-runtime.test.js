@@ -55,6 +55,7 @@ import { computeGitState } from "../../../src/lib/git-state.js";
 import { CanonicalGatePromotion, canonicalGateRevision } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
 import {
+  DRAFT_STEP_ERROR_CATEGORY,
   resolveGateTransition,
   resolveNonGateTransition,
   testExecuteTransitionDefinition,
@@ -817,7 +818,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const attemptId = manager.canonicalState(specId).attempt.id;
     manager.failCurrentAttempt({
       specId,
-      failure: { category: "semantic", code: "DRAFT_GATE_ERROR", message: "Draft Gate failed.", retryable: true, retryKind: "semantic" },
+      failure: { category: DRAFT_STEP_ERROR_CATEGORY, code: "DRAFT_GATE_ERROR", message: "Draft Gate failed.", retryable: false, retryKind: null },
       stepOutput: new StepOutput(new Error("Draft Gate failed.")),
     });
     const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
@@ -825,6 +826,10 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(state.current.at(-1), "draft-gate");
     assert.equal(state.attempt.id, attemptId);
     assert.equal(state.attempt.failure.code, "DRAFT_GATE_ERROR");
+    assert.equal(state.attempt.failure.category, DRAFT_STEP_ERROR_CATEGORY);
+    assert.equal(state.nextAction().operation, "blocked");
+    assert.equal(state.retryEligibility().tooling, false);
+    assert.equal(state.retryEligibility().semantic, false);
     const failure = reloaded.activityLedger(specId).at(-1);
     assert.deepEqual(failure.result.stepOutput, {
       type: STEP_OUTPUT_TYPE.ERROR,

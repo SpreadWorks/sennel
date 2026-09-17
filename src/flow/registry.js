@@ -11,6 +11,7 @@
 import { derivePhase } from "../lib/flow-helpers.js";
 import { Envelope } from "../lib/flow-envelope.js";
 import { hasExplicitOption } from "../lib/flow-options.js";
+import { FatalPostHookError } from "../lib/post-hook-error.js";
 import { FLOW_QUERY_HELP } from "./query-contract.js";
 import fs from "fs";
 import path from "path";
@@ -41,6 +42,7 @@ import {
   RequirementTestLifecycleFacts,
   RequirementTestStepObservation,
   resolveRequirementTestLifecycle,
+  DRAFT_STEP_ERROR_CATEGORY,
 } from "./definition.js";
 import { readCurrentGateTransitionFacts } from "./lib/gate-transition-facts.js";
 import { applyGatePublicOutcomeProjection } from "./lib/gate-transition-application.js";
@@ -73,9 +75,50 @@ import { readCurrentNonGateTransitionFacts } from "./lib/non-gate-transition-fac
 import { readCurrentTestChainTransitionFacts } from "./lib/test-chain-transition-facts.js";
 import { CurrentTaskSourceSnapshot, TaskMutationLineageSet } from "./lib/task-mutation-lineage.js";
 import { RequirementTestLifecycleAuthority } from "./lib/requirement-test-lifecycle.js";
-import { STEP_OUTPUT_TYPE } from "./engine/step-output.js";
+import { STEP_OUTPUT_TYPE, StepOutput } from "./engine/step-output.js";
 import { DraftSpecConnector } from "./engine/connectors/draft/draft-spec-connector.js";
 import { StepFactory } from "./engine/step-factory.js";
+import { markDraftStepErrorPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
+
+function fatalDraftPersistenceFailure(error, fallbackCode) {
+  const failure = new FatalPostHookError(fallbackCode, error?.message || String(error), {
+    cause: error instanceof Error ? error : null,
+  });
+  markDraftStepErrorPersistenceFailure(error);
+  markDraftStepErrorPersistenceFailure(failure);
+  return failure;
+}
+
+function fatalDraftStepError(error, code) {
+  return new FatalPostHookError(code, error?.message || String(error), {
+    cause: error instanceof Error ? error : null,
+  });
+}
+
+function persistDraftStepError(ctx, stepId, error) {
+  const specId = ctx.specId ?? ctx.flowState?.specId;
+  const state = ctx.flowManager?.canonicalState?.(specId);
+  if (state?.current?.at(-1) !== stepId || state.attempt?.failure !== null) return false;
+  const stepOutput = new StepOutput(error instanceof Error ? error : new Error(String(error)));
+  try {
+    ctx.flowManager.failCurrentAttempt({
+      specId,
+      failure: {
+        category: DRAFT_STEP_ERROR_CATEGORY,
+        code: error?.code || "DRAFT_STEP_ERROR",
+        message: stepOutput.error.message,
+        retryable: false,
+        retryKind: null,
+      },
+      stepOutput,
+    });
+    ctx.flowState = ctx.flowManager.loadReadOnly(specId);
+    return true;
+  } catch (persistenceError) {
+    markDraftStepErrorPersistenceFailure(error);
+    throw fatalDraftPersistenceFailure(persistenceError, "DRAFT_STEP_OUTPUT_PERSISTENCE_FAILED");
+  }
+}
 
 async function executePublishedDraftReviewStep(ctx, result) {
   const phase = result?.artifacts?.retryPhase || result?.artifacts?.phase;
@@ -104,23 +147,38 @@ async function executePublishedDraftReviewStep(ctx, result) {
     .provide(reviewCommand.RunReviewCommand, command)
     .create(route.key === "questions" ? steps.DraftQuestionsReviewStep : steps.DraftCoverageReviewStep);
   const output = await step.execute();
-  if (output.type === STEP_OUTPUT_TYPE.ERROR) throw output.error;
+  if (output.type === STEP_OUTPUT_TYPE.ERROR) {
+    persistDraftStepError(ctx, route.reviewStepId, output.error);
+    throw fatalDraftStepError(output.error, "DRAFT_REVIEW_STEP_ERROR");
+  }
   const selected = resolveDraftStepRoute(route.reviewStepId, output);
   const specId = ctx.specId ?? ctx.flowState.specId;
-  ctx.flowManager.publishCurrentAttemptResult({ specId, commandResult: result });
+  try {
+    ctx.flowManager.publishCurrentAttemptResult({ specId, commandResult: result });
+  } catch (error) {
+    throw fatalDraftPersistenceFailure(error, "DRAFT_REVIEW_RESULT_PUBLICATION_FAILED");
+  }
   if (selected.targetStepId === "draft-gate") {
     const { readCoveragePassDraftCompletionFacts } = await import("./lib/draft-completion-connector.js");
     const facts = readCoveragePassDraftCompletionFacts({
       flowManager: ctx.flowManager, specId, sourceStepId: route.reviewStepId,
     });
-    ctx.flowManager.confirmDraftCoverageRepairCompletion({
-      specId,
-      decision: resolveDraftCoverageRepairCompletion(facts),
-      draft: facts.draft,
-      stepOutput: output,
-    });
+    try {
+      ctx.flowManager.confirmDraftCoverageRepairCompletion({
+        specId,
+        decision: resolveDraftCoverageRepairCompletion(facts),
+        draft: facts.draft,
+        stepOutput: output,
+      });
+    } catch (error) {
+      throw fatalDraftPersistenceFailure(error, "DRAFT_REVIEW_STEP_OUTPUT_PERSISTENCE_FAILED");
+    }
   } else {
-    ctx.flowManager.confirmCurrentAttempt({ specId, stepOutput: output });
+    try {
+      ctx.flowManager.confirmCurrentAttempt({ specId, stepOutput: output });
+    } catch (error) {
+      throw fatalDraftPersistenceFailure(error, "DRAFT_REVIEW_STEP_OUTPUT_PERSISTENCE_FAILED");
+    }
   }
   ctx.flowState = ctx.flowManager.loadReadOnly(specId);
   const { persistReviewTransitionFacts } = await import("./lib/review-transition-persistence.js");
@@ -144,7 +202,10 @@ async function executePublishedDraftGateStep(ctx, result) {
     }))
     .create(DraftGateStep);
   const output = await step.execute();
-  if (output.type === STEP_OUTPUT_TYPE.ERROR) throw output.error;
+  if (output.type === STEP_OUTPUT_TYPE.ERROR) {
+    persistDraftStepError(ctx, "draft-gate", output.error);
+    throw fatalDraftStepError(output.error, "DRAFT_GATE_STEP_ERROR");
+  }
   return Object.freeze({ output, route: resolveDraftStepRoute("draft-gate", output) });
 }
 
@@ -688,23 +749,30 @@ class RegistryLifecycleAdapter {
     const gateTransitionDecision = step === this.gateStepId && status === "done"
       ? this.ctx.gateTransitionDecision ?? null
       : null;
-    tryUpdateStepStatus(
-      { ...this.ctx, phase: this.phase },
-      step,
-      settledStatus,
-      this.mutationOpts(step, {
-        gateTransitionDecision,
-        ...(step === "draft-gate" && status === "done" && this.ctx.draftGateStepOutput !== undefined
-          ? { stepOutput: this.ctx.draftGateStepOutput } : {}),
-      }),
-      {
-        action,
-        plan: this.plan,
-        currentStepId: this.input.currentStepId || resolveRuntimeStep(this.input),
-        event: this.input.event,
-        result: lifecycleResult,
-      },
-    );
+    try {
+      tryUpdateStepStatus(
+        { ...this.ctx, phase: this.phase },
+        step,
+        settledStatus,
+        this.mutationOpts(step, {
+          gateTransitionDecision,
+          ...(step === "draft-gate" && status === "done" && this.ctx.draftGateStepOutput !== undefined
+            ? { stepOutput: this.ctx.draftGateStepOutput } : {}),
+        }),
+        {
+          action,
+          plan: this.plan,
+          currentStepId: this.input.currentStepId || resolveRuntimeStep(this.input),
+          event: this.input.event,
+          result: lifecycleResult,
+        },
+      );
+    } catch (error) {
+      if (step === "draft-gate" && status === "done" && this.ctx.draftGateStepOutput !== undefined) {
+        throw fatalDraftPersistenceFailure(error, "DRAFT_GATE_STEP_OUTPUT_PERSISTENCE_FAILED");
+      }
+      throw error;
+    }
   }
 
   refreshFlowState() {
@@ -1685,7 +1753,12 @@ export const FLOW_COMMANDS = {
           // the exact current catalog result, including its Attempt binding,
           // before the persistence adapter chooses whether the Attempt is
           // retryable or must settle.
-          ctx.flowManager.publishCurrentAttemptResult({ specId, commandResult: result });
+          try {
+            ctx.flowManager.publishCurrentAttemptResult({ specId, commandResult: result });
+          } catch (error) {
+            if (phase === "draft") throw fatalDraftPersistenceFailure(error, "DRAFT_GATE_RESULT_PUBLICATION_FAILED");
+            throw error;
+          }
           ctx.flowState = ctx.flowManager.loadReadOnly(specId);
           ctx.gateTransitionDecision = resolvePersistedPlanGateDecision(ctx, result);
           recoveryEffect = ctx.gateTransitionDecision.plan.recoveryEffect;
@@ -1701,11 +1774,17 @@ export const FLOW_COMMANDS = {
           }
           if (ctx.gateTransitionDecision.facts.scope !== "task"
             && ctx.gateTransitionDecision.facts.result === "fail") {
-            const stepAttempt = ctx.flowManager.recordGateObservationDecision({
-              specId,
-              decision: ctx.gateTransitionDecision,
-              ...(phase === "draft" ? { stepOutput: ctx.draftGateStepOutput } : {}),
-            });
+            let stepAttempt;
+            try {
+              stepAttempt = ctx.flowManager.recordGateObservationDecision({
+                specId,
+                decision: ctx.gateTransitionDecision,
+                ...(phase === "draft" ? { stepOutput: ctx.draftGateStepOutput } : {}),
+              });
+            } catch (error) {
+              if (phase === "draft") throw fatalDraftPersistenceFailure(error, "DRAFT_GATE_STEP_OUTPUT_PERSISTENCE_FAILED");
+              throw error;
+            }
             if (stepAttempt !== null) result.stepAttempt = stepAttempt.toJSON();
             ctx.flowState = ctx.flowManager.loadReadOnly(specId);
             ctx.gateTransitionDecision = resolvePersistedPlanGateDecision(ctx, result);
@@ -1764,8 +1843,15 @@ export const FLOW_COMMANDS = {
           || ctx.phase
           || resolveGatePhaseFromState(ctx.flowState)?.phase;
         const errorCtx = { ...ctx, phase };
-        tryAppendIssueLog(() => appendIssueLogFromGateError(errorCtx, err));
         if (ctx.terminalGateRevalidation === true) return;
+        if (phase === "draft") {
+          if (persistDraftStepError(ctx, "draft-gate", err)) {
+            tryAppendIssueLog(() => appendIssueLogFromGateError(errorCtx, err));
+            return;
+          }
+          return;
+        }
+        tryAppendIssueLog(() => appendIssueLogFromGateError(errorCtx, err));
         if (err?.code === "GATE_OUTPUT_TOOLING_FAILURE") return;
         await applyLifecycleActionsFromRegistry(errorCtx, {
           event: "gate:onError",

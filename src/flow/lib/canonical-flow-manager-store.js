@@ -4815,6 +4815,11 @@ export class CanonicalFlowManagerStore {
       }
       if (stepOutput.type === STEP_OUTPUT_TYPE.ERROR) {
         resolveDraftStepRoute(nodeId, stepOutput);
+        if (!["draft-step-error", "source-integrity"].includes(failure.category)) {
+          throw new CurrentFlowStateInvariantError(
+            "Draft Error StepOutput requires draft-step-error or source-integrity failure facts",
+          );
+        }
         failureResult = { ...(failureResult?.toJSON?.() ?? failureResult), stepOutput: stepOutput.toJSON() };
       } else if (nodeId === "draft-gate"
         && [STEP_OUTPUT_TYPE.LOOP_REQUIRED, STEP_OUTPUT_TYPE.COMPLETED].includes(stepOutput.type)) {

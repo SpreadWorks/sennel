@@ -4514,6 +4514,9 @@ export class DraftAwaitUserDecision {
   }
 }
 
+/** Failure category reserved for a persisted terminal Draft StepOutput Error. */
+export const DRAFT_STEP_ERROR_CATEGORY = "draft-step-error";
+
 export class DraftStepErrorDecision {
   constructor(stepId, error) {
     this.stepId = requireString(stepId, "draft error step");
