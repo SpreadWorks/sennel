@@ -1,0 +1,80 @@
+{
+  "devType": "refactor",
+  "goal": "[must] Make public help for all 67 Flow leaves and the get/set/run/report command groups exactly match the parser and use one deterministic layout: every leaf lists each accepted flag and option plus implicit -h, --help exactly once; each group lists only options shared by every child leaf; subcommands sort by ascending name unless explicit display-order metadata overrides; every subcommand name/summary boundary has at least two visible spaces or puts the summary on its own line; and sennel flow <group> --help and sennel help flow <group> render the same rows.",
+  "analysis": {
+    "problem": "Flow command parsing and help presentation are maintained as separate contracts, so accepted options can be omitted from leaf help, unsupported options can appear in group help, implicit help can be hidden, and subcommand rows can be unreadable or registration-order dependent.",
+    "proposedApproach": "[must] Extend existing CommandDefinition into the sole option and command-display authority. [must] Ownership mapping: option name, value placeholder, description, and kind (flag/required-value/optional-value) plus shared target guards, run-only runtime options, and implicit help belong to the CommandDefinition option contract; parser args.flags/options/optionalOptions and leaf Usage/Options project from it; group Options project from the intersection of child-leaf contracts; both group-help entry points project subcommand names/summaries through one shared renderer. [must] Retain each command existing description and examples and all parser execution behavior. [must] Remove hand-written option lists, the fixed group-option array, duplicate subcommand renderers, and registration order as a display authority; these are implementation removals, not public command or option removals. [must] Verify each retained behavior through parser invocations and rendered help for all leaves and group entry points, including target guards and run runtime options.",
+    "validation": "[must] The validation must execute a registry/help contract test and a behavior-parity test through the same FLOW_COMMANDS registry and dispatcher over exactly the 67 leaf entries in FLOW_COMMANDS, the four group surfaces flow get/set/run/report --help, and the four matching help flow get/set/run/report --help surfaces. [must] For each leaf, derive the parser option-name set from args.flags, args.options, and args.optionalOptions, add -h and --help once, and assert that every name appears exactly once in rendered help; required-value and optional-value options must show their declared placeholders and descriptions, while flags must remain valueless. [must] For each group, derive the displayed options as the intersection of every child leaf contract and assert that --agent-work-dir occurs only in run. [must] For every group entry point, assert identical subcommand names, summaries, ascending-name order unless explicit display-order metadata exists, and at least two visible spaces or a multiline boundary between every name and summary. [must] In addition to rendered help, invoke every leaf through its parser and registered dispatcher path with its existing command fixture, using only existing test seams for external or side-effecting boundaries, and assert the pre-change exit result, accepted and rejected options, target-guard result, hooks, runtime directory behavior, and command result. [must] The end-to-end checks must also run flow run abort, flow resume, and flow prepare; select the lexicographically first get leaf, set leaf, and run leaf whose parser declares one or more of --expect-binding, --expect-no-issue, --expect-issue, --expect-spec, or --expect-run-id, invoke each selected leaf with every declared guard and with one rejected option; and exercise every group subcommand whose name length is at least 14 characters. [must] Every check passes only when exit status, accepted/rejected options, rendered rows, placeholders, descriptions, ordering, boundaries, and behavior-level execution match the pre-change contract, and when no command execution, target guard, runtime directory, hook, configuration, generated-artifact, or side-effect behavior changes."
+  },
+  "decisionMap": {
+    "knownFacts": [
+      "The requested scope is one concern: consistency and usability of the public Flow CLI help contract.",
+      "The parser currently declares flags, required-value options, and optional-value options separately from hand-written help text.",
+      "The current audit covers all 67 leaves in FLOW_COMMANDS and identifies omitted leaf options, unsupported group options, hidden implicit help, long-name layout failures, and declaration-order-dependent listings.",
+      "The requested public behavior includes complete leaf option coverage, valid group option intersections, visible row separation, ascending subcommand order, and the same contract for both group-help entry points.",
+      "Command execution semantics, target guard evaluation, and runtime directory behavior are explicitly outside the intended behavior change.",
+      "The migration inventory is the current public parser/help contract: 67 leaf --help surfaces; flow get, set, run, and report group help; and help flow get, set, run, and report group help.",
+      "Each leaf currently has parser declarations in args.flags, args.options, and args.optionalOptions, while hand-written help independently controls option names, value placeholders, descriptions, usage text, and implicit -h, --help visibility; this is the behavior being replaced.",
+      "The retained command behavior includes accepted target guards (--expect-binding, --expect-no-issue, --expect-issue, --expect-spec, --expect-run-id), run-only --agent-work-dir, command names and summaries, and their execution semantics.",
+      "The existing group contract must preserve child-command membership and descriptions while removing unsupported --agent-work-dir from get/set/report; run remains the only group that presents it.",
+      "The existing table behavior presents subcommands in registration order and can concatenate long names with summaries; the migration retains every row and summary while making order and separation explicit."
+    ],
+    "decisionPoints": [
+      "[must] The public help contract distinguishes valueless flags, required-value options, and optional-value options; every value-taking option has its declared placeholder and description, and every leaf shows -h and --help exactly once.",
+      "[must] Every one of the exactly 67 FLOW_COMMANDS leaves is covered by a registry/help contract assertion that compares args.flags, args.options, and args.optionalOptions with the rendered option names and rejects duplicates or omissions.",
+      "[must] Group help represents only the intersection of all child-leaf option contracts; --agent-work-dir is displayed and accepted only for the run group, while get, set, and report omit it.",
+      "[must] Every get, set, run, and report subcommand row is ordered by ascending name unless that command has explicit display-order metadata, and the name/summary boundary contains at least two visible spaces or uses a separate summary line.",
+      "[must] The existing CommandDefinition remains the sole authority for option kind, name, placeholder, description, parser projection, leaf listing, group intersection, target guards, run-only runtime options, and implicit help; no public option or execution behavior is removed.",
+      "[must] sennel flow <group> --help and sennel help flow <group> reuse one subcommand renderer and therefore produce the same names, summaries, order, spacing, and multiline boundaries for get, set, run, and report.",
+      "[must] Existing command descriptions and examples remain attached to their CommandDefinition; the fixed group-option list, duplicate table renderers, hand-written option sections, and registration-order display authority are removed only as implementation authorities, with no command, API, hook, configuration entry, generated artifact, or side effect removed.",
+      "[must] The exact end-to-end set is flow run abort, flow resume, flow prepare, the lexicographically first guarded get/set/run leaf selected from parser declarations, every declared target guard on those selected leaves plus one rejected option, and every group subcommand whose name length is at least 14; acceptance requires the expected parser result and the rendered contract for each invocation."
+    ],
+    "resolvedByProjectRules": [
+      "[must] The implementation must reuse and extend the existing CommandDefinition authority rather than introduce a parallel command abstraction.",
+      "[must] The implementation must use only Node.js built-in modules and must not add external dependencies.",
+      "[must] The implementation must express meaningful option-contract values through the repository's class-based modeling conventions.",
+      "[must] The implementation must preserve existing command execution behavior and must not rely on agent-host-specific lifecycle features."
+    ],
+    "requiresUserJudgment": [],
+    "deferredToSpec": [
+      {
+        "boundary": "The precise boundaries of the shared option contract and its projections into leaf and group help.",
+        "relevance": "[must] The draft establishes the required public option categories and coverage; Spec must define implementable detail without changing the requested behavior.",
+        "owner": "spec"
+      },
+      {
+        "boundary": "The exact verification partition across registry/help contract tests and focused end-to-end tests.",
+        "relevance": "[must] The draft identifies every required behavior-level verification surface; Spec must assign concrete test responsibilities within the listed target files.",
+        "owner": "spec"
+      }
+    ]
+  },
+  "scopeVerification": {
+    "in": [
+      "[must] Cover exactly all 67 leaves in FLOW_COMMANDS plus flow get/set/run/report --help and help flow get/set/run/report --help.",
+      "[must] For every leaf, compare parser declarations in args.flags, args.options, and args.optionalOptions with rendered help and require one occurrence each for every option name plus exactly one implicit -h and one --help; require placeholders and descriptions for required-value and optional-value options.",
+      "[must] For every group, require the option intersection of every child leaf, require --agent-work-dir only in run, require ascending subcommand names unless explicit display-order metadata overrides, and require at least two visible spaces or a separate summary line for every name at least 14 characters long and for every other row.",
+      "[must] Run end-to-end checks for flow run abort, flow resume, flow prepare, the lexicographically first guarded get/set/run leaf selected by the parser-declaration rule, every declared target guard on those selected leaves, one rejected option, and every group subcommand with a name length of at least 14; each check must assert the expected exit result, option acceptance or rejection, and help text contract."
+    ],
+    "out": [
+      "[must] Do not change command execution semantics, target guard evaluation, runtime directory behavior, hook ordering, configuration interpretation, generated artifact behavior, or other command side effects.",
+      "[must] Do not add unrelated commands, alter non-Flow help contracts, remove public options, or introduce external runtime dependencies."
+    ]
+  },
+  "impactOnExisting": [
+    "[must] User-facing commands: invoke help for all exactly 67 Flow leaves and all eight group entry points, assert every parser option plus one -h/--help pair appears exactly once, and assert all existing names, summaries, examples, descriptions, accepted/rejected behavior, target guards, and runtime semantics remain unchanged.",
+    "[must] APIs: instantiate the existing CommandDefinition and FLOW_COMMANDS registry through the dispatcher and both help entry points, then assert that the same option contracts and subcommand rows are projected without removing any public parser or command API.",
+    "[must] Hooks: invoke the lexicographically first guarded get, set, and run leaves selected from FLOW_COMMANDS via the sennel flow namespace dispatcher in src/flow.js; resolve each entry from src/flow/registry.js and execute the shared lifecycle in src/lib/dispatcher.js—pre-hook, command handler, successful post-hook, or the existing error hook on failure—then assert that each existing Flow pre-hook and post-hook runs with the same ordering and context as before.",
+    "[must] Configuration entries: execute a run leaf with --agent-work-dir and execute get, set, and report with that option rejected, while asserting that the .sennel configuration schema, agent profiles, target-guard settings, and runtime option sources are unchanged.",
+    "[must] Generated artifacts: run every help-only surface and assert that no docs, specs, canonical Flow artifact, generated project file, or other non-help artifact is written or revised; only the intended rendered help output and tests may change.",
+    "[must] Side effects: compare Flow state, worktree, branch, runtime-directory, and pull-request state before and after the help surfaces and assert no side effect occurs; execution checks must retain their prior command behavior.",
+    "[must] Compatibility: assert parser acceptance and rejection for every existing option on the selected guarded leaves and for group options, including the disappearance of unsupported --agent-work-dir from get/set/report help without changing leaf parser contracts."
+  ],
+  "questionLedger": {
+    "revision": 0,
+    "publication": "draft-worker-publication",
+    "evidenceDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+    "questions": []
+  },
+  "openQuestions": []
+}

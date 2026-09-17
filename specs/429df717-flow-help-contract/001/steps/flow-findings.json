@@ -1,0 +1,65 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "findingId": "DF-1",
+      "sourceStep": "draft-gate",
+      "sourceArtifact": "steps/draft-gate/result.json",
+      "sourceFindingId": "complete-context",
+      "runId": "429df717-dd29-403d-b951-ea8e90593b06",
+      "fingerprint": "268138f6e92bf8563a9ef0da91714b892f98433ae1f718d281bbe19a4daf3a00",
+      "disposition": "deferred",
+      "rationale": "The requirement refers to “its existing command fixture” without identifying the fixture or defining the invocation and expected command result, so independent reviewers cannot determine whether the verification satisfies it.",
+      "retryExhausted": true,
+      "attempts": 5,
+      "round": 5,
+      "completionKind": "deferred",
+      "finalDisposition": "still_open"
+    },
+    {
+      "findingId": "DF-2",
+      "sourceStep": "draft-gate",
+      "sourceArtifact": "steps/draft-gate/result.json",
+      "sourceFindingId": "unambiguous-requirements",
+      "runId": "429df717-dd29-403d-b951-ea8e90593b06",
+      "fingerprint": "f4c3fa9c5beb41bd3ef2e4317c279bbc78dcac7d54a118c92cee591c365f01dd",
+      "disposition": "deferred",
+      "rationale": "“The pre-change exit result” is not a concrete expected value or specified baseline procedure; state the exact result required for each invocation.",
+      "retryExhausted": true,
+      "attempts": 5,
+      "round": 5,
+      "completionKind": "deferred",
+      "finalDisposition": "still_open"
+    },
+    {
+      "findingId": "DF-3",
+      "sourceStep": "draft-gate",
+      "sourceArtifact": "steps/draft-gate/result.json",
+      "sourceFindingId": "complete-context",
+      "runId": "429df717-dd29-403d-b951-ea8e90593b06",
+      "fingerprint": "e88ab2c015e422c15d3fcdd5b21d428abb0450ec459b4a4511a1db24e7230547",
+      "disposition": "deferred",
+      "rationale": "“The expected parser result” is undefined. Specify the accepted or rejected outcome and expected result for each listed invocation.",
+      "retryExhausted": true,
+      "attempts": 5,
+      "round": 5,
+      "completionKind": "deferred",
+      "finalDisposition": "still_open"
+    },
+    {
+      "findingId": "DF-4",
+      "sourceStep": "draft-gate",
+      "sourceArtifact": "steps/draft-gate/result.json",
+      "sourceFindingId": "complete-context",
+      "runId": "429df717-dd29-403d-b951-ea8e90593b06",
+      "fingerprint": "10ca258e7cc62f358f3a817b6a89e06963911444cae11915b4679b362df29dda",
+      "disposition": "deferred",
+      "rationale": "The hook requirement requires the same “context as before” without defining which context fields or values must remain unchanged, preventing two reviewers from applying the criterion consistently.",
+      "retryExhausted": true,
+      "attempts": 5,
+      "round": 5,
+      "completionKind": "deferred",
+      "finalDisposition": "still_open"
+    }
+  ]
+}

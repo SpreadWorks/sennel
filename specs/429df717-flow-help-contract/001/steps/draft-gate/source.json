@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "phase": "draft",
+  "generatedAt": "2026-09-15T15:38:36.275Z",
+  "result": "fail",
+  "evaluations": [
+    {
+      "guardrail_id": "complete-context",
+      "result": "fail",
+      "reason": "The requirement refers to “its existing command fixture” without identifying the fixture or defining the invocation and expected command result, so independent reviewers cannot determine whether the verification satisfies it.",
+      "category": "process",
+      "title": "Complete Context",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation[2]"
+          },
+          "observed": "The requirement refers to “its existing command fixture” without identifying the fixture or defining the invocation and expected command result, so independent reviewers cannot determine whether the verification satisfies it.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "unambiguous-requirements",
+      "result": "fail",
+      "reason": "“The pre-change exit result” is not a concrete expected value or specified baseline procedure; state the exact result required for each invocation.",
+      "category": "code-quality",
+      "title": "Unambiguous Requirements",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation[2]"
+          },
+          "observed": "“The pre-change exit result” is not a concrete expected value or specified baseline procedure; state the exact result required for each invocation.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "complete-context",
+      "result": "fail",
+      "reason": "“The expected parser result” is undefined. Specify the accepted or rejected outcome and expected result for each listed invocation.",
+      "category": "process",
+      "title": "Complete Context",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation[5]"
+          },
+          "observed": "“The expected parser result” is undefined. Specify the accepted or rejected outcome and expected result for each listed invocation.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "complete-context",
+      "result": "fail",
+      "reason": "The hook requirement requires the same “context as before” without defining which context fields or values must remain unchanged, preventing two reviewers from applying the criterion consistently.",
+      "category": "process",
+      "title": "Complete Context",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "impactOnExisting[2]"
+          },
+          "observed": "The hook requirement requires the same “context as before” without defining which context fields or values must remain unchanged, preventing two reviewers from applying the criterion consistently.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "complete-context",
+      "where": {
+        "file": "spec.json",
+        "locator": "analysis.validation[2]"
+      },
+      "observed": "The requirement refers to “its existing command fixture” without identifying the fixture or defining the invocation and expected command result, so independent reviewers cannot determine whether the verification satisfies it.",
+      "severity": "blocking",
+      "refs": [
+        "complete-context"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "unambiguous-requirements",
+      "where": {
+        "file": "spec.json",
+        "locator": "analysis.validation[2]"
+      },
+      "observed": "“The pre-change exit result” is not a concrete expected value or specified baseline procedure; state the exact result required for each invocation.",
+      "severity": "blocking",
+      "refs": [
+        "unambiguous-requirements"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "complete-context",
+      "where": {
+        "file": "spec.json",
+        "locator": "analysis.validation[5]"
+      },
+      "observed": "“The expected parser result” is undefined. Specify the accepted or rejected outcome and expected result for each listed invocation.",
+      "severity": "blocking",
+      "refs": [
+        "complete-context"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "complete-context",
+      "where": {
+        "file": "spec.json",
+        "locator": "impactOnExisting[2]"
+      },
+      "observed": "The hook requirement requires the same “context as before” without defining which context fields or values must remain unchanged, preventing two reviewers from applying the criterion consistently.",
+      "severity": "blocking",
+      "refs": [
+        "complete-context"
+      ]
+    }
+  ],
+  "issues": [],
+  "reasons": [
+    {
+      "verdict": "FAIL",
+      "detail": "Complete Context — The requirement refers to “its existing command fixture” without identifying the fixture or defining the invocation and expected command result, so independent reviewers cannot determine whether the verification satisfies it.",
+      "guardrail_id": "complete-context",
+      "category": "process"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Unambiguous Requirements — “The pre-change exit result” is not a concrete expected value or specified baseline procedure; state the exact result required for each invocation.",
+      "guardrail_id": "unambiguous-requirements",
+      "category": "code-quality"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Complete Context — “The expected parser result” is undefined. Specify the accepted or rejected outcome and expected result for each listed invocation.",
+      "guardrail_id": "complete-context",
+      "category": "process"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Complete Context — The hook requirement requires the same “context as before” without defining which context fields or values must remain unchanged, preventing two reviewers from applying the criterion consistently.",
+      "guardrail_id": "complete-context",
+      "category": "process"
+    }
+  ],
+  "failureKind": "ai_semantic_fail",
+  "failureCategory": {
+    "category": "semantic",
+    "code": "ai_semantic_fail"
+  },
+  "lineage": "0429484d880e5481d7082a5fe8a00a7b7123b7be00c8e179f1b06332f830906a"
+}

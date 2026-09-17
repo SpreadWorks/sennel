@@ -47,6 +47,9 @@ src/
 │   ├── get/                 status, resolve-context, check, prompt, qa-count, guardrail, issue
 │   ├── set/                 step, request, issue, note, files, metric
 │   ├── run/                 prepare-spec, gate, review, finalize, sync
+│   ├── engine/              Step 実行基盤（Step、StepOutput、StepFactory、StepConnector）
+│   ├── steps/               新しい契約の具体的な Flow Step（Draft から移行）
+│   ├── services/            Step に注入する成果物操作（Draft、Review）
 │   └── commands/            内部ヘルパー（merge, cleanup, review の実体）
 ├── spec/commands/            init, gate, guardrail（flow/run/prepare-spec, gate が内部で呼ぶ）
 ├── presets/                  core builtin preset（base のみ）

@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-c79163b1243c24cb7d00997411938cc48522172f776c23ddf2f9986983d3220d",
+  "repairRecordFingerprint": "c79163b1243c24cb7d00997411938cc48522172f776c23ddf2f9986983d3220d",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-draft-gate-8b84324a-6e71-4351-ba35-9b6fa82603a4",
+      "sequence": 1
+    },
+    "resultLogicalKey": "draft.gate",
+    "publicationActivityId": "attempt-result-published-79e6dcf5-fc8b-4a19-82a3-c08ff87aaf2d",
+    "catalogFingerprint": "bd957ba722340ff5c5c019363d03369a36c40c0e2b0ffd5fb6ed75c92d154c46",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-draft-gate-8b84324a-6e71-4351-ba35-9b6fa82603a4",
+        "sequence": 1
+      },
+      "canonicalAttempt": {
+        "id": "attempt-draft-gate-8b84324a-6e71-4351-ba35-9b6fa82603a4",
+        "sequence": 1
+      },
+      "sourceFingerprint": "cb9812d8e8710f36cb2d8e9b039d95487542046278428b1b7324e5acc96af242",
+      "canonicalFingerprint": "bd957ba722340ff5c5c019363d03369a36c40c0e2b0ffd5fb6ed75c92d154c46",
+      "sourceRevisionFingerprint": "fa1c5c0ce3d39b6010d46ddca5a04feba8c649b7b4d7819094c394a049adf7a3",
+      "canonicalRevisionFingerprint": "fa1c5c0ce3d39b6010d46ddca5a04feba8c649b7b4d7819094c394a049adf7a3"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-draft-gate-8b84324a-6e71-4351-ba35-9b6fa82603a4",
+    "sequence": 1
+  },
+  "targetAttempt": {
+    "id": "attempt-draft-gate-repair-e413ba20-1594-4bda-a0c0-44da44ac33f4",
+    "sequence": 2
+  },
+  "publicationActivityId": "attempt-confirmed-b1516e62-de87-4b1b-b7d5-f398118218d4",
+  "handoffRevision": "983dad7dd3b7e94951363479a6f8c4015ff16abb43e8f973e22f77f7da868fdc",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "27906dda3cd41efcc772dfc5dc034338011e891a86cdcecef2ef0662f07de60f",
+    "outputEvidenceDigest": "4da61ef9f60c395f810d2e0b33be5ff770125c5f049abe28e8e139ad352d8d30",
+    "summary": "Applied one bounded draft correction that makes the layout measurable and documents migration parity for every affected Flow help surface and unchanged integration boundary.",
+    "requests": [
+      {
+        "fingerprint": "3513e1d56f0bced4ed4efba407349c11b044e4f3d76f926d955e5e2897a6c279",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "ee5e6e522e1f7237634cd1895d9882df07438cd5b49a04eb8ce9f2329f58ef8f",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "e6c111b18ec943cac2fe3a1e557dd2c2b681d6a05b39cbf7cbbba1b0eee5c627",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "5c0f6913e5a2b84819fa10dbf6627fb1270f2d20d4fc00175bfa2cfbf0022d02",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "b1e40bc929b08f2afc4b872399a200fc119aa46176db51fff1abcd406dd6c045",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "3513e1d56f0bced4ed4efba407349c11b044e4f3d76f926d955e5e2897a6c279",
+        "strategy": "Replace the goal with explicit measurable parser coverage, group intersection, ordering, and separator conditions.",
+        "summary": "The goal now specifies exact option coverage, group intersections, ascending order, and a two-space or multiline name-summary boundary.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "4da61ef9f60c395f810d2e0b33be5ff770125c5f049abe28e8e139ad352d8d30"
+        ]
+      },
+      {
+        "fingerprint": "ee5e6e522e1f7237634cd1895d9882df07438cd5b49a04eb8ce9f2329f58ef8f",
+        "strategy": "Replace the goal with explicit measurable parser coverage, group intersection, ordering, and separator conditions.",
+        "summary": "The goal gives independent reviewers observable conditions for deciding whether the required help layout is satisfied.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "4da61ef9f60c395f810d2e0b33be5ff770125c5f049abe28e8e139ad352d8d30"
+        ]
+      },
+      {
+        "fingerprint": "e6c111b18ec943cac2fe3a1e557dd2c2b681d6a05b39cbf7cbbba1b0eee5c627",
+        "strategy": "Use a bounded inventory of all affected public help surfaces and parser behavior in decisionMap.knownFacts.",
+        "summary": "The draft now inventories all leaf and group entry points, option presentation details, implicit help, ordering, and layout behavior being replaced.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "4da61ef9f60c395f810d2e0b33be5ff770125c5f049abe28e8e139ad352d8d30"
+        ]
+      },
+      {
+        "fingerprint": "5c0f6913e5a2b84819fa10dbf6627fb1270f2d20d4fc00175bfa2cfbf0022d02",
+        "strategy": "Replace impactOnExisting with separate user-facing, API, hook, configuration, generated-artifact, side-effect, and compatibility statements.",
+        "summary": "The draft explicitly records the impact boundary for commands, APIs, hooks, configuration, generated artifacts, side effects, and compatibility.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "4da61ef9f60c395f810d2e0b33be5ff770125c5f049abe28e8e139ad352d8d30"
+        ]
+      },
+      {
+        "fingerprint": "b1e40bc929b08f2afc4b872399a200fc119aa46176db51fff1abcd406dd6c045",
+        "strategy": "Record behavior ownership and implementation-only removal decisions in analysis.proposedApproach and decisionMap.decisionPoints.",
+        "summary": "The draft maps retained parser, option, group, renderer, and execution behavior to owners and explicitly removes only duplicate implementation authorities and registration-order dependence.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "4da61ef9f60c395f810d2e0b33be5ff770125c5f049abe28e8e139ad352d8d30"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "4da61ef9f60c395f810d2e0b33be5ff770125c5f049abe28e8e139ad352d8d30"
+      ]
+    }
+  }
+}

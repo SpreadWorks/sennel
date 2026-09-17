@@ -1,0 +1,152 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-d1c67bc9718a95b55f4b2263690481dd2cf716a45a1f34d6569a234e11ebbf9d",
+  "repairRecordFingerprint": "d1c67bc9718a95b55f4b2263690481dd2cf716a45a1f34d6569a234e11ebbf9d",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-draft-gate-5a1e4fa5-9624-41f0-92f6-d469dcfe39bf",
+      "sequence": 3
+    },
+    "resultLogicalKey": "draft.gate",
+    "publicationActivityId": "attempt-result-published-a635839a-cd3c-4688-a447-9028ccc51b1d",
+    "catalogFingerprint": "85e6d206432053d6460c488dc8f6f4ea70e679c7c9e2ed68be4eede5ed983f2a",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-draft-gate-5a1e4fa5-9624-41f0-92f6-d469dcfe39bf",
+        "sequence": 3
+      },
+      "canonicalAttempt": {
+        "id": "attempt-draft-gate-5a1e4fa5-9624-41f0-92f6-d469dcfe39bf",
+        "sequence": 3
+      },
+      "sourceFingerprint": "0b6a12722d46b705eb6c574d21278cdb476214c2ef0a02919f1ffaa8afb5e3f5",
+      "canonicalFingerprint": "85e6d206432053d6460c488dc8f6f4ea70e679c7c9e2ed68be4eede5ed983f2a",
+      "sourceRevisionFingerprint": "34ca51027ab7e7ba226ccc62a35de696d02caa63e659fb73c7d00aa6ea4680a4",
+      "canonicalRevisionFingerprint": "34ca51027ab7e7ba226ccc62a35de696d02caa63e659fb73c7d00aa6ea4680a4"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-draft-gate-5a1e4fa5-9624-41f0-92f6-d469dcfe39bf",
+    "sequence": 3
+  },
+  "targetAttempt": {
+    "id": "attempt-draft-gate-repair-492bc7bc-cdf2-449f-a766-f45184b5da41",
+    "sequence": 4
+  },
+  "publicationActivityId": "attempt-confirmed-fc9284b4-1ccf-439e-b4d5-4c3a0c1ba33c",
+  "handoffRevision": "b1019eb4ffa709df13b9900ca595507abe8aea7b2cbe4e39b991859e3913ff6c",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34",
+    "outputEvidenceDigest": "c2b1b43378a64e639ea1b6501cf665f4e4b0ecebd47371cece5a5372cd40bc89",
+    "summary": "Prioritized the draft's authority and verification requirements, made the hook execution path concrete, and added behavior-parity coverage for every Flow leaf.",
+    "requests": [
+      {
+        "fingerprint": "0234010569a3b496287bd9e8271b7b9f7174c94211def5eafd5ea4a00d1bec29",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "0f631a7f93579c556a4c5f168de68e9ef93577316bc46fdb0d4a50cbf43e3d11",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "dae8c908a48b35ad9ab8747143a88c31014d123d42c4495f6c2df65f71199b08",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "7d017d45c943acdab8ef9b3a2eb1596b0b324c593912a71ee915ea368d8c7f05",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "f2b4f2568f5e97b7302a421741acceee548f36832aee6bf8ea0baa26897a4315",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "85c526a2d4a8ca02ef58d8f524b42f6caf6842c044364c5c8096d3375ac77a3c",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "e3d5d055a802af2813f990f3470c47e74a21f533f79403859154f8ba5e34817b",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "0234010569a3b496287bd9e8271b7b9f7174c94211def5eafd5ea4a00d1bec29",
+        "strategy": "Assign explicit priority to the authority requirement",
+        "summary": "The sole CommandDefinition authority is now explicitly marked as mandatory.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "c2b1b43378a64e639ea1b6501cf665f4e4b0ecebd47371cece5a5372cd40bc89"
+        ]
+      },
+      {
+        "fingerprint": "0f631a7f93579c556a4c5f168de68e9ef93577316bc46fdb0d4a50cbf43e3d11",
+        "strategy": "Mark option ownership and projections as mandatory",
+        "summary": "The option contract ownership and all parser/help projections now carry must priority.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "c2b1b43378a64e639ea1b6501cf665f4e4b0ecebd47371cece5a5372cd40bc89"
+        ]
+      },
+      {
+        "fingerprint": "dae8c908a48b35ad9ab8747143a88c31014d123d42c4495f6c2df65f71199b08",
+        "strategy": "Mark retained command behavior as mandatory",
+        "summary": "Descriptions, examples, and parser execution behavior are explicitly retained as must requirements.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "c2b1b43378a64e639ea1b6501cf665f4e4b0ecebd47371cece5a5372cd40bc89"
+        ]
+      },
+      {
+        "fingerprint": "7d017d45c943acdab8ef9b3a2eb1596b0b324c593912a71ee915ea368d8c7f05",
+        "strategy": "Mark implementation-authority removals as mandatory",
+        "summary": "Hand-written lists, duplicate renderers, and registration-order display authority are explicitly removed as implementation authorities.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "c2b1b43378a64e639ea1b6501cf665f4e4b0ecebd47371cece5a5372cd40bc89"
+        ]
+      },
+      {
+        "fingerprint": "f2b4f2568f5e97b7302a421741acceee548f36832aee6bf8ea0baa26897a4315",
+        "strategy": "Mark retained-behavior verification as mandatory",
+        "summary": "Parser invocation and rendered-help verification for retained behavior now carries must priority.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "c2b1b43378a64e639ea1b6501cf665f4e4b0ecebd47371cece5a5372cd40bc89"
+        ]
+      },
+      {
+        "fingerprint": "85c526a2d4a8ca02ef58d8f524b42f6caf6842c044364c5c8096d3375ac77a3c",
+        "strategy": "Name the concrete dispatcher and lifecycle path",
+        "summary": "The hook check now names src/flow.js, src/flow/registry.js, and src/lib/dispatcher.js and their lifecycle order.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "c2b1b43378a64e639ea1b6501cf665f4e4b0ecebd47371cece5a5372cd40bc89"
+        ]
+      },
+      {
+        "fingerprint": "e3d5d055a802af2813f990f3470c47e74a21f533f79403859154f8ba5e34817b",
+        "strategy": "Add behavior-parity execution coverage for every leaf",
+        "summary": "Validation now requires parser and registered-dispatcher execution evidence for all 67 leaves, not help output alone.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "c2b1b43378a64e639ea1b6501cf665f4e4b0ecebd47371cece5a5372cd40bc89"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "c2b1b43378a64e639ea1b6501cf665f4e4b0ecebd47371cece5a5372cd40bc89"
+      ]
+    }
+  }
+}

@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-ce182ebbb6ff99bd2133c1bd6e47f1cb39451417ff77dc891c2bb6bbd12ae78c",
+  "repairRecordFingerprint": "ce182ebbb6ff99bd2133c1bd6e47f1cb39451417ff77dc891c2bb6bbd12ae78c",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-draft-gate-f37a4818-d6dd-4a02-b329-4485654e8c49",
+      "sequence": 2
+    },
+    "resultLogicalKey": "draft.gate",
+    "publicationActivityId": "attempt-result-published-cdd0e676-c5b8-4afd-afe0-739be3fe1dc0",
+    "catalogFingerprint": "287fca1e429b3d66cc94752a8870ea7eaec7d78bc3eae9a5c612e599c5027b6b",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-draft-gate-f37a4818-d6dd-4a02-b329-4485654e8c49",
+        "sequence": 2
+      },
+      "canonicalAttempt": {
+        "id": "attempt-draft-gate-f37a4818-d6dd-4a02-b329-4485654e8c49",
+        "sequence": 2
+      },
+      "sourceFingerprint": "bf8c2a9a19dec9e39c523bcedb941303fcbcba64eb5cc48fc8204389cea5f020",
+      "canonicalFingerprint": "287fca1e429b3d66cc94752a8870ea7eaec7d78bc3eae9a5c612e599c5027b6b",
+      "sourceRevisionFingerprint": "b502cb51e7660dd1fb7e0cbafd40d6a3af14df99ea08915452e89a4d19e1f775",
+      "canonicalRevisionFingerprint": "b502cb51e7660dd1fb7e0cbafd40d6a3af14df99ea08915452e89a4d19e1f775"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-draft-gate-f37a4818-d6dd-4a02-b329-4485654e8c49",
+    "sequence": 2
+  },
+  "targetAttempt": {
+    "id": "attempt-draft-gate-repair-54626b4d-e45f-40b3-830c-ab2db470558d",
+    "sequence": 3
+  },
+  "publicationActivityId": "attempt-confirmed-1d3ae5e1-2514-4438-bdca-15fd694b44ca",
+  "handoffRevision": "8f144e2866a0680b9e1d71d98dfce1cfe7a1bb482800ba0d4bf8152fcdd8afef",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "4da61ef9f60c395f810d2e0b33be5ff770125c5f049abe28e8e139ad352d8d30",
+    "outputEvidenceDigest": "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34",
+    "summary": "Revised the draft with explicit priorities, exact verification selections, measurable long-name and option-coverage criteria, and behavior-level parity checks.",
+    "requests": [
+      {
+        "fingerprint": "dd62489e8316646ed9f23fe794643fc2e33f5f02733ff2dc568d198819e7f008",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "9f19955c272ab288774f67a211b6187877f04d4ecf39a2e3885cdc6b52829578",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "6cc351a7a9156a6c403e348618c957175ea67384cea5849b326f81ea9a177a5d",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "541e618e0578da01734d9750296512ebcef40372b42d51ccd09698b346463d5a",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "a0f03ea745aea44b73c25ae175c7daea2977ee5d4ebd10ae6933423269974c74",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "1bb3b963b3d945e0288d9ffdf8d6314d2c31dff48a823d945de6a95a09d9abd6",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "28f029aa6e25986bfdd051bcdfc90f7d6a33378aa3ce723e151260468f2481b9",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "cd23d9daffa6f7a28eac4cb457ce30657e5dd81a64b1a632fdf99664a600cee4",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "2b59d544acdd88d9f7b8df0ead998d97b24657266b9b3f53c9506f2c0dae3c96",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "b6648be63d36af04eff7ebcf894b397a2f2843ba0aadfda58de1775795256a52",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "dd62489e8316646ed9f23fe794643fc2e33f5f02733ff2dc568d198819e7f008",
+        "strategy": "Replace the validation and scope statements with a complete registry, group, and end-to-end assertion contract.",
+        "summary": "The draft now names every required test surface and gives pass conditions for option coverage, group intersections, ordering, spacing, and end-to-end behavior.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34"
+        ]
+      },
+      {
+        "fingerprint": "9f19955c272ab288774f67a211b6187877f04d4ecf39a2e3885cdc6b52829578",
+        "strategy": "Define the guarded-command selection rule and list the exact fixed commands and guard invocations.",
+        "summary": "The draft now requires abort, resume, prepare, the lexicographically first guarded get/set/run leaves, every declared guard, and one rejected option.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34"
+        ]
+      },
+      {
+        "fingerprint": "6cc351a7a9156a6c403e348618c957175ea67384cea5849b326f81ea9a177a5d",
+        "strategy": "Define long names as group subcommands with length at least 14 characters and assert their row boundary.",
+        "summary": "The long-name requirement now has a numeric threshold and a deterministic all-matching-subcommands selection rule.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34"
+        ]
+      },
+      {
+        "fingerprint": "541e618e0578da01734d9750296512ebcef40372b42d51ccd09698b346463d5a",
+        "strategy": "Replace focused-check wording with an enumerated command set, selection rule, and per-invocation acceptance criteria.",
+        "summary": "The end-to-end scope is now exact and each invocation must assert exit result, option behavior, and rendered help contract.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34"
+        ]
+      },
+      {
+        "fingerprint": "a0f03ea745aea44b73c25ae175c7daea2977ee5d4ebd10ae6933423269974c74",
+        "strategy": "Make the contract verifiable by stating exact counts, thresholds, selected commands, and observable pass conditions.",
+        "summary": "Independent reviewers can now determine completion from the named 67 leaves, eight group surfaces, deterministic command selection, and explicit assertions.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34"
+        ]
+      },
+      {
+        "fingerprint": "1bb3b963b3d945e0288d9ffdf8d6314d2c31dff48a823d945de6a95a09d9abd6",
+        "strategy": "Replace representative-command wording with a deterministic lexicographic selection rule plus an exhaustive long-name rule.",
+        "summary": "The verification set is no longer subjective: it is fixed commands, the first parser-selected guarded leaf per group, and every name meeting the threshold.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34"
+        ]
+      },
+      {
+        "fingerprint": "28f029aa6e25986bfdd051bcdfc90f7d6a33378aa3ce723e151260468f2481b9",
+        "strategy": "Use the explicit 14-character boundary to define which subcommand names are long and require spacing for all rows.",
+        "summary": "The draft now identifies long names by character count and states the required visible separation condition.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34"
+        ]
+      },
+      {
+        "fingerprint": "cd23d9daffa6f7a28eac4cb457ce30657e5dd81a64b1a632fdf99664a600cee4",
+        "strategy": "State the exact end-to-end invocations and the assertions that make each check pass or fail.",
+        "summary": "The focused end-to-end requirement now covers abort, resume, prepare, guarded get/set/run, rejected options, and all long-name rows with measurable outcomes.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34"
+        ]
+      },
+      {
+        "fingerprint": "2b59d544acdd88d9f7b8df0ead998d97b24657266b9b3f53c9506f2c0dae3c96",
+        "strategy": "Prefix the overall goal, every scope requirement, every decision point, and every retained-surface verification with an explicit must priority.",
+        "summary": "The draft now assigns an explicit must priority throughout the requirement-bearing goal, scope, decisions, and impact verification statements.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34"
+        ]
+      },
+      {
+        "fingerprint": "b6648be63d36af04eff7ebcf894b397a2f2843ba0aadfda58de1775795256a52",
+        "strategy": "Add direct behavior checks for user-facing commands, APIs, hooks, configuration, generated artifacts, side effects, and compatibility.",
+        "summary": "Every retained public surface listed in impactOnExisting now has a concrete behavior-level verification and acceptance condition.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "5f7ae53d233f5f726ef5dc4aeefaeb352c98273bed86e2f9d06fd470bbf1bc34"
+      ]
+    }
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "draft-questions-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "draft-questions",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "c8852b88c626f9ed21b8ed46184c162e23c99aebee2875067bb778a603ee0f88",
+          "treeSha": "9ce08a8a13ae6244250bf5a95b49fa23c52a5d57",
+          "targetStateDigest": "27906dda3cd41efcc772dfc5dc034338011e891a86cdcecef2ef0662f07de60f",
+          "issueCount": 0,
+          "retryPhase": "draft-questions"
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.questions.review",
+        "payload": {
+          "version": 2,
+          "phase": "draft-questions",
+          "sourceDraft": "draft.json",
+          "sourceDraftRevision": {
+            "version": 1,
+            "runId": "429df717-dd29-403d-b951-ea8e90593b06",
+            "specId": "429df717-flow-help-contract",
+            "sourceStepId": "draft",
+            "digest": "27906dda3cd41efcc772dfc5dc034338011e891a86cdcecef2ef0662f07de60f",
+            "byteLength": 5586,
+            "finalizedAt": "2026-09-15T15:02:12.310Z"
+          },
+          "generatedAt": "2026-09-15T15:02:22.860Z",
+          "verdict": "PASS",
+          "summary": "No draft review findings recorded.",
+          "blockingFindings": [],
+          "advisoryFindings": [],
+          "repairTargets": [],
+          "workerOutput": {
+            "digest": "324ae0b986313afb0d7425c92812ceec3f96b15d344116d62f1bc1ea512c7869",
+            "byteLength": 601,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "draft-questions",
+            "taskId": null,
+            "treeSha": "9ce08a8a13ae6244250bf5a95b49fa23c52a5d57",
+            "targetStateDigest": "27906dda3cd41efcc772dfc5dc034338011e891a86cdcecef2ef0662f07de60f",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "db95f8646090ccc7ca742f5bdf16876cd45cdf2b5e8b13f65f067fcb610318b9",
+              "capturedAt": "2026-09-15T15:02:22.860Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "draft-questions",
+              "taskId": null,
+              "treeSha": "9ce08a8a13ae6244250bf5a95b49fa23c52a5d57",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "db95f8646090ccc7ca742f5bdf16876cd45cdf2b5e8b13f65f067fcb610318b9",
+                "capturedAt": "2026-09-15T15:02:22.860Z"
+              },
+              "evidenceDigest": "c8852b88c626f9ed21b8ed46184c162e23c99aebee2875067bb778a603ee0f88"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "9ce08a8a13ae6244250bf5a95b49fa23c52a5d57",
+            "targetStateDigest": "27906dda3cd41efcc772dfc5dc034338011e891a86cdcecef2ef0662f07de60f"
+          }
+        }
+      }
+    }
+  ]
+}

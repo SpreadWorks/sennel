@@ -1,0 +1,2225 @@
+{
+  "entries": [
+    {
+      "step": "draft-gate",
+      "level": "parent",
+      "phase": "draft",
+      "reason": "The requirement uses the vague phrase “readable subcommand layout” without stating verifiable alignment, spacing, or row-layout conditions.; Two independent reviewers could disagree on whether an implementation satisfies “readable subcommand layout,” because the required layout conditions are not fully specified.; The refactor replaces hand-written help with contract-derived help but does not inventory the existing public behavior being replaced, including the current per-surface option presentation, value placeholders/descriptions, implicit help, entry points, ordering, and layout.; The draft identifies Flow leaves and group-help surfaces but does not explicitly list whether APIs, hooks, configuration entries, generated artifacts, or side effects are affected by the replacement.; The draft names a shared option and command-display contract, but does not map each retained public behavior to its new owner or state an explicit removal decision.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-15T15:04:58.685Z",
+      "passedGuardrails": [],
+      "headSha": "56ba5471901324ac730b17fd102495c5f733271f",
+      "worktreeHash": "a53ac7c28d85540386e4ecbcbf3b7ed49d8a5d5b0ea1b3cbe57bda50f8629ea3",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "goal"
+          },
+          "observed": "The requirement uses the vague phrase “readable subcommand layout” without stating verifiable alignment, spacing, or row-layout conditions.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "goal"
+          },
+          "observed": "Two independent reviewers could disagree on whether an implementation satisfies “readable subcommand layout,” because the required layout conditions are not fully specified.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.problem / decisionMap.knownFacts"
+          },
+          "observed": "The refactor replaces hand-written help with contract-derived help but does not inventory the existing public behavior being replaced, including the current per-surface option presentation, value placeholders/descriptions, implicit help, entry points, ordering, and layout.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification / impactOnExisting"
+          },
+          "observed": "The draft identifies Flow leaves and group-help surfaces but does not explicitly list whether APIs, hooks, configuration entries, generated artifacts, or side effects are affected by the replacement.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach / decisionMap.decisionPoints"
+          },
+          "observed": "The draft names a shared option and command-display contract, but does not map each retained public behavior to its new owner or state an explicit removal decision.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "The requirement uses the vague phrase “readable subcommand layout” without stating verifiable alignment, spacing, or row-layout conditions."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "Two independent reviewers could disagree on whether an implementation satisfies “readable subcommand layout,” because the required layout conditions are not fully specified."
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "The refactor replaces hand-written help with contract-derived help but does not inventory the existing public behavior being replaced, including the current per-surface option presentation, value placeholders/descriptions, implicit help, entry points, ordering, and layout."
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "The draft identifies Flow leaves and group-help surfaces but does not explicitly list whether APIs, hooks, configuration entries, generated artifacts, or side effects are affected by the replacement."
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "The draft names a shared option and command-display contract, but does not map each retained public behavior to its new owner or state an explicit removal decision."
+        }
+      ],
+      "issueLogId": "set-issue-log-3d9c460c09723f22d16c8d196d462041a9cc3099954372887e7d7809f53a8744"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "draft-gate",
+      "phase": "draft",
+      "reason": "Guarded draft gate repair rewound to draft-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "goal"
+          },
+          "observed": "The requirement uses the vague phrase “readable subcommand layout” without stating verifiable alignment, spacing, or row-layout conditions.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "3513e1d56f0bced4ed4efba407349c11b044e4f3d76f926d955e5e2897a6c279"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "goal"
+          },
+          "observed": "Two independent reviewers could disagree on whether an implementation satisfies “readable subcommand layout,” because the required layout conditions are not fully specified.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "ee5e6e522e1f7237634cd1895d9882df07438cd5b49a04eb8ce9f2329f58ef8f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.problem / decisionMap.knownFacts"
+          },
+          "observed": "The refactor replaces hand-written help with contract-derived help but does not inventory the existing public behavior being replaced, including the current per-surface option presentation, value placeholders/descriptions, implicit help, entry points, ordering, and layout.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "e6c111b18ec943cac2fe3a1e557dd2c2b681d6a05b39cbf7cbbba1b0eee5c627"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification / impactOnExisting"
+          },
+          "observed": "The draft identifies Flow leaves and group-help surfaces but does not explicitly list whether APIs, hooks, configuration entries, generated artifacts, or side effects are affected by the replacement.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "5c0f6913e5a2b84819fa10dbf6627fb1270f2d20d4fc00175bfa2cfbf0022d02"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach / decisionMap.decisionPoints"
+          },
+          "observed": "The draft names a shared option and command-display contract, but does not map each retained public behavior to its new owner or state an explicit removal decision.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "b1e40bc929b08f2afc4b872399a200fc119aa46176db51fff1abcd406dd6c045"
+        }
+      ],
+      "timestamp": "2026-09-15T15:05:02.034Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "429df717-dd29-403d-b951-ea8e90593b06",
+        "specId": "429df717-flow-help-contract",
+        "issue": 521,
+        "phase": "draft",
+        "targetStepId": "draft-gate-repair",
+        "connector": {
+          "phase": "draft",
+          "sourceGateStepId": "draft-gate",
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-8b84324a-6e71-4351-ba35-9b6fa82603a4",
+            "sequence": 1
+          },
+          "resultLogicalKey": "draft.gate",
+          "resultArtifactId": "steps/draft-gate/result.json",
+          "catalogFingerprint": "bd957ba722340ff5c5c019363d03369a36c40c0e2b0ffd5fb6ed75c92d154c46",
+          "targetStepId": "draft-gate-repair",
+          "resetStepIds": [
+            "draft-gate-repair",
+            "draft-coverage-review",
+            "draft-coverage-triage",
+            "draft-coverage-repair",
+            "draft-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-8b84324a-6e71-4351-ba35-9b6fa82603a4",
+            "sequence": 1
+          },
+          "resultLogicalKey": "draft.gate",
+          "publicationActivityId": "attempt-result-published-79e6dcf5-fc8b-4a19-82a3-c08ff87aaf2d",
+          "catalogFingerprint": "bd957ba722340ff5c5c019363d03369a36c40c0e2b0ffd5fb6ed75c92d154c46",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-draft-gate-8b84324a-6e71-4351-ba35-9b6fa82603a4",
+              "sequence": 1
+            },
+            "canonicalAttempt": {
+              "id": "attempt-draft-gate-8b84324a-6e71-4351-ba35-9b6fa82603a4",
+              "sequence": 1
+            },
+            "sourceFingerprint": "cb9812d8e8710f36cb2d8e9b039d95487542046278428b1b7324e5acc96af242",
+            "canonicalFingerprint": "bd957ba722340ff5c5c019363d03369a36c40c0e2b0ffd5fb6ed75c92d154c46",
+            "sourceRevisionFingerprint": "fa1c5c0ce3d39b6010d46ddca5a04feba8c649b7b4d7819094c394a049adf7a3",
+            "canonicalRevisionFingerprint": "fa1c5c0ce3d39b6010d46ddca5a04feba8c649b7b4d7819094c394a049adf7a3"
+          }
+        },
+        "sourceIssueLogId": "set-issue-log-3d9c460c09723f22d16c8d196d462041a9cc3099954372887e7d7809f53a8744",
+        "sourceEntryDigest": "8cd06d6af6877e624cbfaf8fd6435862281c8c50dfb961079c46985f354c8639",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "goal"
+            },
+            "observed": "The requirement uses the vague phrase “readable subcommand layout” without stating verifiable alignment, spacing, or row-layout conditions.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "3513e1d56f0bced4ed4efba407349c11b044e4f3d76f926d955e5e2897a6c279"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "goal"
+            },
+            "observed": "Two independent reviewers could disagree on whether an implementation satisfies “readable subcommand layout,” because the required layout conditions are not fully specified.",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "ee5e6e522e1f7237634cd1895d9882df07438cd5b49a04eb8ce9f2329f58ef8f"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.problem / decisionMap.knownFacts"
+            },
+            "observed": "The refactor replaces hand-written help with contract-derived help but does not inventory the existing public behavior being replaced, including the current per-surface option presentation, value placeholders/descriptions, implicit help, entry points, ordering, and layout.",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "e6c111b18ec943cac2fe3a1e557dd2c2b681d6a05b39cbf7cbbba1b0eee5c627"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "spec.json",
+              "locator": "scopeVerification / impactOnExisting"
+            },
+            "observed": "The draft identifies Flow leaves and group-help surfaces but does not explicitly list whether APIs, hooks, configuration entries, generated artifacts, or side effects are affected by the replacement.",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "5c0f6913e5a2b84819fa10dbf6627fb1270f2d20d4fc00175bfa2cfbf0022d02"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.proposedApproach / decisionMap.decisionPoints"
+            },
+            "observed": "The draft names a shared option and command-display contract, but does not map each retained public behavior to its new owner or state an explicit removal decision.",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "b1e40bc929b08f2afc4b872399a200fc119aa46176db51fff1abcd406dd6c045"
+          }
+        ],
+        "observationFingerprints": [
+          "3513e1d56f0bced4ed4efba407349c11b044e4f3d76f926d955e5e2897a6c279",
+          "ee5e6e522e1f7237634cd1895d9882df07438cd5b49a04eb8ce9f2329f58ef8f",
+          "e6c111b18ec943cac2fe3a1e557dd2c2b681d6a05b39cbf7cbbba1b0eee5c627",
+          "5c0f6913e5a2b84819fa10dbf6627fb1270f2d20d4fc00175bfa2cfbf0022d02",
+          "b1e40bc929b08f2afc4b872399a200fc119aa46176db51fff1abcd406dd6c045"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "3513e1d56f0bced4ed4efba407349c11b044e4f3d76f926d955e5e2897a6c279",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "ee5e6e522e1f7237634cd1895d9882df07438cd5b49a04eb8ce9f2329f58ef8f",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "e6c111b18ec943cac2fe3a1e557dd2c2b681d6a05b39cbf7cbbba1b0eee5c627",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "5c0f6913e5a2b84819fa10dbf6627fb1270f2d20d4fc00175bfa2cfbf0022d02",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "b1e40bc929b08f2afc4b872399a200fc119aa46176db51fff1abcd406dd6c045",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-09-15T15:05:02.034Z"
+      },
+      "issueLogId": "plan-gate-repair-c79163b1243c24cb7d00997411938cc48522172f776c23ddf2f9986983d3220d"
+    },
+    {
+      "step": "draft-gate",
+      "level": "parent",
+      "phase": "draft",
+      "reason": "“focused contract and end-to-end tests” is vague; define the concrete test scope or pass criteria.; “representative” commands are not defined; specify exactly which commands or selection rule must be exercised.; “long command names” has no measurable threshold or explicit command list.; “focused end-to-end checks” is vague; define the required checks and acceptance conditions.; The draft does not define what makes the contract and end-to-end tests “focused,” so independent reviewers cannot determine whether the requirement is satisfied.; The verification set is described as “representative” without a selection rule, leaving coverage acceptance subjective.; The requirement to cover “long command names” lacks a definition of which names qualify.; The draft does not define the required scope or pass criteria for the “focused end-to-end checks.”; The draft contains more than three requirements across goal, scope, and decision points, but assigns none of them must, should, or nice-to-have priority.; The draft inventories retained APIs, hooks, configuration entries, generated artifacts, and side effects, but defines behavior-level verification only for representative command invocations and rendered help. Add at least one explicit behavior-level verification for each retained public surface listed in impactOnExisting.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-15T15:19:05.385Z",
+      "passedGuardrails": [],
+      "headSha": "56ba5471901324ac730b17fd102495c5f733271f",
+      "worktreeHash": "5361423ffa0e92307afd41996e4bf46fae19f749186a9fcdb782df60957abd59",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "“focused contract and end-to-end tests” is vague; define the concrete test scope or pass criteria.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[7]"
+          },
+          "observed": "“representative” commands are not defined; specify exactly which commands or selection rule must be exercised.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification.in[2]"
+          },
+          "observed": "“long command names” has no measurable threshold or explicit command list.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification.in[3]"
+          },
+          "observed": "“focused end-to-end checks” is vague; define the required checks and acceptance conditions.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "The draft does not define what makes the contract and end-to-end tests “focused,” so independent reviewers cannot determine whether the requirement is satisfied.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[7]"
+          },
+          "observed": "The verification set is described as “representative” without a selection rule, leaving coverage acceptance subjective.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification.in[2]"
+          },
+          "observed": "The requirement to cover “long command names” lacks a definition of which names qualify.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification.in[3]"
+          },
+          "observed": "The draft does not define the required scope or pass criteria for the “focused end-to-end checks.”",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json"
+          },
+          "observed": "The draft contains more than three requirements across goal, scope, and decision points, but assigns none of them must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "The draft inventories retained APIs, hooks, configuration entries, generated artifacts, and side effects, but defines behavior-level verification only for representative command invocations and rendered help. Add at least one explicit behavior-level verification for each retained public surface listed in impactOnExisting.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "“focused contract and end-to-end tests” is vague; define the concrete test scope or pass criteria."
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "“representative” commands are not defined; specify exactly which commands or selection rule must be exercised."
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "“long command names” has no measurable threshold or explicit command list."
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "“focused end-to-end checks” is vague; define the required checks and acceptance conditions."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "The draft does not define what makes the contract and end-to-end tests “focused,” so independent reviewers cannot determine whether the requirement is satisfied."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "The verification set is described as “representative” without a selection rule, leaving coverage acceptance subjective."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "The requirement to cover “long command names” lacks a definition of which names qualify."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "The draft does not define the required scope or pass criteria for the “focused end-to-end checks.”"
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "The draft contains more than three requirements across goal, scope, and decision points, but assigns none of them must, should, or nice-to-have priority."
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "The draft inventories retained APIs, hooks, configuration entries, generated artifacts, and side effects, but defines behavior-level verification only for representative command invocations and rendered help. Add at least one explicit behavior-level verification for each retained public surface listed in impactOnExisting."
+        }
+      ],
+      "issueLogId": "set-issue-log-b78f09864ed2608272424bac3653b967eb8e41844a0073622e57c0d8d0e73503"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "draft-gate",
+      "phase": "draft",
+      "reason": "Guarded draft gate repair rewound to draft-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "“focused contract and end-to-end tests” is vague; define the concrete test scope or pass criteria.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "dd62489e8316646ed9f23fe794643fc2e33f5f02733ff2dc568d198819e7f008"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[7]"
+          },
+          "observed": "“representative” commands are not defined; specify exactly which commands or selection rule must be exercised.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "9f19955c272ab288774f67a211b6187877f04d4ecf39a2e3885cdc6b52829578"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification.in[2]"
+          },
+          "observed": "“long command names” has no measurable threshold or explicit command list.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "6cc351a7a9156a6c403e348618c957175ea67384cea5849b326f81ea9a177a5d"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification.in[3]"
+          },
+          "observed": "“focused end-to-end checks” is vague; define the required checks and acceptance conditions.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "541e618e0578da01734d9750296512ebcef40372b42d51ccd09698b346463d5a"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "The draft does not define what makes the contract and end-to-end tests “focused,” so independent reviewers cannot determine whether the requirement is satisfied.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "a0f03ea745aea44b73c25ae175c7daea2977ee5d4ebd10ae6933423269974c74"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[7]"
+          },
+          "observed": "The verification set is described as “representative” without a selection rule, leaving coverage acceptance subjective.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "1bb3b963b3d945e0288d9ffdf8d6314d2c31dff48a823d945de6a95a09d9abd6"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification.in[2]"
+          },
+          "observed": "The requirement to cover “long command names” lacks a definition of which names qualify.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "28f029aa6e25986bfdd051bcdfc90f7d6a33378aa3ce723e151260468f2481b9"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification.in[3]"
+          },
+          "observed": "The draft does not define the required scope or pass criteria for the “focused end-to-end checks.”",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "cd23d9daffa6f7a28eac4cb457ce30657e5dd81a64b1a632fdf99664a600cee4"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json"
+          },
+          "observed": "The draft contains more than three requirements across goal, scope, and decision points, but assigns none of them must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "2b59d544acdd88d9f7b8df0ead998d97b24657266b9b3f53c9506f2c0dae3c96"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "The draft inventories retained APIs, hooks, configuration entries, generated artifacts, and side effects, but defines behavior-level verification only for representative command invocations and rendered help. Add at least one explicit behavior-level verification for each retained public surface listed in impactOnExisting.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "b6648be63d36af04eff7ebcf894b397a2f2843ba0aadfda58de1775795256a52"
+        }
+      ],
+      "timestamp": "2026-09-15T15:19:09.092Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "429df717-dd29-403d-b951-ea8e90593b06",
+        "specId": "429df717-flow-help-contract",
+        "issue": 521,
+        "phase": "draft",
+        "targetStepId": "draft-gate-repair",
+        "connector": {
+          "phase": "draft",
+          "sourceGateStepId": "draft-gate",
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-f37a4818-d6dd-4a02-b329-4485654e8c49",
+            "sequence": 2
+          },
+          "resultLogicalKey": "draft.gate",
+          "resultArtifactId": "steps/draft-gate/result.json",
+          "catalogFingerprint": "287fca1e429b3d66cc94752a8870ea7eaec7d78bc3eae9a5c612e599c5027b6b",
+          "targetStepId": "draft-gate-repair",
+          "resetStepIds": [
+            "draft-gate-repair",
+            "draft-coverage-review",
+            "draft-coverage-triage",
+            "draft-coverage-repair",
+            "draft-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-f37a4818-d6dd-4a02-b329-4485654e8c49",
+            "sequence": 2
+          },
+          "resultLogicalKey": "draft.gate",
+          "publicationActivityId": "attempt-result-published-cdd0e676-c5b8-4afd-afe0-739be3fe1dc0",
+          "catalogFingerprint": "287fca1e429b3d66cc94752a8870ea7eaec7d78bc3eae9a5c612e599c5027b6b",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-draft-gate-f37a4818-d6dd-4a02-b329-4485654e8c49",
+              "sequence": 2
+            },
+            "canonicalAttempt": {
+              "id": "attempt-draft-gate-f37a4818-d6dd-4a02-b329-4485654e8c49",
+              "sequence": 2
+            },
+            "sourceFingerprint": "bf8c2a9a19dec9e39c523bcedb941303fcbcba64eb5cc48fc8204389cea5f020",
+            "canonicalFingerprint": "287fca1e429b3d66cc94752a8870ea7eaec7d78bc3eae9a5c612e599c5027b6b",
+            "sourceRevisionFingerprint": "b502cb51e7660dd1fb7e0cbafd40d6a3af14df99ea08915452e89a4d19e1f775",
+            "canonicalRevisionFingerprint": "b502cb51e7660dd1fb7e0cbafd40d6a3af14df99ea08915452e89a4d19e1f775"
+          }
+        },
+        "sourceIssueLogId": "set-issue-log-b78f09864ed2608272424bac3653b967eb8e41844a0073622e57c0d8d0e73503",
+        "sourceEntryDigest": "7df0505047c267703a9bec5690a9f2d750694110d4e8e8cbcbdc7748bbfb851e",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.validation"
+            },
+            "observed": "“focused contract and end-to-end tests” is vague; define the concrete test scope or pass criteria.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "dd62489e8316646ed9f23fe794643fc2e33f5f02733ff2dc568d198819e7f008"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[7]"
+            },
+            "observed": "“representative” commands are not defined; specify exactly which commands or selection rule must be exercised.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "9f19955c272ab288774f67a211b6187877f04d4ecf39a2e3885cdc6b52829578"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "scopeVerification.in[2]"
+            },
+            "observed": "“long command names” has no measurable threshold or explicit command list.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "6cc351a7a9156a6c403e348618c957175ea67384cea5849b326f81ea9a177a5d"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "scopeVerification.in[3]"
+            },
+            "observed": "“focused end-to-end checks” is vague; define the required checks and acceptance conditions.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "541e618e0578da01734d9750296512ebcef40372b42d51ccd09698b346463d5a"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.validation"
+            },
+            "observed": "The draft does not define what makes the contract and end-to-end tests “focused,” so independent reviewers cannot determine whether the requirement is satisfied.",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "a0f03ea745aea44b73c25ae175c7daea2977ee5d4ebd10ae6933423269974c74"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[7]"
+            },
+            "observed": "The verification set is described as “representative” without a selection rule, leaving coverage acceptance subjective.",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "1bb3b963b3d945e0288d9ffdf8d6314d2c31dff48a823d945de6a95a09d9abd6"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "scopeVerification.in[2]"
+            },
+            "observed": "The requirement to cover “long command names” lacks a definition of which names qualify.",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "28f029aa6e25986bfdd051bcdfc90f7d6a33378aa3ce723e151260468f2481b9"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "scopeVerification.in[3]"
+            },
+            "observed": "The draft does not define the required scope or pass criteria for the “focused end-to-end checks.”",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "cd23d9daffa6f7a28eac4cb457ce30657e5dd81a64b1a632fdf99664a600cee4"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json"
+            },
+            "observed": "The draft contains more than three requirements across goal, scope, and decision points, but assigns none of them must, should, or nice-to-have priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "2b59d544acdd88d9f7b8df0ead998d97b24657266b9b3f53c9506f2c0dae3c96"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.validation"
+            },
+            "observed": "The draft inventories retained APIs, hooks, configuration entries, generated artifacts, and side effects, but defines behavior-level verification only for representative command invocations and rendered help. Add at least one explicit behavior-level verification for each retained public surface listed in impactOnExisting.",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "b6648be63d36af04eff7ebcf894b397a2f2843ba0aadfda58de1775795256a52"
+          }
+        ],
+        "observationFingerprints": [
+          "dd62489e8316646ed9f23fe794643fc2e33f5f02733ff2dc568d198819e7f008",
+          "9f19955c272ab288774f67a211b6187877f04d4ecf39a2e3885cdc6b52829578",
+          "6cc351a7a9156a6c403e348618c957175ea67384cea5849b326f81ea9a177a5d",
+          "541e618e0578da01734d9750296512ebcef40372b42d51ccd09698b346463d5a",
+          "a0f03ea745aea44b73c25ae175c7daea2977ee5d4ebd10ae6933423269974c74",
+          "1bb3b963b3d945e0288d9ffdf8d6314d2c31dff48a823d945de6a95a09d9abd6",
+          "28f029aa6e25986bfdd051bcdfc90f7d6a33378aa3ce723e151260468f2481b9",
+          "cd23d9daffa6f7a28eac4cb457ce30657e5dd81a64b1a632fdf99664a600cee4",
+          "2b59d544acdd88d9f7b8df0ead998d97b24657266b9b3f53c9506f2c0dae3c96",
+          "b6648be63d36af04eff7ebcf894b397a2f2843ba0aadfda58de1775795256a52"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "dd62489e8316646ed9f23fe794643fc2e33f5f02733ff2dc568d198819e7f008",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "9f19955c272ab288774f67a211b6187877f04d4ecf39a2e3885cdc6b52829578",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "6cc351a7a9156a6c403e348618c957175ea67384cea5849b326f81ea9a177a5d",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "541e618e0578da01734d9750296512ebcef40372b42d51ccd09698b346463d5a",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "a0f03ea745aea44b73c25ae175c7daea2977ee5d4ebd10ae6933423269974c74",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "1bb3b963b3d945e0288d9ffdf8d6314d2c31dff48a823d945de6a95a09d9abd6",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "28f029aa6e25986bfdd051bcdfc90f7d6a33378aa3ce723e151260468f2481b9",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "cd23d9daffa6f7a28eac4cb457ce30657e5dd81a64b1a632fdf99664a600cee4",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "2b59d544acdd88d9f7b8df0ead998d97b24657266b9b3f53c9506f2c0dae3c96",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "b6648be63d36af04eff7ebcf894b397a2f2843ba0aadfda58de1775795256a52",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-09-15T15:19:09.092Z"
+      },
+      "issueLogId": "plan-gate-repair-ce182ebbb6ff99bd2133c1bd6e47f1cb39451417ff77dc891c2bb6bbd12ae78c"
+    },
+    {
+      "step": "draft-gate",
+      "level": "parent",
+      "phase": "draft",
+      "reason": "The proposed requirement to make CommandDefinition the sole option and command-display authority has no must, should, or nice-to-have priority.; The option-contract ownership and projection requirements have no assigned priority.; The requirement to retain command descriptions, examples, and parser execution behavior has no assigned priority.; The requirement to remove hand-written option lists, duplicate renderers, and registration-order display authority has no assigned priority.; The requirement to verify each retained behavior through parser invocations and rendered help has no assigned priority.; The phrase \"normal registry/dispatcher paths\" does not define which concrete execution paths are required.; The 67 leaf surfaces and group surfaces are primarily verified through rendered help, while behavior-level execution checks cover only selected commands and leaves. Help output alone is explicitly insufficient evidence of migration parity, so retained behavior for the remaining public surfaces lacks behavior-level verification through the new path.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-15T15:26:59.357Z",
+      "passedGuardrails": [],
+      "headSha": "56ba5471901324ac730b17fd102495c5f733271f",
+      "worktreeHash": "387713d72ce5f165d633f22d32aec39bc1057580a595ce6efd236cae586c1723",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach"
+          },
+          "observed": "The proposed requirement to make CommandDefinition the sole option and command-display authority has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach"
+          },
+          "observed": "The option-contract ownership and projection requirements have no assigned priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach"
+          },
+          "observed": "The requirement to retain command descriptions, examples, and parser execution behavior has no assigned priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach"
+          },
+          "observed": "The requirement to remove hand-written option lists, duplicate renderers, and registration-order display authority has no assigned priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach"
+          },
+          "observed": "The requirement to verify each retained behavior through parser invocations and rendered help has no assigned priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "impactOnExisting[2]"
+          },
+          "observed": "The phrase \"normal registry/dispatcher paths\" does not define which concrete execution paths are required.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "The 67 leaf surfaces and group surfaces are primarily verified through rendered help, while behavior-level execution checks cover only selected commands and leaves. Help output alone is explicitly insufficient evidence of migration parity, so retained behavior for the remaining public surfaces lacks behavior-level verification through the new path.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "The proposed requirement to make CommandDefinition the sole option and command-display authority has no must, should, or nice-to-have priority."
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "The option-contract ownership and projection requirements have no assigned priority."
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "The requirement to retain command descriptions, examples, and parser execution behavior has no assigned priority."
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "The requirement to remove hand-written option lists, duplicate renderers, and registration-order display authority has no assigned priority."
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "The requirement to verify each retained behavior through parser invocations and rendered help has no assigned priority."
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "The phrase \"normal registry/dispatcher paths\" does not define which concrete execution paths are required."
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "The 67 leaf surfaces and group surfaces are primarily verified through rendered help, while behavior-level execution checks cover only selected commands and leaves. Help output alone is explicitly insufficient evidence of migration parity, so retained behavior for the remaining public surfaces lacks behavior-level verification through the new path."
+        }
+      ],
+      "issueLogId": "set-issue-log-466daa0c92f4988c5e455da2a286cd962fb335140274e595f03b17fa5bfccffc"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "draft-gate",
+      "phase": "draft",
+      "reason": "Guarded draft gate repair rewound to draft-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach"
+          },
+          "observed": "The proposed requirement to make CommandDefinition the sole option and command-display authority has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "0234010569a3b496287bd9e8271b7b9f7174c94211def5eafd5ea4a00d1bec29"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach"
+          },
+          "observed": "The option-contract ownership and projection requirements have no assigned priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "0f631a7f93579c556a4c5f168de68e9ef93577316bc46fdb0d4a50cbf43e3d11"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach"
+          },
+          "observed": "The requirement to retain command descriptions, examples, and parser execution behavior has no assigned priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "dae8c908a48b35ad9ab8747143a88c31014d123d42c4495f6c2df65f71199b08"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach"
+          },
+          "observed": "The requirement to remove hand-written option lists, duplicate renderers, and registration-order display authority has no assigned priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "7d017d45c943acdab8ef9b3a2eb1596b0b324c593912a71ee915ea368d8c7f05"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.proposedApproach"
+          },
+          "observed": "The requirement to verify each retained behavior through parser invocations and rendered help has no assigned priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "f2b4f2568f5e97b7302a421741acceee548f36832aee6bf8ea0baa26897a4315"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "impactOnExisting[2]"
+          },
+          "observed": "The phrase \"normal registry/dispatcher paths\" does not define which concrete execution paths are required.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "85c526a2d4a8ca02ef58d8f524b42f6caf6842c044364c5c8096d3375ac77a3c"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "The 67 leaf surfaces and group surfaces are primarily verified through rendered help, while behavior-level execution checks cover only selected commands and leaves. Help output alone is explicitly insufficient evidence of migration parity, so retained behavior for the remaining public surfaces lacks behavior-level verification through the new path.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "e3d5d055a802af2813f990f3470c47e74a21f533f79403859154f8ba5e34817b"
+        }
+      ],
+      "timestamp": "2026-09-15T15:27:03.276Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "429df717-dd29-403d-b951-ea8e90593b06",
+        "specId": "429df717-flow-help-contract",
+        "issue": 521,
+        "phase": "draft",
+        "targetStepId": "draft-gate-repair",
+        "connector": {
+          "phase": "draft",
+          "sourceGateStepId": "draft-gate",
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-5a1e4fa5-9624-41f0-92f6-d469dcfe39bf",
+            "sequence": 3
+          },
+          "resultLogicalKey": "draft.gate",
+          "resultArtifactId": "steps/draft-gate/result.json",
+          "catalogFingerprint": "85e6d206432053d6460c488dc8f6f4ea70e679c7c9e2ed68be4eede5ed983f2a",
+          "targetStepId": "draft-gate-repair",
+          "resetStepIds": [
+            "draft-gate-repair",
+            "draft-coverage-review",
+            "draft-coverage-triage",
+            "draft-coverage-repair",
+            "draft-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-5a1e4fa5-9624-41f0-92f6-d469dcfe39bf",
+            "sequence": 3
+          },
+          "resultLogicalKey": "draft.gate",
+          "publicationActivityId": "attempt-result-published-a635839a-cd3c-4688-a447-9028ccc51b1d",
+          "catalogFingerprint": "85e6d206432053d6460c488dc8f6f4ea70e679c7c9e2ed68be4eede5ed983f2a",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-draft-gate-5a1e4fa5-9624-41f0-92f6-d469dcfe39bf",
+              "sequence": 3
+            },
+            "canonicalAttempt": {
+              "id": "attempt-draft-gate-5a1e4fa5-9624-41f0-92f6-d469dcfe39bf",
+              "sequence": 3
+            },
+            "sourceFingerprint": "0b6a12722d46b705eb6c574d21278cdb476214c2ef0a02919f1ffaa8afb5e3f5",
+            "canonicalFingerprint": "85e6d206432053d6460c488dc8f6f4ea70e679c7c9e2ed68be4eede5ed983f2a",
+            "sourceRevisionFingerprint": "34ca51027ab7e7ba226ccc62a35de696d02caa63e659fb73c7d00aa6ea4680a4",
+            "canonicalRevisionFingerprint": "34ca51027ab7e7ba226ccc62a35de696d02caa63e659fb73c7d00aa6ea4680a4"
+          }
+        },
+        "sourceIssueLogId": "set-issue-log-466daa0c92f4988c5e455da2a286cd962fb335140274e595f03b17fa5bfccffc",
+        "sourceEntryDigest": "4df470dba2e1039ef8d76f3c8db0c0ad8eafd57e2a18b35001535aee5eaeebba",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.proposedApproach"
+            },
+            "observed": "The proposed requirement to make CommandDefinition the sole option and command-display authority has no must, should, or nice-to-have priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "0234010569a3b496287bd9e8271b7b9f7174c94211def5eafd5ea4a00d1bec29"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.proposedApproach"
+            },
+            "observed": "The option-contract ownership and projection requirements have no assigned priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "0f631a7f93579c556a4c5f168de68e9ef93577316bc46fdb0d4a50cbf43e3d11"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.proposedApproach"
+            },
+            "observed": "The requirement to retain command descriptions, examples, and parser execution behavior has no assigned priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "dae8c908a48b35ad9ab8747143a88c31014d123d42c4495f6c2df65f71199b08"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.proposedApproach"
+            },
+            "observed": "The requirement to remove hand-written option lists, duplicate renderers, and registration-order display authority has no assigned priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "7d017d45c943acdab8ef9b3a2eb1596b0b324c593912a71ee915ea368d8c7f05"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.proposedApproach"
+            },
+            "observed": "The requirement to verify each retained behavior through parser invocations and rendered help has no assigned priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "f2b4f2568f5e97b7302a421741acceee548f36832aee6bf8ea0baa26897a4315"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "impactOnExisting[2]"
+            },
+            "observed": "The phrase \"normal registry/dispatcher paths\" does not define which concrete execution paths are required.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "85c526a2d4a8ca02ef58d8f524b42f6caf6842c044364c5c8096d3375ac77a3c"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.validation"
+            },
+            "observed": "The 67 leaf surfaces and group surfaces are primarily verified through rendered help, while behavior-level execution checks cover only selected commands and leaves. Help output alone is explicitly insufficient evidence of migration parity, so retained behavior for the remaining public surfaces lacks behavior-level verification through the new path.",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "e3d5d055a802af2813f990f3470c47e74a21f533f79403859154f8ba5e34817b"
+          }
+        ],
+        "observationFingerprints": [
+          "0234010569a3b496287bd9e8271b7b9f7174c94211def5eafd5ea4a00d1bec29",
+          "0f631a7f93579c556a4c5f168de68e9ef93577316bc46fdb0d4a50cbf43e3d11",
+          "dae8c908a48b35ad9ab8747143a88c31014d123d42c4495f6c2df65f71199b08",
+          "7d017d45c943acdab8ef9b3a2eb1596b0b324c593912a71ee915ea368d8c7f05",
+          "f2b4f2568f5e97b7302a421741acceee548f36832aee6bf8ea0baa26897a4315",
+          "85c526a2d4a8ca02ef58d8f524b42f6caf6842c044364c5c8096d3375ac77a3c",
+          "e3d5d055a802af2813f990f3470c47e74a21f533f79403859154f8ba5e34817b"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "0234010569a3b496287bd9e8271b7b9f7174c94211def5eafd5ea4a00d1bec29",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "0f631a7f93579c556a4c5f168de68e9ef93577316bc46fdb0d4a50cbf43e3d11",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "dae8c908a48b35ad9ab8747143a88c31014d123d42c4495f6c2df65f71199b08",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "7d017d45c943acdab8ef9b3a2eb1596b0b324c593912a71ee915ea368d8c7f05",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "f2b4f2568f5e97b7302a421741acceee548f36832aee6bf8ea0baa26897a4315",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "85c526a2d4a8ca02ef58d8f524b42f6caf6842c044364c5c8096d3375ac77a3c",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "e3d5d055a802af2813f990f3470c47e74a21f533f79403859154f8ba5e34817b",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-09-15T15:27:03.276Z"
+      },
+      "issueLogId": "plan-gate-repair-d1c67bc9718a95b55f4b2263690481dd2cf716a45a1f34d6569a234e11ebbf9d"
+    },
+    {
+      "step": "draft-gate",
+      "level": "parent",
+      "phase": "draft",
+      "reason": "This explicit implementation requirement has no must, should, or nice-to-have priority.; This explicit implementation requirement has no must, should, or nice-to-have priority.; This explicit implementation requirement has no must, should, or nice-to-have priority.; This explicit implementation requirement has no must, should, or nice-to-have priority.; The requirement that the Spec define implementable detail has no must, should, or nice-to-have priority.; The requirement that the Spec assign concrete test responsibilities has no must, should, or nice-to-have priority.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-15T15:32:11.122Z",
+      "passedGuardrails": [],
+      "headSha": "56ba5471901324ac730b17fd102495c5f733271f",
+      "worktreeHash": "4f6179a4205829ab73b615d6f2d7674b3d55f50e701639660b6131944a8269ce",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.resolvedByProjectRules[0]"
+          },
+          "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.resolvedByProjectRules[1]"
+          },
+          "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.resolvedByProjectRules[2]"
+          },
+          "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.resolvedByProjectRules[3]"
+          },
+          "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[0].relevance"
+          },
+          "observed": "The requirement that the Spec define implementable detail has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[1].relevance"
+          },
+          "observed": "The requirement that the Spec assign concrete test responsibilities has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "This explicit implementation requirement has no must, should, or nice-to-have priority."
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "This explicit implementation requirement has no must, should, or nice-to-have priority."
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "This explicit implementation requirement has no must, should, or nice-to-have priority."
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "This explicit implementation requirement has no must, should, or nice-to-have priority."
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "The requirement that the Spec define implementable detail has no must, should, or nice-to-have priority."
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "The requirement that the Spec assign concrete test responsibilities has no must, should, or nice-to-have priority."
+        }
+      ],
+      "issueLogId": "set-issue-log-7f78aa9f7780676a5e0b3e6e30ca13f3a283156ee858a6397927736ffa3630e2"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "draft-gate",
+      "phase": "draft",
+      "reason": "Guarded draft gate repair rewound to draft-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.resolvedByProjectRules[0]"
+          },
+          "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "808668ce920fbc5111a97efd591ac65af461fa833c4e1fcb49cfb7aeca0b9850"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.resolvedByProjectRules[1]"
+          },
+          "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "c8248a537a9961c8127b5a4f927b91688a998e7dcb4a284f3143a900a4cfa9be"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.resolvedByProjectRules[2]"
+          },
+          "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "5fa6f8fd9bf9ef9a38359dbbef32ad8e87d579acaff82999de660b491aadb71f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.resolvedByProjectRules[3]"
+          },
+          "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "b7dc9a6b18e9e9f2ea8a73fbbfec5c7d50d1862e997428c627d207d55fa7243b"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[0].relevance"
+          },
+          "observed": "The requirement that the Spec define implementable detail has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "587c71e5f594d80a269bcc0d040ba07c0a0e90628a79bdf012360c14fb6de6e0"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[1].relevance"
+          },
+          "observed": "The requirement that the Spec assign concrete test responsibilities has no must, should, or nice-to-have priority.",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "b41558dd842abd87afeec46920ba17aa45388d83241212e0b6deeefc86c152ce"
+        }
+      ],
+      "timestamp": "2026-09-15T15:32:15.372Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "429df717-dd29-403d-b951-ea8e90593b06",
+        "specId": "429df717-flow-help-contract",
+        "issue": 521,
+        "phase": "draft",
+        "targetStepId": "draft-gate-repair",
+        "connector": {
+          "phase": "draft",
+          "sourceGateStepId": "draft-gate",
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-366b54e9-763d-4282-a510-b89a383a5c92",
+            "sequence": 4
+          },
+          "resultLogicalKey": "draft.gate",
+          "resultArtifactId": "steps/draft-gate/result.json",
+          "catalogFingerprint": "b41a41b0ebdaab6f4b996e6b923a7c2096622f0d16f4bcda67ccd9e6c07dfa3f",
+          "targetStepId": "draft-gate-repair",
+          "resetStepIds": [
+            "draft-gate-repair",
+            "draft-coverage-review",
+            "draft-coverage-triage",
+            "draft-coverage-repair",
+            "draft-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-366b54e9-763d-4282-a510-b89a383a5c92",
+            "sequence": 4
+          },
+          "resultLogicalKey": "draft.gate",
+          "publicationActivityId": "attempt-result-published-0f3d009f-e9d8-499b-8ba5-645bbaa9d9ae",
+          "catalogFingerprint": "b41a41b0ebdaab6f4b996e6b923a7c2096622f0d16f4bcda67ccd9e6c07dfa3f",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-draft-gate-366b54e9-763d-4282-a510-b89a383a5c92",
+              "sequence": 4
+            },
+            "canonicalAttempt": {
+              "id": "attempt-draft-gate-366b54e9-763d-4282-a510-b89a383a5c92",
+              "sequence": 4
+            },
+            "sourceFingerprint": "1a1563148c28a84c2b90e143922e670004b1e08369f45d8467e42b90b76ac4c3",
+            "canonicalFingerprint": "b41a41b0ebdaab6f4b996e6b923a7c2096622f0d16f4bcda67ccd9e6c07dfa3f",
+            "sourceRevisionFingerprint": "25dab3e4c280499320601fe0d84bbad9ed513e0ecca24690481a608571726c7f",
+            "canonicalRevisionFingerprint": "25dab3e4c280499320601fe0d84bbad9ed513e0ecca24690481a608571726c7f"
+          }
+        },
+        "sourceIssueLogId": "set-issue-log-7f78aa9f7780676a5e0b3e6e30ca13f3a283156ee858a6397927736ffa3630e2",
+        "sourceEntryDigest": "a4984c213a97ff113a7c4dceac398b622c3f6895315a5e672c5f6d3fbf6b0c7c",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.resolvedByProjectRules[0]"
+            },
+            "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "808668ce920fbc5111a97efd591ac65af461fa833c4e1fcb49cfb7aeca0b9850"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.resolvedByProjectRules[1]"
+            },
+            "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "c8248a537a9961c8127b5a4f927b91688a998e7dcb4a284f3143a900a4cfa9be"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.resolvedByProjectRules[2]"
+            },
+            "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "5fa6f8fd9bf9ef9a38359dbbef32ad8e87d579acaff82999de660b491aadb71f"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.resolvedByProjectRules[3]"
+            },
+            "observed": "This explicit implementation requirement has no must, should, or nice-to-have priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "b7dc9a6b18e9e9f2ea8a73fbbfec5c7d50d1862e997428c627d207d55fa7243b"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.deferredToSpec[0].relevance"
+            },
+            "observed": "The requirement that the Spec define implementable detail has no must, should, or nice-to-have priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "587c71e5f594d80a269bcc0d040ba07c0a0e90628a79bdf012360c14fb6de6e0"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.deferredToSpec[1].relevance"
+            },
+            "observed": "The requirement that the Spec assign concrete test responsibilities has no must, should, or nice-to-have priority.",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "b41558dd842abd87afeec46920ba17aa45388d83241212e0b6deeefc86c152ce"
+          }
+        ],
+        "observationFingerprints": [
+          "808668ce920fbc5111a97efd591ac65af461fa833c4e1fcb49cfb7aeca0b9850",
+          "c8248a537a9961c8127b5a4f927b91688a998e7dcb4a284f3143a900a4cfa9be",
+          "5fa6f8fd9bf9ef9a38359dbbef32ad8e87d579acaff82999de660b491aadb71f",
+          "b7dc9a6b18e9e9f2ea8a73fbbfec5c7d50d1862e997428c627d207d55fa7243b",
+          "587c71e5f594d80a269bcc0d040ba07c0a0e90628a79bdf012360c14fb6de6e0",
+          "b41558dd842abd87afeec46920ba17aa45388d83241212e0b6deeefc86c152ce"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "808668ce920fbc5111a97efd591ac65af461fa833c4e1fcb49cfb7aeca0b9850",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "c8248a537a9961c8127b5a4f927b91688a998e7dcb4a284f3143a900a4cfa9be",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "5fa6f8fd9bf9ef9a38359dbbef32ad8e87d579acaff82999de660b491aadb71f",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "b7dc9a6b18e9e9f2ea8a73fbbfec5c7d50d1862e997428c627d207d55fa7243b",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "587c71e5f594d80a269bcc0d040ba07c0a0e90628a79bdf012360c14fb6de6e0",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "b41558dd842abd87afeec46920ba17aa45388d83241212e0b6deeefc86c152ce",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-09-15T15:32:15.372Z"
+      },
+      "issueLogId": "plan-gate-repair-ff3f306b91d10789986724646b43ed9a1c8b1e18116a48eecd65083573d42fb7"
+    },
+    {
+      "step": "draft-gate",
+      "level": "parent",
+      "phase": "draft",
+      "reason": "The requirement refers to “its existing command fixture” without identifying the fixture or defining the invocation and expected command result, so independent reviewers cannot determine whether the verification satisfies it.; “The pre-change exit result” is not a concrete expected value or specified baseline procedure; state the exact result required for each invocation.; “The expected parser result” is undefined. Specify the accepted or rejected outcome and expected result for each listed invocation.; The hook requirement requires the same “context as before” without defining which context fields or values must remain unchanged, preventing two reviewers from applying the criterion consistently.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-15T15:38:37.535Z",
+      "passedGuardrails": [],
+      "headSha": "56ba5471901324ac730b17fd102495c5f733271f",
+      "worktreeHash": "cdea5848b774595eed3ec1ddeb0309921edc1b04a90a76e8b8c029074f29b1e0",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation[2]"
+          },
+          "observed": "The requirement refers to “its existing command fixture” without identifying the fixture or defining the invocation and expected command result, so independent reviewers cannot determine whether the verification satisfies it.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation[2]"
+          },
+          "observed": "“The pre-change exit result” is not a concrete expected value or specified baseline procedure; state the exact result required for each invocation.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation[5]"
+          },
+          "observed": "“The expected parser result” is undefined. Specify the accepted or rejected outcome and expected result for each listed invocation.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "impactOnExisting[2]"
+          },
+          "observed": "The hook requirement requires the same “context as before” without defining which context fields or values must remain unchanged, preventing two reviewers from applying the criterion consistently.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "complete-context",
+          "reason": "The requirement refers to “its existing command fixture” without identifying the fixture or defining the invocation and expected command result, so independent reviewers cannot determine whether the verification satisfies it."
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "“The pre-change exit result” is not a concrete expected value or specified baseline procedure; state the exact result required for each invocation."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "“The expected parser result” is undefined. Specify the accepted or rejected outcome and expected result for each listed invocation."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "The hook requirement requires the same “context as before” without defining which context fields or values must remain unchanged, preventing two reviewers from applying the criterion consistently."
+        }
+      ],
+      "issueLogId": "set-issue-log-aa59f667d95ce8eb50eeda2aff1687ae8852a96e9a4cdc087b43941e1684d9b2"
+    }
+  ]
+}
