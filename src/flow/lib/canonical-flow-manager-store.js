@@ -41,7 +41,9 @@ import {
   RequirementTestStructuralRejectionObservation,
   RequirementTestStepObservation,
   resolveRequirementTestLifecycle,
+  resolveDraftStepRoute,
 } from "../definition.js";
+import { STEP_OUTPUT_TYPE, StepOutput } from "../engine/step-output.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { normalizeAgentMetricDimension } from "../../lib/agent-metrics.js";
 import { managedDir } from "../../lib/config.js";
@@ -1241,6 +1243,22 @@ function resultFor(status, nodeId) {
     summary: `canonical runtime transition for ${nodeId}`,
     confirmedAt: new Date().toISOString(),
     artifactRefs: [],
+  };
+}
+
+function resultWithDraftStepOutput(result, nodeId, stepOutput) {
+  if (stepOutput === null) return result;
+  if (!(stepOutput instanceof StepOutput)) {
+    throw new CurrentFlowStateInvariantError("Draft completion requires a typed StepOutput");
+  }
+  const route = resolveDraftStepRoute(nodeId, stepOutput);
+  if (typeof route.targetStepId !== "string") {
+    throw new CurrentFlowStateInvariantError("Draft completion requires a Definition-selected successor");
+  }
+  return {
+    ...(result?.toJSON?.() ?? result),
+    stepOutput: stepOutput.toJSON(),
+    draftRouteTargetStepId: route.targetStepId,
   };
 }
 
@@ -2957,6 +2975,7 @@ export class CanonicalFlowManagerStore {
     sourcePayloadDigest,
     handoffDigest,
     handoffRequestDigest,
+    stepOutput = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
@@ -2996,9 +3015,11 @@ export class CanonicalFlowManagerStore {
     const promotedDigest = crypto.createHash("sha256").update(promotedBytes).digest("hex");
     const state = this.runtime.load(resolved);
     if (state.current?.at(-1) !== "draft-refine" || state.attempt === null) throw new CurrentFlowStateInvariantError("draft promotion requires active draft-refine");
+    if (stepOutput !== null) resolveDraftStepRoute("draft-refine", stepOutput);
     return this.runtime.publishArtifacts({
       specId: resolved, activityId: activityId("draft-question-promoted"), nodeId: "draft-refine",
       expectedAttempt: CurrentAttemptIdentity.from(state.attempt),
+      stepOutput,
       artifactBaselines: [new CanonicalFlowArtifactBaseline({ logicalKey: "draft", digest, byteLength })],
       artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: promotedBytes }],
       references: new ActivityReferences({
@@ -3493,13 +3514,13 @@ export class CanonicalFlowManagerStore {
    * and replaces the catalog descriptors.  It deliberately accepts no
    * mutable flow-state callback.
    */
-  confirmCurrentAttempt({ specId = null, status = "done", result = null, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null, admission = undefined } = {}) {
+  confirmCurrentAttempt({ specId = null, status = "done", result = null, stepOutput = null, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null, admission = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
     if (state.current === null) throw new CurrentFlowStateInvariantError("canonical completion requires an active Attempt");
     const nodeId = state.current.at(-1);
-    const confirmation = result ?? resultFor(status, nodeId);
+    const confirmation = resultWithDraftStepOutput(result ?? resultFor(status, nodeId), nodeId, stepOutput);
     const confirmationActivityId = activityId("attempt-confirmed");
     const writes = [...artifactWrites];
     if (planGateRepairOutcome !== null) {
@@ -3582,7 +3603,7 @@ export class CanonicalFlowManagerStore {
   }
 
   /** Complete a bounded draft Gate repair whose output cannot change the draft. */
-  completeDraftGateRepairTerminal({ specId = null, plan, outcome = null, confirmedAt = null } = {}) {
+  completeDraftGateRepairTerminal({ specId = null, plan, outcome = null, confirmedAt = null, stepOutput = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(plan instanceof DraftGateRepairTerminalPlan) || plan.specId !== resolved) {
@@ -3614,12 +3635,12 @@ export class CanonicalFlowManagerStore {
       specId: resolved,
       activityId: confirmationActivityId,
       status: "done",
-      result: {
+      result: resultWithDraftStepOutput({
         outcome: "passed",
         summary: plan.summary,
         confirmedAt: confirmedAt ?? new Date().toISOString(),
         artifactRefs,
-      },
+      }, "draft-gate-repair", stepOutput),
       artifactWrites,
       admission: new DraftGateRepairTerminalAdmission(plan),
     });
@@ -4036,11 +4057,15 @@ export class CanonicalFlowManagerStore {
     decision,
     draft,
     result = null,
+    stepOutput = null,
     references = undefined,
     artifactWrites = [],
     artifactRemovals = undefined,
     artifactBaselines = [],
   } = {}) {
+    if (stepOutput !== null && (!(stepOutput instanceof StepOutput) || stepOutput.type !== STEP_OUTPUT_TYPE.COMPLETED)) {
+      throw new CurrentFlowStateInvariantError("draft coverage completion requires completed StepOutput");
+    }
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(decision instanceof DraftCoverageRepairCompletionDecision)) {
@@ -4273,10 +4298,10 @@ export class CanonicalFlowManagerStore {
       summary: "Draft coverage repair completion confirmed the canonical draft.",
       confirmedAt: new Date().toISOString(),
     };
-    const confirmation = {
+    const confirmation = resultWithDraftStepOutput({
       ...baseConfirmation,
       artifactRefs: [...(baseConfirmation.artifactRefs ?? []), connectorArtifact],
-    };
+    }, facts.sourceStepId, stepOutput);
     const baseReferences = references ?? {
       evaluations: [],
       findings: [],
@@ -4755,7 +4780,7 @@ export class CanonicalFlowManagerStore {
    * error counterpart to `confirmCurrentAttempt`; callers never mutate a
    * status blob or write a retry artifact beside flow.json.
    */
-  failCurrentAttempt({ specId = null, failure, result, commandResult = undefined, taskReviewUnsealedCheckpoint = null, taskReviewAbortedWorkUnit = null, admission = undefined } = {}) {
+  failCurrentAttempt({ specId = null, failure, result, stepOutput = null, commandResult = undefined, taskReviewUnsealedCheckpoint = null, taskReviewAbortedWorkUnit = null, admission = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
@@ -4767,12 +4792,19 @@ export class CanonicalFlowManagerStore {
     }
     const nodeId = state.current.at(-1);
     const now = new Date().toISOString();
-    const failureResult = result ?? {
+    let failureResult = result ?? {
       outcome: "failed",
       summary: requiredText(failure.message, "canonical failure.message"),
       confirmedAt: now,
       artifactRefs: [],
     };
+    if (stepOutput !== null) {
+      if (!(stepOutput instanceof StepOutput) || stepOutput.type !== STEP_OUTPUT_TYPE.ERROR) {
+        throw new CurrentFlowStateInvariantError("Draft failure requires an Error StepOutput");
+      }
+      resolveDraftStepRoute(nodeId, stepOutput);
+      failureResult = { ...(failureResult?.toJSON?.() ?? failureResult), stepOutput: stepOutput.toJSON() };
+    }
     if (taskReviewUnsealedCheckpoint !== null && !(taskReviewUnsealedCheckpoint instanceof TaskReviewUnsealedCheckpoint)) {
       throw new CurrentFlowStateInvariantError("Task Review failure checkpoint must be typed");
     }

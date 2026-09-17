@@ -45,6 +45,7 @@ import {
   readDraftCompletionCatalogDigest,
 } from "./draft-completion-connector.js";
 import { DraftTransitionFacts, readDraftTransitionFacts } from "./draft-transition-facts.js";
+import { STEP_OUTPUT_TYPE, StepOutput } from "../engine/step-output.js";
 import { CanonicalFlowFindingsStore } from "./flow-findings.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { findStepById } from "./step-tree.js";
@@ -6834,6 +6835,7 @@ function settleDraftGateRepairTerminal({ ctx, request, state, submission, kind, 
     plan,
     outcome,
     confirmedAt: now().toISOString(),
+    stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
   });
   const receipt = canonicalHandoffReceipt(request, submission, now);
   cleanupCompletedHandoff(request.handoffRoot, receipt);
@@ -6844,6 +6846,7 @@ function settleDraftGateRepairTerminal({ ctx, request, state, submission, kind, 
     stepId: receipt.stepId,
     handoffDigest: receipt.handoffDigest,
     payloadDigest: receipt.payloadDigest,
+    stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
   };
 }
 
@@ -6851,6 +6854,10 @@ function settleDraftGateRepairTerminal({ ctx, request, state, submission, kind, 
 function draftCoverageRepairCompletion(request, route, repair) {
   if (route?.retryPhase !== "draft-coverage" || repair === null) return null;
   const draft = request.inputs.find((input) => input.name === "draft.json");
+  // A changed Draft must be reviewed again before the completion connector
+  // can select the Gate. The unchanged case retains that connector's existing
+  // atomic publication and carry-forward validation.
+  if (stableStringify(repair.draft) !== stableStringify(draft.document)) return null;
   const review = request.inputs.find((input) => input.name === route.reviewArtifact);
   const triage = request.inputs.find((input) => input.name === route.triageArtifact);
   if (!draft || !review || !triage) {
@@ -7531,7 +7538,7 @@ function canonicalTestTreeBaselineForPublication(request) {
 }
 
 class DraftPromotionHandoffAdapter {
-  constructor({ flowManager, specId, sourceBytes, sourcePayloadDigest, handoffDigest, handoffRequestDigest, action }) {
+  constructor({ flowManager, specId, sourceBytes, sourcePayloadDigest, handoffDigest, handoffRequestDigest, action, stepOutput }) {
     this.flowManager = flowManager;
     this.specId = specId;
     this.sourceBytes = Buffer.from(sourceBytes);
@@ -7539,6 +7546,7 @@ class DraftPromotionHandoffAdapter {
     this.handoffDigest = handoffDigest;
     this.handoffRequestDigest = handoffRequestDigest;
     this.action = action;
+    this.stepOutput = stepOutput;
   }
 
   promoteDraftQuestionAndKeepRefineActive(action) {
@@ -7553,6 +7561,7 @@ class DraftPromotionHandoffAdapter {
       sourcePayloadDigest: this.sourcePayloadDigest,
       handoffDigest: this.handoffDigest,
       handoffRequestDigest: this.handoffRequestDigest,
+      stepOutput: this.stepOutput,
     });
   }
 }
@@ -7649,6 +7658,9 @@ function canonicalHandoffPublications(request, submission) {
   const draftGateRepairResultValue = draftGateRepairResult(request, submission, request.state);
   const repairRoute = draftRepairRouteForRequest(request);
   const draftRepairResultValue = repairRoute === null ? null : draftRepairResult(request, submission);
+  const draftRepairChanged = draftRepairResultValue === null ? null
+    : stableStringify(draftRepairResultValue.draft)
+      !== stableStringify(request.inputs.find((input) => input.name === "draft.json").document);
   const draftCoverageRepairDecision = draftCoverageRepairCompletion(
     request,
     repairRoute,
@@ -7906,6 +7918,7 @@ function canonicalHandoffPublications(request, submission) {
         .map((entry) => ({ testPath: entry.parameters.testPath, bytes: Buffer.from(entry.bytes) })),
     ),
     draftCoverageRepairDecision,
+    draftRepairChanged,
     draftCoverageRepairDraft: draftCoverageRepairDecision === null
       ? null
       : structuredClone(draftRepairResultValue.draft),
@@ -9057,8 +9070,18 @@ export class WorkerArtifactHandoffCoordinator {
       : request.stepId === "spec"
         ? planGateRepairArtifactOutcomeDraft(request, submission, state, "spec.json")
         : null;
+    const draftWorkerOutput = request.stepId === "draft-questions-repair"
+      || request.stepId === "draft-coverage-repair"
+      ? new StepOutput(publications.draftRepairChanged
+        ? STEP_OUTPUT_TYPE.LOOP_REQUIRED : STEP_OUTPUT_TYPE.COMPLETED)
+      : request.stepId === "draft" || request.stepId === "draft-questions-triage"
+        || request.stepId === "draft-coverage-triage" || request.stepId === "draft-gate-repair"
+        || request.stepId === "draft-refine"
+        ? new StepOutput(STEP_OUTPUT_TYPE.COMPLETED)
+        : null;
+    let promotionApplied = false;
+    let promotionOutput = null;
     try {
-      let promotionApplied = false;
       this.faultInjector({ phase: "before-worker-handoff-publication", stepId: request.stepId });
       if (planGateRepairOutcome?.disposition === "rejected-no-progress") {
         return settleDraftGateRepairTerminal({
@@ -9095,6 +9118,8 @@ export class WorkerArtifactHandoffCoordinator {
               { retryable: false, data: { stepId: request.stepId } },
             );
           }
+          promotionOutput = new StepOutput(latestState.autoApprove === true
+            ? STEP_OUTPUT_TYPE.LOOP_REQUIRED : STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED);
           action.apply(new DraftPromotionHandoffAdapter({
             flowManager: ctx.flowManager,
             specId: request.specId,
@@ -9103,8 +9128,11 @@ export class WorkerArtifactHandoffCoordinator {
             handoffDigest: submission.handoffDigest,
             handoffRequestDigest: request.requestDigest,
             action,
+            stepOutput: promotionOutput,
           }));
           promotionApplied = true;
+          // The promotion itself keeps the same Attempt active. The waiting
+          // decision is read from its published question ledger by Definition.
         }
       }
       if (!promotionApplied) {
@@ -9146,6 +9174,7 @@ export class WorkerArtifactHandoffCoordinator {
           artifactBaselines: publications.artifactBaselines,
           testSourceBaseline: publications.testSourceBaseline,
           planGateRepairOutcome,
+          ...(draftWorkerOutput === null ? {} : { stepOutput: draftWorkerOutput }),
         };
         if (publications.draftCoverageRepairDecision !== null) {
           ctx.flowManager.confirmDraftCoverageRepairCompletion({
@@ -9196,6 +9225,7 @@ export class WorkerArtifactHandoffCoordinator {
       stepId: receipt.stepId,
       handoffDigest: receipt.handoffDigest,
       payloadDigest: receipt.payloadDigest,
+      stepOutput: promotionOutput ?? draftWorkerOutput,
     };
   }
 

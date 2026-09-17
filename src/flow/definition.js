@@ -46,7 +46,13 @@ import {
   FlowDefinitionNode as CurrentFlowDefinitionNode,
   NodeContract as CurrentFlowNodeContract,
 } from "./lib/current-flow-state.js";
-import { draftReviewRouteForKey, draftReviewRouteForRetryPhase } from "./lib/draft-review-routes.js";
+import { draftReviewRouteForKey, draftReviewRouteForRetryPhase, draftReviewRouteForStepId } from "./lib/draft-review-routes.js";
+import { STEP_OUTPUT_TYPE, StepOutput } from "./engine/step-output.js";
+import { DraftReviewConnector } from "./engine/connectors/draft/draft-review-connector.js";
+import { DraftTriageConnector } from "./engine/connectors/draft/draft-triage-connector.js";
+import { DraftRepairConnector } from "./engine/connectors/draft/draft-repair-connector.js";
+import { DraftRefineConnector } from "./engine/connectors/draft/draft-refine-connector.js";
+import { DraftSpecConnector } from "./engine/connectors/draft/draft-spec-connector.js";
 import {
   flattenSteps,
   findFirstPendingLeaf,
@@ -4483,6 +4489,94 @@ class FlowNode {
 
 const DRAFT_QUESTIONS_ROUTE = draftReviewRouteForKey("questions");
 const DRAFT_COVERAGE_ROUTE = draftReviewRouteForKey("coverage");
+
+/** A Definition-selected Draft connection; the Connector performs the handoff. */
+export class DraftStepRoute {
+  constructor({ sourceStepId, targetStepId, connector }) {
+    if (new.target === DraftStepRoute) throw new TypeError("DraftStepRoute is abstract");
+    this.sourceStepId = requireString(sourceStepId, "draft route source");
+    this.targetStepId = requireString(targetStepId, "draft route target");
+    if (typeof connector !== "function") throw new TypeError("draft route requires a Connector");
+    this.connector = connector;
+    Object.freeze(this);
+  }
+}
+
+export class DraftNextRoute extends DraftStepRoute {}
+export class DraftBranchRoute extends DraftStepRoute {}
+export class DraftLoopRoute extends DraftStepRoute {}
+
+export class DraftAwaitUserDecision {
+  constructor(stepId) {
+    if (stepId !== "draft-refine") throw new TypeError("only draft-refine may await user input");
+    this.stepId = stepId;
+    Object.freeze(this);
+  }
+}
+
+export class DraftStepErrorDecision {
+  constructor(stepId, error) {
+    this.stepId = requireString(stepId, "draft error step");
+    if (!(error instanceof Error)) throw new TypeError("draft error decision requires an Error");
+    this.error = error;
+    Object.freeze(this);
+  }
+}
+
+/** Map one persisted StepOutput to the Route selected by Definition. */
+export function resolveDraftStepRoute(stepId, output) {
+  if (!(output instanceof StepOutput)) throw new TypeError("draft route requires a StepOutput");
+  const reviewRoute = draftReviewRouteForStepId(stepId);
+  if (!["draft", "draft-refine", "draft-gate-repair", "draft-gate"].includes(stepId) && reviewRoute === null) {
+    throw new TypeError(`unknown Draft Step: ${stepId}`);
+  }
+  if (output.type === STEP_OUTPUT_TYPE.ERROR) return new DraftStepErrorDecision(stepId, output.error);
+  if (output.type === STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED) {
+    if (stepId !== "draft-refine") throw new TypeError(`${stepId} cannot await user input`);
+    return new DraftAwaitUserDecision(stepId);
+  }
+
+  const route = (Route, targetStepId, connector) => new Route({ sourceStepId: stepId, targetStepId, connector });
+  if (reviewRoute !== null) {
+    if (stepId === reviewRoute.reviewStepId) {
+      if (output.type === STEP_OUTPUT_TYPE.BRANCH_REQUIRED) {
+        return route(DraftBranchRoute, reviewRoute.triageStepId, DraftTriageConnector);
+      }
+      if (output.type === STEP_OUTPUT_TYPE.COMPLETED) {
+        return route(DraftNextRoute, reviewRoute.passNextStepId,
+          reviewRoute === DRAFT_COVERAGE_ROUTE ? DraftCompletionConnector : DraftRefineConnector);
+      }
+    }
+    if (stepId === reviewRoute.triageStepId && output.type === STEP_OUTPUT_TYPE.COMPLETED) {
+      return route(DraftNextRoute, reviewRoute.repairStepId, DraftRepairConnector);
+    }
+    if (stepId === reviewRoute.repairStepId) {
+      if (output.type === STEP_OUTPUT_TYPE.LOOP_REQUIRED) {
+        return route(DraftLoopRoute, reviewRoute.reviewStepId, DraftReviewConnector);
+      }
+      if (output.type === STEP_OUTPUT_TYPE.COMPLETED) {
+        return route(DraftNextRoute, reviewRoute.passNextStepId,
+          reviewRoute === DRAFT_COVERAGE_ROUTE ? DraftCompletionConnector : DraftRefineConnector);
+      }
+    }
+  } else if (stepId === "draft" && output.type === STEP_OUTPUT_TYPE.COMPLETED) {
+    return route(DraftNextRoute, DRAFT_QUESTIONS_ROUTE.reviewStepId, DraftReviewConnector);
+  } else if (stepId === "draft-refine") {
+    if (output.type === STEP_OUTPUT_TYPE.LOOP_REQUIRED) return route(DraftLoopRoute, stepId, DraftRefineConnector);
+    if (output.type === STEP_OUTPUT_TYPE.COMPLETED) {
+      return route(DraftNextRoute, DRAFT_COVERAGE_ROUTE.reviewStepId, DraftReviewConnector);
+    }
+  } else if (stepId === "draft-gate-repair" && output.type === STEP_OUTPUT_TYPE.COMPLETED) {
+    return route(DraftNextRoute, DRAFT_COVERAGE_ROUTE.reviewStepId, DraftReviewConnector);
+  } else if (stepId === "draft-gate") {
+    if (output.type === STEP_OUTPUT_TYPE.LOOP_REQUIRED) {
+      return route(DraftLoopRoute, "draft-gate-repair", PlanGateRepairConnector);
+    }
+    if (output.type === STEP_OUTPUT_TYPE.COMPLETED) return route(DraftNextRoute, "spec", DraftSpecConnector);
+  }
+  throw new TypeError(`${stepId} cannot return ${output.type}`);
+}
+
 const DRAFT_REVIEW_ROUTE_EXPECTATIONS = Object.freeze([
   Object.freeze({
     route: DRAFT_QUESTIONS_ROUTE,
@@ -5101,8 +5195,12 @@ export function buildCurrentFlowDefinition() {
   const finalizationRouteLeaves = new Set(["finalize-sync", "finalize-cleanup"]);
   const taskOverrunRecoveryLeaves = new Set(["task-review", "task-triage", "task-repair"]);
   const taskStageBypassLeaves = new Set(["task-triage", "task-repair", "task-gate"]);
+  const draftReviewBypassLeaves = new Set([
+    DRAFT_QUESTIONS_ROUTE.triageStepId, DRAFT_QUESTIONS_ROUTE.repairStepId,
+    DRAFT_COVERAGE_ROUTE.triageStepId, DRAFT_COVERAGE_ROUTE.repairStepId,
+  ]);
   const conditionalWorkerLeaves = new Set(["draft-refine", "draft-gate-repair"]);
-  const transitionsFor = ({ skippable = false, conditionalWorker = false, triageNoRepair = false, taskStageBypass = false, requirementTestInitialization = false, existingImplementation = false, finalizationRoute = false, taskOverrunRecovery = false, failurePolicy = null } = {}) => [
+  const transitionsFor = ({ skippable = false, conditionalWorker = false, triageNoRepair = false, taskStageBypass = false, draftReviewBypass = false, requirementTestInitialization = false, existingImplementation = false, finalizationRoute = false, taskOverrunRecovery = false, failurePolicy = null } = {}) => [
     "pending:in_progress",
     "in_progress:done",
     ...(skippable ? ["in_progress:skipped"] : []),
@@ -5111,6 +5209,7 @@ export function buildCurrentFlowDefinition() {
     // review route or invalidated on the acceptance-repair route.
     ...(triageNoRepair ? ["pending:skipped", "invalidated:skipped"] : []),
     ...(taskStageBypass ? ["pending:skipped", "invalidated:skipped"] : []),
+    ...(draftReviewBypass ? ["pending:skipped", "invalidated:skipped"] : []),
     ...(conditionalWorker ? ["pending:skipped", "invalidated:skipped"] : []),
     // Reopening a draft invalidates every downstream leaf. Approval of the
     // revised Spec must still be able to apply the same typed empty-lifecycle
@@ -5152,6 +5251,7 @@ export function buildCurrentFlowDefinition() {
       finalizationRoute: finalizationRouteLeaves.has(node.id),
       taskOverrunRecovery: scope === "task" && taskOverrunRecoveryLeaves.has(node.id),
       taskStageBypass: scope === "task" && taskStageBypassLeaves.has(node.id),
+      draftReviewBypass: scope === "flow" && draftReviewBypassLeaves.has(node.id),
     }),
     // Context requirements stay definition-owned. Current Attempt claims may
     // cover them as completed operations or typed incomplete operations, but

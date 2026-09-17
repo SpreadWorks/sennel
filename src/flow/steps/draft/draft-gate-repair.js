@@ -1,27 +1,31 @@
 import { Agent } from "../../../lib/agent.js";
 import { Step } from "../../engine/step.js";
+import RunDispatchCommand from "../../lib/run-dispatch.js";
 import { DraftService } from "../../services/draft-service.js";
+import { executeCompletedDraftWorker } from "./draft.js";
 
 /**
  * Apply the selected Gate repair request to the bound Draft.
- * Existing source: plan-gate-repair.js; draft-repair-operations.js; worker-artifact-handoff.js.
- * Boundary: Gate-result access needs a designed dependency; do not make this Step search for it.
+ * The bound handoff carries the selected Gate repair plan.
  */
 export class DraftGateRepairStep extends Step {
-  static dependencies = [DraftService, Agent];
+  static dependencies = [DraftService, Agent, RunDispatchCommand];
 
   #draftService;
   #agent;
+  #dispatch;
 
-  constructor(draftService, agent) {
+  constructor(draftService, agent, dispatch) {
     super();
     if (!(draftService instanceof DraftService)) throw new TypeError("DraftService is required");
     if (!(agent instanceof Agent)) throw new TypeError("Agent is required");
+    if (!(dispatch instanceof RunDispatchCommand)) throw new TypeError("RunDispatchCommand is required");
     this.#draftService = draftService;
     this.#agent = agent;
+    this.#dispatch = dispatch;
   }
 
   async _execute() {
-    throw new Error("DraftGateRepairStep._execute() is not implemented");
+    return executeCompletedDraftWorker(this.#draftService, this.#agent, this.#dispatch);
   }
 }

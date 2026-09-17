@@ -27,6 +27,7 @@ import {
   resolveLifecyclePlan,
   resolveRuntimeStep,
   resolveGateTransition,
+  resolveDraftStepRoute,
   GateTransitionDecision,
   projectGatePublicOutcome,
   resolveNonGateTransition,
@@ -72,6 +73,61 @@ import { readCurrentNonGateTransitionFacts } from "./lib/non-gate-transition-fac
 import { readCurrentTestChainTransitionFacts } from "./lib/test-chain-transition-facts.js";
 import { CurrentTaskSourceSnapshot, TaskMutationLineageSet } from "./lib/task-mutation-lineage.js";
 import { RequirementTestLifecycleAuthority } from "./lib/requirement-test-lifecycle.js";
+import { STEP_OUTPUT_TYPE } from "./engine/step-output.js";
+import { DraftSpecConnector } from "./engine/connectors/draft/draft-spec-connector.js";
+import { StepFactory } from "./engine/step-factory.js";
+
+async function executePublishedDraftReviewStep(ctx, result) {
+  const phase = result?.artifacts?.retryPhase || result?.artifacts?.phase;
+  const route = draftReviewRouteForRetryPhase(phase === "draft" ? "draft-questions" : phase);
+  if (route === null || !["PASS", "ADVISORY", "REJECTED"].includes(result?.artifacts?.verdict)
+    || attachedCanonicalCommandResultArtifact(result) === null) return null;
+  const [{ CanonicalDraftReviewSource }, { DraftReviewConnector }, { ReviewService }, reviewCommand, steps] = await Promise.all([
+    import("./lib/canonical-review-artifacts.js"),
+    import("./engine/connectors/draft/draft-review-connector.js"),
+    import("./services/review-service.js"),
+    import("./lib/run-review.js"),
+    import(route.key === "questions" ? "./steps/draft/draft-questions-review.js" : "./steps/draft/draft-coverage-review.js"),
+  ]);
+  const source = new CanonicalDraftReviewSource({
+    flowManager: ctx.flowManager,
+    state: ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId),
+    phase: route.retryPhase,
+  });
+  const binding = await new DraftReviewConnector(source).connect();
+  const command = new reviewCommand.RunReviewCommand({
+    draftStepResult: result,
+    publishDraftStepResult: false,
+  });
+  const step = new StepFactory()
+    .provide(ReviewService, new ReviewService({ flowManager: ctx.flowManager, binding }))
+    .provide(reviewCommand.RunReviewCommand, command)
+    .create(route.key === "questions" ? steps.DraftQuestionsReviewStep : steps.DraftCoverageReviewStep);
+  const output = await step.execute();
+  if (output.type === STEP_OUTPUT_TYPE.ERROR) throw output.error;
+  resolveDraftStepRoute(route.reviewStepId, output);
+  return output;
+}
+
+async function executePublishedDraftGateStep(ctx, result) {
+  const [{ DraftGateStepBinding }, { DraftService }, gateCommand, { DraftGateStep }] = await Promise.all([
+    import("./engine/connectors/draft/draft-step-binding.js"),
+    import("./services/draft-service.js"),
+    import("./lib/run-gate.js"),
+    import("./steps/draft/draft-gate.js"),
+  ]);
+  const binding = new DraftGateStepBinding({ flowManager: ctx.flowManager, facts: ctx.gateTransitionDecision.facts });
+  const step = new StepFactory()
+    .provide(DraftService, new DraftService({ flowManager: ctx.flowManager, binding }))
+    .provide(gateCommand.RunGateCommand, new gateCommand.RunGateCommand({
+      draftStepResult: result,
+      publishDraftStepResult: false,
+    }))
+    .create(DraftGateStep);
+  const output = await step.execute();
+  if (output.type === STEP_OUTPUT_TYPE.ERROR) throw output.error;
+  return resolveDraftStepRoute("draft-gate", output);
+}
 
 /**
  * Successful command-result statuses that map to a flow step status of 'done'.
@@ -1629,6 +1685,18 @@ export const FLOW_COMMANDS = {
         if (!(ctx.gateTransitionDecision instanceof GateTransitionDecision)) {
           throw new Error("gate post requires a canonical Definition-selected GateTransitionDecision");
         }
+        if (phase === "draft" && canonicalResult) {
+          const route = await executePublishedDraftGateStep(ctx, result);
+          if (route.targetStepId === "spec") {
+            if (route.connector !== DraftSpecConnector) {
+              throw new Error("Draft Gate completion requires the Definition-selected Spec connector");
+            }
+            await new route.connector({
+              flowManager: ctx.flowManager,
+              facts: ctx.gateTransitionDecision.facts,
+            }).connect();
+          }
+        }
         await applyLifecycleActionsFromRegistry(ctx, {
           event: "gate:post",
           command: "run-gate",
@@ -1857,6 +1925,7 @@ export const FLOW_COMMANDS = {
         }
         await persistNonTerminalReviewResult(ctx, result);
         try {
+          await executePublishedDraftReviewStep(ctx, result);
           await applyLifecycleActionsFromRegistry(ctx, {
             event: "review:post",
             command: "run-review",

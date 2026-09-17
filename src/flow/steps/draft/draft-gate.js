@@ -1,31 +1,34 @@
-import { Agent } from "../../../lib/agent.js";
 import { Step } from "../../engine/step.js";
+import { STEP_OUTPUT_TYPE, StepOutput } from "../../engine/step-output.js";
 import { DraftService } from "../../services/draft-service.js";
-import { ReviewService } from "../../services/review-service.js";
+import RunGateCommand, { executeDraftGateStep } from "../../lib/run-gate.js";
 
 /**
  * Evaluate the completed Draft and produce the Gate result.
- * Existing source: run-gate.js; canonical-gate-artifacts.js.
- * Boundary: Reuse the existing Gate evaluator and canonical publication; Definition selects the next route.
+ * The existing Gate command evaluates and publishes the bound Attempt.
  */
 export class DraftGateStep extends Step {
-  static dependencies = [DraftService, ReviewService, Agent];
+  static dependencies = [DraftService, RunGateCommand];
 
   #draftService;
-  #reviewService;
-  #agent;
+  #command;
 
-  constructor(draftService, reviewService, agent) {
+  constructor(draftService, command) {
     super();
     if (!(draftService instanceof DraftService)) throw new TypeError("DraftService is required");
-    if (!(reviewService instanceof ReviewService)) throw new TypeError("ReviewService is required");
-    if (!(agent instanceof Agent)) throw new TypeError("Agent is required");
+    if (!(command instanceof RunGateCommand)) throw new TypeError("RunGateCommand is required");
     this.#draftService = draftService;
-    this.#reviewService = reviewService;
-    this.#agent = agent;
+    this.#command = command;
   }
 
   async _execute() {
-    throw new Error("DraftGateStep._execute() is not implemented");
+    try {
+      const { result, decision } = await executeDraftGateStep({ binding: this.#draftService.binding, command: this.#command });
+      return new StepOutput(result.result === "pass" || decision.disposition.operation === "defer"
+        ? STEP_OUTPUT_TYPE.COMPLETED
+        : STEP_OUTPUT_TYPE.LOOP_REQUIRED);
+    } catch (error) {
+      return new StepOutput(error);
+    }
   }
 }

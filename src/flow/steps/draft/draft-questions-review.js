@@ -1,31 +1,34 @@
-import { Agent } from "../../../lib/agent.js";
 import { Step } from "../../engine/step.js";
-import { DraftService } from "../../services/draft-service.js";
+import { STEP_OUTPUT_TYPE, StepOutput } from "../../engine/step-output.js";
 import { ReviewService } from "../../services/review-service.js";
+import RunReviewCommand, { executeDraftReviewStep } from "../../lib/run-review.js";
 
 /**
  * Review unresolved decisions and candidate questions in the bound Draft.
- * Existing source: run-review.js and commands/review.js: runDraftReview (questions stage).
- * Boundary: Move prompt construction and finding interpretation here; keep artifact I/O in ReviewService.
+ * The existing review command evaluates the bound Draft revision.
  */
 export class DraftQuestionsReviewStep extends Step {
-  static dependencies = [DraftService, ReviewService, Agent];
+  static dependencies = [ReviewService, RunReviewCommand];
 
-  #draftService;
   #reviewService;
-  #agent;
+  #command;
 
-  constructor(draftService, reviewService, agent) {
+  constructor(reviewService, command) {
     super();
-    if (!(draftService instanceof DraftService)) throw new TypeError("DraftService is required");
     if (!(reviewService instanceof ReviewService)) throw new TypeError("ReviewService is required");
-    if (!(agent instanceof Agent)) throw new TypeError("Agent is required");
-    this.#draftService = draftService;
+    if (!(command instanceof RunReviewCommand)) throw new TypeError("RunReviewCommand is required");
     this.#reviewService = reviewService;
-    this.#agent = agent;
+    this.#command = command;
   }
 
   async _execute() {
-    throw new Error("DraftQuestionsReviewStep._execute() is not implemented");
+    try {
+      const { review } = await executeDraftReviewStep({ reviewService: this.#reviewService, command: this.#command });
+      return new StepOutput(review.verdict === "PASS"
+        ? STEP_OUTPUT_TYPE.COMPLETED
+        : STEP_OUTPUT_TYPE.BRANCH_REQUIRED);
+    } catch (error) {
+      return new StepOutput(error);
+    }
   }
 }

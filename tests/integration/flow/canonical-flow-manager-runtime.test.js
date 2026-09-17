@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { STEP_OUTPUT_TYPE, StepOutput } from "../../../src/flow/engine/step-output.js";
 import { Agent } from "../../../src/lib/agent.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
@@ -743,6 +744,59 @@ afterEach(() => {
 });
 
 describe("FlowManager canonical Version-1 runtime", () => {
+  it("persists a Draft repair loop route and refuses a mismatched StepOutput atomically", () => {
+    const repository = root();
+    const specId = "001-draft-route-readback";
+    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    new FlowAtStepFixture({
+      flowManager: manager, specId, runId: "run-draft-route-readback",
+      request: "Persist the selected Draft repair route.", targetStep: "draft-questions-repair",
+    }).create();
+    const before = manager.canonicalState(specId).toJSON();
+    const beforeActivities = manager.activityLedger(specId).length;
+    assert.throws(() => manager.confirmCurrentAttempt({
+      specId, stepOutput: new StepOutput(STEP_OUTPUT_TYPE.BRANCH_REQUIRED),
+    }), /draft-questions-repair cannot return branch-required/);
+    assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
+    assert.equal(manager.activityLedger(specId).length, beforeActivities);
+
+    manager.confirmCurrentAttempt({
+      specId,
+      stepOutput: new StepOutput(STEP_OUTPUT_TYPE.LOOP_REQUIRED),
+    });
+    const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const state = reloaded.canonicalState(specId);
+    assert.equal(state.nextAction().nodeId, "draft-questions-review");
+    const confirmation = reloaded.activityLedger(specId).at(-1);
+    assert.deepEqual(confirmation.result.stepOutput, { type: STEP_OUTPUT_TYPE.LOOP_REQUIRED });
+    assert.equal(confirmation.result.draftRouteTargetStepId, "draft-questions-review");
+  });
+
+  it("persists a Draft Error StepOutput with its failed Attempt on readback", () => {
+    const repository = root();
+    const specId = "001-draft-error-readback";
+    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    new FlowAtStepFixture({
+      flowManager: manager, specId, runId: "run-draft-error-readback",
+      request: "Persist the Draft Step error.", targetStep: "draft-gate",
+    }).create();
+    const attemptId = manager.canonicalState(specId).attempt.id;
+    manager.failCurrentAttempt({
+      specId,
+      failure: { category: "semantic", code: "DRAFT_GATE_ERROR", message: "Draft Gate failed.", retryable: true, retryKind: "semantic" },
+      stepOutput: new StepOutput(new Error("Draft Gate failed.")),
+    });
+    const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const state = reloaded.canonicalState(specId);
+    assert.equal(state.current.at(-1), "draft-gate");
+    assert.equal(state.attempt.id, attemptId);
+    assert.equal(state.attempt.failure.code, "DRAFT_GATE_ERROR");
+    const failure = reloaded.activityLedger(specId).at(-1);
+    assert.deepEqual(failure.result.stepOutput, {
+      type: STEP_OUTPUT_TYPE.ERROR,
+      error: { kind: "generic", message: "Draft Gate failed." },
+    });
+  });
   it("records context reads through the same metric path inside and outside managed handoff workers", () => {
     const previous = process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV];
     const recorded = [];
@@ -5573,7 +5627,9 @@ describe("FlowManager canonical Version-1 runtime", () => {
       consumerNodeId: "draft-refine",
     });
     assert.equal(repaired.completed, true);
-    assert.equal(manager.canonicalState(created.specId).findNode("draft-questions-repair").status, "done");
+    assert.equal(repaired.stepOutput.type, STEP_OUTPUT_TYPE.LOOP_REQUIRED);
+    assert.equal(manager.canonicalState(created.specId).findNode("draft-questions-repair").status, "invalidated");
+    assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "draft-questions-review");
     assert.equal(JSON.parse(draft.bytes.toString("utf8")).goal, "Repaired through the parent.");
     assert.equal(JSON.parse(repairAudit.bytes.toString("utf8")).acceptedOperations.length, 1);
     assert.equal(JSON.parse(repairAudit.bytes.toString("utf8")).discardedOperations[0].reason, "unauthorized operation");

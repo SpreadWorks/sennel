@@ -8,7 +8,7 @@ import { describe, it } from "node:test";
 
 import { Container } from "../../../src/lib/container.js";
 import { AgentProcessStopEvidence, AgentTimeoutFailure } from "../../../src/lib/agent-failure.js";
-import { AgentTimeoutError } from "../../../src/lib/agent.js";
+import { Agent, AgentTimeoutError } from "../../../src/lib/agent.js";
 import { dispatch } from "../../../src/lib/dispatcher.js";
 import { flowCommands } from "../../../src/lib/command-registry.js";
 import { findStepById, flattenSteps } from "../../../src/flow/lib/step-tree.js";
@@ -25,6 +25,20 @@ import {
   FlowArtifactAttemptRecord,
 } from "../../../src/lib/flow-artifact-contract.js";
 import RunDispatchCommand, * as runDispatchModule from "../../../src/flow/lib/run-dispatch.js";
+import {
+  FlowDispatchInvocation,
+  FlowDispatchSession,
+  FlowDispatchTarget,
+  UnapprovedFlowDispatchAuthorization,
+} from "../../../src/flow/lib/dispatch-invocation.js";
+import { FlowTargetExpectation } from "../../../src/lib/flow-target-guard.js";
+import { StepFactory } from "../../../src/flow/engine/step-factory.js";
+import { DraftEntryConnector } from "../../../src/flow/engine/connectors/draft/draft-entry-connector.js";
+import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
+import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { DraftStep } from "../../../src/flow/steps/draft/draft.js";
+import { DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
+import { STEP_OUTPUT_TYPE } from "../../../src/flow/engine/step-output.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { canonicalTaskReviewFileMap } from "../../../src/flow/commands/review.js";
 import { validateAssignedRequirementTestHeaders } from "../../../src/flow/lib/test-headers.js";
@@ -4391,6 +4405,23 @@ describe("worker artifact handoff", () => {
       assert.equal(next.directive.kind, "await_draft_question");
       assert.equal(next.directive.questionId, "q1");
       assert.equal(next.directive.questionRevision, 5);
+      const reloaded = new FlowManager({
+        root: value.mainRoot, mainRoot: value.mainRoot, inWorktree: false, specId: value.specId,
+      });
+      const recorded = reloaded.activityLedger(value.specId).at(-1);
+      assert.equal(recorded.transition.stepOutput.type, STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED);
+      assert.equal(reloaded.canonicalState(value.specId).current.at(-1), "draft-refine");
+      const binding = await new DraftRefineConnector({ flowManager: value.flowManager, specId: value.specId }).connect();
+      class IdleAgent extends Agent {
+        constructor() { super({}); }
+        async call() { throw new Error("awaiting a user answer must not invoke a worker"); }
+      }
+      const waitingStep = new StepFactory()
+        .provideArguments(DraftService, { flowManager: value.flowManager, binding })
+        .provide(Agent, new IdleAgent())
+        .provide(RunDispatchCommand, new RunDispatchCommand({}))
+        .create(DraftRefineStep);
+      assert.equal((await waitingStep.execute()).type, STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED);
 
       const replay = value.coordinator.reconcile({ ctx: value.ctx, request });
       assert.equal(replay.completed, true);
@@ -4424,7 +4455,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("keeps auto-approved draft-refine confirmation and advances to the Gate repair boundary", async () => {
+  it("keeps auto-approved draft-refine confirmation and skips unselected Gate repair", async () => {
     for (const { name, autoApprove, source } of [
       { name: "autoApprove Candidate", autoApprove: true, source: draftWithQuestionLedger([candidateDraftQuestion()]) },
     ]) {
@@ -4450,7 +4481,8 @@ describe("worker artifact handoff", () => {
         });
 
         assert.equal(findStepById(value.flowManager.load().steps, "draft-refine").status, "done", name);
-        assert.equal(next.step, "draft-gate-repair", name);
+        assert.equal(findStepById(value.flowManager.load().steps, "draft-gate-repair").status, "skipped", name);
+        assert.equal(next.step, "draft-coverage-review", name);
       } finally {
         removeTmpDir(value.mainRoot);
       }
@@ -4892,6 +4924,55 @@ describe("worker artifact handoff", () => {
       const state = value.flowManager.load();
       assert.equal(findStepById(state.steps, "draft").status, "in_progress");
       assert.equal(state.metrics.filter((entry) => entry.kind === "agent").length, 2);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("runs the bound Draft Step through the existing handoff and advances to questions review", async () => {
+    const value = fixture("draft", { specRecord: validSpec() });
+    try {
+      const session = new FlowDispatchSession({
+        target: new FlowDispatchTarget({
+          expectation: new FlowTargetExpectation({ expectRunId: "run-worker-handoff", expectSpec: value.specId }),
+        }),
+      });
+      const action = session.captureAction(draftWorkerAction(), "bound-draft-step");
+      const invocation = new FlowDispatchInvocation({
+        session, action, authorization: new UnapprovedFlowDispatchAuthorization(action),
+      });
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation,
+      });
+      const binding = await new DraftEntryConnector(request).connect();
+      class SealingAgent extends Agent {
+        constructor() { super({}); }
+        async call(_prompt, options) {
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const document = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          const payloadPath = document.payloads.find((entry) => entry.logicalName === "draft.json").payloadPath;
+          fs.writeFileSync(payloadPath, json(draftDocument("Created through DraftStep")));
+          sealWorkerArtifactHandoff({
+            requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+          });
+          return "sealed";
+        }
+      }
+      const step = new StepFactory()
+        .provide(DraftService, new DraftService({ flowManager: value.flowManager, binding }))
+        .provide(Agent, new SealingAgent())
+        .provide(RunDispatchCommand, new RunDispatchCommand({ handoffCoordinator: value.coordinator }))
+        .create(DraftStep);
+      const output = await step.execute();
+      assert.equal(output.type, STEP_OUTPUT_TYPE.COMPLETED);
+      const reloaded = new FlowManager({
+        root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+      });
+      assert.equal(reloaded.canonicalState(value.specId).nextAction().nodeId, "draft-questions-review");
+      assert.equal(JSON.parse(reloaded.readArtifact({
+        specId: value.specId, logicalKey: "draft", consumerNodeId: "draft-questions-review",
+      }).bytes).goal, "Created through DraftStep");
     } finally {
       removeTmpDir(value.mainRoot);
     }

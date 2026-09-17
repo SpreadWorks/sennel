@@ -21,6 +21,7 @@ import { execFile, execFileSync } from "child_process";
 import { promisify } from "util";
 import { assertOk } from "../../lib/process.js";
 import { PKG_DIR } from "../../lib/cli.js";
+import { loadConfig } from "../../lib/config.js";
 import { PRODUCT } from "../../lib/product.js";
 import { runGit } from "../../lib/git-helpers.js";
 import { computeGitState } from "../../lib/git-state.js";
@@ -114,6 +115,7 @@ import { checkSpecGateReadiness } from "./spec-gate-readiness.js";
 import { CanonicalTaskContext } from "./task-canonical-context.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { TaskGateSettlementAdmission } from "./canonical-flow-manager-store.js";
+import { resolveGateTransition } from "../definition.js";
 
 export { resolveGateStepId };
 
@@ -3590,8 +3592,10 @@ export function resolveEffectiveGatePhase(ctx, inferredResolution = null) {
 }
 
 export class RunGateCommand extends FlowCommand {
-  constructor() {
+  constructor({ draftStepResult = null, publishDraftStepResult = true } = {}) {
     super({ requiresFlow: false });
+    this.draftStepResult = draftStepResult;
+    this.publishDraftStepResult = publishDraftStepResult;
   }
 
   async run(container, input = {}) {
@@ -4223,6 +4227,62 @@ export class RunGateCommand extends FlowCommand {
     }
   }
 
+}
+
+/** Execute and publish one bound Draft Gate through the canonical command. */
+export async function executeDraftGateStep({ binding, command = new RunGateCommand() } = {}) {
+  if (!binding || binding.stepId !== "draft-gate" || typeof binding.assertCurrent !== "function") {
+    throw new TypeError("Draft Gate step requires its typed evaluation binding");
+  }
+  const flowState = binding.assertCurrent();
+  const root = binding.flowManager.executionRoot();
+  if (!(command instanceof RunGateCommand)) throw new TypeError("Draft Gate step requires RunGateCommand");
+  const result = command.draftStepResult ?? await command.executeCanonical({
+    root,
+    executionRoot: root,
+    specId: binding.specId,
+    flowManager: binding.flowManager,
+    flowState,
+    config: loadConfig(root),
+  }, {
+    phase: "draft",
+    level: PHASE_TO_LEVEL.draft,
+    skipGuardrail: false,
+    executionRoot: root,
+  });
+  if (result instanceof Envelope) {
+    throw new Error(result.errors.map((entry) => entry.messages.join("; ")).join("; "));
+  }
+  binding.assertCurrent();
+  if (command.draftStepResult !== null && !command.publishDraftStepResult) {
+    if (binding.facts === undefined) {
+      throw new Error("prepared Draft Gate result requires its published Gate facts");
+    }
+    return Object.freeze({ result, decision: resolveGateTransition(binding.facts) });
+  }
+  binding.flowManager.publishCurrentAttemptResult({ specId: binding.specId, commandResult: result });
+  let facts = readCurrentGateTransitionFacts({
+    flowManager: binding.flowManager,
+    flowState: binding.flowManager.loadReadOnly(binding.specId),
+    phase: "draft",
+  });
+  if (facts === null) throw new Error("Draft Gate result was not published for its bound Attempt");
+  let decision = resolveGateTransition(facts);
+  // This is the same canonical failure classification performed by the
+  // registry post-hook.  It leaves transition application to the caller that
+  // consumes StepOutput, while making the failed Attempt available to the
+  // Definition-selected repair or defer continuation.
+  if (facts.result === "fail") {
+    binding.flowManager.recordGateObservationDecision({ specId: binding.specId, decision });
+    facts = readCurrentGateTransitionFacts({
+      flowManager: binding.flowManager,
+      flowState: binding.flowManager.loadReadOnly(binding.specId),
+      phase: "draft",
+    });
+    if (facts === null) throw new Error("Draft Gate failure classification lost its canonical result");
+    decision = resolveGateTransition(facts);
+  }
+  return Object.freeze({ result, decision });
 }
 
 export default RunGateCommand;

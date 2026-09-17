@@ -15,6 +15,7 @@ import { loadSpecJsonSchema } from "../../lib/spec-json.js";
 import { FlowCommand } from "./base-command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { AgentFailure } from "../../lib/agent-failure.js";
+import { Agent } from "../../lib/agent.js";
 import { DeferredAgentInvocationMetric } from "../../lib/agent-invocation-metric.js";
 import { flowCommands } from "../../lib/command-registry.js";
 import { dispatch } from "../../lib/dispatcher.js";
@@ -76,6 +77,8 @@ import {
   decisionEvidenceForActiveFlow,
   recordNonBlockingDecision,
 } from "./nonblocking.js";
+import { StepFactory } from "../engine/step-factory.js";
+import { DraftService } from "../services/draft-service.js";
 
 const DEFAULT_MAX_DISPATCHES = 256;
 const DEFAULT_MAX_STALLED_DISPATCHES = 3;
@@ -105,6 +108,66 @@ const NON_REPLAYABLE_HANDOFF_ERROR_CODES = new Set([
   "FLOW_SOURCE_HANDOFF_CANONICAL_PATH_VIOLATION",
 ]);
 const REQUIREMENT_TEST_WORKER_LEAVES = new Set(["test-generate", "test-repair"]);
+
+class DispatchWorkerAgent extends Agent {
+  constructor(delegate) {
+    super({});
+    if (!delegate || typeof delegate.call !== "function") {
+      throw new TypeError("dispatcher Draft Step requires an Agent-compatible worker");
+    }
+    this.delegate = delegate;
+  }
+
+  call(prompt, options) {
+    return this.delegate.call(prompt, options);
+  }
+}
+
+async function draftWorkerStepDefinition(stepId) {
+  switch (stepId) {
+    case "draft": {
+      const [{ DraftEntryConnector: Connector }, { DraftStep: StepClass }] = await Promise.all([
+        import("../engine/connectors/draft/draft-entry-connector.js"), import("../steps/draft/draft.js"),
+      ]);
+      return { Connector, StepClass };
+    }
+    case "draft-refine": {
+      const [{ DraftRefineConnector: Connector }, { DraftRefineStep: StepClass }] = await Promise.all([
+        import("../engine/connectors/draft/draft-refine-connector.js"), import("../steps/draft/draft-refine.js"),
+      ]);
+      return { Connector, StepClass };
+    }
+    case "draft-questions-triage":
+    case "draft-coverage-triage": {
+      const [{ DraftTriageConnector: Connector }, steps] = await Promise.all([
+        import("../engine/connectors/draft/draft-triage-connector.js"),
+        stepId === "draft-questions-triage"
+          ? import("../steps/draft/draft-questions-triage.js")
+          : import("../steps/draft/draft-coverage-triage.js"),
+      ]);
+      return { Connector, StepClass: stepId === "draft-questions-triage" ? steps.DraftQuestionsTriageStep : steps.DraftCoverageTriageStep };
+    }
+    case "draft-questions-repair":
+    case "draft-coverage-repair":
+    case "draft-gate-repair": {
+      const [{ DraftRepairConnector: Connector }, steps] = await Promise.all([
+        import("../engine/connectors/draft/draft-repair-connector.js"),
+        stepId === "draft-questions-repair"
+          ? import("../steps/draft/draft-questions-repair.js")
+          : stepId === "draft-coverage-repair"
+            ? import("../steps/draft/draft-coverage-repair.js")
+            : import("../steps/draft/draft-gate-repair.js"),
+      ]);
+      return {
+        Connector,
+        StepClass: stepId === "draft-questions-repair"
+          ? steps.DraftQuestionsRepairStep
+          : stepId === "draft-coverage-repair" ? steps.DraftCoverageRepairStep : steps.DraftGateRepairStep,
+      };
+    }
+    default: return null;
+  }
+}
 
 function agentFailuresFor(error, agentError = null) {
   return Object.freeze([
@@ -1380,7 +1443,7 @@ export default class RunDispatchCommand extends FlowCommand {
     });
   }
 
-  async runWorkerAttempt(ctx, invocation, retryFeedback = null) {
+  async runWorkerAttempt(ctx, invocation, retryFeedback = null, boundRequest = null, agentOverride = null) {
     const action = new FlowDispatchAction(invocation.action.nextAction);
     let handoffRequest = null;
     let handoffAuthority = null;
@@ -1418,12 +1481,26 @@ export default class RunDispatchCommand extends FlowCommand {
       handoffAuthority.acquire();
       handoffAuthorityAcquired = true;
       const state = readFlowState(ctx);
-      handoffRequest = this.handoffCoordinator.createRequest({
-        ctx,
-        state,
-        invocation,
-        workerInstructions,
-      });
+      if (boundRequest !== null) {
+        if (!(boundRequest instanceof WorkerArtifactHandoffRequest)
+          || boundRequest.invocation !== invocation
+          || boundRequest.stepId !== action.nextAction.step) {
+          throw new WorkerArtifactHandoffError(
+            "invalid", "FLOW_ARTIFACT_HANDOFF_INVALID",
+            "bound worker request does not match its dispatch invocation",
+            { retryable: false },
+          );
+        }
+        boundRequest.assertCurrent(state);
+        handoffRequest = boundRequest;
+      } else {
+        handoffRequest = this.handoffCoordinator.createRequest({
+          ctx,
+          state,
+          invocation,
+          workerInstructions,
+        });
+      }
       work = new FlowDispatchWork(invocation, handoffRequest);
       if (handoffRequest.policy.kind === "source") {
         // The Definition-owned action schema remains the canonical base. A
@@ -1434,6 +1511,29 @@ export default class RunDispatchCommand extends FlowCommand {
           ...agentOptions,
           jsonSchema: handoffRequest.sourceResponseSchema(),
         };
+      }
+      const draftDefinition = boundRequest === null
+        ? await draftWorkerStepDefinition(handoffRequest.stepId)
+        : null;
+      if (draftDefinition !== null) {
+        // The request was captured under the normal parent authority lease.
+        // The bound Step reacquires that lease before it verifies the request
+        // and calls the existing worker/reconciliation owner.
+        handoffAuthority.release();
+        handoffAuthority = null;
+        try {
+          return await this.runDraftWorkerStep(ctx, handoffRequest, agentOverride, draftDefinition, retryFeedback);
+        } catch (cause) {
+          return {
+            error: cause instanceof WorkerArtifactHandoffError ? cause : new WorkerArtifactHandoffError(
+              "invalid", "FLOW_DRAFT_STEP_BINDING_INVALID",
+              `Draft Step could not begin its bound worker handoff: ${cause.message}`,
+              { cause, retryable: false, data: { stepId: handoffRequest.stepId } },
+            ),
+            handoffRequest,
+            agentError: null,
+          };
+        }
       }
     } catch (error) {
       handoffAuthority?.release();
@@ -1478,7 +1578,7 @@ export default class RunDispatchCommand extends FlowCommand {
       let sourceWorkerStopped = false;
       const supervisorEvents = [];
       try {
-        const agent = this.agent || (this.agent = this.container.get("agent"));
+        const agent = agentOverride || this.agent || (this.agent = this.container.get("agent"));
         let responseText;
         let processError = null;
         let sourceWorkerStarted = false;
@@ -1670,12 +1770,59 @@ export default class RunDispatchCommand extends FlowCommand {
         handoffRequest,
         agentError,
         partialRepair: reconciliation?.partial === true,
+        stepOutput: reconciliation?.stepOutput ?? null,
         supervisorEvents,
         deferredMetric: holdsSpecRepairMetric ? deferredMetric : null,
       };
     } finally {
       handoffAuthority?.release();
     }
+  }
+
+  /** Execute an already-bound Draft worker through the existing handoff path. */
+  async runBoundDraftWorker(request, agent, retryFeedback = null) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || !request.stepId.startsWith("draft")) {
+      throw new TypeError("bound Draft execution requires its worker handoff request");
+    }
+    const ctx = {
+      root: request.mainRoot,
+      mainRoot: request.mainRoot,
+      executionRoot: request.executionRoot,
+      specId: request.specId,
+      flowManager: request.flowManager,
+      flowState: request.flowManager.loadReadOnly(request.specId),
+    };
+    return this.runWorkerAttempt(ctx, request.invocation, retryFeedback, request, agent);
+  }
+
+  /** Execute a Draft worker through its Definition-selected Connector and Step. */
+  async runDraftWorkerStep(ctx, request, agentOverride = null, definition = null, retryFeedback = null) {
+    definition = definition || await draftWorkerStepDefinition(request.stepId);
+    if (definition === null) throw new Error(`no Draft Step is declared for ${request.stepId}`);
+    const agent = agentOverride || this.agent || (this.agent = this.container.get("agent"));
+    let attempt = null;
+    const owner = this;
+    class BoundDraftDispatch extends RunDispatchCommand {
+      async runBoundDraftWorker(boundRequest, workerAgent) {
+        attempt = await owner.runBoundDraftWorker(boundRequest, workerAgent, retryFeedback);
+        return attempt;
+      }
+    }
+    const binding = await new definition.Connector(request).connect();
+    const step = new StepFactory()
+      .provide(DraftService, new DraftService({ flowManager: ctx.flowManager, binding }))
+      .provide(Agent, new DispatchWorkerAgent(agent))
+      .provide(RunDispatchCommand, new BoundDraftDispatch())
+      .create(definition.StepClass);
+    const output = await step.execute();
+    if (attempt === null) {
+      throw new Error("Draft Step did not execute its bound worker handoff");
+    }
+    if ((attempt.error === null && attempt.stepOutput !== output)
+      || (attempt.error !== null && output.type !== "error")) {
+      throw new Error("Draft Step output does not match its bound worker attempt");
+    }
+    return attempt;
   }
 
   async execute(ctx) {

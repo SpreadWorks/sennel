@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { it } from "node:test";
+import { it, mock } from "node:test";
 
 import { resolveGateTransition } from "../../../src/flow/definition.js";
+import { DraftGateEvaluationBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import { DraftSpecConnector } from "../../../src/flow/engine/connectors/draft/draft-spec-connector.js";
+import { DraftGateStep } from "../../../src/flow/steps/draft/draft-gate.js";
+import { StepFactory } from "../../../src/flow/engine/step-factory.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { DraftService } from "../../../src/flow/services/draft-service.js";
 import { CanonicalGateObservationCycle } from "../../../src/flow/lib/canonical-gate-observation-cycle.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { AnsweredQuestion } from "../../../src/flow/lib/draft-question-ledger.js";
 import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
 import RunSettleGateTransitionCommand from "../../../src/flow/lib/run-settle-gate-transition.js";
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
@@ -27,6 +34,94 @@ const semanticObservations = [{
   severity: "blocking",
   refs: ["R-1"],
 }];
+
+it("connects a normal Draft Gate PASS to Spec before applying its lifecycle", async () => {
+  const root = createTmpDir("draft-gate-post-spec-connector-");
+  const specId = "523-draft-gate-post-spec-connector";
+  const originalConnect = DraftSpecConnector.prototype.connect;
+  const originalExecute = DraftGateStep.prototype.execute;
+  const connected = [];
+  const executed = mock.method(DraftGateStep.prototype, "execute", function () {
+    return originalExecute.call(this);
+  });
+  const connect = mock.method(DraftSpecConnector.prototype, "connect", async function () {
+    const binding = await originalConnect.call(this);
+    connected.push(binding);
+    return binding;
+  });
+  try {
+    initGitRepo(root);
+    fs.writeFileSync(`${root}/README.md`, "draft Gate connector\n");
+    commitAll(root, "draft Gate connector");
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const fixture = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-draft-gate-connector", issue: 523,
+      request: "Connect a passing Draft Gate to Spec.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+      autoApprove: false,
+    }).create().registerActive().activate("draft");
+    manager.confirmCurrentAttempt({ specId, artifactWrites: [{
+      logicalKey: "draft", mediaType: "application/json",
+      bytes: Buffer.from(`${JSON.stringify(draftWithAnsweredQuestion("Resolved behavior"), null, 2)}\n`),
+    }] });
+    fixture.activate("draft-gate");
+    const result = new CanonicalGatePromotion({
+      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
+    }).promote({ result: "pass", artifacts: { phase: "draft", evaluations: [] } });
+    await FLOW_COMMANDS.run.gate.post({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId),
+    }, result);
+    assert.equal(connect.mock.callCount(), 1);
+    assert.equal(executed.mock.callCount(), 1);
+    assert.equal(connected[0].stepId, "draft-gate");
+    assert.equal(manager.canonicalState(specId).nextAction().nodeId, "spec");
+  } finally {
+    connect.mock.restore();
+    executed.mock.restore();
+    removeTmpDir(root);
+  }
+});
+
+it("uses the existing Gate result when StepFactory executes the Draft Gate Step", async () => {
+  const root = createTmpDir("draft-gate-step-result-");
+  const specId = "524-draft-gate-step-result";
+  try {
+    initGitRepo(root);
+    fs.writeFileSync(`${root}/README.md`, "draft Gate Step result\n");
+    commitAll(root, "draft Gate Step result");
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const fixture = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-draft-gate-step", issue: 524,
+      request: "Use the evaluated Gate result once.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+      autoApprove: false,
+    }).create().registerActive().activate("draft");
+    manager.confirmCurrentAttempt({ specId, artifactWrites: [{
+      logicalKey: "draft", mediaType: "application/json",
+      bytes: Buffer.from(`${JSON.stringify(draftWithAnsweredQuestion("Resolved behavior"), null, 2)}\n`),
+    }] });
+    fixture.activate("draft-gate");
+    const result = new CanonicalGatePromotion({
+      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
+    }).promote({ result: "pass", artifacts: { phase: "draft", evaluations: [] } });
+    const binding = new DraftGateEvaluationBinding({ flowManager: manager, specId });
+    const command = new RunGateCommand({ draftStepResult: result });
+    command.executeCanonical = () => { throw new Error("Draft Gate must not evaluate twice"); };
+    const step = new StepFactory()
+      .provide(DraftService, new DraftService({ flowManager: manager, binding }))
+      .provide(RunGateCommand, command)
+      .create(DraftGateStep);
+
+    assert.deepEqual((await step.execute()).toJSON(), { type: "completed" });
+    const history = JSON.parse(manager.readProducerArtifact({
+      specId, nodeId: "draft-gate", logicalKey: "draft.gate",
+    }).bytes.toString("utf8"));
+    assert.deepEqual(history.attempts.map((attempt) => attempt.attempt), [1]);
+  } finally {
+    removeTmpDir(root);
+  }
+});
 
 function draftWithAnsweredQuestion(goal) {
   const draft = canonicalDraftDocument({
@@ -121,6 +216,7 @@ async function dispatchDraftGateSettlement({ root, manager, specId, runId }) {
 }
 
 function recordDraftGateFailure(manager, specId, issueLogId, observations = semanticObservations) {
+  const evaluation = new DraftGateEvaluationBinding({ flowManager: manager, specId });
   const artifacts = {
     phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
     nextAction: { diagnosis: { observations } },
@@ -136,6 +232,7 @@ function recordDraftGateFailure(manager, specId, issueLogId, observations = sema
     },
     commandResult,
   });
+  assert.throws(() => evaluation.assertCurrent(), /stale for the canonical Step Attempt/);
   manager.appendIssueLog({
     specId,
     entry: {
@@ -166,8 +263,11 @@ async function exerciseTerminalContinuation(kind) {
       bytes: Buffer.from(`${JSON.stringify(draftWithAnsweredQuestion("Unresolved behavior"), null, 2)}\n`),
     }] });
     fixture.activate("draft-gate");
+    const evaluation = new DraftGateEvaluationBinding({ flowManager: manager, specId });
+    assert.equal(evaluation.assertCurrent().attempt.id, evaluation.attempt.id);
     const scenario = new DraftGateRepairScenario({ flowManager: manager, root, specId })
       .select({ observations: semanticObservations, issueLogId: "initial-draft-gate-finding" });
+    assert.throws(() => evaluation.assertCurrent(), /stale for the canonical Step Attempt/);
     scenario.createRequest();
     const payload = scenario.replacement("goal", "Unresolved behavior");
     if (kind === "no-progress") payload.operations = [];
@@ -186,6 +286,11 @@ async function exerciseTerminalContinuation(kind) {
     const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     assert.equal(reloaded.canonicalState(specId).findNode("draft-gate-repair").status, "done");
     assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "draft-coverage-review");
+    const terminalConfirmation = reloaded.activityLedger(specId).findLast((activity) => (
+      activity.nodeId === "draft-gate-repair" && activity.transition.operation === "confirm_attempt"
+    ));
+    assert.deepEqual(terminalConfirmation.result.stepOutput, { type: "completed" });
+    assert.equal(terminalConfirmation.result.draftRouteTargetStepId, "draft-coverage-review");
     assert.equal(reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-coverage-review" }).descriptor.hash, before);
 
     fixture.flowManager = reloaded;
@@ -196,6 +301,8 @@ async function exerciseTerminalContinuation(kind) {
     });
     const decision = resolveGateTransition(facts);
     assert.equal(decision.disposition.operation, "defer");
+    const specBinding = await new DraftSpecConnector({ flowManager: reloaded, facts }).connect();
+    assert.equal(specBinding.assertCurrent().attempt.id, facts.target.attempt.id);
     const activityCount = reloaded.activityLedger(specId).length;
     const settledManager = await dispatchDraftGateSettlement({
       root, manager: reloaded, specId, runId: "run-draft-gate-terminal",
@@ -203,6 +310,7 @@ async function exerciseTerminalContinuation(kind) {
 
     const finalReload = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     assert.equal(finalReload.canonicalState(specId).nextAction().nodeId, "spec");
+    assert.throws(() => specBinding.assertCurrent(), /stale for the canonical Step Attempt/);
     assert.equal(finalReload.activityLedger(specId).filter((entry) => (
       entry.transition.operation === "defer_failed_gate"
     )).length, 1);

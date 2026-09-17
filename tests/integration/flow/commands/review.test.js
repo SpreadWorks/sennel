@@ -40,6 +40,10 @@ import {
   PromptFixedContextTooLargeFailure,
 } from "../../../../src/lib/prompt-batching.js";
 import { FLOW_COMMANDS } from "../../../../src/flow/registry.js";
+import { StepFactory } from "../../../../src/flow/engine/step-factory.js";
+import { DraftQuestionsReviewStep } from "../../../../src/flow/steps/draft/draft-questions-review.js";
+import { ReviewService } from "../../../../src/flow/services/review-service.js";
+import RunReviewCommand from "../../../../src/flow/lib/run-review.js";
 import {
   createMemoryWorkUnitCheckpointStore,
   WorkUnitToolingFailure,
@@ -114,6 +118,32 @@ function assertAllDoesNotMatch(text, patterns) {
 }
 
 const CATALOGED_REVIEW_FINGERPRINT = "c".repeat(64);
+
+it("uses the existing Draft review result when StepFactory executes the review Step", async () => {
+  const result = { artifacts: { phase: "draft-questions", verdict: "PASS" } };
+  let published = 0;
+  const service = Object.assign(Object.create(ReviewService.prototype), {
+    binding: {
+      phase: "draft-questions", specId: "test-draft-step",
+      flowManager: { executionRoot: () => "/unused" },
+      assertCurrent: () => ({ currentNodeId: "draft-questions-review" }),
+    },
+    publishReviewResult(value) {
+      assert.equal(value, result);
+      published += 1;
+      return { verdict: "PASS" };
+    },
+  });
+  const command = new RunReviewCommand({ draftStepResult: result });
+  command.executeCanonical = () => { throw new Error("Draft review must not evaluate twice"); };
+  const step = new StepFactory()
+    .provide(ReviewService, service)
+    .provide(RunReviewCommand, command)
+    .create(DraftQuestionsReviewStep);
+
+  assert.deepEqual((await step.execute()).toJSON(), { type: "completed" });
+  assert.equal(published, 1);
+});
 
 function canonicalReviewFixtureTask() {
   return {

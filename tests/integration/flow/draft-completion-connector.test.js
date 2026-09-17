@@ -12,6 +12,7 @@ import {
   resolveLifecyclePlan,
 } from "../../../src/flow/definition.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { STEP_OUTPUT_TYPE, StepOutput } from "../../../src/flow/engine/step-output.js";
 import { FlowArtifactAttemptHistory, FlowArtifactAttemptRecord } from "../../../src/lib/flow-artifact-contract.js";
 import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
 import {
@@ -413,7 +414,16 @@ describe("DraftCompletionConnector", () => {
         ...evidence,
       }));
       const before = flowManager.activityLedger(specId).length;
-      flowManager.confirmDraftCoverageRepairCompletion({ specId, decision: selected, draft: source });
+      const beforeInvalidOutput = persistedSnapshot(flowManager, specId);
+      assert.throws(() => flowManager.confirmDraftCoverageRepairCompletion({
+        specId, decision: selected, draft: source,
+        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.LOOP_REQUIRED),
+      }), /requires completed StepOutput/);
+      assert.equal(persistedSnapshot(flowManager, specId), beforeInvalidOutput);
+      flowManager.confirmDraftCoverageRepairCompletion({
+        specId, decision: selected, draft: source,
+        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+      });
 
       const state = flowManager.loadReadOnly(specId);
       const ledger = flowManager.activityLedger(specId);
@@ -430,6 +440,7 @@ describe("DraftCompletionConnector", () => {
       assert.equal(ledger.length, before + 1);
       assert.equal(published.descriptor.activityId, ledger.at(-1).id);
       assert.equal(ledger.at(-1).result.artifactRefs.at(-1).kind, "draft-completion-connector");
+      assert.deepEqual(ledger.at(-1).result.stepOutput, { type: STEP_OUTPUT_TYPE.COMPLETED });
       assert.equal(ledger.at(-1).transition.stepConnectionReceipt.kind, "draft-completion");
       assert.equal(ledger.at(-1).transition.stepConnectionReceipt.targetStepId, "draft-gate");
       assert.equal(ledger.at(-1).transition.stepConnectionReceipt.lineage.coverageReview.logicalKey, "draft.coverage.review");

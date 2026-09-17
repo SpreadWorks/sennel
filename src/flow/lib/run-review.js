@@ -1316,12 +1316,16 @@ export class RunReviewCommand extends FlowCommand {
     resolveTreeSha = resolveCurrentReviewTreeSha,
     resolveTargetStateDigest = resolveCurrentReviewRepairFingerprint,
     runCommand = runCmd,
+    draftStepResult = null,
+    publishDraftStepResult = true,
   } = {}) {
     super();
     this.resolveScope = resolveScope;
     this.resolveTreeSha = resolveTreeSha;
     this.resolveTargetStateDigest = resolveTargetStateDigest;
     this.runCommand = runCommand;
+    this.draftStepResult = draftStepResult;
+    this.publishDraftStepResult = publishDraftStepResult;
   }
 
   /**
@@ -1839,3 +1843,32 @@ export class RunReviewCommand extends FlowCommand {
 }
 
 export default RunReviewCommand;
+
+/** Execute one bound Draft review through the established canonical command. */
+export async function executeDraftReviewStep({ reviewService, command = new RunReviewCommand() } = {}) {
+  if (!reviewService?.binding || typeof reviewService.publishReviewResult !== "function") {
+    throw new TypeError("Draft review step requires ReviewService");
+  }
+  const binding = reviewService.binding;
+  const flowState = binding.assertCurrent();
+  const root = binding.flowManager.executionRoot();
+  if (!(command instanceof RunReviewCommand)) throw new TypeError("Draft review step requires RunReviewCommand");
+  const result = command.draftStepResult ?? await command.executeCanonical({
+    root,
+    executionRoot: root,
+    specId: binding.specId,
+    flowManager: binding.flowManager,
+    flowState,
+  }, {
+    phase: binding.phase,
+    dryRun: false,
+    executionRoot: root,
+  });
+  if (result instanceof Envelope) {
+    throw new Error(result.errors.map((entry) => entry.messages.join("; ")).join("; "));
+  }
+  const review = command.draftStepResult === null || command.publishDraftStepResult
+    ? reviewService.publishReviewResult(result)
+    : reviewService.inspectReviewResult(result);
+  return Object.freeze({ result, review });
+}
