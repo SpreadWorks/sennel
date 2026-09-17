@@ -75,10 +75,59 @@ it("connects a normal Draft Gate PASS to Spec before applying its lifecycle", as
     assert.equal(connect.mock.callCount(), 1);
     assert.equal(executed.mock.callCount(), 1);
     assert.equal(connected[0].stepId, "draft-gate");
-    assert.equal(manager.canonicalState(specId).nextAction().nodeId, "spec");
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    assert.equal(reloaded.canonicalState(specId).findNode("draft-gate").result.stepOutput.type, "completed");
+    assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "spec");
   } finally {
     connect.mock.restore();
     executed.mock.restore();
+    removeTmpDir(root);
+  }
+});
+
+it("persists the Draft Gate repair loop from the normal post path", async () => {
+  const root = createTmpDir("draft-gate-post-loop-output-");
+  const specId = "525-draft-gate-post-loop-output";
+  try {
+    initGitRepo(root);
+    fs.writeFileSync(`${root}/README.md`, "draft Gate repair loop\n");
+    commitAll(root, "draft Gate repair loop");
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const fixture = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-draft-gate-loop-output", issue: 525,
+      request: "Repair a Draft Gate finding.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+      autoApprove: false,
+    }).create().registerActive().activate("draft");
+    manager.confirmCurrentAttempt({ specId, artifactWrites: [{
+      logicalKey: "draft", mediaType: "application/json",
+      bytes: Buffer.from(`${JSON.stringify(draftWithAnsweredQuestion("Review this behavior"), null, 2)}\n`),
+    }] });
+    fixture.activate("draft-gate");
+    const result = new CanonicalGatePromotion({
+      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
+    }).promote({ result: "fail", artifacts: {
+      phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
+      nextAction: { diagnosis: { observations: semanticObservations } },
+    } });
+    await FLOW_COMMANDS.run.gate.post({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId),
+    }, result);
+
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const failure = reloaded.activityLedger(specId).findLast((activity) => (
+      activity.nodeId === "draft-gate" && activity.transition.operation === "fail_attempt"
+    ));
+    assert.deepEqual(failure.result.stepOutput, { type: "loop-required" });
+    assert.equal(failure.result.draftRouteTargetStepId, "draft-gate-repair");
+    const selected = new RunRepairPlanGateCommand().execute({
+      root, mainRoot: root, executionRoot: root, specId,
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId),
+    });
+    assert.equal(selected.ok, true, JSON.stringify(selected));
+    assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "draft-gate-repair");
+  } finally {
     removeTmpDir(root);
   }
 });
@@ -310,6 +359,7 @@ async function exerciseTerminalContinuation(kind) {
 
     const finalReload = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     assert.equal(finalReload.canonicalState(specId).nextAction().nodeId, "spec");
+    assert.equal(finalReload.canonicalState(specId).findNode("draft-gate").result.stepOutput.type, "completed");
     assert.throws(() => specBinding.assertCurrent(), /stale for the canonical Step Attempt/);
     assert.equal(finalReload.activityLedger(specId).filter((entry) => (
       entry.transition.operation === "defer_failed_gate"

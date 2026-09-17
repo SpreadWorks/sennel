@@ -4,6 +4,7 @@ import { Step } from "./step.js";
 export class StepFactory {
   constructor() {
     this.provided = new Map();
+    this.arguments = new Map();
   }
 
   /** Supplies an already-existing instance instead of constructing that type. */
@@ -12,6 +13,12 @@ export class StepFactory {
       throw new TypeError("StepFactory.provide() requires an instance of Dependency");
     }
     this.provided.set(Dependency, instance);
+    return this;
+  }
+
+  /** Supplies constructor arguments for a dependency constructed by this factory. */
+  provideArguments(Dependency, ...arguments_) {
+    this.arguments.set(Dependency, arguments_);
     return this;
   }
 
@@ -35,7 +42,7 @@ export class StepFactory {
     constructing.add(Dependency);
     const dependencies = (Dependency.dependencies ?? []).map((Next) => this.#resolve(Next, constructing, instances));
     constructing.delete(Dependency);
-    const instance = new Dependency(...dependencies);
+    const instance = new Dependency(...(this.arguments.get(Dependency) ?? []), ...dependencies);
     instances.set(Dependency, instance);
     return instance;
   }

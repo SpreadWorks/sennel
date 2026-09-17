@@ -744,6 +744,40 @@ afterEach(() => {
 });
 
 describe("FlowManager canonical Version-1 runtime", () => {
+  it("reads back Definition-selected Draft Review routes and rejects invalid output without mutation", () => {
+    for (const [stepId, outputType, targetStepId] of [
+      ["draft-questions-review", STEP_OUTPUT_TYPE.COMPLETED, "draft-refine"],
+      ["draft-questions-review", STEP_OUTPUT_TYPE.BRANCH_REQUIRED, "draft-questions-triage"],
+      ["draft-coverage-review", STEP_OUTPUT_TYPE.BRANCH_REQUIRED, "draft-coverage-triage"],
+    ]) {
+      const repository = root();
+      const specId = `001-${stepId}-${outputType}`;
+      const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+      new FlowAtStepFixture({
+        flowManager: manager, specId, runId: `run-${specId}`,
+        request: "Persist the selected Draft Review route.", targetStep: stepId,
+      }).create();
+      const before = manager.canonicalState(specId).toJSON();
+      const beforeActivities = manager.activityLedger(specId).length;
+      assert.throws(() => manager.confirmCurrentAttempt({
+        specId, stepOutput: new StepOutput(STEP_OUTPUT_TYPE.LOOP_REQUIRED),
+      }), new RegExp(`${stepId} cannot return loop-required`));
+      assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
+      assert.equal(manager.activityLedger(specId).length, beforeActivities);
+
+      publishAttemptArtifact(manager, specId, stepId,
+        stepId === "draft-questions-review" ? "draft.questions.review" : "draft.coverage.review",
+        { phase: stepId === "draft-questions-review" ? "draft-questions" : "draft-coverage",
+          verdict: outputType === STEP_OUTPUT_TYPE.COMPLETED ? "PASS" : "REJECTED" });
+      manager.confirmCurrentAttempt({ specId, stepOutput: new StepOutput(outputType) });
+      const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+      assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, targetStepId);
+      const confirmation = reloaded.activityLedger(specId).at(-1);
+      assert.deepEqual(confirmation.result.stepOutput, { type: outputType });
+      assert.equal(confirmation.result.draftRouteTargetStepId, targetStepId);
+    }
+  });
+
   it("persists a Draft repair loop route and refuses a mismatched StepOutput atomically", () => {
     const repository = root();
     const specId = "001-draft-route-readback";
@@ -3697,6 +3731,12 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(fs.existsSync(path.join(location.directory, "draft-questions-review.json")), false);
     assert.equal(fs.existsSync(path.join(location.directory, "draft-questions-triage.json")), false);
     assert.equal(fs.existsSync(path.join(location.directory, "draft-questions-repair.json")), false);
+    await FLOW_COMMANDS.run.review.post(ctx, result);
+    const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const confirmation = reloaded.canonicalState(created.specId).findNode("draft-questions-review").result;
+    assert.deepEqual(confirmation.stepOutput.toJSON(), { type: STEP_OUTPUT_TYPE.COMPLETED });
+    assert.equal(confirmation.draftRouteTargetStepId, "draft-refine");
+    assert.equal(reloaded.canonicalState(created.specId).nextAction().nodeId, "draft-refine");
   });
 
   for (const reviewPhase of ["draft-questions", "draft-coverage"]) {
@@ -3831,10 +3871,18 @@ describe("FlowManager canonical Version-1 runtime", () => {
       }).bytes.toString("utf8"));
       assert.deepEqual(completedDraft, draftDocument);
       if (reviewPhase === "draft-coverage") {
-        const completion = manager.activityLedger(created.specId).at(-1);
-        assert.equal(findStepById(manager.load(created.specId).steps, "draft-coverage-repair").status, "done");
+        const completion = manager.activityLedger(created.specId).findLast(
+          (activity) => activity.transition.operation === "complete_draft_completion",
+        );
+        const state = manager.canonicalState(created.specId);
+        assert.equal(state.findNode("draft-coverage-review").status, "done");
+        assert.equal(state.findNode("draft-coverage-repair").status, "skipped");
+        assert.deepEqual(state.findNode("draft-coverage-review").result.stepOutput.toJSON(),
+          { type: STEP_OUTPUT_TYPE.COMPLETED });
+        assert.equal(state.findNode("draft-coverage-review").result.draftRouteTargetStepId, "draft-gate");
         assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "draft-gate");
         assert.equal(completion.result.artifactRefs.at(-1).kind, "draft-completion-connector");
+        assert.equal(completion.transition.stepConnectionReceipt.sourceStepId, "draft-coverage-review");
       }
     });
   }

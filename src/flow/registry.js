@@ -100,12 +100,31 @@ async function executePublishedDraftReviewStep(ctx, result) {
     publishDraftStepResult: false,
   });
   const step = new StepFactory()
-    .provide(ReviewService, new ReviewService({ flowManager: ctx.flowManager, binding }))
+    .provideArguments(ReviewService, { flowManager: ctx.flowManager, binding })
     .provide(reviewCommand.RunReviewCommand, command)
     .create(route.key === "questions" ? steps.DraftQuestionsReviewStep : steps.DraftCoverageReviewStep);
   const output = await step.execute();
   if (output.type === STEP_OUTPUT_TYPE.ERROR) throw output.error;
-  resolveDraftStepRoute(route.reviewStepId, output);
+  const selected = resolveDraftStepRoute(route.reviewStepId, output);
+  const specId = ctx.specId ?? ctx.flowState.specId;
+  ctx.flowManager.publishCurrentAttemptResult({ specId, commandResult: result });
+  if (selected.targetStepId === "draft-gate") {
+    const { readCoveragePassDraftCompletionFacts } = await import("./lib/draft-completion-connector.js");
+    const facts = readCoveragePassDraftCompletionFacts({
+      flowManager: ctx.flowManager, specId, sourceStepId: route.reviewStepId,
+    });
+    ctx.flowManager.confirmDraftCoverageRepairCompletion({
+      specId,
+      decision: resolveDraftCoverageRepairCompletion(facts),
+      draft: facts.draft,
+      stepOutput: output,
+    });
+  } else {
+    ctx.flowManager.confirmCurrentAttempt({ specId, stepOutput: output });
+  }
+  ctx.flowState = ctx.flowManager.loadReadOnly(specId);
+  const { persistReviewTransitionFacts } = await import("./lib/review-transition-persistence.js");
+  persistReviewTransitionFacts(ctx, result);
   return output;
 }
 
@@ -118,7 +137,7 @@ async function executePublishedDraftGateStep(ctx, result) {
   ]);
   const binding = new DraftGateStepBinding({ flowManager: ctx.flowManager, facts: ctx.gateTransitionDecision.facts });
   const step = new StepFactory()
-    .provide(DraftService, new DraftService({ flowManager: ctx.flowManager, binding }))
+    .provideArguments(DraftService, { flowManager: ctx.flowManager, binding })
     .provide(gateCommand.RunGateCommand, new gateCommand.RunGateCommand({
       draftStepResult: result,
       publishDraftStepResult: false,
@@ -126,7 +145,7 @@ async function executePublishedDraftGateStep(ctx, result) {
     .create(DraftGateStep);
   const output = await step.execute();
   if (output.type === STEP_OUTPUT_TYPE.ERROR) throw output.error;
-  return resolveDraftStepRoute("draft-gate", output);
+  return Object.freeze({ output, route: resolveDraftStepRoute("draft-gate", output) });
 }
 
 /**
@@ -673,7 +692,11 @@ class RegistryLifecycleAdapter {
       { ...this.ctx, phase: this.phase },
       step,
       settledStatus,
-      this.mutationOpts(step, { gateTransitionDecision }),
+      this.mutationOpts(step, {
+        gateTransitionDecision,
+        ...(step === "draft-gate" && status === "done" && this.ctx.draftGateStepOutput !== undefined
+          ? { stepOutput: this.ctx.draftGateStepOutput } : {}),
+      }),
       {
         action,
         plan: this.plan,
@@ -1656,6 +1679,7 @@ export const FLOW_COMMANDS = {
         const canonicalResult = attachedCanonicalCommandResultArtifact(result) !== null;
         const specId = ctx.specId ?? ctx.flowState.specId;
         let recoveryEffect = null;
+        let draftGateRoute = null;
         if (canonicalResult) {
           // Publication precedes classification.  Definition therefore sees
           // the exact current catalog result, including its Attempt binding,
@@ -1670,11 +1694,17 @@ export const FLOW_COMMANDS = {
               throw new Error("Definition-owned Gate recovery operation is unsupported");
             }
           }
+          if (phase === "draft") {
+            const executed = await executePublishedDraftGateStep(ctx, result);
+            ctx.draftGateStepOutput = executed.output;
+            draftGateRoute = executed.route;
+          }
           if (ctx.gateTransitionDecision.facts.scope !== "task"
             && ctx.gateTransitionDecision.facts.result === "fail") {
             const stepAttempt = ctx.flowManager.recordGateObservationDecision({
               specId,
               decision: ctx.gateTransitionDecision,
+              ...(phase === "draft" ? { stepOutput: ctx.draftGateStepOutput } : {}),
             });
             if (stepAttempt !== null) result.stepAttempt = stepAttempt.toJSON();
             ctx.flowState = ctx.flowManager.loadReadOnly(specId);
@@ -1685,8 +1715,8 @@ export const FLOW_COMMANDS = {
         if (!(ctx.gateTransitionDecision instanceof GateTransitionDecision)) {
           throw new Error("gate post requires a canonical Definition-selected GateTransitionDecision");
         }
-        if (phase === "draft" && canonicalResult) {
-          const route = await executePublishedDraftGateStep(ctx, result);
+        if (draftGateRoute !== null) {
+          const route = draftGateRoute;
           if (route.targetStepId === "spec") {
             if (route.connector !== DraftSpecConnector) {
               throw new Error("Draft Gate completion requires the Definition-selected Spec connector");
@@ -1925,7 +1955,12 @@ export const FLOW_COMMANDS = {
         }
         await persistNonTerminalReviewResult(ctx, result);
         try {
-          await executePublishedDraftReviewStep(ctx, result);
+          const draftOutput = await executePublishedDraftReviewStep(ctx, result);
+          if (draftOutput !== null) {
+            const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
+            attachedCanonicalReviewWorkUnit(result)?.cleanup();
+            return;
+          }
           await applyLifecycleActionsFromRegistry(ctx, {
             event: "review:post",
             command: "run-review",

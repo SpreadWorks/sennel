@@ -523,7 +523,7 @@ export class CanonicalFlowRuntime {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
-      nodeId: "draft-coverage-repair",
+      nodeId: receipt.sourceStepId,
       operation: "complete_draft_completion",
       result,
       status: "done",

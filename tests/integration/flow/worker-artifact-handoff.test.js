@@ -4886,7 +4886,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("retries one missing handoff without spending semantic retries", async () => {
+  it("retries one missing Draft handoff before persisting its terminal Step Error", async () => {
     const value = fixture();
     try {
       let calls = 0;
@@ -4923,6 +4923,18 @@ describe("worker artifact handoff", () => {
       assert.equal(calls, 2);
       const state = value.flowManager.load();
       assert.equal(findStepById(state.steps, "draft").status, "in_progress");
+      const canonical = value.flowManager.canonicalState(value.specId);
+      assert.equal(canonical.attempt.failure.code, "FLOW_ARTIFACT_HANDOFF_RETRY_EXHAUSTED");
+      assert.equal(canonical.attempt.failure.retryable, false);
+      const reloaded = new FlowManager({
+        root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+      });
+      const failure = reloaded.activityLedger(value.specId).findLast((entry) => entry.transition.operation === "fail_attempt");
+      assert.ok(failure);
+      assert.equal(failure.result.stepOutput.type, STEP_OUTPUT_TYPE.ERROR);
+      assert.equal(failure.result.stepOutput.error.kind, "generic");
+      assert.match(failure.result.stepOutput.error.message, /handoff payload draft\.json is unavailable/);
+      assert.equal(reloaded.canonicalState(value.specId).current.at(-1), "draft");
       assert.equal(state.metrics.filter((entry) => entry.kind === "agent").length, 2);
     } finally {
       removeTmpDir(value.mainRoot);

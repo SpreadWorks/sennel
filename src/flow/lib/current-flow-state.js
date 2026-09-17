@@ -4946,7 +4946,8 @@ export class CurrentFlowState {
   completeDraftCompletion({ result, receipt }) {
     this.#assertExecutionActive();
     const connection = receipt instanceof ActivityStepConnectionReceipt ? receipt : new ActivityStepConnectionReceipt(receipt);
-    if (connection.sourceStepId !== "draft-coverage-repair" || connection.targetStepId !== "draft-gate") {
+    if (!["draft-coverage-review", "draft-coverage-repair"].includes(connection.sourceStepId)
+      || connection.targetStepId !== "draft-gate") {
       throw new CurrentFlowStateInvariantError("draft completion receipt has an invalid connector route");
     }
     const completed = result instanceof NodeResult ? result : new NodeResult(result);
@@ -4977,12 +4978,15 @@ export class CurrentFlowState {
     if (sourceClaim.operation !== "active") {
       return sourceClaim.materialize(this).completeDraftCompletion({ result: completed, receipt: connection });
     }
-    const root = reconcileCompletedParents(
+    let root = reconcileCompletedParents(
       replaceNode(this.root, source.id, transitionNode(source, "done", this.definition, {
         result: completed, attemptSequence: connection.sourceAttempt.sequence,
       })),
       this.definition,
     );
+    if (connection.sourceStepId === "draft-coverage-review") {
+      root = this.#applyDraftStepRoute(root, source.id, completed);
+    }
     const settled = this.#replaceRoot(root, null, null);
     settled.assertPassiveExecutableTarget(connection.targetStepId);
     return settled;
@@ -5095,6 +5099,11 @@ export class CurrentFlowState {
     );
     const next = this.#replaceRoot(root, null, null);
     this.#assertTaskGateSuccessor(next, lifecycle);
+    if (settled.draftRouteTargetStepId !== null
+      && (leaf.id !== "draft-gate" || settled.stepOutput.type !== STEP_OUTPUT_TYPE.COMPLETED
+        || next.nextAction()?.nodeId !== settled.draftRouteTargetStepId)) {
+      throw new CurrentFlowStateInvariantError("deferred Draft Gate did not reach its Definition-selected successor");
+    }
     return next;
   }
 
@@ -8946,6 +8955,12 @@ export class CurrentFlowVersionStore {
     }
     if (writes.some((entry) => entry.artifact.logicalKey === "spec.snapshot")) {
       throw new CurrentFlowStateInvariantError("spec.snapshot artifacts are generated only by the canonical Spec revision Store");
+    }
+    if (activity.nodeId === "draft-coverage-review"
+      && writes.some((entry) => entry.artifact.logicalKey === "draft")
+      && (activity.transition.operation !== DRAFT_COMPLETION_TRANSITION_OPERATION
+        || activity.transition.stepConnectionReceipt?.sourceStepId !== "draft-coverage-review")) {
+      throw new CurrentFlowStateInvariantError("Draft Review may update the draft only through its selected completion connector");
     }
     // Resolve publication eagerly, before the state journal changes. This
     // makes an unauthorized producer fail closed without appending an

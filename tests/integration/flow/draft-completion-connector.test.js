@@ -307,6 +307,60 @@ function confirmAttemptWithoutStorePublication(flowManager, specId, attempt) {
 }
 
 describe("DraftCompletionConnector", () => {
+  it("confirms coverage PASS on its Review Attempt with a durable completion receipt", () => {
+    const repository = createTmpDir("draft-coverage-review-completion-");
+    const specId = "715f-coverage-review-source";
+    const flowManager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    try {
+      const fixture = new CanonicalFlowFixture({ flowManager, specId, runId: "715f-review-run" });
+      fixture.create().registerActive().activate("draft");
+      const source = draft();
+      const sourceBytes = Buffer.from(`${JSON.stringify(source, null, 2)}\n`, "utf8");
+      flowManager.confirmCurrentAttempt({ specId, artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: sourceBytes }] });
+      fixture.activate("draft-coverage-review");
+      const beforeUnauthorizedWrite = persistedSnapshot(flowManager, specId);
+      assert.throws(() => flowManager.publishArtifacts({
+        specId, nodeId: "draft-coverage-review",
+        artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: sourceBytes }],
+      }), /only through its selected completion connector/);
+      assert.equal(persistedSnapshot(flowManager, specId), beforeUnauthorizedWrite);
+      flowManager.publishArtifacts({
+        specId, nodeId: "draft-coverage-review",
+        artifactWrites: [{ logicalKey: "draft.coverage.review", mediaType: "application/json",
+          bytes: coverageReviewArtifactBytes(flowManager, specId, sourceBytes) }],
+      });
+      const evidence = completionEvidence(flowManager, specId);
+      const selected = resolveDraftCoverageRepairCompletion(facts({
+        source: "coverage-pass", draftDocument: source, ...evidence,
+      }));
+      // The default fixture facts target the passive repair connector. The
+      // Review source uses the same canonical evidence and selected connector.
+      const reviewSelected = resolveDraftCoverageRepairCompletion(new DraftCompletionFacts({
+        ...selected.facts.toJSON(), sourceStepId: "draft-coverage-review", draft: source,
+      }));
+      const publishedButUnconfirmed = persistedSnapshot(flowManager, specId);
+      assert.throws(() => flowManager.confirmDraftCoverageRepairCompletion({
+        specId, decision: reviewSelected, draft: source,
+        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.BRANCH_REQUIRED),
+      }), /requires completed StepOutput/);
+      assert.equal(persistedSnapshot(flowManager, specId), publishedButUnconfirmed);
+      flowManager.confirmDraftCoverageRepairCompletion({
+        specId, decision: reviewSelected, draft: source,
+        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+      });
+      const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+      const state = reloaded.canonicalState(specId);
+      assert.equal(state.nextAction().nodeId, "draft-gate");
+      assert.deepEqual(state.findNode("draft-coverage-review").result.stepOutput.toJSON(),
+        { type: STEP_OUTPUT_TYPE.COMPLETED });
+      assert.equal(state.findNode("draft-coverage-review").result.draftRouteTargetStepId, "draft-gate");
+      assert.equal(reloaded.activityLedger(specId).at(-1).transition.stepConnectionReceipt.sourceStepId,
+        "draft-coverage-review");
+    } finally {
+      removeTmpDir(repository);
+    }
+  });
+
   it("uses the repair completion action rather than adding a Flow step on a coverage PASS", () => {
     const actions = resolveLifecyclePlan({
       event: "review:post",

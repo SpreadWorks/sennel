@@ -267,8 +267,9 @@ export class DraftCompletionFacts {
     if (!SOURCES.has(this.source)) throw new Error("draft completion source is invalid");
     this.sourceStepId = requiredText(sourceStepId, "draft completion source step");
     this.targetStepId = requiredText(targetStepId, "draft completion target step");
-    if (this.sourceStepId !== "draft-coverage-repair" || this.targetStepId !== "draft-gate") {
-      throw new Error("draft completion connector must bridge draft-coverage-repair to draft-gate");
+    if (!((this.source === "coverage-pass" && this.sourceStepId === "draft-coverage-review")
+      || this.sourceStepId === "draft-coverage-repair") || this.targetStepId !== "draft-gate") {
+      throw new Error("draft completion connector has an invalid source or target");
     }
     this.draft = jsonObject(draft, "draft completion draft");
     this.draftDigest = canonicalDigest(draftDigest, "draft completion draft digest");
@@ -496,7 +497,7 @@ export class StepConnectionReceipt {
     if (!SOURCES.has(receipt.source)) throw new Error("draft completion receipt source is invalid");
     receipt.sourceStepId = requiredText(value.sourceStepId, "draft completion receipt source step");
     receipt.targetStepId = requiredText(value.targetStepId, "draft completion receipt target step");
-    if (receipt.sourceStepId !== "draft-coverage-repair" || receipt.targetStepId !== "draft-gate") {
+    if (!["draft-coverage-review", "draft-coverage-repair"].includes(receipt.sourceStepId) || receipt.targetStepId !== "draft-gate") {
       throw new Error("draft completion receipt route is invalid");
     }
     receipt.sourceAttempt = new DraftCompletionAttemptIdentity(value.sourceAttempt, "draft completion receipt sourceAttempt");
@@ -558,7 +559,7 @@ export function readDraftCompletionCatalogDigest({ flowManager, specId, logicalK
 }
 
 /** Read only the cataloged coverage PASS evidence and its exact draft input. */
-export function readCoveragePassDraftCompletionFacts({ flowManager, specId } = {}) {
+export function readCoveragePassDraftCompletionFacts({ flowManager, specId, sourceStepId = "draft-coverage-repair" } = {}) {
   const draft = flowManager.readArtifact({
     specId, logicalKey: "draft", consumerNodeId: "draft-coverage-repair",
   });
@@ -575,7 +576,7 @@ export function readCoveragePassDraftCompletionFacts({ flowManager, specId } = {
   });
   return new DraftCompletionFacts({
     source: "coverage-pass",
-    sourceStepId: "draft-coverage-repair",
+    sourceStepId,
     targetStepId: "draft-gate",
     draft: JSON.parse(draft.bytes.toString("utf8")),
     draftDigest: draft.descriptor.hash,

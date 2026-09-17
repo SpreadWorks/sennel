@@ -78,6 +78,7 @@ import {
   recordNonBlockingDecision,
 } from "./nonblocking.js";
 import { StepFactory } from "../engine/step-factory.js";
+import { StepOutput } from "../engine/step-output.js";
 import { DraftService } from "../services/draft-service.js";
 
 const DEFAULT_MAX_DISPATCHES = 256;
@@ -244,6 +245,26 @@ function settleRequirementTestStructuralHandoff(ctx, attempt, error) {
     structuralResult: error.result,
   });
   ctx.flowState = ctx.flowManager.loadReadOnly(attempt.handoffRequest.specId);
+  return true;
+}
+
+/** Persist a Draft Step's terminal Error through the canonical Attempt owner. */
+function settleDraftStepError(ctx, attempt, error, stepId = attempt?.handoffRequest?.stepId ?? null) {
+  const request = attempt?.handoffRequest ?? null;
+  if (!stepId?.startsWith("draft")) return false;
+  const stepOutput = attempt?.stepOutput ?? new StepOutput(error);
+  ctx.flowManager.failCurrentAttempt({
+    specId: request?.specId ?? ctx.specId,
+    failure: {
+      category: "tooling",
+      code: error?.code || "FLOW_DRAFT_STEP_ERROR",
+      message: stepOutput.error.message,
+      retryable: false,
+      retryKind: null,
+    },
+    stepOutput,
+  });
+  ctx.flowState = ctx.flowManager.loadReadOnly(request?.specId ?? ctx.specId);
   return true;
 }
 /**
@@ -1810,7 +1831,7 @@ export default class RunDispatchCommand extends FlowCommand {
     }
     const binding = await new definition.Connector(request).connect();
     const step = new StepFactory()
-      .provide(DraftService, new DraftService({ flowManager: ctx.flowManager, binding }))
+      .provideArguments(DraftService, { flowManager: ctx.flowManager, binding })
       .provide(Agent, new DispatchWorkerAgent(agent))
       .provide(RunDispatchCommand, new BoundDraftDispatch())
       .create(definition.StepClass);
@@ -1822,7 +1843,7 @@ export default class RunDispatchCommand extends FlowCommand {
       || (attempt.error !== null && output.type !== "error")) {
       throw new Error("Draft Step output does not match its bound worker attempt");
     }
-    return attempt;
+    return { ...attempt, stepOutput: output };
   }
 
   async execute(ctx) {
@@ -2382,6 +2403,7 @@ export default class RunDispatchCommand extends FlowCommand {
             current = await this.fetchNextAction(target);
             continue;
           }
+          settleDraftStepError(ctx, attempt, attempt.error, invocation.action.nextAction.step);
           discardDeferredMetrics(deferredMetrics);
           return this.failure(
             ctx,
@@ -2462,6 +2484,7 @@ export default class RunDispatchCommand extends FlowCommand {
             current = await this.fetchNextAction(target);
             continue;
           }
+          settleDraftStepError(ctx, attempt, exhausted, invocation.action.nextAction.step);
           return this.failure(
             ctx,
             exhausted.code,
