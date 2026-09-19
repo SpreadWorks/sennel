@@ -16,13 +16,26 @@ import { TaskStepIdentity } from "./task-step-identity.js";
 import { attachedCanonicalReviewWorkUnit } from "./canonical-review-artifacts.js";
 import { TaskReviewAbortedWorkUnit } from "./task-review-aborted-work-unit.js";
 
-const DRAFT_STEP_ERROR_PERSISTENCE_FAILURES = new WeakSet();
 export const DRAFT_STEP_ERROR_PERSISTENCE_FAILURE_CODE = "DRAFT_STEP_ERROR_PERSISTENCE_FAILED";
 
-export function markDraftStepErrorPersistenceFailure(error) {
-  if (error !== null && (typeof error === "object" || typeof error === "function")) {
-    DRAFT_STEP_ERROR_PERSISTENCE_FAILURES.add(error);
+/**
+ * A failed Store commit has no Step result to record.  This explicit error
+ * crosses the command boundary so dispatcher fallback can stop without
+ * manufacturing a second failure for the still-current Attempt.
+ */
+export class DraftStepPersistenceFailure extends Error {
+  constructor(cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    super(message, cause instanceof Error ? { cause } : undefined);
+    this.name = "DraftStepPersistenceFailure";
+    this.code = DRAFT_STEP_ERROR_PERSISTENCE_FAILURE_CODE;
   }
+}
+
+export function isDraftStepPersistenceFailure(error) {
+  return error instanceof DraftStepPersistenceFailure
+    || error?.code === DRAFT_STEP_ERROR_PERSISTENCE_FAILURE_CODE
+    || error?.data?.failureKind === "draft-step-persistence";
 }
 
 function nonEmptyText(value, field) {
@@ -129,8 +142,7 @@ export class DefinitionLifecycleAttemptBinding {
   }
 
   toolingFailure(error, fallbackCode, commandResult = null) {
-    if (DRAFT_STEP_ERROR_PERSISTENCE_FAILURES.has(error)
-      || error?.code === DRAFT_STEP_ERROR_PERSISTENCE_FAILURE_CODE) return false;
+    if (isDraftStepPersistenceFailure(error)) return false;
     const facts = failureFacts(error, fallbackCode);
     const state = this.flowManager.canonicalState(this.specId);
     if (state === null || state.runId !== this.runId || !this.attempt.matches(state)) return false;

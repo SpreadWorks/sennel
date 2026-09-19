@@ -2,22 +2,16 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { it, mock } from "node:test";
 
-import { resolveGateTransition } from "../../../src/flow/definition.js";
 import { DraftGateEvaluationBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { DraftSpecConnector } from "../../../src/flow/engine/connectors/draft/draft-spec-connector.js";
 import { DraftGateStep } from "../../../src/flow/steps/draft/draft-gate.js";
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
-import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { GateService } from "../../../src/flow/services/review-service.js";
 import { CanonicalGateObservationCycle } from "../../../src/flow/lib/canonical-gate-observation-cycle.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { AnsweredQuestion } from "../../../src/flow/lib/draft-question-ledger.js";
-import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
-import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
-import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
-import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
-import RunSettleGateTransitionCommand from "../../../src/flow/lib/run-settle-gate-transition.js";
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -132,7 +126,7 @@ it("persists the Draft Gate repair loop from the normal post path", async () => 
   }
 });
 
-it("uses the existing Gate result when StepFactory executes the Draft Gate Step", async () => {
+it("uses the evaluated Gate result once when the Draft Gate Step settles it", async () => {
   const root = createTmpDir("draft-gate-step-result-");
   const specId = "524-draft-gate-step-result";
   try {
@@ -155,18 +149,19 @@ it("uses the existing Gate result when StepFactory executes the Draft Gate Step"
       state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
     }).promote({ result: "pass", artifacts: { phase: "draft", evaluations: [] } });
     const binding = new DraftGateEvaluationBinding({ flowManager: manager, specId });
-    const command = new RunGateCommand({ draftStepResult: result });
-    command.executeCanonical = () => { throw new Error("Draft Gate must not evaluate twice"); };
     const step = new StepFactory()
-      .provide(DraftService, new DraftService({ flowManager: manager, binding }))
-      .provide(RunGateCommand, command)
+      .provideArguments(GateService, { flowManager: manager, binding, commandResult: result })
       .create(DraftGateStep);
 
     assert.deepEqual((await step.execute()).toJSON(), { type: "completed" });
-    const history = JSON.parse(manager.readProducerArtifact({
-      specId, nodeId: "draft-gate", logicalKey: "draft.gate",
+    const history = JSON.parse(manager.readArtifact({
+      specId, logicalKey: "draft.gate", consumerNodeId: "spec",
     }).bytes.toString("utf8"));
     assert.deepEqual(history.attempts.map((attempt) => attempt.attempt), [1]);
+    assert.equal(manager.activityLedger(specId).filter((activity) => (
+      activity.nodeId === "draft-gate" && activity.transition.operation === "publish_artifacts"
+    )).length, 1);
+    assert.equal(manager.canonicalState(specId).nextAction().nodeId, "spec");
   } finally {
     removeTmpDir(root);
   }
@@ -192,105 +187,39 @@ function draftWithAnsweredQuestion(goal) {
   return draft;
 }
 
-function commandContainer({ root, manager }) {
-  const values = { paths: { root }, flowManager: manager, mainRoot: root, config: null, inWorktree: false };
-  return {
-    get(name) { return values[name] ?? null; },
-    has(name) { return Object.hasOwn(values, name); },
-  };
-}
-
-function completedAction() {
-  return {
-    taskId: null, step: null, action: "completed", instructions: null, context: null,
-    output_schema: null, requires_approval: false,
-    directive: { kind: "completed", terminal: true, requiresUserAction: false },
-  };
-}
-
-async function dispatchDraftGateSettlement({ root, manager, specId, runId }) {
-  const context = {
+async function dispatchDraftGateSettlement({ root, manager, specId }) {
+  const result = new CanonicalGatePromotion({
+    state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
+  }).promote({ result: "fail", artifacts: {
+    phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
+    nextAction: { diagnosis: { observations: semanticObservations } },
+  } });
+  await FLOW_COMMANDS.run.gate.post({
     root, mainRoot: root, executionRoot: root, specId,
-    flowManager: manager, flowState: manager.loadReadOnly(specId),
-    expectRunId: runId, expectSpec: specId,
-    _envelopeType: "run", _envelopeKey: "dispatch",
-  };
-  const selected = await new GetNextActionCommand().execute(context);
-  assert.equal(selected.directive.actionId, "SETTLE_GATE_DEFER", JSON.stringify(selected.directive));
-  assert.equal(selected.directive.requiresUserAction, false);
-  assert.equal(selected.nonblockingDecision, undefined);
-  assert.equal(manager.loadReadOnly(specId).policy.nonblocking, null);
-
-  let nextActionReads = 0;
-  let specAction = null;
-  let workerCalls = 0;
-  const dispatcher = new RunDispatchCommand({
-    nextAction: {
-      async run(container, input) {
-        nextActionReads += 1;
-        const next = await new GetNextActionCommand().run(container, input);
-        if (next.step === "draft-gate") return next;
-        specAction = next;
-        assert.equal(next.step, "spec");
-        return completedAction();
-      },
-    },
-    agent: { async call() { workerCalls += 1; } },
-    repositoryFingerprint: () => "draft-gate-terminal-settlement",
-    leaseFactory: () => ({ acquire() {}, release() {} }),
-    handoffCoordinator: { recoverPending() {} },
-  });
-  dispatcher.container = commandContainer({ root, manager });
-  const outcome = await dispatcher.execute(context);
-  assert.equal(outcome.dispatch?.boundary, "completed", JSON.stringify(outcome));
-  assert.equal(outcome.dispatch?.dispatchCount, 1);
-  assert.equal(nextActionReads, 3);
-  assert.equal(workerCalls, 0);
-  assert.ok(specAction);
-
+    flowManager: manager, flowState: manager.loadReadOnly(specId), phase: "draft",
+  }, result);
   const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
   assert.equal(reloaded.loadReadOnly(specId).policy.nonblocking, null);
-  const beforeDuplicateActivities = reloaded.activityLedger(specId);
-  const duplicate = new RunSettleGateTransitionCommand().execute({
-    ...context, flowManager: reloaded, flowState: reloaded.loadReadOnly(specId),
-  });
-  assert.equal(duplicate.ok, false, "settlement cannot repeat after reload");
-  assert.deepEqual(reloaded.activityLedger(specId), beforeDuplicateActivities);
-  reloaded.beginNextAction(specId);
-  const startedSpec = reloaded.canonicalState(specId);
-  assert.equal(startedSpec.current.at(-1), "spec");
-  assert.equal(startedSpec.findNode("spec").status, "in_progress");
-  assert.notEqual(startedSpec.attempt, null);
   return reloaded;
 }
 
-function recordDraftGateFailure(manager, specId, issueLogId, observations = semanticObservations) {
-  const evaluation = new DraftGateEvaluationBinding({ flowManager: manager, specId });
-  const artifacts = {
+async function selectDraftGateRepair({ root, manager, specId, observations }) {
+  const result = new CanonicalGatePromotion({
+    state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
+  }).promote({ result: "fail", artifacts: {
     phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
     nextAction: { diagnosis: { observations } },
-  };
-  const commandResult = new CanonicalGatePromotion({
-    state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
-  }).promote({ result: "fail", artifacts });
-  manager.failCurrentAttempt({
-    specId,
-    failure: {
-      category: "semantic", code: "GATE_REJECTED", message: "The draft Gate retained one finding.",
-      retryable: true, retryKind: "semantic",
-    },
-    commandResult,
+  } });
+  await FLOW_COMMANDS.run.gate.post({
+    root, mainRoot: root, executionRoot: root, specId,
+    flowManager: manager, flowState: manager.loadReadOnly(specId), phase: "draft",
+  }, result);
+  const selected = new RunRepairPlanGateCommand().execute({
+    root, mainRoot: root, executionRoot: root, specId,
+    flowManager: manager, flowState: manager.loadReadOnly(specId),
   });
-  assert.throws(() => evaluation.assertCurrent(), /stale for the canonical Step Attempt/);
-  manager.appendIssueLog({
-    specId,
-    entry: {
-      issueLogId, step: "draft-gate", phase: "draft", observations,
-      reason: "The finding continues to Spec.", trigger: "gate post hook (auto)",
-      timestamp: "2026-09-15T00:00:00.000Z",
-    },
-    idempotencyKey: issueLogId,
-  });
+  assert.equal(selected.ok, true, JSON.stringify(selected));
+  assert.equal(manager.canonicalState(specId).current.at(-1), "draft-gate-repair");
 }
 
 async function exerciseTerminalContinuation(kind) {
@@ -314,8 +243,8 @@ async function exerciseTerminalContinuation(kind) {
     fixture.activate("draft-gate");
     const evaluation = new DraftGateEvaluationBinding({ flowManager: manager, specId });
     assert.equal(evaluation.assertCurrent().attempt.id, evaluation.attempt.id);
-    const scenario = new DraftGateRepairScenario({ flowManager: manager, root, specId })
-      .select({ observations: semanticObservations, issueLogId: "initial-draft-gate-finding" });
+    const scenario = new DraftGateRepairScenario({ flowManager: manager, root, specId });
+    await selectDraftGateRepair({ root, manager, specId, observations: semanticObservations });
     assert.throws(() => evaluation.assertCurrent(), /stale for the canonical Step Attempt/);
     scenario.createRequest();
     const payload = scenario.replacement("goal", "Unresolved behavior");
@@ -325,6 +254,19 @@ async function exerciseTerminalContinuation(kind) {
       payload.operations[0].expectedDigest = "f".repeat(64);
     }
     const before = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" }).descriptor.hash;
+    if (kind === "invalid-payload") {
+      const beforeAttempt = manager.canonicalState(specId).attempt;
+      const beforeActivities = manager.activityLedger(specId).length;
+      assert.throws(() => scenario.apply(payload), /draft Gate repair batch is invalid/);
+      assert.equal(
+        manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" }).descriptor.hash,
+        before,
+      );
+      assert.deepEqual(manager.canonicalState(specId).attempt, beforeAttempt);
+      assert.equal(manager.activityLedger(specId).length, beforeActivities);
+      assert.equal(manager.canonicalState(specId).current.at(-1), "draft-gate-repair");
+      return;
+    }
     const repaired = scenario.apply(payload);
     assert.equal(repaired.result.rejected, true);
     assert.equal(repaired.bytes.length > 0, true);
@@ -344,23 +286,14 @@ async function exerciseTerminalContinuation(kind) {
 
     fixture.flowManager = reloaded;
     fixture.settle("draft-coverage-review").settle("draft-coverage-triage").settle("draft-coverage-repair").activate("draft-gate");
-    recordDraftGateFailure(reloaded, specId, "recurring-draft-gate-finding");
-    const facts = readCurrentGateTransitionFacts({
-      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId), phase: "draft",
-    });
-    const decision = resolveGateTransition(facts);
-    assert.equal(decision.disposition.operation, "defer");
-    const specBinding = await new DraftSpecConnector({ flowManager: reloaded, facts }).connect();
-    assert.equal(specBinding.assertCurrent().attempt.id, facts.target.attempt.id);
     const activityCount = reloaded.activityLedger(specId).length;
     const settledManager = await dispatchDraftGateSettlement({
-      root, manager: reloaded, specId, runId: "run-draft-gate-terminal",
+      root, manager: reloaded, specId,
     });
 
     const finalReload = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     assert.equal(finalReload.canonicalState(specId).nextAction().nodeId, "spec");
     assert.equal(finalReload.canonicalState(specId).findNode("draft-gate").result.stepOutput.type, "completed");
-    assert.throws(() => specBinding.assertCurrent(), /stale for the canonical Step Attempt/);
     assert.equal(finalReload.activityLedger(specId).filter((entry) => (
       entry.transition.operation === "defer_failed_gate"
     )).length, 1);
@@ -372,6 +305,8 @@ async function exerciseTerminalContinuation(kind) {
     assert.equal(new CanonicalGateObservationCycle({
       flowManager: finalReload, state: finalReload.loadReadOnly(specId),
     }).status().entries[0].finalDisposition, "deferred");
+    fixture.flowManager = finalReload;
+    fixture.activate("spec");
     const specRequest = new WorkerArtifactHandoffCoordinator().createRequest({
       ctx: { root, mainRoot: root, executionRoot: root, flowManager: settledManager, specId },
       state: settledManager.loadReadOnly(specId),
@@ -400,7 +335,7 @@ it("persists no-progress repair completion and defers the recurring draft Gate f
   await exerciseTerminalContinuation("no-progress");
 });
 
-it("persists invalid repair completion without partial artifacts and defers the draft Gate finding to Spec", async () => {
+it("rejects invalid repair payload without changing Draft state or artifacts", async () => {
   await exerciseTerminalContinuation("invalid-payload");
 });
 
@@ -429,8 +364,8 @@ it("settles the fifth draft Gate failure after four completed repair and coverag
         failureMode: `semantic-finding-${cycle}`,
         observed: `Unresolved semantic finding ${cycle}.`,
       }];
-      const scenario = new DraftGateRepairScenario({ flowManager: manager, root, specId })
-        .select({ observations, issueLogId: `draft-gate-cycle-${cycle}` });
+      const scenario = new DraftGateRepairScenario({ flowManager: manager, root, specId });
+      await selectDraftGateRepair({ root, manager, specId, observations });
       scenario.createRequest();
       const result = scenario.apply(scenario.replacement("goal", `Draft revision ${cycle}`));
       assert.notEqual(result.result.rejected, true);
@@ -446,28 +381,29 @@ it("settles the fifth draft Gate failure after four completed repair and coverag
       failureMode: "semantic-finding-5",
       observed: "A fifth distinct semantic finding remains.",
     }];
-    recordDraftGateFailure(manager, specId, "draft-gate-cycle-5", finalObservation);
-    const facts = readCurrentGateTransitionFacts({
+    const finalResult = new CanonicalGatePromotion({
+      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
+    }).promote({ result: "fail", artifacts: {
+      phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
+      nextAction: { diagnosis: { observations: finalObservation } },
+    } });
+    await FLOW_COMMANDS.run.gate.post({
+      root, mainRoot: root, executionRoot: root, specId,
       flowManager: manager, flowState: manager.loadReadOnly(specId), phase: "draft",
-    });
-    assert.deepEqual(facts.retry.toJSON(), { used: 4, maximum: 4, remaining: 0 });
-    assert.equal(resolveGateTransition(facts).disposition.operation, "defer");
-    const beforeAttempt = manager.canonicalState(specId).attempt;
-    const beforeActivities = manager.activityLedger(specId).length;
-    const bypass = new RunRepairPlanGateCommand().execute({
-      root, mainRoot: root, executionRoot: root, flowManager: manager, specId,
-      flowState: manager.loadReadOnly(specId),
-    });
-    assert.equal(bypass.ok, false);
-    assert.deepEqual(manager.canonicalState(specId).attempt, beforeAttempt);
-    assert.equal(manager.activityLedger(specId).length, beforeActivities);
-    const settled = await dispatchDraftGateSettlement({
-      root, manager, specId, runId: "run-draft-gate-semantic-budget",
-    });
+    }, finalResult);
+    const settled = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    assert.equal(settled.canonicalState(specId).nextAction().nodeId, "spec");
+    assert.equal(settled.canonicalState(specId).findNode("draft-gate").result.stepOutput.type, "completed");
+    assert.equal(settled.activityLedger(specId).filter((entry) => (
+      entry.transition.operation === "defer_failed_gate"
+    )).length, 1);
+    settled.beginNextAction(specId);
     const findings = settled.readArtifact({
       specId, logicalKey: "flow.findings", consumerNodeId: "system",
     });
     assert.equal(JSON.parse(findings.bytes).entries.length > 0, true);
+    fixture.flowManager = settled;
+    fixture.activate("spec");
     const specRequest = new WorkerArtifactHandoffCoordinator().createRequest({
       ctx: { root, mainRoot: root, executionRoot: root, flowManager: settled, specId },
       state: settled.loadReadOnly(specId),

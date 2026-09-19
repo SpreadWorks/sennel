@@ -7,6 +7,7 @@ import { execFileSync } from "child_process";
 import { createTmpDir, removeTmpDir } from "../../../support/builders/tmp-dir.js";
 import {
   CanonicalFlowFixture,
+  canonicalDraftDocument,
   makeFlowManager,
   promoteCanonicalRequirementTest,
   setupFlowConfig,
@@ -43,6 +44,8 @@ import { FLOW_COMMANDS } from "../../../../src/flow/registry.js";
 import { StepFactory } from "../../../../src/flow/engine/step-factory.js";
 import { DraftQuestionsReviewStep } from "../../../../src/flow/steps/draft/draft-questions-review.js";
 import { ReviewService } from "../../../../src/flow/services/review-service.js";
+import { CanonicalDraftReviewSource } from "../../../../src/flow/lib/canonical-review-artifacts.js";
+import { DraftReviewConnector } from "../../../../src/flow/engine/connectors/draft/draft-review-connector.js";
 import RunReviewCommand from "../../../../src/flow/lib/run-review.js";
 import {
   createMemoryWorkUnitCheckpointStore,
@@ -119,30 +122,138 @@ function assertAllDoesNotMatch(text, patterns) {
 
 const CATALOGED_REVIEW_FINGERPRINT = "c".repeat(64);
 
-it("uses the existing Draft review result when StepFactory executes the review Step", async () => {
-  const result = { artifacts: { phase: "draft-questions", verdict: "PASS" } };
-  let published = 0;
-  const service = Object.assign(Object.create(ReviewService.prototype), {
-    binding: {
-      phase: "draft-questions", specId: "test-draft-step",
-      flowManager: { executionRoot: () => "/unused" },
-      assertCurrent: () => ({ currentNodeId: "draft-questions-review" }),
-    },
-    publishReviewResult(value) {
-      assert.equal(value, result);
-      published += 1;
-      return { verdict: "PASS" };
-    },
-  });
-  const command = new RunReviewCommand({ draftStepResult: result });
-  command.executeCanonical = () => { throw new Error("Draft review must not evaluate twice"); };
-  const step = new StepFactory()
-    .provide(ReviewService, service)
-    .provide(RunReviewCommand, command)
-    .create(DraftQuestionsReviewStep);
+it("uses the evaluated Draft review result once when the review Step settles it", async () => {
+  const root = createTmpDir("draft-review-step-result-");
+  const specId = "524-draft-review-step-result";
+  const originalInspect = ReviewService.prototype.inspectReviewResult;
+  let inspectCalls = 0;
+  ReviewService.prototype.inspectReviewResult = function (...args) {
+    inspectCalls += 1;
+    return originalInspect.call(this, ...args);
+  };
+  try {
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const fixture = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-draft-review-step", issue: 524,
+      request: "Use the evaluated Review result once.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft");
+    manager.confirmCurrentAttempt({
+      specId,
+      artifactWrites: [{
+        logicalKey: "draft",
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(canonicalDraftDocument(), null, 2)}\n`, "utf8"),
+      }],
+    });
+    fixture.activate("draft-questions-review");
+    const source = new CanonicalDraftReviewSource({
+      flowManager: manager,
+      state: manager.canonicalState(specId),
+      phase: "draft-questions",
+    });
+    const document = {
+      version: 2,
+      phase: "draft-questions",
+      sourceDraft: "draft.json",
+      sourceDraftRevision: source.revision(),
+      generatedAt: "2026-08-04T00:00:00.000Z",
+      verdict: "PASS",
+      summary: "No draft review findings recorded.",
+      blockingFindings: [],
+      advisoryFindings: [],
+      repairTargets: [],
+    };
+    const result = attachCanonicalCommandResultArtifact({
+      result: "ok",
+      artifacts: { phase: "draft-questions", verdict: "PASS" },
+    }, { logicalKey: "draft.questions.review", payload: document });
+    const binding = await new DraftReviewConnector(source).connect();
+    const step = new StepFactory()
+      .provideArguments(ReviewService, { flowManager: manager, binding, commandResult: result })
+      .create(DraftQuestionsReviewStep);
 
-  assert.deepEqual((await step.execute()).toJSON(), { type: "completed" });
-  assert.equal(published, 1);
+    assert.deepEqual((await step.execute()).toJSON(), { type: "completed" });
+    assert.equal(inspectCalls, 1);
+    const history = JSON.parse(manager.readArtifact({
+      specId, logicalKey: "draft.questions.review", consumerNodeId: "draft-questions-triage",
+    }).bytes.toString("utf8"));
+    assert.deepEqual(history.attempts.map((attempt) => attempt.attempt), [1]);
+    assert.equal(manager.canonicalState(specId).nextAction().nodeId, "draft-refine");
+  } finally {
+    ReviewService.prototype.inspectReviewResult = originalInspect;
+    removeTmpDir(root);
+  }
+});
+
+it("rehydrates a published Draft review Attempt before the post hook", async () => {
+  const root = createTmpDir("draft-review-post-recovery-");
+  const specId = "524-draft-review-post-recovery";
+  try {
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const fixture = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-draft-review-post-recovery", issue: 524,
+      request: "Reuse the published Draft Review result.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft");
+    manager.confirmCurrentAttempt({
+      specId,
+      artifactWrites: [{
+        logicalKey: "draft",
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(canonicalDraftDocument(), null, 2)}\n`, "utf8"),
+      }],
+    });
+    fixture.activate("draft-questions-review");
+    const source = new CanonicalDraftReviewSource({
+      flowManager: manager,
+      state: manager.canonicalState(specId),
+      phase: "draft-questions",
+    });
+    const payload = {
+      version: 2,
+      phase: "draft-questions",
+      sourceDraft: "draft.json",
+      sourceDraftRevision: source.revision(),
+      generatedAt: "2026-08-04T00:00:00.000Z",
+      verdict: "PASS",
+      summary: "No draft review findings recorded.",
+      blockingFindings: [],
+      advisoryFindings: [],
+      repairTargets: [],
+    };
+    const published = attachCanonicalCommandResultArtifact({
+      result: "ok",
+      artifacts: { phase: "draft-questions", verdict: "PASS" },
+    }, { logicalKey: "draft.questions.review", payload });
+    manager.publishCurrentAttemptResult({ specId, commandResult: published });
+    let providerCalls = 0;
+    const recovered = await new RunReviewCommand({ runCommand: async () => { providerCalls += 1; } }).execute({
+      root,
+      executionRoot: root,
+      mainRoot: root,
+      flowManager: manager,
+      flowState: manager.loadReadOnly(specId),
+      specId,
+      phase: "draft",
+      dryRun: false,
+    });
+    assert.equal(providerCalls, 0);
+    assert.equal(recovered.artifacts.verdict, "PASS");
+    assert.equal(recovered.artifacts.phase, "draft-questions");
+    await FLOW_COMMANDS.run.review.post({
+      root,
+      mainRoot: root,
+      executionRoot: root,
+      flowManager: manager,
+      flowState: manager.loadReadOnly(specId),
+      specId,
+      phase: "draft",
+    }, recovered);
+    assert.equal(manager.canonicalState(specId).nextAction().nodeId, "draft-refine");
+  } finally {
+    removeTmpDir(root);
+  }
 });
 
 function canonicalReviewFixtureTask() {
@@ -1014,7 +1125,7 @@ describe("draft repair target checkpoint replay", () => {
     assert.equal(artifactPhaseMatchesReviewTarget("draft-questions-review", "draft-coverage"), false);
   });
 
-  it("records the exact R8 ADVISORY fixture once and advances through the production triage hook without review AI", async () => {
+  it("records the exact R8 ADVISORY fixture once without bypassing the typed Draft Step", async () => {
     const tmp = createTmpDir("draft-repair-target-checkpoint-");
     const specDir = path.join(tmp, "specs/demo");
     fs.mkdirSync(specDir, { recursive: true });
@@ -1131,7 +1242,7 @@ describe("draft repair target checkpoint replay", () => {
 
       assert.equal(agentCall.mock.callCount(), 0);
       const steps = flattenSteps(flowManager.load(created.specId).steps);
-      assert.equal(steps.find((step) => step.id === "draft-questions-review").status, "done");
+      assert.equal(steps.find((step) => step.id === "draft-questions-review").status, "in_progress");
       assert.equal(steps.find((step) => step.id === "draft-questions-triage").status, "pending");
       assert.equal(steps.find((step) => step.id === "draft-questions-repair").status, "pending");
       assert.deepEqual(

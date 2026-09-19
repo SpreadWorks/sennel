@@ -56,6 +56,7 @@ import { DraftSpecConnector } from "./engine/connectors/draft/draft-spec-connect
 import {
   flattenSteps,
   findFirstPendingLeaf,
+  contiguousLeafRouteEffects,
 } from "./lib/step-tree.js";
 import { nonblockingRouteFor } from "./lib/nonblocking-route.js";
 import { TaskStepIdentity } from "./lib/task-step-identity.js";
@@ -1631,7 +1632,7 @@ export class PlanGateRepairConnector {
     if (token !== GATE_TRANSITION_TOKEN
       || !(facts instanceof GateTransitionFacts)
       || !(route instanceof PlanGateRepairRoute)
-      || facts.recoveryEvidence.kind !== "repair") {
+      || (facts.recoveryEvidence.kind !== "repair" && facts.phase !== "draft")) {
       throw new Error("plan Gate repair connectors are created only by Definition");
     }
     if (route.phase !== facts.phase || route.gateStepId !== facts.target.stepId) {
@@ -2028,6 +2029,12 @@ function resolveGateClassification(facts) {
   // Task execution rounds remain bounded separately.
   if (facts.recoveryEvidence.kind === "repair"
     && (facts.scope !== "task" || !facts.taskBudget.finalRound)) {
+    return gateDecision(facts, new GateRepairDisposition(GATE_TRANSITION_TOKEN));
+  }
+  // Draft Gate semantic findings enter the bounded authoring repair loop on
+  // their first ordinary observation. Other Gate phases retain their retry
+  // budget policy below.
+  if (facts.phase === "draft") {
     return gateDecision(facts, new GateRepairDisposition(GATE_TRANSITION_TOKEN));
   }
   if (facts.scope === "task"
@@ -3510,22 +3517,6 @@ export class PersistReviewResult {
   }
 }
 
-/**
- * Definition-selected opportunity to apply the shared coverage-repair to
- * draft-gate completion boundary. The adapter reads canonical facts, then the
- * Definition selects one sealed completion decision for the Store to apply
- * without re-selection.
- */
-export class CompleteDraftCoverageRepair {
-  constructor() {
-    Object.freeze(this);
-  }
-
-  apply(adapter) {
-    return adapter.completeDraftCoverageRepair(this);
-  }
-}
-
 export class AppendIssueLog {
   constructor({ source }) {
     this.source = requireString(source, "source");
@@ -3922,6 +3913,7 @@ export function resolveReviewDeferralLifecycle({ scope, stepId, disposition } = 
   if (scope === "task") return [];
   if (scope !== "flow") throw new Error("review deferral lifecycle scope is invalid");
   const phase = reviewPhaseForFlowStepId(stepId);
+  if (["draft-questions", "draft-coverage"].includes(phase)) return [];
   if (phase === null || phase !== disposition.phase) {
     throw new Error("review deferral lifecycle does not match the definition disposition");
   }
@@ -3978,36 +3970,15 @@ export function resolveRuntimeStep(input = {}) {
   return input.currentStepId || null;
 }
 
-function resolveDraftReviewLifecycle(input) {
-  const route = draftReviewRouteForInput(input);
-  const verdict = input.result?.artifacts?.verdict;
-  const actions = [new IncrementMetric({ phase: route.retryPhase, counter: "reviewRetry" })];
-  if (!["PASS", "ADVISORY", "REJECTED"].includes(verdict)) return actions;
-  if (rejectedFlowReviewReachesExhaustion(input, route.retryPhase, route.reviewStepId)) {
-    return [new PersistReviewResult(), ...actions];
-  }
-  actions.push(new SetStepStatus({ step: route.reviewStepId, status: "done" }));
-  if (verdict === "PASS") {
-    actions.push(new SetStepStatus({ step: route.triageStepId, status: "done" }));
-    if (route.retryPhase === "draft-coverage") {
-      actions.push(new CompleteDraftCoverageRepair());
-    } else {
-      actions.push(new SetStepStatus({ step: route.repairStepId, status: "done" }));
-    }
-  }
-  return actions;
-}
-
 function resolvePlanReviewLifecycle(input) {
   const phase = input.result?.artifacts?.phase || input.phase;
   const verdict = input.result?.artifacts?.verdict;
   const toolingOutcome = input.result?.artifacts?.toolingOutcome;
   if (phase === "draft" || phase === "draft-questions" || phase === "draft-coverage") {
-    const route = nonblockingRouteFor(draftReviewRouteForInput(input).reviewStepId);
-    if (input.flowState?.policy?.nonblocking?.enabled === true && route && (verdict === "REJECTED" || toolingOutcome)) {
-      return [];
-    }
-    return resolveDraftReviewLifecycle(input);
+    // Draft Review lifecycle is committed by the typed Step/Service boundary.
+    // Keeping this plan empty prevents generic hooks from settling a result
+    // without its StepOutput and canonical route receipt.
+    return [];
   }
   const actions = [];
   // Tooling observations also need their typed ExternalBlocked persistence;
@@ -4128,6 +4099,7 @@ function resolveGateLifecycle(input) {
   }
 
   const decision = input.gateTransitionDecision;
+  if (decision.facts.phase === "draft") return [];
   if (decision.facts.scope === "task") {
     const progress = decision.facts.taskSettlementProgress;
     if (decision.plan.retryMetric !== null && !progress.hasMetric(decision.plan.retryMetric)) {
@@ -4490,15 +4462,56 @@ class FlowNode {
 const DRAFT_QUESTIONS_ROUTE = draftReviewRouteForKey("questions");
 const DRAFT_COVERAGE_ROUTE = draftReviewRouteForKey("coverage");
 
+/**
+ * The complete state effect of a Draft route.  The route resolver derives
+ * this from the Definition once, then persistence carries these exact IDs to
+ * the state machine.  State never infers a skip or reset range from topology.
+ */
+export class DraftRouteEffects {
+  constructor({ skipStepIds = [], resetStepIds = [] } = {}) {
+    for (const [field, stepIds] of Object.entries({ skipStepIds, resetStepIds })) {
+      if (!Array.isArray(stepIds) || stepIds.some((stepId) => typeof stepId !== "string" || stepId === "")) {
+        throw new TypeError(`Draft route ${field} must contain Step IDs`);
+      }
+      if (new Set(stepIds).size !== stepIds.length) throw new TypeError(`Draft route ${field} must not contain duplicates`);
+    }
+    if (skipStepIds.some((stepId) => resetStepIds.includes(stepId))) {
+      throw new TypeError("Draft route effects cannot skip and reset the same Step");
+    }
+    this.skipStepIds = Object.freeze([...skipStepIds]);
+    this.resetStepIds = Object.freeze([...resetStepIds]);
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return { skipStepIds: [...this.skipStepIds], resetStepIds: [...this.resetStepIds] };
+  }
+}
+
+function draftRouteEffects(sourceStepId, targetStepId) {
+  return new DraftRouteEffects(contiguousLeafRouteEffects(
+    collectFlowLeafIds(), sourceStepId, targetStepId,
+  ));
+}
+
 /** A Definition-selected Draft connection; the Connector performs the handoff. */
 export class DraftStepRoute {
-  constructor({ sourceStepId, targetStepId, connector }) {
+  constructor({ sourceStepId, targetStepId, connector, effects }) {
     if (new.target === DraftStepRoute) throw new TypeError("DraftStepRoute is abstract");
     this.sourceStepId = requireString(sourceStepId, "draft route source");
     this.targetStepId = requireString(targetStepId, "draft route target");
     if (typeof connector !== "function") throw new TypeError("draft route requires a Connector");
     this.connector = connector;
+    this.effects = effects instanceof DraftRouteEffects ? effects : new DraftRouteEffects(effects);
     Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      sourceStepId: this.sourceStepId,
+      targetStepId: this.targetStepId,
+      effects: this.effects.toJSON(),
+    };
   }
 }
 
@@ -4539,7 +4552,12 @@ export function resolveDraftStepRoute(stepId, output) {
     return new DraftAwaitUserDecision(stepId);
   }
 
-  const route = (Route, targetStepId, connector) => new Route({ sourceStepId: stepId, targetStepId, connector });
+  const route = (Route, targetStepId, connector) => new Route({
+    sourceStepId: stepId,
+    targetStepId,
+    connector,
+    effects: draftRouteEffects(stepId, targetStepId),
+  });
   if (reviewRoute !== null) {
     if (stepId === reviewRoute.reviewStepId) {
       if (output.type === STEP_OUTPUT_TYPE.BRANCH_REQUIRED) {

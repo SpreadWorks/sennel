@@ -71,6 +71,10 @@ export function settleDefinitionReviewTransition(ctx) {
   });
   if (selection.disposition?.operation !== "defer") return null;
   const { facts, disposition } = selection;
+  // Draft Review recovery must re-enter through run-review, which rehydrates
+  // the published Attempt and lets the Draft Step/Service settle it.  This
+  // transition owns only the flow/task review paths that have no Draft Step.
+  if (["draft-questions", "draft-coverage"].includes(facts.phase)) return null;
   const findings = buildDeferredSemanticFindingsPublication({
     flowManager: ctx.flowManager,
     flowState,

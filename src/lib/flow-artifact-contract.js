@@ -1752,7 +1752,7 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("artifact.catalog", "artifact-catalog.json", "artifact-catalog", "repository-metadata", "system", own(["system", "prepare-spec"], ["system"], ["system", "prepare-spec"]), "permanent", "singleton", false),
   contract("issue.snapshot", "issue.md", "issue-snapshot", "canonical-flow-artifacts", "system", own(["system", "prepare-spec"], ["system", "prepare-spec"], ["system", "draft", "draft-questions-review", "draft-coverage-review", "draft-gate", "spec"])),
   contract("draft", "steps/draft/result.json", "draft", "canonical-flow-artifacts", "system", own("draft", [
-    "system", "draft", "draft-questions-repair", "draft-refine", "draft-gate-repair", "draft-coverage-review", "draft-coverage-repair",
+    "system", "draft", "draft-questions-repair", "draft-refine", "draft-gate-repair", "draft-coverage-repair",
   ], [
     "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
     "draft-gate-repair", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "spec",
@@ -1761,7 +1761,7 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("draft.questions.triage", "steps/draft-questions-triage/result.json", "draft-questions-triage", "canonical-flow-artifacts", "system", own("draft-questions-triage", ["system", "draft-questions-triage"], ["draft-questions-repair", "draft-refine", "draft-gate"])),
   contract("draft.questions.repair", "steps/draft-questions-repair/result.json", "draft-questions-repair", "canonical-flow-artifacts", "system", own("draft-questions-repair", ["system", "draft-questions-repair"], ["draft-refine", "draft-gate", "acceptance-review"])),
   contract("draft.gate.repair", "steps/draft-gate-repair/result.json", "draft-gate-repair", "canonical-flow-artifacts", "system", own("draft-gate-repair", ["system", "draft-gate-repair"], ["draft-coverage-review", "draft-gate", "acceptance-review"])),
-  contract("draft.coverage.review", "steps/draft-coverage-review/result.json", "draft-coverage-review", "canonical-flow-artifacts", "draft-coverage-review", own("draft-coverage-review", ["draft-coverage-review"], ["system", "draft-coverage-triage", "draft-coverage-repair", "draft-gate"])),
+  contract("draft.coverage.review", "steps/draft-coverage-review/result.json", "draft-coverage-review", "canonical-flow-artifacts", "draft-coverage-review", own("draft-coverage-review", ["draft-coverage-review"], ["system", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate"])),
   contract("draft.coverage.triage", "steps/draft-coverage-triage/result.json", "draft-coverage-triage", "canonical-flow-artifacts", "system", own("draft-coverage-triage", ["system", "draft-coverage-triage"], ["draft-coverage-repair", "draft-gate"])),
   contract("draft.coverage.repair", "steps/draft-coverage-repair/result.json", "draft-coverage-repair", "canonical-flow-artifacts", "system", own("draft-coverage-repair", ["system", "draft-coverage-repair"], ["draft-gate", "acceptance-review"])),
   contract("draft.gate.source", "steps/draft-gate/source.json", "draft-gate-source", "canonical-flow-artifacts", "draft-gate", own("draft-gate", ["draft-gate"], ["draft-gate", "spec"])),

@@ -166,7 +166,7 @@ describe("flow get next-action", () => {
     }).operation, "skip-worker");
   });
 
-  it("keeps exhausted flow Reviews active before draft/impl rejection routes leave Review", () => {
+  it("leaves Draft Review lifecycle settlement to the typed Step route", () => {
     const metric = (phase) => ({ phase, counter: "reviewRetry", delta: 1 });
     const cases = [
       { phase: "draft-questions", stepId: "draft-questions-review", previous: 0, retained: true },
@@ -191,6 +191,10 @@ describe("flow get next-action", () => {
           },
         },
       });
+      if (testCase.phase.startsWith("draft-")) {
+        assert.deepEqual(actions, [], `${testCase.phase} must not use generic lifecycle actions`);
+        continue;
+      }
       const leavesReview = actions.some((action) => (
         action.constructor.name === "SetStepStatus"
         && action.step === testCase.stepId

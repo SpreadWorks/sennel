@@ -1866,10 +1866,33 @@ export class ArtifactReference {
   toJSON() { return { kind: this.kind, id: this.id }; }
 }
 
+/** Immutable persisted effects selected by Definition for one Draft route. */
+class PersistedDraftRouteEffects {
+  constructor(value) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)
+      || !Array.isArray(value.skipStepIds) || !Array.isArray(value.resetStepIds)
+      || Object.keys(value).length !== 2) {
+      throw new CurrentFlowStateInvariantError("result.draftRouteEffects is invalid");
+    }
+    const stepIds = [...value.skipStepIds, ...value.resetStepIds];
+    if (stepIds.some((stepId) => typeof stepId !== "string" || stepId === "")
+      || new Set(stepIds).size !== stepIds.length) {
+      throw new CurrentFlowStateInvariantError("result.draftRouteEffects is invalid");
+    }
+    this.skipStepIds = Object.freeze([...value.skipStepIds]);
+    this.resetStepIds = Object.freeze([...value.resetStepIds]);
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return { skipStepIds: [...this.skipStepIds], resetStepIds: [...this.resetStepIds] };
+  }
+}
+
 export class NodeResult {
   constructor(value) {
-    requireExactFields(value, new Set(["outcome", "summary", "confirmedAt", "artifactRefs", ...(value != null && Object.hasOwn(value, "stepOutput") ? ["stepOutput"] : []), ...(value != null && Object.hasOwn(value, "draftRouteTargetStepId") ? ["draftRouteTargetStepId"] : [])]), "result");
-    const { outcome, summary, confirmedAt, artifactRefs, stepOutput, draftRouteTargetStepId } = value;
+    requireExactFields(value, new Set(["outcome", "summary", "confirmedAt", "artifactRefs", ...(value != null && Object.hasOwn(value, "stepOutput") ? ["stepOutput"] : []), ...(value != null && Object.hasOwn(value, "draftRouteTargetStepId") ? ["draftRouteTargetStepId"] : []), ...(value != null && Object.hasOwn(value, "draftRouteEffects") ? ["draftRouteEffects"] : [])]), "result");
+    const { outcome, summary, confirmedAt, artifactRefs, stepOutput, draftRouteTargetStepId, draftRouteEffects } = value;
     if (!RESULT_OUTCOMES.has(outcome)) {
       throw new CurrentFlowStateInvariantError(`result.outcome is invalid: ${outcome}`);
     }
@@ -1880,9 +1903,10 @@ export class NodeResult {
     this.artifactRefs = Object.freeze(artifactRefs.map((ref) => ref instanceof ArtifactReference ? ref : new ArtifactReference(ref)));
     this.stepOutput = stepOutput === undefined ? null : stepOutput instanceof StepOutput ? stepOutput : StepOutput.fromStored(stepOutput);
     this.draftRouteTargetStepId = draftRouteTargetStepId === undefined ? null : requireString(draftRouteTargetStepId, "result.draftRouteTargetStepId");
-    if ((this.stepOutput === null && this.draftRouteTargetStepId !== null)
-      || (this.stepOutput !== null && this.stepOutput.type !== STEP_OUTPUT_TYPE.ERROR && this.draftRouteTargetStepId === null)
-      || (this.stepOutput?.type === STEP_OUTPUT_TYPE.ERROR && this.draftRouteTargetStepId !== null)) {
+    this.draftRouteEffects = draftRouteEffects === undefined ? null : new PersistedDraftRouteEffects(draftRouteEffects);
+    if ((this.stepOutput === null && (this.draftRouteTargetStepId !== null || this.draftRouteEffects !== null))
+      || (this.stepOutput !== null && this.stepOutput.type !== STEP_OUTPUT_TYPE.ERROR && (this.draftRouteTargetStepId === null || this.draftRouteEffects === null))
+      || (this.stepOutput?.type === STEP_OUTPUT_TYPE.ERROR && (this.draftRouteTargetStepId !== null || this.draftRouteEffects !== null))) {
       throw new CurrentFlowStateInvariantError("Draft StepOutput and selected route target are inconsistent");
     }
     if (new Set(this.artifactRefs.map((ref) => ref.kind)).size !== this.artifactRefs.length) {
@@ -1899,6 +1923,7 @@ export class NodeResult {
       artifactRefs: this.artifactRefs.map((ref) => ref.toJSON()),
       ...(this.stepOutput === null ? {} : { stepOutput: this.stepOutput.toJSON() }),
       ...(this.draftRouteTargetStepId === null ? {} : { draftRouteTargetStepId: this.draftRouteTargetStepId }),
+      ...(this.draftRouteEffects === null ? {} : { draftRouteEffects: this.draftRouteEffects.toJSON() }),
     };
   }
 }
@@ -4668,23 +4693,21 @@ export class CurrentFlowState {
   }
 
   #applyDraftStepRoute(root, sourceStepId, result) {
-    if (result.outcome !== "passed" || result.stepOutput === null) {
+    if (result.outcome !== "passed" || result.stepOutput === null || result.draftRouteEffects === null) {
       throw new CurrentFlowStateInvariantError("Draft route requires a passed StepOutput result");
     }
-    const leaves = collectNodes(root).filter((node) => node.steps.length === 0);
-    const sourceIndex = leaves.findIndex((node) => node.id === sourceStepId);
-    const targetIndex = leaves.findIndex((node) => node.id === result.draftRouteTargetStepId);
-    if (sourceIndex < 0 || targetIndex < 0) {
-      throw new CurrentFlowStateInvariantError("Draft route source or target is absent");
+    if (this.findNode(result.draftRouteTargetStepId) === null) {
+      throw new CurrentFlowStateInvariantError("Draft route target is absent");
     }
-    if (targetIndex <= sourceIndex) {
-      for (const node of leaves.slice(targetIndex)) {
-        root = replaceNode(root, node.id, transitionNode(node, "invalidated", this.definition, { result: null }));
+    // Route effects are selected and sealed by Definition at the Store
+    // boundary. State validates only their IDs and applicability while
+    // replaying the already selected transition.
+    for (const stepId of result.draftRouteEffects.skipStepIds) {
+      const node = findNodeInRoot(root, stepId);
+      if (node === null || node.steps.length !== 0 || !["pending", "invalidated"].includes(node.status)) {
+        throw new CurrentFlowStateInvariantError(`Draft route cannot skip ${stepId}`);
       }
-    } else {
-      for (const node of leaves.slice(sourceIndex + 1, targetIndex)) {
-        if (node.status === "pending" || node.status === "invalidated") {
-          root = replaceNode(root, node.id, transitionNode(node, "skipped", this.definition, {
+      root = replaceNode(root, stepId, transitionNode(node, "skipped", this.definition, {
             attemptSequence: node.attemptSequence + 1,
             result: new NodeResult({
               outcome: "skipped",
@@ -4693,8 +4716,13 @@ export class CurrentFlowState {
               artifactRefs: [],
             }),
           }));
-        }
+    }
+    for (const stepId of result.draftRouteEffects.resetStepIds) {
+      const node = findNodeInRoot(root, stepId);
+      if (node === null || node.steps.length !== 0) {
+        throw new CurrentFlowStateInvariantError(`Draft route cannot reset ${stepId}`);
       }
+      root = replaceNode(root, stepId, transitionNode(node, "invalidated", this.definition, { result: null }));
     }
     root = reconcileCompletedParents(root, this.definition);
     root = reconcileInvalidatedParents(root, this.definition);
@@ -6354,20 +6382,13 @@ export class ActivityTransition {
     const normalized = isPlainObject(value) && (!Object.hasOwn(value, "finalizeSteps") || !Object.hasOwn(value, "gateTaskLifecycle") || !Object.hasOwn(value, "stepConnectionReceipt") || !Object.hasOwn(value, "taskReviewStagePlan") || !Object.hasOwn(value, "requirementTestInitialization") || !Object.hasOwn(value, "requirementTestLifecycle"))
       ? { ...value, finalizeSteps: value.finalizeSteps ?? null, gateTaskLifecycle: value.gateTaskLifecycle ?? null, stepConnectionReceipt: value.stepConnectionReceipt ?? null, taskReviewStagePlan: value.taskReviewStagePlan ?? null, requirementTestInitialization: value.requirementTestInitialization ?? null, requirementTestLifecycle: value.requirementTestLifecycle ?? null }
       : value;
-    requireExactFields(normalized, new Set([...ACTIVITY_TRANSITION_FIELDS, ...(normalized != null && Object.hasOwn(normalized, "stepOutput") ? ["stepOutput"] : [])]), "activity.transition");
+    requireExactFields(normalized, ACTIVITY_TRANSITION_FIELDS, "activity.transition");
     const { operation, nodeId, task, attempt, status, policy, outbox, approval, nonblocking, finalizeSteps, gateTaskLifecycle, stepConnectionReceipt, taskReviewStagePlan, requirementTestInitialization, requirementTestLifecycle } = normalized;
     if (![FLOW_CREATION_TRANSITION_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "advance_task_review_stage", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "fail_attempt", "record_failure", "confirm_attempt", "complete_acceptance_decision_noop", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", INTERRUPTED_FINALIZE_SYNC_OPERATION, ...LIFECYCLE_TRANSITION_OPERATIONS, ...POLICY_TRANSITION_OPERATIONS, ...OUTBOX_TRANSITION_OPERATIONS, ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS, ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS, ...OBSERVATION_TRANSITION_OPERATIONS, ...NONBLOCKING_TRANSITION_OPERATIONS, ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS].includes(operation)) {
       throw new CurrentFlowStateInvariantError(`activity.transition.operation is invalid: ${operation}`);
     }
     this.operation = operation;
     this.nodeId = requireString(nodeId, "activity.transition.nodeId");
-    this.stepOutput = normalized.stepOutput === undefined ? null
-      : normalized.stepOutput instanceof StepOutput ? normalized.stepOutput : StepOutput.fromStored(normalized.stepOutput);
-    if (this.stepOutput !== null && (operation !== "publish_artifacts"
-      || this.nodeId !== "draft-refine"
-      || ![STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED, STEP_OUTPUT_TYPE.LOOP_REQUIRED].includes(this.stepOutput.type))) {
-      throw new CurrentFlowStateInvariantError("only draft-refine publication may record a question continuation");
-    }
     this.task = task == null ? null : task instanceof ActivityTask ? task : new ActivityTask(task);
     this.attempt = attempt == null ? null : attempt instanceof CurrentAttempt ? attempt : new CurrentAttempt(attempt);
     this.stepConnectionReceipt = stepConnectionReceipt === null ? null : stepConnectionReceipt instanceof ActivityStepConnectionReceipt ? stepConnectionReceipt : new ActivityStepConnectionReceipt(stepConnectionReceipt);
@@ -6596,9 +6617,6 @@ export class ActivityTransition {
       if (this.operation === "publish_artifacts" && activity.attemptId !== null
         && (activity.attemptId !== state.attempt.id || activity.sequence !== state.attempt.sequence)) {
         throw new CurrentFlowStateInvariantError("artifact publication Activity Attempt does not match the active producer Attempt");
-      }
-      if (this.stepOutput !== null && (activity.attemptId === null || activity.sequence === null)) {
-        throw new CurrentFlowStateInvariantError("Draft question StepOutput publication requires its active Attempt identity");
       }
       return state;
     }
@@ -6883,7 +6901,6 @@ export class ActivityTransition {
       taskReviewStagePlan: this.taskReviewStagePlan?.toJSON() ?? null,
       requirementTestInitialization: this.requirementTestInitialization?.toJSON() ?? null,
       requirementTestLifecycle: this.requirementTestLifecycle?.toJSON() ?? null,
-      ...(this.stepOutput === null ? {} : { stepOutput: this.stepOutput.toJSON() }),
     };
   }
 }
@@ -7126,10 +7143,7 @@ export class FlowActivity {
     if (!Object.hasOwn(value ?? {}, "reviewPublication")) {
       throw new CurrentFlowStateInvariantError("durable Activity must declare reviewPublication");
     }
-    requireExactFields(value?.transition, new Set([
-      ...ACTIVITY_TRANSITION_FIELDS,
-      ...(value?.transition != null && Object.hasOwn(value.transition, "stepOutput") ? ["stepOutput"] : []),
-    ]), "activity.transition");
+    requireExactFields(value?.transition, ACTIVITY_TRANSITION_FIELDS, "activity.transition");
     return new FlowActivity(value);
   }
 

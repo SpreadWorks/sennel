@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { describe, it } from "node:test";
 
 import { sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { STEP_OUTPUT_TYPE, StepOutput } from "../../../src/flow/engine/step-output.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -139,7 +140,16 @@ describe("dedicated draft Gate repair handoff", () => {
       const payload = value.scenario.replacement("goal", "Incomplete retained behavior");
       payload.operations = [];
       seal(request, payload);
-      const result = value.scenario.coordinator.reconcile({ ctx: value.scenario.ctx, request });
+      const preparation = value.scenario.coordinator.prepareDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+      });
+      const result = value.scenario.coordinator.commitDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+        preparation,
+        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+      });
       assert.equal(result.rejected, true);
       assert.equal(catalogEntry(value.flowManager, value.scenario.specId, "draft.gate.repair"), null);
       const outcomeEntry = catalogEntry(value.flowManager, value.scenario.specId, "plan.gate.repair.outcome");
@@ -208,10 +218,12 @@ describe("dedicated draft Gate repair handoff", () => {
         const payload = value.scenario.replacement("goal", "Retain the complete behavior explicitly.");
         mutate(payload, request);
         seal(request, payload);
-        const result = value.scenario.coordinator.reconcile({ ctx: value.scenario.ctx, request });
-        assert.equal(result.completed, true, name);
-        assert.equal(result.rejected, true, name);
-        assert.equal(findStepById(value.flowManager.loadReadOnly(value.scenario.specId).steps, "draft-gate-repair").status, "done", name);
+        assert.throws(
+          () => value.scenario.coordinator.prepareDraftWorker({ ctx: value.scenario.ctx, request }),
+          (error) => ["FLOW_ARTIFACT_HANDOFF_INVALID", "FLOW_ARTIFACT_HANDOFF_STALE", "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID", "FLOW_DRAFT_GATE_REPAIR_INVALID"].includes(error.code),
+          name,
+        );
+        assert.equal(findStepById(value.flowManager.loadReadOnly(value.scenario.specId).steps, "draft-gate-repair").status, "in_progress", name);
         assertNoRepairPublication(value.flowManager, value.scenario.specId, draftBefore);
       } finally {
         removeTmpDir(value.root);
@@ -231,10 +243,11 @@ describe("dedicated draft Gate repair handoff", () => {
         specId: value.scenario.specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair",
       }).descriptor.hash;
       seal(request, value.scenario.replacement("goal", "Retain the complete behavior explicitly."));
-      const result = value.scenario.coordinator.reconcile({ ctx: value.scenario.ctx, request });
-      assert.equal(result.completed, true);
-      assert.equal(result.rejected, true);
-      assert.equal(findStepById(value.flowManager.loadReadOnly(value.scenario.specId).steps, "draft-gate-repair").status, "done");
+      assert.throws(
+        () => value.scenario.coordinator.prepareDraftWorker({ ctx: value.scenario.ctx, request }),
+        (error) => ["FLOW_ARTIFACT_HANDOFF_INVALID", "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID", "FLOW_DRAFT_GATE_REPAIR_INVALID"].includes(error.code),
+      );
+      assert.equal(findStepById(value.flowManager.loadReadOnly(value.scenario.specId).steps, "draft-gate-repair").status, "in_progress");
       assertNoRepairPublication(value.flowManager, value.scenario.specId, draftBefore);
     } finally {
       removeTmpDir(value.root);
@@ -258,7 +271,7 @@ describe("dedicated draft Gate repair handoff", () => {
         specId: value.scenario.specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair",
       }).descriptor.hash;
       assert.throws(
-        () => value.scenario.coordinator.reconcile({ ctx: value.scenario.ctx, request }),
+        () => value.scenario.coordinator.prepareDraftWorker({ ctx: value.scenario.ctx, request }),
         (error) => error.code === "FLOW_ARTIFACT_HANDOFF_STALE",
       );
       assertNoRepairPublication(value.flowManager, value.scenario.specId, concurrent);
@@ -325,9 +338,10 @@ describe("dedicated draft Gate repair handoff", () => {
         outcomes: beforeCatalog.artifacts.filter((entry) => entry.logicalKey === "plan.gate.repair.outcome").length,
       };
       seal(request, payload);
-      const result = recurring.coordinator.reconcile({ ctx: recurring.ctx, request });
-      assert.equal(result.completed, true);
-      assert.equal(result.rejected, true);
+      assert.throws(
+        () => recurring.coordinator.prepareDraftWorker({ ctx: recurring.ctx, request }),
+        (error) => error.code === "FLOW_ARTIFACT_HANDOFF_INVALID" || error.code === "FLOW_DRAFT_STEP_OUTPUT_REQUIRED",
+      );
       const afterCatalog = value.flowManager.artifactCatalog(value.scenario.specId);
       assert.equal(value.flowManager.readArtifact({
         specId: value.scenario.specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair",

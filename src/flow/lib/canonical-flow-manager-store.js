@@ -1259,6 +1259,7 @@ function resultWithDraftStepOutput(result, nodeId, stepOutput) {
     ...(result?.toJSON?.() ?? result),
     stepOutput: stepOutput.toJSON(),
     draftRouteTargetStepId: route.targetStepId,
+    draftRouteEffects: route.effects.toJSON(),
   };
 }
 
@@ -2291,10 +2292,17 @@ export class CanonicalFlowManagerStore {
     if (Object.hasOwn(input, "artifactWrites") || Object.hasOwn(input, "artifactBaselines")) {
       throw new CurrentFlowStateInvariantError("canonical Gate settlement accepts only its deferred flow.findings publication");
     }
-    const { specId = null, decision } = input;
+    const { specId = null, decision, stepOutput = null } = input;
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
+    if (state.current?.at(-1) === "draft-gate") {
+      if (!(stepOutput instanceof StepOutput) || stepOutput.type !== STEP_OUTPUT_TYPE.COMPLETED) {
+        throw new CurrentFlowStateInvariantError("Draft Gate settlement requires the Step-selected completed StepOutput");
+      }
+    } else if (stepOutput !== null) {
+      throw new CurrentFlowStateInvariantError("only Draft Gate settlement accepts a StepOutput");
+    }
     const current = this.#admitGateDecision(state, decision, "defer");
     const findings = buildDeferredSemanticFindingsPublication({
       flowManager: this, flowState: this.loadReadOnly(resolved), nodeId: state.current.at(-1),
@@ -2313,7 +2321,7 @@ export class CanonicalFlowManagerStore {
       specId: resolved, activityId: activityId("gate-failure-deferred"), nodeId: state.current.at(-1),
       attempt: commandContextAttempt(state, state.current.at(-1)),
       result: state.current.at(-1) === "draft-gate"
-        ? resultWithDraftStepOutput(settlementResult, "draft-gate", new StepOutput(STEP_OUTPUT_TYPE.COMPLETED))
+        ? resultWithDraftStepOutput(settlementResult, "draft-gate", stepOutput)
         : settlementResult,
       findingsPublication: findings,
       gateTaskLifecycle: current.plan.taskLifecycle?.toJSON?.() ?? null,
@@ -2321,6 +2329,98 @@ export class CanonicalFlowManagerStore {
         ? new TaskGateSettlementAdmission(current, "continuation")
         : undefined,
     });
+  }
+
+  /**
+   * Commit the one Draft Gate Step decision selected by the Definition.
+   * Observation classification and terminal settlement share this boundary so
+   * a Step cannot publish a second Gate result while choosing its output.
+   */
+  async commitDraftGateTransition({ specId = null, decision, stepOutput } = {}) {
+    if (!(decision instanceof GateTransitionDecision)) {
+      throw new CurrentFlowStateInvariantError("Draft Gate transition requires a Definition-selected Gate decision");
+    }
+    if (!(stepOutput instanceof StepOutput) || stepOutput.type === STEP_OUTPUT_TYPE.ERROR) {
+      throw new CurrentFlowStateInvariantError("Draft Gate transition requires a non-error StepOutput");
+    }
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    if (decision.facts.phase !== "draft" || decision.facts.target.stepId !== "draft-gate"
+      || decision.facts.target.specId !== resolved) {
+      throw new CurrentFlowStateInvariantError("Draft Gate decision does not target draft-gate");
+    }
+    let state = this.runtime.load(resolved);
+    const node = state.findNode("draft-gate");
+    if (node?.status === "done" && state.current === null) {
+      const persisted = node.result?.stepOutput;
+      const terminalActivity = this.runtime.activities(resolved).findLast((activity) => (
+        activity.nodeId === "draft-gate"
+        && ["confirm_attempt", "defer_failed_gate"].includes(activity.transition?.operation)
+      )) ?? null;
+      const expectedOperation = terminalActivity?.transition?.operation ?? null;
+      const operationMatches = (decision.disposition.operation === "defer" && expectedOperation === "defer_failed_gate")
+        || (decision.disposition.operation === "pass" && expectedOperation === "confirm_attempt");
+      if (operationMatches
+        && terminalActivity?.attemptId === decision.facts.currentAttempt.id
+        && terminalActivity?.sequence === decision.facts.currentAttempt.sequence
+        && persisted?.type === stepOutput.type) return state;
+      throw new CurrentFlowStateInvariantError("Draft Gate transition has already been committed");
+    }
+    if (state.current?.at(-1) !== "draft-gate") {
+      throw new CurrentFlowStateInvariantError("Draft Gate transition requires its active Attempt");
+    }
+    const operation = decision.disposition.operation;
+    if (["pass", "defer"].includes(operation)) {
+      const route = resolveDraftStepRoute("draft-gate", stepOutput);
+      await new route.connector({ flowManager: this, facts: decision.facts }).connect();
+    }
+    if (operation === "pass") {
+      if (stepOutput.type !== STEP_OUTPUT_TYPE.COMPLETED) {
+        throw new CurrentFlowStateInvariantError("Draft Gate PASS requires a completed StepOutput");
+      }
+      this.#admitGateDecision(state, decision, "pass");
+      return this.confirmCurrentAttempt({
+        specId: resolved,
+        stepOutput,
+        gateTransitionDecision: decision,
+      });
+    }
+    if (!["repair", "defer"].includes(operation)) {
+      throw new CurrentFlowStateInvariantError(`Draft Gate transition does not support ${operation}`);
+    }
+    const expectedOutput = operation === "defer"
+      ? STEP_OUTPUT_TYPE.COMPLETED
+      : STEP_OUTPUT_TYPE.LOOP_REQUIRED;
+    if (stepOutput.type !== expectedOutput) {
+      throw new CurrentFlowStateInvariantError(`Draft Gate ${operation} requires a ${expectedOutput} StepOutput`);
+    }
+
+    let facts = readCurrentGateTransitionFacts({
+      flowManager: this,
+      flowState: this.loadReadOnly(resolved),
+      phase: "draft",
+    });
+    if (facts === null) throw new CurrentFlowStateInvariantError("current Draft Gate observation is unavailable");
+    if (facts.postPublication.status === "unclassified") {
+      this.recordGateObservationDecision({ specId: resolved, decision, stepOutput });
+      state = this.runtime.load(resolved);
+    } else if (state.attempt?.failure === null) {
+      throw new CurrentFlowStateInvariantError("Draft Gate observation classification is inconsistent with its Attempt");
+    } else if (state.findNode("draft-gate")?.result?.stepOutput?.type !== stepOutput.type) {
+      throw new CurrentFlowStateInvariantError("Draft Gate observation was already committed with a different StepOutput");
+    }
+    if (operation !== "defer") return state;
+
+    facts = readCurrentGateTransitionFacts({
+      flowManager: this,
+      flowState: this.loadReadOnly(resolved),
+      phase: "draft",
+    });
+    const settledDecision = facts === null ? null : resolveGateTransition(facts);
+    if (settledDecision === null || settledDecision.disposition.operation !== "defer") {
+      throw new CurrentFlowStateInvariantError("Draft Gate defer is no longer Definition-selected");
+    }
+    return this.settleGateTransition({ specId: resolved, decision: settledDecision, stepOutput });
   }
 
   /** Apply only the current Definition-selected stale Task round closure. */
@@ -2986,7 +3086,6 @@ export class CanonicalFlowManagerStore {
     sourcePayloadDigest,
     handoffDigest,
     handoffRequestDigest,
-    stepOutput = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
@@ -3026,11 +3125,9 @@ export class CanonicalFlowManagerStore {
     const promotedDigest = crypto.createHash("sha256").update(promotedBytes).digest("hex");
     const state = this.runtime.load(resolved);
     if (state.current?.at(-1) !== "draft-refine" || state.attempt === null) throw new CurrentFlowStateInvariantError("draft promotion requires active draft-refine");
-    if (stepOutput !== null) resolveDraftStepRoute("draft-refine", stepOutput);
     return this.runtime.publishArtifacts({
       specId: resolved, activityId: activityId("draft-question-promoted"), nodeId: "draft-refine",
       expectedAttempt: CurrentAttemptIdentity.from(state.attempt),
-      stepOutput,
       artifactBaselines: [new CanonicalFlowArtifactBaseline({ logicalKey: "draft", digest, byteLength })],
       artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: promotedBytes }],
       references: new ActivityReferences({
@@ -4130,7 +4227,7 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("draft coverage repair completion rejected a stale canonical draft revision");
     }
     const review = this.readArtifact({
-      specId: resolved, logicalKey: "draft.coverage.review", consumerNodeId: "draft-coverage-repair",
+      specId: resolved, logicalKey: "draft.coverage.review", consumerNodeId: facts.sourceStepId,
     });
     if (review.descriptor.hash !== facts.reviewArtifactDigest) {
       throw new CurrentFlowStateInvariantError("draft coverage repair completion rejected a stale coverage review artifact");
@@ -4172,7 +4269,9 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("draft coverage repair completion connector is invalid");
     }
     const publishedDraft = connector.applyTo(draft);
-    const publishedDraftBytes = Buffer.from(`${JSON.stringify(publishedDraft, null, 2)}\n`, "utf8");
+    const publishedDraftBytes = facts.source === "coverage-pass"
+      ? Buffer.from(source.bytes)
+      : Buffer.from(`${JSON.stringify(publishedDraft, null, 2)}\n`, "utf8");
     const baseline = new CanonicalFlowArtifactBaseline({
       logicalKey: "draft",
       digest: facts.draftDigest,
@@ -4210,7 +4309,10 @@ export class CanonicalFlowManagerStore {
     if (artifactWrites.some((entry) => entry?.logicalKey === "draft")) {
       throw new CurrentFlowStateInvariantError("draft coverage repair completion owns the only draft publication");
     }
-    const publishesDraft = true;
+    // A coverage PASS only binds the existing canonical revision.  An
+    // eligible coverage repair publishes its changed Draft and audit together
+    // with the source Attempt settlement.
+    const publishesDraft = facts.source === "coverage-repair";
     const writes = [
       ...(publishesDraft ? [{
         logicalKey: "draft",
@@ -4289,6 +4391,7 @@ export class CanonicalFlowManagerStore {
       sourceAttempt: sourceAttemptIdentity,
       draftInput: { digest: facts.draftDigest, byteLength: facts.draftByteLength },
       publishedDraft,
+      ...(facts.source === "coverage-pass" ? { publishedDraftBytes } : {}),
       lineage,
       decisionEvidence: new DraftCompletionDecisionEvidence({
         reviewVerdict: facts.reviewVerdict,
@@ -4335,7 +4438,7 @@ export class CanonicalFlowManagerStore {
       artifactWrites: writes,
       artifactRemovals,
       artifactBaselines: baselines,
-      admission: this.#stepConnectionAdmission(state, facts.sourceStepId, writes),
+      admission: this.#stepConnectionAdmission(state, facts.sourceStepId, facts.targetStepId, writes),
     });
   }
 
@@ -6356,12 +6459,11 @@ export class CanonicalFlowManagerStore {
   }
 
   /** Bind a synthetic connector to both sides of its source on one catalog snapshot. */
-  #stepConnectionAdmission(state, sourceNodeId, artifactWrites) {
-    const sourceConsumerAdmission = this.#consumerAdmission(state,
-      sourceNodeId === "draft-coverage-review" ? "draft-coverage-repair" : sourceNodeId);
+  #stepConnectionAdmission(state, sourceNodeId, targetNodeId, artifactWrites) {
+    const sourceConsumerAdmission = this.#consumerAdmission(state, targetNodeId);
     if (sourceConsumerAdmission === null) {
       throw new CurrentFlowStateInvariantError(
-        `Step connection source has no typed consumer readiness: ${sourceNodeId}`,
+        `Step connection target has no typed consumer readiness: ${targetNodeId}`,
       );
     }
     return new StepConnectionAdmission({

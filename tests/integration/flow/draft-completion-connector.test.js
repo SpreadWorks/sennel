@@ -6,7 +6,6 @@ import { describe, it } from "node:test";
 
 import {
   DraftCompletionConnector,
-  CompleteDraftCoverageRepair,
   resolveDraftCoverageRepairCompletion,
   resolveDraftCompletionConnector,
   resolveLifecyclePlan,
@@ -329,6 +328,8 @@ describe("DraftCompletionConnector", () => {
         artifactWrites: [{ logicalKey: "draft.coverage.review", mediaType: "application/json",
           bytes: coverageReviewArtifactBytes(flowManager, specId, sourceBytes) }],
       });
+      const draftBeforePass = flowManager.artifactCatalog(specId).toJSON().artifacts
+        .find((artifact) => artifact.logicalKey === "draft");
       const evidence = completionEvidence(flowManager, specId);
       const selected = resolveDraftCoverageRepairCompletion(facts({
         source: "coverage-pass", draftDocument: source, ...evidence,
@@ -350,7 +351,15 @@ describe("DraftCompletionConnector", () => {
       });
       const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
       const state = reloaded.canonicalState(specId);
+      const draftAfterPass = reloaded.artifactCatalog(specId).toJSON().artifacts
+        .find((artifact) => artifact.logicalKey === "draft");
       assert.equal(state.nextAction().nodeId, "draft-gate");
+      assert.deepEqual(draftAfterPass, draftBeforePass, "coverage PASS must not republish the Draft revision");
+      assert.deepEqual(
+        reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate" }).bytes,
+        sourceBytes,
+        "coverage PASS must preserve canonical Draft bytes",
+      );
       assert.deepEqual(state.findNode("draft-coverage-review").result.stepOutput.toJSON(),
         { type: STEP_OUTPUT_TYPE.COMPLETED });
       assert.equal(state.findNode("draft-coverage-review").result.draftRouteTargetStepId, "draft-gate");
@@ -361,7 +370,7 @@ describe("DraftCompletionConnector", () => {
     }
   });
 
-  it("uses the repair completion action rather than adding a Flow step on a coverage PASS", () => {
+  it("leaves Draft Review lifecycle settlement to the typed Step route", () => {
     const actions = resolveLifecyclePlan({
       event: "review:post",
       currentStepId: "draft-coverage-review",
@@ -370,8 +379,7 @@ describe("DraftCompletionConnector", () => {
       flowState: { policy: { nonblocking: { enabled: false } } },
     }).actions;
 
-    assert.ok(actions.at(-1) instanceof CompleteDraftCoverageRepair);
-    assert.equal(actions.some((action) => action.constructor.name === "SetStepStatus" && action.step === "draft-coverage-repair"), false);
+    assert.deepEqual(actions, []);
   });
 
   it("is selected by Definition for the no-repair coverage path without changing the draft", () => {
@@ -467,6 +475,8 @@ describe("DraftCompletionConnector", () => {
         draftDocument: source,
         ...evidence,
       }));
+      const draftBeforeCompletion = flowManager.artifactCatalog(specId).toJSON().artifacts
+        .find((artifact) => artifact.logicalKey === "draft");
       const before = flowManager.activityLedger(specId).length;
       const beforeInvalidOutput = persistedSnapshot(flowManager, specId);
       assert.throws(() => flowManager.confirmDraftCoverageRepairCompletion({
@@ -492,7 +502,7 @@ describe("DraftCompletionConnector", () => {
       assert.equal(flowManager.canonicalState(specId).nextAction().operation, "start");
       assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, "draft-gate");
       assert.equal(ledger.length, before + 1);
-      assert.equal(published.descriptor.activityId, ledger.at(-1).id);
+      assert.deepEqual(published.descriptor, draftBeforeCompletion);
       assert.equal(ledger.at(-1).result.artifactRefs.at(-1).kind, "draft-completion-connector");
       assert.deepEqual(ledger.at(-1).result.stepOutput, { type: STEP_OUTPUT_TYPE.COMPLETED });
       assert.equal(ledger.at(-1).transition.stepConnectionReceipt.kind, "draft-completion");
@@ -564,7 +574,7 @@ describe("DraftCompletionConnector", () => {
       const beforeFiles = versionFileSnapshot(flowManager, specId);
       assert.throws(
         () => flowManager.confirmDraftCoverageRepairCompletion({ specId, decision: selected, draft: source }),
-        /canonical producer artifact is not ready for draft-coverage-repair: draft\.coverage\.review has no matching confirmed producer Activity/,
+        /canonical producer artifact is not ready for draft-gate: draft\.coverage\.review has no matching confirmed producer Activity/,
       );
       assert.equal(persistedSnapshot(flowManager, specId), beforeState);
       assert.deepEqual(versionFileSnapshot(flowManager, specId), beforeFiles);

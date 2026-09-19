@@ -13,6 +13,7 @@ import {
   getFlowNode,
   TaskReviewStageBinding,
   TaskReviewStageFacts,
+  resolveDraftStepRoute,
   resolveTaskReviewStageTransition,
 } from "../../../src/flow/definition.js";
 import {
@@ -53,11 +54,13 @@ it("preserves a Draft StepOutput in a typed NodeResult readback", () => {
     outcome: "passed", summary: "Draft review requested repair", confirmedAt: NOW,
     artifactRefs: [], stepOutput: new StepOutput(STEP_OUTPUT_TYPE.BRANCH_REQUIRED),
     draftRouteTargetStepId: "draft-questions-triage",
+    draftRouteEffects: { skipStepIds: [], resetStepIds: [] },
   });
   const restored = new NodeResult(JSON.parse(JSON.stringify(result)));
   assert.equal(restored.stepOutput instanceof StepOutput, true);
   assert.deepEqual(restored.stepOutput.toJSON(), { type: STEP_OUTPUT_TYPE.BRANCH_REQUIRED });
   assert.equal(restored.draftRouteTargetStepId, "draft-questions-triage");
+  assert.deepEqual(restored.draftRouteEffects.toJSON(), { skipStepIds: [], resetStepIds: [] });
   assert.deepEqual(new NodeResult(passedResult("ordinary completion")).toJSON(), passedResult("ordinary completion"));
 });
 
@@ -233,25 +236,28 @@ function advanceUntil(state, targetId, prefix = "advance") {
   return state;
 }
 
-it("routes Draft review completion and repair loop through the persisted successor", () => {
-  const routed = (summary, type, target) => ({
-    ...passedResult(summary), stepOutput: new StepOutput(type), draftRouteTargetStepId: target,
+it("applies only Definition-selected Draft route effects", () => {
+  const routed = (sourceStepId, summary, type, target) => ({
+    ...passedResult(summary),
+    stepOutput: new StepOutput(type),
+    draftRouteTargetStepId: target,
+    draftRouteEffects: resolveDraftStepRoute(sourceStepId, new StepOutput(type)).effects.toJSON(),
   });
   let state = advanceUntil(CurrentFlowState.create({ definition: definition() }), "draft-questions-review", "draft-route");
   state = startDescriptor(state, "draft-review-branch").confirmCurrentAttempt({
-    result: routed("Questions need repair", STEP_OUTPUT_TYPE.BRANCH_REQUIRED, "draft-questions-triage"),
+    result: routed("draft-questions-review", "Questions need repair", STEP_OUTPUT_TYPE.BRANCH_REQUIRED, "draft-questions-triage"),
   });
   assert.equal(state.nextAction().nodeId, "draft-questions-triage");
   state = completeNext(state, "draft-triage");
   state = startDescriptor(state, "draft-repair-loop").confirmCurrentAttempt({
-    result: routed("Questions repaired", STEP_OUTPUT_TYPE.LOOP_REQUIRED, "draft-questions-review"),
+    result: routed("draft-questions-repair", "Questions repaired", STEP_OUTPUT_TYPE.LOOP_REQUIRED, "draft-questions-review"),
   });
   assert.equal(state.nextAction().nodeId, "draft-questions-review");
   assert.equal(state.findNode("draft-questions-repair").status, "invalidated");
   const previousTriageSequence = state.findNode("draft-questions-triage").attemptSequence;
   const previousRepairSequence = state.findNode("draft-questions-repair").attemptSequence;
   state = startDescriptor(state, "draft-review-pass").confirmCurrentAttempt({
-    result: routed("Questions resolved", STEP_OUTPUT_TYPE.COMPLETED, "draft-refine"),
+    result: routed("draft-questions-review", "Questions resolved", STEP_OUTPUT_TYPE.COMPLETED, "draft-refine"),
   });
   assert.equal(state.nextAction().nodeId, "draft-refine");
   assert.equal(state.findNode("draft-questions-triage").status, "skipped");
@@ -259,7 +265,7 @@ it("routes Draft review completion and repair loop through the persisted success
   assert.equal(state.findNode("draft-questions-triage").attemptSequence, previousTriageSequence + 1);
   assert.equal(state.findNode("draft-questions-repair").attemptSequence, previousRepairSequence + 1);
   state = startDescriptor(state, "draft-refine-loop").confirmCurrentAttempt({
-    result: routed("More refinement needed", STEP_OUTPUT_TYPE.LOOP_REQUIRED, "draft-refine"),
+    result: routed("draft-refine", "More refinement needed", STEP_OUTPUT_TYPE.LOOP_REQUIRED, "draft-refine"),
   });
   assert.equal(state.nextAction().nodeId, "draft-refine");
 });

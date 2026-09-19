@@ -805,6 +805,9 @@ export class FlowManager {
   settleGateTransition(input = {}) {
     return this._store.settleGateTransition({ ...input, specId: input.specId ?? this._boundSpecId });
   }
+  commitDraftGateTransition(input = {}) {
+    return this._store.commitDraftGateTransition({ ...input, specId: input.specId ?? this._boundSpecId });
+  }
   recoverTaskExecutionOverrun(input = {}) {
     return this._store.recoverTaskExecutionOverrun({ ...input, specId: input.specId ?? this._boundSpecId });
   }

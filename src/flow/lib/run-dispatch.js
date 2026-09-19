@@ -64,7 +64,7 @@ import {
   FLOW_DISPATCH_INVOCATION_ENV,
 } from "./dispatch-invocation.js";
 import { buildFlowCommandHookContext } from "./flow-context.js";
-import { ConfirmAndAdvance, DRAFT_STEP_ERROR_CATEGORY, resolveDefinitionRoute, resolveDispatcherOwnedFlowAction, resolveSourceHandoffTransitionPlan } from "../definition.js";
+import { ConfirmAndAdvance, resolveDefinitionRoute, resolveDispatcherOwnedFlowAction, resolveSourceHandoffTransitionPlan } from "../definition.js";
 import { CanonicalSpecApproval } from "./canonical-spec-approval.js";
 import { reconcileCompletedReviewWorkUnits } from "./review-work-unit.js";
 import { approvalRouteFacts } from "./definition-route-facts.js";
@@ -78,7 +78,6 @@ import {
   recordNonBlockingDecision,
 } from "./nonblocking.js";
 import { StepFactory } from "../engine/step-factory.js";
-import { StepOutput } from "../engine/step-output.js";
 import { DraftService } from "../services/draft-service.js";
 
 const DEFAULT_MAX_DISPATCHES = 256;
@@ -109,20 +108,6 @@ const NON_REPLAYABLE_HANDOFF_ERROR_CODES = new Set([
   "FLOW_SOURCE_HANDOFF_CANONICAL_PATH_VIOLATION",
 ]);
 const REQUIREMENT_TEST_WORKER_LEAVES = new Set(["test-generate", "test-repair"]);
-
-class DispatchWorkerAgent extends Agent {
-  constructor(delegate) {
-    super({});
-    if (!delegate || typeof delegate.call !== "function") {
-      throw new TypeError("dispatcher Draft Step requires an Agent-compatible worker");
-    }
-    this.delegate = delegate;
-  }
-
-  call(prompt, options) {
-    return this.delegate.call(prompt, options);
-  }
-}
 
 async function draftWorkerStepDefinition(stepId) {
   switch (stepId) {
@@ -248,25 +233,24 @@ function settleRequirementTestStructuralHandoff(ctx, attempt, error) {
   return true;
 }
 
-/** Persist a Draft Step's terminal Error through the canonical Attempt owner. */
-function settleDraftStepError(ctx, attempt, error, stepId = attempt?.handoffRequest?.stepId ?? null) {
-  const request = attempt?.handoffRequest ?? null;
+/** Persist a pre-Step worker or handoff failure without inventing StepOutput. */
+function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoffRequest?.stepId ?? null) {
   if (!stepId?.startsWith("draft")) return false;
-  const stepOutput = attempt?.stepOutput ?? new StepOutput(error);
+  const request = attempt?.handoffRequest ?? null;
   ctx.flowManager.failCurrentAttempt({
     specId: request?.specId ?? ctx.specId,
     failure: {
-      category: DRAFT_STEP_ERROR_CATEGORY,
-      code: error?.code || "FLOW_DRAFT_STEP_ERROR",
-      message: stepOutput.error.message,
+      category: "tooling",
+      code: error?.code || "FLOW_DRAFT_WORKER_FAILURE",
+      message: error?.message || String(error),
       retryable: false,
       retryKind: null,
     },
-    stepOutput,
   });
   ctx.flowState = ctx.flowManager.loadReadOnly(request?.specId ?? ctx.specId);
   return true;
 }
+
 /**
  * Definition-backed command invocation owned by the dispatcher.  This keeps
  * command selection as typed definition data, rather than asking a sandboxed
@@ -1464,7 +1448,7 @@ export default class RunDispatchCommand extends FlowCommand {
     });
   }
 
-  async runWorkerAttempt(ctx, invocation, retryFeedback = null, boundRequest = null, agentOverride = null) {
+  async runWorkerAttempt(ctx, invocation, retryFeedback = null, agentOverride = null) {
     const action = new FlowDispatchAction(invocation.action.nextAction);
     let handoffRequest = null;
     let handoffAuthority = null;
@@ -1472,6 +1456,7 @@ export default class RunDispatchCommand extends FlowCommand {
     let handoffAuthorityAcquired = false;
     let work = null;
     let agentOptions = {};
+    let draftDefinition = null;
     try {
       handoffPolicy = workerArtifactHandoffPolicy(action.nextAction.step);
       if (handoffPolicy === null) {
@@ -1502,26 +1487,12 @@ export default class RunDispatchCommand extends FlowCommand {
       handoffAuthority.acquire();
       handoffAuthorityAcquired = true;
       const state = readFlowState(ctx);
-      if (boundRequest !== null) {
-        if (!(boundRequest instanceof WorkerArtifactHandoffRequest)
-          || boundRequest.invocation !== invocation
-          || boundRequest.stepId !== action.nextAction.step) {
-          throw new WorkerArtifactHandoffError(
-            "invalid", "FLOW_ARTIFACT_HANDOFF_INVALID",
-            "bound worker request does not match its dispatch invocation",
-            { retryable: false },
-          );
-        }
-        boundRequest.assertCurrent(state);
-        handoffRequest = boundRequest;
-      } else {
-        handoffRequest = this.handoffCoordinator.createRequest({
-          ctx,
-          state,
-          invocation,
-          workerInstructions,
-        });
-      }
+      handoffRequest = this.handoffCoordinator.createRequest({
+        ctx,
+        state,
+        invocation,
+        workerInstructions,
+      });
       work = new FlowDispatchWork(invocation, handoffRequest);
       if (handoffRequest.policy.kind === "source") {
         // The Definition-owned action schema remains the canonical base. A
@@ -1533,29 +1504,7 @@ export default class RunDispatchCommand extends FlowCommand {
           jsonSchema: handoffRequest.sourceResponseSchema(),
         };
       }
-      const draftDefinition = boundRequest === null
-        ? await draftWorkerStepDefinition(handoffRequest.stepId)
-        : null;
-      if (draftDefinition !== null) {
-        // The request was captured under the normal parent authority lease.
-        // The bound Step reacquires that lease before it verifies the request
-        // and calls the existing worker/reconciliation owner.
-        handoffAuthority.release();
-        handoffAuthority = null;
-        try {
-          return await this.runDraftWorkerStep(ctx, handoffRequest, agentOverride, draftDefinition, retryFeedback);
-        } catch (cause) {
-          return {
-            error: cause instanceof WorkerArtifactHandoffError ? cause : new WorkerArtifactHandoffError(
-              "invalid", "FLOW_DRAFT_STEP_BINDING_INVALID",
-              `Draft Step could not begin its bound worker handoff: ${cause.message}`,
-              { cause, retryable: false, data: { stepId: handoffRequest.stepId } },
-            ),
-            handoffRequest,
-            agentError: null,
-          };
-        }
-      }
+      draftDefinition = await draftWorkerStepDefinition(handoffRequest.stepId);
     } catch (error) {
       handoffAuthority?.release();
       if (handoffPolicy !== null && !handoffAuthorityAcquired && !(error instanceof WorkerArtifactHandoffError)) {
@@ -1700,11 +1649,21 @@ export default class RunDispatchCommand extends FlowCommand {
           sourceResponseError = null;
         }
         if (sourceResponseError !== null) throw sourceResponseError;
-        reconciliation = this.handoffCoordinator.reconcile({
-          ctx,
-          request: handoffRequest,
-          mutationAuthority: workerArtifactAuthority,
-        });
+        if (draftDefinition !== null) {
+          const prepared = this.handoffCoordinator.prepareDraftWorker({
+            ctx,
+            request: handoffRequest,
+          });
+          reconciliation = prepared.completed
+            ? { error: null, ...prepared }
+            : await this.runDraftWorkerStep(ctx, handoffRequest, draftDefinition, prepared);
+        } else {
+          reconciliation = this.handoffCoordinator.reconcile({
+            ctx,
+            request: handoffRequest,
+            mutationAuthority: workerArtifactAuthority,
+          });
+        }
         agentError = null;
       } catch (error) {
         const sourcePlan = error instanceof WorkerArtifactHandoffError && handoffRequest.policy.kind === "source"
@@ -1800,45 +1759,35 @@ export default class RunDispatchCommand extends FlowCommand {
     }
   }
 
-  /** Execute an already-bound Draft worker through the existing handoff path. */
-  async runBoundDraftWorker(request, agent, retryFeedback = null) {
-    if (!(request instanceof WorkerArtifactHandoffRequest) || !request.stepId.startsWith("draft")) {
-      throw new TypeError("bound Draft execution requires its worker handoff request");
-    }
-    const ctx = {
-      root: request.mainRoot,
-      mainRoot: request.mainRoot,
-      executionRoot: request.executionRoot,
-      specId: request.specId,
-      flowManager: request.flowManager,
-      flowState: request.flowManager.loadReadOnly(request.specId),
-    };
-    return this.runWorkerAttempt(ctx, request.invocation, retryFeedback, request, agent);
-  }
-
   /** Execute a Draft worker through its Definition-selected Connector and Step. */
-  async runDraftWorkerStep(ctx, request, agentOverride = null, definition = null, retryFeedback = null) {
-    definition = definition || await draftWorkerStepDefinition(request.stepId);
+  async runDraftWorkerStep(ctx, request, definition, prepared) {
     if (definition === null) throw new Error(`no Draft Step is declared for ${request.stepId}`);
-    const agent = agentOverride || this.agent || (this.agent = this.container.get("agent"));
-    let attempt = null;
-    const owner = this;
-    class BoundDraftDispatch extends RunDispatchCommand {
-      async runBoundDraftWorker(boundRequest, workerAgent) {
-        attempt = await owner.runBoundDraftWorker(boundRequest, workerAgent, retryFeedback);
-        return attempt;
-      }
+    if (prepared?.facts === null || prepared?.facts === undefined) {
+      throw new Error("Draft Step requires prepared worker facts");
     }
     const binding = await new definition.Connector(request).connect();
+    const draftService = new DraftService({
+      flowManager: ctx.flowManager,
+      binding,
+      workerFacts: prepared.facts,
+      workerExecutor: (stepOutput) => {
+        return {
+          error: null,
+          ...this.handoffCoordinator.commitDraftWorker({ ctx, request, preparation: prepared, stepOutput }),
+        };
+      },
+      workerErrorCommitter: (stepOutput) => this.handoffCoordinator.commitDraftWorkerError({
+        ctx,
+        request,
+        stepOutput,
+      }),
+    });
     const step = new StepFactory()
-      .provideArguments(DraftService, { flowManager: ctx.flowManager, binding })
-      .provide(Agent, new DispatchWorkerAgent(agent))
-      .provide(RunDispatchCommand, new BoundDraftDispatch())
+      .provide(DraftService, draftService)
       .create(definition.StepClass);
     const output = await step.execute();
-    if (attempt === null) {
-      throw new Error("Draft Step did not execute its bound worker handoff");
-    }
+    const attempt = draftService.workerOutcome;
+    if (attempt === null) throw new Error("Draft Step did not execute its bound worker handoff");
     if ((attempt.error === null && attempt.stepOutput !== output)
       || (attempt.error !== null && output.type !== "error")) {
       throw new Error("Draft Step output does not match its bound worker attempt");
@@ -2403,7 +2352,7 @@ export default class RunDispatchCommand extends FlowCommand {
             current = await this.fetchNextAction(target);
             continue;
           }
-          settleDraftStepError(ctx, attempt, attempt.error, invocation.action.nextAction.step);
+          settleDraftWorkerFailure(ctx, attempt, attempt.error, invocation.action.nextAction.step);
           discardDeferredMetrics(deferredMetrics);
           return this.failure(
             ctx,
@@ -2484,7 +2433,7 @@ export default class RunDispatchCommand extends FlowCommand {
             current = await this.fetchNextAction(target);
             continue;
           }
-          settleDraftStepError(ctx, attempt, exhausted, invocation.action.nextAction.step);
+          settleDraftWorkerFailure(ctx, attempt, exhausted, invocation.action.nextAction.step);
           return this.failure(
             ctx,
             exhausted.code,

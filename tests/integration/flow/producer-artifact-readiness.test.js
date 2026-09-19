@@ -95,6 +95,21 @@ describe("ProducerArtifactReadiness", () => {
         instanceof ProducerArtifactReadiness,
       "dynamic task gate results preserve their replacement implementation identity",
     );
+    assert.ok(
+      producerArtifactReadiness({ producerNodeId: "draft-coverage-review", consumerNodeId: "draft-gate" })
+        instanceof ProducerArtifactReadiness,
+      "coverage PASS connects its review evidence directly to Draft Gate",
+    );
+    assert.ok(
+      producerArtifactReadiness({ producerNodeId: "draft-coverage-review", consumerNodeId: "draft-coverage-triage" })
+        instanceof ProducerArtifactReadiness,
+      "coverage branch keeps the ordinary review-to-triage readiness edge",
+    );
+    assert.equal(
+      producerArtifactReadiness({ producerNodeId: "draft-coverage-review", consumerNodeId: "draft-coverage-repair" }),
+      null,
+      "coverage PASS does not borrow the repair route's readiness",
+    );
     assert.deepEqual(
       producerArtifactReadinessesForProducer({ producerNodeId: "spec-review" })
         .map((readiness) => `${readiness.producerNodeId}->${readiness.consumerNodeId}`),

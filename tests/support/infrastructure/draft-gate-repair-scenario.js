@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { DraftRepairPath } from "../../../src/flow/lib/draft-repair-operations.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
+import { STEP_OUTPUT_TYPE, StepOutput } from "../../../src/flow/engine/step-output.js";
 import {
   WorkerArtifactHandoffCoordinator,
   sealWorkerArtifactHandoff,
@@ -90,7 +91,16 @@ export class DraftGateRepairScenario {
   apply(payload) {
     fs.writeFileSync(this.request.payloadPath("draft-gate-repair.json"), `${JSON.stringify(payload, null, 2)}\n`);
     sealWorkerArtifactHandoff({ requestPath: this.request.requestPath, invocationId: this.request.dispatchInvocationId });
-    const result = this.coordinator.reconcile({ ctx: this.ctx, request: this.request });
+    const preparation = this.coordinator.prepareDraftWorker({
+      ctx: this.ctx,
+      request: this.request,
+    });
+    const result = this.coordinator.commitDraftWorker({
+      ctx: this.ctx,
+      request: this.request,
+      preparation,
+      stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+    });
     assert.equal(result.completed, true, JSON.stringify(result));
     const source = this.flowManager.readArtifact({ specId: this.specId, logicalKey: "draft", consumerNodeId: "draft-coverage-review" });
     return { result, source: JSON.parse(source.bytes.toString("utf8")), bytes: source.bytes };

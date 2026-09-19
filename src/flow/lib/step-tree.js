@@ -22,6 +22,17 @@ export function flattenSteps(steps) {
   return flat;
 }
 
+/** Return the contiguous leaf effects required to move from one route node to another. */
+export function contiguousLeafRouteEffects(leafIds, sourceId, targetId) {
+  if (!Array.isArray(leafIds)) throw new TypeError("leafIds must be an array");
+  const sourceIndex = leafIds.indexOf(sourceId);
+  const targetIndex = leafIds.indexOf(targetId);
+  if (sourceIndex < 0 || targetIndex < 0) throw new TypeError("route source or target is absent");
+  return targetIndex > sourceIndex
+    ? { skipStepIds: leafIds.slice(sourceIndex + 1, targetIndex), resetStepIds: [] }
+    : { skipStepIds: [], resetStepIds: leafIds.slice(targetIndex) };
+}
+
 export function findStepById(steps, id) {
   for (const step of steps || []) {
     if (step.id === id) return step;

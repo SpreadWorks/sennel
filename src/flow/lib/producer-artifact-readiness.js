@@ -180,10 +180,10 @@ function taskStageCompletionMatches({ route, expectedAttemptId, producer, descri
     && binding.artifactDigest === descriptor.hash;
 }
 
-/** The coverage completion connector consumes its review evidence directly. */
+/** The coverage completion connector consumes its review evidence at Gate. */
 function isConnectorConsumerHandoff(producerNodeId, consumerNodeId) {
   return producerNodeId === "draft-coverage-review"
-    && consumerNodeId === "draft-coverage-repair";
+    && consumerNodeId === "draft-gate";
 }
 
 function producerHandoffs(producerNodeId, consumerNodeId) {
@@ -388,8 +388,11 @@ export class ProducerArtifactReadiness {
           // definition-validated settlement may admit a downstream consumer.
           || (
             deferredGateSettlement !== null
-            && activity.transition.operation === "fail_attempt"
-            && activity.result?.outcome === "failed"
+            && (
+              activity.transition.operation === "publish_artifacts"
+              || (activity.transition.operation === "fail_attempt"
+                && activity.result?.outcome === "failed")
+            )
             && activity.sequence === deferredGateSettlement.sequence
             && activity.attemptId === deferredGateSettlement.attemptId
           )

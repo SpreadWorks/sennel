@@ -423,6 +423,14 @@ export class NextActionDirectiveResolver {
       });
     }
     if (reviewDisposition?.operation === "defer") {
+      if (["draft-questions", "draft-coverage"].includes(reviewDisposition.phase)) {
+        return new ExecuteCommandDirective({
+          actionId: "RESUME_DRAFT_REVIEW",
+          nextAction: guardedCommand("sennel flow run review --phase draft", this.state, this.binding),
+          instruction: "Reuse the published Draft Review Attempt through the typed Step and Service boundary, then refresh next-action. Do not invoke another provider evaluation.",
+          reason: `The published ${reviewDisposition.phase} Draft Review requires Step-owned settlement recovery.`,
+        });
+      }
       return new ExecuteCommandDirective({
         actionId: "SETTLE_REVIEW_DEFER",
         nextAction: guardedCommand("sennel flow run settle-review-transition", this.state, this.binding),

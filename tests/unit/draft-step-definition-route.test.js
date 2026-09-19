@@ -35,7 +35,20 @@ test("Definition routes every successful Draft Step output through the selected 
     assert.equal(selected.sourceStepId, stepId);
     assert.equal(selected.targetStepId, targetStepId);
     assert.equal(selected.connector.name, connectorName);
+    assert.equal(selected.effects.skipStepIds.includes(stepId), false);
+    assert.equal(selected.effects.resetStepIds.includes(stepId), outputType === "LOOP_REQUIRED");
   }
+});
+
+test("Definition seals the coverage PASS bypass instead of leaving it to state traversal", () => {
+  const selected = resolveDraftStepRoute(
+    "draft-coverage-review",
+    new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+  );
+  assert.deepEqual(selected.effects.toJSON(), {
+    skipStepIds: ["draft-coverage-triage", "draft-coverage-repair"],
+    resetStepIds: [],
+  });
 });
 
 test("Definition keeps user input and Error at the current Draft Step", () => {

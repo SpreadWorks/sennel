@@ -370,7 +370,7 @@ export class CanonicalGateObservationCycle {
   #currentOccurrenceRows() {
     const nodeId = this.state.current?.at(-1) ?? null;
     const attempt = this.state.attempt;
-    if (nodeId === null || attempt === null || attempt.failure === null || !nodeId.endsWith("-gate")) return [];
+    if (nodeId === null || attempt === null || !nodeId.endsWith("-gate")) return [];
     const taskId = taskIdForGateNode(nodeId);
     const phase = nodeId === "draft-gate" ? "draft"
       : nodeId === "spec-gate" ? null
@@ -404,9 +404,12 @@ export class CanonicalGateObservationCycle {
         nodeId,
         attempt,
         operations: new Set(["fail_attempt", "record_failure"]),
-      }) && activity.failure?.category === attempt.failure?.category
-        && activity.failure?.code === attempt.failure?.code);
-      if (failures.length !== 1) {
+      }));
+      const matchingFailures = attempt.failure === null ? [] : failures.filter((activity) => (
+        activity.failure?.category === attempt.failure.category
+        && activity.failure?.code === attempt.failure.code
+      ));
+      if (attempt.failure !== null && matchingFailures.length !== 1) {
         throw new Error("current canonical failed Gate result has no exact failure Activity");
       }
 

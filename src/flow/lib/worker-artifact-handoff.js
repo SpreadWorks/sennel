@@ -37,6 +37,7 @@ import {
   resolveRequirementTestLifecycle,
   resolveSourceHandoffTransitionPlan,
   SourceHandoffTransitionPlan,
+  DRAFT_STEP_ERROR_CATEGORY,
 } from "../definition.js";
 import { SourceHandoffFailureFacts } from "./source-handoff-failure.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
@@ -46,6 +47,7 @@ import {
 } from "./draft-completion-connector.js";
 import { DraftTransitionFacts, readDraftTransitionFacts } from "./draft-transition-facts.js";
 import { STEP_OUTPUT_TYPE, StepOutput } from "../engine/step-output.js";
+import { DraftStepPersistenceFailure } from "./definition-lifecycle-failure.js";
 import { CanonicalFlowFindingsStore } from "./flow-findings.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { findStepById } from "./step-tree.js";
@@ -6814,7 +6816,166 @@ function draftGateRepairResult(request, submission, state) {
     : null;
 }
 
-function settleDraftGateRepairTerminal({ ctx, request, state, submission, kind, outcome = null, failure = null, now }) {
+/** Sealed facts a Draft Step needs to choose its own output before commit. */
+class DraftWorkerHandoffFacts {
+  constructor({ request, submission, publications, state } = {}) {
+    if (!(request instanceof WorkerArtifactHandoffRequest)) {
+      throw new TypeError("Draft worker facts require a sealed worker request");
+    }
+    this.stepId = request.stepId;
+    this.draftChanged = publications.draftRepairChanged === true;
+    this.autoApprove = state.autoApprove === true;
+    this.hasCandidateQuestion = false;
+    if (request.stepId === "draft-refine") {
+      const payload = submission.payloadManifest.find((entry) => entry.targetRelativePath === "draft.json");
+      const bytes = payload === undefined ? null : manifestPayloadBytes(request, payload, "draft-refine payload");
+      const draft = bytes === null ? null : new DraftLifecycle(JSON.parse(bytes.toString("utf8")));
+      const facts = draft === null ? null : DraftTransitionFacts.fromDraft(draft);
+      if (facts?.nextQuestion !== null) {
+        throw new WorkerArtifactHandoffError(
+          "invalid",
+          "FLOW_ARTIFACT_HANDOFF_INVALID",
+          "draft-refine handoff cannot confirm an output ledger with AwaitingUserAnswer",
+        );
+      }
+      this.hasCandidateQuestion = facts?.candidateQuestion !== null;
+    }
+    Object.freeze(this);
+  }
+}
+
+function isDraftWorkerStep(stepId) {
+  return stepId === "draft" || stepId === "draft-questions-triage"
+    || stepId === "draft-questions-repair" || stepId === "draft-refine"
+    || stepId === "draft-gate-repair" || stepId === "draft-coverage-triage"
+    || stepId === "draft-coverage-repair";
+}
+
+/** Private in-memory boundary between Draft handoff preparation and commit. */
+class DraftWorkerPreparation {
+  constructor({ request, state, submission, publications, repairCheckpoint, planGateRepairOutcome, facts } = {}) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)) {
+      throw new TypeError("Draft worker preparation requires a Draft worker request");
+    }
+    this.request = request;
+    this.state = state;
+    this.submission = submission;
+    this.publications = publications;
+    this.repairCheckpoint = repairCheckpoint;
+    this.planGateRepairOutcome = planGateRepairOutcome;
+    this.facts = facts;
+    Object.freeze(this);
+  }
+}
+
+function prepareDraftWorkerCanonical({ request, state, submission }) {
+  const quarantine = readHandoffQuarantine(request, submission);
+  if (quarantine !== null) {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_ARTIFACT_HANDOFF_QUARANTINED",
+      `sealed worker artifact handoff is quarantined after ${quarantine.code}: ${quarantine.message}`,
+      {
+        retryable: false,
+        recoveryPossible: false,
+        data: { stepId: request.stepId, handoffDirectory: request.directory },
+      },
+    );
+  }
+  let publications;
+  try {
+    publications = canonicalHandoffPublications(request, submission);
+  } catch (cause) {
+    throw cause instanceof WorkerArtifactHandoffError
+      ? cause
+      : new WorkerArtifactHandoffError(
+          "invalid",
+          "FLOW_ARTIFACT_HANDOFF_INVALID",
+          `canonical worker artifact publication cannot be resolved: ${cause.message}`,
+          { cause, retryable: false },
+      );
+  }
+  let repairCheckpoint = null;
+  try {
+    repairCheckpoint = testReviewRepairProgressPublication(request, submission, publications);
+    if (repairCheckpoint !== null) publications = repairCheckpoint.publications;
+  } catch (cause) {
+    throw cause instanceof WorkerArtifactHandoffError ? cause : new WorkerArtifactHandoffError(
+      "invalid", "FLOW_TEST_REVIEW_REPAIR_PROGRESS_INVALID",
+      `test-review repair progress could not be prepared: ${cause.message}`, { cause },
+    );
+  }
+  const planGateRepairOutcome = request.stepId === "draft-gate-repair"
+    ? draftGateRepairResult(request, submission, state).outcome
+    : null;
+  const facts = new DraftWorkerHandoffFacts({ request, submission, publications, state });
+  return new DraftWorkerPreparation({
+    request, state, submission, publications, repairCheckpoint, planGateRepairOutcome, facts,
+  });
+}
+
+function replayedDraftStepOutput({ ctx, request }) {
+  return ctx.flowManager.canonicalState(request.specId)?.findNode(request.stepId)?.result?.stepOutput ?? null;
+}
+
+function isDraftPromotionReceipt({ ctx, request }) {
+  const state = ctx.flowManager.canonicalState(request.specId);
+  const expectedAttempt = request.state?.attempt ?? state?.attempt ?? null;
+  const expectedSequence = expectedAttempt?.sequence ?? state?.findNode(request.stepId)?.attemptSequence ?? null;
+  if (expectedSequence === null) return false;
+  return ctx.flowManager.activityLedger(request.specId).some((activity) => {
+    if (activity?.nodeId !== request.stepId || activity?.transition?.operation !== "publish_artifacts") return false;
+    if (expectedAttempt?.id !== undefined && expectedAttempt?.id !== null && activity.attemptId !== expectedAttempt.id) return false;
+    if (activity.sequence !== expectedSequence) return false;
+    const artifacts = activity?.references?.artifacts;
+    return Array.isArray(artifacts)
+      && artifacts.some((reference) => (
+        reference.id === request.requestDigest && reference.label === "draft-refine handoff request"
+      ))
+      && artifacts.some((reference) => reference.label === "draft-refine handoff");
+  });
+}
+
+function assertReplayedDraftStepOutput({ ctx, request, stepOutput }) {
+  if (stepOutput instanceof StepOutput || isDraftPromotionReceipt({ ctx, request })) return stepOutput;
+  throw new WorkerArtifactHandoffError(
+    "recovery-required",
+    "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
+    "terminal Draft handoff receipt has no persisted StepOutput",
+    { retryable: false, data: { stepId: request.stepId, handoffDirectory: request.directory } },
+  );
+}
+
+function hasCommittedDraftStepOutput({ ctx, request, stepOutput, requireReceipt = false }) {
+  if (!(stepOutput instanceof StepOutput)) return false;
+  const state = ctx.flowManager.canonicalState(request.specId);
+  const node = state?.findNode(request.stepId) ?? null;
+  const persisted = node?.result?.stepOutput ?? null;
+  if (persisted === null) return false;
+  const expectedAttempt = request.state?.attempt ?? state?.attempt ?? null;
+  const expectedSequence = expectedAttempt?.sequence ?? node?.attemptSequence ?? null;
+  if (expectedSequence === null || node?.attemptSequence !== expectedSequence) return false;
+  if (requireReceipt && canonicalHandoffReceiptForRequest(state, request, ctx.flowManager) === null) return false;
+  const activity = ctx.flowManager.activityLedger(request.specId).findLast((entry) => (
+    entry?.nodeId === request.stepId
+      && (expectedAttempt?.id === null || expectedAttempt?.id === undefined || entry?.attemptId === expectedAttempt.id)
+      && entry?.sequence === expectedSequence
+      && entry?.result?.stepOutput !== null
+      && entry?.result?.stepOutput !== undefined
+  ));
+  return activity !== undefined
+    && JSON.stringify(activity.result.stepOutput) === JSON.stringify(stepOutput.toJSON())
+    && JSON.stringify(persisted.toJSON?.() ?? persisted) === JSON.stringify(stepOutput.toJSON());
+}
+
+function settleDraftGateRepairTerminal({ ctx, request, state, submission, kind, outcome = null, failure = null, stepOutput, now }) {
+  if (!(stepOutput instanceof StepOutput) || stepOutput.type === STEP_OUTPUT_TYPE.ERROR) {
+    throw new WorkerArtifactHandoffError(
+      "invalid", "FLOW_DRAFT_STEP_OUTPUT_REQUIRED",
+      "Draft Gate repair terminal settlement requires the Step-selected output",
+      { retryable: false, data: { stepId: request.stepId } },
+    );
+  }
   const selected = currentPlanGateObservationRepair({ request, state });
   if (selected === null) {
     throw new WorkerArtifactHandoffError(
@@ -6835,7 +6996,7 @@ function settleDraftGateRepairTerminal({ ctx, request, state, submission, kind, 
     plan,
     outcome,
     confirmedAt: now().toISOString(),
-    stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+    stepOutput,
   });
   const receipt = canonicalHandoffReceipt(request, submission, now);
   cleanupCompletedHandoff(request.handoffRoot, receipt);
@@ -6846,7 +7007,7 @@ function settleDraftGateRepairTerminal({ ctx, request, state, submission, kind, 
     stepId: receipt.stepId,
     handoffDigest: receipt.handoffDigest,
     payloadDigest: receipt.payloadDigest,
-    stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+    stepOutput,
   };
 }
 
@@ -7538,7 +7699,7 @@ function canonicalTestTreeBaselineForPublication(request) {
 }
 
 class DraftPromotionHandoffAdapter {
-  constructor({ flowManager, specId, sourceBytes, sourcePayloadDigest, handoffDigest, handoffRequestDigest, action, stepOutput }) {
+  constructor({ flowManager, specId, sourceBytes, sourcePayloadDigest, handoffDigest, handoffRequestDigest, action }) {
     this.flowManager = flowManager;
     this.specId = specId;
     this.sourceBytes = Buffer.from(sourceBytes);
@@ -7546,7 +7707,6 @@ class DraftPromotionHandoffAdapter {
     this.handoffDigest = handoffDigest;
     this.handoffRequestDigest = handoffRequestDigest;
     this.action = action;
-    this.stepOutput = stepOutput;
   }
 
   promoteDraftQuestionAndKeepRefineActive(action) {
@@ -7561,7 +7721,6 @@ class DraftPromotionHandoffAdapter {
       sourcePayloadDigest: this.sourcePayloadDigest,
       handoffDigest: this.handoffDigest,
       handoffRequestDigest: this.handoffRequestDigest,
-      stepOutput: this.stepOutput,
     });
   }
 }
@@ -8905,7 +9064,149 @@ export class WorkerArtifactHandoffCoordinator {
       : null;
   }
 
-  reconcile({ ctx, request, mutationAuthority = null }) {
+  /**
+   * Validate one sealed Draft worker result and expose only the facts its
+   * Step needs to choose a result.  Publication is deliberately deferred
+   * until commitDraftWorker receives that choice.
+   */
+  prepareDraftWorker({ ctx, request }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)) {
+      throw new TypeError("Draft worker preparation requires a Draft worker handoff request");
+    }
+    if (request.state?.schemaRevision !== 3 || typeof ctx.flowManager.confirmCurrentAttempt !== "function") {
+      throw new WorkerArtifactHandoffError(
+        "invalid",
+        "FLOW_ARTIFACT_HANDOFF_INVALID",
+        "worker artifact handoff publication requires a Version-1 Flow",
+      );
+    }
+    let state;
+    try {
+      state = ctx.flowManager.load(request.specId);
+      const committed = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
+      if (committed !== null) {
+        return {
+          completed: true,
+          replayed: true,
+          stepId: request.stepId,
+          handoffDigest: committed.id,
+          payloadDigest: null,
+          facts: null,
+          stepOutput: assertReplayedDraftStepOutput({
+            ctx, request, stepOutput: replayedDraftStepOutput({ ctx, request, state }),
+          }),
+        };
+      }
+    } catch (cause) {
+      if (cause?.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED") throw cause;
+      state = null;
+    }
+    let submission;
+    try {
+      submission = readSubmission(request);
+      validateSubmission(request, submission);
+    } catch (cause) {
+      if (cause instanceof WorkerArtifactHandoffError && cause.classification === "missing") {
+        const payloadError = unsealedFilePayloadError(request);
+        if (payloadError !== null) throw payloadError;
+      }
+      throw cause instanceof WorkerArtifactHandoffError
+        ? cause
+        : new WorkerArtifactHandoffError(
+            "invalid",
+            "FLOW_ARTIFACT_HANDOFF_INVALID",
+            `canonical worker artifact handoff is invalid: ${cause.message}`,
+            { cause },
+          );
+    }
+    try {
+      state ??= ctx.flowManager.load(request.specId);
+      request.assertCurrent(state);
+      if (request.policy.kind === "source") {
+        throw new WorkerArtifactHandoffError(
+          "invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", "Draft worker handoff cannot use source policy",
+        );
+      }
+      const recoverableValidation = validatePayload(request, submission, state) ?? null;
+      if (recoverableValidation instanceof RequirementTestStructuralHandoffResult) {
+        throw new RequirementTestStructuralHandoffError(recoverableValidation);
+      }
+      return prepareDraftWorkerCanonical({ request, state, submission });
+    } catch (cause) {
+      if (cause instanceof WorkerArtifactHandoffError) throw cause;
+      throw new WorkerArtifactHandoffError(
+        "invalid",
+        "FLOW_ARTIFACT_HANDOFF_INVALID",
+        `canonical worker artifact handoff preparation failed: ${cause.message}`,
+        { cause, retryable: false },
+      );
+    }
+  }
+
+  /** Commit a Step-selected result through the existing canonical handoff. */
+  commitDraftWorker({ ctx, request, preparation, stepOutput }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)) {
+      throw new TypeError("Draft worker commit requires a Draft worker handoff request");
+    }
+    if (!(stepOutput instanceof StepOutput) || stepOutput.type === STEP_OUTPUT_TYPE.ERROR) {
+      throw new TypeError("Draft worker commit requires a non-error StepOutput");
+    }
+    if (!(preparation instanceof DraftWorkerPreparation) || preparation.request !== request) {
+      throw new TypeError("Draft worker commit requires its prepared handoff");
+    }
+    try {
+      return this.reconcile({
+        ctx,
+        request,
+        preparedDraft: preparation,
+        draftWorkerOutput: stepOutput,
+      });
+    } catch (cause) {
+      if (!hasCommittedDraftStepOutput({ ctx, request, stepOutput, requireReceipt: true })) throw cause;
+      const state = ctx.flowManager.canonicalState(request.specId);
+      const receipt = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
+      return {
+        completed: true,
+        replayed: false,
+        stepId: request.stepId,
+        handoffDigest: receipt?.id ?? null,
+        payloadDigest: manifestDigest(preparation.submission.payloadManifest),
+        stepOutput,
+      };
+    }
+  }
+
+  /** Commit a Draft Step error against the same bound Attempt. */
+  commitDraftWorkerError({ ctx, request, stepOutput }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)) {
+      throw new TypeError("Draft worker error commit requires a Draft worker handoff request");
+    }
+    if (!(stepOutput instanceof StepOutput) || stepOutput.type !== STEP_OUTPUT_TYPE.ERROR) {
+      throw new TypeError("Draft worker error commit requires an Error StepOutput");
+    }
+    try {
+      request.assertCurrent(ctx.flowManager.loadReadOnly(request.specId));
+      ctx.flowManager.failCurrentAttempt({
+        specId: request.specId,
+        failure: {
+          category: DRAFT_STEP_ERROR_CATEGORY,
+          code: stepOutput.error?.code || "DRAFT_WORKER_STEP_ERROR",
+          message: stepOutput.error.message,
+          retryable: false,
+          retryKind: null,
+        },
+        stepOutput,
+      });
+      return { error: null, stepOutput };
+    } catch (cause) {
+      if (hasCommittedDraftStepOutput({ ctx, request, stepOutput })) {
+        return { error: null, stepOutput };
+      }
+      throw new DraftStepPersistenceFailure(cause);
+    }
+  }
+
+  reconcile({ ctx, request, mutationAuthority = null, preparedDraft = null, draftWorkerOutput = null }) {
     if (!(request instanceof WorkerArtifactHandoffRequest)) return null;
     // A sealed V1 payload sits in `.runtime/` until the parent accepts it.
     // Validate that untrusted surface before loading the Version Store: a
@@ -8918,6 +9219,39 @@ export class WorkerArtifactHandoffCoordinator {
         "worker artifact handoff publication requires a Version-1 Flow",
       );
     }
+    if (preparedDraft !== null) {
+      if (!(preparedDraft instanceof DraftWorkerPreparation) || preparedDraft.request !== request) {
+        throw new WorkerArtifactHandoffError(
+          "invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", "Draft worker preparation does not match its request",
+        );
+      }
+      const state = ctx.flowManager.load(request.specId);
+      const committed = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
+      if (committed !== null) {
+        return {
+          completed: true,
+          replayed: true,
+          stepId: request.stepId,
+          handoffDigest: committed.id,
+          payloadDigest: null,
+          ...(isDraftWorkerStep(request.stepId) ? {
+            stepOutput: assertReplayedDraftStepOutput({
+              ctx, request, stepOutput: replayedDraftStepOutput({ ctx, request, state }),
+            }),
+          } : {}),
+        };
+      }
+      request.assertCurrent(state);
+      return this.#reconcileCanonical({
+        ctx,
+        request,
+        state,
+        submission: preparedDraft.submission,
+        mutationAuthority,
+        draftWorkerOutput,
+        preparedDraft,
+      });
+    }
     let state = null;
     try {
       state = ctx.flowManager.load(request.specId);
@@ -8929,9 +9263,15 @@ export class WorkerArtifactHandoffCoordinator {
           stepId: request.stepId,
           handoffDigest: committed.id,
           payloadDigest: null,
+          ...(isDraftWorkerStep(request.stepId) ? {
+            stepOutput: assertReplayedDraftStepOutput({
+              ctx, request, stepOutput: replayedDraftStepOutput({ ctx, request, state }),
+            }),
+          } : {}),
         };
       }
-    } catch {
+    } catch (cause) {
+      if (cause?.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED") throw cause;
       // An untrusted runtime payload can make catalog verification reject a
       // symlink before its own handoff validation runs. Defer that load
       // failure until after the sealed surface has been checked below.
@@ -8972,12 +9312,13 @@ export class WorkerArtifactHandoffCoordinator {
       mutationAuthority = this.sourceMutationAuthority({ ctx, request });
     }
     return this.#reconcileCanonical({
-      ctx, request, state, submission, mutationAuthority,
+      ctx, request, state, submission, mutationAuthority, preparedDraft, draftWorkerOutput,
     });
   }
 
   #reconcileCanonical({
     ctx, request, state, submission = null, mutationAuthority = null,
+    preparedDraft = null, draftWorkerOutput = null,
   }) {
     const committed = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
     if (committed !== null) {
@@ -8987,106 +9328,116 @@ export class WorkerArtifactHandoffCoordinator {
         stepId: request.stepId,
         handoffDigest: committed.id,
         payloadDigest: null,
+        ...(isDraftWorkerStep(request.stepId) ? {
+          stepOutput: assertReplayedDraftStepOutput({
+            ctx, request, stepOutput: replayedDraftStepOutput({ ctx, request, state }),
+          }),
+        } : {}),
       };
     }
-    try {
-      const resolvedSubmission = submission ?? readSubmission(request);
-      if (submission === null) validateSubmission(request, resolvedSubmission);
-      submission = resolvedSubmission;
+    if (preparedDraft !== null) {
+      if (!(preparedDraft instanceof DraftWorkerPreparation) || preparedDraft.request !== request) {
+        throw new WorkerArtifactHandoffError(
+          "invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", "Draft worker preparation does not match its request",
+        );
+      }
+      submission = preparedDraft.submission;
       request.assertCurrent(state);
-    } catch (cause) {
-      throw cause instanceof WorkerArtifactHandoffError
-        ? cause
-        : new WorkerArtifactHandoffError(
-            "invalid",
-            "FLOW_ARTIFACT_HANDOFF_INVALID",
-            `canonical worker artifact handoff is invalid: ${cause.message}`,
-            { cause },
-          );
+    } else {
+      try {
+        const resolvedSubmission = submission ?? readSubmission(request);
+        if (submission === null) validateSubmission(request, resolvedSubmission);
+        submission = resolvedSubmission;
+        request.assertCurrent(state);
+      } catch (cause) {
+        throw cause instanceof WorkerArtifactHandoffError
+          ? cause
+          : new WorkerArtifactHandoffError(
+              "invalid",
+              "FLOW_ARTIFACT_HANDOFF_INVALID",
+              `canonical worker artifact handoff is invalid: ${cause.message}`,
+              { cause },
+            );
+      }
     }
     let recoverableValidation = null;
-    try {
-      recoverableValidation = validatePayload(request, submission, state) ?? null;
-    } catch (cause) {
-      const failure = cause instanceof WorkerArtifactHandoffError
-        ? cause
-        : new WorkerArtifactHandoffError(
-            "invalid",
-            "FLOW_ARTIFACT_HANDOFF_INVALID",
-            `canonical worker artifact handoff is invalid: ${cause.message}`,
-            { cause },
-          );
-      if (request.stepId === "draft-gate-repair" && failure.classification === "invalid") {
-        return settleDraftGateRepairTerminal({
-          ctx, request, state, submission, kind: "invalid-payload", failure, now: this.now,
-        });
+    if (preparedDraft === null) {
+      try {
+        recoverableValidation = validatePayload(request, submission, state) ?? null;
+      } catch (cause) {
+        const failure = cause instanceof WorkerArtifactHandoffError
+          ? cause
+          : new WorkerArtifactHandoffError(
+              "invalid",
+              "FLOW_ARTIFACT_HANDOFF_INVALID",
+              `canonical worker artifact handoff is invalid: ${cause.message}`,
+              { cause },
+            );
+        throw failure;
       }
-      throw failure;
+      if (recoverableValidation instanceof RequirementTestStructuralHandoffResult) {
+        throw new RequirementTestStructuralHandoffError(recoverableValidation);
+      }
     }
-    if (recoverableValidation instanceof RequirementTestStructuralHandoffResult) {
-      throw new RequirementTestStructuralHandoffError(recoverableValidation);
+    if (isDraftWorkerStep(request.stepId) && preparedDraft === null) {
+      throw new WorkerArtifactHandoffError(
+        "invalid", "FLOW_DRAFT_STEP_OUTPUT_REQUIRED",
+        "Draft worker handoff must be committed through its prepared Step output",
+        { retryable: false, data: { stepId: request.stepId } },
+      );
     }
     if (request.policy.kind === "source") {
       return this.#reconcileSource({ ctx, request, submission, mutationAuthority });
     }
-    const quarantine = readHandoffQuarantine(request, submission);
-    if (quarantine !== null) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_ARTIFACT_HANDOFF_QUARANTINED",
-        `sealed worker artifact handoff is quarantined after ${quarantine.code}: ${quarantine.message}`,
-        {
-          retryable: false,
-          recoveryPossible: false,
-          data: { stepId: request.stepId, handoffDirectory: request.directory },
-        },
-      );
-    }
     let publications;
-    try {
-      publications = canonicalHandoffPublications(request, submission);
-    } catch (cause) {
-      throw cause instanceof WorkerArtifactHandoffError
-        ? cause
-        : new WorkerArtifactHandoffError(
-            "invalid",
-            "FLOW_ARTIFACT_HANDOFF_INVALID",
-            `canonical worker artifact publication cannot be resolved: ${cause.message}`,
-            { cause, retryable: false },
+    let repairCheckpoint;
+    let planGateRepairOutcome;
+    if (preparedDraft !== null) {
+      ({ publications, repairCheckpoint, planGateRepairOutcome } = preparedDraft);
+    } else {
+      const quarantine = readHandoffQuarantine(request, submission);
+      if (quarantine !== null) {
+        throw new WorkerArtifactHandoffError(
+          "invalid",
+          "FLOW_ARTIFACT_HANDOFF_QUARANTINED",
+          `sealed worker artifact handoff is quarantined after ${quarantine.code}: ${quarantine.message}`,
+          {
+            retryable: false,
+            recoveryPossible: false,
+            data: { stepId: request.stepId, handoffDirectory: request.directory },
+          },
         );
-    }
-    let repairCheckpoint = null;
-    try {
+      }
+      publications = canonicalHandoffPublications(request, submission);
       repairCheckpoint = testReviewRepairProgressPublication(request, submission, publications);
       if (repairCheckpoint !== null) publications = repairCheckpoint.publications;
-    } catch (cause) {
-      throw cause instanceof WorkerArtifactHandoffError ? cause : new WorkerArtifactHandoffError(
-        "invalid", "FLOW_TEST_REVIEW_REPAIR_PROGRESS_INVALID",
-        `test-review repair progress could not be prepared: ${cause.message}`, { cause },
-      );
-    }
-    const planGateRepairOutcome = request.stepId === "draft-gate-repair"
-      ? draftGateRepairResult(request, submission, state).outcome
-      : request.stepId === "spec"
+      planGateRepairOutcome = request.stepId === "spec"
         ? planGateRepairArtifactOutcomeDraft(request, submission, state, "spec.json")
         : null;
-    const draftWorkerOutput = request.stepId === "draft-questions-repair"
-      || request.stepId === "draft-coverage-repair"
-      ? new StepOutput(publications.draftRepairChanged
-        ? STEP_OUTPUT_TYPE.LOOP_REQUIRED : STEP_OUTPUT_TYPE.COMPLETED)
-      : request.stepId === "draft" || request.stepId === "draft-questions-triage"
-        || request.stepId === "draft-coverage-triage" || request.stepId === "draft-gate-repair"
-        || request.stepId === "draft-refine"
-        ? new StepOutput(STEP_OUTPUT_TYPE.COMPLETED)
-        : null;
+    }
+    const selectedDraftWorkerOutput = draftWorkerOutput;
+    if (selectedDraftWorkerOutput !== null && !(selectedDraftWorkerOutput instanceof StepOutput)) {
+      throw new WorkerArtifactHandoffError(
+        "invalid", "FLOW_DRAFT_STEP_OUTPUT_INVALID", "Draft Step must select a typed StepOutput",
+        { retryable: false, data: { stepId: request.stepId } },
+      );
+    }
     let promotionApplied = false;
     let promotionOutput = null;
     try {
       this.faultInjector({ phase: "before-worker-handoff-publication", stepId: request.stepId });
       if (planGateRepairOutcome?.disposition === "rejected-no-progress") {
+        if (preparedDraft === null) {
+          throw new WorkerArtifactHandoffError(
+            "invalid", "FLOW_DRAFT_STEP_OUTPUT_REQUIRED",
+            "Draft Gate repair terminal settlement requires the Step-selected output",
+            { retryable: false, data: { stepId: request.stepId } },
+          );
+        }
         return settleDraftGateRepairTerminal({
           ctx, request, state, submission,
-          kind: "rejected-no-progress", outcome: planGateRepairOutcome, now: this.now,
+          kind: "rejected-no-progress", outcome: planGateRepairOutcome,
+          stepOutput: selectedDraftWorkerOutput, now: this.now,
         });
       }
       if (request.stepId === "draft-refine") {
@@ -9096,13 +9447,6 @@ export class WorkerArtifactHandoffCoordinator {
         const draft = draftBytes === null ? null : new DraftLifecycle(JSON.parse(draftBytes.toString("utf8")));
         const latestState = ctx.flowManager.loadReadOnly(request.specId);
         const draftTransitionFacts = draft === null ? null : DraftTransitionFacts.fromDraft(draft);
-        if (draftTransitionFacts?.nextQuestion !== null) {
-          throw new WorkerArtifactHandoffError(
-            "invalid",
-            "FLOW_ARTIFACT_HANDOFF_INVALID",
-            "draft-refine handoff cannot confirm an output ledger with AwaitingUserAnswer",
-          );
-        }
         const plan = draft === null ? null : resolveLifecyclePlan({
           event: "draft-refine:confirm", currentStepId: "draft-refine", flowState: latestState,
           draftTransitionFacts,
@@ -9118,8 +9462,7 @@ export class WorkerArtifactHandoffCoordinator {
               { retryable: false, data: { stepId: request.stepId } },
             );
           }
-          promotionOutput = new StepOutput(latestState.autoApprove === true
-            ? STEP_OUTPUT_TYPE.LOOP_REQUIRED : STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED);
+          promotionOutput = selectedDraftWorkerOutput;
           action.apply(new DraftPromotionHandoffAdapter({
             flowManager: ctx.flowManager,
             specId: request.specId,
@@ -9128,7 +9471,6 @@ export class WorkerArtifactHandoffCoordinator {
             handoffDigest: submission.handoffDigest,
             handoffRequestDigest: request.requestDigest,
             action,
-            stepOutput: promotionOutput,
           }));
           promotionApplied = true;
           // The promotion itself keeps the same Attempt active. The waiting
@@ -9174,7 +9516,7 @@ export class WorkerArtifactHandoffCoordinator {
           artifactBaselines: publications.artifactBaselines,
           testSourceBaseline: publications.testSourceBaseline,
           planGateRepairOutcome,
-          ...(draftWorkerOutput === null ? {} : { stepOutput: draftWorkerOutput }),
+          ...(selectedDraftWorkerOutput === null ? {} : { stepOutput: selectedDraftWorkerOutput }),
         };
         if (publications.draftCoverageRepairDecision !== null) {
           ctx.flowManager.confirmDraftCoverageRepairCompletion({
@@ -9225,7 +9567,7 @@ export class WorkerArtifactHandoffCoordinator {
       stepId: receipt.stepId,
       handoffDigest: receipt.handoffDigest,
       payloadDigest: receipt.payloadDigest,
-      stepOutput: promotionOutput ?? draftWorkerOutput,
+      stepOutput: promotionOutput ?? selectedDraftWorkerOutput,
     };
   }
 

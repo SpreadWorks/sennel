@@ -529,9 +529,11 @@ function assertReceiptConsistency(receipt) {
   }
 }
 
-export function createDraftCompletionReceipt({ connector, sourceAttempt, draftInput, publishedDraft, lineage, decisionEvidence } = {}) {
+export function createDraftCompletionReceipt({ connector, sourceAttempt, draftInput, publishedDraft, publishedDraftBytes = null, lineage, decisionEvidence } = {}) {
   if (!(connector instanceof DraftCompletionConnector)) throw new Error("draft completion receipt requires a DraftCompletionConnector");
-  const bytes = Buffer.from(`${JSON.stringify(publishedDraft, null, 2)}\n`, "utf8");
+  const bytes = publishedDraftBytes === null
+    ? Buffer.from(`${JSON.stringify(publishedDraft, null, 2)}\n`, "utf8")
+    : Buffer.from(publishedDraftBytes);
   return new StepConnectionReceipt(RECEIPT_TOKEN, {
     connector, sourceAttempt, draftInput,
     draftOutput: { digest: createHash("sha256").update(bytes).digest("hex"), byteLength: bytes.length },
@@ -559,12 +561,12 @@ export function readDraftCompletionCatalogDigest({ flowManager, specId, logicalK
 }
 
 /** Read only the cataloged coverage PASS evidence and its exact draft input. */
-export function readCoveragePassDraftCompletionFacts({ flowManager, specId, sourceStepId = "draft-coverage-repair" } = {}) {
+export function readCoveragePassDraftCompletionFacts({ flowManager, specId, sourceStepId = "draft-coverage-review" } = {}) {
   const draft = flowManager.readArtifact({
-    specId, logicalKey: "draft", consumerNodeId: "draft-coverage-repair",
+    specId, logicalKey: "draft", consumerNodeId: sourceStepId,
   });
   const review = flowManager.readArtifact({
-    specId, logicalKey: "draft.coverage.review", consumerNodeId: "draft-coverage-repair",
+    specId, logicalKey: "draft.coverage.review", consumerNodeId: sourceStepId,
   });
   const history = CanonicalCommandAttemptArtifactHistory.fromBytes({
     logicalKey: "draft.coverage.review", bytes: review.bytes,

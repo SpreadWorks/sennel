@@ -302,6 +302,45 @@ describe("definition-owned Gate transition boundary", () => {
     }).category, "tooling");
   });
 
+  it("routes an ordinary Draft Gate semantic failure to repair while preserving defer guards", () => {
+    const repair = resolveGateTransition(facts({
+      phase: "draft",
+      result: "fail",
+      failure: new GateFailureCategory({ category: "semantic", code: "GATE_REJECTED" }),
+      retry: new GateRetryMetrics({ used: 0, maximum: 4 }),
+    }));
+    assert.equal(repair.disposition.operation, "repair");
+    assert.equal(repair.plan.repairConnector.sourceGateStepId, "draft-gate");
+    assert.equal(repair.plan.repairConnector.targetStepId, "draft-gate-repair");
+
+    const sameEvidence = resolveGateTransition(facts({
+      phase: "draft",
+      result: "fail",
+      failure: new GateFailureCategory({ category: "semantic", code: "GATE_REJECTED" }),
+      retry: new GateRetryMetrics({ used: 0, maximum: 4 }),
+      observationConvergence: new GateObservationConvergenceFacts({
+        evidenceKey: "draft-gate-evidence",
+        observationFingerprints: ["evidence-1"],
+        occurrenceCount: 2,
+        repairCount: 1,
+        recurrenceCount: 1,
+        recurringObservationCount: 1,
+        latestOutcomeDisposition: "rejected-no-progress",
+        latestOutcomeChangedEvidence: false,
+        finalRound: false,
+      }),
+    }));
+    assert.equal(sameEvidence.disposition.operation, "defer");
+
+    const exhausted = resolveGateTransition(facts({
+      phase: "draft",
+      result: "fail",
+      failure: new GateFailureCategory({ category: "semantic", code: "GATE_REJECTED" }),
+      retry: new GateRetryMetrics({ used: 4, maximum: 4 }),
+    }));
+    assert.equal(exhausted.disposition.operation, "defer");
+  });
+
   it("projects public Gate failures from the sealed Definition decision", () => {
     const draftTooling = resolveGateTransition(facts({
       phase: "draft", result: "fail",

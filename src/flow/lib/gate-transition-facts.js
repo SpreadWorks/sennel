@@ -631,7 +631,7 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
     round: flowManager.taskMutationLineages({ specId: state.specId, taskId }).at(-1)?.budget.round,
   });
   let observationConvergence = null;
-  if (failure?.category === "semantic" && classificationRecorded) {
+  if (failure?.category === "semantic") {
     const evidenceKey = [
       keys.result,
       attempt.id,
