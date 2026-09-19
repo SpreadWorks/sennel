@@ -221,9 +221,11 @@ test("recovery abort supports a direct Flow without branch ownership", async () 
     flowManager: manager,
     specId,
     runId: "run-489-abort-direct",
-    execution: { mode: "direct" },
+    execution: { mode: "direct", baseBranch: "main", featureBranch: null },
   }).create().registerActive();
   installRetiredSpecReviewCatalogEntry(manager, specId);
+  const unrelatedFile = path.join(root, "unrelated.txt");
+  fs.writeFileSync(unrelatedFile, "keep me\n");
   assert.throws(() => manager.loadReadOnly(specId), /artifact path does not match logical contract spec\.review/);
 
   const target = manager.resolveFlowRecoveryTarget(new FlowTargetExpectation({ expectSpec: specId }));
@@ -240,6 +242,7 @@ test("recovery abort supports a direct Flow without branch ownership", async () 
   assert.equal(result.removed.worktree, null);
   assert.equal(result.removed.branch, null);
   assert.equal(fs.existsSync(manager.specLocation(specId).directory), false);
+  assert.equal(fs.readFileSync(unrelatedFile, "utf8"), "keep me\n");
   assert.deepEqual(manager.loadActiveFlows(), []);
 });
 

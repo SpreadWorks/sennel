@@ -95,6 +95,7 @@ export class RunAbortCommand extends FlowCommand {
     const specLocation = ctx.specLocation || ctx.flowManager.specLocation(state.specId);
     const repositoryRoot = specLocation.repositoryRoot;
     const { worktreePath } = ctx.flowManager.resolveWorktreePaths(state);
+    const ownsFeatureBranch = state.featureBranch !== null && state.featureBranch !== state.baseBranch;
     const operation = new RepositoryFlowOperationLock({ mainRoot: repositoryRoot });
     const operationOwnerToken = operation.acquire();
     try {
@@ -127,7 +128,7 @@ export class RunAbortCommand extends FlowCommand {
             expectedBinding,
           });
           if (!removed.ok) return removed.env;
-        } else if (!state.worktree && state.featureBranch !== state.baseBranch) {
+        } else if (!state.worktree && ownsFeatureBranch) {
           const unrelatedDirty = listUncommittedFiles({ cwd: repositoryRoot })
             .filter((filePath) => outsideTargetSpec(filePath, specLocation.relativeDirectory));
           if (unrelatedDirty.length > 0) {
@@ -148,7 +149,7 @@ export class RunAbortCommand extends FlowCommand {
       }
 
       if (!journal.atLeast("branch-deleted")) {
-        if (state.featureBranch !== state.baseBranch) {
+        if (ownsFeatureBranch) {
           const branch = runGit(["-C", repositoryRoot, "rev-parse", "--verify", `refs/heads/${state.featureBranch}`]);
           if (branch.ok) {
             const deleted = deleteFeatureBranchForCleanup({
@@ -177,7 +178,7 @@ export class RunAbortCommand extends FlowCommand {
         specId: state.specId,
         removed: {
           worktree: state.worktree ? worktreePath : null,
-          branch: state.featureBranch === state.baseBranch ? null : state.featureBranch,
+          branch: ownsFeatureBranch ? state.featureBranch : null,
           specDir: specLocation.relativeDirectory,
         },
       };

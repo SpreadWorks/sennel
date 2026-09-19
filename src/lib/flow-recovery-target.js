@@ -89,11 +89,8 @@ class FlowRecoveryExecution {
     if (this.mode === "direct") {
       this.baseBranch = branchName(value.baseBranch, "baseBranch", { nullable: true });
       this.featureBranch = branchName(value.featureBranch, "featureBranch", { nullable: true });
-      if ((this.baseBranch === null) !== (this.featureBranch === null)) {
-        throw new Error("direct recovery flow requires both branch names or neither");
-      }
-      if (this.baseBranch !== null && this.baseBranch !== this.featureBranch) {
-        throw new Error("direct recovery flow may not own a separate feature branch");
+      if (this.featureBranch !== null) {
+        throw new Error("direct recovery flow must not own a feature branch");
       }
     } else {
       this.baseBranch = branchName(value.baseBranch, "baseBranch");
