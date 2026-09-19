@@ -3881,6 +3881,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
         );
         const state = manager.canonicalState(created.specId);
         assert.equal(state.findNode("draft-coverage-review").status, "done");
+        assert.equal(state.findNode("draft-coverage-triage").status, "skipped");
         assert.equal(state.findNode("draft-coverage-repair").status, "skipped");
         assert.deepEqual(state.findNode("draft-coverage-review").result.stepOutput.toJSON(),
           { type: STEP_OUTPUT_TYPE.COMPLETED });
@@ -3888,6 +3889,71 @@ describe("FlowManager canonical Version-1 runtime", () => {
         assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "draft-gate");
         assert.equal(completion.result.artifactRefs.at(-1).kind, "draft-completion-connector");
         assert.equal(completion.transition.stepConnectionReceipt.sourceStepId, "draft-coverage-review");
+
+        const gateManager = new FlowManager({ root: executionRoot, mainRoot: repository, inWorktree: true });
+        const persistedCoverage = gateManager.canonicalState(created.specId);
+        assert.equal(persistedCoverage.findNode("draft-coverage-triage").status, "skipped");
+        assert.equal(persistedCoverage.findNode("draft-coverage-repair").status, "skipped");
+        const gateContext = {
+          root: repository, mainRoot: repository, executionRoot, specId: created.specId,
+          phase: "draft", flowManager: gateManager, flowState: gateManager.loadReadOnly(created.specId),
+          config: {},
+        };
+        const claimedGate = await new RunClaimNextActionCommand().execute(gateContext);
+        assert.equal(claimedGate.ok, true, JSON.stringify(claimedGate));
+        assert.equal(claimedGate.data.step, "draft-gate");
+        const observations = [{
+          kind: "violation",
+          failureMode: "guardrail-violation",
+          requirementRef: "R-1",
+          where: { file: "draft.json", locator: "goal" },
+          observed: "The coverage-reviewed draft still omits a required behavior.",
+          severity: "blocking",
+          refs: ["R-1"],
+        }];
+        const gateResult = new CanonicalGatePromotion({
+          state: gateManager.canonicalState(created.specId), phase: "draft", nodeId: "draft-gate",
+        }).promote({ result: "fail", artifacts: {
+          phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
+          nextAction: { diagnosis: { observations } },
+        } });
+        await FLOW_COMMANDS.run.gate.post({
+          ...gateContext, flowState: gateManager.loadReadOnly(created.specId),
+        }, gateResult);
+
+        const repairManager = new FlowManager({ root: executionRoot, mainRoot: repository, inWorktree: true });
+        const repaired = new RunRepairPlanGateCommand().execute({
+          ...gateContext,
+          flowManager: repairManager,
+          flowState: repairManager.loadReadOnly(created.specId),
+        });
+        assert.equal(repaired.ok, true, JSON.stringify(repaired));
+        assert.deepEqual(repaired.data.resetSteps, [
+          "draft-gate-repair", "draft-coverage-review", "draft-coverage-triage",
+          "draft-coverage-repair", "draft-gate",
+        ]);
+        const repairState = repairManager.canonicalState(created.specId);
+        assert.equal(repairState.current.at(-1), "draft-gate-repair");
+        assert.equal(repairState.findNode("draft-gate-repair").status, "in_progress");
+
+        const reloadedRepair = new FlowManager({ root: executionRoot, mainRoot: repository, inWorktree: true });
+        assert.equal(reloadedRepair.canonicalState(created.specId).current.at(-1), "draft-gate-repair");
+        const beforeRetry = {
+          activities: reloadedRepair.activityLedger(created.specId),
+          issueLog: JSON.parse(fs.readFileSync(reloadedRepair.specLocation(created.specId).issueLogFile, "utf8")),
+        };
+        const rejected = new RunRepairPlanGateCommand().execute({
+          ...gateContext,
+          flowManager: reloadedRepair,
+          flowState: reloadedRepair.loadReadOnly(created.specId),
+        });
+        assert.equal(rejected.ok, false);
+        assert.equal(rejected.errors[0].code, "PLAN_GATE_REPAIR_STAGE_UNSUPPORTED");
+        assert.deepEqual(reloadedRepair.activityLedger(created.specId), beforeRetry.activities);
+        assert.deepEqual(
+          JSON.parse(fs.readFileSync(reloadedRepair.specLocation(created.specId).issueLogFile, "utf8")),
+          beforeRetry.issueLog,
+        );
       }
     });
   }

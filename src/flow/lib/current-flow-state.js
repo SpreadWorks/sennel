@@ -5582,11 +5582,7 @@ export class CurrentFlowState {
     for (const stepId of route.resetStepIds) {
       const node = this.findNode(stepId);
       if (node === null) throw new CurrentFlowStateInvariantError(`plan gate repair route node is missing: ${stepId}`);
-      const expected = stepId === route.gateStepId
-        ? ["in_progress"]
-        : stepId === "draft-gate-repair"
-          ? ["done", "skipped"]
-          : ["done"];
+      const expected = route.acceptedSourceStatuses(stepId);
       if (!expected.includes(node.status)) {
         throw new CurrentFlowStateInvariantError(
           `plan gate repair requires ${stepId}=${expected.join("|")}, got ${node.status}`,

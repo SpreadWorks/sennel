@@ -13,6 +13,9 @@ import {
 const SHA256 = /^[a-f0-9]{64}$/;
 const MAX_TEXT_LENGTH = 4000;
 const MAX_OBSERVATIONS = 64;
+const DONE_SOURCE_STATUSES = Object.freeze(["done"]);
+const SKIPPABLE_SOURCE_STATUSES = Object.freeze(["done", "skipped"]);
+const ACTIVE_GATE_SOURCE_STATUSES = Object.freeze(["in_progress"]);
 
 function requiredString(value, field, maxLength = MAX_TEXT_LENGTH) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -203,7 +206,9 @@ export class PlanGateRepairConnectorBinding {
 }
 
 export class PlanGateRepairRoute {
-  constructor({ phase, gateStepId, targetStepId, resetStepIds }) {
+  #skippableSourceStepIds;
+
+  constructor({ phase, gateStepId, targetStepId, resetStepIds, skippableSourceStepIds = [] }) {
     this.phase = requiredString(phase, "plan gate repair phase", 100);
     this.gateStepId = requiredString(gateStepId, "plan gate repair gateStepId", 100);
     this.targetStepId = requiredString(targetStepId, "plan gate repair targetStepId", 100);
@@ -216,7 +221,27 @@ export class PlanGateRepairRoute {
     if (this.resetStepIds[0] !== this.targetStepId || !this.resetStepIds.includes(this.gateStepId)) {
       throw new Error(`plan gate repair route is inconsistent for ${this.phase}`);
     }
+    if (!Array.isArray(skippableSourceStepIds)) {
+      throw new Error("plan gate repair skippable source steps must be an array");
+    }
+    this.#skippableSourceStepIds = Object.freeze(skippableSourceStepIds.map((stepId, index) => (
+      requiredString(stepId, `plan gate repair skippable source steps[${index}]`, 100)
+    )));
+    if (new Set(this.#skippableSourceStepIds).size !== this.#skippableSourceStepIds.length
+      || this.#skippableSourceStepIds.some((stepId) => (
+        stepId === this.gateStepId || !this.resetStepIds.includes(stepId)
+      ))) {
+      throw new Error(`plan gate repair skippable source steps are inconsistent for ${this.phase}`);
+    }
     Object.freeze(this);
+  }
+
+  acceptedSourceStatuses(stepId) {
+    if (!this.resetStepIds.includes(stepId)) throw new Error(`step is outside plan gate repair route: ${stepId}`);
+    if (stepId === this.gateStepId) return ACTIVE_GATE_SOURCE_STATUSES;
+    return this.#skippableSourceStepIds.includes(stepId)
+      ? SKIPPABLE_SOURCE_STATUSES
+      : DONE_SOURCE_STATUSES;
   }
 
   requestedStatus(stepId) {
@@ -246,6 +271,7 @@ const ROUTES = Object.freeze([
     gateStepId: "draft-gate",
     targetStepId: "draft-gate-repair",
     resetStepIds: ["draft-gate-repair", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate"],
+    skippableSourceStepIds: ["draft-gate-repair", "draft-coverage-triage", "draft-coverage-repair"],
   }),
   new PlanGateRepairRoute({
     phase: "spec",
