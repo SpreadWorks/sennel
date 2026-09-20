@@ -44,9 +44,16 @@ import {
   DraftStepErrorDecision,
   DraftAwaitUserDecision,
   DraftStepRoute,
+  DraftExecutionSettlement,
   DraftStepSettlement,
   DraftStepSettlementReceipt,
   DraftStepSettlementPublication,
+  DraftStepExecutionLifecycle,
+  DraftStepExecutionState,
+  DraftReviewExecutionBinding,
+  DraftWorkerExecutionBinding,
+  DraftReviewExecutionClaim,
+  DraftWorkerExecutionClaim,
   DRAFT_RESULT_ERROR_CATEGORY,
 } from "../definition.js";
 import {
@@ -95,6 +102,7 @@ import {
   CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
   CurrentFlowTransitionSnapshot,
+  assertDraftSettlementReceiptTransition,
   ApprovalTaskAdmission,
   FlowActivity,
   TaskNode,
@@ -3649,14 +3657,18 @@ export class CanonicalFlowManagerStore {
       nodeId: binding.stepId,
       commandResult,
     }).find((entry) => entry.logicalKey === "draft.coverage.review");
-    if (reviewWrite === undefined) {
+    const reviewArtifactBytes = reviewWrite?.bytes ?? this.#ownedArtifactBytes(
+      resolved,
+      FLOW_ARTIFACT_CONTRACTS.resolve("draft.coverage.review", {}),
+    );
+    if (reviewArtifactBytes === null) {
       throw new CurrentFlowStateInvariantError("coverage PASS requires its prospective Review history publication");
     }
     return readProspectiveCoveragePassDraftCompletionFacts({
       flowManager: this,
       specId: resolved,
       commandResult,
-      reviewArtifactBytes: reviewWrite.bytes,
+      reviewArtifactBytes,
     });
   }
 
@@ -3675,6 +3687,7 @@ export class CanonicalFlowManagerStore {
     references = undefined,
     specRecord = undefined,
     planGateRepairOutcome = null,
+    executionLifecycle = null,
   } = {}) {
     return new DraftStepSettlementReceipt({
       binding,
@@ -3694,47 +3707,195 @@ export class CanonicalFlowManagerStore {
         specRecord,
         planGateRepairOutcome,
       }),
+      executionLifecycle,
     });
   }
 
-  #admitDraftSettlement({ resolved, state, binding, stepResult, settlement, receipt, lifecycleResult = null, allowSuccessiveNonTerminal = false }) {
-    const bindingActivities = this.activityLedger(resolved).filter((entry) => {
+  #draftSettlementBindingActivities(resolved, receiptBinding) {
+    return this.activityLedger(resolved).filter((entry) => {
       const persisted = entry.result?.draftSettlementReceipt;
-      return persisted?.binding.runId === receipt.binding.runId
-        && persisted.binding.specId === receipt.binding.specId
-        && persisted.binding.stepId === receipt.binding.stepId
-        && persisted.binding.attemptId === receipt.binding.attemptId
-        && persisted.binding.attemptSequence === receipt.binding.attemptSequence;
+      return persisted?.binding.runId === receiptBinding.runId
+        && persisted.binding.specId === receiptBinding.specId
+        && persisted.binding.stepId === receiptBinding.stepId
+        && persisted.binding.attemptId === receiptBinding.attemptId
+        && persisted.binding.attemptSequence === receiptBinding.attemptSequence;
     });
+  }
+
+  #latestDraftExecutionLifecycle(resolved, binding) {
+    const receiptBinding = {
+      runId: binding?.runId,
+      specId: binding?.specId,
+      stepId: binding?.stepId,
+      attemptId: binding?.attempt?.id,
+      attemptSequence: binding?.attempt?.sequence,
+    };
+    const latest = this.#draftSettlementBindingActivities(resolved, receiptBinding)
+      .map((entry) => entry.result.draftSettlementReceipt)
+      .filter((receipt) => receipt.executionLifecycle !== null)
+      .at(-1)?.executionLifecycle ?? null;
+    return latest === null ? null : DraftStepExecutionLifecycle.fromJSON(latest.toJSON?.() ?? latest);
+  }
+
+  /** Read the latest typed generation/claim authority for one active Attempt. */
+  draftStepExecutionState({ specId = null, binding } = {}) {
+    const resolved = this.#resolveSpecId(specId ?? binding?.specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const state = this.runtime.load(resolved);
+    if (binding?.runId !== state.runId || binding?.specId !== state.specId
+      || binding?.stepId !== state.current?.at(-1)
+      || binding?.attempt?.id !== state.attempt?.id
+      || binding?.attempt?.sequence !== state.attempt?.sequence) {
+      throw new CurrentFlowStateConflictError("Draft execution state binding is stale");
+    }
+    const receipts = this.#draftSettlementBindingActivities(resolved, {
+      runId: binding.runId,
+      specId: binding.specId,
+      stepId: binding.stepId,
+      attemptId: binding.attempt.id,
+      attemptSequence: binding.attempt.sequence,
+    }).map((entry) => entry.result.draftSettlementReceipt)
+      .filter((receipt) => receipt.executionLifecycle !== null);
+    const latest = receipts.at(-1) ?? null;
+    return new DraftStepExecutionState({
+      binding,
+      receiptId: latest?.id ?? null,
+      lifecycle: latest === null
+        ? null : DraftStepExecutionLifecycle.fromJSON(
+          latest.executionLifecycle.toJSON?.() ?? latest.executionLifecycle,
+        ),
+    });
+  }
+
+  #settlementExecutionLifecycle({ resolved, binding, settlement, executionLifecycle }) {
+    if (executionLifecycle !== undefined && executionLifecycle !== null) {
+      if (!(executionLifecycle instanceof DraftStepExecutionLifecycle)) {
+        throw new CurrentFlowStateInvariantError("Draft settlement execution lifecycle must be typed");
+      }
+      return executionLifecycle;
+    }
+    const latest = this.#latestDraftExecutionLifecycle(resolved, binding);
+    if (settlement instanceof DraftExecutionSettlement) {
+      if (latest?.phase === "claimed") return latest.published();
+      if (latest?.phase === "publication") return latest;
+      throw new CurrentFlowStateInvariantError(
+        "Draft Execution settlement requires a pre-execution checkpoint or claimed publication",
+      );
+    }
+    if (latest === null) return null;
+    if (settlement instanceof DraftAwaitUserDecision) {
+      if (latest.phase === "claimed") return latest.published();
+      return latest.phase === "publication" ? latest : null;
+    }
+    if (latest.phase === "publication") return latest.terminal();
+    if (latest.phase === "claimed") {
+      throw new CurrentFlowStateInvariantError(
+        "Draft terminal settlement requires its durable execution publication",
+      );
+    }
+    return latest.phase === "terminal" ? latest : null;
+  }
+
+  #admitDraftSettlement({ resolved, state, binding, stepResult, settlement, receipt }) {
+    const bindingActivities = this.#draftSettlementBindingActivities(resolved, receipt.binding);
     const replay = bindingActivities.find((entry) => entry.result.draftSettlementReceipt.id === receipt.id);
-    if (replay !== undefined) return replay.result.draftSettlementReceipt;
+    if (replay !== undefined) {
+      const latest = bindingActivities.at(-1)?.result?.draftSettlementReceipt ?? null;
+      if (latest?.id === receipt.id) return replay.result.draftSettlementReceipt;
+      throw new CurrentFlowStateConflictError("Draft settlement replay is stale for the latest execution generation");
+    }
     const currentBinding = binding?.runId === state.runId && binding?.specId === state.specId
       && binding?.stepId === state.current?.at(-1) && binding.stepId === stepResult.stepId
       && binding.stepId === settlement.sourceStepId && binding?.attempt?.id === state.attempt?.id
       && binding?.attempt?.sequence === state.attempt?.sequence;
-    const sameResult = bindingActivities.some((entry) => (
-      entry.result.draftSettlementReceipt.resultDigest === receipt.resultDigest
-    ));
-    const priorNonTerminal = bindingActivities.every((entry) => (
-      ["execution", "await"].includes(entry.result.draftSettlementReceipt.settlementKind)
-    ));
-    const handoffRequestId = lifecycleResult?.artifactRefs?.find((reference) => (
-      reference?.kind === "worker-handoff-request"
-    ))?.id ?? null;
-    const sameHandoffRequest = handoffRequestId !== null && bindingActivities.some((entry) => (
-      entry.result?.artifactRefs?.some((reference) => (
-        reference?.kind === "worker-handoff-request" && reference.id === handoffRequestId
-      ))
-    ));
-    const freshSameResultContinuation = sameResult && allowSuccessiveNonTerminal
-      && priorNonTerminal && currentBinding && handoffRequestId !== null && !sameHandoffRequest;
-    if (bindingActivities.length > 0 && (!allowSuccessiveNonTerminal
-      || (!freshSameResultContinuation && sameResult)
-      || !priorNonTerminal || !currentBinding)) {
-      throw new CurrentFlowStateConflictError("Draft settlement binding already has a different Result, Settlement, or Publication");
-    }
+    assertDraftSettlementReceiptTransition(
+      bindingActivities.map((entry) => entry.result.draftSettlementReceipt),
+      receipt,
+    );
     if (!currentBinding) throw new CurrentFlowStateConflictError("Draft settlement binding is stale");
     return null;
+  }
+
+  #recordDraftExecutionLifecycle({ resolved, binding, stepResult, settlement, executionLifecycle }) {
+    if (!(stepResult instanceof StepResult) || !(settlement instanceof DraftExecutionSettlement)
+      || settlement.sourceStepId !== stepResult.stepId
+      || !(executionLifecycle instanceof DraftStepExecutionLifecycle)
+      || !["checkpoint", "claimed"].includes(executionLifecycle.phase)) {
+      throw new CurrentFlowStateInvariantError(
+        "Draft execution checkpoint requires its typed Execution Result, Settlement, and lifecycle",
+      );
+    }
+    const receipt = this.#draftSettlementReceipt({
+      binding,
+      stepResult,
+      settlement,
+      executionLifecycle,
+    });
+    const state = this.runtime.load(resolved);
+    if (state.attempt?.failure !== null && state.attempt?.failure !== undefined) {
+      throw new CurrentFlowStateConflictError("Draft execution cannot continue a failed Attempt");
+    }
+    const replay = this.#admitDraftSettlement({
+      resolved, state, binding, stepResult, settlement, receipt,
+    });
+    if (replay !== null) return Object.freeze({ state, receipt: replay });
+    const result = resultWithDraftStepResult(
+      resultFor("done", binding.stepId),
+      binding.stepId,
+      stepResult,
+      receipt,
+    );
+    const next = this.runtime.recordDraftStepSettlement({
+      specId: resolved,
+      activityId: activityId(`draft-execution-${executionLifecycle.phase}`),
+      result,
+    });
+    return Object.freeze({ state: next, receipt });
+  }
+
+  /** Atomically reserve one execution generation before request materialization. */
+  checkpointDraftStepExecution({ specId = null, binding, stepResult, settlement, executionBinding } = {}) {
+    const resolved = this.#resolveSpecId(specId ?? binding?.specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    if (!(executionBinding instanceof DraftReviewExecutionBinding)
+      && !(executionBinding instanceof DraftWorkerExecutionBinding)) {
+      throw new CurrentFlowStateInvariantError("Draft execution checkpoint requires a typed execution binding");
+    }
+    return this.#recordDraftExecutionLifecycle({
+      resolved,
+      binding,
+      stepResult,
+      settlement,
+      executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding),
+    });
+  }
+
+  /** Atomically claim the first exact provider/worker request for a generation. */
+  claimDraftStepExecution({
+    specId = null,
+    binding,
+    stepResult,
+    settlement,
+    executionBinding,
+    executionClaim,
+  } = {}) {
+    const resolved = this.#resolveSpecId(specId ?? binding?.specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    if (!(executionBinding instanceof DraftReviewExecutionBinding)
+      && !(executionBinding instanceof DraftWorkerExecutionBinding)) {
+      throw new CurrentFlowStateInvariantError("Draft execution claim requires a typed execution binding");
+    }
+    if (!(executionClaim instanceof DraftReviewExecutionClaim)
+      && !(executionClaim instanceof DraftWorkerExecutionClaim)) {
+      throw new CurrentFlowStateInvariantError("Draft execution claim requires a typed claim");
+    }
+    return this.#recordDraftExecutionLifecycle({
+      resolved,
+      binding,
+      stepResult,
+      settlement,
+      executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding).claimed(executionClaim),
+    });
   }
 
   findDraftStepSettlementReceipt({
@@ -3752,11 +3913,15 @@ export class CanonicalFlowManagerStore {
     references = undefined,
     specRecord = undefined,
     planGateRepairOutcome = null,
+    executionLifecycle = undefined,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null || !(stepResult instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
       return null;
     }
+    const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
+      resolved, binding, settlement, executionLifecycle,
+    });
     const receipt = this.#draftSettlementReceipt({
       binding,
       stepResult,
@@ -3771,6 +3936,7 @@ export class CanonicalFlowManagerStore {
       references,
       specRecord,
       planGateRepairOutcome,
+      executionLifecycle: selectedExecutionLifecycle,
     });
     return this.activityLedger(resolved).find((entry) => (
       entry.result?.draftSettlementReceipt?.id === receipt.id
@@ -3819,12 +3985,16 @@ export class CanonicalFlowManagerStore {
     artifactBaselines = undefined,
     testSourceBaseline = undefined,
     planGateRepairOutcome = null,
+    executionLifecycle = undefined,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(stepResult instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
       throw new CurrentFlowStateInvariantError("Draft settlement requires typed Result and Settlement");
     }
+    const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
+      resolved, binding, settlement, executionLifecycle,
+    });
     const receipt = this.#draftSettlementReceipt({
       binding,
       stepResult,
@@ -3839,17 +4009,16 @@ export class CanonicalFlowManagerStore {
       references,
       specRecord,
       planGateRepairOutcome,
+      executionLifecycle: selectedExecutionLifecycle,
     });
     const state = this.runtime.load(resolved);
     const replay = this.#admitDraftSettlement({
-      resolved, state, binding, stepResult, settlement, receipt, lifecycleResult,
-      // A retained Attempt may first record an Execution/Await result and
-      // later settle its next, terminal Result.  The admission still rejects
-      // a changed publication for the same Result and any continuation after
-      // a terminal receipt.
-      allowSuccessiveNonTerminal: true,
+      resolved, state, binding, stepResult, settlement, receipt,
     });
     if (replay !== null) return Object.freeze({ state, receipt: replay });
+    if (state.attempt?.failure !== null && state.attempt?.failure !== undefined) {
+      throw new CurrentFlowStateConflictError("Draft settlement cannot overwrite a failed Attempt");
+    }
     const base = lifecycleResult ?? (settlement instanceof DraftStepErrorDecision
       ? {
           outcome: "failed",
@@ -3906,7 +4075,11 @@ export class CanonicalFlowManagerStore {
       const draftCompletionDecision = settlement.application;
       const facts = draftCompletionDecision.facts;
       const reviewWrite = writes.find((entry) => entry.logicalKey === "draft.coverage.review") ?? null;
-      if (facts.source === "coverage-pass" && reviewWrite === null) {
+      const publishedReviewBytes = reviewWrite?.bytes ?? this.#ownedArtifactBytes(
+        resolved,
+        FLOW_ARTIFACT_CONTRACTS.resolve("draft.coverage.review", {}),
+      );
+      if (facts.source === "coverage-pass" && publishedReviewBytes === null) {
         throw new CurrentFlowStateInvariantError("coverage PASS settlement requires its Review history publication");
       }
       const next = this.confirmDraftCoverageRepairCompletion({
@@ -3920,11 +4093,11 @@ export class CanonicalFlowManagerStore {
         artifactWrites: writes,
         artifactRemovals,
         artifactBaselines,
-        prospectiveReview: reviewWrite === null ? null : {
-          bytes: reviewWrite.bytes,
+        prospectiveReview: publishedReviewBytes === null ? null : {
+          bytes: publishedReviewBytes,
           descriptor: {
             hash: facts.reviewArtifactDigest,
-            size: reviewWrite.bytes.length,
+            size: publishedReviewBytes.length,
           },
         },
       });
@@ -4112,6 +4285,7 @@ export class CanonicalFlowManagerStore {
     stepResult,
     settlement,
     handoffReferences = [],
+    executionLifecycle = undefined,
   } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
@@ -4155,6 +4329,9 @@ export class CanonicalFlowManagerStore {
       confirmedAt: confirmedAt ?? new Date().toISOString(),
       artifactRefs,
     };
+    const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
+      resolved, binding, settlement, executionLifecycle,
+    });
     const receipt = this.#draftSettlementReceipt({
       binding,
       stepResult,
@@ -4162,6 +4339,7 @@ export class CanonicalFlowManagerStore {
       lifecycleResult,
       artifactWrites,
       planGateRepairOutcome: outcome,
+      executionLifecycle: selectedExecutionLifecycle,
     });
     const before = this.runtime.load(resolved);
     const replay = this.#admitDraftSettlement({

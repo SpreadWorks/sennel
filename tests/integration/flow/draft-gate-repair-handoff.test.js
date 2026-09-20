@@ -5,8 +5,21 @@ import { describe, it } from "node:test";
 
 import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { DraftGateRepairAppliedResult } from "../../../src/flow/engine/step-result.js";
-import { DraftWorkerStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
-import { settleDraftStepResult } from "../../../src/flow/definition.js";
+import {
+  DraftWorkerExecutionStepBinding,
+  DraftWorkerStepBinding,
+} from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import {
+  DraftWorkerExecutionBinding,
+  DraftWorkerExecutionClaim,
+  settleDraftStepResult,
+} from "../../../src/flow/definition.js";
+import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { DraftGateRepairStep } from "../../../src/flow/steps/draft/draft-gate-repair.js";
+import { StepFactory } from "../../../src/flow/engine/step-factory.js";
+import { DraftRepairConnector } from "../../../src/flow/engine/connectors/draft/draft-repair-connector.js";
+import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -72,6 +85,74 @@ function assertNoRepairPublication(flowManager, specId, draftDigest) {
 }
 
 describe("dedicated draft Gate repair handoff", () => {
+  it("checkpoints and claims Gate repair before request materialization", async () => {
+    const value = setup("521-gate-repair-execution-claim");
+    try {
+      const state = value.flowManager.loadReadOnly(value.scenario.specId);
+      const invocation = {
+        id: "draft-gate-repair-execution-claim",
+        target: { digest: "b".repeat(64) },
+        action: { digest: "a".repeat(64), nextAction: { step: "draft-gate-repair" } },
+      };
+      const request = value.scenario.coordinator.createRequest({
+        ctx: value.scenario.ctx,
+        state,
+        invocation,
+        deferPreparation: true,
+      });
+      assert.equal(fs.existsSync(request.requestPath), false);
+      const binding = new DraftWorkerExecutionStepBinding({
+        flowManager: value.flowManager,
+        specId: value.scenario.specId,
+        stepId: "draft-gate-repair",
+      });
+      const executionBinding = new DraftWorkerExecutionBinding({
+        executionGeneration: 0,
+        inputDigest: request.inputDigest,
+        inputRevision: request.inputRevision,
+      });
+      let executionResult;
+      let executionSettlement;
+      const service = new DraftService({
+        flowManager: value.flowManager,
+        binding,
+        executionCheckpointer(stepResult, settlement, selectedBinding) {
+          executionResult = stepResult;
+          executionSettlement = settlement;
+          return value.flowManager.checkpointDraftStepExecution({
+            binding: selectedBinding,
+            stepResult,
+            settlement,
+            executionBinding,
+          });
+        },
+      });
+      const result = await new StepFactory()
+        .provide(DraftService, service)
+        .create(DraftGateRepairStep)
+        .execute();
+      assert.equal(result.kind, "draft-gate-repair-worker-required");
+      value.flowManager.claimDraftStepExecution({
+        binding,
+        stepResult: executionResult,
+        settlement: executionSettlement,
+        executionBinding,
+        executionClaim: new DraftWorkerExecutionClaim({
+          dispatchInvocationId: request.dispatchInvocationId,
+          generatedAt: request.generatedAt,
+          actionDigest: request.actionDigest,
+          requestDigest: request.requestDigest,
+        }),
+      });
+      assert.equal(fs.existsSync(request.requestPath), false);
+      request.prepare();
+      assert.equal(fs.existsSync(request.requestPath), true);
+      assert.equal(value.flowManager.draftStepExecutionState({ binding }).lifecycle.phase, "claimed");
+    } finally {
+      removeTmpDir(value.root);
+    }
+  });
+
   it("admits only the selected repair and publishes the bounded delta, audit, and outcome atomically", () => {
     const value = setup("521-gate-repair-applied");
     try {
@@ -107,6 +188,42 @@ describe("dedicated draft Gate repair handoff", () => {
       assert.equal(JSON.parse(audit.bytes).report.outputEvidenceDigest, draft.descriptor.hash);
       assert.equal(JSON.parse(outcome.bytes).report.outputEvidenceDigest, draft.descriptor.hash);
       assert.equal(JSON.parse(outcome.bytes).disposition, "applied");
+    } finally {
+      removeTmpDir(value.root);
+    }
+  });
+
+  it("publishes Gate repair through its exact worker binding instead of a review-repair Connector", async () => {
+    const value = setup("521-gate-repair-dispatch-step");
+    try {
+      const request = value.scenario.createRequest();
+      seal(request, value.scenario.replacement(
+        "goal",
+        "Retain the complete behavior explicitly through the dispatcher Step.",
+      ));
+      const preparation = value.scenario.coordinator.prepareDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+      });
+
+      const completed = await new RunDispatchCommand({ handoffCoordinator: value.scenario.coordinator })
+        .runDraftWorkerStep(
+          value.scenario.ctx,
+          request,
+          { Connector: DraftRepairConnector, StepClass: DraftGateRepairStep },
+          preparation,
+        );
+
+      assert.equal(completed.completed, true);
+      assert.equal(completed.stepResult.kind, "draft-gate-repair-applied");
+      assert.equal(findStepById(value.flowManager.load().steps, "draft-gate-repair").status, "done");
+      assert.equal(catalogEntry(value.flowManager, value.scenario.specId, "draft.gate.repair") !== null, true);
+      const source = new CanonicalDraftReviewSource({
+        flowManager: value.flowManager,
+        state: value.flowManager.loadReadOnly(value.scenario.specId),
+        phase: "draft-coverage",
+      });
+      assert.equal(source.sourceNodeId, "draft-gate-repair");
     } finally {
       removeTmpDir(value.root);
     }

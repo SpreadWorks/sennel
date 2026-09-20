@@ -15,6 +15,8 @@ import { findStepById, flattenSteps } from "../../../src/flow/lib/step-tree.js";
 import {
   buildInitialNestedSteps,
   buildInitialTaskSteps,
+  DraftWorkerExecutionBinding,
+  DraftWorkerExecutionClaim,
   resolveSourceHandoffTransitionPlan,
   settleDraftStepResult,
 } from "../../../src/flow/definition.js";
@@ -36,12 +38,16 @@ import { FlowTargetExpectation } from "../../../src/lib/flow-target-guard.js";
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { DraftEntryConnector } from "../../../src/flow/engine/connectors/draft/draft-entry-connector.js";
 import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
-import { DraftWorkerStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import {
+  DraftWorkerExecutionStepBinding,
+  DraftWorkerStepBinding,
+} from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
 import { DraftStep } from "../../../src/flow/steps/draft/draft.js";
 import { DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
 import {
   DraftCreatedResult,
+  DraftGateRepairWorkerRequiredResult,
   DraftRefineCompletedResult,
   DraftRefineAwaitingAnswerResult,
   DraftRefineWorkerRequiredResult,
@@ -188,7 +194,48 @@ function fixture(stepId = "draft", {
   });
   const createRequest = coordinator.createRequest.bind(coordinator);
   coordinator.createRequest = (input) => {
-    const handoff = createRequest(input);
+    const conditionalDraft = ["draft-refine", "draft-gate-repair"]
+      .includes(input.invocation?.action?.nextAction?.step);
+    const handoff = createRequest({
+      ...input,
+      deferPreparation: conditionalDraft || input.deferPreparation === true,
+    });
+    if (conditionalDraft && input.deferPreparation !== true) {
+      const state = flowManager.canonicalState(specId);
+      const binding = {
+        runId: state.runId,
+        specId: state.specId,
+        stepId: handoff.stepId,
+        attempt: state.attempt,
+      };
+      const execution = flowManager.draftStepExecutionState({ binding });
+      const executionBinding = new DraftWorkerExecutionBinding({
+        executionGeneration: execution.lifecycle === null
+          ? 0 : execution.lifecycle.executionGeneration + 1,
+        inputDigest: handoff.inputDigest,
+        inputRevision: handoff.inputRevision,
+      });
+      const stepResult = handoff.stepId === "draft-refine"
+        ? new DraftRefineWorkerRequiredResult()
+        : new DraftGateRepairWorkerRequiredResult();
+      const settlement = settleDraftStepResult(handoff.stepId, stepResult);
+      flowManager.checkpointDraftStepExecution({
+        binding, stepResult, settlement, executionBinding,
+      });
+      flowManager.claimDraftStepExecution({
+        binding,
+        stepResult,
+        settlement,
+        executionBinding,
+        executionClaim: new DraftWorkerExecutionClaim({
+          dispatchInvocationId: handoff.dispatchInvocationId,
+          generatedAt: handoff.generatedAt,
+          actionDigest: handoff.actionDigest,
+          requestDigest: handoff.requestDigest,
+        }),
+      });
+      handoff.prepare();
+    }
     if (handoff?.policy.kind === "source") {
       coordinator.startSourceWorker({ ctx: input.ctx, request: handoff, invocation: input.invocation });
       SOURCE_REQUEST_LIFECYCLES.set(handoff, { coordinator, ctx: input.ctx });
@@ -3354,6 +3401,36 @@ describe("worker artifact handoff", () => {
     }
   });
 
+  it("keeps non-conditional Draft workers on their existing Connector commit path", async () => {
+    const value = fixture("draft");
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      const expectedDraft = draftDocument("non-conditional dispatcher path");
+      fs.writeFileSync(request.payloadPath("draft.json"), json(expectedDraft));
+      seal(request);
+      const preparation = value.coordinator.prepareDraftWorker({ ctx: value.ctx, request });
+
+      const completed = await new RunDispatchCommand({ handoffCoordinator: value.coordinator })
+        .runDraftWorkerStep(
+          value.ctx,
+          request,
+          { Connector: DraftEntryConnector, StepClass: DraftStep },
+          preparation,
+        );
+
+      assert.equal(completed.completed, true);
+      assert.equal(completed.stepResult.kind, "draft-created");
+      assert.equal(findStepById(value.flowManager.load().steps, "draft").status, "done");
+      assert.deepEqual(readCatalogJson(value, "draft", "draft-questions-review"), expectedDraft);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
   it("rejects direct Draft reconcile without a Step-selected Result", () => {
     const value = fixture("draft");
     try {
@@ -4504,7 +4581,7 @@ describe("worker artifact handoff", () => {
       assert.equal(replay.completed, true);
       assert.equal(replay.replayed, true);
       assert.equal(replay.receipt.id, activity.result.draftSettlementReceipt.id);
-      assert.equal(value.flowManager.activityLedger(value.specId).length, beforeActivities + 1);
+      assert.equal(value.flowManager.activityLedger(value.specId).length, beforeActivities + 2);
       assert.equal(readCatalogJson(value, "draft", "draft-refine").questionLedger.questions[0].revision, 5);
     } finally {
       removeTmpDir(value.mainRoot);
@@ -4622,6 +4699,264 @@ describe("worker artifact handoff", () => {
         && error.code === "FLOW_WORKER_ACTION_NOT_SELECTED");
       assert.equal(value.flowManager.activityLedger(value.specId).length, beforeActivities);
       assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), beforeState);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("admits and claims a conditional Draft worker before materializing its request", async () => {
+    const value = fixture("draft-refine", {
+      autoApprove: true,
+      beforeActivate(fixtureValue) {
+        publishDraftBeforeTarget(fixtureValue, draftWithQuestionLedger([candidateDraftQuestion()]));
+      },
+    });
+    try {
+      const state = value.flowManager.load();
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state,
+        invocation: value.invocation,
+        deferPreparation: true,
+      });
+      assert.equal(fs.existsSync(request.requestPath), false);
+      const binding = new DraftWorkerExecutionStepBinding({
+        flowManager: value.flowManager,
+        specId: value.specId,
+        stepId: "draft-refine",
+      });
+      const beforeAttempt = value.flowManager.canonicalState(value.specId).attempt;
+      const executionBinding = new DraftWorkerExecutionBinding({
+        executionGeneration: 0,
+        inputDigest: request.inputDigest,
+        inputRevision: request.inputRevision,
+      });
+      let admittedResult = null;
+      let admittedSettlement = null;
+      const service = new DraftService({
+        flowManager: value.flowManager,
+        binding,
+        executionCheckpointer(stepResult, settlement, selectedBinding) {
+          admittedResult = stepResult;
+          admittedSettlement = settlement;
+          return value.flowManager.checkpointDraftStepExecution({
+            binding: selectedBinding,
+            stepResult,
+            settlement,
+            executionBinding,
+          });
+        },
+      });
+      const selected = await new StepFactory()
+        .provide(DraftService, service)
+        .create(DraftRefineStep)
+        .execute();
+      assert.equal(selected.kind, "draft-refine-worker-required");
+      assert.equal(fs.existsSync(request.requestPath), false);
+      value.flowManager.claimDraftStepExecution({
+        binding,
+        stepResult: admittedResult,
+        settlement: admittedSettlement,
+        executionBinding,
+        executionClaim: new DraftWorkerExecutionClaim({
+          dispatchInvocationId: request.dispatchInvocationId,
+          generatedAt: request.generatedAt,
+          actionDigest: request.actionDigest,
+          requestDigest: request.requestDigest,
+        }),
+      });
+      request.prepare();
+      assert.equal(fs.existsSync(request.requestPath), true);
+      const execution = value.flowManager.draftStepExecutionState({ binding });
+      assert.equal(execution.lifecycle.phase, "claimed");
+      assert.equal(execution.lifecycle.executionGeneration, 0);
+      assert.deepEqual(
+        value.flowManager.canonicalState(value.specId).attempt.consumption.toJSON(),
+        beforeAttempt.consumption.toJSON(),
+      );
+      assert.equal(value.coordinator.restoreClaimedDraftRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        lifecycle: execution.lifecycle,
+      }).requestDigest, request.requestDigest);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("reaches the conditional Draft provider only after its exact generation is claimed", async () => {
+    const value = fixture("draft-refine", {
+      autoApprove: true,
+      beforeActivate(fixtureValue) {
+        publishDraftBeforeTarget(fixtureValue, draftWithQuestionLedger([candidateDraftQuestion()]));
+      },
+    });
+    try {
+      const session = new FlowDispatchSession({
+        target: new FlowDispatchTarget({
+          expectation: new FlowTargetExpectation({ expectRunId: "run-worker-handoff", expectSpec: value.specId }),
+        }),
+      });
+      const action = session.captureAction(draftWorkerAction("draft-refine"), "conditional-draft-step");
+      const invocation = new FlowDispatchInvocation({
+        session,
+        action,
+        authorization: new UnapprovedFlowDispatchAuthorization(action),
+      });
+      class SealingAgent extends Agent {
+        constructor() { super({}); }
+        async call(_prompt, options) {
+          const canonical = value.flowManager.canonicalState(value.specId);
+          const execution = value.flowManager.draftStepExecutionState({
+            binding: {
+              runId: canonical.runId,
+              specId: canonical.specId,
+              stepId: "draft-refine",
+              attempt: canonical.attempt,
+            },
+          });
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const requestDocument = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          assert.equal(execution.lifecycle.phase, "claimed");
+          assert.equal(execution.lifecycle.executionGeneration, 0);
+          assert.equal(execution.lifecycle.claim.requestDigest, options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION
+            ? JSON.parse(options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION).requestDigest
+            : null);
+          const payloadPath = requestDocument.payloads.find((entry) => entry.logicalName === "draft.json").payloadPath;
+          fs.writeFileSync(payloadPath, json(draftWithQuestionLedger([])));
+          sealWorkerArtifactHandoff({
+            requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+          });
+          return "sealed";
+        }
+      }
+      const dispatcher = new RunDispatchCommand({ handoffCoordinator: value.coordinator });
+      const attempt = await dispatcher.runWorkerAttempt({
+        ...value.ctx,
+        flowState: value.flowManager.load(),
+      }, invocation, null, new SealingAgent());
+      assert.equal(attempt.error, null);
+      assert.equal(attempt.stepResult.kind, "draft-refine-completed");
+      const terminal = value.flowManager.canonicalState(value.specId)
+        .findNode("draft-refine").result.draftSettlementReceipt.executionLifecycle;
+      assert.equal(terminal.phase, "terminal");
+      assert.equal(terminal.executionGeneration, 0);
+      const phases = value.flowManager.activityLedger(value.specId)
+        .map((activity) => activity.result?.draftSettlementReceipt?.executionLifecycle?.phase)
+        .filter((phase) => phase !== undefined);
+      assert.deepEqual(phases, ["checkpoint", "claimed", "publication", "terminal"]);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("reenters the same sealed worker generation after publication interruption", async () => {
+    const value = fixture("draft-refine", {
+      autoApprove: true,
+      beforeActivate(fixtureValue) {
+        publishDraftBeforeTarget(fixtureValue, draftWithQuestionLedger([candidateDraftQuestion()]));
+      },
+    });
+    try {
+      const session = new FlowDispatchSession({
+        target: new FlowDispatchTarget({
+          expectation: new FlowTargetExpectation({ expectRunId: "run-worker-handoff", expectSpec: value.specId }),
+        }),
+      });
+      const action = session.captureAction(draftWorkerAction("draft-refine"), "conditional-draft-recovery");
+      const invocation = new FlowDispatchInvocation({
+        session,
+        action,
+        authorization: new UnapprovedFlowDispatchAuthorization(action),
+      });
+      let providerCalls = 0;
+      class SealingAgent extends Agent {
+        constructor() { super({}); }
+        async call(_prompt, options) {
+          providerCalls += 1;
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const requestDocument = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          const payloadPath = requestDocument.payloads.find((entry) => entry.logicalName === "draft.json").payloadPath;
+          fs.writeFileSync(payloadPath, json(draftWithQuestionLedger([])));
+          sealWorkerArtifactHandoff({
+            requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+          });
+          return "sealed";
+        }
+      }
+      class InterruptingCoordinator extends WorkerArtifactHandoffCoordinator {
+        interrupted = false;
+
+        completePublishedDraftWorker(input) {
+          if (!this.interrupted) {
+            this.interrupted = true;
+            throw new WorkerArtifactHandoffError(
+              "recovery-required",
+              "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
+              "simulated interruption after publication",
+              { recoveryPossible: true },
+            );
+          }
+          return super.completePublishedDraftWorker(input);
+        }
+      }
+      const coordinator = new InterruptingCoordinator();
+      const dispatcher = new RunDispatchCommand({ handoffCoordinator: coordinator });
+      const ctx = { ...value.ctx, flowState: value.flowManager.load() };
+      const conflictingSession = new FlowDispatchSession({ target: session.target });
+      const conflictingAction = conflictingSession.captureAction(
+        draftWorkerAction("draft-refine"),
+        "conditional-draft-recovery",
+      );
+      const conflictingInvocation = new FlowDispatchInvocation({
+        session: conflictingSession,
+        action: conflictingAction,
+        authorization: new UnapprovedFlowDispatchAuthorization(conflictingAction),
+      });
+      const conflictingRequest = coordinator.createRequest({
+        ctx,
+        state: value.flowManager.load(),
+        invocation: conflictingInvocation,
+        deferPreparation: true,
+      });
+      await assert.rejects(
+        () => dispatcher.runWorkerAttempt(ctx, invocation, null, new SealingAgent()),
+        /simulated interruption after publication/,
+      );
+      const binding = {
+        runId: value.flowManager.canonicalState(value.specId).runId,
+        specId: value.specId,
+        stepId: "draft-refine",
+        attempt: value.flowManager.canonicalState(value.specId).attempt,
+      };
+      const interruptedExecution = value.flowManager.draftStepExecutionState({ binding }).lifecycle;
+      assert.equal(interruptedExecution.phase, "publication");
+
+      conflictingRequest.prepare();
+      fs.writeFileSync(conflictingRequest.payloadPath("draft.json"), json(draftWithQuestionLedger([])));
+      sealWorkerArtifactHandoff({
+        requestPath: conflictingRequest.requestPath,
+        invocationId: conflictingRequest.dispatchInvocationId,
+      });
+      assert.throws(
+        () => coordinator.prepareDraftWorker({ ctx, request: conflictingRequest }),
+        (error) => error instanceof WorkerArtifactHandoffError
+          && error.code === "FLOW_DRAFT_EXECUTION_CLAIM_MISMATCH",
+      );
+
+      const recovered = await dispatcher.runWorkerAttempt(
+        { ...value.ctx, flowState: value.flowManager.load() },
+        invocation,
+        null,
+        new SealingAgent(),
+      );
+      assert.equal(recovered.error, null);
+      assert.equal(recovered.stepResult.kind, "draft-refine-completed");
+      assert.equal(providerCalls, 1);
+      assert.equal(value.flowManager.canonicalState(value.specId)
+        .findNode("draft-refine").result.draftSettlementReceipt.executionLifecycle.phase, "terminal");
     } finally {
       removeTmpDir(value.mainRoot);
     }

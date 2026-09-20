@@ -24,6 +24,11 @@ export class DraftRefineStep extends Step {
   }
 
   async _execute() {
+    if (this.#draftService.requiresWorkerExecution()) {
+      const result = new DraftRefineWorkerRequiredResult();
+      await result.persist(this.#draftService);
+      return result;
+    }
     if (this.#draftService.awaitingUserInput()) {
       const result = new DraftRefineAwaitingAnswerResult();
       await result.persist(this.#draftService);

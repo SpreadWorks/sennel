@@ -43,6 +43,7 @@ import {
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { validWorkerHandoffSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
+import { completeDraftWorkerThroughStep } from "../../support/infrastructure/draft-worker-step.js";
 
 const TASK_IDS = Object.freeze(["T1", "T2"]);
 const PREPARATION_LEAVES = new Set([
@@ -233,7 +234,7 @@ function writeSourcePayload(stepId, request, executionRoot) {
   return { paths: changed === undefined ? [] : [changed], effect: sourceEffect(stepId, changed === undefined ? [] : [changed]) };
 }
 
-function completeArtifactHandoff({ coordinator, ctx, stepId, invocationId, logicalName, payload }) {
+async function completeArtifactHandoff({ coordinator, ctx, stepId, invocationId, logicalName, payload }) {
   const actionDigest = crypto.createHash("sha256").update(`${invocationId}:action`).digest("hex");
   const targetDigest = crypto.createHash("sha256").update(`${invocationId}:target`).digest("hex");
   const request = coordinator.createRequest({
@@ -248,7 +249,7 @@ function completeArtifactHandoff({ coordinator, ctx, stepId, invocationId, logic
   assert.ok(request, `${stepId} must create a handoff request`);
   fs.writeFileSync(request.payloadPath(logicalName), workerArtifactJson(payload));
   sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId });
-  return { request, result: coordinator.reconcile({ ctx, request }) };
+  return { request, result: await completeDraftWorkerThroughStep({ coordinator, ctx, request }) };
 }
 
 function publishAttemptArtifact(flowManager, specId, nodeId, logicalKey, payload, histories) {
@@ -786,7 +787,7 @@ describe("deterministic full Flow worker handoff", () => {
     }
   });
 
-  it("routes a repaired draft through the coordinator and promotes one authorized operation", () => {
+  it("routes a repaired draft through the coordinator and promotes one authorized operation", async () => {
     const temporaryRoot = createTmpDir("worker-handoff-draft-coverage-repair-");
     try {
       const repository = temporaryRoot;
@@ -865,7 +866,7 @@ describe("deterministic full Flow worker handoff", () => {
           requiredFieldPaths: ["analysis.validation"],
         }],
       };
-      completeArtifactHandoff({
+      await completeArtifactHandoff({
         coordinator,
         ctx,
         stepId: "draft-coverage-triage",
@@ -914,7 +915,7 @@ describe("deterministic full Flow worker handoff", () => {
         requestPath: repairHandoff.requestPath,
         invocationId: "draft-coverage-repair-worker",
       });
-      const repaired = coordinator.reconcile({ ctx, request: repairHandoff });
+      const repaired = await completeDraftWorkerThroughStep({ coordinator, ctx, request: repairHandoff });
 
       assert.equal(repaired.completed, true);
       const repairAudit = JSON.parse(flowManager.readArtifact({
@@ -936,26 +937,31 @@ describe("deterministic full Flow worker handoff", () => {
       assert.equal(completedDraft.analysis.validation, repairedValue);
       assert.equal(Object.hasOwn(completedDraft, "approval"), false);
 
-      const completionActivity = flowManager.activityLedger(specId).at(-1);
       const repairDescriptor = flowManager.readArtifact({
         specId,
         logicalKey: "draft.coverage.repair",
         consumerNodeId: "draft-gate",
       }).descriptor;
+      const completionActivity = flowManager.activityLedger(specId)
+        .find((activity) => activity.id === repairDescriptor.activityId);
+      assert.ok(completionActivity);
       assert.equal(repairDescriptor.activityId, completedDraftArtifact.descriptor.activityId);
       assert.equal(completedDraftArtifact.descriptor.activityId, completionActivity.id);
-      assert.equal(completionActivity.transition.stepConnectionReceipt.kind, "draft-completion");
-      assert.equal(completionActivity.transition.stepConnectionReceipt.source, "coverage-repair");
-      assert.equal(completionActivity.transition.stepConnectionReceipt.targetStepId, "draft-gate");
-      assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, "draft-gate");
+      assert.equal(completionActivity.transition.operation, "confirm_attempt");
+      assert.equal(repaired.stepResult.kind, "draft-coverage-repair-changed");
+      assert.equal(repaired.settlementReceipt.targetStepId, "draft-coverage-review");
+      assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, "draft-coverage-review");
 
       const activityCount = flowManager.activityLedger(specId).length;
-      const replay = coordinator.reconcile({ ctx, request: repairHandoff });
-      assert.equal(replay.replayed, true);
-      assert.equal(flowManager.activityLedger(specId).length, activityCount);
+      const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false, specId });
+      const durableReceipt = reloaded.activityLedger(specId).findLast((activity) => (
+        activity.result?.draftSettlementReceipt?.id === repaired.settlementReceipt.id
+      ))?.result.draftSettlementReceipt ?? null;
+      assert.equal(durableReceipt?.id, repaired.settlementReceipt.id);
+      assert.equal(reloaded.activityLedger(specId).length, activityCount);
       assert.equal(
-        flowManager.activityLedger(specId).filter((activity) => activity.transition.stepConnectionReceipt?.kind === "draft-completion").length,
-        1,
+        reloaded.activityLedger(specId).filter((activity) => activity.transition.stepConnectionReceipt?.kind === "draft-completion").length,
+        0,
       );
     } finally {
       removeTmpDir(temporaryRoot);

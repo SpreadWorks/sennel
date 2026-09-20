@@ -2,7 +2,7 @@ import { attachedCanonicalCommandResultArtifact } from "../lib/canonical-command
 import { DraftReviewArtifactDocument, DraftReviewEvidenceSet } from "../lib/draft-review-artifacts.js";
 import { draftReviewRouteForStepId } from "../lib/draft-review-routes.js";
 import { readProspectiveDraftGateFacts } from "../lib/gate-transition-facts.js";
-import { settleDraftStepResult } from "../definition.js";
+import { DraftExecutionSettlement, settleDraftStepResult } from "../definition.js";
 import {
   DraftCoverageReviewPassedResult,
   StepResult,
@@ -18,14 +18,23 @@ import {
 } from "../lib/draft-gate-prospective.js";
 
 function committedReceipt(flowManager, input) {
-  return flowManager.findDraftStepSettlementReceipt(input);
+  try {
+    return flowManager.findDraftStepSettlementReceipt(input);
+  } catch {
+    return null;
+  }
 }
 
 /** Validate a Draft Review observation and settle it in one canonical transaction. */
 export class ReviewService {
   #reviewDocument = null;
 
-  constructor({ flowManager, binding, commandResult }) {
+  constructor({
+    flowManager,
+    binding,
+    commandResult = null,
+    executionCheckpointer = null,
+  }) {
     if (!flowManager || typeof flowManager.settleDraftStepResult !== "function"
       || typeof flowManager.findDraftStepSettlementReceipt !== "function") {
       throw new TypeError("ReviewService requires canonical Result settlement and receipt readback");
@@ -40,7 +49,16 @@ export class ReviewService {
     this.binding = binding;
     this.route = route;
     this.commandResult = commandResult;
+    if (executionCheckpointer !== null && typeof executionCheckpointer !== "function") {
+      throw new TypeError("ReviewService execution checkpointer must be a function");
+    }
+    this.executionCheckpointer = executionCheckpointer;
     Object.freeze(this);
+  }
+
+  requiresReviewExecution() {
+    this.binding.assertCurrent();
+    return this.executionCheckpointer !== null;
   }
 
   inspectReviewResult(result = this.commandResult) {
@@ -68,8 +86,27 @@ export class ReviewService {
     if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
       throw new TypeError("ReviewService requires its bound Step's concrete Result");
     }
-    if (stepResult.error === null) this.inspectReviewResult();
     let settlement = settleDraftStepResult(this.binding.stepId, stepResult);
+    if (this.executionCheckpointer !== null) {
+      if (!(settlement instanceof DraftExecutionSettlement)) {
+        throw new DraftStepPersistenceFailure(new Error("Draft review pre-execution Step must select an Execution settlement"));
+      }
+      const input = {
+        binding: this.binding,
+        stepResult,
+        settlement,
+        commandResult: this.commandResult,
+      };
+      try {
+        const committed = await this.executionCheckpointer(stepResult, settlement, this.binding);
+        return committed.receipt;
+      } catch (error) {
+        const replay = committedReceipt(this.flowManager, input);
+        if (replay !== null) return replay;
+        throw error instanceof DraftStepPersistenceFailure ? error : new DraftStepPersistenceFailure(error);
+      }
+    }
+    if (stepResult.error === null && this.#reviewDocument === null) this.inspectReviewResult();
     if (stepResult instanceof DraftCoverageReviewPassedResult) {
       const facts = this.flowManager.readProspectiveDraftCoveragePassFacts({
         binding: this.binding,
@@ -81,6 +118,8 @@ export class ReviewService {
       binding: this.binding,
       stepResult,
       settlement,
+      // Terminal routing still supplies the exact already-published bytes so
+      // producer-readiness can bind the downstream confirmation to them.
       commandResult: stepResult.error === null ? this.commandResult : undefined,
     };
     try {

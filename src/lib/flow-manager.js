@@ -476,6 +476,24 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  checkpointDraftStepExecution(input = {}) {
+    return this._store.checkpointDraftStepExecution({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  draftStepExecutionState(input = {}) {
+    return this._store.draftStepExecutionState({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  claimDraftStepExecution(input = {}) {
+    return this._store.claimDraftStepExecution({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   readProspectiveDraftCoveragePassFacts(input = {}) {
     return this._store.readProspectiveDraftCoveragePassFacts({
       ...input,

@@ -8,6 +8,7 @@ import {
   requiresWorkerArtifactHandoff,
 } from "../../../lib/flow-artifact-authority.js";
 import { WorkerArtifactHandoffRequest } from "../../../lib/worker-artifact-handoff.js";
+import { isConditionalDraftWorkerStep } from "../../../lib/draft-conditional-worker.js";
 
 function canonicalState(flowManager, specId) {
   if (!flowManager || typeof flowManager.canonicalState !== "function") {
@@ -79,6 +80,22 @@ export class DraftWorkerStepBinding extends DraftStepBinding {
     const state = super.assertCurrent();
     this.request.assertCurrent(this.flowManager.loadReadOnly(this.specId));
     return state;
+  }
+}
+
+/** Binds pre-execution admission without granting a materialized worker request. */
+export class DraftWorkerExecutionStepBinding extends DraftStepBinding {
+  constructor({ flowManager, specId, stepId } = {}) {
+    if (!isConditionalDraftWorkerStep(stepId)) {
+      throw new Error("Draft worker execution admission requires a conditional worker Step");
+    }
+    const state = canonicalState(flowManager, specId);
+    if (state.current?.at(-1) !== stepId || state.attempt?.nodeId !== stepId
+      || state.attempt.failure !== null) {
+      throw new Error("Draft worker execution admission requires its active Attempt");
+    }
+    super({ flowManager, state, stepId, attempt: state.attempt });
+    Object.freeze(this);
   }
 }
 

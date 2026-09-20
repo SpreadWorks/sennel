@@ -71,7 +71,11 @@ import { readCurrentNonGateTransitionFacts } from "./lib/non-gate-transition-fac
 import { readCurrentTestChainTransitionFacts } from "./lib/test-chain-transition-facts.js";
 import { CurrentTaskSourceSnapshot, TaskMutationLineageSet } from "./lib/task-mutation-lineage.js";
 import { RequirementTestLifecycleAuthority } from "./lib/requirement-test-lifecycle.js";
-import { STEP_RESULT_TYPE } from "./engine/step-result.js";
+import {
+  DraftCoverageReviewExecutionRequiredResult,
+  DraftQuestionsReviewExecutionRequiredResult,
+  STEP_RESULT_TYPE,
+} from "./engine/step-result.js";
 import { StepFactory } from "./engine/step-factory.js";
 import { isDraftStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
 
@@ -113,8 +117,42 @@ async function executePublishedDraftReviewStep(ctx, result) {
     phase: route.retryPhase,
   });
   const binding = await new DraftReviewConnector(source).connect();
+  const publicationResult = route.key === "questions"
+    ? new DraftQuestionsReviewExecutionRequiredResult()
+    : new DraftCoverageReviewExecutionRequiredResult();
+  const publicationStep = new StepFactory()
+    .provideArguments(ReviewService, {
+      flowManager: ctx.flowManager,
+      binding,
+      commandResult: result,
+      executionCheckpointer: (stepResult, settlement, selectedBinding) => (
+        ctx.flowManager.settleDraftStepResult({
+          binding: selectedBinding,
+          stepResult,
+          settlement,
+          commandResult: result,
+        })
+      ),
+    })
+    .create(route.key === "questions" ? steps.DraftQuestionsReviewStep : steps.DraftCoverageReviewStep);
+  let published;
+  try {
+    published = await publicationStep.execute();
+  } catch (error) {
+    if (isDraftStepPersistenceFailure(error)) {
+      throw fatalDraftPersistenceFailure(error, "DRAFT_REVIEW_STEP_RESULT_PERSISTENCE_FAILED");
+    }
+    throw error;
+  }
+  if (published.kind !== publicationResult.kind) {
+    throw new Error("Draft review publication Step selected an invalid Result");
+  }
   const step = new StepFactory()
-    .provideArguments(ReviewService, { flowManager: ctx.flowManager, binding, commandResult: result })
+    .provideArguments(ReviewService, {
+      flowManager: ctx.flowManager,
+      binding,
+      commandResult: result,
+    })
     .create(route.key === "questions" ? steps.DraftQuestionsReviewStep : steps.DraftCoverageReviewStep);
   let output;
   try {

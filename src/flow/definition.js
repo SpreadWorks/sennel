@@ -12,6 +12,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { isConditionalDraftWorkerStep } from "./lib/draft-conditional-worker.js";
 import { SourceHandoffFailureFacts } from "./lib/source-handoff-failure.js";
 import { NonblockingFailureClassification } from "./lib/nonblocking-evidence.js";
 import {
@@ -4666,9 +4667,296 @@ export class DraftStepSettlementPublication {
   toJSON() { return { digest: this.digest }; }
 }
 
+const SHA256_DIGEST = /^[a-f0-9]{64}$/;
+const GIT_TREE_DIGEST = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
+const DRAFT_EXECUTION_PHASES = new Set(["checkpoint", "claimed", "publication", "terminal"]);
+
+function requireDraftExecutionDigest(value, field, pattern = SHA256_DIGEST) {
+  const digest = requireString(value, field).toLowerCase();
+  if (!pattern.test(digest)) throw new TypeError(`${field} is invalid`);
+  return digest;
+}
+
+function requireExactObject(value, fields, field) {
+  if (!isPlainObject(value)
+    || Object.keys(value).sort().join("\0") !== [...fields].sort().join("\0")) {
+    throw new TypeError(`${field} has invalid fields`);
+  }
+  return value;
+}
+
+/** Immutable ReviewWorkUnitManifest target identity used at execution admission. */
+export class DraftReviewExecutionTargetIdentity {
+  constructor({ treeSha, targetStateDigest } = {}) {
+    this.treeSha = requireDraftExecutionDigest(treeSha, "Draft review execution target treeSha", GIT_TREE_DIGEST);
+    this.targetStateDigest = requireDraftExecutionDigest(targetStateDigest, "Draft review execution target state digest");
+    Object.freeze(this);
+  }
+
+  toJSON() { return { treeSha: this.treeSha, targetStateDigest: this.targetStateDigest }; }
+
+  equals(other) {
+    return other instanceof DraftReviewExecutionTargetIdentity
+      && this.treeSha === other.treeSha
+      && this.targetStateDigest === other.targetStateDigest;
+  }
+
+  static fromJSON(value) {
+    return new this(requireExactObject(value, ["treeSha", "targetStateDigest"], "Draft review execution target"));
+  }
+}
+
+/** Generation-bound identity of a canonical Draft review work unit. */
+export class DraftReviewExecutionBinding {
+  constructor({ executionGeneration, manifestDigest, inputDigest, target } = {}) {
+    if (!Number.isSafeInteger(executionGeneration) || executionGeneration < 0) {
+      throw new TypeError("Draft review execution generation is invalid");
+    }
+    this.kind = "review";
+    this.executionGeneration = executionGeneration;
+    this.manifestDigest = requireDraftExecutionDigest(manifestDigest, "Draft review execution manifest digest");
+    this.inputDigest = requireDraftExecutionDigest(inputDigest, "Draft review execution input digest");
+    this.target = target instanceof DraftReviewExecutionTargetIdentity
+      ? target : DraftReviewExecutionTargetIdentity.fromJSON(target);
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      kind: this.kind,
+      executionGeneration: this.executionGeneration,
+      manifestDigest: this.manifestDigest,
+      inputDigest: this.inputDigest,
+      target: this.target.toJSON(),
+    };
+  }
+
+  /**
+   * A saved review checkpoint or claim authorizes only this exact
+   * reconstructed worker contract.  The execution generation is part of the
+   * comparison so callers cannot replay one generation as another.
+   */
+  equals(other) {
+    return other instanceof DraftReviewExecutionBinding
+      && this.executionGeneration === other.executionGeneration
+      && this.manifestDigest === other.manifestDigest
+      && this.inputDigest === other.inputDigest
+      && this.target.equals(other.target);
+  }
+}
+
+/** Generation-bound identity from which a WorkerArtifactHandoffRequest is materialized. */
+export class DraftWorkerExecutionBinding {
+  constructor({ executionGeneration, inputDigest, inputRevision } = {}) {
+    if (!Number.isSafeInteger(executionGeneration) || executionGeneration < 0) {
+      throw new TypeError("Draft worker execution generation is invalid");
+    }
+    this.kind = "worker";
+    this.executionGeneration = executionGeneration;
+    this.inputDigest = requireDraftExecutionDigest(inputDigest, "Draft worker execution input digest");
+    this.inputRevision = requireDraftExecutionDigest(inputRevision, "Draft worker execution input revision");
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      kind: this.kind,
+      executionGeneration: this.executionGeneration,
+      inputDigest: this.inputDigest,
+      inputRevision: this.inputRevision,
+    };
+  }
+
+  equals(other) {
+    return other instanceof DraftWorkerExecutionBinding
+      && this.executionGeneration === other.executionGeneration
+      && this.inputDigest === other.inputDigest
+      && this.inputRevision === other.inputRevision;
+  }
+}
+
+function draftExecutionBindingFromJSON(value) {
+  if (!isPlainObject(value)) throw new TypeError("Draft execution binding must be an object");
+  if (value.kind === "review") {
+    requireExactObject(value, ["kind", "executionGeneration", "manifestDigest", "inputDigest", "target"], "Draft review execution binding");
+    return new DraftReviewExecutionBinding(value);
+  }
+  if (value.kind === "worker") {
+    requireExactObject(value, ["kind", "executionGeneration", "inputDigest", "inputRevision"], "Draft worker execution binding");
+    return new DraftWorkerExecutionBinding(value);
+  }
+  throw new TypeError("Draft execution binding kind is invalid");
+}
+
+/** First claim for a review generation; the manifest itself is the exact request. */
+export class DraftReviewExecutionClaim {
+  constructor() {
+    this.kind = "review";
+    Object.freeze(this);
+  }
+
+  toJSON() { return { kind: this.kind }; }
+}
+
+/** First claim for the exact worker request which may be materialized after commit. */
+export class DraftWorkerExecutionClaim {
+  constructor({ dispatchInvocationId, generatedAt, actionDigest, requestDigest } = {}) {
+    this.kind = "worker";
+    this.dispatchInvocationId = requireString(dispatchInvocationId, "Draft worker dispatch invocation ID");
+    if (typeof generatedAt !== "string" || !Number.isFinite(Date.parse(generatedAt))) {
+      throw new TypeError("Draft worker generatedAt is invalid");
+    }
+    this.generatedAt = new Date(generatedAt).toISOString();
+    this.actionDigest = requireDraftExecutionDigest(actionDigest, "Draft worker action digest");
+    this.requestDigest = requireDraftExecutionDigest(requestDigest, "Draft worker request digest");
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      kind: this.kind,
+      dispatchInvocationId: this.dispatchInvocationId,
+      generatedAt: this.generatedAt,
+      actionDigest: this.actionDigest,
+      requestDigest: this.requestDigest,
+    };
+  }
+}
+
+function draftExecutionClaimFromJSON(value) {
+  if (!isPlainObject(value)) throw new TypeError("Draft execution claim must be an object");
+  if (value.kind === "review") {
+    requireExactObject(value, ["kind"], "Draft review execution claim");
+    return new DraftReviewExecutionClaim();
+  }
+  if (value.kind === "worker") {
+    requireExactObject(value, ["kind", "dispatchInvocationId", "generatedAt", "actionDigest", "requestDigest"], "Draft worker execution claim");
+    return new DraftWorkerExecutionClaim(value);
+  }
+  throw new TypeError("Draft execution claim kind is invalid");
+}
+
+/** One durable point in the execution generation lifecycle. */
+export class DraftStepExecutionLifecycle {
+  constructor({ phase, binding, claim = null } = {}) {
+    if (!DRAFT_EXECUTION_PHASES.has(phase)) throw new TypeError("Draft execution lifecycle phase is invalid");
+    if (!(binding instanceof DraftReviewExecutionBinding) && !(binding instanceof DraftWorkerExecutionBinding)) {
+      throw new TypeError("Draft execution lifecycle requires a typed binding");
+    }
+    if (claim !== null && !(claim instanceof DraftReviewExecutionClaim) && !(claim instanceof DraftWorkerExecutionClaim)) {
+      throw new TypeError("Draft execution lifecycle claim is invalid");
+    }
+    if ((phase === "checkpoint") !== (claim === null)) {
+      throw new TypeError("Draft execution checkpoint is the only unclaimed lifecycle phase");
+    }
+    if (claim !== null && claim.kind !== binding.kind) {
+      throw new TypeError("Draft execution claim does not match its binding kind");
+    }
+    this.phase = phase;
+    this.binding = binding;
+    this.claim = claim;
+    Object.freeze(this);
+  }
+
+  get executionGeneration() { return this.binding.executionGeneration; }
+
+  claimed(claim) { return new DraftStepExecutionLifecycle({ phase: "claimed", binding: this.binding, claim }); }
+  published() { return new DraftStepExecutionLifecycle({ phase: "publication", binding: this.binding, claim: this.claim }); }
+  terminal() { return new DraftStepExecutionLifecycle({ phase: "terminal", binding: this.binding, claim: this.claim }); }
+
+  toJSON() {
+    return {
+      phase: this.phase,
+      binding: this.binding.toJSON(),
+      claim: this.claim?.toJSON() ?? null,
+    };
+  }
+
+  equals(other) {
+    return other instanceof DraftStepExecutionLifecycle
+      && stableJson(this.toJSON()) === stableJson(other.toJSON());
+  }
+
+  static checkpoint(binding) {
+    return new this({ phase: "checkpoint", binding });
+  }
+
+  static fromJSON(value) {
+    requireExactObject(value, ["phase", "binding", "claim"], "Draft execution lifecycle");
+    return new this({
+      phase: value.phase,
+      binding: draftExecutionBindingFromJSON(value.binding),
+      claim: value.claim === null ? null : draftExecutionClaimFromJSON(value.claim),
+    });
+  }
+}
+
+/** Canonical read model for restart-safe generation selection and claim recovery. */
+export class DraftStepExecutionState {
+  constructor({ binding, receiptId = null, lifecycle = null } = {}) {
+    if (binding?.runId === undefined || binding?.specId === undefined
+      || typeof binding?.stepId !== "string" || typeof binding?.attempt?.id !== "string"
+      || !Number.isSafeInteger(binding?.attempt?.sequence)) {
+      throw new TypeError("Draft execution state requires its exact Attempt binding");
+    }
+    if (receiptId !== null && !SHA256_DIGEST.test(receiptId)) {
+      throw new TypeError("Draft execution state receipt ID is invalid");
+    }
+    if (lifecycle !== null && !(lifecycle instanceof DraftStepExecutionLifecycle)) {
+      throw new TypeError("Draft execution state lifecycle must be typed");
+    }
+    if ((receiptId === null) !== (lifecycle === null)) {
+      throw new TypeError("Draft execution state receipt and lifecycle must be present together");
+    }
+    this.flowBinding = Object.freeze({
+      runId: binding.runId,
+      specId: binding.specId,
+      stepId: binding.stepId,
+      attemptId: binding.attempt.id,
+      attemptSequence: binding.attempt.sequence,
+    });
+    this.receiptId = receiptId;
+    this.lifecycle = lifecycle;
+    Object.freeze(this);
+  }
+
+  get nextGeneration() {
+    return this.lifecycle?.phase === "terminal"
+      ? null : this.lifecycle === null ? 0 : this.lifecycle.executionGeneration + 1;
+  }
+
+  reviewBinding({ manifestDigest, inputDigest, target } = {}) {
+    if (this.nextGeneration === null) throw new TypeError("terminal Draft execution has no next generation");
+    return new DraftReviewExecutionBinding({
+      executionGeneration: this.nextGeneration,
+      manifestDigest,
+      inputDigest,
+      target,
+    });
+  }
+
+  workerBinding({ inputDigest, inputRevision } = {}) {
+    if (this.nextGeneration === null) throw new TypeError("terminal Draft execution has no next generation");
+    return new DraftWorkerExecutionBinding({
+      executionGeneration: this.nextGeneration,
+      inputDigest,
+      inputRevision,
+    });
+  }
+
+  toJSON() {
+    return {
+      flowBinding: { ...this.flowBinding },
+      receiptId: this.receiptId,
+      lifecycle: this.lifecycle?.toJSON() ?? null,
+      nextGeneration: this.nextGeneration,
+    };
+  }
+}
+
 /** Durable identity of one Result and its already-selected settlement. */
 export class DraftStepSettlementReceipt {
-  constructor({ binding, result, settlement, publication } = {}) {
+  constructor({ binding, result, settlement, publication, executionLifecycle = null } = {}) {
     if (!(result instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
       throw new TypeError("Draft settlement receipt requires a Result and Settlement");
     }
@@ -4680,6 +4968,27 @@ export class DraftStepSettlementReceipt {
       || settlement.resultKind !== result.kind || settlement.resultType !== result.type
       || typeof binding.attempt?.id !== "string" || !Number.isSafeInteger(binding.attempt?.sequence)) {
       throw new TypeError("Draft settlement receipt requires the exact Result binding");
+    }
+    if (executionLifecycle !== null && !(executionLifecycle instanceof DraftStepExecutionLifecycle)) {
+      throw new TypeError("Draft settlement receipt execution lifecycle must be typed");
+    }
+    const reviewExecution = result instanceof DraftQuestionsReviewExecutionRequiredResult
+      || result instanceof DraftCoverageReviewExecutionRequiredResult;
+    const workerExecution = result instanceof DraftRefineWorkerRequiredResult
+      || result instanceof DraftGateRepairWorkerRequiredResult;
+    if (executionLifecycle !== null
+      && ((reviewExecution && !(executionLifecycle.binding instanceof DraftReviewExecutionBinding))
+        || (workerExecution && !(executionLifecycle.binding instanceof DraftWorkerExecutionBinding)))) {
+      throw new TypeError("Draft settlement receipt execution binding does not match its Step Result");
+    }
+    const executionSettlement = settlement instanceof DraftExecutionSettlement;
+    const awaitSettlement = settlement instanceof DraftAwaitUserDecision;
+    const executionPhase = executionLifecycle?.phase ?? null;
+    if ((["checkpoint", "claimed"].includes(executionPhase) && !executionSettlement)
+      || (executionSettlement && !["checkpoint", "claimed", "publication"].includes(executionPhase))
+      || (executionPhase === "publication" && !(executionSettlement || awaitSettlement))
+      || (executionPhase === "terminal" && (executionSettlement || awaitSettlement))) {
+      throw new TypeError("Draft settlement receipt execution phase does not match its Settlement");
     }
     this.binding = Object.freeze({
       runId: binding.runId,
@@ -4698,6 +5007,7 @@ export class DraftStepSettlementReceipt {
       ? Object.freeze({ name: settlement.connector.name })
       : null;
     this.publicationDigest = publication.digest;
+    this.executionLifecycle = executionLifecycle;
     const identity = {
       binding: this.binding,
       resultKind: this.resultKind,
@@ -4708,6 +5018,7 @@ export class DraftStepSettlementReceipt {
       effects: this.effects?.toJSON() ?? null,
       connector: this.connector,
       publicationDigest: this.publicationDigest,
+      executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
     };
     this.id = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     Object.freeze(this);
@@ -4725,6 +5036,7 @@ export class DraftStepSettlementReceipt {
       effects: this.effects?.toJSON() ?? null,
       connector: this.connector === null ? null : { ...this.connector },
       publicationDigest: this.publicationDigest,
+      executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
     };
   }
 }
@@ -5425,7 +5737,6 @@ export function buildCurrentFlowDefinition() {
     DRAFT_QUESTIONS_ROUTE.triageStepId, DRAFT_QUESTIONS_ROUTE.repairStepId,
     DRAFT_COVERAGE_ROUTE.triageStepId, DRAFT_COVERAGE_ROUTE.repairStepId,
   ]);
-  const conditionalWorkerLeaves = new Set(["draft-refine", "draft-gate-repair"]);
   const transitionsFor = ({ skippable = false, conditionalWorker = false, triageNoRepair = false, taskStageBypass = false, draftReviewBypass = false, requirementTestInitialization = false, existingImplementation = false, finalizationRoute = false, taskOverrunRecovery = false, failurePolicy = null } = {}) => [
     "pending:in_progress",
     "in_progress:done",
@@ -5471,7 +5782,7 @@ export function buildCurrentFlowDefinition() {
       ...node,
       triageNoRepair: node.id === "impl-repair",
       skippable: definitionNodeIsSkippable(scope, node.id),
-      conditionalWorker: conditionalWorkerLeaves.has(node.id),
+      conditionalWorker: isConditionalDraftWorkerStep(node.id),
       requirementTestInitialization: requirementTestInitializationSkippable.has(node.id),
       existingImplementation: existingImplementationCompletion.has(node.id),
       finalizationRoute: finalizationRouteLeaves.has(node.id),

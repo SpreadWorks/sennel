@@ -566,13 +566,34 @@ function descriptorSnapshot(flowManager, specId, descriptor) {
   return snapshot;
 }
 
+function matchesDraftReviewExecution(activity, manifest, phase, executionGeneration = null) {
+  const lifecycle = activity.result?.draftSettlementReceipt?.executionLifecycle ?? null;
+  const binding = lifecycle?.binding ?? null;
+  return lifecycle?.phase === phase
+    && binding?.kind === "review"
+    && Number.isSafeInteger(binding.executionGeneration)
+    && (executionGeneration === null || binding.executionGeneration === executionGeneration)
+    && binding.manifestDigest === manifest.digest
+    && binding.inputDigest === manifest.inputDigest
+    && binding.target?.treeSha === manifest.target.treeSha
+    && binding.target?.targetStateDigest === manifest.target.targetStateDigest;
+}
+
 function confirmedReviewReceipt(flowManager, specId, workUnit, sealed, { catalog, activities }) {
   const manifest = workUnit.manifestDocument;
   const seal = sealed.seal;
-  const activity = activities.find((candidate) => (
+  const draftExecution = manifest.phase === "draft-questions" || manifest.phase === "draft-coverage";
+  const candidates = activities.filter((candidate) => (
     candidate.type === "result_confirmed"
     && candidate.nodeId === manifest.nodeId
     && candidate.attemptId === manifest.attemptId
+  ));
+  const activity = candidates.findLast((candidate) => (
+    (!draftExecution || matchesDraftReviewExecution(candidate, manifest, "terminal"))
+    && catalog.artifacts.some((entry) => (
+      entry.logicalKey === (manifest.phase === "spec" ? manifest.output.logicalKey : "review.evidence")
+      && entry.activityId === candidate.id
+    ))
   )) ?? null;
   if (activity === null) return false;
   if (manifest.phase === "spec") {
@@ -613,8 +634,18 @@ function confirmedReviewReceipt(flowManager, specId, workUnit, sealed, { catalog
   const evidenceDescriptor = catalog.artifacts.find((entry) => (
     entry.logicalKey === "review.evidence" && entry.activityId === activity.id
   )) ?? null;
+  const publicationActivity = draftExecution
+    ? candidates.findLast((candidate) => matchesDraftReviewExecution(
+      candidate,
+      manifest,
+      "publication",
+      activity.result.draftSettlementReceipt.executionLifecycle.binding.executionGeneration,
+    )) ?? null
+    : activity;
+  if (publicationActivity === null) return false;
   const outputDescriptor = catalog.artifacts.find((entry) => (
-    entry.logicalKey === manifest.output.logicalKey && entry.activityId === activity.id
+    entry.logicalKey === manifest.output.logicalKey
+    && entry.activityId === publicationActivity.id
   )) ?? null;
   if (evidenceDescriptor === null || outputDescriptor === null || outputDescriptor.mediaType !== manifest.output.mediaType) return false;
   let evidence;

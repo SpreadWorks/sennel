@@ -21,6 +21,7 @@ import { AgentRuntimeDirectorySet } from "../../lib/agent.js";
 import { AgentFailure } from "../../lib/agent-failure.js";
 import { FlowCommand } from "./base-command.js";
 import {
+  CurrentAttemptIdentity,
   CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
   ReviewProviderCompletionFailure,
@@ -28,10 +29,18 @@ import {
 } from "./current-flow-state.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import {
+  DraftReviewExecutionBinding,
+  DraftReviewExecutionClaim,
+  DraftReviewExecutionTargetIdentity,
   flowLeafIdsBetween,
+  settleDraftStepResult,
   TaskReviewFailureFacts,
   resolveTaskReviewFailure,
 } from "../definition.js";
+import {
+  DraftCoverageReviewExecutionRequiredResult,
+  DraftQuestionsReviewExecutionRequiredResult,
+} from "../engine/step-result.js";
 import { flattenSteps } from "./step-tree.js";
 import path from "path";
 import fs from "fs";
@@ -55,10 +64,16 @@ import {
 import { FLOW_REVIEW_ROUTES } from "./review-route.js";
 import { ReviewTargetAuthority } from "./review-target-authority.js";
 import {
+  CanonicalDraftReviewSource,
   CanonicalReviewPromotion,
   CanonicalReviewWorkUnit,
   canonicalReviewNodeId,
 } from "./canonical-review-artifacts.js";
+import { DraftReviewConnector } from "../engine/connectors/draft/draft-review-connector.js";
+import { StepFactory } from "../engine/step-factory.js";
+import { ReviewService } from "../services/review-service.js";
+import { DraftQuestionsReviewStep } from "../steps/draft/draft-questions-review.js";
+import { DraftCoverageReviewStep } from "../steps/draft/draft-coverage-review.js";
 import {
   REVIEW_WORK_UNIT_MANIFEST_ENV,
   ReviewWorkUnit,
@@ -154,6 +169,176 @@ function resolveDraftReviewPhaseKey(flowState = {}) {
 function reviewPhaseKeyForCtx(ctx, phase) {
   if (phase !== "draft") return persistedPhaseKey(phase);
   return resolveDraftReviewPhaseKey(ctx?.flowState || {});
+}
+
+function draftReviewExecutionRequiredResult(phase) {
+  if (phase === "draft-questions") return new DraftQuestionsReviewExecutionRequiredResult();
+  if (phase === "draft-coverage") return new DraftCoverageReviewExecutionRequiredResult();
+  return null;
+}
+
+class ReviewExecutionAttemptIdentity {
+  constructor({ runId, attempt }) {
+    this.runId = runId;
+    this.attempt = CurrentAttemptIdentity.from(attempt);
+    Object.freeze(this);
+  }
+
+  get nodeId() { return this.attempt.nodeId; }
+  get attemptId() { return this.attempt.id; }
+
+  matches(state) {
+    return state?.runId === this.runId && this.attempt.matches(state);
+  }
+
+  toJSON() {
+    return {
+      runId: this.runId,
+      nodeId: this.nodeId,
+      attemptId: this.attemptId,
+      attemptSequence: this.attempt.sequence,
+    };
+  }
+}
+
+function staleReviewExecutionIdentity(identity, state, message) {
+  return Envelope.fail(
+    "run",
+    "review",
+    "REVIEW_EXECUTION_LEASE_IDENTITY_STALE",
+    message,
+    {
+      leased: identity.toJSON(),
+      current: {
+        runId: state?.runId ?? null,
+        nodeId: state?.current?.at(-1) ?? null,
+        attemptId: state?.attempt?.id ?? null,
+        attemptSequence: state?.attempt?.sequence ?? null,
+      },
+    },
+  );
+}
+
+/**
+ * Admit the exact in-memory ReviewWorkUnitManifest before its directory or
+ * provider request exists. Re-entry reuses the Store-owned generation only
+ * when the rebuilt manifest is byte-identical to the admitted contract.
+ */
+async function claimDraftReviewExecution({ flowManager, state, phase, manifest }) {
+  const stepResult = draftReviewExecutionRequiredResult(phase);
+  if (stepResult === null) return null;
+  const binding = Object.freeze({
+    runId: state.runId,
+    specId: state.specId,
+    stepId: stepResult.stepId,
+    attempt: state.attempt,
+  });
+  const settlement = settleDraftStepResult(binding.stepId, stepResult);
+  const executionState = flowManager.draftStepExecutionState({ binding });
+  const target = new DraftReviewExecutionTargetIdentity(manifest.target.toJSON());
+  const current = executionState.lifecycle;
+  let executionBinding;
+  let checkpointRequired = true;
+  if (current !== null && ["checkpoint", "claimed"].includes(current.phase)) {
+    const rebuilt = new DraftReviewExecutionBinding({
+      executionGeneration: current.executionGeneration,
+      manifestDigest: manifest.digest,
+      inputDigest: manifest.inputDigest,
+      target,
+    });
+    if (!current.binding.equals(rebuilt)) {
+      return Envelope.fail(
+        "run",
+        "review",
+        "DRAFT_REVIEW_EXECUTION_BINDING_MISMATCH",
+        "the rebuilt Draft Review work unit does not match its persisted execution checkpoint or claim",
+        {
+          phase,
+          lifecyclePhase: current.phase,
+          persistedBinding: current.binding.toJSON(),
+          rebuiltBinding: rebuilt.toJSON(),
+        },
+      );
+    }
+    executionBinding = current.binding;
+    // The persisted checkpoint already reserves this exact generation.  Its
+    // replay proceeds directly to the first claim; writing a second
+    // checkpoint would be an unnecessary state mutation before the provider.
+    checkpointRequired = false;
+  } else if (current !== null && ["publication", "terminal"].includes(current.phase)) {
+    return Envelope.fail(
+      "run",
+      "review",
+      "DRAFT_REVIEW_EXECUTION_ALREADY_PUBLISHED",
+      "the current Draft Review execution generation is already published or terminal and cannot create a new generation without a definition-selected Step",
+      { phase, lifecyclePhase: current.phase, executionBinding: current.binding.toJSON() },
+    );
+  } else {
+    executionBinding = executionState.reviewBinding({
+      manifestDigest: manifest.digest,
+      inputDigest: manifest.inputDigest,
+      target,
+    });
+  }
+  const source = new CanonicalDraftReviewSource({ flowManager, state, phase });
+  const stepBinding = await new DraftReviewConnector(source).connect();
+  let selected = stepResult;
+  if (checkpointRequired) {
+    const service = new ReviewService({
+      flowManager,
+      binding: stepBinding,
+      executionCheckpointer: (selectedResult, selectedSettlement, selectedBinding) => (
+        flowManager.checkpointDraftStepExecution({
+          binding: selectedBinding,
+          stepResult: selectedResult,
+          settlement: selectedSettlement,
+          executionBinding,
+        })
+      ),
+    });
+    selected = await new StepFactory()
+      .provide(ReviewService, service)
+      .create(phase === "draft-questions" ? DraftQuestionsReviewStep : DraftCoverageReviewStep)
+      .execute();
+  }
+  if (selected.kind !== stepResult.kind) {
+    throw new Error("Draft review pre-execution Step selected an invalid Result");
+  }
+  flowManager.claimDraftStepExecution({
+    binding: stepBinding,
+    stepResult: selected,
+    settlement,
+    executionBinding,
+    executionClaim: new DraftReviewExecutionClaim(),
+  });
+  return executionBinding;
+}
+
+function checkpointFailedDraftReviewExecution({ flowManager, state, phase }) {
+  const stepResult = draftReviewExecutionRequiredResult(phase);
+  if (stepResult === null || state.attempt === null) return false;
+  const binding = Object.freeze({
+    runId: state.runId,
+    specId: state.specId,
+    stepId: stepResult.stepId,
+    attempt: state.attempt,
+  });
+  const execution = flowManager.draftStepExecutionState({ binding });
+  if (execution.lifecycle?.phase !== "claimed"
+    || !(execution.lifecycle.binding instanceof DraftReviewExecutionBinding)) return false;
+  const prior = execution.lifecycle.binding;
+  flowManager.checkpointDraftStepExecution({
+    binding,
+    stepResult,
+    settlement: settleDraftStepResult(binding.stepId, stepResult),
+    executionBinding: new DraftReviewExecutionBinding({
+      executionGeneration: prior.executionGeneration + 1,
+      manifestDigest: prior.manifestDigest,
+      inputDigest: prior.inputDigest,
+      target: prior.target,
+    }),
+  });
+  return true;
 }
 
 export { REVIEW_PHASE_KEYS };
@@ -606,20 +791,84 @@ function rehydratePublishedDraftReview(ctx, { state, phase }) {
   if (!new Set(["draft-questions", "draft-coverage"]).has(phase)) return null;
   const route = FLOW_REVIEW_ROUTES.find((entry) => entry.phase === phase);
   if (route === undefined) return null;
+  const binding = {
+    runId: state.runId,
+    specId: state.specId,
+    stepId: route.reviewStepId,
+    attempt: state.attempt,
+  };
+  let execution;
+  try {
+    execution = ctx.flowManager.draftStepExecutionState({ binding });
+  } catch (error) {
+    return Envelope.fail("run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED", error.message, { phase });
+  }
   const source = ctx.flowManager.readProducerArtifact({
     specId: state.specId,
     nodeId: route.reviewStepId,
     logicalKey: route.logicalKey,
     optional: true,
   });
-  if (source === null) return null;
+  // An arbitrary producer artifact is not execution publication. Only the
+  // durable receipt created by settling this exact claimed generation can be
+  // replayed without reconstructing and claiming a new worker request.
+  if (execution.lifecycle?.phase !== "publication"
+    || !(execution.lifecycle.binding instanceof DraftReviewExecutionBinding)) {
+    if (source === null) return null;
+    try {
+      const history = FlowArtifactAttemptHistory.fromJSON(JSON.parse(source.bytes.toString("utf8")));
+      if (history.current.attempt.value !== state.attempt.sequence) return null;
+    } catch (error) {
+      return Envelope.fail("run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED", error.message, { phase });
+    }
+    return Envelope.fail(
+      "run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED",
+      "the current Draft Review artifact has no matching execution publication receipt", { phase },
+    );
+  }
+  const publicationActivity = ctx.flowManager.activityLedger(state.specId).findLast((activity) => (
+    activity.nodeId === route.reviewStepId
+    && activity.attemptId === state.attempt.id
+    && activity.transition?.operation === "record_draft_step_settlement"
+    && activity.result?.draftSettlementReceipt?.id === execution.receiptId
+    && activity.result.draftSettlementReceipt.binding?.runId === state.runId
+    && activity.result.draftSettlementReceipt.binding?.specId === state.specId
+    && activity.result.draftSettlementReceipt.binding?.stepId === route.reviewStepId
+    && activity.result.draftSettlementReceipt.binding?.attemptId === state.attempt.id
+    && activity.result.draftSettlementReceipt.binding?.attemptSequence === state.attempt.sequence
+    && activity.result.draftSettlementReceipt.executionLifecycle?.phase === "publication"
+    && activity.result.draftSettlementReceipt.executionLifecycle?.binding?.kind === "review"
+  )) ?? null;
+  if (publicationActivity === null) {
+    return Envelope.fail(
+      "run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED",
+      "the Draft Review execution publication receipt is unavailable for the current Attempt", { phase },
+    );
+  }
+  if (source === null) {
+    return Envelope.fail(
+      "run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED",
+      "the Draft Review publication receipt has no current review artifact", { phase },
+    );
+  }
+  if (source.descriptor?.activityId !== publicationActivity.id) {
+    return Envelope.fail(
+      "run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED",
+      "the Draft Review artifact is not owned by its current execution publication receipt", { phase },
+    );
+  }
   let history;
   try {
     history = FlowArtifactAttemptHistory.fromJSON(JSON.parse(source.bytes.toString("utf8")));
   } catch (error) {
     return Envelope.fail("run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED", error.message, { phase });
   }
-  if (history.current.attempt.value !== state.attempt.sequence) return null;
+  if (history.current.attempt.value !== state.attempt.sequence) {
+    return Envelope.fail(
+      "run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED",
+      "the Draft Review publication receipt does not own the current Attempt artifact", { phase },
+    );
+  }
   const stored = history.current.payload;
   const payload = stored?.artifact?.payload;
   if (stored?.artifact?.logicalKey !== route.logicalKey
@@ -1435,15 +1684,40 @@ export class RunReviewCommand extends FlowCommand {
     }
     const treeSha = this.resolveTreeSha(ctx);
     const targetStateDigest = this.resolveTargetStateDigest(ctx, persistedPhase);
-    const workUnit = new CanonicalReviewWorkUnit({
-      flowManager: ctx.flowManager,
-      state,
-      phase: persistedPhase,
-      taskId,
-      executionRoot,
-      treeSha,
-      targetStateDigest,
-    });
+    const leaseIdentity = ctx.reviewExecutionLeaseIdentity instanceof ReviewExecutionAttemptIdentity
+      ? ctx.reviewExecutionLeaseIdentity : null;
+    const targetState = leaseIdentity === null
+      ? null : ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId);
+    if (leaseIdentity !== null && !leaseIdentity.matches(targetState)) {
+      return staleReviewExecutionIdentity(
+        leaseIdentity,
+        targetState,
+        "the canonical Review identity changed while resolving its execution target",
+      );
+    }
+    let workUnit;
+    try {
+      workUnit = new CanonicalReviewWorkUnit({
+        flowManager: ctx.flowManager,
+        state,
+        phase: persistedPhase,
+        taskId,
+        executionRoot,
+        treeSha,
+        targetStateDigest,
+      });
+    } catch (error) {
+      const current = leaseIdentity === null
+        ? null : ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId);
+      if (leaseIdentity !== null && !leaseIdentity.matches(current)) {
+        return staleReviewExecutionIdentity(
+          leaseIdentity,
+          current,
+          "the canonical Review identity changed before its work unit could be constructed",
+        );
+      }
+      throw error;
+    }
     let taskRecoveryBaseline = null;
     let taskCanonicalObservation = null;
     let taskCanonicalObservationBoundary = null;
@@ -1525,7 +1799,23 @@ export class RunReviewCommand extends FlowCommand {
         workUnit.workUnit.declareInput(taskRecoveryBaselineInput);
         workUnit.workUnit.declareInput(taskCanonicalObservationInput);
       }
-      sealedWorkUnit = workUnit.workUnit.recoverSealed();
+      if (draftReviewExecutionRequiredResult(persistedPhase) !== null) {
+        const executionAdmission = await claimDraftReviewExecution({
+          flowManager: ctx.flowManager,
+          state,
+          phase: persistedPhase,
+          manifest: workUnit.workUnit.manifest(),
+        });
+        if (executionAdmission instanceof Envelope) return executionAdmission;
+      }
+      try {
+        sealedWorkUnit = workUnit.workUnit.recoverSealed();
+      } catch (error) {
+        if (draftReviewExecutionRequiredResult(persistedPhase) !== null) {
+          workUnit.workUnit.cleanup();
+        }
+        throw error;
+      }
     } catch (error) {
       return this.#canonicalFailure(ctx, persistedPhase, error);
     }
@@ -1611,6 +1901,9 @@ export class RunReviewCommand extends FlowCommand {
         const failure = ReviewFailure.fromSubprocessResult({ phase: persistedPhase, result: res });
         const error = failure.toExecutionError();
         const stoppedFailure = stoppedTaskReviewFailure({ error, state, taskId, workUnit, baseline: taskRecoveryBaseline });
+        if (draftReviewExecutionRequiredResult(persistedPhase) !== null) {
+          try { workUnit.workUnit.cleanup(); } catch { /* next recovery reconciles retained runtime */ }
+        }
         return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, {
           taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint,
           taskReviewWorkUnit: workUnit.workUnit,
@@ -1629,6 +1922,9 @@ export class RunReviewCommand extends FlowCommand {
           validationError: error.message || String(error),
         });
         const stoppedFailure = stoppedTaskReviewFailure({ error: failure.toExecutionError(error), state, taskId, workUnit, baseline: taskRecoveryBaseline });
+        if (draftReviewExecutionRequiredResult(persistedPhase) !== null) {
+          try { workUnit.workUnit.cleanup(); } catch { /* next recovery reconciles retained runtime */ }
+        }
         return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, {
           taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint,
           taskReviewWorkUnit: workUnit.workUnit,
@@ -1662,6 +1958,9 @@ export class RunReviewCommand extends FlowCommand {
         }
       }
     } catch (error) {
+      if (draftReviewExecutionRequiredResult(persistedPhase) !== null) {
+        try { sealedWorkUnit.cleanup(); } catch { /* next recovery reconciles retained runtime */ }
+      }
       return this.#canonicalFailure(ctx, persistedPhase, error);
     }
     const currentTreeSha = this.resolveTreeSha(ctx);
@@ -1723,7 +2022,14 @@ export class RunReviewCommand extends FlowCommand {
         && !(error instanceof CurrentFlowStateConflictError)
         && !(error instanceof CurrentFlowStateInvariantError)
         && !(error instanceof TaskReviewSourceEffectRejection);
-      if (!publicationUnavailable) return this.#canonicalFailure(ctx, persistedPhase, error);
+      if (!publicationUnavailable) {
+        if (!publicationStarted && draftReviewExecutionRequiredResult(persistedPhase) !== null) {
+          try { sealedWorkUnit.cleanup(); } catch { /* next recovery reconciles retained runtime */ }
+        }
+        return this.#canonicalFailure(ctx, persistedPhase, error, {
+          advanceDraftExecution: !publicationStarted,
+        });
+      }
       const failure = ReviewFailure.publicationFailure({ phase: persistedPhase, reason: error.message || String(error) });
       let checkpoint = null;
       try {
@@ -1746,6 +2052,7 @@ export class RunReviewCommand extends FlowCommand {
   #canonicalFailure(ctx, phase, error, {
     taskReviewUnsealedCheckpoint = null,
     taskReviewWorkUnit = null,
+    advanceDraftExecution = true,
   } = {}) {
     const classified = error?.reviewFailure instanceof ReviewFailure
       ? error.reviewFailure
@@ -1758,6 +2065,15 @@ export class RunReviewCommand extends FlowCommand {
       classification: classified?.classification ?? null,
     });
     const canonicalState = ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId);
+    const leaseIdentity = ctx.reviewExecutionLeaseIdentity instanceof ReviewExecutionAttemptIdentity
+      ? ctx.reviewExecutionLeaseIdentity : null;
+    if (leaseIdentity !== null && !leaseIdentity.matches(canonicalState)) {
+      return staleReviewExecutionIdentity(
+        leaseIdentity,
+        canonicalState,
+        "the canonical Review identity changed before its failure could be recorded",
+      );
+    }
     const activeNode = canonicalState.findNode(`${taskReviewUnsealedCheckpoint?.taskId ?? ""}-review`);
     const toolingRetryLimit = activeNode === null
       ? 0
@@ -1778,12 +2094,41 @@ export class RunReviewCommand extends FlowCommand {
     const canConvergeTaskReview = failureDecision.disposition === "publish-unavailable";
     const canonicalFailure = failureFacts.toCanonicalFailure();
     try {
+      if (draftReviewExecutionRequiredResult(phase) !== null) {
+        if (advanceDraftExecution) {
+          checkpointFailedDraftReviewExecution({
+            flowManager: ctx.flowManager,
+            state: canonicalState,
+            phase,
+          });
+        }
+      }
       if (canConvergeTaskReview) {
         ctx.flowManager.confirmTaskReviewUnavailable({
           specId: ctx.specId ?? ctx.flowState.specId,
           checkpoint: taskReviewUnsealedCheckpoint,
           decision: failureDecision,
         });
+      } else if (leaseIdentity !== null && taskReviewUnsealedCheckpoint === null) {
+        const recorded = ctx.flowManager.failCurrentAttemptIfCurrent({
+          specId: ctx.specId ?? ctx.flowState.specId,
+          expectedRunId: leaseIdentity.runId,
+          expectedAttempt: leaseIdentity.attempt,
+          failure: canonicalFailure,
+          result: {
+            outcome: "failed",
+            summary: failureFacts.message,
+            confirmedAt: new Date().toISOString(),
+            artifactRefs: [],
+          },
+        });
+        if (!recorded) {
+          return staleReviewExecutionIdentity(
+            leaseIdentity,
+            ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId),
+            "the canonical Review identity changed before its failure could be recorded",
+          );
+        }
       } else {
         ctx.flowManager.failCurrentAttempt({
           specId: ctx.specId ?? ctx.flowState.specId,
@@ -1865,6 +2210,10 @@ export class RunReviewCommand extends FlowCommand {
       nodeId: expectedNodeId,
       attemptId: state.attempt.id,
     });
+    const leaseIdentity = new ReviewExecutionAttemptIdentity({
+      runId: state.runId,
+      attempt: state.attempt,
+    });
     try {
       lease.acquire();
     } catch (error) {
@@ -1876,7 +2225,37 @@ export class RunReviewCommand extends FlowCommand {
       );
     }
     try {
-      return await this.executeCanonical(ctx, { phase, dryRun, executionRoot, admissionChecked: true });
+      const refreshedFlowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
+      const refreshedState = ctx.flowManager.canonicalState(ctx.specId ?? refreshedFlowState.specId);
+      const refreshedCtx = { ...ctx, flowState: refreshedFlowState };
+      const refreshedPhase = reviewPhaseKeyForCtx(refreshedCtx, phase);
+      const refreshedTaskId = refreshedPhase === IMPL_REVIEW_PHASE
+        ? refreshedFlowState.currentTaskId ?? null
+        : null;
+      const refreshedNodeId = canonicalReviewNodeId({ phase: refreshedPhase, taskId: refreshedTaskId });
+      if (!leaseIdentity.matches(refreshedState)) {
+        return staleReviewExecutionIdentity(
+          leaseIdentity,
+          refreshedState,
+          "the canonical Review identity changed while its execution lease was being acquired",
+        );
+      }
+      if (refreshedState?.current?.at(-1) === refreshedNodeId && refreshedState.attempt !== null) {
+        const recovered = rehydratePublishedDraftReview(refreshedCtx, {
+          state: refreshedState,
+          phase: refreshedPhase,
+        });
+        if (recovered !== null) return recovered;
+        const refreshedAdmissionFailure = reviewExecutionAdmission(refreshedCtx, {
+          persistedPhase: refreshedPhase,
+          executionRoot,
+        });
+        if (refreshedAdmissionFailure !== null) return refreshedAdmissionFailure;
+      }
+      return await this.executeCanonical({
+        ...refreshedCtx,
+        reviewExecutionLeaseIdentity: leaseIdentity,
+      }, { phase, dryRun, executionRoot, admissionChecked: true });
     } finally {
       lease.release();
     }

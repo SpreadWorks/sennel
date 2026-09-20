@@ -2,6 +2,7 @@ import { Step } from "../../engine/step.js";
 import {
   DraftQuestionsReviewFindingsResult,
   DraftQuestionsReviewPassedResult,
+  DraftQuestionsReviewExecutionRequiredResult,
   DraftStepErrorResult,
 } from "../../engine/step-result.js";
 import { ReviewService } from "../../services/review-service.js";
@@ -23,6 +24,11 @@ export class DraftQuestionsReviewStep extends Step {
   }
 
   async _execute() {
+    if (this.#reviewService.requiresReviewExecution()) {
+      const result = new DraftQuestionsReviewExecutionRequiredResult();
+      await result.persist(this.#reviewService);
+      return result;
+    }
     try {
       const review = this.#reviewService.inspectReviewResult();
       const result = review.verdict === "PASS"

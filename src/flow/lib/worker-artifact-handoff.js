@@ -29,22 +29,31 @@ import {
   PromoteDraftQuestionAndKeepRefineActive,
   RequirementTestLifecycleFacts,
   DraftGateRepairTerminalFacts,
+  DraftExecutionSettlement,
+  DraftWorkerExecutionBinding,
   resolveDraftTransition,
   resolveDraftGateRepairTerminal,
   resolveLifecyclePlan,
   resolvePlanGateRepairWorkerTransition,
   resolveRequirementTestLifecycle,
   resolveSourceHandoffTransitionPlan,
+  settleDraftStepResult,
   SourceHandoffTransitionPlan,
 } from "../definition.js";
 import { SourceHandoffFailureFacts } from "./source-handoff-failure.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
+import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import {
   DraftCompletionFacts,
   readDraftCompletionCatalogDigest,
 } from "./draft-completion-connector.js";
 import { DraftTransitionFacts, readDraftTransitionFacts } from "./draft-transition-facts.js";
-import { STEP_RESULT_TYPE, StepResult } from "../engine/step-result.js";
+import {
+  DraftGateRepairWorkerRequiredResult,
+  DraftRefineWorkerRequiredResult,
+  STEP_RESULT_TYPE,
+  StepResult,
+} from "../engine/step-result.js";
 import { DraftStepPersistenceFailure } from "./definition-lifecycle-failure.js";
 import { CanonicalFlowFindingsStore } from "./flow-findings.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
@@ -4793,7 +4802,7 @@ function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
 }
 
 function assertConditionalWorkerExecutionSelected({ flowManager, state, policy }) {
-  if (!["draft-refine", "draft-gate-repair"].includes(policy.stepId)) return state;
+  if (!isConditionalDraftWorkerStep(policy.stepId)) return state;
   const canonical = flowManager.loadReadOnly(state.specId);
   if (canonical.currentNodeId !== policy.stepId || canonical.attempt === null) {
     throw new WorkerArtifactHandoffError(
@@ -5011,6 +5020,7 @@ export class WorkerArtifactHandoffRequest {
     invocation,
     flowManager = null,
     now = () => new Date(),
+    generatedAt = null,
     workerInstructions = new WorkerArtifactWorkerInstructions(),
   }) {
     const policy = workerArtifactHandoffPolicy(invocation?.action?.nextAction?.step);
@@ -5155,7 +5165,7 @@ export class WorkerArtifactHandoffRequest {
         requirementTestBinding: requirementTestContext?.binding ?? null,
         acceptanceRepairRoute,
       }),
-      generatedAt: now().toISOString(),
+      generatedAt: generatedAt ?? now().toISOString(),
       testReviewRepair,
       testReviewRepairProgress,
       workerVisibleTestReviewRepair: selectedRepairContract,
@@ -6850,6 +6860,55 @@ function isDraftWorkerStep(stepId) {
     || stepId === "draft-coverage-repair";
 }
 
+function activeFlowStepId(state) {
+  if (typeof state?.currentNodeId === "string") return state.currentNodeId;
+  if (Array.isArray(state?.current)) return state.current.at(-1) ?? null;
+  return typeof state?.current === "string" ? state.current : null;
+}
+
+function canonicalDraftExecutionClaimForStored({ flowManager, stored }) {
+  const canonical = flowManager.canonicalState(stored.specId);
+  const activeStepId = canonical.current?.at(-1) ?? null;
+  if (!isConditionalDraftWorkerStep(stored?.stepId)
+    || activeStepId !== stored.stepId || canonical.attempt?.nodeId !== stored.stepId
+    || typeof flowManager?.draftStepExecutionState !== "function") return null;
+  const execution = flowManager.draftStepExecutionState({
+    specId: canonical.specId,
+    binding: {
+      runId: canonical.runId,
+      specId: canonical.specId,
+      stepId: stored.stepId,
+      attempt: canonical.attempt,
+    },
+  });
+  const lifecycle = execution.lifecycle;
+  const claim = lifecycle?.claim;
+  const binding = lifecycle?.binding;
+  if (!["claimed", "publication"].includes(lifecycle?.phase)
+    || claim?.kind !== "worker" || binding?.kind !== "worker"
+    || binding.inputDigest !== stored.inputDigest
+    || binding.inputRevision !== stored.inputRevision
+    || claim.dispatchInvocationId !== stored.dispatchInvocationId
+    || claim.generatedAt !== stored.generatedAt
+    || claim.actionDigest !== stored.actionDigest
+    || claim.requestDigest !== stored.requestDigest) return null;
+  return lifecycle;
+}
+
+function requireCanonicalDraftExecutionClaimForStored({ flowManager, state, stored, phase = null }) {
+  if (!isConditionalDraftWorkerStep(stored?.stepId)) return null;
+  const lifecycle = canonicalDraftExecutionClaimForStored({ flowManager, state, stored });
+  if (lifecycle === null || (phase !== null && lifecycle.phase !== phase)) {
+    throw new WorkerArtifactHandoffError(
+      "conflict",
+      "FLOW_DRAFT_EXECUTION_CLAIM_MISMATCH",
+      "conditional Draft worker request does not match its canonical execution claim",
+      { retryable: false, recoveryPossible: false, data: { stepId: stored.stepId } },
+    );
+  }
+  return lifecycle;
+}
+
 /** Private in-memory boundary between Draft handoff preparation and commit. */
 class DraftWorkerPreparation {
   constructor({ request, state, submission, publications, repairCheckpoint, planGateRepairOutcome, facts } = {}) {
@@ -8398,7 +8457,14 @@ export class WorkerArtifactHandoffCoordinator {
     this.now = now;
   }
 
-  createRequest({ ctx, state, invocation, workerInstructions = new WorkerArtifactWorkerInstructions() }) {
+  createRequest({
+    ctx,
+    state,
+    invocation,
+    workerInstructions = new WorkerArtifactWorkerInstructions(),
+    generatedAt = null,
+    deferPreparation = false,
+  }) {
     const request = WorkerArtifactHandoffRequest.create({
       mainRoot: ctx.mainRoot || ctx.root,
       executionRoot: ctx.executionRoot || ctx.root,
@@ -8406,11 +8472,55 @@ export class WorkerArtifactHandoffCoordinator {
       invocation,
       flowManager: ctx.flowManager,
       now: this.now,
+      generatedAt,
       workerInstructions,
     });
     if (request === null) return null;
-    if (request.policy.kind !== "source") return request.prepare();
+    if (request.policy.kind !== "source") return deferPreparation ? request : request.prepare();
+    if (deferPreparation) throw new Error("source worker preparation cannot be deferred");
     return this.prepareSourceWorker({ ctx, request, invocation });
+  }
+
+  restoreClaimedDraftRequest({ ctx, state, lifecycle }) {
+    const claim = lifecycle?.claim;
+    const binding = lifecycle?.binding;
+    const activeStepId = activeFlowStepId(state);
+    if (claim?.kind !== "worker" || binding?.kind !== "worker"
+      || !isConditionalDraftWorkerStep(activeStepId)) return null;
+    const requestPath = path.join(
+      handoffActionDirectory(
+        executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId),
+        state.runId,
+        claim.dispatchInvocationId,
+        claim.actionDigest,
+      ),
+      "request.json",
+    );
+    if (!fs.existsSync(requestPath)) return null;
+    const stored = requestFromStored(requestPath);
+    const request = restoreExecutionHandoffRequest({
+      mainRoot: ctx.mainRoot || ctx.root,
+      executionRoot: ctx.executionRoot || ctx.root,
+      state,
+      stored,
+      canonicalLocation: ctx.flowManager.specLocation(state.specId),
+      flowManager: ctx.flowManager,
+    });
+    if (request.stepId !== activeStepId
+      || request.inputDigest !== binding.inputDigest
+      || request.inputRevision !== binding.inputRevision
+      || request.dispatchInvocationId !== claim.dispatchInvocationId
+      || request.generatedAt !== claim.generatedAt
+      || request.actionDigest !== claim.actionDigest
+      || request.requestDigest !== claim.requestDigest) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required",
+        "FLOW_DRAFT_EXECUTION_CLAIM_MISMATCH",
+        "persisted Draft worker request does not match its canonical execution claim",
+        { retryable: false, recoveryPossible: false },
+      );
+    }
+    return request;
   }
 
   /** Capture, publish, and read back durable authority before request.json exists. */
@@ -9056,8 +9166,13 @@ export class WorkerArtifactHandoffCoordinator {
         submission = readSubmission(stored);
       } catch (cause) {
         if (cause instanceof WorkerArtifactHandoffError && cause.classification === "missing") {
-          // No sealed payload exists.  The next dispatcher attempt owns a
-          // fresh request; this incomplete work unit is not persisted truth.
+          // A conditional Draft execution claim is persisted authority for
+          // this exact request. Preserve it so the same generation can
+          // resume instead of inventing a fresh invocation.
+          if (canonicalDraftExecutionClaimForStored({ flowManager: ctx.flowManager, state, stored }) !== null) {
+            continue;
+          }
+          // Other artifact handoffs remain transient and may be discarded.
           if (cleanupTransientExecutionHandoffDirectory(handoffRoot, stored.directory)) cleaned += 1;
           continue;
         }
@@ -9088,6 +9203,9 @@ export class WorkerArtifactHandoffCoordinator {
             },
           },
         );
+      }
+      if (canonicalDraftExecutionClaimForStored({ flowManager: ctx.flowManager, state, stored }) !== null) {
+        continue;
       }
       if (canonicalHandoffIsCommitted(state, request, submission, ctx.flowManager)) {
         cleanupCompletedHandoff(request.handoffRoot, canonicalHandoffReceipt(request, submission, this.now), this.faultInjector);
@@ -9125,7 +9243,7 @@ export class WorkerArtifactHandoffCoordinator {
    * Step needs to choose a result.  Publication is deliberately deferred
    * until commitDraftWorker receives that choice.
    */
-  prepareDraftWorker({ ctx, request }) {
+  prepareDraftWorker({ ctx, request, publicationRecovery = false }) {
     if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)) {
       throw new TypeError("Draft worker preparation requires a Draft worker handoff request");
     }
@@ -9137,10 +9255,24 @@ export class WorkerArtifactHandoffCoordinator {
       );
     }
     let state;
+    let executionLifecycle = null;
     try {
       state = ctx.flowManager.load(request.specId);
+      executionLifecycle = canonicalDraftExecutionClaimForStored({
+        flowManager: ctx.flowManager,
+        state,
+        stored: request,
+      });
       const committed = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
-      if (committed !== null) {
+      if (publicationRecovery && executionLifecycle?.phase !== "publication") {
+        throw new WorkerArtifactHandoffError(
+          "recovery-required",
+          "FLOW_DRAFT_EXECUTION_PUBLICATION_STALE",
+          "Draft worker publication recovery lost its canonical generation",
+          { retryable: false, recoveryPossible: false },
+        );
+      }
+      if (committed !== null && !publicationRecovery && executionLifecycle?.phase !== "publication") {
         return {
           completed: true,
           replayed: true,
@@ -9177,7 +9309,12 @@ export class WorkerArtifactHandoffCoordinator {
     }
     try {
       state ??= ctx.flowManager.load(request.specId);
-      request.assertCurrent(state);
+      executionLifecycle = requireCanonicalDraftExecutionClaimForStored({
+        flowManager: ctx.flowManager,
+        state,
+        stored: request,
+      }) ?? executionLifecycle;
+      if (!publicationRecovery && executionLifecycle?.phase !== "publication") request.assertCurrent(state);
       if (request.policy.kind === "source") {
         throw new WorkerArtifactHandoffError(
           "invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", "Draft worker handoff cannot use source policy",
@@ -9187,7 +9324,11 @@ export class WorkerArtifactHandoffCoordinator {
       if (recoverableValidation instanceof RequirementTestStructuralHandoffResult) {
         throw new RequirementTestStructuralHandoffError(recoverableValidation);
       }
-      return prepareDraftWorkerCanonical({ request, state, submission });
+      return prepareDraftWorkerCanonical({
+        request,
+        state: publicationRecovery || executionLifecycle?.phase === "publication" ? request.state : state,
+        submission,
+      });
     } catch (cause) {
       if (cause instanceof WorkerArtifactHandoffError) throw cause;
       throw new WorkerArtifactHandoffError(
@@ -9209,6 +9350,71 @@ export class WorkerArtifactHandoffCoordinator {
     }
     if (!(preparation instanceof DraftWorkerPreparation) || preparation.request !== request) {
       throw new TypeError("Draft worker commit requires its prepared handoff");
+    }
+    if (hasCommittedDraftStepResult({ ctx, request, stepResult, requireReceipt: true })) {
+      const state = ctx.flowManager.canonicalState(request.specId);
+      const handoffReceipt = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
+      const settlementReceipt = replayedDraftStepSettlementReceipt({ ctx, request });
+      cleanupCompletedHandoff(
+        request.handoffRoot,
+        canonicalHandoffReceipt(request, preparation.submission, this.now),
+        this.faultInjector,
+      );
+      return {
+        completed: true,
+        replayed: true,
+        stepId: request.stepId,
+        handoffDigest: handoffReceipt?.id ?? null,
+        payloadDigest: manifestDigest(preparation.submission.payloadManifest),
+        stepResult,
+        settlementReceipt,
+        receipt: settlementReceipt,
+      };
+    }
+    if (isConditionalDraftWorkerStep(request.stepId)) {
+      const executionResult = request.stepId === "draft-refine"
+        ? new DraftRefineWorkerRequiredResult()
+        : new DraftGateRepairWorkerRequiredResult();
+      this.publishDraftWorker({
+        ctx,
+        request,
+        preparation,
+        stepResult: executionResult,
+        settlement: settleDraftStepResult(request.stepId, executionResult),
+        binding,
+      });
+      if (settlement instanceof DraftExecutionSettlement) {
+        const state = ctx.flowManager.canonicalState(request.specId);
+        const nextRequest = this.createRequest({
+          ctx,
+          state,
+          invocation: request.invocation,
+          deferPreparation: true,
+        });
+        const execution = ctx.flowManager.draftStepExecutionState({ binding });
+        const committed = ctx.flowManager.checkpointDraftStepExecution({
+          binding,
+          stepResult,
+          settlement,
+          executionBinding: new DraftWorkerExecutionBinding({
+            executionGeneration: execution.lifecycle.executionGeneration + 1,
+            inputDigest: nextRequest.inputDigest,
+            inputRevision: nextRequest.inputRevision,
+          }),
+        });
+        this.cleanupPublishedDraftWorker({ request, preparation });
+        return {
+          completed: true,
+          replayed: false,
+          stepId: request.stepId,
+          stepResult,
+          settlementReceipt: committed.receipt,
+          receipt: committed.receipt,
+        };
+      }
+      return this.completePublishedDraftWorker({
+        ctx, request, preparation, stepResult, settlement, binding,
+      });
     }
     try {
       return this.reconcile({
@@ -9237,6 +9443,110 @@ export class WorkerArtifactHandoffCoordinator {
         receipt: settlementReceipt,
       };
     }
+  }
+
+  /** Publish one claimed conditional Draft generation without selecting its terminal Result. */
+  publishDraftWorker({ ctx, request, preparation, stepResult, settlement, binding }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)
+      || !(preparation instanceof DraftWorkerPreparation) || preparation.request !== request
+      || !(stepResult instanceof StepResult) || !(settlement instanceof DraftExecutionSettlement)) {
+      throw new TypeError("Draft worker publication requires its prepared Execution Result");
+    }
+    const state = ctx.flowManager.load(request.specId);
+    requireCanonicalDraftExecutionClaimForStored({
+      flowManager: ctx.flowManager,
+      state,
+      stored: request,
+    });
+    const execution = ctx.flowManager.draftStepExecutionState({ binding });
+    if (execution.lifecycle?.phase === "publication") {
+      const receipt = ctx.flowManager.activityLedger(request.specId).findLast((activity) => (
+        activity.result?.draftSettlementReceipt?.id === execution.receiptId
+      ))?.result?.draftSettlementReceipt ?? null;
+      if (receipt === null) throw new Error("Draft worker publication receipt is missing");
+      return { completed: true, replayed: true, stepId: request.stepId, stepResult, receipt };
+    }
+    return this.#reconcileCanonical({
+      ctx,
+      request,
+      state: ctx.flowManager.load(request.specId),
+      submission: preparation.submission,
+      preparedDraft: preparation,
+      draftStepResult: stepResult,
+      draftWorkerBinding: binding,
+      draftWorkerSettlement: settlement,
+      publicationOnly: true,
+    });
+  }
+
+  /** Settle the Result selected by the same Step after its publication receipt. */
+  completePublishedDraftWorker({ ctx, request, preparation, stepResult, settlement, binding }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)
+      || !(preparation instanceof DraftWorkerPreparation) || preparation.request !== request
+      || !(stepResult instanceof StepResult) || settlement instanceof DraftExecutionSettlement) {
+      throw new TypeError("Published Draft worker completion requires a terminal Step Result");
+    }
+    const state = ctx.flowManager.load(request.specId);
+    requireCanonicalDraftExecutionClaimForStored({
+      flowManager: ctx.flowManager,
+      state,
+      stored: request,
+      phase: "publication",
+    });
+    if (preparation.planGateRepairOutcome?.disposition === "rejected-no-progress") {
+      return settleDraftGateRepairTerminal({
+        ctx,
+        request,
+        state,
+        submission: preparation.submission,
+        kind: "rejected-no-progress",
+        outcome: preparation.planGateRepairOutcome,
+        stepResult,
+        binding,
+        settlement,
+        now: this.now,
+        faultInjector: this.faultInjector,
+      });
+    }
+    const publication = ctx.flowManager.activityLedger(request.specId).findLast((activity) => (
+      activity?.nodeId === request.stepId
+      && activity?.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication"
+      && activity.result.draftSettlementReceipt.binding.attemptId === binding.attempt.id
+      && activity.result.draftSettlementReceipt.binding.attemptSequence === binding.attempt.sequence
+    )) ?? null;
+    if (publication === null) throw new Error("Published Draft worker Activity is missing");
+    const committed = ctx.flowManager.settleDraftStepResult({
+      binding,
+      stepResult,
+      settlement,
+      lifecycleResult: canonicalHandoffResult(request, preparation.submission, this.now),
+      references: publication.references,
+      planGateRepairOutcome: preparation.planGateRepairOutcome,
+    });
+    const handoffReceipt = canonicalHandoffReceipt(request, preparation.submission, this.now);
+    cleanupCompletedHandoff(request.handoffRoot, handoffReceipt, this.faultInjector);
+    return {
+      completed: true,
+      replayed: false,
+      stepId: request.stepId,
+      handoffDigest: handoffReceipt.handoffDigest,
+      payloadDigest: handoffReceipt.payloadDigest,
+      stepResult,
+      settlementReceipt: committed.receipt,
+      receipt: committed.receipt,
+    };
+  }
+
+  cleanupPublishedDraftWorker({ request, preparation }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest)
+      || !(preparation instanceof DraftWorkerPreparation) || preparation.request !== request) {
+      throw new TypeError("Draft worker publication cleanup requires its preparation");
+    }
+    cleanupCompletedHandoff(
+      request.handoffRoot,
+      canonicalHandoffReceipt(request, preparation.submission, this.now),
+      this.faultInjector,
+    );
   }
 
   /** Commit a Draft Step error against the same bound Attempt. */
@@ -9300,6 +9610,27 @@ export class WorkerArtifactHandoffCoordinator {
       // failure until after the sealed surface has been checked below.
       state = null;
     }
+    const committed = state === null
+      ? null : canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
+    if (committed !== null && !fs.existsSync(request.directory)) {
+      const settlementReceipt = isDraftWorkerStep(request.stepId)
+        ? replayedDraftStepSettlementReceipt({ ctx, request })
+        : null;
+      return {
+        completed: true,
+        replayed: true,
+        stepId: request.stepId,
+        handoffDigest: committed.id,
+        payloadDigest: null,
+        ...(isDraftWorkerStep(request.stepId) ? {
+          stepResult: assertReplayedDraftStepResult({
+            ctx, request, stepResult: replayedDraftStepResult({ ctx, request, state }),
+          }),
+          settlementReceipt,
+          receipt: settlementReceipt,
+        } : {}),
+      };
+    }
     let submission;
     try {
       submission = readSubmission(request);
@@ -9343,7 +9674,7 @@ export class WorkerArtifactHandoffCoordinator {
   #reconcileCanonical({
     ctx, request, state, submission = null, mutationAuthority = null,
     preparedDraft = null, draftStepResult = null, draftWorkerBinding = null,
-    draftWorkerSettlement = null,
+    draftWorkerSettlement = null, publicationOnly = false,
   }) {
     if (preparedDraft !== null) {
       if (!(preparedDraft instanceof DraftWorkerPreparation) || preparedDraft.request !== request) {
@@ -9478,7 +9809,7 @@ export class WorkerArtifactHandoffCoordinator {
     let persistedSettlementReceipt = null;
     try {
       this.faultInjector({ phase: "before-worker-handoff-publication", stepId: request.stepId });
-      if (planGateRepairOutcome?.disposition === "rejected-no-progress") {
+      if (planGateRepairOutcome?.disposition === "rejected-no-progress" && !publicationOnly) {
         if (preparedDraft === null) {
           throw new WorkerArtifactHandoffError(
             "invalid", "FLOW_DRAFT_STEP_RESULT_REQUIRED",
@@ -9538,7 +9869,19 @@ export class WorkerArtifactHandoffCoordinator {
         }
       }
       if (!promotionApplied) {
-        if (repairCheckpoint !== null && !repairCheckpoint.progress.complete) {
+        if (publicationOnly && planGateRepairOutcome?.disposition === "rejected-no-progress") {
+          const committed = ctx.flowManager.settleDraftStepResult({
+            binding: draftWorkerBinding,
+            stepResult: selectedDraftStepResult,
+            settlement: draftWorkerSettlement,
+            lifecycleResult: canonicalHandoffResult(request, submission, this.now),
+            references: {
+              evaluations: [], findings: [], repairs: [],
+              artifacts: [{ id: submission.handoffDigest, label: request.stepId }],
+            },
+          });
+          persistedSettlementReceipt = committed.receipt;
+        } else if (repairCheckpoint !== null && !repairCheckpoint.progress.complete) {
           ctx.flowManager.publishArtifacts({
             specId: request.specId,
             nodeId: request.stepId,
@@ -9558,58 +9901,59 @@ export class WorkerArtifactHandoffCoordinator {
             payloadDigest: receipt.payloadDigest,
             remainingFindings: repairCheckpoint.progress.entries.filter((entry) => entry.status === "pending").length,
           };
-        }
-        const confirmation = {
-          specId: request.specId,
-          result: canonicalHandoffResult(request, submission, this.now),
-          references: {
-            evaluations: [],
-            findings: [],
-            repairs: [],
-            artifacts: [
-              { id: submission.handoffDigest, label: request.stepId },
-            ],
-          },
-          specRecord: publications.specRecord,
-          artifactWrites: publications.artifactWrites,
-          artifactRemovals: publications.artifactRemovals,
-          artifactBaselines: publications.artifactBaselines,
-          testSourceBaseline: publications.testSourceBaseline,
-          planGateRepairOutcome,
-          ...(selectedDraftStepResult === null ? {} : { stepResult: selectedDraftStepResult }),
-        };
-        if (REQUIREMENT_TEST_WORKER_STEPS.has(request.stepId)) {
-          // A repair-progress publication may have refreshed the runtime
-          // object while preserving the same Attempt. Re-read the canonical
-          // state for Definition authority rather than retaining that stale
-          // in-memory object across the publication boundary.
-          const lifecycleState = ctx.flowManager.loadReadOnly(request.specId);
-          const planRead = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state: lifecycleState })
-            .readPlan(request.stepId);
-          const decision = resolveRequirementTestLifecycle(new RequirementTestLifecycleFacts({
-            authority: RequirementTestLifecycleAuthority.capture({ state: lifecycleState, planDescriptor: planRead.descriptor }),
-            plan: planRead.artifact.plan,
-            leaf: request.stepId,
-            observation: publications.requirementTestCandidate,
-          }));
-          ctx.flowManager.completeRequirementTestLifecycle({ ...confirmation, decision });
-        } else if (selectedDraftStepResult !== null) {
-          const committed = ctx.flowManager.settleDraftStepResult({
-            binding: draftWorkerBinding,
-            stepResult: selectedDraftStepResult,
-            settlement: draftWorkerSettlement,
-            lifecycleResult: confirmation.result,
-            references: confirmation.references,
-            specRecord: confirmation.specRecord,
-            artifactWrites: confirmation.artifactWrites,
-            artifactRemovals: confirmation.artifactRemovals,
-            artifactBaselines: confirmation.artifactBaselines,
-            testSourceBaseline: confirmation.testSourceBaseline,
-            planGateRepairOutcome,
-          });
-          persistedSettlementReceipt = committed.receipt;
         } else {
-          ctx.flowManager.confirmCurrentAttempt(confirmation);
+          const confirmation = {
+            specId: request.specId,
+            result: canonicalHandoffResult(request, submission, this.now),
+            references: {
+              evaluations: [],
+              findings: [],
+              repairs: [],
+              artifacts: [
+                { id: submission.handoffDigest, label: request.stepId },
+              ],
+            },
+            specRecord: publications.specRecord,
+            artifactWrites: publications.artifactWrites,
+            artifactRemovals: publications.artifactRemovals,
+            artifactBaselines: publications.artifactBaselines,
+            testSourceBaseline: publications.testSourceBaseline,
+            planGateRepairOutcome,
+            ...(selectedDraftStepResult === null ? {} : { stepResult: selectedDraftStepResult }),
+          };
+          if (REQUIREMENT_TEST_WORKER_STEPS.has(request.stepId)) {
+            // A repair-progress publication may have refreshed the runtime
+            // object while preserving the same Attempt. Re-read the canonical
+            // state for Definition authority rather than retaining that stale
+            // in-memory object across the publication boundary.
+            const lifecycleState = ctx.flowManager.loadReadOnly(request.specId);
+            const planRead = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state: lifecycleState })
+              .readPlan(request.stepId);
+            const decision = resolveRequirementTestLifecycle(new RequirementTestLifecycleFacts({
+              authority: RequirementTestLifecycleAuthority.capture({ state: lifecycleState, planDescriptor: planRead.descriptor }),
+              plan: planRead.artifact.plan,
+              leaf: request.stepId,
+              observation: publications.requirementTestCandidate,
+            }));
+            ctx.flowManager.completeRequirementTestLifecycle({ ...confirmation, decision });
+          } else if (selectedDraftStepResult !== null) {
+            const committed = ctx.flowManager.settleDraftStepResult({
+              binding: draftWorkerBinding,
+              stepResult: selectedDraftStepResult,
+              settlement: draftWorkerSettlement,
+              lifecycleResult: confirmation.result,
+              references: confirmation.references,
+              specRecord: confirmation.specRecord,
+              artifactWrites: confirmation.artifactWrites,
+              artifactRemovals: confirmation.artifactRemovals,
+              artifactBaselines: confirmation.artifactBaselines,
+              testSourceBaseline: confirmation.testSourceBaseline,
+              planGateRepairOutcome,
+            });
+            persistedSettlementReceipt = committed.receipt;
+          } else {
+            ctx.flowManager.confirmCurrentAttempt(confirmation);
+          }
         }
       }
     } catch (cause) {
@@ -9629,6 +9973,18 @@ export class WorkerArtifactHandoffCoordinator {
       );
     }
     const receipt = canonicalHandoffReceipt(request, submission, this.now);
+    if (publicationOnly) {
+      return {
+        completed: true,
+        replayed: false,
+        stepId: receipt.stepId,
+        handoffDigest: receipt.handoffDigest,
+        payloadDigest: receipt.payloadDigest,
+        stepResult: selectedDraftStepResult,
+        settlementReceipt: persistedSettlementReceipt,
+        receipt: persistedSettlementReceipt,
+      };
+    }
     cleanupCompletedHandoff(request.handoffRoot, receipt, this.faultInjector);
     return {
       completed: true,

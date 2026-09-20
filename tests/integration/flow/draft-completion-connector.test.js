@@ -7,6 +7,10 @@ import { describe, it } from "node:test";
 import {
   DraftCompletionConnector,
   DraftCoverageRepairCompletionDecision,
+  DraftExecutionSettlement,
+  DraftReviewExecutionBinding,
+  DraftReviewExecutionClaim,
+  DraftReviewExecutionTargetIdentity,
   DraftStepSettlementPublication,
   DraftStepSettlementReceipt,
   resolveDraftCoverageRepairCompletion,
@@ -21,6 +25,7 @@ import {
   DraftCoverageRepairUnchangedResult,
   DraftCoverageReviewFindingsResult,
   DraftCoverageReviewPassedResult,
+  DraftCoverageReviewExecutionRequiredResult,
 } from "../../../src/flow/engine/step-result.js";
 import { FlowArtifactAttemptHistory, FlowArtifactAttemptRecord } from "../../../src/lib/flow-artifact-contract.js";
 import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
@@ -350,6 +355,37 @@ describe("DraftCompletionConnector", () => {
         artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: sourceBytes }],
       });
       fixture.activate("draft-coverage-review");
+      const reviewState = flowManager.canonicalState(specId);
+      const reviewBinding = {
+        runId: reviewState.runId,
+        specId,
+        stepId: "draft-coverage-review",
+        attempt: reviewState.attempt,
+      };
+      const executionResult = new DraftCoverageReviewExecutionRequiredResult();
+      const executionSettlement = settleDraftStepResult(reviewBinding.stepId, executionResult);
+      const executionBinding = new DraftReviewExecutionBinding({
+        executionGeneration: 0,
+        manifestDigest: "c".repeat(64),
+        inputDigest: "d".repeat(64),
+        target: new DraftReviewExecutionTargetIdentity({
+          treeSha: "a".repeat(40),
+          targetStateDigest: "b".repeat(64),
+        }),
+      });
+      flowManager.checkpointDraftStepExecution({
+        binding: reviewBinding,
+        stepResult: executionResult,
+        settlement: executionSettlement,
+        executionBinding,
+      });
+      flowManager.claimDraftStepExecution({
+        binding: reviewBinding,
+        stepResult: executionResult,
+        settlement: executionSettlement,
+        executionBinding,
+        executionClaim: new DraftReviewExecutionClaim(),
+      });
       const history = JSON.parse(coverageReviewArtifactBytes(flowManager, specId, sourceBytes).toString("utf8"));
       const payload = history.attempts.at(-1).artifact.payload;
       const result = attachCanonicalCommandResultArtifact({
@@ -357,9 +393,13 @@ describe("DraftCompletionConnector", () => {
         artifacts: { phase: "draft-coverage", retryPhase: "draft-coverage", verdict: "PASS" },
       }, { logicalKey: "draft.coverage.review", payload });
       const settle = flowManager.settleDraftStepResult.bind(flowManager);
+      const observedSettlements = [];
       flowManager.settleDraftStepResult = (input) => {
-        assert.ok(input.settlement.application instanceof DraftCoverageRepairCompletionDecision);
-        assert.equal(Object.hasOwn(input, "draftCompletionFacts"), false);
+        observedSettlements.push(input.settlement);
+        if (!(input.settlement instanceof DraftExecutionSettlement)) {
+          assert.ok(input.settlement.application instanceof DraftCoverageRepairCompletionDecision);
+          assert.equal(Object.hasOwn(input, "draftCompletionFacts"), false);
+        }
         return settle(input);
       };
 
@@ -372,6 +412,8 @@ describe("DraftCompletionConnector", () => {
         flowManager,
         flowState: flowManager.loadReadOnly(specId),
       }, result);
+      assert.equal(observedSettlements.length, 2);
+      assert.ok(observedSettlements[0] instanceof DraftExecutionSettlement);
 
       const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
       const state = reloaded.canonicalState(specId);

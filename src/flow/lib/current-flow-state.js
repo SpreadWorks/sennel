@@ -23,6 +23,7 @@ import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { AuthoritativeSpecRecord, FlowActivityId, FlowArtifactCatalog, FlowArtifactCatalogStore, FlowArtifactDescriptor, FlowId, FlowRunId, FlowSpecIdentity, FlowSpecRevision, FlowVersionId, FlowVersionLocation, FlowVersionMigrationOutput, FlowVersionMigrationOutputBuilder, FlowVersionMigrationOutputSet, FlowVersionRuntimeLockLocation, FlowVersionSemanticValidator } from "../../lib/flow-version.js";
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactActivityEvidence, FlowArtifactUpdater } from "../../lib/flow-artifact-contract.js";
 import { CanonicalSpecReview, initialCanonicalSpecReview } from "./spec-review-artifacts.js";
+import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import {
   artifactPublicationClaimForStep,
   requiresWorkerSourceHandoff,
@@ -1891,11 +1892,199 @@ class PersistedDraftRouteEffects {
   }
 }
 
+const DRAFT_EXECUTION_PHASES = new Set(["checkpoint", "claimed", "publication", "terminal"]);
+
+class PersistedDraftExecutionTargetIdentity {
+  constructor(value) {
+    requireExactFields(value, new Set(["treeSha", "targetStateDigest"]), "result.draftSettlementReceipt.executionLifecycle.binding.target");
+    if (typeof value.treeSha !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(value.treeSha)
+      || typeof value.targetStateDigest !== "string" || !/^[a-f0-9]{64}$/.test(value.targetStateDigest)) {
+      throw new CurrentFlowStateInvariantError("Draft review execution target identity is invalid");
+    }
+    this.treeSha = value.treeSha;
+    this.targetStateDigest = value.targetStateDigest;
+    Object.freeze(this);
+  }
+
+  toJSON() { return { treeSha: this.treeSha, targetStateDigest: this.targetStateDigest }; }
+}
+
+class PersistedDraftExecutionBinding {
+  constructor(value) {
+    if (value?.kind === "review") {
+      requireExactFields(value, new Set([
+        "kind", "executionGeneration", "manifestDigest", "inputDigest", "target",
+      ]), "result.draftSettlementReceipt.executionLifecycle.binding");
+      if (!/^[a-f0-9]{64}$/.test(value.manifestDigest)) {
+        throw new CurrentFlowStateInvariantError("Draft review execution manifest digest is invalid");
+      }
+      this.manifestDigest = value.manifestDigest;
+      this.target = new PersistedDraftExecutionTargetIdentity(value.target);
+      this.inputRevision = null;
+    } else if (value?.kind === "worker") {
+      requireExactFields(value, new Set([
+        "kind", "executionGeneration", "inputDigest", "inputRevision",
+      ]), "result.draftSettlementReceipt.executionLifecycle.binding");
+      if (!/^[a-f0-9]{64}$/.test(value.inputRevision)) {
+        throw new CurrentFlowStateInvariantError("Draft worker execution input revision is invalid");
+      }
+      this.inputRevision = value.inputRevision;
+      this.manifestDigest = null;
+      this.target = null;
+    } else {
+      throw new CurrentFlowStateInvariantError("Draft execution binding kind is invalid");
+    }
+    if (!Number.isSafeInteger(value.executionGeneration) || value.executionGeneration < 0
+      || typeof value.inputDigest !== "string" || !/^[a-f0-9]{64}$/.test(value.inputDigest)) {
+      throw new CurrentFlowStateInvariantError("Draft execution binding identity is invalid");
+    }
+    this.kind = value.kind;
+    this.executionGeneration = value.executionGeneration;
+    this.inputDigest = value.inputDigest;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return this.kind === "review"
+      ? {
+          kind: this.kind,
+          executionGeneration: this.executionGeneration,
+          manifestDigest: this.manifestDigest,
+          inputDigest: this.inputDigest,
+          target: this.target.toJSON(),
+        }
+      : {
+          kind: this.kind,
+          executionGeneration: this.executionGeneration,
+          inputDigest: this.inputDigest,
+          inputRevision: this.inputRevision,
+        };
+  }
+}
+
+class PersistedDraftExecutionClaim {
+  constructor(value) {
+    if (value?.kind === "review") {
+      requireExactFields(value, new Set(["kind"]), "result.draftSettlementReceipt.executionLifecycle.claim");
+      this.dispatchInvocationId = null;
+      this.generatedAt = null;
+      this.actionDigest = null;
+      this.requestDigest = null;
+    } else if (value?.kind === "worker") {
+      requireExactFields(value, new Set([
+        "kind", "dispatchInvocationId", "generatedAt", "actionDigest", "requestDigest",
+      ]), "result.draftSettlementReceipt.executionLifecycle.claim");
+      this.dispatchInvocationId = requireString(value.dispatchInvocationId, "Draft worker execution claim dispatchInvocationId");
+      this.generatedAt = requireIso(value.generatedAt, "Draft worker execution claim generatedAt");
+      for (const field of ["actionDigest", "requestDigest"]) {
+        if (typeof value[field] !== "string" || !/^[a-f0-9]{64}$/.test(value[field])) {
+          throw new CurrentFlowStateInvariantError(`Draft worker execution claim ${field} is invalid`);
+        }
+      }
+      this.actionDigest = value.actionDigest;
+      this.requestDigest = value.requestDigest;
+    } else {
+      throw new CurrentFlowStateInvariantError("Draft execution claim kind is invalid");
+    }
+    this.kind = value.kind;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return this.kind === "review"
+      ? { kind: this.kind }
+      : {
+          kind: this.kind,
+          dispatchInvocationId: this.dispatchInvocationId,
+          generatedAt: this.generatedAt,
+          actionDigest: this.actionDigest,
+          requestDigest: this.requestDigest,
+        };
+  }
+}
+
+class PersistedDraftExecutionLifecycle {
+  constructor(value) {
+    requireExactFields(value, new Set(["phase", "binding", "claim"]), "result.draftSettlementReceipt.executionLifecycle");
+    if (!DRAFT_EXECUTION_PHASES.has(value.phase)) {
+      throw new CurrentFlowStateInvariantError("Draft execution lifecycle phase is invalid");
+    }
+    this.phase = value.phase;
+    this.binding = new PersistedDraftExecutionBinding(value.binding);
+    this.claim = value.claim === null ? null : new PersistedDraftExecutionClaim(value.claim);
+    if ((this.phase === "checkpoint") !== (this.claim === null)
+      || (this.claim !== null && this.claim.kind !== this.binding.kind)) {
+      throw new CurrentFlowStateInvariantError("Draft execution lifecycle claim does not match its phase and binding");
+    }
+    Object.freeze(this);
+  }
+
+  get executionGeneration() { return this.binding.executionGeneration; }
+
+  toJSON() {
+    return {
+      phase: this.phase,
+      binding: this.binding.toJSON(),
+      claim: this.claim?.toJSON() ?? null,
+    };
+  }
+}
+
+function sameDraftExecutionValue(left, right) {
+  return isDeepStrictEqual(left?.toJSON?.() ?? left, right?.toJSON?.() ?? right);
+}
+
+/** Validate one new receipt against the durable execution-generation history. */
+export function assertDraftSettlementReceiptTransition(priorReceipts, receipt) {
+  if (!Array.isArray(priorReceipts)) {
+    throw new CurrentFlowStateInvariantError("Draft settlement receipt history must be an array");
+  }
+  const lifecycle = receipt?.executionLifecycle ?? null;
+  const executionHistory = priorReceipts.filter((entry) => entry?.executionLifecycle !== null);
+  if (priorReceipts.some((entry) => entry?.id === receipt?.id)) {
+    throw new CurrentFlowStateConflictError("Draft settlement receipt was already recorded");
+  }
+  if (lifecycle === null) {
+    if (priorReceipts.length > 0) {
+      throw new CurrentFlowStateConflictError("Draft settlement binding already has a different Result, Settlement, or Publication");
+    }
+    return receipt;
+  }
+  const previous = executionHistory.at(-1)?.executionLifecycle ?? null;
+  if (previous?.phase === "terminal") {
+    throw new CurrentFlowStateConflictError("Draft execution is already terminal");
+  }
+  if (lifecycle.phase === "checkpoint") {
+    const previousGeneration = previous?.executionGeneration ?? previous?.binding?.executionGeneration;
+    const expectedGeneration = previous === null ? 0 : previousGeneration + 1;
+    if (lifecycle.executionGeneration !== expectedGeneration) {
+      throw new CurrentFlowStateConflictError("Draft execution checkpoint generation is not monotonic");
+    }
+    return receipt;
+  }
+  const publicationAwaitContinuation = lifecycle.phase === "publication"
+    && previous?.phase === "publication"
+    && executionHistory.at(-1)?.settlementKind === "execution"
+    && receipt.settlementKind === "await";
+  const expectedPhases = lifecycle.phase === "claimed"
+    ? ["checkpoint"] : lifecycle.phase === "publication"
+      ? (publicationAwaitContinuation ? ["publication"] : ["claimed"])
+      : ["publication"];
+  const previousGeneration = previous?.executionGeneration ?? previous?.binding?.executionGeneration;
+  if (previous === null || !expectedPhases.includes(previous.phase)
+    || lifecycle.executionGeneration !== previousGeneration
+    || !sameDraftExecutionValue(lifecycle.binding, previous.binding)
+    || (lifecycle.phase !== "claimed" && !sameDraftExecutionValue(lifecycle.claim, previous.claim))) {
+    throw new CurrentFlowStateConflictError(`Draft execution ${lifecycle.phase} does not continue its exact generation`);
+  }
+  return receipt;
+}
+
 class PersistedDraftSettlementReceipt {
   constructor(value) {
     requireExactFields(value, new Set([
       "id", "binding", "resultKind", "resultType", "resultDigest", "settlementKind",
-      "targetStepId", "effects", "connector", "publicationDigest",
+      "targetStepId", "effects", "connector", "publicationDigest", "executionLifecycle",
     ]), "result.draftSettlementReceipt");
     if (!/^[a-f0-9]{64}$/.test(value.id)) {
       throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt.id is invalid");
@@ -1921,6 +2110,23 @@ class PersistedDraftSettlementReceipt {
       throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt.publicationDigest is invalid");
     }
     this.publicationDigest = value.publicationDigest;
+    this.executionLifecycle = value.executionLifecycle === null
+      ? null : new PersistedDraftExecutionLifecycle(value.executionLifecycle);
+    const reviewExecutionKinds = new Set([
+      "draft-questions-review-execution-required",
+      "draft-coverage-review-execution-required",
+    ]);
+    const workerExecutionKinds = new Set([
+      "draft-refine-worker-required",
+      "draft-gate-repair-worker-required",
+    ]);
+    if (this.executionLifecycle !== null
+      && ((reviewExecutionKinds.has(this.resultKind) && this.executionLifecycle.binding.kind !== "review")
+        || (workerExecutionKinds.has(this.resultKind) && this.executionLifecycle.binding.kind !== "worker"))) {
+      throw new CurrentFlowStateInvariantError(
+        "Draft settlement execution binding does not match its Step Result",
+      );
+    }
     if (!["target-connection", "execution", "await", "failure"].includes(value.settlementKind)) {
       throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt settlement kind is invalid");
     }
@@ -1936,6 +2142,13 @@ class PersistedDraftSettlementReceipt {
     } else {
       this.connector = null;
     }
+    const phase = this.executionLifecycle?.phase ?? null;
+    if ((["checkpoint", "claimed"].includes(phase) && this.settlementKind !== "execution")
+      || (this.settlementKind === "execution" && !["checkpoint", "claimed", "publication"].includes(phase))
+      || (phase === "publication" && !["execution", "await"].includes(this.settlementKind))
+      || (phase === "terminal" && ["execution", "await"].includes(this.settlementKind))) {
+      throw new CurrentFlowStateInvariantError("Draft execution lifecycle phase does not match its Settlement");
+    }
     const identity = {
       binding: this.binding,
       resultKind: this.resultKind,
@@ -1946,6 +2159,7 @@ class PersistedDraftSettlementReceipt {
       effects: this.effects?.toJSON() ?? null,
       connector: this.connector,
       publicationDigest: this.publicationDigest,
+      executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
     };
     const expectedId = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     if (this.id !== expectedId) {
@@ -1966,6 +2180,7 @@ class PersistedDraftSettlementReceipt {
       effects: this.effects?.toJSON() ?? null,
       connector: this.connector === null ? null : { ...this.connector },
       publicationDigest: this.publicationDigest,
+      executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
     };
   }
 }
@@ -4834,7 +5049,7 @@ export class CurrentFlowState {
     if (this.current !== null || this.attempt !== null || status !== "skipped") {
       throw new CurrentFlowStateInvariantError("passive conditional worker settlement requires skipped with no active Attempt");
     }
-    if (!["draft-refine", "draft-gate-repair"].includes(stepId)) {
+    if (!isConditionalDraftWorkerStep(stepId)) {
       throw new CurrentFlowStateInvariantError("conditional worker settlement target is not authorized");
     }
     requireIso(confirmedAt, "conditional worker settlement confirmedAt");
@@ -6652,6 +6867,24 @@ export class ActivityTransition {
     const target = nodeAtPath(state.root, currentPath);
     if (state.lifecycle.state === "finalized") {
       throw new CurrentFlowStateInvariantError("finalized Flow rejects subsequent Activities");
+    }
+    const draftReceipt = activity.result?.draftSettlementReceipt ?? null;
+    if (draftReceipt !== null) {
+      if (draftReceipt.binding.runId !== state.runId || draftReceipt.binding.specId !== state.specId
+        || draftReceipt.binding.stepId !== targetId || state.current?.at(-1) !== targetId
+        || draftReceipt.binding.attemptId !== state.attempt?.id
+        || draftReceipt.binding.attemptSequence !== state.attempt?.sequence) {
+        throw new CurrentFlowStateConflictError("Draft settlement receipt binding is stale");
+      }
+      const priorReceipts = priorActivities.map((entry) => entry.result?.draftSettlementReceipt).filter((receipt) => (
+        receipt !== null && receipt !== undefined
+        && receipt.binding.runId === draftReceipt.binding.runId
+        && receipt.binding.specId === draftReceipt.binding.specId
+        && receipt.binding.stepId === draftReceipt.binding.stepId
+        && receipt.binding.attemptId === draftReceipt.binding.attemptId
+        && receipt.binding.attemptSequence === draftReceipt.binding.attemptSequence
+      ));
+      assertDraftSettlementReceiptTransition(priorReceipts, draftReceipt);
     }
     if (this.operation === FLOW_CREATION_TRANSITION_OPERATION) {
       if (target.id !== state.root.id) {

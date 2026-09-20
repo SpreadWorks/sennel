@@ -14,6 +14,8 @@ import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
 import RunGateCommand from "../../src/flow/lib/run-gate.js";
 import RunReviewCommand from "../../src/flow/lib/run-review.js";
 import { FLOW_COMMANDS } from "../../src/flow/registry.js";
+import { DraftRepairConnector } from "../../src/flow/engine/connectors/draft/draft-repair-connector.js";
+import { DraftGateRepairStep } from "../../src/flow/steps/draft/draft-gate-repair.js";
 import { Container } from "../../src/lib/container.js";
 import { DraftGateRepairScenario } from "../support/infrastructure/draft-gate-repair-scenario.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../support/infrastructure/flow-setup.js";
@@ -124,7 +126,14 @@ it("real agent completes a synthetic bounded draft Gate repair through canonical
       "Use its inputRevision, every persisted observation fingerprint, and one bounded replacement at an allowed authoring path.",
       "Do not write draft.json or gate-repair-report.json. Run the exact sealCommand from the request.",
     ].join(" "), { commandId: "flow.dispatch", executionWorkDir: root }));
-    const reconciled = scenario.coordinator.reconcile({ ctx: scenario.ctx, request });
+    const preparation = scenario.coordinator.prepareDraftWorker({ ctx: scenario.ctx, request });
+    const reconciled = await new RunDispatchCommand({ handoffCoordinator: scenario.coordinator })
+      .runDraftWorkerStep(
+        scenario.ctx,
+        request,
+        { Connector: DraftRepairConnector, StepClass: DraftGateRepairStep },
+        preparation,
+      );
     assert.equal(reconciled.completed, true, JSON.stringify(reconciled));
     const repairedDraft = JSON.parse(manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-coverage-review" }).bytes);
     if (!retained) assert.notEqual(repairedDraft.goal, "The retained behavior is incomplete.");

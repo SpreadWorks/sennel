@@ -1,7 +1,10 @@
 import { Step } from "../../engine/step.js";
 import { DraftService } from "../../services/draft-service.js";
 import { executeDraftWorker } from "./draft.js";
-import { DraftGateRepairAppliedResult } from "../../engine/step-result.js";
+import {
+  DraftGateRepairAppliedResult,
+  DraftGateRepairWorkerRequiredResult,
+} from "../../engine/step-result.js";
 
 /**
  * Apply the selected Gate repair request to the bound Draft.
@@ -19,6 +22,11 @@ export class DraftGateRepairStep extends Step {
   }
 
   async _execute() {
+    if (this.#draftService.requiresWorkerExecution()) {
+      const result = new DraftGateRepairWorkerRequiredResult();
+      await result.persist(this.#draftService);
+      return result;
+    }
     return executeDraftWorker(this.#draftService, DraftGateRepairAppliedResult);
   }
 }

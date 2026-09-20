@@ -277,6 +277,13 @@ function producerAttemptId(state, activities, producer) {
   return introduction.transition.attempt.id;
 }
 
+/** Whether an Activity is the durable publication boundary of a Draft execution generation. */
+export function isDraftExecutionPublicationActivity(activity) {
+  return activity?.transition?.operation === "record_draft_step_settlement"
+    && activity?.result?.draftSettlementReceipt?.settlementKind === "execution"
+    && activity.result.draftSettlementReceipt.executionLifecycle?.phase === "publication";
+}
+
 /** A typed producer/consumer requirement, derived only from artifact contracts. */
 export class ProducerArtifactReadiness {
   constructor({ producerNodeId, consumerNodeId } = {}) {
@@ -381,6 +388,7 @@ export class ProducerArtifactReadiness {
           // An explicit publication can likewise retain the active Attempt
           // for a Definition-owned route.
               || activity.transition.operation === "publish_artifacts"
+              || isDraftExecutionPublicationActivity(activity)
             ))
           // Deferral introduces a settlement Attempt that records
           // flow.findings. Its immutable failed Gate artifact stays on the

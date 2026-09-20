@@ -1,4 +1,8 @@
 import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
+import {
+  completeDraftWorkerThroughStep,
+  prepareConditionalDraftWorkerThroughStep,
+} from "../../support/infrastructure/draft-worker-step.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -3961,19 +3965,10 @@ describe("FlowManager canonical Version-1 runtime", () => {
         }, gateResult);
 
         const repairManager = new FlowManager({ root: executionRoot, mainRoot: repository, inWorktree: true });
-        const repaired = new RunRepairPlanGateCommand().execute({
-          ...gateContext,
-          flowManager: repairManager,
-          flowState: repairManager.loadReadOnly(created.specId),
-        });
-        assert.equal(repaired.ok, true, JSON.stringify(repaired));
-        assert.deepEqual(repaired.data.resetSteps, [
-          "draft-gate-repair", "draft-coverage-review", "draft-coverage-triage",
-          "draft-coverage-repair", "draft-gate",
-        ]);
         const repairState = repairManager.canonicalState(created.specId);
         assert.equal(repairState.current.at(-1), "draft-gate-repair");
         assert.equal(repairState.findNode("draft-gate-repair").status, "in_progress");
+        assert.equal(repairManager.activityLedger(created.specId).at(-1).transition.operation, "plan_gate_repair");
 
         const reloadedRepair = new FlowManager({ root: executionRoot, mainRoot: repository, inWorktree: true });
         assert.equal(reloadedRepair.canonicalState(created.specId).current.at(-1), "draft-gate-repair");
@@ -4096,7 +4091,13 @@ describe("FlowManager canonical Version-1 runtime", () => {
         outputDirectory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
         const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
         fs.writeFileSync(path.join(outputDirectory, "draft-review-questions.json"), `${JSON.stringify({
-          verdict: "PASS", sourceDraft: "draft.json", sourceDraftRevision: source.revision,
+          version: 2,
+          phase: "draft-questions",
+          sourceDraft: "draft.json",
+          sourceDraftRevision: source.revision,
+          generatedAt: "2026-08-14T00:00:00.000Z",
+          verdict: "PASS",
+          summary: "Cleanup recovery review output.",
           blockingFindings: [], advisoryFindings: [], repairTargets: [],
         })}\n`);
         ReviewWorkUnit.fromEnvironment(options.env).seal();
@@ -4118,6 +4119,12 @@ describe("FlowManager canonical Version-1 runtime", () => {
       true,
       "Store confirmation precedes local cleanup",
     );
+    const confirmedManifest = sealed.manifestDocument;
+    const confirmedOutput = sealed.readSealedOutput().bytes;
+    const confirmedInputs = confirmedManifest.inputs.map((input) => ({
+      input,
+      bytes: input.assertSnapshot(sealed.directory).bytes,
+    }));
     assert.equal(fs.existsSync(outputDirectory), true);
     assert.equal(reconcileCompletedReviewWorkUnits({
       flowManager: manager,
@@ -4125,6 +4132,40 @@ describe("FlowManager canonical Version-1 runtime", () => {
       executionRoot,
     }), 1);
     assert.equal(fs.existsSync(outputDirectory), false);
+
+    const conflicting = new ReviewWorkUnit({
+      executionRoot,
+      runId: confirmedManifest.runId,
+      specId: confirmedManifest.specId,
+      phase: confirmedManifest.phase,
+      taskId: confirmedManifest.taskId,
+      nodeId: confirmedManifest.nodeId,
+      attemptId: confirmedManifest.attemptId,
+      target: confirmedManifest.target,
+      output: confirmedManifest.output,
+    });
+    for (const [index, { input, bytes }] of confirmedInputs.entries()) {
+      conflicting.writeInput({
+        logicalKey: input.logicalKey,
+        logicalPath: input.logicalPath,
+        bytes: index === 0 ? Buffer.concat([bytes, Buffer.from("\nconflicting input")]) : bytes,
+        mediaType: input.mediaType,
+        root: input.relativePath === input.logicalPath,
+      });
+    }
+    conflicting.finalize();
+    fs.writeFileSync(conflicting.outputPath(), confirmedOutput);
+    conflicting.seal();
+    assert.throws(
+      () => reconcileCompletedReviewWorkUnits({
+        flowManager: manager,
+        specId: created.specId,
+        executionRoot,
+      }),
+      /no canonical confirmation receipt or active Attempt/,
+      "cleanup must reject a same-Attempt surface with a different manifest identity",
+    );
+    assert.equal(fs.existsSync(conflicting.directory), true);
   });
 
   it("materializes the shared file.map for impl review from its catalog authority", async () => {
@@ -5647,7 +5688,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(fs.existsSync(path.join(location.directory, "draft.json")), false);
   });
 
-  it("hands cataloged draft review payloads to V1 triage and repair without exposing attempts wrappers", () => {
+  it("hands cataloged draft review payloads to V1 triage and repair without exposing attempts wrappers", async () => {
     const repository = root();
     const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     const created = manager.createFresh(request("001-canonical-draft-triage"));
@@ -5733,7 +5774,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     }, null, 2)}\n`);
     sealWorkerArtifactHandoff({ requestPath: handoff.requestPath, invocationId: "canonical-draft-triage" });
 
-    const result = coordinator.reconcile({ ctx: context, request: handoff });
+    const result = await completeDraftWorkerThroughStep({ coordinator, ctx: context, request: handoff });
     const location = manager.specLocation(created.specId);
     const triage = manager.readArtifact({
       specId: created.specId,
@@ -5782,7 +5823,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     }, null, 2)}\n`);
     sealWorkerArtifactHandoff({ requestPath: repairHandoff.requestPath, invocationId: "canonical-draft-repair" });
 
-    const repaired = coordinator.reconcile({ ctx: context, request: repairHandoff });
+    const repaired = await completeDraftWorkerThroughStep({ coordinator, ctx: context, request: repairHandoff });
     const draft = manager.readArtifact({
       specId: created.specId,
       logicalKey: "draft",
@@ -5929,8 +5970,10 @@ describe("FlowManager canonical Version-1 runtime", () => {
     );
 
     const coordinator = new WorkerArtifactHandoffCoordinator();
-    const handoff = coordinator.createRequest({
-      ctx: { ...context, flowState: manager.load(created.specId) },
+    const workerContext = { ...context, flowState: manager.load(created.specId) };
+    const { request: handoff } = await prepareConditionalDraftWorkerThroughStep({
+      coordinator,
+      ctx: workerContext,
       state: manager.load(created.specId),
       invocation: {
         id: "draft-plan-gate-repair-worker",
@@ -5972,7 +6015,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
       requestPath: handoff.requestPath,
       invocationId: "draft-plan-gate-repair-worker",
     });
-    const repairCompletion = coordinator.reconcile({
+    const repairCompletion = await completeDraftWorkerThroughStep({
+      coordinator,
       ctx: { ...context, flowState: manager.load(created.specId) },
       request: handoff,
     });
@@ -6064,9 +6108,9 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const next = await new GetNextActionCommand().execute(context);
     const repair = new RunRepairPlanGateCommand().execute(context);
 
-    // Mismatched evidence cannot select repair. The current semantic Gate
-    // observation remains eligible only for Definition-owned retry.
-    assert.equal(next.directive.actionId, "CLAIM_GATE_RETRY");
+    // The first Draft Gate semantic failure selects the repair operation, but
+    // mismatched evidence still cannot authorize its guarded command.
+    assert.equal(next.directive.actionId, "REPAIR_PLAN_GATE_EVIDENCE");
     assert.equal(repair.ok, false);
     assert.equal(repair.errors[0].code, "PLAN_GATE_REPAIR_NOT_ADMITTED");
     assert.equal(manager.canonicalState(created.specId).current.at(-1), "draft-gate");
@@ -6292,75 +6336,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
       ...context, flowState: fixture.manager.load(fixture.specId),
     });
     assert.equal(acceptance.step, "acceptance-review");
-  });
-
-  it("settles the fifth persisted Draft Gate semantic failure, records findings, and rejects a sixth retry", async () => {
-    const repository = root();
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request());
-    manager.addActiveFlow(created.specId, "direct");
-    advanceTo(manager, created.specId, "draft-gate");
-    const observation = {
-      kind: "violation", failureMode: "guardrail-violation", requirementRef: "R-1",
-      where: { file: "draft.json", locator: "goal" }, observed: "A bounded fixture finding.",
-      severity: "blocking", refs: ["R-1"],
-    };
-    let fifthDecision = null;
-    for (let evaluation = 1; evaluation <= 5; evaluation += 1) {
-      const commandResult = attachCanonicalCommandResultArtifact({
-        result: "fail",
-        artifacts: {
-          phase: "draft", gateTransitionFailureCategory: { category: "semantic", code: "GATE_REJECTED" },
-          nextAction: { diagnosis: { observations: [observation] } },
-        },
-      }, {
-        logicalKey: "draft.gate",
-        payload: {
-          result: "fail",
-          artifacts: {
-            phase: "draft", gateTransitionFailureCategory: { category: "semantic", code: "GATE_REJECTED" },
-            nextAction: { diagnosis: { observations: [observation] } },
-          },
-        },
-      });
-      manager.failCurrentAttempt({
-        specId: created.specId,
-        failure: { category: "semantic", code: "GATE_REJECTED", message: "fixture", retryable: evaluation < 5, retryKind: evaluation < 5 ? "semantic" : null },
-        commandResult,
-      });
-      const facts = readCurrentGateTransitionFacts({ flowManager: manager, flowState: manager.load(created.specId), phase: "draft" });
-      const decision = resolveGateTransition(facts);
-      if (evaluation < 5) {
-        assert.equal(decision.disposition.operation, "retry");
-        manager.retryGateTransition({ specId: created.specId, decision });
-        if (evaluation === 1) {
-          const stateBeforeStale = manager.canonicalState(created.specId).toJSON();
-          const activitiesBeforeStale = manager.activityLedger(created.specId);
-          const catalogBeforeStale = manager.artifactCatalog(created.specId).toJSON();
-          assert.throws(() => manager.retryGateTransition({ specId: created.specId, decision }), /no longer current|stale/);
-          assert.deepEqual(manager.canonicalState(created.specId).toJSON(), stateBeforeStale);
-          assert.deepEqual(manager.activityLedger(created.specId), activitiesBeforeStale);
-          assert.deepEqual(manager.artifactCatalog(created.specId).toJSON(), catalogBeforeStale);
-        }
-      } else {
-        fifthDecision = decision;
-      }
-    }
-    assert.equal(fifthDecision.disposition.operation, "defer");
-    const next = await new GetNextActionCommand().execute({
-      root: repository, mainRoot: repository, executionRoot: repository, specId: created.specId,
-      flowManager: manager, flowState: manager.load(created.specId),
-    });
-    assert.equal(next.directive.actionId, "SETTLE_GATE_DEFER");
-    const beforeActivities = manager.activityLedger(created.specId);
-    manager.settleGateTransition({ specId: created.specId, decision: fifthDecision });
-    const settled = manager.canonicalState(created.specId);
-    assert.equal(settled.findNode("draft-gate").status, "done");
-    assert.equal(leaves(manager.load(created.specId).steps).find((step) => step.id === "spec").status, "pending");
-    const findings = manager.readArtifact({ specId: created.specId, logicalKey: "flow.findings", consumerNodeId: "draft-gate" });
-    assert.ok(findings);
-    assert.equal(manager.activityLedger(created.specId).length, beforeActivities.length + 1);
-    assert.equal(manager.activityLedger(created.specId).at(-1).transition.operation, "defer_failed_gate");
   });
 
   it("rejects implementation and Task gate repair without a current Definition-selected receipt", async () => {
@@ -7695,8 +7670,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     });
     fs.writeFileSync(handoff.payloadPath("draft.json"), canonicalDraftBytes("recover cleanup"));
     sealWorkerArtifactHandoff({ requestPath: handoff.requestPath, invocationId: "canonical-recovery" });
-    assert.throws(
-      () => coordinator.reconcile({ ctx: context, request: handoff }),
+    await assert.rejects(
+      () => completeDraftWorkerThroughStep({ coordinator, ctx: context, request: handoff }),
       /RECOVERY_REQUIRED|cleanup requires recovery/i,
     );
     assert.equal(manager.canonicalState(created.specId).findNode("draft").status, "done");

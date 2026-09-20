@@ -30,6 +30,7 @@ import { DraftReviewEvidenceSet } from "./draft-review-artifacts.js";
 import { CanonicalSpecTestTopology } from "./canonical-worker-artifacts.js";
 import { CanonicalReviewInputDescriptor } from "./review-work-unit-input.js";
 import { draftReviewSourceStepIds } from "./draft-review-routes.js";
+import { isDraftExecutionPublicationActivity } from "./producer-artifact-readiness.js";
 import { ReviewWorkUnit, ReviewWorkUnitOutput, ReviewWorkUnitOutputReceipt } from "./review-work-unit.js";
 import { renderTaskMarkdown } from "../../spec/commands/render.js";
 import {
@@ -176,13 +177,16 @@ class CanonicalDraftSourceProducerActivity {
     if (activity === null || typeof activity !== "object" || Array.isArray(activity)) {
       throw new CanonicalDraftReviewSourceError(`canonical draft source has no authorized ${reviewPhase} producer Activity`);
     }
+    const terminalConfirmation = activity?.transition?.operation === "confirm_attempt"
+      && activity.transition.status === "done";
+    const executionPublication = isDraftExecutionPublicationActivity(activity)
+      && activity.transition.status === null;
     if (
       activity.id !== descriptor.activityId
       || descriptor.logicalKey !== "draft"
       || activity.type !== "result_confirmed"
-      || activity.transition?.operation !== "confirm_attempt"
       || activity.transition?.nodeId !== activity.nodeId
-      || activity.transition?.status !== "done"
+      || (!terminalConfirmation && !executionPublication)
       || activity.nodeId !== descriptor.publicationStep
       || !allowedSteps.has(activity.nodeId)
       || typeof activity.attemptId !== "string"

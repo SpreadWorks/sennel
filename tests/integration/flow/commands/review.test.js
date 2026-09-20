@@ -41,12 +41,23 @@ import {
   PromptFixedContextTooLargeFailure,
 } from "../../../../src/lib/prompt-batching.js";
 import { FLOW_COMMANDS } from "../../../../src/flow/registry.js";
-import { StepFactory } from "../../../../src/flow/engine/step-factory.js";
-import { DraftQuestionsReviewStep } from "../../../../src/flow/steps/draft/draft-questions-review.js";
 import { ReviewService } from "../../../../src/flow/services/review-service.js";
 import { CanonicalDraftReviewSource } from "../../../../src/flow/lib/canonical-review-artifacts.js";
-import { DraftReviewConnector } from "../../../../src/flow/engine/connectors/draft/draft-review-connector.js";
+import {
+  DraftCoverageReviewExecutionRequiredResult,
+  DraftStepErrorResult,
+  DraftQuestionsReviewExecutionRequiredResult,
+  DraftQuestionsReviewPassedResult,
+} from "../../../../src/flow/engine/step-result.js";
+import {
+  DraftReviewExecutionBinding,
+  DraftReviewExecutionClaim,
+  DraftReviewExecutionTargetIdentity,
+  settleDraftStepResult,
+} from "../../../../src/flow/definition.js";
 import RunReviewCommand from "../../../../src/flow/lib/run-review.js";
+import { ReviewExecutionLease } from "../../../../src/flow/lib/review-execution-lease.js";
+import RunClaimNextActionCommand from "../../../../src/flow/lib/run-claim-next-action.js";
 import {
   createMemoryWorkUnitCheckpointStore,
   WorkUnitToolingFailure,
@@ -122,6 +133,119 @@ function assertAllDoesNotMatch(text, patterns) {
 
 const CATALOGED_REVIEW_FINGERPRINT = "c".repeat(64);
 
+function claimDraftQuestionsReview(manager, specId) {
+  const state = manager.canonicalState(specId);
+  const binding = {
+    runId: state.runId,
+    specId,
+    stepId: "draft-questions-review",
+    attempt: state.attempt,
+  };
+  const result = new DraftQuestionsReviewExecutionRequiredResult();
+  const settlement = settleDraftStepResult(result.stepId, result);
+  const executionBinding = manager.draftStepExecutionState({ binding }).reviewBinding({
+    manifestDigest: "1".repeat(64),
+    inputDigest: "2".repeat(64),
+    target: new DraftReviewExecutionTargetIdentity({
+      treeSha: "3".repeat(40), targetStateDigest: "4".repeat(64),
+    }),
+  });
+  manager.checkpointDraftStepExecution({ binding, stepResult: result, settlement, executionBinding });
+  manager.claimDraftStepExecution({
+    binding,
+    stepResult: result,
+    settlement,
+    executionBinding,
+    executionClaim: new DraftReviewExecutionClaim(),
+  });
+}
+
+function draftReviewExecutionResult(phase) {
+  return phase === "draft-questions"
+    ? new DraftQuestionsReviewExecutionRequiredResult()
+    : new DraftCoverageReviewExecutionRequiredResult();
+}
+
+function distinctDigest(value) {
+  return value === "f".repeat(64) ? "e".repeat(64) : "f".repeat(64);
+}
+
+function distinctTreeSha(value) {
+  return value === "f".repeat(40) ? "e".repeat(40) : "f".repeat(40);
+}
+
+function setupDraftReviewExecutionReentry({ root, specId, runId, phase }) {
+  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+  const fixture = new CanonicalFlowFixture({
+    flowManager: manager, specId, runId, issue: 524,
+    request: "Verify Draft Review execution identity reentry.",
+    execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+  }).create().registerActive().activate("draft");
+  manager.confirmCurrentAttempt({
+    specId,
+    artifactWrites: [{
+      logicalKey: "draft",
+      mediaType: "application/json",
+      bytes: Buffer.from(`${JSON.stringify(canonicalDraftDocument(), null, 2)}\n`, "utf8"),
+    }],
+  });
+  fixture.activate(`${phase}-review`);
+  const state = manager.canonicalState(specId);
+  const workUnit = new CanonicalReviewWorkUnit({
+    flowManager: manager,
+    state,
+    phase,
+    executionRoot: root,
+    treeSha: "a".repeat(40),
+    targetStateDigest: "b".repeat(64),
+  });
+  const manifest = workUnit.declareCanonicalInputs();
+  const binding = {
+    runId: state.runId,
+    specId,
+    stepId: `${phase}-review`,
+    attempt: state.attempt,
+  };
+  return { manager, fixture, state, workUnit, manifest, binding };
+}
+
+function advanceClaimedDraftQuestionsReview(manager, specId, { required, settlement, summary }) {
+  const current = manager.canonicalState(specId);
+  const binding = {
+    runId: current.runId,
+    specId,
+    stepId: "draft-questions-review",
+    attempt: current.attempt,
+  };
+  const source = new CanonicalDraftReviewSource({
+    flowManager: manager, state: current, phase: "draft-questions",
+  });
+  const result = attachCanonicalCommandResultArtifact({
+    result: "ok", artifacts: { phase: "draft-questions", verdict: "PASS" },
+  }, {
+    logicalKey: "draft.questions.review",
+    payload: {
+      version: 2, phase: "draft-questions", sourceDraft: "draft.json",
+      sourceDraftRevision: source.revision(), generatedAt: "2026-09-20T00:00:00.000Z",
+      verdict: "PASS", summary, blockingFindings: [], advisoryFindings: [], repairTargets: [],
+    },
+  });
+  manager.settleDraftStepResult({
+    binding, stepResult: required, settlement, commandResult: result,
+  });
+  const passed = new DraftQuestionsReviewPassedResult();
+  manager.settleDraftStepResult({
+    binding,
+    stepResult: passed,
+    settlement: settleDraftStepResult(passed.stepId, passed),
+  });
+  manager.beginNextAction(specId);
+  return Object.freeze({
+    state: manager.canonicalState(specId).toJSON(),
+    activities: structuredClone(manager.activityLedger(specId)),
+  });
+}
+
 it("uses the evaluated Draft review result once when the review Step settles it", async () => {
   const root = createTmpDir("draft-review-step-result-");
   const specId = "524-draft-review-step-result";
@@ -168,12 +292,17 @@ it("uses the evaluated Draft review result once when the review Step settles it"
       result: "ok",
       artifacts: { phase: "draft-questions", verdict: "PASS" },
     }, { logicalKey: "draft.questions.review", payload: document });
-    const binding = await new DraftReviewConnector(source).connect();
-    const step = new StepFactory()
-      .provideArguments(ReviewService, { flowManager: manager, binding, commandResult: result })
-      .create(DraftQuestionsReviewStep);
-
-    assert.deepEqual((await step.execute()).toJSON(), { type: "completed" });
+    claimDraftQuestionsReview(manager, specId);
+    await FLOW_COMMANDS.run.review.post({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId), config: {},
+    }, result);
+    const persistedResult = manager.canonicalState(specId)
+      .findNode("draft-questions-review").result.stepResult;
+    assert.deepEqual(
+      persistedResult.toJSON?.() ?? persistedResult,
+      { kind: "draft-questions-review-passed", type: "completed" },
+    );
     assert.equal(inspectCalls, 1);
     const history = JSON.parse(manager.readArtifact({
       specId, logicalKey: "draft.questions.review", consumerNodeId: "draft-questions-triage",
@@ -190,24 +319,12 @@ it("rehydrates a published Draft review Attempt before the post hook", async () 
   const root = createTmpDir("draft-review-post-recovery-");
   const specId = "524-draft-review-post-recovery";
   try {
-    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
-    const fixture = new CanonicalFlowFixture({
-      flowManager: manager, specId, runId: "run-draft-review-post-recovery", issue: 524,
-      request: "Reuse the published Draft Review result.",
-      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
-    }).create().registerActive().activate("draft");
-    manager.confirmCurrentAttempt({
-      specId,
-      artifactWrites: [{
-        logicalKey: "draft",
-        mediaType: "application/json",
-        bytes: Buffer.from(`${JSON.stringify(canonicalDraftDocument(), null, 2)}\n`, "utf8"),
-      }],
+    const value = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-post-recovery", phase: "draft-questions",
     });
-    fixture.activate("draft-questions-review");
     const source = new CanonicalDraftReviewSource({
-      flowManager: manager,
-      state: manager.canonicalState(specId),
+      flowManager: value.manager,
+      state: value.manager.canonicalState(specId),
       phase: "draft-questions",
     });
     const payload = {
@@ -226,14 +343,35 @@ it("rehydrates a published Draft review Attempt before the post hook", async () 
       result: "ok",
       artifacts: { phase: "draft-questions", verdict: "PASS" },
     }, { logicalKey: "draft.questions.review", payload });
-    manager.publishCurrentAttemptResult({ specId, commandResult: published });
+    const executionResult = new DraftQuestionsReviewExecutionRequiredResult();
+    const executionBinding = new DraftReviewExecutionBinding({
+      executionGeneration: 0,
+      manifestDigest: value.manifest.digest,
+      inputDigest: value.manifest.inputDigest,
+      target: new DraftReviewExecutionTargetIdentity(value.manifest.target.toJSON()),
+    });
+    const settlement = settleDraftStepResult(executionResult.stepId, executionResult);
+    value.manager.checkpointDraftStepExecution({
+      binding: value.binding, stepResult: executionResult, settlement, executionBinding,
+    });
+    value.manager.claimDraftStepExecution({
+      binding: value.binding,
+      stepResult: executionResult,
+      settlement,
+      executionBinding,
+      executionClaim: new DraftReviewExecutionClaim(),
+    });
+    value.manager.settleDraftStepResult({
+      binding: value.binding, stepResult: executionResult, settlement, commandResult: published,
+    });
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     let providerCalls = 0;
     const recovered = await new RunReviewCommand({ runCommand: async () => { providerCalls += 1; } }).execute({
       root,
       executionRoot: root,
       mainRoot: root,
-      flowManager: manager,
-      flowState: manager.loadReadOnly(specId),
+      flowManager: reloaded,
+      flowState: reloaded.loadReadOnly(specId),
       specId,
       phase: "draft",
       dryRun: false,
@@ -245,14 +383,972 @@ it("rehydrates a published Draft review Attempt before the post hook", async () 
       root,
       mainRoot: root,
       executionRoot: root,
-      flowManager: manager,
-      flowState: manager.loadReadOnly(specId),
+      flowManager: reloaded,
+      flowState: reloaded.loadReadOnly(specId),
       specId,
       phase: "draft",
     }, recovered);
-    assert.equal(manager.canonicalState(specId).nextAction().nodeId, "draft-refine");
+    assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "draft-refine");
   } finally {
     removeTmpDir(root);
+  }
+});
+
+it("fails closed when a Draft review publication receipt lacks its exact artifact", async () => {
+  for (const artifact of ["missing", "mismatched"]) {
+    const root = createTmpDir(`draft-review-publication-${artifact}-`);
+    const specId = `524-draft-review-publication-${artifact}`;
+    try {
+      const value = setupDraftReviewExecutionReentry({
+        root, specId, runId: `run-draft-review-publication-${artifact}`, phase: "draft-questions",
+      });
+      const executionResult = new DraftQuestionsReviewExecutionRequiredResult();
+      const executionBinding = new DraftReviewExecutionBinding({
+        executionGeneration: 0,
+        manifestDigest: value.manifest.digest,
+        inputDigest: value.manifest.inputDigest,
+        target: new DraftReviewExecutionTargetIdentity(value.manifest.target.toJSON()),
+      });
+      const settlement = settleDraftStepResult(executionResult.stepId, executionResult);
+      value.manager.checkpointDraftStepExecution({
+        binding: value.binding, stepResult: executionResult, settlement, executionBinding,
+      });
+      value.manager.claimDraftStepExecution({
+        binding: value.binding,
+        stepResult: executionResult,
+        settlement,
+        executionBinding,
+        executionClaim: new DraftReviewExecutionClaim(),
+      });
+      value.manager.settleDraftStepResult({
+        binding: value.binding, stepResult: executionResult, settlement,
+      });
+      if (artifact === "mismatched") {
+        const source = new CanonicalDraftReviewSource({
+          flowManager: value.manager,
+          state: value.manager.canonicalState(specId),
+          phase: "draft-questions",
+        });
+        value.manager.publishCurrentAttemptResult({
+          specId,
+          commandResult: attachCanonicalCommandResultArtifact({
+            result: "ok",
+            artifacts: { phase: "draft-questions", verdict: "PASS" },
+          }, {
+            logicalKey: "draft.questions.review",
+            payload: {
+              version: 2, phase: "draft-questions", sourceDraft: "draft.json",
+              sourceDraftRevision: source.revision(), generatedAt: "2026-09-20T00:00:00.000Z",
+              verdict: "PASS", summary: "A foreign publication.",
+              blockingFindings: [], advisoryFindings: [], repairTargets: [],
+            },
+          }),
+        });
+      }
+      const beforeState = value.manager.canonicalState(specId).toJSON();
+      const beforeActivities = structuredClone(value.manager.activityLedger(specId));
+      let providerCalls = 0;
+      const result = await new RunReviewCommand({
+        resolveTreeSha: () => "a".repeat(40),
+        resolveTargetStateDigest: () => "b".repeat(64),
+        runCommand() { providerCalls += 1; },
+      }).execute({
+        root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+        flowManager: value.manager, flowState: value.manager.loadReadOnly(specId), config: {},
+      });
+      assert.equal(result.errors[0].code, "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED");
+      assert.equal(providerCalls, 0);
+      assert.deepEqual(value.manager.canonicalState(specId).toJSON(), beforeState);
+      assert.deepEqual(value.manager.activityLedger(specId), beforeActivities);
+    } finally {
+      removeTmpDir(root);
+    }
+  }
+});
+
+it("rehydrates publication committed after initial admission but before provider execution", async (t) => {
+  const root = createTmpDir("draft-review-lease-publication-race-");
+  const specId = "524-draft-review-lease-publication-race";
+  try {
+    const value = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-lease-publication-race", phase: "draft-questions",
+    });
+    const executionResult = new DraftQuestionsReviewExecutionRequiredResult();
+    const executionBinding = new DraftReviewExecutionBinding({
+      executionGeneration: 0,
+      manifestDigest: value.manifest.digest,
+      inputDigest: value.manifest.inputDigest,
+      target: new DraftReviewExecutionTargetIdentity(value.manifest.target.toJSON()),
+    });
+    const settlement = settleDraftStepResult(executionResult.stepId, executionResult);
+    value.manager.checkpointDraftStepExecution({
+      binding: value.binding, stepResult: executionResult, settlement, executionBinding,
+    });
+    value.manager.claimDraftStepExecution({
+      binding: value.binding, stepResult: executionResult, settlement, executionBinding,
+      executionClaim: new DraftReviewExecutionClaim(),
+    });
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const acquire = ReviewExecutionLease.prototype.acquire;
+    let expectedState = null;
+    let expectedActivities = null;
+    let committed = false;
+    t.after(() => { ReviewExecutionLease.prototype.acquire = acquire; });
+    ReviewExecutionLease.prototype.acquire = function () {
+      const token = acquire.call(this);
+      if (!committed) {
+        committed = true;
+        const current = reloaded.canonicalState(specId);
+        const source = new CanonicalDraftReviewSource({ flowManager: reloaded, state: current, phase: "draft-questions" });
+        reloaded.settleDraftStepResult({
+          binding: {
+            runId: current.runId, specId, stepId: "draft-questions-review", attempt: current.attempt,
+          },
+          stepResult: executionResult,
+          settlement,
+          commandResult: attachCanonicalCommandResultArtifact({
+            result: "ok", artifacts: { phase: "draft-questions", verdict: "PASS" },
+          }, {
+            logicalKey: "draft.questions.review",
+            payload: {
+              version: 2, phase: "draft-questions", sourceDraft: "draft.json",
+              sourceDraftRevision: source.revision(), generatedAt: "2026-09-20T00:00:00.000Z",
+              verdict: "PASS", summary: "Published while the execution lease was acquired.",
+              blockingFindings: [], advisoryFindings: [], repairTargets: [],
+            },
+          }),
+        });
+      }
+      return token;
+    };
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() { providerCalls += 1; },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId), config: {},
+    });
+    assert.equal(committed, true);
+    assert.equal(providerCalls, 0);
+    assert.equal(result.artifacts.phase, "draft-questions");
+    const current = reloaded.canonicalState(specId);
+    const lifecycle = reloaded.draftStepExecutionState({
+      binding: { runId: current.runId, specId, stepId: "draft-questions-review", attempt: current.attempt },
+    }).lifecycle;
+    assert.equal(lifecycle.phase, "publication");
+    assert.equal(lifecycle.executionGeneration, 0);
+    assert.deepEqual(
+      reloaded.activityLedger(specId)
+        .map((activity) => activity.result?.draftSettlementReceipt?.executionLifecycle?.binding?.executionGeneration)
+        .filter((generation) => generation !== undefined),
+      [0, 0, 0],
+    );
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("rejects a lease whose Review identity changes through a persisted Draft transition", async (t) => {
+  const root = createTmpDir("draft-review-lease-identity-");
+  const specId = "524-draft-review-lease-identity";
+  try {
+    const value = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-lease-identity", phase: "draft-questions",
+    });
+    const required = new DraftQuestionsReviewExecutionRequiredResult();
+    const executionBinding = new DraftReviewExecutionBinding({
+      executionGeneration: 0,
+      manifestDigest: value.manifest.digest,
+      inputDigest: value.manifest.inputDigest,
+      target: new DraftReviewExecutionTargetIdentity(value.manifest.target.toJSON()),
+    });
+    const executionSettlement = settleDraftStepResult(required.stepId, required);
+    value.manager.checkpointDraftStepExecution({
+      binding: value.binding, stepResult: required, settlement: executionSettlement, executionBinding,
+    });
+    value.manager.claimDraftStepExecution({
+      binding: value.binding,
+      stepResult: required,
+      settlement: executionSettlement,
+      executionBinding,
+      executionClaim: new DraftReviewExecutionClaim(),
+    });
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const acquire = ReviewExecutionLease.prototype.acquire;
+    let expectedState;
+    let expectedActivities;
+    t.after(() => { ReviewExecutionLease.prototype.acquire = acquire; });
+    ReviewExecutionLease.prototype.acquire = function () {
+      const token = acquire.call(this);
+      const advanced = advanceClaimedDraftQuestionsReview(reloaded, specId, {
+        required,
+        settlement: executionSettlement,
+        summary: "Lease transition.",
+      });
+      expectedState = advanced.state;
+      expectedActivities = advanced.activities;
+      return token;
+    };
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() { providerCalls += 1; },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId), config: {},
+    });
+    assert.equal(result.errors[0].code, "REVIEW_EXECUTION_LEASE_IDENTITY_STALE");
+    assert.equal(providerCalls, 0);
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), expectedState);
+    assert.deepEqual(reloaded.activityLedger(specId), expectedActivities);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("does not fail a replacement Attempt after lease readmission", async () => {
+  const root = createTmpDir("draft-review-post-readmission-stale-");
+  const specId = "524-draft-review-post-readmission-stale";
+  try {
+    const value = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-post-readmission-stale", phase: "draft-questions",
+    });
+    const required = new DraftQuestionsReviewExecutionRequiredResult();
+    const executionBinding = new DraftReviewExecutionBinding({
+      executionGeneration: 0,
+      manifestDigest: value.manifest.digest,
+      inputDigest: value.manifest.inputDigest,
+      target: new DraftReviewExecutionTargetIdentity(value.manifest.target.toJSON()),
+    });
+    const executionSettlement = settleDraftStepResult(required.stepId, required);
+    value.manager.checkpointDraftStepExecution({
+      binding: value.binding, stepResult: required, settlement: executionSettlement, executionBinding,
+    });
+    value.manager.claimDraftStepExecution({
+      binding: value.binding,
+      stepResult: required,
+      settlement: executionSettlement,
+      executionBinding,
+      executionClaim: new DraftReviewExecutionClaim(),
+    });
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    let expectedState;
+    let expectedActivities;
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha() {
+        const advanced = advanceClaimedDraftQuestionsReview(reloaded, specId, {
+          required,
+          settlement: executionSettlement,
+          summary: "Replace the leased Attempt after readmission.",
+        });
+        expectedState = advanced.state;
+        expectedActivities = advanced.activities;
+        return "a".repeat(40);
+      },
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() { providerCalls += 1; },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId), config: {},
+    });
+    assert.equal(result.errors[0].code, "REVIEW_EXECUTION_LEASE_IDENTITY_STALE");
+    assert.equal(providerCalls, 0);
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), expectedState);
+    assert.deepEqual(reloaded.activityLedger(specId), expectedActivities);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("fails closed when a Draft review becomes terminal after lease readmission", async () => {
+  const root = createTmpDir("draft-review-terminal-race-");
+  const specId = "524-draft-review-terminal-race";
+  try {
+    const value = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-terminal-race", phase: "draft-questions",
+    });
+    const required = new DraftQuestionsReviewExecutionRequiredResult();
+    const executionBinding = new DraftReviewExecutionBinding({
+      executionGeneration: 0,
+      manifestDigest: value.manifest.digest,
+      inputDigest: value.manifest.inputDigest,
+      target: new DraftReviewExecutionTargetIdentity(value.manifest.target.toJSON()),
+    });
+    const executionSettlement = settleDraftStepResult(required.stepId, required);
+    value.manager.checkpointDraftStepExecution({
+      binding: value.binding, stepResult: required, settlement: executionSettlement, executionBinding,
+    });
+    value.manager.claimDraftStepExecution({
+      binding: value.binding,
+      stepResult: required,
+      settlement: executionSettlement,
+      executionBinding,
+      executionClaim: new DraftReviewExecutionClaim(),
+    });
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    let expectedState;
+    let expectedActivities;
+    let terminalized = false;
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha() {
+        if (!terminalized) {
+          terminalized = true;
+          const current = reloaded.canonicalState(specId);
+          const binding = {
+            runId: current.runId,
+            specId,
+            stepId: "draft-questions-review",
+            attempt: current.attempt,
+          };
+          const source = new CanonicalDraftReviewSource({
+            flowManager: reloaded, state: current, phase: "draft-questions",
+          });
+          const published = attachCanonicalCommandResultArtifact({
+            result: "ok", artifacts: { phase: "draft-questions", verdict: "PASS" },
+          }, {
+            logicalKey: "draft.questions.review",
+            payload: {
+              version: 2, phase: "draft-questions", sourceDraft: "draft.json",
+              sourceDraftRevision: source.revision(), generatedAt: "2026-09-20T00:00:00.000Z",
+              verdict: "PASS", summary: "Published before a concurrent terminal failure.",
+              blockingFindings: [], advisoryFindings: [], repairTargets: [],
+            },
+          });
+          reloaded.settleDraftStepResult({
+            binding,
+            stepResult: required,
+            settlement: executionSettlement,
+            commandResult: published,
+          });
+          const failed = new DraftStepErrorResult(
+            "draft-questions-review",
+            new Error("concurrent Draft review execution failed terminally"),
+          );
+          reloaded.settleDraftStepResult({
+            binding,
+            stepResult: failed,
+            settlement: settleDraftStepResult(failed.stepId, failed),
+          });
+          expectedState = reloaded.canonicalState(specId).toJSON();
+          expectedActivities = structuredClone(reloaded.activityLedger(specId));
+        }
+        return "a".repeat(40);
+      },
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() { providerCalls += 1; },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId), config: {},
+    });
+    assert.equal(terminalized, true);
+    assert.equal(result.errors[0].code, "REVIEW_EXECUTION_LEASE_IDENTITY_STALE");
+    assert.equal(providerCalls, 0);
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), expectedState);
+    assert.deepEqual(reloaded.activityLedger(specId), expectedActivities);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("does not record a provider failure against an Attempt replaced after failure classification", async () => {
+  const root = createTmpDir("draft-review-conditional-failure-race-");
+  const specId = "524-draft-review-conditional-failure-race";
+  try {
+    setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-conditional-failure-race", phase: "draft-questions",
+    });
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const failIfCurrent = reloaded.failCurrentAttemptIfCurrent.bind(reloaded);
+    let expectedState;
+    let expectedActivities;
+    let conditionalFailureCalls = 0;
+    reloaded.failCurrentAttemptIfCurrent = (input) => {
+      conditionalFailureCalls += 1;
+      reloaded.failCurrentAttempt({
+        specId,
+        failure: input.failure,
+        result: input.result,
+      });
+      reloaded.beginNextAction(specId);
+      expectedState = reloaded.canonicalState(specId).toJSON();
+      expectedActivities = structuredClone(reloaded.activityLedger(specId));
+      return failIfCurrent(input);
+    };
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() {
+        providerCalls += 1;
+        return {
+          ok: false,
+          status: 1,
+          signal: null,
+          killed: false,
+          stdout: "",
+          stderr: "provider failed while another command replaced its Attempt",
+        };
+      },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId), config: {},
+    });
+    assert.equal(result.errors[0].code, "REVIEW_EXECUTION_LEASE_IDENTITY_STALE");
+    assert.equal(providerCalls, 1);
+    assert.equal(conditionalFailureCalls, 1);
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), expectedState);
+    assert.deepEqual(reloaded.activityLedger(specId), expectedActivities);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("reenters the same Draft review Step after its publication receipt", async () => {
+  const root = createTmpDir("draft-review-publication-reentry-");
+  const specId = "524-draft-review-publication-reentry";
+  try {
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const fixture = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-draft-review-publication-reentry", issue: 524,
+      request: "Resume a Draft review after publication.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft");
+    manager.confirmCurrentAttempt({
+      specId,
+      artifactWrites: [{
+        logicalKey: "draft",
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(canonicalDraftDocument(), null, 2)}\n`, "utf8"),
+      }],
+    });
+    fixture.activate("draft-questions-review");
+    const source = new CanonicalDraftReviewSource({
+      flowManager: manager,
+      state: manager.canonicalState(specId),
+      phase: "draft-questions",
+    });
+    const result = attachCanonicalCommandResultArtifact({
+      result: "ok",
+      artifacts: { phase: "draft-questions", verdict: "PASS" },
+    }, {
+      logicalKey: "draft.questions.review",
+      payload: {
+        version: 2,
+        phase: "draft-questions",
+        sourceDraft: "draft.json",
+        sourceDraftRevision: source.revision(),
+        generatedAt: "2026-09-20T00:00:00.000Z",
+        verdict: "PASS",
+        summary: "No draft review findings recorded.",
+        blockingFindings: [],
+        advisoryFindings: [],
+        repairTargets: [],
+      },
+    });
+    claimDraftQuestionsReview(manager, specId);
+    const state = manager.canonicalState(specId);
+    const binding = {
+      runId: state.runId,
+      specId,
+      stepId: "draft-questions-review",
+      attempt: state.attempt,
+    };
+    const executionResult = new DraftQuestionsReviewExecutionRequiredResult();
+    manager.settleDraftStepResult({
+      binding,
+      stepResult: executionResult,
+      settlement: settleDraftStepResult(executionResult.stepId, executionResult),
+      commandResult: result,
+    });
+    assert.equal(manager.draftStepExecutionState({ binding }).lifecycle.phase, "publication");
+
+    await FLOW_COMMANDS.run.review.post({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId), config: {},
+    }, result);
+    const phases = manager.activityLedger(specId)
+      .map((activity) => activity.result?.draftSettlementReceipt?.executionLifecycle?.phase)
+      .filter((phase) => phase !== undefined);
+    assert.deepEqual(phases, ["checkpoint", "claimed", "publication", "terminal"]);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("claims each Draft review manifest before provider execution and settles that generation terminally", async () => {
+  const root = createTmpDir("draft-review-execution-claim-");
+  const specId = "524-draft-review-execution-claim";
+  try {
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const fixture = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-draft-review-execution-claim", issue: 524,
+      request: "Claim the exact Draft review before invoking its provider.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft");
+    manager.confirmCurrentAttempt({
+      specId,
+      artifactWrites: [{
+        logicalKey: "draft",
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(canonicalDraftDocument(), null, 2)}\n`, "utf8"),
+      }],
+    });
+
+    const runPhase = async (phase) => {
+      const expectedAttempt = manager.canonicalState(specId).attempt;
+      let claimedAttemptId = null;
+      const command = new RunReviewCommand({
+        resolveTreeSha: () => "a".repeat(40),
+        resolveTargetStateDigest: () => "b".repeat(64),
+        runCommand(_command, _args, options) {
+          const active = manager.canonicalState(specId);
+          const binding = {
+            runId: active.runId,
+            specId: active.specId,
+            stepId: active.current.at(-1),
+            attempt: active.attempt,
+          };
+          claimedAttemptId = active.attempt.id;
+          assert.equal(active.attempt.id, expectedAttempt.id);
+          assert.equal(active.attempt.sequence, expectedAttempt.sequence);
+          assert.deepEqual(active.attempt.consumption.toJSON(), expectedAttempt.consumption.toJSON());
+          const execution = manager.draftStepExecutionState({ binding });
+          const worker = ReviewWorkUnit.fromEnvironment(options.env);
+          assert.equal(execution.lifecycle.phase, "claimed");
+          assert.equal(execution.lifecycle.executionGeneration, 0);
+          assert.equal(execution.lifecycle.binding.kind, "review");
+          assert.equal(execution.lifecycle.binding.manifestDigest, worker.manifestDocument.digest);
+          assert.equal(execution.lifecycle.binding.inputDigest, worker.manifestDocument.inputDigest);
+          assert.deepEqual(execution.lifecycle.binding.target.toJSON(), worker.manifestDocument.target.toJSON());
+
+          const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+          fs.writeFileSync(path.join(worker.root, worker.manifestDocument.output.basename), `${JSON.stringify({
+            version: 2,
+            phase,
+            sourceDraft: "draft.json",
+            sourceDraftRevision: source.revision,
+            generatedAt: "2026-09-20T00:00:00.000Z",
+            verdict: "PASS",
+            summary: "No draft review findings recorded.",
+            blockingFindings: [],
+            advisoryFindings: [],
+            repairTargets: [],
+          }, null, 2)}\n`);
+          worker.seal();
+          return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+        },
+      });
+      const ctx = {
+        root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+        flowManager: manager, flowState: manager.loadReadOnly(specId), config: {},
+      };
+      const result = await command.execute(ctx);
+      assert.equal(result.artifacts.phase, phase);
+      await FLOW_COMMANDS.run.review.post(ctx, result);
+      const receipt = manager.canonicalState(specId).findNode(`${phase}-review`).result.draftSettlementReceipt;
+      assert.equal(receipt.executionLifecycle.phase, "terminal");
+      assert.equal(receipt.executionLifecycle.executionGeneration, 0);
+      assert.equal(receipt.binding.attemptId, claimedAttemptId);
+      const lifecyclePhases = manager.activityLedger(specId)
+        .filter((activity) => activity.result?.draftSettlementReceipt?.binding?.attemptId === claimedAttemptId)
+        .map((activity) => activity.result.draftSettlementReceipt.executionLifecycle?.phase);
+      assert.deepEqual(lifecyclePhases, ["checkpoint", "claimed", "publication", "terminal"]);
+    };
+
+    fixture.activate("draft-questions-review");
+    await runPhase("draft-questions");
+    for (const stepId of ["draft-refine", "draft-gate-repair"]) {
+      const skipped = await new RunClaimNextActionCommand().execute({
+        root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+        flowManager: manager, flowState: manager.loadReadOnly(specId), config: {},
+      });
+      assert.equal(skipped.ok, true, JSON.stringify(skipped));
+      assert.equal(skipped.data.step, stepId);
+    }
+    manager.updateStepStatus(
+      { stepId: "draft-coverage-review", requestedStatus: "in_progress" },
+      { specId },
+    );
+    await runPhase("draft-coverage");
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("keeps a failed Draft review on the same Attempt and checkpoints its next generation", async () => {
+  const root = createTmpDir("draft-review-execution-failure-");
+  const specId = "524-draft-review-execution-failure";
+  try {
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const fixture = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-draft-review-execution-failure", issue: 524,
+      request: "Retain the Draft review Attempt after a provider failure.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft");
+    manager.confirmCurrentAttempt({
+      specId,
+      artifactWrites: [{
+        logicalKey: "draft",
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(canonicalDraftDocument(), null, 2)}\n`, "utf8"),
+      }],
+    });
+    fixture.activate("draft-questions-review");
+    const before = manager.canonicalState(specId).attempt;
+    const result = await new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand: async () => ({
+        ok: false, status: 1, signal: null, killed: false,
+        stdout: "", stderr: "provider failed before producing a review",
+      }),
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId), config: {},
+    });
+    assert.equal(result.ok, false);
+    const current = manager.canonicalState(specId);
+    assert.equal(current.attempt.id, before.id);
+    assert.equal(current.attempt.sequence, before.sequence);
+    assert.deepEqual(current.attempt.consumption.toJSON(), before.consumption.toJSON());
+    assert.equal(current.attempt.failure.category, "tooling");
+    assert.equal(current.attempt.failure.code, "SUBPROCESS_FAILURE");
+    assert.equal(current.attempt.failure.message, "provider failed before producing a review");
+    const execution = manager.draftStepExecutionState({
+      binding: {
+        runId: current.runId,
+        specId: current.specId,
+        stepId: "draft-questions-review",
+        attempt: current.attempt,
+      },
+    });
+    assert.equal(execution.lifecycle.phase, "checkpoint");
+    assert.equal(execution.lifecycle.executionGeneration, 1);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("replays an exact Draft review checkpoint by claiming its reserved generation once", async () => {
+  const root = createTmpDir("draft-review-checkpoint-replay-");
+  const specId = "524-draft-review-checkpoint-replay";
+  try {
+    const value = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-checkpoint-replay", phase: "draft-questions",
+    });
+    const executionResult = draftReviewExecutionResult("draft-questions");
+    const executionBinding = new DraftReviewExecutionBinding({
+      executionGeneration: 0,
+      manifestDigest: value.manifest.digest,
+      inputDigest: value.manifest.inputDigest,
+      target: new DraftReviewExecutionTargetIdentity(value.manifest.target.toJSON()),
+    });
+    value.manager.checkpointDraftStepExecution({
+      binding: value.binding,
+      stepResult: executionResult,
+      settlement: settleDraftStepResult(executionResult.stepId, executionResult),
+      executionBinding,
+    });
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const before = reloaded.canonicalState(specId).attempt;
+    const beforeActivities = reloaded.activityLedger(specId).length;
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand(_command, _args, options) {
+        providerCalls += 1;
+        const current = reloaded.canonicalState(specId);
+        const lifecycle = reloaded.draftStepExecutionState({
+          binding: {
+            runId: current.runId,
+            specId,
+            stepId: "draft-questions-review",
+            attempt: current.attempt,
+          },
+        }).lifecycle;
+        assert.equal(lifecycle.phase, "claimed");
+        assert.equal(lifecycle.executionGeneration, 0);
+        assert.equal(lifecycle.binding.equals(executionBinding), true);
+        const worker = ReviewWorkUnit.fromEnvironment(options.env);
+        const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+        fs.writeFileSync(path.join(worker.root, worker.manifestDocument.output.basename), `${JSON.stringify({
+          version: 2,
+          phase: "draft-questions",
+          sourceDraft: "draft.json",
+          sourceDraftRevision: source.revision,
+          generatedAt: "2026-09-20T00:00:00.000Z",
+          verdict: "PASS",
+          summary: "No draft review findings recorded.",
+          blockingFindings: [],
+          advisoryFindings: [],
+          repairTargets: [],
+        }, null, 2)}\n`);
+        worker.seal();
+        return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+      },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId), config: {},
+    });
+    assert.equal(result.artifacts.phase, "draft-questions");
+    assert.equal(providerCalls, 1);
+    const current = reloaded.canonicalState(specId);
+    assert.equal(current.attempt.id, before.id);
+    assert.equal(current.attempt.sequence, before.sequence);
+    assert.deepEqual(current.attempt.consumption.toJSON(), before.consumption.toJSON());
+    assert.equal(reloaded.activityLedger(specId).length, beforeActivities + 1);
+    assert.deepEqual(
+      reloaded.activityLedger(specId)
+        .slice(-2)
+        .map((activity) => activity.result?.draftSettlementReceipt?.executionLifecycle?.phase),
+      ["checkpoint", "claimed"],
+    );
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("replays an exact claimed Draft review but rejects a generic current-Attempt artifact", async () => {
+  const root = createTmpDir("draft-review-claimed-replay-");
+  const specId = "524-draft-review-claimed-replay";
+  try {
+    const value = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-claimed-replay", phase: "draft-questions",
+    });
+    const executionResult = draftReviewExecutionResult("draft-questions");
+    const executionBinding = new DraftReviewExecutionBinding({
+      executionGeneration: 0,
+      manifestDigest: value.manifest.digest,
+      inputDigest: value.manifest.inputDigest,
+      target: new DraftReviewExecutionTargetIdentity(value.manifest.target.toJSON()),
+    });
+    const settlement = settleDraftStepResult(executionResult.stepId, executionResult);
+    value.manager.checkpointDraftStepExecution({
+      binding: value.binding, stepResult: executionResult, settlement, executionBinding,
+    });
+    value.manager.claimDraftStepExecution({
+      binding: value.binding,
+      stepResult: executionResult,
+      settlement,
+      executionBinding,
+      executionClaim: new DraftReviewExecutionClaim(),
+    });
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const before = reloaded.canonicalState(specId).attempt;
+    const beforeActivities = reloaded.activityLedger(specId).length;
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand(_command, _args, options) {
+        providerCalls += 1;
+        const worker = ReviewWorkUnit.fromEnvironment(options.env);
+        const draft = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+        fs.writeFileSync(path.join(worker.root, worker.manifestDocument.output.basename), `${JSON.stringify({
+          version: 2, phase: "draft-questions", sourceDraft: "draft.json",
+          sourceDraftRevision: draft.revision, generatedAt: "2026-09-20T00:00:00.000Z",
+          verdict: "PASS", summary: "Claimed generation replayed.",
+          blockingFindings: [], advisoryFindings: [], repairTargets: [],
+        }, null, 2)}\n`);
+        worker.seal();
+        return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+      },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId), config: {},
+    });
+    assert.equal(result.artifacts.phase, "draft-questions");
+    assert.equal(providerCalls, 1);
+    const current = reloaded.canonicalState(specId);
+    assert.equal(current.attempt.id, before.id);
+    assert.equal(current.attempt.sequence, before.sequence);
+    assert.deepEqual(current.attempt.consumption.toJSON(), before.consumption.toJSON());
+    assert.equal(reloaded.activityLedger(specId).length, beforeActivities);
+    assert.equal(reloaded.draftStepExecutionState({ binding: value.binding }).lifecycle.binding.equals(executionBinding), true);
+
+    const source = new CanonicalDraftReviewSource({
+      flowManager: reloaded,
+      state: reloaded.canonicalState(specId),
+      phase: "draft-questions",
+    });
+    reloaded.publishCurrentAttemptResult({
+      specId,
+      commandResult: attachCanonicalCommandResultArtifact({
+        result: "ok",
+        artifacts: { phase: "draft-questions", verdict: "PASS" },
+      }, {
+        logicalKey: "draft.questions.review",
+        payload: {
+          version: 2,
+          phase: "draft-questions",
+          sourceDraft: "draft.json",
+          sourceDraftRevision: source.revision(),
+          generatedAt: "2026-09-20T00:00:00.000Z",
+          verdict: "PASS",
+          summary: "Generic publication must not bypass the execution claim.",
+          blockingFindings: [], advisoryFindings: [], repairTargets: [],
+        },
+      }),
+    });
+    const genericBefore = reloaded.canonicalState(specId).toJSON();
+    const genericActivities = structuredClone(reloaded.activityLedger(specId));
+    let genericProviderCalls = 0;
+    const generic = await new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() { genericProviderCalls += 1; },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId), config: {},
+    });
+    assert.equal(generic.errors[0].code, "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED");
+    assert.equal(genericProviderCalls, 0);
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), genericBefore);
+    assert.deepEqual(reloaded.activityLedger(specId), genericActivities);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("retains a sealed claimed Draft review work unit when rebuilt identity mismatches", async () => {
+  const root = createTmpDir("draft-review-sealed-mismatch-");
+  const specId = "524-draft-review-sealed-mismatch";
+  try {
+    const value = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-sealed-mismatch", phase: "draft-questions",
+    });
+    const executionResult = draftReviewExecutionResult("draft-questions");
+    const executionBinding = new DraftReviewExecutionBinding({
+      executionGeneration: 0,
+      manifestDigest: value.manifest.digest,
+      inputDigest: value.manifest.inputDigest,
+      target: new DraftReviewExecutionTargetIdentity(value.manifest.target.toJSON()),
+    });
+    const settlement = settleDraftStepResult(executionResult.stepId, executionResult);
+    value.manager.checkpointDraftStepExecution({
+      binding: value.binding, stepResult: executionResult, settlement, executionBinding,
+    });
+    value.manager.claimDraftStepExecution({
+      binding: value.binding,
+      stepResult: executionResult,
+      settlement,
+      executionBinding,
+      executionClaim: new DraftReviewExecutionClaim(),
+    });
+    value.workUnit.prepare();
+    value.workUnit.materializeSpecRecord();
+    value.workUnit.materializeDraft();
+    const surface = value.workUnit.finalize();
+    fs.writeFileSync(surface.outputPath, "{}\n");
+    ReviewWorkUnit.fromEnvironment({ [REVIEW_WORK_UNIT_MANIFEST_ENV]: surface.manifestPath }).seal();
+    const retained = new Map([
+      [surface.manifestPath, fs.readFileSync(surface.manifestPath)],
+      [path.join(surface.directory, "seal.json"), fs.readFileSync(path.join(surface.directory, "seal.json"))],
+      [surface.outputPath, fs.readFileSync(surface.outputPath)],
+    ]);
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const beforeState = reloaded.canonicalState(specId).toJSON();
+    const beforeActivities = structuredClone(reloaded.activityLedger(specId));
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha: () => distinctTreeSha("a".repeat(40)),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() { providerCalls += 1; },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId), config: {},
+    });
+    assert.equal(result.errors[0].code, "DRAFT_REVIEW_EXECUTION_BINDING_MISMATCH");
+    assert.equal(providerCalls, 0);
+    for (const [file, bytes] of retained) assert.deepEqual(fs.readFileSync(file), bytes);
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), beforeState);
+    assert.deepEqual(reloaded.activityLedger(specId), beforeActivities);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("rejects mismatched Draft review checkpoints and claims before materializing or invoking a provider", async () => {
+  const scenarios = [
+    { lifecycle: "checkpoint", phase: "draft-questions", mismatch: "manifestDigest" },
+    { lifecycle: "checkpoint", phase: "draft-coverage", mismatch: "inputDigest" },
+    { lifecycle: "checkpoint", phase: "draft-questions", mismatch: "treeSha" },
+    { lifecycle: "checkpoint", phase: "draft-coverage", mismatch: "targetStateDigest" },
+    { lifecycle: "claimed", phase: "draft-coverage", mismatch: "manifestDigest" },
+    { lifecycle: "claimed", phase: "draft-questions", mismatch: "inputDigest" },
+    { lifecycle: "claimed", phase: "draft-coverage", mismatch: "treeSha" },
+    { lifecycle: "claimed", phase: "draft-questions", mismatch: "targetStateDigest" },
+  ];
+  for (const scenario of scenarios) {
+    const root = createTmpDir(`draft-review-${scenario.lifecycle}-${scenario.mismatch}-`);
+    const specId = `524-draft-review-${scenario.lifecycle}-${scenario.phase}-${scenario.mismatch}`;
+    try {
+      const value = setupDraftReviewExecutionReentry({
+        root,
+        specId,
+        runId: `run-draft-review-${scenario.lifecycle}-${scenario.phase}-${scenario.mismatch}`,
+        phase: scenario.phase,
+      });
+      const executionResult = draftReviewExecutionResult(scenario.phase);
+      const target = new DraftReviewExecutionTargetIdentity(value.manifest.target.toJSON());
+      const executionBinding = new DraftReviewExecutionBinding({
+        executionGeneration: 0,
+        manifestDigest: scenario.mismatch === "manifestDigest"
+          ? distinctDigest(value.manifest.digest) : value.manifest.digest,
+        inputDigest: scenario.mismatch === "inputDigest"
+          ? distinctDigest(value.manifest.inputDigest) : value.manifest.inputDigest,
+        target: ["treeSha", "targetStateDigest"].includes(scenario.mismatch)
+          ? new DraftReviewExecutionTargetIdentity({
+              treeSha: scenario.mismatch === "treeSha"
+                ? distinctTreeSha(target.treeSha) : target.treeSha,
+              targetStateDigest: scenario.mismatch === "targetStateDigest"
+                ? distinctDigest(target.targetStateDigest) : target.targetStateDigest,
+            })
+          : target,
+      });
+      const settlement = settleDraftStepResult(executionResult.stepId, executionResult);
+      value.manager.checkpointDraftStepExecution({
+        binding: value.binding, stepResult: executionResult, settlement, executionBinding,
+      });
+      if (scenario.lifecycle === "claimed") {
+        value.manager.claimDraftStepExecution({
+          binding: value.binding,
+          stepResult: executionResult,
+          settlement,
+          executionBinding,
+          executionClaim: new DraftReviewExecutionClaim(),
+        });
+      }
+      const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      const beforeState = reloaded.canonicalState(specId).toJSON();
+      const beforeActivities = structuredClone(reloaded.activityLedger(specId));
+      let providerCalls = 0;
+      const result = await new RunReviewCommand({
+        resolveTreeSha: () => "a".repeat(40),
+        resolveTargetStateDigest: () => "b".repeat(64),
+        runCommand() { providerCalls += 1; },
+      }).execute({
+        root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+        flowManager: reloaded, flowState: reloaded.loadReadOnly(specId), config: {},
+      });
+      assert.equal(result.ok, false, `${scenario.lifecycle}/${scenario.phase}/${scenario.mismatch}`);
+      assert.equal(result.errors[0].code, "DRAFT_REVIEW_EXECUTION_BINDING_MISMATCH");
+      assert.equal(result.data.lifecyclePhase, scenario.lifecycle);
+      assert.deepEqual(result.data.persistedBinding, executionBinding.toJSON());
+      assert.notDeepEqual(result.data.rebuiltBinding, executionBinding.toJSON());
+      assert.equal(providerCalls, 0);
+      assert.equal(fs.existsSync(value.workUnit.workUnit.directory), false);
+      assert.deepEqual(reloaded.canonicalState(specId).toJSON(), beforeState);
+      assert.deepEqual(reloaded.activityLedger(specId), beforeActivities);
+    } finally {
+      removeTmpDir(root);
+    }
   }
 });
 

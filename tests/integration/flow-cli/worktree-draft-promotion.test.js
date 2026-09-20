@@ -12,6 +12,7 @@ import {
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
+import { completeDraftWorkerThroughStep } from "../../support/infrastructure/draft-worker-step.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const cliPath = path.join(repoRoot, "src/sennel.js");
@@ -88,7 +89,7 @@ function canonicalDraft(root, flow) {
     .specLocation(flow.specId).artifact("draft");
 }
 
-function publishDraft(root, flow, value) {
+async function publishDraft(root, flow, value) {
   const flowManager = new FlowManager({
     root: flow.worktreePath,
     mainRoot: root,
@@ -122,7 +123,7 @@ function publishDraft(root, flow, value) {
   });
   fs.writeFileSync(request.payloadPath("draft.json"), `${JSON.stringify(value, null, 2)}\n`);
   sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId });
-  return coordinator.reconcile({ ctx, request });
+  return completeDraftWorkerThroughStep({ coordinator, ctx, request });
 }
 
 afterEach(() => {
@@ -130,7 +131,7 @@ afterEach(() => {
 });
 
 describe("worktree draft promotion", () => {
-  it("publishes each active Flow's completed draft to only its canonical artifact", () => {
+  it("publishes each active Flow's completed draft to only its canonical artifact", async () => {
     const root = createProject();
     const first = prepareWorktree(root, 497, "first canonical draft");
     const second = prepareWorktree(root, 498, "second canonical draft");
@@ -139,12 +140,12 @@ describe("worktree draft promotion", () => {
     assert.equal(fs.existsSync(canonicalDraft(root, first)), false);
     assert.equal(fs.existsSync(canonicalDraft(root, second)), false);
 
-    const firstCompletion = publishDraft(root, first, firstDraft);
+    const firstCompletion = await publishDraft(root, first, firstDraft);
     assert.equal(firstCompletion.completed, true);
     assert.deepEqual(JSON.parse(fs.readFileSync(canonicalDraft(root, first), "utf8")), firstDraft);
     assert.equal(fs.existsSync(canonicalDraft(root, second)), false);
 
-    const secondCompletion = publishDraft(root, second, secondDraft);
+    const secondCompletion = await publishDraft(root, second, secondDraft);
     assert.equal(secondCompletion.completed, true);
     assert.deepEqual(JSON.parse(fs.readFileSync(canonicalDraft(root, second), "utf8")), secondDraft);
 

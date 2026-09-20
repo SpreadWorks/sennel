@@ -7,7 +7,16 @@ import { flowCommands } from "../../../src/lib/command-registry.js";
 import { dispatch } from "../../../src/lib/dispatcher.js";
 import { Envelope } from "../../../src/lib/flow-envelope.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { buildCurrentFlowDefinition, DEFINITION_FAILURE_OWNERS, DRAFT_RESULT_ERROR_CATEGORY, resolveGateTransition } from "../../../src/flow/definition.js";
+import {
+  buildCurrentFlowDefinition,
+  DEFINITION_FAILURE_OWNERS,
+  DRAFT_RESULT_ERROR_CATEGORY,
+  DraftReviewExecutionBinding,
+  DraftReviewExecutionClaim,
+  DraftReviewExecutionTargetIdentity,
+  resolveGateTransition,
+  settleDraftStepResult,
+} from "../../../src/flow/definition.js";
 import RunGateCommand, { appendIssueLogFromGateResult } from "../../../src/flow/lib/run-gate.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
@@ -17,7 +26,11 @@ import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-trans
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
 import { TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION } from "../../../src/flow/lib/task-gate-classification-recovery.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
-import { STEP_RESULT_TYPE, StepResult } from "../../../src/flow/engine/step-result.js";
+import {
+  DraftQuestionsReviewExecutionRequiredResult,
+  STEP_RESULT_TYPE,
+  StepResult,
+} from "../../../src/flow/engine/step-result.js";
 import { GateService, ReviewService } from "../../../src/flow/services/review-service.js";
 import { CanonicalFlowFixture, TaskLifecycleFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -46,6 +59,35 @@ function hookContext({ root, manager, specId }) {
     specId,
     flowResolutionError: null,
   };
+}
+
+function claimDraftQuestionsReviewExecution(manager, specId) {
+  const state = manager.canonicalState(specId);
+  const binding = {
+    runId: state.runId,
+    specId,
+    stepId: "draft-questions-review",
+    attempt: state.attempt,
+  };
+  const stepResult = new DraftQuestionsReviewExecutionRequiredResult();
+  const settlement = settleDraftStepResult(binding.stepId, stepResult);
+  const executionBinding = new DraftReviewExecutionBinding({
+    executionGeneration: 0,
+    manifestDigest: "c".repeat(64),
+    inputDigest: "d".repeat(64),
+    target: new DraftReviewExecutionTargetIdentity({
+      treeSha: "a".repeat(40),
+      targetStateDigest: "b".repeat(64),
+    }),
+  });
+  manager.checkpointDraftStepExecution({ binding, stepResult, settlement, executionBinding });
+  manager.claimDraftStepExecution({
+    binding,
+    stepResult,
+    settlement,
+    executionBinding,
+    executionClaim: new DraftReviewExecutionClaim(),
+  });
 }
 
 class ThrowingCommand extends Command {
@@ -528,6 +570,7 @@ test("Draft Review Step Error is persisted without a dispatcher fallback", async
       }],
     });
     flow.activate("draft-questions-review");
+    claimDraftQuestionsReviewExecution(manager, specId);
     const result = attachCanonicalCommandResultArtifact({
       result: "ok",
       artifacts: { phase: "draft-questions", verdict: "PASS" },
@@ -585,6 +628,7 @@ test("Draft Review result-publication failure leaves the confirmed Attempt uncha
       }],
     });
     flow.activate("draft-questions-review");
+    claimDraftQuestionsReviewExecution(manager, specId);
     const source = new CanonicalDraftReviewSource({
       flowManager: manager,
       state: manager.canonicalState(specId),
@@ -653,6 +697,7 @@ test("Draft Review adopts a result artifact when publication reports after durab
       }],
     });
     flow.activate("draft-questions-review");
+    claimDraftQuestionsReviewExecution(manager, specId);
     const source = new CanonicalDraftReviewSource({
       flowManager: manager,
       state: manager.canonicalState(specId),

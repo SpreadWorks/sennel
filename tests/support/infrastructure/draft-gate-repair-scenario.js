@@ -5,9 +5,19 @@ import fs from "node:fs";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { DraftRepairPath } from "../../../src/flow/lib/draft-repair-operations.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
-import { DraftGateRepairAppliedResult } from "../../../src/flow/engine/step-result.js";
-import { DraftWorkerStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
-import { settleDraftStepResult } from "../../../src/flow/definition.js";
+import {
+  DraftGateRepairAppliedResult,
+  DraftGateRepairWorkerRequiredResult,
+} from "../../../src/flow/engine/step-result.js";
+import {
+  DraftWorkerExecutionStepBinding,
+  DraftWorkerStepBinding,
+} from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import {
+  DraftWorkerExecutionBinding,
+  DraftWorkerExecutionClaim,
+  settleDraftStepResult,
+} from "../../../src/flow/definition.js";
 import {
   WorkerArtifactHandoffCoordinator,
   sealWorkerArtifactHandoff,
@@ -57,15 +67,45 @@ export class DraftGateRepairScenario {
 
   createRequest() {
     const state = this.flowManager.loadReadOnly(this.specId);
+    const invocation = {
+      id: `draft-gate-repair-${this.flowManager.canonicalState(this.specId).attempt.id}`,
+      target: { digest: "b".repeat(64) },
+      action: { digest: "a".repeat(64), nextAction: { step: "draft-gate-repair" } },
+    };
     this.request = this.coordinator.createRequest({
       ctx: this.ctx,
       state,
-      invocation: {
-        id: `draft-gate-repair-${this.flowManager.canonicalState(this.specId).attempt.id}`,
-        target: { digest: "b".repeat(64) },
-        action: { digest: "a".repeat(64), nextAction: { step: "draft-gate-repair" } },
-      },
+      invocation,
+      deferPreparation: true,
     });
+    const binding = new DraftWorkerExecutionStepBinding({
+      flowManager: this.flowManager,
+      specId: this.specId,
+      stepId: "draft-gate-repair",
+    });
+    const stepResult = new DraftGateRepairWorkerRequiredResult();
+    const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
+    const executionBinding = new DraftWorkerExecutionBinding({
+      executionGeneration: 0,
+      inputDigest: this.request.inputDigest,
+      inputRevision: this.request.inputRevision,
+    });
+    this.flowManager.checkpointDraftStepExecution({
+      binding, stepResult, settlement, executionBinding,
+    });
+    this.flowManager.claimDraftStepExecution({
+      binding,
+      stepResult,
+      settlement,
+      executionBinding,
+      executionClaim: new DraftWorkerExecutionClaim({
+        dispatchInvocationId: this.request.dispatchInvocationId,
+        generatedAt: this.request.generatedAt,
+        actionDigest: this.request.actionDigest,
+        requestDigest: this.request.requestDigest,
+      }),
+    });
+    this.request.prepare();
     return this.request;
   }
 
