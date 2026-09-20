@@ -4,12 +4,14 @@ import fs from "node:fs";
 
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { DraftRepairPath } from "../../../src/flow/lib/draft-repair-operations.js";
-import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
 import {
   DraftGateRepairAppliedResult,
+  DraftGateRepairCarryForwardResult,
+  DraftGateRepairRequiredResult,
   DraftGateRepairWorkerRequiredResult,
 } from "../../../src/flow/engine/step-result.js";
 import {
+  DraftGateEvaluationBinding,
   DraftWorkerExecutionStepBinding,
   DraftWorkerStepBinding,
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
@@ -18,6 +20,11 @@ import {
   DraftWorkerExecutionClaim,
   settleDraftStepResult,
 } from "../../../src/flow/definition.js";
+import { readProspectiveDraftGateFacts } from "../../../src/flow/lib/gate-transition-facts.js";
+import {
+  DraftGateIssuePublication,
+  DraftGatePublicationIntent,
+} from "../../../src/flow/lib/draft-gate-prospective.js";
 import {
   WorkerArtifactHandoffCoordinator,
   sealWorkerArtifactHandoff,
@@ -40,27 +47,33 @@ export class DraftGateRepairScenario {
     const commandResult = new CanonicalGatePromotion({
       state: this.flowManager.canonicalState(this.specId), phase: "draft", nodeId: "draft-gate",
     }).promote({ result: "fail", artifacts });
-    this.flowManager.failCurrentAttempt({
+    const binding = new DraftGateEvaluationBinding({
+      flowManager: this.flowManager,
       specId: this.specId,
-      failure: {
-        category: "semantic", code: "GATE_REJECTED", message: "The draft Gate found blocking evidence.",
-        retryable: true, retryKind: "semantic",
-      },
+    });
+    const facts = readProspectiveDraftGateFacts({
+      flowManager: this.flowManager,
+      binding,
       commandResult,
     });
-    this.flowManager.appendIssueLog({
-      specId: this.specId,
-      entry: {
-        issueLogId, step: "draft-gate", phase: "draft", observations,
-        reason: "The draft needs a retained behavior made explicit.",
-        trigger: "gate post hook (auto)", timestamp: "2026-09-15T00:00:00.000Z",
-      },
-      idempotencyKey: issueLogId,
+    const stepResult = new DraftGateRepairRequiredResult();
+    this.flowManager.settleDraftStepResult({
+      binding,
+      stepResult,
+      settlement: settleDraftStepResult(stepResult.stepId, stepResult),
+      commandResult,
+      gatePublication: new DraftGatePublicationIntent({
+        facts,
+        issue: new DraftGateIssuePublication({
+          binding,
+          entry: {
+            issueLogId, step: "draft-gate", phase: "draft", observations,
+            reason: "The draft needs a retained behavior made explicit.",
+            trigger: "gate post hook (auto)", timestamp: binding.assertCurrent().attempt.startedAt,
+          },
+        }),
+      }),
     });
-    const selected = new RunRepairPlanGateCommand().execute({
-      ...this.ctx, flowState: this.flowManager.loadReadOnly(this.specId),
-    });
-    assert.equal(selected.ok, true, JSON.stringify(selected));
     assert.equal(this.flowManager.canonicalState(this.specId).current.at(-1), "draft-gate-repair");
     return this;
   }
@@ -138,7 +151,9 @@ export class DraftGateRepairScenario {
       request: this.request,
     });
     const binding = new DraftWorkerStepBinding({ request: this.request });
-    const stepResult = new DraftGateRepairAppliedResult();
+    const stepResult = preparation.planGateRepairOutcome.disposition === "rejected-no-progress"
+      ? new DraftGateRepairCarryForwardResult()
+      : new DraftGateRepairAppliedResult();
     const result = this.coordinator.commitDraftWorker({
       ctx: this.ctx,
       request: this.request,

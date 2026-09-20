@@ -132,3 +132,9 @@ test("Definition rejects a Result bound to another Step", () => {
     /must be selected by Definition/,
   );
 });
+
+test("Draft refine route effects skip an unselected Gate repair without creating a Result", () => {
+  const result = new results.DraftRefineCompletedResult();
+  const selected = settleDraftStepResult(result.stepId, result);
+  assert.deepEqual(selected.effects.skipStepIds, ["draft-gate-repair"]);
+});

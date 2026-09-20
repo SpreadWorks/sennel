@@ -536,12 +536,6 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
-  completeDraftGateRepairTerminal(input = {}) {
-    return this._store.completeDraftGateRepairTerminal({
-      ...input,
-      specId: input.specId ?? this._boundSpecId,
-    });
-  }
   completeAcceptanceDecisionNoOp(input = {}) {
     return this._store.completeAcceptanceDecisionNoOp({
       ...input,

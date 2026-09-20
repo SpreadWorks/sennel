@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 
 import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
-import {
-  createConditionalWorkerSettlementPlan,
-  resolvePlanGateRepairWorkerTransition,
-} from "../../../src/flow/definition.js";
+import { settleDraftStepResult } from "../../../src/flow/definition.js";
+import { DraftRefineCompletedResult } from "../../../src/flow/engine/step-result.js";
+import { DraftWorkerExecutionStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { ReviewTargetAuthority } from "../../../src/flow/lib/review-target-authority.js";
 import {
   canonicalDraftDocument,
@@ -37,6 +36,19 @@ function managerWith(manager, { descriptor = null, activities = null } = {}) {
 
 function completeStep(flowManager, stepId, artifactWrites = []) {
   flowManager.updateStepStatus({ stepId, requestedStatus: "in_progress" }, { specId: SPEC_ID });
+  if (stepId === "draft-refine") {
+    const binding = new DraftWorkerExecutionStepBinding({
+      flowManager, specId: SPEC_ID, stepId,
+    });
+    const result = new DraftRefineCompletedResult();
+    flowManager.settleDraftStepResult({
+      binding,
+      stepResult: result,
+      settlement: settleDraftStepResult(stepId, result),
+      artifactWrites,
+    });
+    return;
+  }
   const canonicalCommandResult = canonicalFixtureProducerResult(
     flowManager.loadReadOnly(SPEC_ID),
     stepId,
@@ -141,19 +153,6 @@ describe("canonical draft review source", () => {
       phase: "draft-coverage",
     });
     assert.equal(coverageSource.sourceNodeId, "draft-refine");
-
-    const gateRepairState = flowManager.canonicalState(SPEC_ID);
-    flowManager.settleConditionalWorker({
-      specId: SPEC_ID,
-      plan: createConditionalWorkerSettlementPlan({
-        disposition: resolvePlanGateRepairWorkerTransition({
-          stepId: "draft-gate-repair",
-          workerStatus: "pending",
-          repair: null,
-        }),
-        flowState: gateRepairState,
-      }),
-    });
 
     completeStep(flowManager, "draft-coverage-review");
     completeStep(flowManager, "draft-coverage-triage");

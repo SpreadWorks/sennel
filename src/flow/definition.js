@@ -147,7 +147,6 @@ import {
   TaskGateSettlementProgress,
   GateTransitionFacts,
 } from "./lib/gate-transition.js";
-import { GateObservationRepair } from "./lib/gate-observation-convergence.js";
 import {
   NonGateAttemptIdentity,
   NonGateCatalogPublication,
@@ -3689,90 +3688,6 @@ export function resolveReviewTransition({
     return new DefinitionReviewDisposition({ operation: "blocked", phase, attempts, maxAttempts });
   }
   return null;
-}
-
-/** Definition-owned admission for a repair-only worker leaf. */
-export function resolvePlanGateRepairWorkerTransition({ stepId, workerStatus, repair } = {}) {
-  if (stepId !== "draft-gate-repair") return null;
-  if (!["pending", "invalidated", "in_progress"].includes(workerStatus)) {
-    throw new Error("plan Gate repair worker status is invalid");
-  }
-  if (repair !== null) {
-    if (repair.targetStepId !== stepId) throw new Error("plan Gate repair does not target its conditional worker");
-    return new DefinitionConditionalWorkerDisposition({ stepId, operation: "execute-worker" });
-  }
-  return new DefinitionConditionalWorkerDisposition({
-    stepId,
-    operation: workerStatus === "in_progress" ? "blocked" : "skip-worker",
-  });
-}
-
-const DRAFT_GATE_REPAIR_TERMINAL_TOKEN = Symbol("definition-draft-gate-repair-terminal");
-
-/** Typed facts for a repair worker that completed without publishable draft bytes. */
-export class DraftGateRepairTerminalFacts {
-  constructor({ kind, repair, failureCode = null, failureMessage = null } = {}) {
-    if (!new Set(["rejected-no-progress", "invalid-payload"]).has(kind)) {
-      throw new Error("draft Gate repair terminal kind is invalid");
-    }
-    if (!(repair instanceof GateObservationRepair)) {
-      throw new Error("draft Gate repair terminal facts require the selected repair");
-    }
-    if (kind === "invalid-payload") {
-      this.failureCode = requireString(failureCode, "draft Gate repair payload failure code");
-      this.failureMessage = requireString(failureMessage, "draft Gate repair payload failure message");
-    } else if (failureCode !== null || failureMessage !== null) {
-      throw new Error("no-progress draft Gate repair cannot carry a payload failure");
-    } else {
-      this.failureCode = null;
-      this.failureMessage = null;
-    }
-    this.kind = kind;
-    this.repair = repair;
-    Object.freeze(this);
-  }
-}
-
-/** Immutable authority to finish the bounded worker and resume draft coverage. */
-export class DraftGateRepairTerminalPlan {
-  constructor(token, { facts, flowState } = {}) {
-    if (token !== DRAFT_GATE_REPAIR_TERMINAL_TOKEN
-      || !(facts instanceof DraftGateRepairTerminalFacts)) {
-      throw new Error("draft Gate repair terminal plan is created only by Definition");
-    }
-    if (flowState?.current?.at(-1) !== "draft-gate-repair"
-      || flowState?.attempt === null
-      || flowState?.findNode?.("draft-gate-repair")?.status !== "in_progress") {
-      throw new Error("draft Gate repair terminal plan requires its active worker Attempt");
-    }
-    if (facts.repair.targetAttempt.id !== flowState.attempt.id
-      || facts.repair.targetAttempt.sequence !== flowState.attempt.sequence) {
-      throw new Error("draft Gate repair terminal facts do not bind the active Attempt");
-    }
-    this.kind = facts.kind;
-    this.runId = requireString(flowState.runId, "draft Gate repair terminal runId");
-    this.specId = requireString(flowState.specId, "draft Gate repair terminal specId");
-    this.confirmationOrder = flowState.confirmationOrder;
-    this.attemptId = flowState.attempt.id;
-    this.attemptSequence = flowState.attempt.sequence;
-    this.repairId = facts.repair.repairId;
-    this.repairRecordFingerprint = facts.repair.recordFingerprint;
-    this.handoffRevision = facts.repair.handoffRevision;
-    this.failureCode = facts.failureCode;
-    this.failureMessage = facts.failureMessage;
-    Object.freeze(this);
-  }
-
-  get summary() {
-    return this.kind === "rejected-no-progress"
-      ? "Plan-Gate repair produced no canonical draft change; the unresolved finding continues to Spec."
-      : `Plan-Gate repair payload was rejected (${this.failureCode}); the unresolved finding continues to Spec.`;
-  }
-}
-
-export function resolveDraftGateRepairTerminal({ facts, flowState } = {}) {
-  if (!(facts instanceof DraftGateRepairTerminalFacts)) return null;
-  return new DraftGateRepairTerminalPlan(DRAFT_GATE_REPAIR_TERMINAL_TOKEN, { facts, flowState });
 }
 
 const CONDITIONAL_WORKER_SETTLEMENT_TOKEN = Symbol("definition-conditional-worker-settlement");

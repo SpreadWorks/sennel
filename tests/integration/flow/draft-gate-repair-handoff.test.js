@@ -4,7 +4,15 @@ import fs from "node:fs";
 import { describe, it } from "node:test";
 
 import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
-import { DraftGateRepairAppliedResult } from "../../../src/flow/engine/step-result.js";
+import {
+  DraftGateRepairAppliedResult,
+  DraftGateRepairCarryForwardResult,
+  DraftGateRepairWorkerRequiredResult,
+} from "../../../src/flow/engine/step-result.js";
+import {
+  GateObservationRepair,
+  PlanGateRepairOutcomeDraft,
+} from "../../../src/flow/lib/gate-observation-convergence.js";
 import {
   DraftWorkerExecutionStepBinding,
   DraftWorkerStepBinding,
@@ -162,7 +170,7 @@ describe("dedicated draft Gate repair handoff", () => {
       ]);
       assert.deepEqual(request.payloads.map(({ rule }) => rule.logicalName), ["draft-gate-repair.json"]);
       const authority = request.inputs.find((entry) => entry.name === "plan-gate-repair.json").document;
-      assert.equal(authority.sourceIssueLogId, "issue-521-gate-repair-applied");
+      assert.match(authority.sourceIssueLogId, /^draft-gate-result-[a-f0-9]{64}$/);
       assert.equal(authority.sourceEntryDigest.length, 64);
       assert.equal(authority.connector.resultLogicalKey, "draft.gate");
       assert.equal(authority.connector.catalogFingerprint.length, 64);
@@ -188,6 +196,55 @@ describe("dedicated draft Gate repair handoff", () => {
       assert.equal(JSON.parse(audit.bytes).report.outputEvidenceDigest, draft.descriptor.hash);
       assert.equal(JSON.parse(outcome.bytes).report.outputEvidenceDigest, draft.descriptor.hash);
       assert.equal(JSON.parse(outcome.bytes).disposition, "applied");
+    } finally {
+      removeTmpDir(value.root);
+    }
+  });
+
+  it("rejects an outcome bound to a different repair record before Result settlement", () => {
+    const value = setup("521-gate-repair-outcome-binding");
+    try {
+      const request = value.scenario.createRequest();
+      seal(request, value.scenario.replacement("goal", "Retain the exact repair binding."));
+      const preparation = value.scenario.coordinator.prepareDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+      });
+      const binding = new DraftWorkerStepBinding({ request });
+      const executionResult = new DraftGateRepairWorkerRequiredResult();
+      value.scenario.coordinator.publishDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+        preparation,
+        stepResult: executionResult,
+        settlement: settleDraftStepResult(executionResult.stepId, executionResult),
+        binding,
+      });
+      const validOutcome = preparation.planGateRepairOutcome;
+      const mismatchedOutcome = new PlanGateRepairOutcomeDraft({
+        repair: new GateObservationRepair({
+          ...validOutcome.repair.toJSON(),
+          recordFingerprint: "f".repeat(64),
+        }),
+        disposition: validOutcome.disposition,
+        report: validOutcome.report,
+      });
+      const before = {
+        state: value.flowManager.canonicalState(value.scenario.specId).toJSON(),
+        activities: value.flowManager.activityLedger(value.scenario.specId),
+        catalog: value.flowManager.artifactCatalog(value.scenario.specId).toJSON(),
+      };
+      const terminalResult = new DraftGateRepairAppliedResult();
+
+      assert.throws(() => value.flowManager.settleDraftStepResult({
+        binding,
+        stepResult: terminalResult,
+        settlement: settleDraftStepResult(terminalResult.stepId, terminalResult),
+        planGateRepairOutcome: mismatchedOutcome,
+      }), /does not match its canonical repair binding/);
+      assert.deepEqual(value.flowManager.canonicalState(value.scenario.specId).toJSON(), before.state);
+      assert.deepEqual(value.flowManager.activityLedger(value.scenario.specId), before.activities);
+      assert.deepEqual(value.flowManager.artifactCatalog(value.scenario.specId).toJSON(), before.catalog);
     } finally {
       removeTmpDir(value.root);
     }
@@ -229,6 +286,114 @@ describe("dedicated draft Gate repair handoff", () => {
     }
   });
 
+  it("selects and persists CarryForward through the dispatcher Step when the worker makes no progress", async () => {
+    const value = setup("521-gate-repair-dispatch-no-progress");
+    try {
+      const request = value.scenario.createRequest();
+      const payload = value.scenario.replacement("goal", "Incomplete retained behavior");
+      payload.operations = [];
+      seal(request, payload);
+      const preparation = value.scenario.coordinator.prepareDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+      });
+
+      const completed = await new RunDispatchCommand({ handoffCoordinator: value.scenario.coordinator })
+        .runDraftWorkerStep(
+          value.scenario.ctx,
+          request,
+          { Connector: DraftRepairConnector, StepClass: DraftGateRepairStep },
+          preparation,
+        );
+
+      assert.equal(completed.completed, true);
+      assert.equal(completed.stepResult.kind, "draft-gate-repair-carry-forward");
+      assert.equal(findStepById(value.flowManager.load().steps, "draft-gate-repair").status, "done");
+      assert.equal(value.flowManager.canonicalState(value.scenario.specId).nextAction().nodeId, "draft-coverage-review");
+      assert.equal(catalogEntry(value.flowManager, value.scenario.specId, "draft.gate.repair"), null);
+      assert.equal(catalogEntry(value.flowManager, value.scenario.specId, "flow.findings"), null);
+      const outcomeEntry = catalogEntry(value.flowManager, value.scenario.specId, "plan.gate.repair.outcome");
+      const repairId = outcomeEntry.relativePath.match(/plan-gate-repairs\/([^/]+)\/outcome\.json$/)?.[1];
+      const outcome = value.flowManager.readArtifact({
+        specId: value.scenario.specId,
+        logicalKey: "plan.gate.repair.outcome",
+        parameters: { repairId },
+        consumerNodeId: "system",
+      });
+      assert.equal(JSON.parse(outcome.bytes).disposition, "rejected-no-progress");
+    } finally {
+      removeTmpDir(value.root);
+    }
+  });
+
+  it("persists an accepted post-worker integrity Error through the normal Draft committer", async () => {
+    const value = setup("521-gate-repair-dispatch-error");
+    try {
+      const request = value.scenario.createRequest();
+      seal(request, value.scenario.replacement("goal", "Retain the exact repair binding."));
+      const preparation = value.scenario.coordinator.prepareDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+      });
+      const binding = new DraftWorkerStepBinding({ request });
+      const executionResult = new DraftGateRepairWorkerRequiredResult();
+      value.scenario.coordinator.publishDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+        preparation,
+        stepResult: executionResult,
+        settlement: settleDraftStepResult(executionResult.stepId, executionResult),
+        binding,
+      });
+      const terminalBinding = new DraftWorkerExecutionStepBinding({
+        flowManager: value.flowManager,
+        specId: value.scenario.specId,
+        stepId: "draft-gate-repair",
+      });
+      const integrityError = Object.assign(new Error("accepted repair outcome failed its semantic integrity check"), {
+        code: "DRAFT_GATE_REPAIR_INTEGRITY",
+      });
+      const service = new DraftService({
+        flowManager: value.flowManager,
+        binding: terminalBinding,
+        workerFacts: { planGateRepairOutcome: integrityError },
+        workerExecutor: () => {
+          throw new Error("Error Result must use the worker error committer");
+        },
+        workerErrorCommitter: (stepResult, settlement, workerBinding) => ({
+          error: null,
+          ...value.scenario.coordinator.completePublishedDraftWorker({
+            ctx: value.scenario.ctx,
+            request,
+            preparation,
+            stepResult,
+            settlement,
+            binding: workerBinding,
+          }),
+        }),
+      });
+
+      const result = await new StepFactory()
+        .provide(DraftService, service)
+        .create(DraftGateRepairStep)
+        .execute();
+
+      assert.equal(result.kind, "draft-gate-repair-error");
+      assert.equal(result.error.code, "DRAFT_GATE_REPAIR_INTEGRITY");
+      const state = value.flowManager.canonicalState(value.scenario.specId);
+      assert.equal(state.current.at(-1), "draft-gate-repair");
+      assert.equal(state.attempt.failure.category, "draft-result-error");
+      assert.equal(state.attempt.failure.code, "DRAFT_GATE_REPAIR_INTEGRITY");
+      const failure = value.flowManager.activityLedger(value.scenario.specId).at(-1);
+      assert.equal(failure.transition.operation, "fail_attempt");
+      assert.equal(failure.result.stepResult.kind, "draft-gate-repair-error");
+      assert.equal(failure.result.draftSettlementReceipt.settlementKind, "failure");
+      assert.equal(catalogEntry(value.flowManager, value.scenario.specId, "plan.gate.repair.outcome"), null);
+    } finally {
+      removeTmpDir(value.root);
+    }
+  });
+
   it("rejects direct request creation without a Definition-selected repair before any side effect", () => {
     const value = setup("521-gate-repair-no-plan", { selectRepair: false });
     try {
@@ -264,7 +429,7 @@ describe("dedicated draft Gate repair handoff", () => {
         request,
       });
       const binding = new DraftWorkerStepBinding({ request });
-      const stepResult = new DraftGateRepairAppliedResult();
+      const stepResult = new DraftGateRepairCarryForwardResult();
       const result = value.scenario.coordinator.commitDraftWorker({
         ctx: value.scenario.ctx,
         request,
@@ -273,7 +438,7 @@ describe("dedicated draft Gate repair handoff", () => {
         settlement: settleDraftStepResult(stepResult.stepId, stepResult),
         binding,
       });
-      assert.equal(result.rejected, true);
+      assert.equal(result.stepResult.kind, "draft-gate-repair-carry-forward");
       const terminal = value.flowManager.canonicalState(value.scenario.specId)
         .findNode("draft-gate-repair").result.draftSettlementReceipt;
       assert.equal(result.receipt.id, terminal.id);
@@ -308,7 +473,7 @@ describe("dedicated draft Gate repair handoff", () => {
         request,
       });
       const binding = new DraftWorkerStepBinding({ request });
-      const stepResult = new DraftGateRepairAppliedResult();
+      const stepResult = new DraftGateRepairCarryForwardResult();
       const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
       const interrupted = new WorkerArtifactHandoffCoordinator({
         faultInjector({ phase }) {

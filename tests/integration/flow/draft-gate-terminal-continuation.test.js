@@ -341,11 +341,14 @@ async function exerciseTerminalContinuation(kind) {
       return;
     }
     const repaired = scenario.apply(payload);
-    assert.equal(repaired.result.rejected, true);
+    assert.equal(repaired.result.stepResult.kind, "draft-gate-repair-carry-forward");
     assert.equal(repaired.bytes.length > 0, true);
     assert.equal(manager.artifactCatalog(specId).artifacts.some((entry) => (
       entry.logicalKey === "plan.gate.repair.outcome"
     )), kind === "no-progress");
+    assert.equal(manager.artifactCatalog(specId).artifacts.some((entry) => (
+      entry.logicalKey === "draft.gate.repair" || entry.logicalKey === "flow.findings"
+    )), false);
 
     const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     assert.equal(reloaded.canonicalState(specId).findNode("draft-gate-repair").status, "done");
@@ -353,7 +356,7 @@ async function exerciseTerminalContinuation(kind) {
     const terminalConfirmation = reloaded.activityLedger(specId).findLast((activity) => (
       activity.nodeId === "draft-gate-repair" && activity.transition.operation === "confirm_attempt"
     ));
-    assert.equal(terminalConfirmation.result.stepResult.kind, "draft-gate-repair-applied");
+    assert.equal(terminalConfirmation.result.stepResult.kind, "draft-gate-repair-carry-forward");
     assert.equal(terminalConfirmation.result.draftSettlementReceipt.targetStepId, "draft-coverage-review");
     assert.equal(reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-coverage-review" }).descriptor.hash, before);
 
@@ -374,7 +377,12 @@ async function exerciseTerminalContinuation(kind) {
     const findings = finalReload.readArtifact({
       specId, logicalKey: "flow.findings", consumerNodeId: "system",
     });
-    assert.equal(JSON.parse(findings.bytes).entries.length > 0, true);
+    const persistedFindings = JSON.parse(findings.bytes);
+    assert.equal(persistedFindings.entries.length, semanticObservations.length);
+    assert.equal(
+      new Set(persistedFindings.entries.map((entry) => entry.fingerprint)).size,
+      semanticObservations.length,
+    );
     const issueEntries = JSON.parse(finalReload.readArtifact({
       specId, logicalKey: "issue.log", consumerNodeId: "system",
     }).bytes.toString("utf8")).entries;
@@ -396,7 +404,6 @@ async function exerciseTerminalContinuation(kind) {
     });
     const findingsInput = specRequest.inputs.find((entry) => entry.name === "flow-findings.json");
     const draftInput = specRequest.inputs.find((entry) => entry.name === "draft.json");
-    const persistedFindings = JSON.parse(findings.bytes);
     assert.deepEqual(
       findingsInput.document.entries.map(({ sourceObservation, ...entry }) => entry),
       persistedFindings.entries,

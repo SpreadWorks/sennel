@@ -3,6 +3,7 @@ import { STEP_RESULT_TYPE, StepResult } from "../engine/step-result.js";
 import { DraftAwaitQuestionIdentity, DraftAwaitUserDecision, DraftExecutionSettlement, settleDraftStepResult } from "../definition.js";
 import { DraftStepPersistenceFailure, isDraftStepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
 import { DraftTransitionFacts, readDraftTransitionFacts } from "../lib/draft-transition-facts.js";
+import { canonicalPlanGateRepairForTarget, PlanGateRepairRecord } from "../lib/plan-gate-repair.js";
 
 /** Access the sealed worker request for one Connector-bound Draft Step. */
 export class DraftService {
@@ -69,6 +70,23 @@ export class DraftService {
     if (this.workerFacts === null) throw new Error("Draft worker has no prepared facts");
     this.binding.assertCurrent();
     return this.workerFacts;
+  }
+
+  /** Read the canonical repair binding selected for the active pre-worker Step. */
+  inspectPlanGateRepair() {
+    const state = this.binding.assertCurrent();
+    if (this.binding.stepId !== "draft-gate-repair") {
+      throw new Error("Plan Gate repair facts belong only to draft-gate-repair");
+    }
+    const repair = canonicalPlanGateRepairForTarget({
+      flowManager: this.binding.flowManager,
+      state,
+      targetStepId: this.binding.stepId,
+    });
+    if (!(repair instanceof PlanGateRepairRecord)) {
+      throw new Error("draft-gate-repair has no canonical repair binding");
+    }
+    return repair;
   }
 
   inspectDraftTransition() {

@@ -17,7 +17,6 @@ import path from "node:path";
 import {
   buildCurrentFlowDefinition,
   ConditionalWorkerSettlementPlan,
-  DraftGateRepairTerminalPlan,
   InterruptedFinalizeSyncRuntimeLogFact,
   NonGateFailCurrentAttemptAction,
   NonGateIncrementRetryAction,
@@ -66,6 +65,8 @@ import {
   DraftRefineAwaitingAnswerResult,
   DraftGateCarryForwardResult,
   DraftGatePassedResult,
+  DraftGateRepairAppliedResult,
+  DraftGateRepairCarryForwardResult,
   DraftGateRepairRequiredResult,
   STEP_RESULT_TYPE,
   StepResult,
@@ -120,6 +121,7 @@ import {
 } from "./canonical-command-result.js";
 import { attachedTaskReviewPublicationBinding } from "./canonical-review-artifacts.js";
 import {
+  canonicalPlanGateRepairForTarget,
   createProspectiveDraftGateRepairRecord,
   PlanGateRepairRecord,
 } from "./plan-gate-repair.js";
@@ -974,31 +976,6 @@ class ConditionalWorkerSettlementAdmission {
       if (descriptor?.hash !== plan.evidenceDigest) {
         throw new CurrentFlowStateConflictError("conditional worker evidence changed before commit");
       }
-    }
-  }
-}
-
-class DraftGateRepairTerminalAdmission {
-  constructor(plan) {
-    if (!(plan instanceof DraftGateRepairTerminalPlan)) {
-      throw new CurrentFlowStateInvariantError("draft Gate repair terminal settlement requires its Definition plan");
-    }
-    this.plan = plan;
-    Object.freeze(this);
-  }
-
-  assert(view) {
-    const { plan } = this;
-    const state = view.state;
-    if (state.runId !== plan.runId
-      || state.specId !== plan.specId
-      || state.confirmationOrder !== plan.confirmationOrder
-      || state.current?.at(-1) !== "draft-gate-repair"
-      || state.findNode("draft-gate-repair")?.status !== "in_progress"
-      || state.attempt?.id !== plan.attemptId
-      || state.attempt?.sequence !== plan.attemptSequence
-      || state.attempt?.failure !== null) {
-      throw new CurrentFlowStateConflictError("draft Gate repair terminal facts changed before commit");
     }
   }
 }
@@ -2169,6 +2146,9 @@ export class CanonicalFlowManagerStore {
     if (!(decision instanceof GateTransitionDecision)) {
       throw new CurrentFlowStateInvariantError("definition-owned Gate operation requires a typed Gate decision");
     }
+    if (decision.facts.phase === "draft") {
+      throw new CurrentFlowStateInvariantError("Draft Gate decisions are persisted only through Draft StepResult settlement");
+    }
     const facts = readCurrentGateTransitionFacts({
       flowManager: this, flowState: this.loadReadOnly(state.specId), phase: decision.facts.phase,
     });
@@ -2403,6 +2383,9 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const repair = PlanGateRepairRecord.from(record);
+    if (repair.phase === "draft") {
+      throw new CurrentFlowStateInvariantError("Draft Gate repair is persisted only through Draft StepResult settlement");
+    }
     const state = this.runtime.load(resolved);
     const gateDecision = this.#admitGateDecision(state, decision, "repair");
     const connector = gateDecision.plan.repairConnector;
@@ -3597,13 +3580,45 @@ export class CanonicalFlowManagerStore {
         ...this.#commandPublicationWrites(commandResult),
       ]),
     ];
+    const draftGateRepairResult = stepResult instanceof DraftGateRepairAppliedResult
+      ? "applied"
+      : stepResult instanceof DraftGateRepairCarryForwardResult
+        ? "rejected-no-progress"
+        : null;
+    if (nodeId === "draft-gate-repair" && (
+      !(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
+      || planGateRepairOutcome.disposition !== draftGateRepairResult
+    )) {
+      throw new CurrentFlowStateInvariantError("draft Gate repair Result requires its exact typed outcome");
+    }
     if (planGateRepairOutcome !== null) {
       if (!(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
-        || planGateRepairOutcome.disposition !== "applied"
-        || status !== "done") {
-        throw new CurrentFlowStateInvariantError("successful plan-Gate repair confirmation requires an applied typed outcome");
+        || status !== "done"
+        || (nodeId !== "draft-gate-repair" && planGateRepairOutcome.disposition !== "applied")) {
+        throw new CurrentFlowStateInvariantError("plan-Gate repair confirmation requires its matching typed outcome");
       }
       const outcome = planGateRepairOutcome.seal(confirmationActivityId);
+      if (nodeId === "draft-gate-repair") {
+        const repair = canonicalPlanGateRepairForTarget({
+          flowManager: this,
+          state,
+          targetStepId: nodeId,
+        });
+        if (!(repair instanceof PlanGateRepairRecord)) {
+          throw new CurrentFlowStateInvariantError("draft Gate repair outcome has no canonical repair binding");
+        }
+        try {
+          outcome.assertRepair(repair.observationRepair({
+            state,
+            activities: this.activityLedger(resolved),
+            handoffRevision: planGateRepairOutcome.repair.handoffRevision,
+          }));
+        } catch (cause) {
+          throw new CurrentFlowStateInvariantError(
+            `draft Gate repair outcome does not match its canonical repair binding: ${cause.message}`,
+          );
+        }
+      }
       if (outcome.targetAttempt.id !== state.attempt.id
         || outcome.targetAttempt.sequence !== state.attempt.sequence) {
         throw new CurrentFlowStateInvariantError("plan-Gate repair outcome does not target the current Attempt");
@@ -4402,6 +4417,9 @@ export class CanonicalFlowManagerStore {
     if (!(plan instanceof ConditionalWorkerSettlementPlan) || plan.specId !== resolved) {
       throw new CurrentFlowStateInvariantError("conditional worker settlement requires its typed Definition plan");
     }
+    if (plan.stepId === "draft-gate-repair") {
+      throw new CurrentFlowStateInvariantError("Draft Gate repair absence is settled only by Draft route effects");
+    }
     const admission = new ConditionalWorkerSettlementAdmission(plan);
     if (plan.status === "done") {
       return this.confirmCurrentAttempt({
@@ -4421,93 +4439,6 @@ export class CanonicalFlowManagerStore {
       result: resultFor("skipped", plan.stepId),
       admission,
     });
-  }
-
-  /** Complete a bounded draft Gate repair whose output cannot change the draft. */
-  completeDraftGateRepairTerminal({
-    specId = null,
-    plan,
-    outcome = null,
-    confirmedAt = null,
-    binding,
-    stepResult,
-    settlement,
-    handoffReferences = [],
-    executionLifecycle = undefined,
-  } = {}) {
-    const resolved = this.#resolveSpecId(specId);
-    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    if (!(plan instanceof DraftGateRepairTerminalPlan) || plan.specId !== resolved) {
-      throw new CurrentFlowStateInvariantError("draft Gate repair terminal completion requires its typed Definition plan");
-    }
-    if ((plan.kind === "rejected-no-progress") !== (outcome instanceof PlanGateRepairOutcomeDraft)
-      || (outcome !== null && (outcome.disposition !== "rejected-no-progress"
-        || outcome.repair.repairId !== plan.repairId
-        || outcome.repair.recordFingerprint !== plan.repairRecordFingerprint))) {
-      throw new CurrentFlowStateInvariantError("draft Gate repair terminal outcome does not match its Definition plan");
-    }
-    if (!(stepResult instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
-      throw new CurrentFlowStateInvariantError("draft Gate repair terminal completion requires its typed Draft settlement");
-    }
-    if (!Array.isArray(handoffReferences) || handoffReferences.some((reference) => (
-      reference?.kind !== "worker-handoff-request" && reference?.kind !== "worker-handoff"
-    ) || handoffReferences.some((reference) => typeof reference.id !== "string" || reference.id === ""))) {
-      throw new CurrentFlowStateInvariantError("draft Gate repair terminal completion requires its handoff references");
-    }
-    const confirmationActivityId = activityId("draft-gate-repair-terminal");
-    const artifactWrites = [];
-    const artifactRefs = [
-      { kind: "plan-gate-repair-terminal", id: plan.repairId },
-      { kind: "plan-gate-repair-handoff-revision", id: plan.handoffRevision },
-      ...handoffReferences,
-    ];
-    if (outcome !== null) {
-      const sealed = outcome.seal(confirmationActivityId);
-      artifactWrites.push({
-        logicalKey: "plan.gate.repair.outcome",
-        parameters: { repairId: sealed.repairId },
-        mediaType: "application/json",
-        bytes: Buffer.from(`${JSON.stringify(sealed.toJSON(), null, 2)}\n`, "utf8"),
-      });
-      artifactRefs.push({ kind: "plan-gate-repair-outcome", id: sealed.repairId });
-    }
-    const lifecycleResult = {
-      outcome: "passed",
-      summary: plan.summary,
-      confirmedAt: confirmedAt ?? new Date().toISOString(),
-      artifactRefs,
-    };
-    const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
-      resolved, binding, settlement, executionLifecycle,
-    });
-    const receipt = this.#draftSettlementReceipt({
-      binding,
-      stepResult,
-      settlement,
-      lifecycleResult,
-      artifactWrites,
-      planGateRepairOutcome: outcome,
-      executionLifecycle: selectedExecutionLifecycle,
-    });
-    const before = this.runtime.load(resolved);
-    const replay = this.#admitDraftSettlement({
-      resolved,
-      state: before,
-      binding,
-      stepResult,
-      settlement,
-      receipt,
-    });
-    if (replay !== null) return Object.freeze({ state: before, receipt: replay });
-    const state = this.runtime.confirmAttempt({
-      specId: resolved,
-      activityId: confirmationActivityId,
-      status: "done",
-      result: resultWithDraftStepResult(lifecycleResult, "draft-gate-repair", stepResult, receipt),
-      artifactWrites,
-      admission: new DraftGateRepairTerminalAdmission(plan),
-    });
-    return Object.freeze({ state, receipt });
   }
 
   /** Apply a Definition-selected Requirement test connector and its publications atomically. */

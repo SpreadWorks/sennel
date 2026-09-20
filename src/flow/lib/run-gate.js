@@ -115,7 +115,6 @@ import { checkSpecGateReadiness } from "./spec-gate-readiness.js";
 import { CanonicalTaskContext } from "./task-canonical-context.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { TaskGateSettlementAdmission } from "./canonical-flow-manager-store.js";
-import { resolveGateTransition } from "../definition.js";
 
 export { resolveGateStepId };
 
@@ -3698,6 +3697,11 @@ export class RunGateCommand extends FlowCommand {
       phase,
     });
     if (existingFacts !== null) {
+      if (phase === "draft") {
+        const error = new Error("Draft Gate publication must be settled by its bound Draft StepResult");
+        error.code = "FLOW_DRAFT_GATE_RESULT_ALREADY_PUBLISHED";
+        throw error;
+      }
       // Task settlement is considered before the generic publication
       // recovery so a saved Task Gate result is reconciled without invoking
       // its worker again.
@@ -3754,6 +3758,11 @@ export class RunGateCommand extends FlowCommand {
         root: executionRoot,
       });
       if (facts !== null) {
+        if (phase === "draft") {
+          const error = new Error("Draft Gate provider admission found an already-published bound result");
+          error.code = "FLOW_GATE_EVALUATION_ADMISSION_DENIED";
+          throw error;
+        }
         const admission = resolveGateEvaluationAdmission(facts);
         const decision = admission.selectedDecision;
         const error = new Error(

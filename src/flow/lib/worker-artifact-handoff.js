@@ -27,12 +27,9 @@ import {
   findActiveNode,
   getFlowNode,
   RequirementTestLifecycleFacts,
-  DraftGateRepairTerminalFacts,
   DraftAwaitUserDecision,
   DraftExecutionSettlement,
   DraftWorkerExecutionBinding,
-  resolveDraftGateRepairTerminal,
-  resolvePlanGateRepairWorkerTransition,
   resolveRequirementTestLifecycle,
   resolveSourceHandoffTransitionPlan,
   settleDraftStepResult,
@@ -4810,7 +4807,7 @@ function assertConditionalWorkerExecutionSelected({ flowManager, state, policy }
       { retryable: false, data: { stepId: policy.stepId } },
     );
   }
-  let disposition;
+  let workerSelected;
   if (policy.stepId === "draft-refine") {
     const typed = flowManager.canonicalState(canonical.specId);
     const binding = {
@@ -4821,24 +4818,18 @@ function assertConditionalWorkerExecutionSelected({ flowManager, state, policy }
     };
     const projected = flowManager.draftRefineStepState({ binding });
     const lifecycle = flowManager.draftStepExecutionState({ binding }).lifecycle;
-    disposition = projected.executionIdentity() !== null
-      && ["checkpoint", "claimed", "publication"].includes(lifecycle?.phase)
-      ? { operation: "execute-worker" }
-      : null;
+    workerSelected = projected.executionIdentity() !== null
+      && ["checkpoint", "claimed", "publication"].includes(lifecycle?.phase);
   } else {
     const repair = currentPlanGateRepair({ flowManager, state: canonical, stepId: policy.stepId });
-    disposition = resolvePlanGateRepairWorkerTransition({
-      stepId: policy.stepId,
-      workerStatus: findStepById(canonical.steps, policy.stepId)?.status,
-      repair,
-    });
+    workerSelected = repair?.targetStepId === policy.stepId;
   }
-  if (disposition?.operation !== "execute-worker") {
+  if (!workerSelected) {
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_WORKER_ACTION_NOT_SELECTED",
-      `Definition selected ${disposition?.operation ?? "no action"} for ${policy.stepId}`,
-      { retryable: false, data: { stepId: policy.stepId, operation: disposition?.operation ?? null } },
+      `Definition did not select worker execution for ${policy.stepId}`,
+      { retryable: false, data: { stepId: policy.stepId } },
     );
   }
   return canonical;
@@ -6849,7 +6840,7 @@ export class DraftRepairResultFacts {
 
 /** Sealed facts a Draft Step needs to choose its own output before commit. */
 class DraftWorkerHandoffFacts {
-  constructor({ request, submission, publications, state } = {}) {
+  constructor({ request, submission, publications, state, planGateRepairOutcome = null } = {}) {
     if (!(request instanceof WorkerArtifactHandoffRequest)) {
       throw new TypeError("Draft worker facts require a sealed worker request");
     }
@@ -6861,6 +6852,10 @@ class DraftWorkerHandoffFacts {
           draftChanged: publications.draftRepairChanged === true,
         })
       : null;
+    if ((request.stepId === "draft-gate-repair") !== (planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)) {
+      throw new TypeError("Draft worker facts require the selected plan Gate repair outcome");
+    }
+    this.planGateRepairOutcome = planGateRepairOutcome;
     this.autoApprove = state.autoApprove === true;
     this.draftTransitionFacts = null;
     if (request.stepId === "draft-refine") {
@@ -6996,7 +6991,9 @@ function prepareDraftWorkerCanonical({ request, state, submission }) {
   const planGateRepairOutcome = request.stepId === "draft-gate-repair"
     ? draftGateRepairResult(request, submission, state).outcome
     : null;
-  const facts = new DraftWorkerHandoffFacts({ request, submission, publications, state });
+  const facts = new DraftWorkerHandoffFacts({
+    request, submission, publications, state, planGateRepairOutcome,
+  });
   return new DraftWorkerPreparation({
     request, state, submission, publications, repairCheckpoint, planGateRepairOutcome, facts,
   });
@@ -7081,57 +7078,6 @@ function hasCommittedDraftStepResult({ ctx, request, stepResult, requireReceipt 
   return activity !== undefined
     && JSON.stringify(activity.result.stepResult) === JSON.stringify(stepResult.toJSON())
     && JSON.stringify(persisted.toJSON?.() ?? persisted) === JSON.stringify(stepResult.toJSON());
-}
-
-function settleDraftGateRepairTerminal({ ctx, request, state, submission, kind, outcome = null, failure = null, binding, stepResult, settlement, now, faultInjector }) {
-  if (!(stepResult instanceof StepResult) || stepResult.type === STEP_RESULT_TYPE.ERROR) {
-    throw new WorkerArtifactHandoffError(
-      "invalid", "FLOW_DRAFT_STEP_RESULT_REQUIRED",
-      "Draft Gate repair terminal settlement requires the Step-selected Result",
-      { retryable: false, data: { stepId: request.stepId } },
-    );
-  }
-  const selected = currentPlanGateObservationRepair({ request, state });
-  if (selected === null) {
-    throw new WorkerArtifactHandoffError(
-      "stale", "FLOW_PLAN_GATE_REPAIR_EVIDENCE_MISSING",
-      "draft Gate repair terminal settlement has no selected canonical repair evidence",
-      { retryable: false, data: { stepId: request.stepId } },
-    );
-  }
-  const canonical = ctx.flowManager.canonicalState(request.specId);
-  const facts = new DraftGateRepairTerminalFacts({
-    kind,
-    repair: selected.repair,
-    ...(failure === null ? {} : { failureCode: failure.code, failureMessage: failure.message }),
-  });
-  const plan = resolveDraftGateRepairTerminal({ facts, flowState: canonical });
-  const committed = ctx.flowManager.completeDraftGateRepairTerminal({
-    specId: request.specId,
-    plan,
-    outcome,
-    confirmedAt: now().toISOString(),
-    binding,
-    stepResult,
-    settlement,
-    handoffReferences: [
-      { kind: "worker-handoff-request", id: request.requestDigest },
-      { kind: "worker-handoff", id: submission.handoffDigest },
-    ],
-  });
-  const receipt = canonicalHandoffReceipt(request, submission, now);
-  cleanupCompletedHandoff(request.handoffRoot, receipt, faultInjector);
-  return {
-    completed: true,
-    rejected: true,
-    replayed: false,
-    stepId: receipt.stepId,
-    handoffDigest: receipt.handoffDigest,
-    payloadDigest: receipt.payloadDigest,
-    stepResult,
-    settlementReceipt: committed.receipt,
-    receipt: committed.receipt,
-  };
 }
 
 /** Build facts later bound by the application already selected in the Step settlement. */
@@ -9491,21 +9437,6 @@ export class WorkerArtifactHandoffCoordinator {
       stored: request,
       phase: "publication",
     });
-    if (preparation.planGateRepairOutcome?.disposition === "rejected-no-progress") {
-      return settleDraftGateRepairTerminal({
-        ctx,
-        request,
-        state,
-        submission: preparation.submission,
-        kind: "rejected-no-progress",
-        outcome: preparation.planGateRepairOutcome,
-        stepResult,
-        binding,
-        settlement,
-        now: this.now,
-        faultInjector: this.faultInjector,
-      });
-    }
     const publication = ctx.flowManager.activityLedger(request.specId).findLast((activity) => (
       activity?.nodeId === request.stepId
       && activity?.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication"
@@ -9548,13 +9479,16 @@ export class WorkerArtifactHandoffCoordinator {
         lifecycleResult: canonicalHandoffResult(request, preparation.submission, this.now),
       });
     } else {
+      const failed = stepResult.type === STEP_RESULT_TYPE.ERROR;
       committed = ctx.flowManager.settleDraftStepResult({
         binding,
         stepResult,
         settlement,
-        lifecycleResult: canonicalHandoffResult(request, preparation.submission, this.now),
+        lifecycleResult: failed
+          ? null
+          : canonicalHandoffResult(request, preparation.submission, this.now),
         references: publication.references,
-        planGateRepairOutcome: preparation.planGateRepairOutcome,
+        planGateRepairOutcome: failed ? null : preparation.planGateRepairOutcome,
       });
     }
     const handoffReceipt = canonicalHandoffReceipt(request, preparation.submission, this.now);
@@ -9842,24 +9776,6 @@ export class WorkerArtifactHandoffCoordinator {
     let persistedSettlementReceipt = null;
     try {
       this.faultInjector({ phase: "before-worker-handoff-publication", stepId: request.stepId });
-      if (planGateRepairOutcome?.disposition === "rejected-no-progress" && !publicationOnly) {
-        if (preparedDraft === null) {
-          throw new WorkerArtifactHandoffError(
-            "invalid", "FLOW_DRAFT_STEP_RESULT_REQUIRED",
-            "Draft Gate repair terminal settlement requires the Step-selected Result",
-            { retryable: false, data: { stepId: request.stepId } },
-          );
-        }
-        return settleDraftGateRepairTerminal({
-          ctx, request, state, submission,
-          kind: "rejected-no-progress", outcome: planGateRepairOutcome,
-          stepResult: selectedDraftStepResult,
-          binding: draftWorkerBinding,
-          settlement: draftWorkerSettlement,
-          now: this.now,
-          faultInjector: this.faultInjector,
-        });
-      }
       {
         if (publicationOnly && planGateRepairOutcome?.disposition === "rejected-no-progress") {
           const committed = ctx.flowManager.settleDraftStepResult({

@@ -618,6 +618,9 @@ async function applyTestChainTransition(ctx, result, stepId) {
  */
 function resolvePersistedPlanGateDecision(ctx, result) {
   const phase = result?.artifacts?.phase || ctx.phase;
+  if (phase === "draft") {
+    throw new Error("Draft Gate results are classified by the bound Draft Step");
+  }
   const facts = readCurrentGateTransitionFacts({
     flowManager: ctx.flowManager,
     flowState: ctx.flowState,

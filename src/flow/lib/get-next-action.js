@@ -18,7 +18,6 @@ import {
   ConfirmAndAdvance,
   deriveNextAction,
   resolveDefinitionRoute,
-  resolvePlanGateRepairWorkerTransition,
   resolveTaskExecutionOverrun,
   selectedNonGateUserAction,
   testExecuteTransitionDefinition,
@@ -269,9 +268,7 @@ function finalRegressionNextAction(ctx, state, typedState, binding) {
 
 /** Definition-owned Gate routing is projected only from its canonical typed facts. */
 function definitionOwnedGateSelection(ctx, state, target) {
-  const phase = target.stepId === "draft-gate"
-    ? "draft"
-    : target.stepId === "spec-gate"
+  const phase = target.stepId === "spec-gate"
       ? "spec"
       : target.scope === "task" && target.stepId === "task-gate"
         ? "task-impl"
@@ -810,22 +807,6 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     conditionalWorkerDisposition = persistedDraftRefineDisposition({
       flowManager: ctx.flowManager,
       typedState,
-    });
-  }
-  if (
-    target.scope === "flow"
-    && target.stepId === "draft-gate-repair"
-    && ["start", "recover", "resume", "retry"].includes(descriptor.operation)
-  ) {
-    const repair = canonicalPlanGateRepairForTarget({
-      flowManager: ctx.flowManager,
-      state,
-      targetStepId: target.stepId,
-    });
-    conditionalWorkerDisposition = resolvePlanGateRepairWorkerTransition({
-      stepId: target.stepId,
-      workerStatus: typedState.findNode(target.nodeId)?.status,
-      repair,
     });
   }
   const definitionDescriptor = descriptor

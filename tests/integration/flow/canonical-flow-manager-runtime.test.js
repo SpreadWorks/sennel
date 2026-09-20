@@ -14,13 +14,19 @@ import { FlowManager } from "../../../src/lib/flow-manager.js";
 import {
   DraftCreatedResult,
   DraftCoverageReviewFindingsResult,
+  DraftGateRepairRequiredResult,
+  DraftRefineCompletedResult,
   DraftQuestionsRepairChangedResult,
   DraftQuestionsReviewFindingsResult,
   DraftQuestionsReviewPassedResult,
   DraftStepErrorResult,
   STEP_RESULT_TYPE,
 } from "../../../src/flow/engine/step-result.js";
-import { DraftWorkerStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import {
+  DraftGateEvaluationBinding,
+  DraftWorkerExecutionStepBinding,
+  DraftWorkerStepBinding,
+} from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { Agent } from "../../../src/lib/agent.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
@@ -66,7 +72,14 @@ import RunUpdateOverviewCommand from "../../../src/flow/lib/run-update-overview.
 import RunGateCommand, { appendIssueLogFromGateResult, GateIssueLogEntry } from "../../../src/flow/lib/run-gate.js";
 import { computeGitState } from "../../../src/lib/git-state.js";
 import { CanonicalGatePromotion, canonicalGateRevision } from "../../../src/flow/lib/canonical-gate-artifacts.js";
-import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
+import {
+  readCurrentGateTransitionFacts,
+  readProspectiveDraftGateFacts,
+} from "../../../src/flow/lib/gate-transition-facts.js";
+import {
+  DraftGateIssuePublication,
+  DraftGatePublicationIntent,
+} from "../../../src/flow/lib/draft-gate-prospective.js";
 import {
   DRAFT_RESULT_ERROR_CATEGORY,
   resolveGateTransition,
@@ -3870,14 +3883,27 @@ describe("FlowManager canonical Version-1 runtime", () => {
         };
         const questionsResult = await questions.execute(questionsCtx);
         await FLOW_COMMANDS.run.review.post(questionsCtx, questionsResult);
-        for (const stepId of ["draft-refine", "draft-gate-repair"]) {
-          const skipped = await new RunClaimNextActionCommand().execute({
-            ...questionsCtx, flowState: manager.loadReadOnly(created.specId),
-          });
-          assert.equal(skipped.ok, true, JSON.stringify(skipped));
-          assert.equal(skipped.data.step, stepId);
-          assert.equal(skipped.data.status, "skipped");
-        }
+        manager.updateStepStatus(
+          { stepId: "draft-refine", requestedStatus: "in_progress" },
+          { specId: created.specId },
+        );
+        const refineBinding = new DraftWorkerExecutionStepBinding({
+          flowManager: manager,
+          specId: created.specId,
+          stepId: "draft-refine",
+        });
+        const refineResult = new DraftRefineCompletedResult();
+        manager.settleDraftStepResult({
+          binding: refineBinding,
+          stepResult: refineResult,
+          settlement: settleDraftStepResult(refineResult.stepId, refineResult),
+        });
+        assert.equal(manager.canonicalState(created.specId).findNode("draft-refine").status, "done");
+        const skippedRepair = manager.canonicalState(created.specId).findNode("draft-gate-repair");
+        assert.equal(skippedRepair.status, "skipped");
+        assert.equal(skippedRepair.result.stepResult, null);
+        assert.equal(skippedRepair.result.draftSettlementReceipt, null);
+        assert.equal(manager.canonicalState(created.specId).attempt, null);
         manager.updateStepStatus(
           { stepId: "draft-coverage-review", requestedStatus: "in_progress" },
           { specId: created.specId },
@@ -5845,7 +5871,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(fs.existsSync(path.join(location.directory, "draft-questions-repair.json")), false);
   });
 
-  it("rewinds a v2 plan Gate and atomically records its applied worker outcome", async () => {
+  it("settles a v2 Draft Gate StepResult and atomically records its applied worker outcome", async () => {
     const repository = root();
     const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     const created = manager.createFresh(request());
@@ -5885,37 +5911,18 @@ describe("FlowManager canonical Version-1 runtime", () => {
       }],
       timestamp: "2026-08-13T00:00:00.000Z",
     };
-    const gateResult = attachCanonicalCommandResultArtifact({
+    const gateResult = new CanonicalGatePromotion({
+      state: manager.canonicalState(created.specId),
+      phase: "draft",
+      nodeId: "draft-gate",
+    }).promote({
       result: "fail",
       artifacts: {
         phase: "draft",
+        failureKind: "ai_semantic_fail",
+        failureCode: "GATE_REJECTED",
         nextAction: { diagnosis: { observations: source.observations } },
       },
-    }, {
-      logicalKey: "draft.gate",
-      payload: {
-        result: "fail",
-        artifacts: {
-          phase: "draft",
-          nextAction: { diagnosis: { observations: source.observations } },
-        },
-      },
-    });
-    manager.failCurrentAttempt({
-      specId: created.specId,
-      failure: {
-        category: "semantic",
-        code: "GATE_REJECTED",
-        message: "The draft gate has blocking evidence.",
-        retryable: true,
-        retryKind: "semantic",
-      },
-      commandResult: gateResult,
-    });
-    manager.appendIssueLog({
-      specId: created.specId,
-      entry: source,
-      idempotencyKey: source.issueLogId,
     });
     manager.appendIssueLog({
       specId: created.specId,
@@ -5934,24 +5941,40 @@ describe("FlowManager canonical Version-1 runtime", () => {
       flowManager: manager,
       flowState: manager.load(created.specId),
     };
-
-    const repairAction = await new GetNextActionCommand().execute(context);
-    assert.equal(repairAction.directive.actionId, "REPAIR_PLAN_GATE_EVIDENCE");
-    assert.equal(repairAction.directive.phase, "draft");
-    assert.match(repairAction.directive.nextAction, /sennel flow run repair-plan-gate/);
-
-    const repaired = new RunRepairPlanGateCommand().execute(context);
+    const binding = new DraftGateEvaluationBinding({
+      flowManager: manager,
+      specId: created.specId,
+    });
+    const facts = readProspectiveDraftGateFacts({
+      flowManager: manager,
+      binding,
+      commandResult: gateResult,
+    });
+    const gateStepResult = new DraftGateRepairRequiredResult();
+    manager.settleDraftStepResult({
+      binding,
+      stepResult: gateStepResult,
+      settlement: settleDraftStepResult(gateStepResult.stepId, gateStepResult),
+      commandResult: gateResult,
+      gatePublication: new DraftGatePublicationIntent({
+        facts,
+        issue: new DraftGateIssuePublication({ binding, entry: source }),
+      }),
+    });
     const typed = manager.canonicalState(created.specId);
     const projected = manager.load(created.specId);
     const activities = manager.activityLedger(created.specId);
+    const selectedRepair = canonicalPlanGateRepairForTarget({
+      flowManager: manager,
+      state: projected,
+      targetStepId: "draft-gate-repair",
+    });
 
-    assert.equal(repaired.ok, true, JSON.stringify(repaired));
-    assert.equal(repaired.data.previousStep, "draft-gate");
     assert.equal(typed.current.at(-1), "draft-gate-repair");
     assert.equal(Object.hasOwn(typed.toJSON(), "planGateRepair"), false);
     assert.equal(Object.hasOwn(projected, "planGateRepair"), false);
     assert.equal(activities.at(-1).transition.operation, "plan_gate_repair");
-    assert.equal(activities.at(-1).references.repairs[0].label, source.issueLogId);
+    assert.equal(activities.at(-1).references.repairs[0].label, selectedRepair.sourceIssueLogId);
     const workerAction = await new GetNextActionCommand().execute({
       ...context,
       flowState: manager.load(created.specId),
@@ -5960,7 +5983,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(workerAction.context.planGateRepair.version, 2);
     assert.equal(workerAction.context.planGateRepair.phase, "draft");
     assert.equal(workerAction.context.planGateRepair.targetStepId, "draft-gate-repair");
-    assert.equal(workerAction.context.planGateRepair.sourceIssueLogId, source.issueLogId);
+    assert.equal(workerAction.context.planGateRepair.sourceIssueLogId, selectedRepair.sourceIssueLogId);
     assert.equal(workerAction.context.planGateRepair.evidenceIdentity.resultLogicalKey, "draft.gate");
     assert.equal(workerAction.context.planGateRepair.connector.sourceGateStepId, "draft-gate");
     assert.equal(workerAction.context.planGateRepair.observationFingerprints.length, 2);
@@ -6049,7 +6072,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(freshGate.directive.actionId, "CLAIM_NEXT_ACTION");
   });
 
-  it("fails closed when a current gate result and issue-log observations do not match", async () => {
+  it("rejects mismatched prospective Draft Gate evidence before Result settlement", () => {
     const repository = root();
     const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     const created = manager.createFresh(request());
@@ -6068,52 +6091,62 @@ describe("FlowManager canonical Version-1 runtime", () => {
       ...currentObservations[0],
       observed: "A stale issue-log entry is not evidence for this result.",
     }];
-    publishAttemptArtifact(manager, created.specId, "draft-gate", "draft.gate", {
+    const commandResult = new CanonicalGatePromotion({
+      state: manager.canonicalState(created.specId),
+      phase: "draft",
+      nodeId: "draft-gate",
+    }).promote({
       result: "fail",
       artifacts: {
         phase: "draft",
+        failureKind: "ai_semantic_fail",
+        failureCode: "GATE_REJECTED",
         nextAction: { diagnosis: { observations: currentObservations } },
       },
     });
-    manager.failCurrentAttempt({
-      specId: created.specId,
-      failure: {
-        category: "semantic",
-        code: "GATE_REJECTED",
-        message: "The current draft gate failed with different durable observations.",
-        retryable: true,
-        retryKind: "semantic",
-      },
-    });
-    manager.appendIssueLog({
-      specId: created.specId,
-      entry: {
-        step: "draft-gate",
-        phase: "draft",
-        reason: "A mismatched issue-log entry must not authorize repair.",
-        trigger: "gate post hook (auto)",
-        observations: staleObservations,
-      },
-      idempotencyKey: "mismatched-draft-gate-evidence",
-    });
-    const context = {
-      root: repository,
-      mainRoot: repository,
-      executionRoot: repository,
-      specId: created.specId,
+    const binding = new DraftGateEvaluationBinding({
       flowManager: manager,
-      flowState: manager.load(created.specId),
+      specId: created.specId,
+    });
+    const facts = readProspectiveDraftGateFacts({
+      flowManager: manager,
+      binding,
+      commandResult,
+    });
+    const stepResult = new DraftGateRepairRequiredResult();
+    const issueLogFile = manager.specLocation(created.specId).issueLogFile;
+    const before = {
+      state: manager.canonicalState(created.specId).toJSON(),
+      activities: manager.activityLedger(created.specId),
+      catalog: manager.artifactCatalog(created.specId),
+      issueLog: fs.existsSync(issueLogFile) ? fs.readFileSync(issueLogFile, "utf8") : null,
     };
 
-    const next = await new GetNextActionCommand().execute(context);
-    const repair = new RunRepairPlanGateCommand().execute(context);
-
-    // The first Draft Gate semantic failure selects the repair operation, but
-    // mismatched evidence still cannot authorize its guarded command.
-    assert.equal(next.directive.actionId, "REPAIR_PLAN_GATE_EVIDENCE");
-    assert.equal(repair.ok, false);
-    assert.equal(repair.errors[0].code, "PLAN_GATE_REPAIR_NOT_ADMITTED");
-    assert.equal(manager.canonicalState(created.specId).current.at(-1), "draft-gate");
+    assert.throws(() => manager.settleDraftStepResult({
+      binding,
+      stepResult,
+      settlement: settleDraftStepResult(stepResult.stepId, stepResult),
+      commandResult,
+      gatePublication: new DraftGatePublicationIntent({
+        facts,
+        issue: new DraftGateIssuePublication({
+          binding,
+          entry: {
+            issueLogId: "mismatched-draft-gate-evidence",
+            step: "draft-gate",
+            phase: "draft",
+            reason: "A mismatched issue-log entry must not authorize repair.",
+            trigger: "gate post hook (auto)",
+            observations: staleObservations,
+            timestamp: binding.assertCurrent().attempt.startedAt,
+          },
+        }),
+      }),
+    }), /observations|evidence|publication/i);
+    assert.deepEqual(manager.canonicalState(created.specId).toJSON(), before.state);
+    assert.deepEqual(manager.activityLedger(created.specId), before.activities);
+    assert.deepEqual(manager.artifactCatalog(created.specId), before.catalog);
+    assert.equal(fs.existsSync(issueLogFile) ? fs.readFileSync(issueLogFile, "utf8") : null, before.issueLog);
   });
 
   it("records Draft Gate recovery facts deterministically without inventing a Draft recovery route", () => {

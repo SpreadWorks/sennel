@@ -45,6 +45,14 @@ export default class RunRepairPlanGateCommand extends FlowCommand {
         "the current step is not a supported plan Gate repair source",
       );
     }
+    if (route.phase === "draft") {
+      return Envelope.fail(
+        "run",
+        "repair-plan-gate",
+        "PLAN_GATE_REPAIR_STAGE_UNSUPPORTED",
+        "Draft Gate repair is selected and persisted by the Draft StepResult settlement",
+      );
+    }
     let evidence;
     try {
       evidence = inspectCanonicalPlanGateRepair({ flowManager: ctx.flowManager, state });
@@ -66,7 +74,7 @@ export default class RunRepairPlanGateCommand extends FlowCommand {
     }
     const { phase } = evidence.route;
     let decision = null;
-    if (phase === "draft" || phase === "spec" || phase === "task-impl") {
+    if (phase === "spec" || phase === "task-impl") {
       try {
         const facts = readCurrentGateTransitionFacts({
           flowManager: ctx.flowManager,
