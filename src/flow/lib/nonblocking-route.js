@@ -43,22 +43,6 @@ export class NonBlockingRoute {
 }
 
 const ROUTES = [
-  new NonBlockingRoute({
-    sourceStep: "draft-questions-review",
-    artifact: "draft-review-questions.json",
-    kind: "review",
-    phase: "draft-questions",
-    targetStep: "draft-refine",
-    skippedSteps: ["draft-questions-triage", "draft-questions-repair"],
-  }),
-  new NonBlockingRoute({
-    sourceStep: "draft-coverage-review",
-    artifact: "draft-review-coverage.json",
-    kind: "review",
-    phase: "draft-coverage",
-    targetStep: "draft-gate",
-    skippedSteps: ["draft-coverage-triage", "draft-coverage-repair"],
-  }),
   new NonBlockingRoute({ sourceStep: "draft-gate", artifact: "draft-gate-result.json", kind: "gate", phase: "draft", targetStep: "spec" }),
   new NonBlockingRoute({ sourceStep: "spec-gate", artifact: "spec-gate-result.json", kind: "gate", phase: "spec", targetStep: "approval" }),
   new NonBlockingRoute({ sourceStep: "test-result-review", artifact: "test-result-review.json", kind: "verification", targetStep: "impl-review" }),

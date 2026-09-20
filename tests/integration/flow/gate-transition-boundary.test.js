@@ -25,6 +25,7 @@ import {
   projectGatePublicOutcome,
   gateNonblockingEligibilityForDecision,
   reviewNonblockingEligibilityForDisposition,
+  resolveActiveNonblockingEligibility,
   acceptanceBoundaryNonblockingEligibility,
   resolveReviewTransition,
   resolveLifecycle,
@@ -708,16 +709,38 @@ describe("definition-owned Gate transition boundary", () => {
     }
   });
 
-  it("keeps every review, Gate, and acceptance route in the Definition-owned behavior table", () => {
+  it("keeps eligible Review, Gate, and acceptance routes in the Definition-owned behavior table", () => {
     assert.deepEqual(NONBLOCKING_ROUTES.map((route) => route.sourceStep).sort(), [
-      "acceptance-review", "draft-coverage-review", "draft-gate", "draft-questions-review",
-      "final-regression", "impl-gate", "impl-review", "retro",
+      "acceptance-review", "draft-gate", "final-regression", "impl-gate", "impl-review", "retro",
       "spec-gate", "task-gate", "task-review", "test-result-review",
     ]);
+    for (const [sourceStep, phase] of [
+      ["draft-questions-review", "draft-questions"],
+      ["draft-coverage-review", "draft-coverage"],
+    ]) {
+      const facts = new ReviewTransitionFacts({
+        scope: "flow", phase, toolingOutcome: { code: "PROVIDER_UNAVAILABLE" },
+      });
+      const disposition = resolveReviewTransition({
+        stepId: sourceStep,
+        flowState: { policy: { nonblocking: null }, metrics: [] },
+        facts,
+      });
+      assert.equal(disposition, null, `${sourceStep} has no generic Review disposition`);
+      assert.equal(
+        reviewNonblockingEligibilityForDisposition({ stepId: sourceStep, disposition }),
+        null,
+        `${sourceStep} has no generic Review eligibility`,
+      );
+      assert.equal(resolveActiveNonblockingEligibility({
+        sourceStep,
+        evidence: {},
+        flowState: { policy: { nonblocking: null }, metrics: [] },
+        reader: { reviewFacts: () => facts },
+      }), null, `${sourceStep} has no active nonblocking eligibility`);
+    }
     const selected = new Map();
     for (const [sourceStep, phase, scope] of [
-      ["draft-questions-review", "draft-questions", "flow"],
-      ["draft-coverage-review", "draft-coverage", "flow"],
       ["task-review", "impl", "task"],
       ["impl-review", "impl", "flow"],
     ]) {
@@ -752,8 +775,8 @@ describe("definition-owned Gate transition boundary", () => {
       assert.deepEqual(eligibility.effectFor("continue").skippedStepIds, route.skippedSteps);
     }
     assert.deepEqual([...selected.keys()].sort(), [
-      "acceptance-review", "draft-coverage-review", "draft-gate", "draft-questions-review",
-      "impl-gate", "impl-review", "retro", "spec-gate", "task-gate", "task-review",
+      "acceptance-review", "draft-gate", "impl-gate", "impl-review", "retro",
+      "spec-gate", "task-gate", "task-review",
     ]);
   });
 

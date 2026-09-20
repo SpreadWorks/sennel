@@ -74,10 +74,9 @@ export class DraftService {
     if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
       throw new TypeError("DraftService requires its bound Step's concrete Result");
     }
-    let settlement = settleDraftStepResult(this.binding.stepId, stepResult);
-    if (settlement.application !== null && settlement.application !== undefined) {
-      settlement = settlement.materializeDraftCompletion(this.workerFacts?.draftCompletionFacts ?? null);
-    }
+    const settlement = settleDraftStepResult(this.binding.stepId, stepResult, {
+      draftCompletionFacts: this.workerFacts?.draftCompletionFacts ?? null,
+    });
     if (stepResult.type === STEP_RESULT_TYPE.ERROR) {
       return this.#commitWorkerError(stepResult, settlement);
     }

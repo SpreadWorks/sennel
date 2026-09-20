@@ -6824,6 +6824,21 @@ function draftGateRepairResult(request, submission, state) {
     : null;
 }
 
+/** Typed, I/O-free facts used only to classify a Draft Repair Result. */
+export class DraftRepairResultFacts {
+  constructor({ stepId, draftChanged } = {}) {
+    if (!["draft-questions-repair", "draft-coverage-repair"].includes(stepId)) {
+      throw new TypeError("Draft Repair Result facts require a Repair Step");
+    }
+    if (typeof draftChanged !== "boolean") {
+      throw new TypeError("Draft Repair Result facts require a changed decision");
+    }
+    this.stepId = stepId;
+    this.draftChanged = draftChanged;
+    Object.freeze(this);
+  }
+}
+
 /** Sealed facts a Draft Step needs to choose its own output before commit. */
 class DraftWorkerHandoffFacts {
   constructor({ request, submission, publications, state } = {}) {
@@ -6831,8 +6846,13 @@ class DraftWorkerHandoffFacts {
       throw new TypeError("Draft worker facts require a sealed worker request");
     }
     this.stepId = request.stepId;
-    this.draftChanged = publications.draftRepairChanged === true;
     this.draftCompletionFacts = publications.draftCoverageRepairFacts;
+    this.repairResult = ["draft-questions-repair", "draft-coverage-repair"].includes(request.stepId)
+      ? new DraftRepairResultFacts({
+          stepId: request.stepId,
+          draftChanged: publications.draftRepairChanged === true,
+        })
+      : null;
     this.autoApprove = state.autoApprove === true;
     this.hasCandidateQuestion = false;
     if (request.stepId === "draft-refine") {

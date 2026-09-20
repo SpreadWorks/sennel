@@ -17,6 +17,7 @@ import {
   reviewPhaseForStep,
 } from "./review-transition-facts.js";
 import { flowReviewRouteForPhase } from "./review-route.js";
+import { draftReviewRouteForStepId } from "./draft-review-routes.js";
 
 function phaseFor(ctx, result) {
   return result?.artifacts?.retryPhase || result?.artifacts?.phase || ctx.phase || "impl";
@@ -63,6 +64,7 @@ export function settleDefinitionReviewTransition(ctx) {
   const scope = taskId === null ? "flow" : "task";
   const nodeId = scope === "task" ? `${taskId}-review` : flowState.currentNodeId;
   const stepId = scope === "task" ? "task-review" : nodeId;
+  if (draftReviewRouteForStepId(stepId) !== null) return null;
   const selection = resolveCurrentReviewTransition({
     flowManager: ctx.flowManager,
     flowState,
@@ -71,10 +73,6 @@ export function settleDefinitionReviewTransition(ctx) {
   });
   if (selection.disposition?.operation !== "defer") return null;
   const { facts, disposition } = selection;
-  // Draft Review recovery must re-enter through run-review, which rehydrates
-  // the published Attempt and lets the Draft Step/Service settle it.  This
-  // transition owns only the flow/task review paths that have no Draft Step.
-  if (["draft-questions", "draft-coverage"].includes(facts.phase)) return null;
   const findings = buildDeferredSemanticFindingsPublication({
     flowManager: ctx.flowManager,
     flowState,

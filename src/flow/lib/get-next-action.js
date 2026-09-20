@@ -749,8 +749,6 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   // exhausted persisted evidence must therefore converge to defer/blocked
   // before a stale repair revision can be observed.
   const reviewStep = new Set([
-    "draft-questions-review",
-    "draft-coverage-review",
     "spec-review",
     "test-review",
     "impl-review",

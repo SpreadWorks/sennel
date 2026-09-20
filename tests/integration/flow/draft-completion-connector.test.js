@@ -6,14 +6,11 @@ import { describe, it } from "node:test";
 
 import {
   DraftCompletionConnector,
-  DraftCoverageRepairCompletionDecision,
+  DraftCompletionSettlementApplication,
   DraftExecutionSettlement,
   DraftReviewExecutionBinding,
   DraftReviewExecutionClaim,
   DraftReviewExecutionTargetIdentity,
-  DraftStepSettlementPublication,
-  DraftStepSettlementReceipt,
-  resolveDraftCoverageRepairCompletion,
   resolveDraftCompletionConnector,
   resolveLifecyclePlan,
   settleDraftStepResult,
@@ -60,23 +57,43 @@ function receiptId(value) {
   return crypto.createHash("sha256").update(JSON.stringify(stableValue(content))).digest("hex");
 }
 
-function draftSettlement(flowManager, specId, stepResult) {
+function completionApplication(completionFacts) {
+  const stepResult = completionFacts.sourceStepId === "draft-coverage-review"
+    ? new DraftCoverageReviewPassedResult()
+    : new DraftCoverageRepairUnchangedResult();
+  return settleDraftStepResult(stepResult.stepId, stepResult, {
+    draftCompletionFacts: completionFacts,
+  }).application;
+}
+
+function settleCompletion(flowManager, {
+  specId,
+  application,
+  stepResult = null,
+  artifactWrites = [],
+  artifactBaselines = [],
+} = {}) {
+  assert.ok(application instanceof DraftCompletionSettlementApplication);
+  const expectedResult = application.facts.sourceStepId === "draft-coverage-review"
+    ? new DraftCoverageReviewPassedResult()
+    : new DraftCoverageRepairUnchangedResult();
   const state = flowManager.canonicalState(specId);
-  const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
-  return {
-    settlement,
-    receipt: new DraftStepSettlementReceipt({
-      binding: {
-        runId: state.runId,
-        specId,
-        stepId: stepResult.stepId,
-        attempt: state.attempt,
-      },
-      result: stepResult,
-      settlement,
-      publication: new DraftStepSettlementPublication(),
+  const priorBinding = state.findNode(expectedResult.stepId)?.result?.draftSettlementReceipt?.binding ?? null;
+  const attempt = state.current?.at(-1) === expectedResult.stepId
+    ? state.attempt
+    : priorBinding === null ? null : {
+        id: priorBinding.attemptId,
+        sequence: priorBinding.attemptSequence,
+      };
+  return flowManager.settleDraftStepResult({
+    binding: { runId: state.runId, specId, stepId: expectedResult.stepId, attempt },
+    stepResult: stepResult ?? expectedResult,
+    settlement: settleDraftStepResult(expectedResult.stepId, expectedResult, {
+      draftCompletionFacts: application.facts,
     }),
-  };
+    artifactWrites,
+    artifactBaselines,
+  });
 }
 
 function draft({ questions = [] } = {}) {
@@ -256,11 +273,11 @@ function completeInitialDraftCoveragePass({ flowManager, specId, runId, claimGat
   fixture.activate("draft-coverage-review");
   publishCoverageReviewEvidence(flowManager, specId, sourceBytes);
   fixture.activate("draft-coverage-repair");
-  const initial = resolveDraftCoverageRepairCompletion(facts({
+  const initial = completionApplication(facts({
     draftDocument: source,
     ...completionEvidence(flowManager, specId),
   }));
-  flowManager.confirmDraftCoverageRepairCompletion({ specId, decision: initial, draft: source });
+  settleCompletion(flowManager, { specId, application: initial });
   const completedBytes = flowManager.readArtifact({
     specId, logicalKey: "draft", consumerNodeId: "draft-gate",
   }).bytes;
@@ -397,7 +414,7 @@ describe("DraftCompletionConnector", () => {
       flowManager.settleDraftStepResult = (input) => {
         observedSettlements.push(input.settlement);
         if (!(input.settlement instanceof DraftExecutionSettlement)) {
-          assert.ok(input.settlement.application instanceof DraftCoverageRepairCompletionDecision);
+          assert.ok(input.settlement.application instanceof DraftCompletionSettlementApplication);
           assert.equal(Object.hasOwn(input, "draftCompletionFacts"), false);
         }
         return settle(input);
@@ -455,27 +472,23 @@ describe("DraftCompletionConnector", () => {
       const draftBeforePass = flowManager.artifactCatalog(specId).toJSON().artifacts
         .find((artifact) => artifact.logicalKey === "draft");
       const evidence = completionEvidence(flowManager, specId);
-      const selected = resolveDraftCoverageRepairCompletion(facts({
+      const selected = completionApplication(facts({
         source: "coverage-pass", draftDocument: source, ...evidence,
       }));
       // The default fixture facts target the passive repair connector. The
       // Review source uses the same canonical evidence and selected connector.
-      const reviewSelected = resolveDraftCoverageRepairCompletion(new DraftCompletionFacts({
+      const reviewSelected = completionApplication(new DraftCompletionFacts({
         ...selected.facts.toJSON(), sourceStepId: "draft-coverage-review", draft: source,
       }));
       const publishedButUnconfirmed = persistedSnapshot(flowManager, specId);
       const invalidResult = new DraftCoverageReviewFindingsResult();
-      assert.throws(() => flowManager.confirmDraftCoverageRepairCompletion({
-        specId, decision: reviewSelected, draft: source,
-        stepResult: invalidResult,
-      }), /requires completed StepResult/);
+      assert.throws(() => settleCompletion(flowManager, {
+        specId, application: reviewSelected, stepResult: invalidResult,
+      }), /exact Result binding/);
       assert.equal(persistedSnapshot(flowManager, specId), publishedButUnconfirmed);
       const passedResult = new DraftCoverageReviewPassedResult();
-      const { receipt } = draftSettlement(flowManager, specId, passedResult);
-      flowManager.confirmDraftCoverageRepairCompletion({
-        specId, decision: reviewSelected, draft: source,
-        stepResult: passedResult,
-        settlementReceipt: receipt,
+      settleCompletion(flowManager, {
+        specId, application: reviewSelected, stepResult: passedResult,
       });
       const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
       const state = reloaded.canonicalState(specId);
@@ -563,7 +576,7 @@ describe("DraftCompletionConnector", () => {
 
     for (const candidate of cases) {
       assert.throws(() => resolveDraftCompletionConnector(candidate), /connector is unavailable/);
-      assert.throws(() => resolveDraftCoverageRepairCompletion(candidate), /connector is unavailable/);
+      assert.throws(() => completionApplication(candidate), /connector is unavailable/);
     }
     assert.throws(() => facts({ reviewArtifactDigest: null }), /review artifact digest/i);
     assert.throws(() => facts({ questionsReviewArtifactDigest: null }), /questions review artifact digest/i);
@@ -599,7 +612,7 @@ describe("DraftCompletionConnector", () => {
       publishCoverageReviewEvidence(flowManager, specId, sourceBytes);
       fixture.activate("draft-coverage-repair");
       const evidence = completionEvidence(flowManager, specId);
-      const selected = resolveDraftCoverageRepairCompletion(facts({
+      const selected = completionApplication(facts({
         draftDocument: source,
         ...evidence,
       }));
@@ -608,17 +621,13 @@ describe("DraftCompletionConnector", () => {
       const before = flowManager.activityLedger(specId).length;
       const beforeInvalidOutput = persistedSnapshot(flowManager, specId);
       const invalidResult = new DraftCoverageRepairChangedResult();
-      assert.throws(() => flowManager.confirmDraftCoverageRepairCompletion({
-        specId, decision: selected, draft: source,
-        stepResult: invalidResult,
-      }), /requires completed StepResult/);
+      assert.throws(() => settleCompletion(flowManager, {
+        specId, application: selected, stepResult: invalidResult,
+      }), /exact Result binding/);
       assert.equal(persistedSnapshot(flowManager, specId), beforeInvalidOutput);
       const completedResult = new DraftCoverageRepairUnchangedResult();
-      const { receipt } = draftSettlement(flowManager, specId, completedResult);
-      flowManager.confirmDraftCoverageRepairCompletion({
-        specId, decision: selected, draft: source,
-        stepResult: completedResult,
-        settlementReceipt: receipt,
+      settleCompletion(flowManager, {
+        specId, application: selected, stepResult: completedResult,
       });
 
       const state = flowManager.loadReadOnly(specId);
@@ -645,11 +654,11 @@ describe("DraftCompletionConnector", () => {
       assert.equal(flowManager.canonicalState(specId).current.at(-1), "draft-gate");
       const afterTargetClaim = flowManager.activityLedger(specId).length;
 
-      flowManager.confirmDraftCoverageRepairCompletion({ specId, decision: selected, draft: source });
+      settleCompletion(flowManager, { specId, application: selected });
       assert.equal(flowManager.activityLedger(specId).length, afterTargetClaim, "replay must not duplicate the connector Activity or target claim");
 
       const staleDraft = { ...source, goal: "A stale alternative completion." };
-      const staleDecision = resolveDraftCoverageRepairCompletion(facts({
+      const staleDecision = completionApplication(facts({
         draftDocument: staleDraft,
         canonicalDigest: selected.facts.draftDigest,
         canonicalByteLength: selected.facts.draftByteLength,
@@ -657,10 +666,8 @@ describe("DraftCompletionConnector", () => {
       }));
       const beforeStaleReplay = persistedSnapshot(flowManager, specId);
       assert.throws(
-        () => flowManager.confirmDraftCoverageRepairCompletion({
-          specId, decision: staleDecision, draft: staleDraft,
-        }),
-        /stale completed plan/i,
+        () => settleCompletion(flowManager, { specId, application: staleDecision }),
+        /different Result, Settlement, or Publication/i,
       );
       assert.equal(persistedSnapshot(flowManager, specId), beforeStaleReplay);
     } finally {
@@ -698,14 +705,15 @@ describe("DraftCompletionConnector", () => {
 
       // The facts reader still sees the retained Attempt 1 review bytes. The
       // Step connection must instead bind that descriptor to Attempt 2.
-      const selected = resolveDraftCoverageRepairCompletion(facts({
+      const selected = completionApplication(facts({
         draftDocument: source,
         ...completionEvidence(flowManager, specId),
       }));
+      flowManager.beginNextAction(specId);
       const beforeState = persistedSnapshot(flowManager, specId);
       const beforeFiles = versionFileSnapshot(flowManager, specId);
       assert.throws(
-        () => flowManager.confirmDraftCoverageRepairCompletion({ specId, decision: selected, draft: source }),
+        () => settleCompletion(flowManager, { specId, application: selected }),
         /canonical producer artifact is not ready for draft-gate: draft\.coverage\.review has no matching confirmed producer Activity/,
       );
       assert.equal(persistedSnapshot(flowManager, specId), beforeState);
@@ -732,15 +740,16 @@ describe("DraftCompletionConnector", () => {
       assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, "draft-coverage-triage");
       flowManager.beginNextAction(specId);
       flowManager.confirmCurrentAttempt({ specId });
+      flowManager.beginNextAction(specId);
 
       const before = flowManager.activityLedger(specId).length;
       const beforeCatalog = flowManager.artifactCatalog(specId).toJSON().artifacts
         .filter((artifact) => ["draft.coverage.triage", "draft.coverage.repair"].includes(artifact.logicalKey));
-      const recovered = resolveDraftCoverageRepairCompletion(facts({
+      const recovered = completionApplication(facts({
         draftDocument: source,
         ...completionEvidence(flowManager, specId),
       }));
-      flowManager.confirmDraftCoverageRepairCompletion({ specId, decision: recovered, draft: source });
+      settleCompletion(flowManager, { specId, application: recovered });
 
       const state = flowManager.canonicalState(specId);
       const activity = flowManager.activityLedger(specId).at(-1);
@@ -804,7 +813,7 @@ describe("DraftCompletionConnector", () => {
         acceptedOperations: [{ path: "goal" }],
         operationDigest: "e".repeat(64),
       });
-      const selected = resolveDraftCoverageRepairCompletion(facts({
+      const selected = completionApplication(facts({
         source: "coverage-repair",
         draftDocument: repaired,
         ...completionEvidence(flowManager, specId, { includeTriage: true }),
@@ -814,10 +823,9 @@ describe("DraftCompletionConnector", () => {
         triage: triageDocument,
         repair: audit,
       }));
-      flowManager.confirmDraftCoverageRepairCompletion({
+      settleCompletion(flowManager, {
         specId,
-        decision: selected,
-        draft: repaired,
+        application: selected,
         artifactBaselines: [{
           logicalKey: "draft",
           digest: crypto.createHash("sha256").update(sourceBytes).digest("hex"),
@@ -857,7 +865,7 @@ describe("DraftCompletionConnector", () => {
       fixture.activate("draft-coverage-review");
       publishCoverageReviewEvidence(flowManager, specId, Buffer.from(`${JSON.stringify(source, null, 2)}\n`, "utf8"));
       fixture.activate("draft-coverage-repair");
-      const selected = resolveDraftCoverageRepairCompletion(facts({
+      const selected = completionApplication(facts({
         draftDocument: source,
         ...completionEvidence(flowManager, specId),
       }));
@@ -873,7 +881,7 @@ describe("DraftCompletionConnector", () => {
       const before = persistedSnapshot(flowManager, specId);
 
       assert.throws(
-        () => flowManager.confirmDraftCoverageRepairCompletion({ specId, decision: selected, draft: source }),
+        () => settleCompletion(flowManager, { specId, application: selected }),
         /stale canonical draft revision/i,
       );
       assert.equal(persistedSnapshot(flowManager, specId), before);
@@ -895,7 +903,7 @@ describe("DraftCompletionConnector", () => {
       fixture.activate("draft-coverage-review");
       publishCoverageReviewEvidence(flowManager, specId, sourceBytes);
       fixture.activate("draft-coverage-repair");
-      const selected = resolveDraftCoverageRepairCompletion(facts({
+      const selected = completionApplication(facts({
         draftDocument: source,
         ...completionEvidence(flowManager, specId),
       }));
@@ -905,8 +913,8 @@ describe("DraftCompletionConnector", () => {
       });
       const before = persistedSnapshot(flowManager, specId);
       assert.throws(
-        () => flowManager.confirmDraftCoverageRepairCompletion({ specId, decision: selected, draft: source }),
-        /does not own the active Attempt/i,
+        () => settleCompletion(flowManager, { specId, application: selected }),
+        /cannot overwrite a failed Attempt/i,
       );
       assert.equal(persistedSnapshot(flowManager, specId), before);
     } finally {
@@ -962,7 +970,8 @@ describe("DraftCompletionConnector", () => {
           : logicalKey === "draft.coverage.triage"
             ? (coverageTriage.descriptor.hash === "f".repeat(64) ? "e".repeat(64) : "f".repeat(64))
           : (questionsReview.hash === "f".repeat(64) ? "e".repeat(64) : "f".repeat(64));
-        const selected = resolveDraftCoverageRepairCompletion(facts({
+        const audit = repairAudit();
+        const selected = completionApplication(facts({
           source: "coverage-repair",
           draftDocument: selectedDraft,
           canonicalDigest: canonicalDraft.descriptor.hash,
@@ -970,14 +979,22 @@ describe("DraftCompletionConnector", () => {
           ...completionEvidence(flowManager, specId, { includeTriage: true }),
           reviewVerdict: "REJECTED",
           triage: triageDocument,
-          repair: repairAudit(),
+          repair: audit,
           reviewArtifactDigest: logicalKey === "draft.coverage.review" ? staleDigest : coverageReview.descriptor.hash,
           triageArtifactDigest: logicalKey === "draft.coverage.triage" ? staleDigest : coverageTriage.descriptor.hash,
           questionsReviewArtifactDigest: logicalKey === "draft.questions.review" ? staleDigest : questionsReview.hash,
         }));
         const before = persistedSnapshot(flowManager, specId);
         assert.throws(
-          () => flowManager.confirmDraftCoverageRepairCompletion({ specId, decision: selected, draft: selectedDraft }),
+          () => settleCompletion(flowManager, {
+            specId,
+            application: selected,
+            artifactWrites: [{
+              logicalKey: "draft.coverage.repair",
+              mediaType: "application/json",
+              bytes: Buffer.from(`${JSON.stringify(audit, null, 2)}\n`, "utf8"),
+            }],
+          }),
           message,
         );
         assert.equal(persistedSnapshot(flowManager, specId), before, `${logicalKey} stale rejection must be side-effect free`);
@@ -1004,7 +1021,7 @@ describe("DraftCompletionConnector", () => {
       publishCoverageReviewEvidence(flowManager, specId, sourceBytes);
       fixture.activate("draft-coverage-repair");
       const before = persistedSnapshot(flowManager, specId);
-      assert.throws(() => resolveDraftCoverageRepairCompletion(facts({
+      assert.throws(() => completionApplication(facts({
         draftDocument: source,
         ...completionEvidence(flowManager, specId),
         reviewVerdict: "REJECTED",
@@ -1098,13 +1115,12 @@ describe("DraftCompletionConnector", () => {
       fixture.activate("draft-coverage-review");
       publishCoverageReviewEvidence(flowManager, specId, sourceBytes);
       fixture.activate("draft-coverage-repair");
-      flowManager.confirmDraftCoverageRepairCompletion({
+      settleCompletion(flowManager, {
         specId,
-        decision: resolveDraftCoverageRepairCompletion(facts({
+        application: completionApplication(facts({
           draftDocument: source,
           ...completionEvidence(flowManager, specId),
         })),
-        draft: source,
       });
 
       const persisted = flowManager.activityLedger(specId).at(-1).transition.stepConnectionReceipt;

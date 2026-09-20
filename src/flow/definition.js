@@ -1091,7 +1091,6 @@ const GATE_DISPOSITIONS = new Set([
 const GATE_TRANSITION_TOKEN = Symbol("definition-gate-transition");
 export const SPEC_GATE_MAXIMUM_CYCLE = 4;
 const NONBLOCKING_ELIGIBILITY_TOKEN = Symbol("definition-nonblocking-eligibility");
-const DRAFT_COVERAGE_REPAIR_COMPLETION_TOKEN = Symbol("definition-draft-coverage-repair-completion");
 const DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN = Symbol("definition-draft-completion-settlement-application");
 export { DraftCompletionConnector } from "./lib/draft-completion-connector.js";
 
@@ -1100,54 +1099,29 @@ export function resolveDraftCompletionConnector(facts) {
   return createDraftCompletionConnector(facts);
 }
 
-/** One sealed result for the shared draft-coverage-repair completion boundary. */
-export class DraftCoverageRepairCompletionDecision {
+/** The concrete completion application selected with a Draft Step settlement. */
+export class DraftCompletionSettlementApplication {
   constructor(token, { facts, connector }) {
-    if (token !== DRAFT_COVERAGE_REPAIR_COMPLETION_TOKEN || !(facts instanceof DraftCompletionFacts)) {
-      throw new Error("Draft coverage repair completion is created only by its selected application");
+    if (token !== DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN
+      || !(facts instanceof DraftCompletionFacts)) {
+      throw new Error("Draft completion application is selected only by Definition");
     }
     if (!(connector instanceof DraftCompletionConnector)) {
-      throw new Error("Draft coverage repair completion requires a DraftCompletionConnector");
+      throw new Error("Draft completion application requires its selected connector");
     }
     this.facts = facts;
     this.connector = connector;
-    this.kind = "draft-coverage-repair-completion";
+    this.kind = "draft-completion";
     Object.freeze(this);
   }
 
   toJSON() {
     return {
-      facts: this.facts.toJSON(),
       kind: this.kind,
-      connector: this.connector?.toJSON() ?? null,
+      facts: this.facts.toJSON(),
+      connector: this.connector.toJSON(),
     };
   }
-}
-
-/** Materializes only the DraftCompletionConnector already selected by a Draft settlement. */
-export class DraftCompletionSettlementApplication {
-  constructor(token) {
-    if (token !== DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN) {
-      throw new Error("Draft completion application is selected only by Definition");
-    }
-    Object.freeze(this);
-  }
-
-  materialize(facts) {
-    return new DraftCoverageRepairCompletionDecision(
-      DRAFT_COVERAGE_REPAIR_COMPLETION_TOKEN,
-      { facts, connector: createDraftCompletionConnector(facts) },
-    );
-  }
-
-  toJSON() { return { kind: "draft-completion" }; }
-}
-
-/** Definition selects the mandatory connector for the shared completion boundary. */
-export function resolveDraftCoverageRepairCompletion(facts) {
-  return new DraftCompletionSettlementApplication(
-    DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN,
-  ).materialize(facts);
 }
 
 export class GateTransitionDisposition {
@@ -3680,6 +3654,9 @@ export function resolveReviewTransition({
   flowState,
   facts,
 } = {}) {
+  // Draft Reviews settle only through their concrete StepResult. They must
+  // never enter the generic retry/defer/blocked Review policy.
+  if (draftReviewRouteForStepId(stepId) !== null) return null;
   const phase = stepId === "task-review" ? "impl" : reviewPhaseForFlowStepId(stepId);
   if (phase === null || !(facts instanceof ReviewTransitionFacts)) return null;
   if (facts.phase !== phase) throw new Error("review transition facts phase does not match step");
@@ -4532,7 +4509,6 @@ function draftRouteEffects(sourceStepId, targetStepId) {
 }
 
 const DRAFT_STEP_SETTLEMENT_TOKEN = Symbol("Definition-selected Draft Step settlement");
-const DRAFT_STEP_SETTLEMENT_RESULTS = new WeakMap();
 
 /** A complete Definition-selected disposition for one Draft Step Result. */
 export class DraftStepSettlement {
@@ -4546,7 +4522,6 @@ export class DraftStepSettlement {
     this.resultKind = result.kind;
     this.resultType = result.type;
     this.kind = requireString(kind, "draft settlement kind");
-    DRAFT_STEP_SETTLEMENT_RESULTS.set(this, result);
   }
 }
 
@@ -4557,17 +4532,16 @@ export class DraftStepRoute extends DraftStepSettlement {
     this.targetStepId = requireString(targetStepId, "draft route target");
     if (typeof connector !== "function") throw new TypeError("draft route requires a Connector");
     this.connector = connector;
-    const completionApplication = application instanceof DraftCompletionSettlementApplication
-      || application instanceof DraftCoverageRepairCompletionDecision;
+    const completionApplication = application instanceof DraftCompletionSettlementApplication;
     if ((connector === DraftCompletionConnector) !== completionApplication) {
       throw new TypeError("Draft completion route requires its selected connector application");
     }
-    if (application instanceof DraftCoverageRepairCompletionDecision && (
+    if (completionApplication && (
       application.facts.sourceStepId !== result.stepId
       || application.facts.targetStepId !== this.targetStepId
       || !(application.connector instanceof connector)
     )) {
-      throw new TypeError("Draft completion decision does not match its selected route");
+      throw new TypeError("Draft completion application does not match its selected route");
     }
     this.application = application;
     this.effects = effects instanceof DraftRouteEffects ? effects : new DraftRouteEffects(effects);
@@ -4583,18 +4557,6 @@ export class DraftStepRoute extends DraftStepSettlement {
     };
   }
 
-  materializeDraftCompletion(facts) {
-    if (!(this.application instanceof DraftCompletionSettlementApplication)) {
-      throw new TypeError("Draft route has no unmaterialized completion application");
-    }
-    return new this.constructor(DRAFT_STEP_SETTLEMENT_TOKEN, {
-      result: DRAFT_STEP_SETTLEMENT_RESULTS.get(this),
-      targetStepId: this.targetStepId,
-      connector: this.connector,
-      effects: this.effects,
-      application: this.application.materialize(facts),
-    });
-  }
 }
 
 export class DraftNextRoute extends DraftStepRoute {}
@@ -5042,22 +5004,33 @@ export class DraftStepSettlementReceipt {
 }
 
 /** Select exactly one settlement from a concrete semantic Draft Step Result. */
-export function settleDraftStepResult(stepId, result) {
+export function settleDraftStepResult(stepId, result, { draftCompletionFacts = null } = {}) {
   if (!(result instanceof StepResult) || result.stepId !== stepId) {
     throw new TypeError("draft settlement requires the Step's concrete Result");
   }
   if (result instanceof DraftStepErrorResult) {
     return new DraftStepErrorDecision(DRAFT_STEP_SETTLEMENT_TOKEN, result);
   }
-  const route = (Route, targetStepId, connector) => new Route(DRAFT_STEP_SETTLEMENT_TOKEN, {
-    result,
-    targetStepId,
-    connector,
-    effects: draftRouteEffects(stepId, targetStepId),
-    application: connector === DraftCompletionConnector
-      ? new DraftCompletionSettlementApplication(DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN)
-      : null,
-  });
+  const route = (Route, targetStepId, connector) => {
+    const completion = connector === DraftCompletionConnector;
+    if (completion !== (draftCompletionFacts instanceof DraftCompletionFacts)) {
+      throw new TypeError(completion
+        ? "Draft completion settlement requires typed completion facts"
+        : "Draft completion facts do not belong to this settlement");
+    }
+    return new Route(DRAFT_STEP_SETTLEMENT_TOKEN, {
+      result,
+      targetStepId,
+      connector,
+      effects: draftRouteEffects(stepId, targetStepId),
+      application: completion
+        ? new DraftCompletionSettlementApplication(DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN, {
+            facts: draftCompletionFacts,
+            connector: createDraftCompletionConnector(draftCompletionFacts),
+          })
+        : null,
+    });
+  };
   if (result instanceof DraftCreatedResult) {
     return route(DraftNextRoute, DRAFT_QUESTIONS_ROUTE.reviewStepId, DraftReviewConnector);
   }

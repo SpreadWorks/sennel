@@ -5,7 +5,19 @@ import {
   DraftCoverageRepairUnchangedResult,
   DraftStepErrorResult,
 } from "../../engine/step-result.js";
+import { DraftRepairResultFacts } from "../../lib/worker-artifact-handoff.js";
 import { isDraftStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
+
+/** Pure mapping from typed Repair facts to this Step's terminal Result. */
+export function draftCoverageRepairResult(facts) {
+  if (facts instanceof Error) return new DraftStepErrorResult("draft-coverage-repair", facts);
+  if (!(facts instanceof DraftRepairResultFacts) || facts.stepId !== "draft-coverage-repair") {
+    throw new TypeError("draft coverage Repair Result requires its typed worker facts");
+  }
+  return facts.draftChanged
+    ? new DraftCoverageRepairChangedResult()
+    : new DraftCoverageRepairUnchangedResult();
+}
 
 /**
  * Apply coverage-triage decisions to the Draft and record the repair.
@@ -25,15 +37,10 @@ export class DraftCoverageRepairStep extends Step {
   async _execute() {
     let result;
     try {
-      const facts = this.#draftService.inspectWorkerFacts();
-      result = facts.draftChanged
-        ? new DraftCoverageRepairChangedResult()
-        : new DraftCoverageRepairUnchangedResult();
+      result = draftCoverageRepairResult(this.#draftService.inspectWorkerFacts().repairResult);
     } catch (error) {
       if (isDraftStepPersistenceFailure(error)) throw error;
-      const failure = new DraftStepErrorResult("draft-coverage-repair", error);
-      await failure.persist(this.#draftService);
-      return failure;
+      result = draftCoverageRepairResult(error);
     }
     await result.persist(this.#draftService);
     return result;

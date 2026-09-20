@@ -6,7 +6,19 @@ import {
   DraftStepErrorResult,
 } from "../../engine/step-result.js";
 import { ReviewService } from "../../services/review-service.js";
+import { DraftReviewArtifactDocument } from "../../lib/draft-review-artifacts.js";
 import { isDraftStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
+
+/** Pure mapping from typed terminal Review facts to this Step's Result. */
+export function draftCoverageReviewResult(facts) {
+  if (facts instanceof Error) return new DraftStepErrorResult("draft-coverage-review", facts);
+  if (!(facts instanceof DraftReviewArtifactDocument) || facts.phase !== "draft-coverage") {
+    throw new TypeError("draft coverage Review Result requires typed Review facts");
+  }
+  return facts.verdict === "PASS"
+    ? new DraftCoverageReviewPassedResult()
+    : new DraftCoverageReviewFindingsResult();
+}
 
 /**
  * Review the bound Draft against the original request and decisions.
@@ -29,18 +41,14 @@ export class DraftCoverageReviewStep extends Step {
       await result.persist(this.#reviewService);
       return result;
     }
+    let result;
     try {
-      const review = this.#reviewService.inspectReviewResult();
-      const result = review.verdict === "PASS"
-        ? new DraftCoverageReviewPassedResult()
-        : new DraftCoverageReviewFindingsResult();
-      await result.persist(this.#reviewService);
-      return result;
+      result = draftCoverageReviewResult(this.#reviewService.inspectReviewResult());
     } catch (error) {
       if (isDraftStepPersistenceFailure(error)) throw error;
-      const result = new DraftStepErrorResult("draft-coverage-review", error);
-      await result.persist(this.#reviewService);
-      return result;
+      result = draftCoverageReviewResult(error);
     }
+    await result.persist(this.#reviewService);
+    return result;
   }
 }

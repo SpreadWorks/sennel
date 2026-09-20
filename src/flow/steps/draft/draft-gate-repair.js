@@ -1,6 +1,5 @@
 import { Step } from "../../engine/step.js";
 import { DraftService } from "../../services/draft-service.js";
-import { executeDraftWorker } from "./draft.js";
 import {
   DraftGateRepairAppliedResult,
   DraftGateRepairWorkerRequiredResult,
@@ -27,6 +26,8 @@ export class DraftGateRepairStep extends Step {
       await result.persist(this.#draftService);
       return result;
     }
-    return executeDraftWorker(this.#draftService, DraftGateRepairAppliedResult);
+    const result = new DraftGateRepairAppliedResult();
+    await result.persist(this.#draftService);
+    return result;
   }
 }

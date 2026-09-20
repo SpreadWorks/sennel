@@ -86,7 +86,14 @@ export class ReviewService {
     if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
       throw new TypeError("ReviewService requires its bound Step's concrete Result");
     }
-    let settlement = settleDraftStepResult(this.binding.stepId, stepResult);
+    let draftCompletionFacts = null;
+    if (stepResult instanceof DraftCoverageReviewPassedResult) {
+      draftCompletionFacts = this.flowManager.readProspectiveDraftCoveragePassFacts({
+        binding: this.binding,
+        commandResult: this.commandResult,
+      });
+    }
+    const settlement = settleDraftStepResult(this.binding.stepId, stepResult, { draftCompletionFacts });
     if (this.executionCheckpointer !== null) {
       if (!(settlement instanceof DraftExecutionSettlement)) {
         throw new DraftStepPersistenceFailure(new Error("Draft review pre-execution Step must select an Execution settlement"));
@@ -107,13 +114,6 @@ export class ReviewService {
       }
     }
     if (stepResult.error === null && this.#reviewDocument === null) this.inspectReviewResult();
-    if (stepResult instanceof DraftCoverageReviewPassedResult) {
-      const facts = this.flowManager.readProspectiveDraftCoveragePassFacts({
-        binding: this.binding,
-        commandResult: this.commandResult,
-      });
-      settlement = settlement.materializeDraftCompletion(facts);
-    }
     const input = {
       binding: this.binding,
       stepResult,

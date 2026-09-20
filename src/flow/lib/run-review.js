@@ -736,6 +736,7 @@ function resolveCurrentReviewRepairFingerprint(
 
 /** Definition-owned admission: this command may execute only when no other Review transition is selected. */
 function reviewExecutionAdmission(ctx, { persistedPhase, executionRoot }) {
+  if (["draft-questions", "draft-coverage"].includes(persistedPhase)) return null;
   const specId = ctx.specId ?? ctx.flowState.specId;
   const flowState = ctx.flowManager.loadReadOnly(specId);
   const currentState = ctx.flowManager.canonicalState(specId);

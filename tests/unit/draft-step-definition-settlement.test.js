@@ -1,15 +1,50 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import test from "node:test";
 import {
   DraftAwaitUserDecision,
   DraftBranchRoute,
   DraftExecutionSettlement,
+  DraftCompletionSettlementApplication,
   DraftLoopRoute,
   DraftNextRoute,
   DraftStepErrorDecision,
   settleDraftStepResult,
 } from "../../src/flow/definition.js";
 import * as results from "../../src/flow/engine/step-result.js";
+import { DraftCompletionFacts } from "../../src/flow/lib/draft-completion-connector.js";
+
+function completionFacts(sourceStepId) {
+  const draft = {
+    devType: "feature",
+    goal: "Select one concrete completion settlement.",
+    analysis: {
+      problem: "The completion route must own its connector.",
+      proposedApproach: "Bind typed facts during Definition selection.",
+      validation: "Inspect the selected application.",
+    },
+    decisionMap: {
+      knownFacts: [], decisionPoints: [], resolvedByProjectRules: [], requiresUserJudgment: [], deferredToSpec: [],
+    },
+    questionLedger: {
+      revision: 0, publication: "unit-test", evidenceDigest: "a".repeat(64), questions: [],
+    },
+  };
+  const bytes = Buffer.from(`${JSON.stringify(draft, null, 2)}\n`, "utf8");
+  const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+  return new DraftCompletionFacts({
+    source: "coverage-pass",
+    sourceStepId,
+    targetStepId: "draft-gate",
+    draft,
+    draftDigest: digest,
+    draftByteLength: bytes.length,
+    reviewDraftDigest: digest,
+    reviewArtifactDigest: "b".repeat(64),
+    questionsReviewArtifactDigest: "c".repeat(64),
+    reviewVerdict: "PASS",
+  });
+}
 
 test("Definition maps every target-connection Result through its selected Connector", () => {
   const cases = [
@@ -33,11 +68,34 @@ test("Definition maps every target-connection Result through its selected Connec
   ];
   for (const [name, SettlementClass, targetStepId, connectorName] of cases) {
     const result = new results[name]();
-    const selected = settleDraftStepResult(result.stepId, result);
+    const draftCompletionFacts = connectorName === "DraftCompletionConnector"
+      ? completionFacts(result.stepId)
+      : null;
+    const selected = settleDraftStepResult(result.stepId, result, { draftCompletionFacts });
     assert.equal(selected instanceof SettlementClass, true, name);
     assert.equal(selected.targetStepId, targetStepId);
     assert.equal(selected.connector.name, connectorName);
+    if (draftCompletionFacts !== null) {
+      assert.equal(selected.application instanceof DraftCompletionSettlementApplication, true);
+      assert.equal(selected.application.facts, draftCompletionFacts);
+      assert.equal(selected.application.connector instanceof selected.connector, true);
+    }
   }
+});
+
+test("Definition rejects a completion Result without typed facts and unrelated facts on another route", () => {
+  const completion = new results.DraftCoverageReviewPassedResult();
+  assert.throws(
+    () => settleDraftStepResult(completion.stepId, completion),
+    /requires typed completion facts/,
+  );
+  const unrelated = new results.DraftCreatedResult();
+  assert.throws(
+    () => settleDraftStepResult(unrelated.stepId, unrelated, {
+      draftCompletionFacts: completionFacts("draft-coverage-review"),
+    }),
+    /do not belong/,
+  );
 });
 
 test("Definition selects connector-free Execution, Await, and Failure settlements", () => {

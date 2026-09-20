@@ -30,7 +30,7 @@ import {
   resolveTaskExecutionOverrun,
   testExecuteTransitionDefinition,
   testResultReviewTransitionDefinition,
-  DraftCoverageRepairCompletionDecision,
+  DraftCompletionSettlementApplication,
   DefinitionNonblockingEligibility,
   resolveSourceQualityIssueRecoveryPlan,
   TaskReviewStageBinding, TaskReviewStageFacts, TaskReviewUnavailableEvidence, TaskReviewFailureFacts, TaskReviewFailurePlan, resolveTaskReviewFailure, resolveTaskReviewStageTransition,
@@ -4071,21 +4071,22 @@ export class CanonicalFlowManagerStore {
       });
       return Object.freeze({ state: next, receipt });
     }
-    if (settlement.application instanceof DraftCoverageRepairCompletionDecision) {
-      const draftCompletionDecision = settlement.application;
-      const facts = draftCompletionDecision.facts;
+    if (settlement.application instanceof DraftCompletionSettlementApplication) {
+      const draftCompletionApplication = settlement.application;
+      const facts = draftCompletionApplication.facts;
       const reviewWrite = writes.find((entry) => entry.logicalKey === "draft.coverage.review") ?? null;
-      const publishedReviewBytes = reviewWrite?.bytes ?? this.#ownedArtifactBytes(
-        resolved,
-        FLOW_ARTIFACT_CONTRACTS.resolve("draft.coverage.review", {}),
-      );
-      if (facts.source === "coverage-pass" && publishedReviewBytes === null) {
+      const publishedReviewBytes = facts.sourceStepId === "draft-coverage-review"
+        ? reviewWrite?.bytes ?? this.#ownedArtifactBytes(
+            resolved,
+            FLOW_ARTIFACT_CONTRACTS.resolve("draft.coverage.review", {}),
+          )
+        : null;
+      if (facts.sourceStepId === "draft-coverage-review" && publishedReviewBytes === null) {
         throw new CurrentFlowStateInvariantError("coverage PASS settlement requires its Review history publication");
       }
-      const next = this.confirmDraftCoverageRepairCompletion({
+      const next = this.#applyDraftCompletionApplication({
         specId: resolved,
-        decision: draftCompletionDecision,
-        draft: facts.draft,
+        application: draftCompletionApplication,
         result: lifecycleResult,
         stepResult,
         references,
@@ -4096,7 +4097,7 @@ export class CanonicalFlowManagerStore {
         prospectiveReview: publishedReviewBytes === null ? null : {
           bytes: publishedReviewBytes,
           descriptor: {
-            hash: facts.reviewArtifactDigest,
+            hash: crypto.createHash("sha256").update(publishedReviewBytes).digest("hex"),
             size: publishedReviewBytes.length,
           },
         },
@@ -4764,14 +4765,13 @@ export class CanonicalFlowManagerStore {
   }
 
   /**
-   * Apply the one Definition-selected coverage-repair completion decision.
-   * The Store never chooses a connector: it validates the selected facts,
-   * publishes the selected draft derivation, and confirms repair together.
+   * Apply the one Definition-selected completion application. The Store never
+   * chooses a connector: it validates the selected facts, publishes the
+   * selected draft derivation, and confirms the source Step together.
    */
-  confirmDraftCoverageRepairCompletion({
+  #applyDraftCompletionApplication({
     specId = null,
-    decision,
-    draft,
+    application,
     result = null,
     stepResult = null,
     references = undefined,
@@ -4786,10 +4786,11 @@ export class CanonicalFlowManagerStore {
     }
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    if (!(decision instanceof DraftCoverageRepairCompletionDecision)) {
-      throw new CurrentFlowStateInvariantError("draft coverage repair completion requires a Definition-selected decision");
+    if (!(application instanceof DraftCompletionSettlementApplication)) {
+      throw new CurrentFlowStateInvariantError("draft completion requires its Definition-selected application");
     }
-    const { facts, connector } = decision;
+    const { facts, connector } = application;
+    const draft = facts.draft;
     const state = this.runtime.load(resolved);
     const sourceNode = state.findNode(facts.sourceStepId);
     const repairWrites = artifactWrites.filter((entry) => entry?.logicalKey === "draft.coverage.repair");
@@ -7188,9 +7189,9 @@ export class CanonicalFlowManagerStore {
       command: commandIdentity,
       gatePublication: settlement instanceof DraftStepErrorDecision
         ? null : jsonIdentity(gatePublication, "Gate publication"),
-      draftCompletionDecision: settlement instanceof DraftStepRoute
-        && settlement.application instanceof DraftCoverageRepairCompletionDecision
-          ? jsonIdentity(settlement.application, "Draft completion decision")
+      draftCompletionApplication: settlement instanceof DraftStepRoute
+        && settlement.application instanceof DraftCompletionSettlementApplication
+          ? jsonIdentity(settlement.application, "Draft completion application")
           : null,
       lifecycleResult: jsonIdentity(lifecycleResult, "lifecycle result"),
       references: settlement instanceof DraftStepErrorDecision ? null : jsonIdentity(references, "references"),

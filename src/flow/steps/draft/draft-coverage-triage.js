@@ -1,6 +1,5 @@
 import { Step } from "../../engine/step.js";
 import { DraftService } from "../../services/draft-service.js";
-import { executeDraftWorker } from "./draft.js";
 import { DraftCoverageTriageCompletedResult } from "../../engine/step-result.js";
 
 /**
@@ -19,6 +18,8 @@ export class DraftCoverageTriageStep extends Step {
   }
 
   async _execute() {
-    return executeDraftWorker(this.#draftService, DraftCoverageTriageCompletedResult);
+    const result = new DraftCoverageTriageCompletedResult();
+    await result.persist(this.#draftService);
+    return result;
   }
 }
