@@ -9,24 +9,18 @@ import { beginFinalRegressionRepairTransition } from "./final-regression-transit
 import GetNextActionCommand from "./get-next-action.js";
 import {
   createConditionalWorkerSettlementPlan,
-  resolveDraftTransition,
   resolveGateTransition,
   resolvePlanGateRepairWorkerTransition,
 } from "../definition.js";
 import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
-import { readDraftTransitionFacts } from "./draft-transition-facts.js";
 import { canonicalPlanGateRepairForTarget } from "./plan-gate-repair.js";
 
 function conditionalWorkerSettlement({ ctx, state, next }) {
   const stepId = state.current?.at(-1) ?? next?.nodeId ?? null;
   let disposition = null;
   let evidenceDigest = null;
-  if (stepId === "draft-refine") {
-    const facts = readDraftTransitionFacts({ flowManager: ctx.flowManager, flowState: ctx.flowState });
-    disposition = facts === null ? null : resolveDraftTransition({ stepId, flowState: ctx.flowState, facts });
-    evidenceDigest = facts?.sourceDigest ?? null;
-  } else if (stepId === "draft-gate-repair") {
+  if (stepId === "draft-gate-repair") {
     const repair = canonicalPlanGateRepairForTarget({
       flowManager: ctx.flowManager,
       state: ctx.flowState,

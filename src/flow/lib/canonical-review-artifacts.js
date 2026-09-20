@@ -170,7 +170,7 @@ export class CanonicalDraftReviewSourceError extends Error {
 }
 
 class CanonicalDraftSourceProducerActivity {
-  constructor({ descriptor, activity, reviewPhase, allowedSteps } = {}) {
+  constructor({ descriptor, activity, activities, reviewPhase, allowedSteps } = {}) {
     if (descriptor === null || typeof descriptor !== "object" || Array.isArray(descriptor)) {
       throw new CanonicalDraftReviewSourceError("canonical draft source requires a catalog descriptor");
     }
@@ -181,25 +181,46 @@ class CanonicalDraftSourceProducerActivity {
       && activity.transition.status === "done";
     const executionPublication = isDraftExecutionPublicationActivity(activity)
       && activity.transition.status === null;
+    const resume = activity?.transition?.draftResumeReceipt ?? null;
+    const consumedAwait = resume === null ? null : activities.find((candidate) => (
+      candidate.result?.draftSettlementReceipt?.id === resume.awaitReceiptId
+    )) ?? null;
+    const completion = resume === null ? null : activities.find((candidate) => {
+      const receipt = candidate.result?.draftSettlementReceipt;
+      return candidate.confirmationOrder > activity.confirmationOrder
+        && receipt?.binding?.attemptId === resume.binding.attemptId
+        && receipt.binding.attemptSequence === resume.binding.attemptSequence
+        && receipt.resultKind === "draft-refine-completed"
+        && receipt.settlementKind === "target-connection"
+        && receipt.targetStepId === "draft-coverage-review";
+    }) ?? null;
+    const answerPublication = activity?.type === "artifacts_published"
+      && activity.transition?.operation === "publish_artifacts"
+      && activity.transition.status === null
+      && resume !== null
+      && consumedAwait?.result?.draftSettlementReceipt?.settlementKind === "await"
+      && consumedAwait.result.draftSettlementReceipt.binding.attemptId === activity.attemptId
+      && consumedAwait.result.draftSettlementReceipt.binding.attemptSequence === activity.sequence
+      && completion !== null;
+    const producerResult = answerPublication ? completion.result : activity.result;
     if (
       activity.id !== descriptor.activityId
       || descriptor.logicalKey !== "draft"
-      || activity.type !== "result_confirmed"
       || activity.transition?.nodeId !== activity.nodeId
-      || (!terminalConfirmation && !executionPublication)
+      || (!terminalConfirmation && !executionPublication && !answerPublication)
       || activity.nodeId !== descriptor.publicationStep
       || !allowedSteps.has(activity.nodeId)
       || typeof activity.attemptId !== "string"
       || activity.attemptId.trim() === ""
       || !Number.isSafeInteger(activity.sequence)
       || activity.sequence < 1
-      || activity.result?.outcome !== "passed"
-      || !isIsoTimestamp(activity.result?.confirmedAt)
+      || producerResult?.outcome !== "passed"
+      || !isIsoTimestamp(producerResult?.confirmedAt)
     ) {
       throw new CanonicalDraftReviewSourceError(`canonical draft source has no authorized ${reviewPhase} producer Activity`);
     }
     this.nodeId = activity.nodeId;
-    this.finalizedAt = activity.result.confirmedAt;
+    this.finalizedAt = producerResult.confirmedAt;
     Object.freeze(this);
   }
 }
@@ -469,6 +490,7 @@ export class CanonicalDraftReviewSource {
     const producer = new CanonicalDraftSourceProducerActivity({
       descriptor: resolved.descriptor,
       activity: publication,
+      activities: ledger,
       reviewPhase: this.phase,
       allowedSteps: allowed,
     });

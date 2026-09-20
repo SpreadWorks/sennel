@@ -8,10 +8,10 @@ export class DraftRefineConnector extends StepConnector {
   }
 
   async connect() {
-    const { DraftWorkerStepBinding, DraftRefineAwaitBinding } = await import("./draft-step-binding.js");
+    const { DraftWorkerStepBinding, DraftWorkerExecutionStepBinding } = await import("./draft-step-binding.js");
     const binding = this.request?.stepId === "draft-refine"
       ? new DraftWorkerStepBinding({ request: this.request })
-      : new DraftRefineAwaitBinding(this.request);
+      : new DraftWorkerExecutionStepBinding({ ...this.request, stepId: "draft-refine" });
     binding.assertCurrent();
     return binding;
   }

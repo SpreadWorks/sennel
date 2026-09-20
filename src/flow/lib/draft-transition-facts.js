@@ -15,20 +15,25 @@ export class DraftQuestionFact {
   }
 }
 export class DraftTransitionFacts {
-  constructor({ ledger, workerStatus = "pending", sourceDigest = null, nextQuestion = null, candidateQuestion = null } = {}) {
+  constructor({ ledger, workerStatus = "pending", origin = "canonical", sourceDigest = null, sourceByteLength = null, nextQuestion = null, candidateQuestion = null } = {}) {
     if (!(ledger instanceof DraftQuestionLedger)) throw new Error("draft transition facts require a typed ledger");
     if (nextQuestion !== null && !(nextQuestion instanceof DraftQuestionFact)) throw new Error("draft transition facts require a typed next question");
     if (candidateQuestion !== null && !(candidateQuestion instanceof DraftQuestionFact)) throw new Error("draft transition facts require a typed candidate question");
     if (!["pending", "invalidated", "in_progress"].includes(workerStatus)) throw new Error("draft transition facts worker status is invalid");
+    if (!["canonical", "sealed-worker-output"].includes(origin)) throw new Error("draft transition facts origin is invalid");
     if (sourceDigest !== null && !/^[a-f0-9]{64}$/.test(sourceDigest)) throw new Error("draft transition facts source digest is invalid");
-    this.ledger = ledger; this.workerStatus = workerStatus; this.sourceDigest = sourceDigest; this.nextQuestion = nextQuestion; this.candidateQuestion = candidateQuestion; Object.freeze(this);
+    if ((sourceDigest === null) !== (sourceByteLength === null)
+      || (sourceByteLength !== null && (!Number.isSafeInteger(sourceByteLength) || sourceByteLength < 0))) {
+      throw new Error("draft transition facts source byte length is invalid");
+    }
+    this.ledger = ledger; this.workerStatus = workerStatus; this.origin = origin; this.sourceDigest = sourceDigest; this.sourceByteLength = sourceByteLength; this.nextQuestion = nextQuestion; this.candidateQuestion = candidateQuestion; Object.freeze(this);
   }
-  static fromDraft(draft, { workerStatus = "pending", sourceDigest = null } = {}) {
+  static fromDraft(draft, { workerStatus = "pending", origin = "canonical", sourceDigest = null, sourceByteLength = null } = {}) {
     if (!(draft instanceof DraftLifecycle)) throw new Error("draft transition facts require a DraftLifecycle");
     if (draft.questionLedger === null) throw new Error(draft.validateQuestionStructure().join("; "));
     const question = draft.questionLedger.nextAwaiting();
     const candidate = draft.questionLedger.nextCandidate();
-    return new DraftTransitionFacts({ ledger: draft.questionLedger, workerStatus, sourceDigest, nextQuestion: question === null ? null : new DraftQuestionFact(question), candidateQuestion: candidate === null ? null : new DraftQuestionFact(candidate) });
+    return new DraftTransitionFacts({ ledger: draft.questionLedger, workerStatus, origin, sourceDigest, sourceByteLength, nextQuestion: question === null ? null : new DraftQuestionFact(question), candidateQuestion: candidate === null ? null : new DraftQuestionFact(candidate) });
   }
 }
 export class DraftTransitionFactsError extends Error { constructor(code, message) { super(message); this.name = "DraftTransitionFactsError"; this.code = code; } }
@@ -42,6 +47,6 @@ export function readDraftTransitionFacts({ flowManager, flowState } = {}) {
       "canonical draft-refine lifecycle state is unavailable for transition selection",
     );
   }
-  try { return DraftTransitionFacts.fromDraft(new DraftLifecycle(JSON.parse(source.bytes.toString("utf8"))), { workerStatus, sourceDigest: source.descriptor.hash }); }
+  try { return DraftTransitionFacts.fromDraft(new DraftLifecycle(JSON.parse(source.bytes.toString("utf8"))), { workerStatus, sourceDigest: source.descriptor.hash, sourceByteLength: source.descriptor.size }); }
   catch (cause) { throw new DraftTransitionFactsError("DRAFT_SCHEMA_INVALID", `canonical draft question ledger is invalid: ${cause.message}; run reopen-draft to regenerate a valid questionLedger`); }
 }

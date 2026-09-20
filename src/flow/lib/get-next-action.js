@@ -18,7 +18,6 @@ import {
   ConfirmAndAdvance,
   deriveNextAction,
   resolveDefinitionRoute,
-  resolveDraftTransition,
   resolvePlanGateRepairWorkerTransition,
   resolveTaskExecutionOverrun,
   selectedNonGateUserAction,
@@ -73,10 +72,7 @@ import {
 } from "./test-review-repair.js";
 import { inspectRetryRecoveryPlan, retryEvidenceRouteForNode } from "./retry-recovery.js";
 import { resolveCurrentReviewTransition } from "./review-transition-persistence.js";
-import {
-  DraftTransitionFactsError,
-  readDraftTransitionFacts,
-} from "./draft-transition-facts.js";
+import { DraftLifecycle } from "./draft-lifecycle.js";
 import {
   acceptanceDecisionRouteFacts,
   approvalRouteFacts,
@@ -613,6 +609,45 @@ function draftQuestionDirective(disposition) {
   });
 }
 
+function persistedDraftRefineDisposition({ flowManager, typedState }) {
+  const binding = {
+    runId: typedState.runId,
+    specId: typedState.specId,
+    stepId: "draft-refine",
+    attempt: typedState.attempt,
+  };
+  const projected = flowManager.draftRefineStepState({ binding });
+  if (projected.requiresStepSelection) return null;
+  const identity = projected.awaitQuestionIdentity();
+  if (identity === null) return projected.dispositionForQuestion();
+  const source = flowManager.readArtifact({
+    specId: typedState.specId,
+    logicalKey: "draft",
+    consumerNodeId: "draft-refine",
+  });
+  if (source.descriptor.hash !== identity.sourceDigest
+    || source.descriptor.size !== identity.sourceByteLength) {
+    throw new NextActionPlanError(
+      "DRAFT_AWAIT_RECEIPT_STALE",
+      "persisted Draft Await receipt does not bind the canonical Draft revision",
+    );
+  }
+  let draft;
+  try {
+    draft = new DraftLifecycle(JSON.parse(source.bytes.toString("utf8")));
+  } catch (cause) {
+    throw new NextActionPlanError("DRAFT_SCHEMA_INVALID", `canonical Draft is invalid: ${cause.message}`);
+  }
+  const question = draft.questionLedger.nextAwaiting();
+  if (question?.id !== identity.questionId || question.revision !== identity.questionRevision) {
+    throw new NextActionPlanError(
+      "DRAFT_AWAIT_RECEIPT_STALE",
+      "persisted Draft Await receipt does not select the canonical pending question",
+    );
+  }
+  return projected.dispositionForQuestion(question);
+}
+
 function conditionalWorkerDirective(disposition, { state, binding }) {
   if (disposition === null || disposition.operation === "execute-worker" || disposition.operation === "await-user-answer") return null;
   if (disposition.operation === "blocked") {
@@ -772,17 +807,10 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     && target.stepId === "draft-refine"
     && ["start", "recover", "resume", "retry"].includes(descriptor.operation)
   ) {
-    try {
-      const facts = readDraftTransitionFacts({ flowManager: ctx.flowManager, flowState: state });
-      conditionalWorkerDisposition = facts === null
-        ? null
-        : resolveDraftTransition({ stepId: target.stepId, flowState: state, facts });
-    } catch (error) {
-      if (error instanceof DraftTransitionFactsError) {
-        throw new NextActionPlanError(error.code, error.message);
-      }
-      throw error;
-    }
+    conditionalWorkerDisposition = persistedDraftRefineDisposition({
+      flowManager: ctx.flowManager,
+      typedState,
+    });
   }
   if (
     target.scope === "flow"

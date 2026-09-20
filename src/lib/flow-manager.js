@@ -512,6 +512,24 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  draftRefineStepState(input = {}) {
+    return this._store.draftRefineStepState({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  findDraftQuestionResumeReceipt(input = {}) {
+    return this._store.findDraftQuestionResumeReceipt({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  recordDraftQuestionResume(input = {}) {
+    return this._store.recordDraftQuestionResume({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   settleConditionalWorker(input = {}) {
     return this._store.settleConditionalWorker({
       ...input,

@@ -10,7 +10,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import GetNextActionCommand from "../../src/flow/lib/get-next-action.js";
 import RunFilterTaskReviewCommand from "../../src/flow/lib/run-filter-task-review.js";
-import RunClaimNextActionCommand from "../../src/flow/lib/run-claim-next-action.js";
 import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
 import RunReviewCommand from "../../src/flow/lib/run-review.js";
 import { sourceWorkerEffectJsonSchema } from "../../src/flow/lib/source-worker-effect-schema.js";
@@ -578,20 +577,43 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         flowState: completed,
       });
       assert.equal(downstream.step, "draft-refine");
-      assert.equal(downstream.directive.actionId, "SKIP_CONDITIONAL_WORKER");
-      for (const stepId of ["draft-refine", "draft-gate-repair"]) {
-        const claim = await new RunClaimNextActionCommand().execute({
-          root: executionRoot, executionRoot, mainRoot, specId, flowManager,
-          flowState: flowManager.loadReadOnly(specId),
-        });
-        assert.equal(claim.ok, true, JSON.stringify(claim));
-        assert.equal(claim.data.step, stepId);
-        assert.equal(claim.data.status, "skipped");
+      assert.equal(downstream.directive.kind, "execute_step");
+      let downstreamAgentCalls = 0;
+      class UnexpectedWorkerAgent extends Agent {
+        constructor() { super({}); }
+        async call() {
+          downstreamAgentCalls += 1;
+          throw new Error("empty draft-refine must not start a worker");
+        }
       }
-      const claimed = flowManager.loadReadOnly(specId);
-      assert.equal(claimed.currentNodeId, null);
+      const downstreamDispatcher = new RunDispatchCommand({
+        nextAction: {
+          async run() {
+            return findStepById(flowManager.load().steps, "draft-refine").status === "done"
+              ? action(null)
+              : action("draft-refine");
+          },
+        },
+        agent: new UnexpectedWorkerAgent(),
+        repositoryFingerprint: () => "real-agent-handoff",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+      });
+      downstreamDispatcher.container = {};
+      const resumed = await downstreamDispatcher.execute({
+        root: executionRoot, executionRoot, mainRoot, specId, flowManager,
+        flowState: flowManager.loadReadOnly(specId),
+        expectRunId: state.runId,
+        expectSpec: specId,
+        _envelopeType: "run",
+        _envelopeKey: "dispatch",
+      });
+      assert.equal(resumed.dispatch?.boundary, "completed", JSON.stringify(resumed));
+      assert.equal(resumed.dispatch.dispatchCount, 1);
+      assert.equal(downstreamAgentCalls, 0);
+      const refined = flowManager.loadReadOnly(specId);
+      assert.equal(refined.currentNodeId, null);
       assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, "draft-coverage-review");
-      const source = new CanonicalDraftReviewSource({ flowManager, state: claimed, phase: "draft-coverage" });
+      const source = new CanonicalDraftReviewSource({ flowManager, state: refined, phase: "draft-coverage" });
       assert.equal(source.sourceNodeId, "draft-questions-repair");
       assert.deepEqual(JSON.parse(source.bytes), draftHandoffPayload("Parent publication is canonical."));
     } finally {

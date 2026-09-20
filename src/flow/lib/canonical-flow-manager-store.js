@@ -1,4 +1,6 @@
 import { projectAdvisorySummary } from "./advisory-summary.js";
+import { DraftQuestionResumeReceipt, DraftQuestionResolutionIdentity } from "./draft-question-resume-receipt.js";
+import { DraftWorkerExecutionStepBinding } from "../engine/connectors/draft/draft-step-binding.js";
 /**
  * Canonical persistence boundary used by FlowManager.
  *
@@ -47,9 +49,12 @@ import {
   DraftExecutionSettlement,
   DraftStepSettlement,
   DraftStepSettlementReceipt,
+  DraftStepSettlementReceiptValue,
+  DraftAwaitQuestionIdentity,
   DraftStepSettlementPublication,
   DraftStepExecutionLifecycle,
   DraftStepExecutionState,
+  DraftRefineStepState,
   DraftReviewExecutionBinding,
   DraftWorkerExecutionBinding,
   DraftReviewExecutionClaim,
@@ -3018,13 +3023,20 @@ export class CanonicalFlowManagerStore {
     sourcePayloadDigest,
     handoffDigest,
     handoffRequestDigest,
-    stepResult = null,
-    settlement = null,
-    binding = null,
+    stepResult,
+    settlement,
+    binding,
     lifecycleResult = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    if (!(stepResult instanceof DraftRefineAwaitingAnswerResult)
+      || !(settlement instanceof DraftAwaitUserDecision)
+      || !(binding instanceof DraftWorkerExecutionStepBinding)) {
+      throw new CurrentFlowStateInvariantError(
+        "draft promotion requires its typed Result, Settlement, and execution binding",
+      );
+    }
     if (typeof questionId !== "string" || questionId.trim() === "") throw new CurrentFlowStateInvariantError("draft promotion questionId is required");
     if (!Number.isSafeInteger(questionRevision) || questionRevision < 0) throw new CurrentFlowStateInvariantError("draft promotion questionRevision is invalid");
     if (typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest) || !Number.isSafeInteger(byteLength) || byteLength < 0) throw new CurrentFlowStateInvariantError("draft promotion baseline is invalid");
@@ -3074,24 +3086,21 @@ export class CanonicalFlowManagerStore {
           { id: promotedDigest, label: `draft question ${questionId}@${questionRevision} promoted artifact` },
         ],
       });
-    if (stepResult !== null) {
-      return this.settleDraftStepResult({
-        specId: resolved,
-        binding,
-        stepResult,
-        settlement,
-        lifecycleResult,
-        references,
-        artifactBaselines,
-        artifactWrites,
-      });
-    }
-    return this.runtime.publishArtifacts({
-      specId: resolved, activityId: activityId("draft-question-promoted"), nodeId: "draft-refine",
-      expectedAttempt: CurrentAttemptIdentity.from(state.attempt),
+    return this.settleDraftStepResult({
+      specId: resolved,
+      binding,
+      stepResult,
+      settlement,
+      lifecycleResult,
+      references,
       artifactBaselines,
       artifactWrites,
-      references,
+      awaitQuestion: new DraftAwaitQuestionIdentity({
+        questionId,
+        questionRevision: questionRevision + 1,
+        sourceDigest: promotedDigest,
+        sourceByteLength: promotedBytes.length,
+      }),
     });
   }
 
@@ -3688,6 +3697,7 @@ export class CanonicalFlowManagerStore {
     specRecord = undefined,
     planGateRepairOutcome = null,
     executionLifecycle = null,
+    awaitQuestion = null,
   } = {}) {
     return new DraftStepSettlementReceipt({
       binding,
@@ -3708,6 +3718,7 @@ export class CanonicalFlowManagerStore {
         planGateRepairOutcome,
       }),
       executionLifecycle,
+      awaitQuestion,
     });
   }
 
@@ -3808,9 +3819,14 @@ export class CanonicalFlowManagerStore {
       && binding?.stepId === state.current?.at(-1) && binding.stepId === stepResult.stepId
       && binding.stepId === settlement.sourceStepId && binding?.attempt?.id === state.attempt?.id
       && binding?.attempt?.sequence === state.attempt?.sequence;
+    const resumeReceipts = this.activityLedger(resolved)
+      .map((entry) => entry.transition?.draftResumeReceipt ?? null)
+      .filter((entry) => entry?.binding.attemptId === receipt.binding.attemptId
+        && entry.binding.attemptSequence === receipt.binding.attemptSequence);
     assertDraftSettlementReceiptTransition(
       bindingActivities.map((entry) => entry.result.draftSettlementReceipt),
       receipt,
+      { resumeReceipts },
     );
     if (!currentBinding) throw new CurrentFlowStateConflictError("Draft settlement binding is stale");
     return null;
@@ -3914,6 +3930,7 @@ export class CanonicalFlowManagerStore {
     specRecord = undefined,
     planGateRepairOutcome = null,
     executionLifecycle = undefined,
+    awaitQuestion = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null || !(stepResult instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
@@ -3937,6 +3954,7 @@ export class CanonicalFlowManagerStore {
       specRecord,
       planGateRepairOutcome,
       executionLifecycle: selectedExecutionLifecycle,
+      awaitQuestion,
     });
     return this.activityLedger(resolved).find((entry) => (
       entry.result?.draftSettlementReceipt?.id === receipt.id
@@ -3944,10 +3962,11 @@ export class CanonicalFlowManagerStore {
   }
 
   /** Read the latest exact Await receipt without reconstructing its publication. */
-  findDraftAwaitSettlementReceipt({ specId = null, binding, stepResult, settlement } = {}) {
+  findDraftAwaitSettlementReceipt({ specId = null, binding, stepResult, settlement, awaitQuestion } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null || !(stepResult instanceof DraftRefineAwaitingAnswerResult)
-      || !(settlement instanceof DraftAwaitUserDecision)) return null;
+      || !(settlement instanceof DraftAwaitUserDecision)
+      || !(awaitQuestion instanceof DraftAwaitQuestionIdentity)) return null;
     const state = this.runtime.load(resolved);
     if (binding?.runId !== state.runId || binding?.specId !== state.specId
       || binding?.stepId !== "draft-refine" || state.current?.at(-1) !== "draft-refine"
@@ -3966,8 +3985,134 @@ export class CanonicalFlowManagerStore {
     if (latest === null || latest.resultKind !== stepResult.kind
       || latest.resultType !== stepResult.type || latest.resultDigest !== resultDigest
       || latest.settlementKind !== "await" || latest.targetStepId !== null
-      || latest.effects !== null || latest.connector !== null) return null;
+      || latest.effects !== null || latest.connector !== null
+      || JSON.stringify(latest.awaitQuestion?.toJSON?.() ?? latest.awaitQuestion)
+        !== JSON.stringify(awaitQuestion.toJSON())) return null;
     return latest;
+  }
+
+  /** Project only persisted draft-refine Result/Settlement and resume authority for one Attempt. */
+  draftRefineStepState({ specId = null, binding } = {}) {
+    const resolved = this.#resolveSpecId(specId ?? binding?.specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const snapshot = this.runtime.loadSnapshot(resolved);
+    if (snapshot === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const state = snapshot.state;
+    if (binding?.runId !== state.runId || binding?.specId !== state.specId
+      || binding?.stepId !== "draft-refine" || state.current?.at(-1) !== "draft-refine"
+      || binding?.attempt?.id !== state.attempt?.id
+      || binding?.attempt?.sequence !== state.attempt?.sequence) {
+      throw new CurrentFlowStateConflictError("Draft refine projection binding is stale");
+    }
+    const activities = snapshot.activities.filter((entry) => (
+      entry.nodeId === "draft-refine"
+      && entry.attemptId === binding.attempt.id
+      && entry.sequence === binding.attempt.sequence
+    ));
+    const settlementActivity = activities.findLast((entry) => entry.result?.draftSettlementReceipt != null) ?? null;
+    const resumeActivity = activities.findLast((entry) => entry.transition?.draftResumeReceipt != null) ?? null;
+    return new DraftRefineStepState({
+      binding,
+      settlement: settlementActivity?.result.draftSettlementReceipt ?? null,
+      resume: resumeActivity?.transition.draftResumeReceipt ?? null,
+      resumeAfterSettlement: resumeActivity !== null
+        && (settlementActivity === null || resumeActivity.confirmationOrder > settlementActivity.confirmationOrder),
+    });
+  }
+
+  findDraftQuestionResumeReceipt({ specId = null, binding, questionId, questionRevision, resolution } = {}) {
+    if (!(resolution instanceof DraftQuestionResolutionIdentity)) return null;
+    const resolved = this.#resolveSpecId(specId ?? binding?.specId);
+    if (resolved === null) return null;
+    const request = {
+        binding: {
+          runId: binding.runId,
+          specId: binding.specId,
+          stepId: binding.stepId,
+          attemptId: binding.attempt.id,
+          attemptSequence: binding.attempt.sequence,
+        },
+        questionId,
+        questionRevision,
+        resolution,
+      };
+    return this.activityLedger(resolved)
+      .map((activity) => activity.transition?.draftResumeReceipt ?? null)
+      .filter(Boolean)
+      .map((stored) => DraftQuestionResumeReceipt.fromJSON(stored.toJSON?.() ?? stored))
+      .findLast((receipt) => receipt.matchesRequest(request)) ?? null;
+  }
+
+  /** Atomically publish the answered Draft and its exact same-Attempt resume authority. */
+  recordDraftQuestionResume({
+    specId = null,
+    binding,
+    awaitReceipt,
+    questionId,
+    questionRevision,
+    resolution,
+    source,
+    outputBytes,
+  } = {}) {
+    const resolved = this.#resolveSpecId(specId ?? binding?.specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    if (!(resolution instanceof DraftQuestionResolutionIdentity)
+      || !(awaitReceipt instanceof DraftStepSettlementReceiptValue)
+      || !Buffer.isBuffer(outputBytes)
+      || awaitReceipt?.settlementKind !== "await"
+      || awaitReceipt?.awaitQuestion?.questionId !== questionId
+      || awaitReceipt?.awaitQuestion?.questionRevision !== questionRevision
+      || source?.descriptor?.hash !== awaitReceipt?.awaitQuestion?.sourceDigest
+      || source?.descriptor?.size !== awaitReceipt?.awaitQuestion?.sourceByteLength) {
+      throw new CurrentFlowStateConflictError("Draft answer does not match its persisted Await receipt");
+    }
+    const receipt = new DraftQuestionResumeReceipt({
+      binding: {
+        runId: binding.runId,
+        specId: binding.specId,
+        stepId: binding.stepId,
+        attemptId: binding.attempt.id,
+        attemptSequence: binding.attempt.sequence,
+      },
+      awaitReceiptId: awaitReceipt.id,
+      questionId,
+      questionRevision,
+      resolution,
+      sourceDigest: source.descriptor.hash,
+      sourceByteLength: source.descriptor.size,
+      outputDigest: crypto.createHash("sha256").update(outputBytes).digest("hex"),
+    });
+    const replay = this.findDraftQuestionResumeReceipt({
+      specId: resolved, binding, questionId, questionRevision, resolution,
+    });
+    if (replay !== null) return Object.freeze({ state: this.runtime.load(resolved), receipt: replay });
+    try {
+      const next = this.runtime.publishArtifacts({
+        specId: resolved,
+        activityId: activityId("draft-question-resumed"),
+        nodeId: "draft-refine",
+        expectedAttempt: CurrentAttemptIdentity.from(binding.attempt),
+        artifactBaselines: [new CanonicalFlowArtifactBaseline({
+          logicalKey: "draft",
+          digest: source.descriptor.hash,
+          byteLength: source.descriptor.size,
+        })],
+        artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: outputBytes }],
+        draftResumeReceipt: receipt,
+      });
+      return Object.freeze({ state: next, receipt });
+    } catch (error) {
+      // A concurrent identical command may have committed after the initial
+      // readback. Preserve exact idempotency without accepting a different
+      // question, revision, or normalized resolution.
+      const committed = this.findDraftQuestionResumeReceipt({
+        specId: resolved, binding, questionId, questionRevision, resolution,
+      });
+      if (committed !== null) {
+        return Object.freeze({ state: this.runtime.load(resolved), receipt: committed });
+      }
+      throw error;
+    }
   }
 
   settleDraftStepResult({
@@ -3986,6 +4131,7 @@ export class CanonicalFlowManagerStore {
     testSourceBaseline = undefined,
     planGateRepairOutcome = null,
     executionLifecycle = undefined,
+    awaitQuestion = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
@@ -4010,6 +4156,7 @@ export class CanonicalFlowManagerStore {
       specRecord,
       planGateRepairOutcome,
       executionLifecycle: selectedExecutionLifecycle,
+      awaitQuestion,
     });
     const state = this.runtime.load(resolved);
     const replay = this.#admitDraftSettlement({

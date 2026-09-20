@@ -44,7 +44,8 @@ import {
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
 import { DraftStep } from "../../../src/flow/steps/draft/draft.js";
-import { DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
+import { createDraftRefineResult, DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
+import { readDraftTransitionFacts } from "../../../src/flow/lib/draft-transition-facts.js";
 import {
   DraftCreatedResult,
   DraftGateRepairWorkerRequiredResult,
@@ -199,6 +200,8 @@ function fixture(stepId = "draft", {
     const handoff = createRequest({
       ...input,
       deferPreparation: conditionalDraft || input.deferPreparation === true,
+      deferConditionalAdmission: input.deferConditionalAdmission === true
+        || input.invocation?.action?.nextAction?.step === "draft-refine",
     });
     if (conditionalDraft && input.deferPreparation !== true) {
       const state = flowManager.canonicalState(specId);
@@ -216,12 +219,24 @@ function fixture(stepId = "draft", {
         inputRevision: handoff.inputRevision,
       });
       const stepResult = handoff.stepId === "draft-refine"
-        ? new DraftRefineWorkerRequiredResult()
+        ? createDraftRefineResult({
+            facts: readDraftTransitionFacts({
+              flowManager,
+              flowState: flowManager.loadReadOnly(specId),
+            }),
+            autoApprove: state.policy.autoApprove,
+          })
         : new DraftGateRepairWorkerRequiredResult();
+      if (handoff.stepId === "draft-refine" && stepResult.kind !== "draft-refine-worker-required") {
+        coordinator.admitConditionalDraftRequest({ ctx: input.ctx, state: input.state, request: handoff });
+      }
       const settlement = settleDraftStepResult(handoff.stepId, stepResult);
       flowManager.checkpointDraftStepExecution({
         binding, stepResult, settlement, executionBinding,
       });
+      if (handoff.stepId === "draft-refine") {
+        coordinator.admitConditionalDraftRequest({ ctx: input.ctx, state: input.state, request: handoff });
+      }
       flowManager.claimDraftStepExecution({
         binding,
         stepResult,
@@ -4753,6 +4768,7 @@ describe("worker artifact handoff", () => {
         .execute();
       assert.equal(selected.kind, "draft-refine-worker-required");
       assert.equal(fs.existsSync(request.requestPath), false);
+      value.coordinator.admitConditionalDraftRequest({ ctx: value.ctx, state, request });
       value.flowManager.claimDraftStepExecution({
         binding,
         stepResult: admittedResult,
@@ -5117,6 +5133,27 @@ describe("worker artifact handoff", () => {
       assert.equal(second.receipt.binding.attemptId, retained.id);
       assert.equal(second.receipt.binding.attemptSequence, retained.sequence);
       assert.equal(value.flowManager.canonicalState(value.specId).current.at(-1), "draft-refine");
+      const secondAnswer = new SetDraftAnswerCommand().execute({
+        ...value.ctx,
+        flowState: value.flowManager.load(),
+        questionId: "q2",
+        questionRevision: 1,
+        answer: "Keep the explicit compatibility boundary.",
+        why: "The user selected it for the public contract.",
+      });
+      assert.equal(secondAnswer.replayed, false);
+      const activityCount = value.flowManager.activityLedger(value.specId).length;
+      const firstAnswerReplay = new SetDraftAnswerCommand().execute({
+        ...value.ctx,
+        flowState: value.flowManager.load(),
+        questionId: "q1",
+        questionRevision: 1,
+        answer: "Keep the established public behavior.",
+        why: "The user selected the existing compatibility contract.",
+      });
+      assert.equal(firstAnswerReplay.replayed, true);
+      assert.equal(firstAnswerReplay.resumeReceiptId, answer.resumeReceiptId);
+      assert.equal(value.flowManager.activityLedger(value.specId).length, activityCount);
     } finally {
       removeTmpDir(value.mainRoot);
     }

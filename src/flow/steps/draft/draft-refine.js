@@ -7,10 +7,30 @@ import {
 } from "../../engine/step-result.js";
 import { DraftService } from "../../services/draft-service.js";
 import { isDraftStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
+import { DraftTransitionFacts } from "../../lib/draft-transition-facts.js";
+
+/** The sole draft-refine facts-to-Result decision. */
+export function createDraftRefineResult({ facts, autoApprove } = {}) {
+  if (!(facts instanceof DraftTransitionFacts)) {
+    throw new TypeError("draft-refine Result selection requires typed transition facts");
+  }
+  if (typeof autoApprove !== "boolean") {
+    throw new TypeError("draft-refine Result selection requires autoApprove");
+  }
+  if (facts.nextQuestion !== null && autoApprove !== true) {
+    return new DraftRefineAwaitingAnswerResult();
+  }
+  if ((facts.candidateQuestion !== null && (autoApprove === true || facts.origin === "canonical"))
+    || (autoApprove === true && facts.nextQuestion !== null)) {
+    return new DraftRefineWorkerRequiredResult();
+  }
+  if (facts.candidateQuestion !== null) return new DraftRefineAwaitingAnswerResult();
+  return new DraftRefineCompletedResult();
+}
 
 /**
  * Apply user answers and resolve remaining Draft questions.
- * The bound question determines whether this step waits or runs a worker.
+ * Typed canonical or sealed-worker facts determine its concrete Result.
  */
 export class DraftRefineStep extends Step {
   static dependencies = [DraftService];
@@ -24,21 +44,9 @@ export class DraftRefineStep extends Step {
   }
 
   async _execute() {
-    if (this.#draftService.requiresWorkerExecution()) {
-      const result = new DraftRefineWorkerRequiredResult();
-      await result.persist(this.#draftService);
-      return result;
-    }
-    if (this.#draftService.awaitingUserInput()) {
-      const result = new DraftRefineAwaitingAnswerResult();
-      await result.persist(this.#draftService);
-      return result;
-    }
     try {
-      const facts = this.#draftService.inspectWorkerFacts();
-      const result = facts.hasCandidateQuestion
-        ? (facts.autoApprove ? new DraftRefineWorkerRequiredResult() : new DraftRefineAwaitingAnswerResult())
-        : new DraftRefineCompletedResult();
+      const input = this.#draftService.inspectDraftTransition();
+      const result = createDraftRefineResult(input);
       await result.persist(this.#draftService);
       return result;
     } catch (error) {

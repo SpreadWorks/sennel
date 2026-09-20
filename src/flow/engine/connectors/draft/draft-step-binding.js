@@ -3,7 +3,6 @@ import { CurrentAttemptIdentity } from "../../../lib/current-flow-state.js";
 import { GateTransitionFacts } from "../../../lib/gate-transition.js";
 import { readCurrentGateTransitionFacts } from "../../../lib/gate-transition-facts.js";
 import { draftReviewRouteForRetryPhase } from "../../../lib/draft-review-routes.js";
-import { readDraftTransitionFacts } from "../../../lib/draft-transition-facts.js";
 import {
   requiresWorkerArtifactHandoff,
 } from "../../../lib/flow-artifact-authority.js";
@@ -96,35 +95,6 @@ export class DraftWorkerExecutionStepBinding extends DraftStepBinding {
     }
     super({ flowManager, state, stepId, attempt: state.attempt });
     Object.freeze(this);
-  }
-}
-
-/** The exact pending question for a refine Attempt awaiting the user. */
-export class DraftRefineAwaitBinding extends DraftStepBinding {
-  constructor({ flowManager, specId } = {}) {
-    const state = canonicalState(flowManager, specId);
-    if (state.current?.at(-1) !== "draft-refine" || state.attempt?.nodeId !== "draft-refine"
-      || state.autoApprove === true) {
-      throw new Error("Draft refine await binding requires its active manual Attempt");
-    }
-    const facts = readDraftTransitionFacts({ flowManager, flowState: flowManager.loadReadOnly(specId) });
-    if (facts?.nextQuestion === null || facts?.nextQuestion === undefined) {
-      throw new Error("Draft refine has no question awaiting a user answer");
-    }
-    super({ flowManager, state, stepId: "draft-refine", attempt: state.attempt });
-    this.questionId = facts.nextQuestion.id;
-    this.questionRevision = facts.nextQuestion.revision;
-    Object.freeze(this);
-  }
-
-  assertCurrent() {
-    const state = super.assertCurrent();
-    const facts = readDraftTransitionFacts({ flowManager: this.flowManager, flowState: this.flowManager.loadReadOnly(this.specId) });
-    if (facts?.nextQuestion?.id !== this.questionId
-      || facts.nextQuestion.revision !== this.questionRevision) {
-      throw new Error("Draft refine awaiting question revision is stale");
-    }
-    return state;
   }
 }
 

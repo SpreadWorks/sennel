@@ -94,7 +94,6 @@ import {
 } from "../engine/connectors/draft/draft-step-binding.js";
 import {
   DraftGateRepairWorkerRequiredResult,
-  DraftRefineWorkerRequiredResult,
 } from "../engine/step-result.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 
@@ -126,10 +125,12 @@ const NON_REPLAYABLE_HANDOFF_ERROR_CODES = new Set([
   "FLOW_SOURCE_HANDOFF_CANONICAL_PATH_VIOLATION",
 ]);
 const REQUIREMENT_TEST_WORKER_LEAVES = new Set(["test-generate", "test-repair"]);
-function conditionalDraftExecutionResult(stepId) {
-  if (stepId === "draft-refine") return new DraftRefineWorkerRequiredResult();
-  if (stepId === "draft-gate-repair") return new DraftGateRepairWorkerRequiredResult();
-  throw new Error(`no conditional Draft execution Result for ${stepId}`);
+function draftGateRepairExecutionIdentity(stepId) {
+  if (stepId !== "draft-gate-repair") {
+    throw new Error(`no Draft Gate repair execution Result for ${stepId}`);
+  }
+  const stepResult = new DraftGateRepairWorkerRequiredResult();
+  return Object.freeze({ stepResult, settlement: settleDraftStepResult(stepId, stepResult) });
 }
 
 export async function draftWorkerStepDefinition(stepId) {
@@ -273,11 +274,17 @@ function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoff
       && error.classification === "recovery-required"
       && error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED";
     if (execution.lifecycle?.phase === "claimed" && !publicationRecoveryPending) {
-      const stepResult = conditionalDraftExecutionResult(stepId);
+      const executionIdentity = stepId === "draft-refine"
+        ? ctx.flowManager.draftRefineStepState({ binding }).executionIdentity()
+        : draftGateRepairExecutionIdentity(stepId);
+      if (executionIdentity === null) {
+        throw new Error("conditional Draft worker failure has no persisted execution identity");
+      }
+      const { stepResult, settlement } = executionIdentity;
       ctx.flowManager.checkpointDraftStepExecution({
         binding,
         stepResult,
-        settlement: settleDraftStepResult(stepId, stepResult),
+        settlement,
         executionBinding: new DraftWorkerExecutionBinding({
           executionGeneration: execution.lifecycle.executionGeneration + 1,
           inputDigest: execution.lifecycle.binding.inputDigest,
@@ -1511,8 +1518,9 @@ export default class RunDispatchCommand extends FlowCommand {
 
   async prepareConditionalDraftWorker({ ctx, state, invocation, workerInstructions, definition, retrying }) {
     const stepId = invocation.action.nextAction.step;
-    const executionResult = conditionalDraftExecutionResult(stepId);
-    const executionSettlement = settleDraftStepResult(stepId, executionResult);
+    let executionIdentity = stepId === "draft-gate-repair"
+      ? draftGateRepairExecutionIdentity(stepId)
+      : null;
     const stepBinding = new DraftWorkerExecutionStepBinding({
       flowManager: ctx.flowManager,
       specId: state.specId,
@@ -1520,6 +1528,11 @@ export default class RunDispatchCommand extends FlowCommand {
     });
     const executionState = ctx.flowManager.draftStepExecutionState({ binding: stepBinding });
     const prior = executionState.lifecycle;
+    const refineProjection = stepId === "draft-refine"
+      ? ctx.flowManager.draftRefineStepState({ binding: stepBinding })
+      : null;
+    const stepFirst = stepId === "draft-refine"
+      && refineProjection.requiresStepSelection;
     if (prior?.phase === "terminal") {
       throw new WorkerArtifactHandoffError(
         "stale",
@@ -1536,7 +1549,10 @@ export default class RunDispatchCommand extends FlowCommand {
         { retryable: false },
       );
     }
-    const reusePrior = !retrying && ["checkpoint", "claimed", "publication"].includes(prior?.phase);
+    const reusePrior = !stepFirst && !retrying && ["checkpoint", "claimed", "publication"].includes(prior?.phase);
+    if (reusePrior && stepId === "draft-refine") {
+      executionIdentity = refineProjection.executionIdentity();
+    }
     const executionGeneration = reusePrior
       ? prior.executionGeneration
       : prior === null ? 0 : prior.executionGeneration + 1;
@@ -1558,7 +1574,7 @@ export default class RunDispatchCommand extends FlowCommand {
       state,
       lifecycle: prior,
     });
-    if (prior?.phase === "publication" && persistedRequest === null) {
+    if (reusePrior && prior?.phase === "publication" && persistedRequest === null) {
       throw new WorkerArtifactHandoffError(
         "recovery-required",
         "FLOW_DRAFT_EXECUTION_REQUEST_MISSING",
@@ -1566,7 +1582,7 @@ export default class RunDispatchCommand extends FlowCommand {
         { retryable: false, recoveryPossible: false },
       );
     }
-    const request = prior?.phase === "publication"
+    const request = reusePrior && prior?.phase === "publication"
       ? persistedRequest
       : this.handoffCoordinator.createRequest({
           ctx,
@@ -1575,8 +1591,9 @@ export default class RunDispatchCommand extends FlowCommand {
           workerInstructions,
           generatedAt: claimed?.generatedAt ?? null,
           deferPreparation: true,
+          deferConditionalAdmission: stepFirst,
         });
-    if (prior?.phase !== "publication" && persistedRequest !== null
+    if (!(reusePrior && prior?.phase === "publication") && persistedRequest !== null
       && persistedRequest.requestDigest !== request.requestDigest) {
       throw new WorkerArtifactHandoffError(
         "recovery-required",
@@ -1602,22 +1619,35 @@ export default class RunDispatchCommand extends FlowCommand {
       const draftService = new DraftService({
         flowManager: ctx.flowManager,
         binding: stepBinding,
-        executionCheckpointer: (stepResult, settlement, binding) => (
-          ctx.flowManager.checkpointDraftStepExecution({
+        executionCheckpointer: (stepResult, settlement, binding) => {
+          executionIdentity = Object.freeze({ stepResult, settlement });
+          return ctx.flowManager.checkpointDraftStepExecution({
             binding,
             stepResult,
             settlement,
             executionBinding,
-          })
-        ),
+          });
+        },
       });
       const result = await new StepFactory()
         .provide(DraftService, draftService)
         .create(definition.StepClass)
         .execute();
-      if (result.stepId !== stepId || result.type !== "loop-required") {
-        throw new Error("conditional Draft pre-execution Step did not require its worker");
+      if (result.stepId !== stepId) {
+        throw new Error("conditional Draft pre-execution Step selected a different Step");
       }
+      if (result.type !== "loop-required") {
+        return {
+          request: null,
+          invocation: workerInvocation,
+          publicationRecovery: false,
+          stepResult: result,
+        };
+      }
+      this.handoffCoordinator.admitConditionalDraftRequest({ ctx, state, request });
+    }
+    if (executionIdentity === null) {
+      throw new Error("conditional Draft execution lacks its Step-selected identity");
     }
     if (claimed === null) {
       const executionClaim = new DraftWorkerExecutionClaim({
@@ -1628,8 +1658,8 @@ export default class RunDispatchCommand extends FlowCommand {
       });
       ctx.flowManager.claimDraftStepExecution({
         binding: stepBinding,
-        stepResult: executionResult,
-        settlement: executionSettlement,
+        stepResult: executionIdentity.stepResult,
+        settlement: executionIdentity.settlement,
         executionBinding,
         executionClaim,
       });
@@ -1642,7 +1672,7 @@ export default class RunDispatchCommand extends FlowCommand {
         { retryable: false, recoveryPossible: false },
       );
     }
-    if (prior?.phase !== "publication") request.prepare();
+    if (!(reusePrior && prior?.phase === "publication")) request.prepare();
     return {
       request,
       invocation: workerInvocation,
@@ -1705,6 +1735,16 @@ export default class RunDispatchCommand extends FlowCommand {
           definition: draftDefinition,
           retrying: retryFeedback !== null,
         });
+        if (prepared.request === null) {
+          return {
+            error: null,
+            handoffRequest: null,
+            agentError: null,
+            stepResult: prepared.stepResult,
+            supervisorEvents: [],
+            deferredMetric: null,
+          };
+        }
         handoffRequest = prepared.request;
         workerInvocation = prepared.invocation;
         publicationRecovery = prepared.publicationRecovery;

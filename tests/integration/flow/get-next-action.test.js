@@ -24,7 +24,6 @@ import {
   getFlowDefinitionOrder,
   getTaskDefinitionOrder,
   resolveLifecycle,
-  resolveDraftTransition,
   resolveReviewTransition,
 } from "../../../src/flow/definition.js";
 import {
@@ -50,6 +49,10 @@ import {
 } from "../../../src/flow/lib/flow-outbox.js";
 import { outboxCommitMarker } from "../../../src/flow/lib/run-finalize.js";
 import GetPromptCommand from "../../../src/flow/lib/get-prompt.js";
+import { createDraftRefineResult } from "../../../src/flow/steps/draft/draft-refine.js";
+import { DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
+import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
+import { DraftService } from "../../../src/flow/services/draft-service.js";
 
 const CLI = path.join(process.cwd(), "src/sennel.js");
 const SPEC_ID = "001-test";
@@ -129,6 +132,12 @@ function publishDraft(scenario, draft) {
   });
 }
 
+async function executeDraftRefineStep(scenario) {
+  const manager = managerFor(scenario);
+  const binding = await new DraftRefineConnector({ flowManager: manager, specId: SPEC_ID }).connect();
+  return new DraftRefineStep(new DraftService({ flowManager: manager, binding })).execute();
+}
+
 describe("flow get next-action", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
@@ -149,21 +158,12 @@ describe("flow get next-action", () => {
     });
     const noQuestionFacts = new DraftTransitionFacts({ ledger: new DraftQuestionLedger({ revision: 0, publication: "fixture", evidenceDigest: digest, questions: [] }) });
 
-    assert.equal(resolveDraftTransition({
-      stepId: "draft-refine",
-      flowState: { autoApprove: false },
-      facts: questionFacts,
-    }).operation, "await-user-answer");
-    assert.equal(resolveDraftTransition({
-      stepId: "draft-refine",
-      flowState: { autoApprove: true },
-      facts: questionFacts,
-    }).operation, "execute-worker");
-    assert.equal(resolveDraftTransition({
-      stepId: "draft-refine",
-      flowState: { autoApprove: false },
-      facts: noQuestionFacts,
-    }).operation, "skip-worker");
+    assert.equal(createDraftRefineResult({ facts: questionFacts, autoApprove: false }).kind,
+      "draft-refine-awaiting-answer");
+    assert.equal(createDraftRefineResult({ facts: questionFacts, autoApprove: true }).kind,
+      "draft-refine-worker-required");
+    assert.equal(createDraftRefineResult({ facts: noQuestionFacts, autoApprove: false }).kind,
+      "draft-refine-completed");
   });
 
   it("leaves Draft Review lifecycle settlement to the typed Step route", () => {
@@ -334,11 +334,12 @@ describe("flow get next-action", () => {
     assert.equal(stateFor(scenario).currentNodeId, "draft");
   });
 
-  it("yields each manual draft question before starting the draft-refine worker", () => {
+  it("projects only persisted Await receipts and re-enters the Step after each answer", async () => {
     tmp = createTmpDir();
     const scenario = createScenario(tmp).atFlowStep("draft");
     publishDraft(scenario, draftDocumentWithPendingQuestions());
     scenario.atFlowStep("draft-refine");
+    assert.equal((await executeDraftRefineStep(scenario)).kind, "draft-refine-awaiting-answer");
     const binding = FlowTargetBinding.capture({
       flowState: stateFor(scenario),
       mainRoot: tmp,
@@ -370,6 +371,10 @@ describe("flow get next-action", () => {
     assert.equal(answered.envelope.data.status, "answered");
     assert.equal(answered.envelope.data.nextQuestionId, "q2");
 
+    const resumeQ2 = runCli(tmp, ["flow", "get", "next-action", "--expect-binding", binding]);
+    assert.equal(resumeQ2.envelope.data.directive.kind, "execute_step");
+    assert.equal((await executeDraftRefineStep(scenario)).kind, "draft-refine-awaiting-answer");
+
     const second = runCli(tmp, ["flow", "get", "next-action", "--expect-binding", binding]);
     assert.equal(second.envelope.data.binding, binding);
     assert.equal(second.envelope.data.directive.kind, "await_draft_question");
@@ -384,20 +389,16 @@ describe("flow get next-action", () => {
     ]);
     assert.equal(dropped.exitCode, 0, JSON.stringify(dropped.envelope));
     assert.equal(dropped.envelope.data.nextQuestionId, null);
-    assert.equal(dropped.envelope.data.draftRefineCompleted, true);
+    assert.equal(dropped.envelope.data.replayed, false);
 
     const ready = runCli(tmp, ["flow", "get", "next-action", "--expect-binding", binding]);
     assert.equal(ready.exitCode, 0);
     assert.equal(ready.envelope.data.binding, binding);
-    assert.equal(ready.envelope.data.directive.kind, "execute_command");
-    assert.equal(ready.envelope.data.directive.actionId, "SKIP_CONDITIONAL_WORKER");
-    assert.equal(ready.envelope.data.step, "draft-gate-repair");
-
-    const skipped = runCli(tmp, ["flow", "run", "claim-next-action", "--expect-binding", binding]);
-    assert.equal(skipped.exitCode, 0, JSON.stringify(skipped.envelope));
-    assert.equal(skipped.envelope.data.status, "skipped");
-    assert.equal(skipped.envelope.data.nextStep, "draft-coverage-review");
+    assert.equal(ready.envelope.data.directive.kind, "execute_step");
+    assert.equal(ready.envelope.data.step, "draft-refine");
+    assert.equal((await executeDraftRefineStep(scenario)).kind, "draft-refine-completed");
     assert.equal(stateFor(scenario).currentNodeId, null);
+    assert.equal(managerFor(scenario).canonicalState(SPEC_ID).nextAction().nodeId, "draft-coverage-review");
 
     const stored = JSON.parse(managerFor(scenario).readArtifact({
       specId: SPEC_ID,
@@ -411,38 +412,26 @@ describe("flow get next-action", () => {
     assert.deepEqual(stored.decisionMap.requiresUserJudgment, []);
   });
 
-  it("skips empty draft-refine and absent Gate repair without creating worker requests", () => {
+  it("completes empty draft-refine through its Step without creating worker requests", async () => {
     tmp = createTmpDir();
     const scenario = createScenario(tmp).atFlowStep("draft");
     const emptyDraft = draftDocumentWithPendingQuestions();
     emptyDraft.questionLedger.questions = [];
     emptyDraft.decisionMap.requiresUserJudgment = [];
     publishDraft(scenario, emptyDraft);
-    scenario.beforeFlowStep("draft-refine");
+    scenario.atFlowStep("draft-refine");
 
     const refine = runCli(tmp, ["flow", "get", "next-action"]);
     assert.equal(refine.exitCode, 0);
     assert.equal(refine.envelope.data.step, "draft-refine");
-    assert.equal(refine.envelope.data.directive.actionId, "SKIP_CONDITIONAL_WORKER");
-    const refineSkip = runCli(tmp, ["flow", "run", "claim-next-action"]);
-    assert.equal(refineSkip.exitCode, 0, JSON.stringify(refineSkip.envelope));
-    assert.equal(refineSkip.envelope.data.status, "skipped");
-
-    const repair = runCli(tmp, ["flow", "get", "next-action"]);
-    assert.equal(repair.exitCode, 0);
-    assert.equal(repair.envelope.data.step, "draft-gate-repair");
-    assert.equal(repair.envelope.data.directive.actionId, "SKIP_CONDITIONAL_WORKER");
-    const repairSkip = runCli(tmp, ["flow", "run", "claim-next-action"]);
-    assert.equal(repairSkip.exitCode, 0, JSON.stringify(repairSkip.envelope));
-    assert.equal(repairSkip.envelope.data.nextStep, "draft-coverage-review");
+    assert.equal(refine.envelope.data.directive.kind, "execute_step");
+    assert.equal((await executeDraftRefineStep(scenario)).kind, "draft-refine-completed");
 
     const reloaded = managerFor(scenario).canonicalState(SPEC_ID);
-    assert.equal(reloaded.findNode("draft-refine").status, "skipped");
-    assert.equal(reloaded.findNode("draft-gate-repair").status, "skipped");
+    assert.equal(reloaded.findNode("draft-refine").status, "done");
     assert.equal(reloaded.nextAction().nodeId, "draft-coverage-review");
     assert.equal(managerFor(scenario).activityLedger(SPEC_ID).some((activity) => (
-      activity.transition.operation === "start_attempt"
-      && ["draft-refine", "draft-gate-repair"].includes(activity.nodeId)
+      activity.result?.stepResult?.kind === "draft-refine-worker-required"
     )), false);
     assert.equal(fs.existsSync(path.join(tmp, ".sennel", "handoffs")), false);
   });

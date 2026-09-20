@@ -26,14 +26,12 @@ import { draftReviewRouteForStepId } from "./draft-review-routes.js";
 import {
   findActiveNode,
   getFlowNode,
-  PromoteDraftQuestionAndKeepRefineActive,
   RequirementTestLifecycleFacts,
   DraftGateRepairTerminalFacts,
+  DraftAwaitUserDecision,
   DraftExecutionSettlement,
   DraftWorkerExecutionBinding,
-  resolveDraftTransition,
   resolveDraftGateRepairTerminal,
-  resolveLifecyclePlan,
   resolvePlanGateRepairWorkerTransition,
   resolveRequirementTestLifecycle,
   resolveSourceHandoffTransitionPlan,
@@ -47,7 +45,7 @@ import {
   DraftCompletionFacts,
   readDraftCompletionCatalogDigest,
 } from "./draft-completion-connector.js";
-import { DraftTransitionFacts, readDraftTransitionFacts } from "./draft-transition-facts.js";
+import { DraftTransitionFacts } from "./draft-transition-facts.js";
 import {
   DraftGateRepairWorkerRequiredResult,
   DraftRefineWorkerRequiredResult,
@@ -4814,12 +4812,19 @@ function assertConditionalWorkerExecutionSelected({ flowManager, state, policy }
   }
   let disposition;
   if (policy.stepId === "draft-refine") {
-    const facts = readDraftTransitionFacts({ flowManager, flowState: canonical });
-    disposition = facts === null ? null : resolveDraftTransition({
-      stepId: policy.stepId,
-      flowState: canonical,
-      facts,
-    });
+    const typed = flowManager.canonicalState(canonical.specId);
+    const binding = {
+      runId: typed.runId,
+      specId: typed.specId,
+      stepId: "draft-refine",
+      attempt: typed.attempt,
+    };
+    const projected = flowManager.draftRefineStepState({ binding });
+    const lifecycle = flowManager.draftStepExecutionState({ binding }).lifecycle;
+    disposition = projected.executionIdentity() !== null
+      && ["checkpoint", "claimed", "publication"].includes(lifecycle?.phase)
+      ? { operation: "execute-worker" }
+      : null;
   } else {
     const repair = currentPlanGateRepair({ flowManager, state: canonical, stepId: policy.stepId });
     disposition = resolvePlanGateRepairWorkerTransition({
@@ -5022,6 +5027,7 @@ export class WorkerArtifactHandoffRequest {
     now = () => new Date(),
     generatedAt = null,
     workerInstructions = new WorkerArtifactWorkerInstructions(),
+    deferConditionalAdmission = false,
   }) {
     const policy = workerArtifactHandoffPolicy(invocation?.action?.nextAction?.step);
     if (!policy) return null;
@@ -5039,7 +5045,9 @@ export class WorkerArtifactHandoffRequest {
         "canonical worker handoff requires the Version Store catalog reader",
       );
     }
-    const admittedState = assertConditionalWorkerExecutionSelected({ flowManager, state, policy });
+    const admittedState = deferConditionalAdmission
+      ? state
+      : assertConditionalWorkerExecutionSelected({ flowManager, state, policy });
     state = admittedState;
     const planGateRepair = currentPlanGateRepair({ flowManager, state: admittedState, stepId: policy.stepId });
     const testReviewRepair = currentTestReviewRepair({ flowManager, state, stepId: policy.stepId });
@@ -6854,12 +6862,14 @@ class DraftWorkerHandoffFacts {
         })
       : null;
     this.autoApprove = state.autoApprove === true;
-    this.hasCandidateQuestion = false;
+    this.draftTransitionFacts = null;
     if (request.stepId === "draft-refine") {
       const payload = submission.payloadManifest.find((entry) => entry.targetRelativePath === "draft.json");
       const bytes = payload === undefined ? null : manifestPayloadBytes(request, payload, "draft-refine payload");
       const draft = bytes === null ? null : new DraftLifecycle(JSON.parse(bytes.toString("utf8")));
-      const facts = draft === null ? null : DraftTransitionFacts.fromDraft(draft);
+      const facts = draft === null ? null : DraftTransitionFacts.fromDraft(draft, {
+        origin: "sealed-worker-output",
+      });
       if (facts?.nextQuestion !== null) {
         throw new WorkerArtifactHandoffError(
           "invalid",
@@ -6867,7 +6877,7 @@ class DraftWorkerHandoffFacts {
           "draft-refine handoff cannot confirm an output ledger with AwaitingUserAnswer",
         );
       }
-      this.hasCandidateQuestion = facts?.candidateQuestion !== null;
+      this.draftTransitionFacts = facts;
     }
     Object.freeze(this);
   }
@@ -7811,53 +7821,6 @@ function canonicalTestTreeBaselineForPublication(request) {
   return baseline;
 }
 
-class DraftPromotionHandoffAdapter {
-  constructor({
-    flowManager,
-    specId,
-    sourceBytes,
-    sourcePayloadDigest,
-    handoffDigest,
-    handoffRequestDigest,
-    action,
-    stepResult,
-    settlement,
-    binding,
-    lifecycleResult,
-  }) {
-    this.flowManager = flowManager;
-    this.specId = specId;
-    this.sourceBytes = Buffer.from(sourceBytes);
-    this.sourcePayloadDigest = sourcePayloadDigest;
-    this.handoffDigest = handoffDigest;
-    this.handoffRequestDigest = handoffRequestDigest;
-    this.action = action;
-    this.stepResult = stepResult;
-    this.settlement = settlement;
-    this.binding = binding;
-    this.lifecycleResult = lifecycleResult;
-  }
-
-  promoteDraftQuestionAndKeepRefineActive(action) {
-    if (action !== this.action) throw new Error("unselected draft promotion action");
-    return this.flowManager.promoteDraftQuestionAndKeepRefineActive({
-      specId: this.specId,
-      questionId: action.questionId,
-      questionRevision: action.questionRevision,
-      digest: action.digest,
-      byteLength: action.byteLength,
-      sourceBytes: this.sourceBytes,
-      sourcePayloadDigest: this.sourcePayloadDigest,
-      handoffDigest: this.handoffDigest,
-      handoffRequestDigest: this.handoffRequestDigest,
-      stepResult: this.stepResult,
-      settlement: this.settlement,
-      binding: this.binding,
-      lifecycleResult: this.lifecycleResult,
-    });
-  }
-}
-
 function canonicalHandoffPublications(request, submission) {
   if (request.stepId === "spec-triage") {
     const reviewInput = request.inputs.find((input) => input.name === "review.json");
@@ -8484,6 +8447,7 @@ export class WorkerArtifactHandoffCoordinator {
     workerInstructions = new WorkerArtifactWorkerInstructions(),
     generatedAt = null,
     deferPreparation = false,
+    deferConditionalAdmission = false,
   }) {
     const request = WorkerArtifactHandoffRequest.create({
       mainRoot: ctx.mainRoot || ctx.root,
@@ -8494,11 +8458,25 @@ export class WorkerArtifactHandoffCoordinator {
       now: this.now,
       generatedAt,
       workerInstructions,
+      deferConditionalAdmission,
     });
     if (request === null) return null;
     if (request.policy.kind !== "source") return deferPreparation ? request : request.prepare();
     if (deferPreparation) throw new Error("source worker preparation cannot be deferred");
     return this.prepareSourceWorker({ ctx, request, invocation });
+  }
+
+  admitConditionalDraftRequest({ ctx, state, request }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest)
+      || !isConditionalDraftWorkerStep(request.stepId)) {
+      throw new TypeError("conditional Draft admission requires its planned request");
+    }
+    assertConditionalWorkerExecutionSelected({
+      flowManager: ctx.flowManager,
+      state,
+      policy: request.policy,
+    });
+    return request;
   }
 
   restoreClaimedDraftRequest({ ctx, state, lifecycle }) {
@@ -9535,14 +9513,50 @@ export class WorkerArtifactHandoffCoordinator {
       && activity.result.draftSettlementReceipt.binding.attemptSequence === binding.attempt.sequence
     )) ?? null;
     if (publication === null) throw new Error("Published Draft worker Activity is missing");
-    const committed = ctx.flowManager.settleDraftStepResult({
-      binding,
-      stepResult,
-      settlement,
-      lifecycleResult: canonicalHandoffResult(request, preparation.submission, this.now),
-      references: publication.references,
-      planGateRepairOutcome: preparation.planGateRepairOutcome,
-    });
+    let committed;
+    if (request.stepId === "draft-refine" && settlement instanceof DraftAwaitUserDecision) {
+      const candidate = preparation.facts.draftTransitionFacts?.candidateQuestion ?? null;
+      if (candidate === null) {
+        throw new WorkerArtifactHandoffError(
+          "invalid",
+          "FLOW_ARTIFACT_HANDOFF_INVALID",
+          "draft-refine Await Result requires its sealed Candidate question",
+          { retryable: false, data: { stepId: request.stepId } },
+        );
+      }
+      const source = ctx.flowManager.readArtifact({
+        specId: request.specId,
+        logicalKey: "draft",
+        consumerNodeId: "draft-refine",
+      });
+      const payload = preparation.submission.payloadManifest.find((entry) => (
+        entry.targetRelativePath === "draft.json"
+      ));
+      committed = ctx.flowManager.promoteDraftQuestionAndKeepRefineActive({
+        specId: request.specId,
+        questionId: candidate.id,
+        questionRevision: candidate.revision,
+        digest: source.descriptor.hash,
+        byteLength: source.descriptor.size,
+        sourceBytes: source.bytes,
+        sourcePayloadDigest: payload.digest,
+        handoffDigest: preparation.submission.handoffDigest,
+        handoffRequestDigest: request.requestDigest,
+        stepResult,
+        settlement,
+        binding,
+        lifecycleResult: canonicalHandoffResult(request, preparation.submission, this.now),
+      });
+    } else {
+      committed = ctx.flowManager.settleDraftStepResult({
+        binding,
+        stepResult,
+        settlement,
+        lifecycleResult: canonicalHandoffResult(request, preparation.submission, this.now),
+        references: publication.references,
+        planGateRepairOutcome: preparation.planGateRepairOutcome,
+      });
+    }
     const handoffReceipt = canonicalHandoffReceipt(request, preparation.submission, this.now);
     cleanupCompletedHandoff(request.handoffRoot, handoffReceipt, this.faultInjector);
     return {
@@ -9825,7 +9839,6 @@ export class WorkerArtifactHandoffCoordinator {
         { retryable: false, data: { stepId: request.stepId } },
       );
     }
-    let promotionApplied = false;
     let persistedSettlementReceipt = null;
     try {
       this.faultInjector({ phase: "before-worker-handoff-publication", stepId: request.stepId });
@@ -9847,48 +9860,7 @@ export class WorkerArtifactHandoffCoordinator {
           faultInjector: this.faultInjector,
         });
       }
-      if (request.stepId === "draft-refine") {
-        const draftPayload = submission.payloadManifest.find((entry) => entry.targetRelativePath === "draft.json");
-        const draftBytes = draftPayload === undefined ? null : manifestPayloadBytes(request, draftPayload, "draft-refine payload");
-        const source = request.flowManager.readArtifact({ specId: request.specId, logicalKey: "draft", consumerNodeId: "draft-refine" });
-        const draft = draftBytes === null ? null : new DraftLifecycle(JSON.parse(draftBytes.toString("utf8")));
-        const latestState = ctx.flowManager.loadReadOnly(request.specId);
-        const draftTransitionFacts = draft === null ? null : DraftTransitionFacts.fromDraft(draft);
-        const plan = draft === null ? null : resolveLifecyclePlan({
-          event: "draft-refine:confirm", currentStepId: "draft-refine", flowState: latestState,
-          draftTransitionFacts,
-          draftCatalogBaseline: { digest: source.descriptor.hash, byteLength: source.descriptor.size },
-        });
-        const action = plan?.actions.find((entry) => entry instanceof PromoteDraftQuestionAndKeepRefineActive) ?? null;
-        if (action !== null) {
-          if (planGateRepairOutcome !== null) {
-            throw new WorkerArtifactHandoffError(
-              "invalid",
-              "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID",
-              "draft Gate repair cannot promote a question instead of recording its selected repair outcome",
-              { retryable: false, data: { stepId: request.stepId } },
-            );
-          }
-          const committed = action.apply(new DraftPromotionHandoffAdapter({
-            flowManager: ctx.flowManager,
-            specId: request.specId,
-            sourceBytes: draftBytes,
-            sourcePayloadDigest: draftPayload.digest,
-            handoffDigest: submission.handoffDigest,
-            handoffRequestDigest: request.requestDigest,
-            action,
-            stepResult: selectedDraftStepResult,
-            settlement: draftWorkerSettlement,
-            binding: draftWorkerBinding,
-            lifecycleResult: canonicalHandoffResult(request, submission, this.now),
-          }));
-          persistedSettlementReceipt = committed.receipt;
-          promotionApplied = true;
-          // The promotion itself keeps the same Attempt active. The waiting
-          // decision is read from its published question ledger by Definition.
-        }
-      }
-      if (!promotionApplied) {
+      {
         if (publicationOnly && planGateRepairOutcome?.disposition === "rejected-no-progress") {
           const committed = ctx.flowManager.settleDraftStepResult({
             binding: draftWorkerBinding,

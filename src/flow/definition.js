@@ -95,7 +95,9 @@ import {
   planGateRepairResultLogicalKey,
 } from "./lib/plan-gate-repair.js";
 import { ReviewTransitionFacts } from "./lib/review-transition-facts.js";
-import { DraftTransitionFacts } from "./lib/draft-transition-facts.js";
+import { DraftQuestionResumeReceipt } from "./lib/draft-question-resume-receipt.js";
+import { DraftStepSettlementReceiptValue } from "./lib/draft-step-settlement-receipt.js";
+export { DraftStepSettlementReceiptValue } from "./lib/draft-step-settlement-receipt.js";
 import {
   DraftCompletionFacts,
   DraftCompletionConnector,
@@ -3436,21 +3438,6 @@ export class SetStepStatus {
   }
 }
 
-/** Definition-selected post-confirmation mutation; adapters may only apply it. */
-export class PromoteDraftQuestionAndKeepRefineActive {
-  constructor({ questionId, questionRevision, digest, byteLength }) {
-    this.questionId = requireString(questionId, "draft promotion questionId");
-    if (!Number.isSafeInteger(questionRevision) || questionRevision < 0) throw new Error("draft promotion questionRevision is invalid");
-    this.questionRevision = questionRevision;
-    this.digest = requireString(digest, "draft promotion digest");
-    if (!/^[a-f0-9]{64}$/.test(this.digest)) throw new Error("draft promotion digest is invalid");
-    if (!Number.isSafeInteger(byteLength) || byteLength < 0) throw new Error("draft promotion byteLength is invalid");
-    this.byteLength = byteLength;
-    Object.freeze(this);
-  }
-  apply(adapter) { return adapter.promoteDraftQuestionAndKeepRefineActive(this); }
-}
-
 const DEFINITION_LIFECYCLE_PLAN_TOKEN = Symbol("definition-lifecycle-plan");
 
 export class DefinitionLifecyclePlan {
@@ -3702,103 +3689,6 @@ export function resolveReviewTransition({
     return new DefinitionReviewDisposition({ operation: "blocked", phase, attempts, maxAttempts });
   }
   return null;
-}
-
-/**
- * Decide whether draft refinement may execute or must yield one canonical
- * user-decision question. Artifact reading and directive rendering live in
- * other layers; this is the sole transition-policy owner.
- */
-export class DraftQuestionPromotionPlan {
-  constructor({ questionId, questionRevision } = {}) {
-    this.questionId = requireString(questionId, "draft question promotion questionId");
-    if (!Number.isSafeInteger(questionRevision) || questionRevision < 0) {
-      throw new Error("draft question promotion questionRevision is invalid");
-    }
-    this.questionRevision = questionRevision;
-    Object.freeze(this);
-  }
-  toJSON() { return { operation: "promote-candidate", questionId: this.questionId, questionRevision: this.questionRevision }; }
-  apply(ledger) { return ledger.transitionCandidate(this.questionId, this.questionRevision); }
-}
-
-class ResolveDraftQuestionPlan {
-  constructor({ questionId, questionRevision } = {}) {
-    this.questionId = requireString(questionId, "draft question resolution questionId");
-    if (!Number.isSafeInteger(questionRevision) || questionRevision < 0) throw new Error("draft question resolution questionRevision is invalid");
-    this.questionRevision = questionRevision;
-  }
-}
-
-export class AnswerDraftQuestionPlan extends ResolveDraftQuestionPlan {
-  constructor({ questionId, questionRevision, answer, why, considered = "" } = {}) {
-    super({ questionId, questionRevision });
-    this.answer = answer;
-    this.why = why;
-    this.considered = considered;
-    Object.freeze(this);
-  }
-
-  apply(ledger) {
-    return ledger.answer(this.questionId, this.questionRevision, {
-      answer: this.answer,
-      why: this.why,
-      considered: this.considered,
-    });
-  }
-}
-
-export class DiscardDraftQuestionPlan extends ResolveDraftQuestionPlan {
-  constructor({ questionId, questionRevision, reason } = {}) {
-    super({ questionId, questionRevision });
-    this.reason = reason;
-    Object.freeze(this);
-  }
-
-  apply(ledger) {
-    return ledger.discard(this.questionId, this.questionRevision, this.reason);
-  }
-}
-
-/** Definition owns admission and action selection for direct draft answers. */
-export function resolveDraftQuestionResolution({ intent, questionId, questionRevision, facts, flowState, answer = null, why = null, considered = "", reason = null } = {}) {
-  if (!(facts instanceof DraftTransitionFacts)) return null;
-  const disposition = resolveDraftTransition({ stepId: "draft-refine", flowState, facts });
-  if (disposition?.operation !== "await-user-answer" || disposition.questionId !== questionId || disposition.questionRevision !== questionRevision) return null;
-  return intent === "answer"
-    ? new AnswerDraftQuestionPlan({ questionId, questionRevision, answer, why, considered })
-    : intent === "discard"
-      ? new DiscardDraftQuestionPlan({ questionId, questionRevision, reason })
-      : null;
-}
-
-/** The only creator of a candidate-to-user-boundary transition plan. */
-export function resolveDraftQuestionPromotion({ facts } = {}) {
-  if (!(facts instanceof DraftTransitionFacts) || facts.candidateQuestion === null) return null;
-  return new DraftQuestionPromotionPlan({
-    questionId: facts.candidateQuestion.id,
-    questionRevision: facts.candidateQuestion.revision,
-  });
-}
-
-export function resolveDraftTransition({ stepId, flowState, facts } = {}) {
-  if (stepId !== "draft-refine" || !(facts instanceof DraftTransitionFacts)) return null;
-  if (flowState?.autoApprove !== true && facts.nextQuestion !== null) {
-    return new DefinitionConditionalWorkerDisposition({
-      stepId,
-      operation: "await-user-answer",
-      questionId: facts.nextQuestion.id,
-      question: facts.nextQuestion.question,
-      questionRevision: facts.nextQuestion.revision,
-    });
-  }
-  if (facts.candidateQuestion !== null || (flowState?.autoApprove === true && facts.nextQuestion !== null)) {
-    return new DefinitionConditionalWorkerDisposition({ stepId, operation: "execute-worker" });
-  }
-  return new DefinitionConditionalWorkerDisposition({
-    stepId,
-    operation: facts.workerStatus === "in_progress" ? "complete-worker" : "skip-worker",
-  });
 }
 
 /** Definition-owned admission for a repair-only worker leaf. */
@@ -4317,25 +4207,6 @@ export function resolveLifecycle(input = {}) {
 export function resolveLifecyclePlan(input = {}) {
   let actions = resolveLifecycle(input);
   const currentStepId = input.currentStepId || resolveRuntimeStep(input) || input.targetStepId || null;
-  if (
-    input.event === "draft-refine:confirm"
-    && input.flowState?.autoApprove !== true
-    && input.draftTransitionFacts instanceof DraftTransitionFacts
-    && input.draftTransitionFacts.candidateQuestion !== null
-    && input.draftTransitionFacts.nextQuestion === null
-  ) {
-    const candidate = input.draftTransitionFacts.candidateQuestion;
-    const baseline = input.draftCatalogBaseline;
-    if (!baseline || typeof baseline.digest !== "string" || !Number.isSafeInteger(baseline.byteLength)) {
-      throw new Error("draft-refine promotion requires a catalog baseline");
-    }
-    actions = [new PromoteDraftQuestionAndKeepRefineActive({
-      questionId: candidate.id,
-      questionRevision: candidate.revision,
-      digest: baseline.digest,
-      byteLength: baseline.byteLength,
-    })];
-  }
   if (input.settleInProgressAsDone === true) {
     actions = actions.map((action) => (
       action instanceof SetStepStatus
@@ -4629,6 +4500,35 @@ export class DraftStepSettlementPublication {
   toJSON() { return { digest: this.digest }; }
 }
 
+/** Exact canonical question selected by one persisted Await Result. */
+export class DraftAwaitQuestionIdentity {
+  constructor({ questionId, questionRevision, sourceDigest, sourceByteLength } = {}) {
+    this.questionId = requireString(questionId, "Draft Await question ID");
+    if (!Number.isSafeInteger(questionRevision) || questionRevision < 0) {
+      throw new TypeError("Draft Await question revision is invalid");
+    }
+    if (typeof sourceDigest !== "string" || !SHA256_DIGEST.test(sourceDigest)) {
+      throw new TypeError("Draft Await source digest is invalid");
+    }
+    if (!Number.isSafeInteger(sourceByteLength) || sourceByteLength < 0) {
+      throw new TypeError("Draft Await source byte length is invalid");
+    }
+    this.questionRevision = questionRevision;
+    this.sourceDigest = sourceDigest;
+    this.sourceByteLength = sourceByteLength;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      questionId: this.questionId,
+      questionRevision: this.questionRevision,
+      sourceDigest: this.sourceDigest,
+      sourceByteLength: this.sourceByteLength,
+    };
+  }
+}
+
 const SHA256_DIGEST = /^[a-f0-9]{64}$/;
 const GIT_TREE_DIGEST = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
 const DRAFT_EXECUTION_PHASES = new Set(["checkpoint", "claimed", "publication", "terminal"]);
@@ -4917,8 +4817,9 @@ export class DraftStepExecutionState {
 }
 
 /** Durable identity of one Result and its already-selected settlement. */
-export class DraftStepSettlementReceipt {
-  constructor({ binding, result, settlement, publication, executionLifecycle = null } = {}) {
+export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue {
+  constructor({ binding, result, settlement, publication, executionLifecycle = null, awaitQuestion = null } = {}) {
+    super();
     if (!(result instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
       throw new TypeError("Draft settlement receipt requires a Result and Settlement");
     }
@@ -4945,6 +4846,9 @@ export class DraftStepSettlementReceipt {
     }
     const executionSettlement = settlement instanceof DraftExecutionSettlement;
     const awaitSettlement = settlement instanceof DraftAwaitUserDecision;
+    if (awaitSettlement !== (awaitQuestion instanceof DraftAwaitQuestionIdentity)) {
+      throw new TypeError("Draft Await settlement receipt requires its exact question identity");
+    }
     const executionPhase = executionLifecycle?.phase ?? null;
     if ((["checkpoint", "claimed"].includes(executionPhase) && !executionSettlement)
       || (executionSettlement && !["checkpoint", "claimed", "publication"].includes(executionPhase))
@@ -4970,6 +4874,7 @@ export class DraftStepSettlementReceipt {
       : null;
     this.publicationDigest = publication.digest;
     this.executionLifecycle = executionLifecycle;
+    this.awaitQuestion = awaitQuestion;
     const identity = {
       binding: this.binding,
       resultKind: this.resultKind,
@@ -4981,6 +4886,7 @@ export class DraftStepSettlementReceipt {
       connector: this.connector,
       publicationDigest: this.publicationDigest,
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
+      awaitQuestion: this.awaitQuestion?.toJSON() ?? null,
     };
     this.id = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     Object.freeze(this);
@@ -4999,7 +4905,154 @@ export class DraftStepSettlementReceipt {
       connector: this.connector === null ? null : { ...this.connector },
       publicationDigest: this.publicationDigest,
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
+      awaitQuestion: this.awaitQuestion?.toJSON() ?? null,
     };
+  }
+}
+
+const DRAFT_REFINE_EXECUTION_IDENTITY_TOKEN = Symbol("draft-refine-execution-identity");
+
+/** Step-selected execution identity rehydrated from one persisted refine receipt. */
+export class DraftRefineExecutionIdentity {
+  constructor(token, receiptId) {
+    if (token !== DRAFT_REFINE_EXECUTION_IDENTITY_TOKEN
+      || typeof receiptId !== "string" || !SHA256_DIGEST.test(receiptId)) {
+      throw new TypeError("Draft refine execution identity requires its persisted receipt");
+    }
+    this.receiptId = receiptId;
+    this.stepResult = new DraftRefineWorkerRequiredResult();
+    this.settlement = settleDraftStepResult(this.stepResult.stepId, this.stepResult);
+    Object.freeze(this);
+  }
+}
+
+function draftRefineReceiptMatchesBinding(receipt, binding) {
+  return receipt?.binding?.runId === binding.runId
+    && receipt.binding.specId === binding.specId
+    && receipt.binding.stepId === "draft-refine"
+    && receipt.binding.attemptId === binding.attempt.id
+    && receipt.binding.attemptSequence === binding.attempt.sequence;
+}
+
+/**
+ * Typed read model for the latest persisted draft-refine Result and same-Attempt
+ * resume authority. Consumers ask semantic questions instead of interpreting
+ * Result and Settlement string pairs independently.
+ */
+export class DraftRefineStepState {
+  #selection;
+  #settlement;
+
+  constructor({ binding, settlement = null, resume = null, resumeAfterSettlement = false } = {}) {
+    if (binding?.stepId !== "draft-refine"
+      || typeof binding?.runId !== "string" || binding.runId === ""
+      || typeof binding?.specId !== "string" || binding.specId === ""
+      || typeof binding?.attempt?.id !== "string" || binding.attempt.id === ""
+      || !Number.isSafeInteger(binding?.attempt?.sequence) || binding.attempt.sequence < 1) {
+      throw new TypeError("Draft refine state requires its exact Attempt binding");
+    }
+    if (typeof resumeAfterSettlement !== "boolean") {
+      throw new TypeError("Draft refine state resume ordering must be boolean");
+    }
+    if (settlement !== null && !(settlement instanceof DraftStepSettlementReceiptValue)) {
+      throw new TypeError("Draft refine settlement must be a typed receipt");
+    }
+    if (resume !== null && !(resume instanceof DraftQuestionResumeReceipt)) {
+      throw new TypeError("Draft refine resume authority must be a typed receipt");
+    }
+    if (settlement !== null && !draftRefineReceiptMatchesBinding(settlement, binding)) {
+      throw new TypeError("Draft refine settlement does not match its Attempt binding");
+    }
+    if (resume !== null && !draftRefineReceiptMatchesBinding(resume, binding)) {
+      throw new TypeError("Draft refine resume receipt does not match its Attempt binding");
+    }
+    if (settlement === null) {
+      if (resume !== null || resumeAfterSettlement) {
+        throw new TypeError("Draft refine resume authority requires its persisted Await settlement");
+      }
+      this.#selection = "step-selection-required";
+    } else {
+      const workerExecution = settlement.resultKind === "draft-refine-worker-required"
+        && settlement.resultType === "loop-required"
+        && settlement.settlementKind === "execution"
+        && settlement.awaitQuestion === null;
+      const awaitingAnswer = settlement.resultKind === "draft-refine-awaiting-answer"
+        && settlement.resultType === "user-input-required"
+        && settlement.settlementKind === "await"
+        && settlement.awaitQuestion !== null;
+      if (!workerExecution && !awaitingAnswer) {
+        throw new TypeError("Draft refine state has no resumable persisted Step Result");
+      }
+      const consumesLatestAwait = resume?.awaitReceiptId === settlement.id;
+      if (resumeAfterSettlement !== consumesLatestAwait) {
+        throw new TypeError("Draft refine resume ordering does not match its Await receipt");
+      }
+      if (resumeAfterSettlement && !awaitingAnswer) {
+        throw new TypeError("Draft refine resume authority can consume only an Await settlement");
+      }
+      this.#selection = resumeAfterSettlement
+        ? "step-selection-required"
+        : workerExecution ? "worker-execution" : "await-user-answer";
+    }
+    this.binding = Object.freeze({
+      runId: binding.runId,
+      specId: binding.specId,
+      stepId: binding.stepId,
+      attemptId: binding.attempt.id,
+      attemptSequence: binding.attempt.sequence,
+    });
+    this.#settlement = settlement;
+    this.resumeReceiptId = resume?.id ?? null;
+    Object.freeze(this);
+  }
+
+  get requiresStepSelection() { return this.#selection === "step-selection-required"; }
+
+  executionIdentity() {
+    return this.#selection === "worker-execution"
+      ? new DraftRefineExecutionIdentity(
+          DRAFT_REFINE_EXECUTION_IDENTITY_TOKEN,
+          this.#settlement.id,
+        )
+      : null;
+  }
+
+  awaitQuestionIdentity() {
+    return this.#selection === "await-user-answer"
+      ? new DraftAwaitQuestionIdentity(this.#settlement.awaitQuestion)
+      : null;
+  }
+
+  awaitReceiptFor({ questionId, questionRevision } = {}) {
+    const identity = this.awaitQuestionIdentity();
+    return identity !== null
+      && identity.questionId === questionId
+      && identity.questionRevision === questionRevision
+      ? this.#settlement
+      : null;
+  }
+
+  dispositionForQuestion(question = null) {
+    if (this.requiresStepSelection) return null;
+    if (this.#selection === "worker-execution") {
+      return new DefinitionConditionalWorkerDisposition({
+        stepId: "draft-refine",
+        operation: "execute-worker",
+      });
+    }
+    const identity = this.awaitQuestionIdentity();
+    if (question?.id !== identity.questionId
+      || question.revision !== identity.questionRevision
+      || typeof question.question !== "string" || question.question.trim() === "") {
+      throw new TypeError("Draft refine Await receipt does not select the canonical pending question");
+    }
+    return new DefinitionConditionalWorkerDisposition({
+      stepId: "draft-refine",
+      operation: "await-user-answer",
+      questionId: identity.questionId,
+      question: question.question,
+      questionRevision: identity.questionRevision,
+    });
   }
 }
 

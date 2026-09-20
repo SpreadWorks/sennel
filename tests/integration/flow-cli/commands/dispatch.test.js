@@ -82,6 +82,7 @@ function installWorker(root, {
   holdForRelease = false,
   captureInput = false,
   failAfterCapture = false,
+  response = "premature normal worker response",
 } = {}) {
   const worker = path.join(root, "serial-worker.mjs");
   const workDir = path.join(root, ".tmp");
@@ -116,7 +117,7 @@ function installWorker(root, {
       ? 'const releaseDeadline=Date.now()+10_000; while (!fs.existsSync(releaseFile)) { if (Date.now() >= releaseDeadline) { fs.rmSync(lockFile,{force:true}); throw new Error("timed out waiting for worker release"); } await new Promise((resolve)=>setTimeout(resolve,10)); }'
       : `await new Promise((resolve)=>setTimeout(resolve,${delayMs}));`,
     'fs.rmSync(lockFile,{force:true});',
-    'process.stdout.write("premature normal worker response");',
+    `process.stdout.write(${JSON.stringify(response)});`,
   ].join("\n"));
   fs.mkdirSync(path.join(root, ".sennel"), { recursive: true });
   fs.writeFileSync(path.join(root, ".sennel/config.json"), `${JSON.stringify({
@@ -798,8 +799,9 @@ describe("flow dispatch CLI", () => {
     );
   });
 
-  it("returns and reuses one opaque binding across draft-question decisions", () => {
+  it("reuses one opaque binding and continues the final draft answer through coverage review", () => {
     root = createTmpDir("sennel-flow-dispatch-draft-question-");
+    installWorker(root, { response: "NO_PROPOSALS" });
     const scenario = draftQuestionScenario(root);
     const refineSequence = scenario.manager.canonicalState(scenario.state.specId)
       .findNode("draft-refine").attemptSequence;
@@ -852,31 +854,33 @@ describe("flow dispatch CLI", () => {
     ]);
     assert.equal(secondAnswer.status, 0, secondAnswer.stderr);
 
-    const ready = invokeFlow(root, [
-      "get", "next-action",
+    const beforeResumeActivities = scenario.manager.activityLedger(scenario.state.specId).length;
+    const resumed = invokeFlow(root, [
+      "run", "dispatch",
       "--expect-binding", second.envelope.data.dispatch.binding,
     ]);
-    assert.equal(ready.status, 0, ready.stderr);
-    assert.equal(ready.envelope.data.binding, scenario.binding);
-    assert.equal(ready.envelope.data.directive.kind, "execute_command");
-    assert.equal(ready.envelope.data.directive.actionId, "SKIP_CONDITIONAL_WORKER");
-    assert.equal(ready.envelope.data.step, "draft-gate-repair");
+    assert.notEqual(resumed.status, 0, "the dispatcher continues from coverage review to the next guarded worker boundary");
+    assert.ok(resumed.envelope?.data?.dispatch, `${resumed.stderr}\n${resumed.stdout}`);
+    assert.equal(resumed.envelope.data.dispatch.boundary, "blocked");
+    assert.equal(resumed.envelope.data.nextAction.step, "draft-gate");
     const answered = scenario.manager.canonicalState(scenario.state.specId);
     assert.equal(answered.findNode("draft-refine").status, "done");
     assert.equal(answered.findNode("draft-refine").attemptSequence, refineSequence);
-    assert.equal(answered.attempt, null);
-
-    const skipped = invokeFlow(root, [
-      "run", "claim-next-action",
-      "--expect-binding", ready.envelope.data.binding,
-    ]);
-    assert.equal(skipped.status, 0, skipped.stderr);
-    const coverage = invokeFlow(root, [
-      "get", "next-action", "--expect-binding", ready.envelope.data.binding,
-    ]);
-    assert.equal(coverage.status, 0, coverage.stderr);
-    assert.equal(coverage.envelope.data.binding, scenario.binding);
-    assert.equal(coverage.envelope.data.step, "draft-coverage-review");
+    assert.equal(answered.findNode("draft-coverage-review").status, "done");
+    assert.equal(answered.findNode("draft-coverage-review").result.stepResult.kind, "draft-coverage-review-passed");
+    assert.equal(answered.attempt.nodeId, "draft-gate");
+    assert.equal(answered.attempt.failure.code, "DRAFT_RESULT_ERROR");
+    const resumedActivities = scenario.manager.activityLedger(scenario.state.specId)
+      .slice(beforeResumeActivities);
+    assert.equal(resumedActivities.some((entry) => (
+      entry.result?.stepResult?.kind === "draft-refine-completed"
+    )), true);
+    assert.equal(resumedActivities.some((entry) => (
+      entry.result?.stepResult?.kind === "draft-refine-worker-required"
+    )), false);
+    assert.equal(resumedActivities.some((entry) => (
+      entry.result?.stepResult?.kind === "draft-coverage-review-passed"
+    )), true);
   });
 
   it("reclaims a lease whose dispatcher owner exited", () => {

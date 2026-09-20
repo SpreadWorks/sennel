@@ -46,6 +46,8 @@ import {
 } from "./task-review-stage-transition.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { STEP_RESULT_TYPE, StepResult, stepResultDigest } from "../engine/step-result.js";
+import { DraftQuestionResumeReceipt } from "./draft-question-resume-receipt.js";
+import { DraftStepSettlementReceiptValue } from "./draft-step-settlement-receipt.js";
 import {
   REQUIREMENT_TEST_LEAF_IDS,
   RequirementTestInitializationEffect,
@@ -2035,7 +2037,7 @@ function sameDraftExecutionValue(left, right) {
 }
 
 /** Validate one new receipt against the durable execution-generation history. */
-export function assertDraftSettlementReceiptTransition(priorReceipts, receipt) {
+export function assertDraftSettlementReceiptTransition(priorReceipts, receipt, { resumeReceipts = [] } = {}) {
   if (!Array.isArray(priorReceipts)) {
     throw new CurrentFlowStateInvariantError("Draft settlement receipt history must be an array");
   }
@@ -2046,7 +2048,15 @@ export function assertDraftSettlementReceiptTransition(priorReceipts, receipt) {
   }
   if (lifecycle === null) {
     if (priorReceipts.length > 0) {
-      throw new CurrentFlowStateConflictError("Draft settlement binding already has a different Result, Settlement, or Publication");
+      const previous = priorReceipts.at(-1);
+      const resume = resumeReceipts.at(-1) ?? null;
+      const resumedAwait = previous?.settlementKind === "await"
+        && resume?.awaitReceiptId === previous.id
+        && resume?.binding?.attemptId === receipt?.binding?.attemptId
+        && resume?.binding?.attemptSequence === receipt?.binding?.attemptSequence;
+      if (!resumedAwait) {
+        throw new CurrentFlowStateConflictError("Draft settlement binding already has a different Result, Settlement, or Publication");
+      }
     }
     return receipt;
   }
@@ -2064,7 +2074,7 @@ export function assertDraftSettlementReceiptTransition(priorReceipts, receipt) {
   }
   const publicationAwaitContinuation = lifecycle.phase === "publication"
     && previous?.phase === "publication"
-    && executionHistory.at(-1)?.settlementKind === "execution"
+    && ["execution", "await"].includes(executionHistory.at(-1)?.settlementKind)
     && receipt.settlementKind === "await";
   const expectedPhases = lifecycle.phase === "claimed"
     ? ["checkpoint"] : lifecycle.phase === "publication"
@@ -2080,11 +2090,12 @@ export function assertDraftSettlementReceiptTransition(priorReceipts, receipt) {
   return receipt;
 }
 
-class PersistedDraftSettlementReceipt {
+class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
   constructor(value) {
+    super();
     requireExactFields(value, new Set([
       "id", "binding", "resultKind", "resultType", "resultDigest", "settlementKind",
-      "targetStepId", "effects", "connector", "publicationDigest", "executionLifecycle",
+      "targetStepId", "effects", "connector", "publicationDigest", "executionLifecycle", "awaitQuestion",
     ]), "result.draftSettlementReceipt");
     if (!/^[a-f0-9]{64}$/.test(value.id)) {
       throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt.id is invalid");
@@ -2112,6 +2123,27 @@ class PersistedDraftSettlementReceipt {
     this.publicationDigest = value.publicationDigest;
     this.executionLifecycle = value.executionLifecycle === null
       ? null : new PersistedDraftExecutionLifecycle(value.executionLifecycle);
+    if ((value.settlementKind === "await") !== (value.awaitQuestion !== null)) {
+      throw new CurrentFlowStateInvariantError("Draft Await receipt must carry its question identity");
+    }
+    if (value.awaitQuestion !== null) {
+      requireExactFields(value.awaitQuestion, new Set([
+        "questionId", "questionRevision", "sourceDigest", "sourceByteLength",
+      ]), "result.draftSettlementReceipt.awaitQuestion");
+      if (!Number.isSafeInteger(value.awaitQuestion.questionRevision) || value.awaitQuestion.questionRevision < 0
+        || !/^[a-f0-9]{64}$/.test(value.awaitQuestion.sourceDigest)
+        || !Number.isSafeInteger(value.awaitQuestion.sourceByteLength) || value.awaitQuestion.sourceByteLength < 0) {
+        throw new CurrentFlowStateInvariantError("Draft Await question identity is invalid");
+      }
+      this.awaitQuestion = Object.freeze({
+        questionId: requireString(value.awaitQuestion.questionId, "Draft Await question ID"),
+        questionRevision: value.awaitQuestion.questionRevision,
+        sourceDigest: value.awaitQuestion.sourceDigest,
+        sourceByteLength: value.awaitQuestion.sourceByteLength,
+      });
+    } else {
+      this.awaitQuestion = null;
+    }
     const reviewExecutionKinds = new Set([
       "draft-questions-review-execution-required",
       "draft-coverage-review-execution-required",
@@ -2160,6 +2192,7 @@ class PersistedDraftSettlementReceipt {
       connector: this.connector,
       publicationDigest: this.publicationDigest,
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
+      awaitQuestion: this.awaitQuestion,
     };
     const expectedId = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     if (this.id !== expectedId) {
@@ -2181,6 +2214,7 @@ class PersistedDraftSettlementReceipt {
       connector: this.connector === null ? null : { ...this.connector },
       publicationDigest: this.publicationDigest,
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
+      awaitQuestion: this.awaitQuestion,
     };
   }
 }
@@ -6689,16 +6723,16 @@ export class ActivityGateTaskLifecycle {
 const ACTIVITY_TRANSITION_FIELDS = new Set([
   "operation", "nodeId", "task", "attempt", "status", "policy", "outbox", "approval",
   "nonblocking", "finalizeSteps", "gateTaskLifecycle", "stepConnectionReceipt", "taskReviewStagePlan",
-  "requirementTestInitialization", "requirementTestLifecycle",
+  "requirementTestInitialization", "requirementTestLifecycle", "draftResumeReceipt",
 ]);
 
 export class ActivityTransition {
   constructor(value) {
-    const normalized = isPlainObject(value) && (!Object.hasOwn(value, "finalizeSteps") || !Object.hasOwn(value, "gateTaskLifecycle") || !Object.hasOwn(value, "stepConnectionReceipt") || !Object.hasOwn(value, "taskReviewStagePlan") || !Object.hasOwn(value, "requirementTestInitialization") || !Object.hasOwn(value, "requirementTestLifecycle"))
-      ? { ...value, finalizeSteps: value.finalizeSteps ?? null, gateTaskLifecycle: value.gateTaskLifecycle ?? null, stepConnectionReceipt: value.stepConnectionReceipt ?? null, taskReviewStagePlan: value.taskReviewStagePlan ?? null, requirementTestInitialization: value.requirementTestInitialization ?? null, requirementTestLifecycle: value.requirementTestLifecycle ?? null }
+    const normalized = isPlainObject(value) && (!Object.hasOwn(value, "finalizeSteps") || !Object.hasOwn(value, "gateTaskLifecycle") || !Object.hasOwn(value, "stepConnectionReceipt") || !Object.hasOwn(value, "taskReviewStagePlan") || !Object.hasOwn(value, "requirementTestInitialization") || !Object.hasOwn(value, "requirementTestLifecycle") || !Object.hasOwn(value, "draftResumeReceipt"))
+      ? { ...value, finalizeSteps: value.finalizeSteps ?? null, gateTaskLifecycle: value.gateTaskLifecycle ?? null, stepConnectionReceipt: value.stepConnectionReceipt ?? null, taskReviewStagePlan: value.taskReviewStagePlan ?? null, requirementTestInitialization: value.requirementTestInitialization ?? null, requirementTestLifecycle: value.requirementTestLifecycle ?? null, draftResumeReceipt: value.draftResumeReceipt ?? null }
       : value;
     requireExactFields(normalized, ACTIVITY_TRANSITION_FIELDS, "activity.transition");
-    const { operation, nodeId, task, attempt, status, policy, outbox, approval, nonblocking, finalizeSteps, gateTaskLifecycle, stepConnectionReceipt, taskReviewStagePlan, requirementTestInitialization, requirementTestLifecycle } = normalized;
+    const { operation, nodeId, task, attempt, status, policy, outbox, approval, nonblocking, finalizeSteps, gateTaskLifecycle, stepConnectionReceipt, taskReviewStagePlan, requirementTestInitialization, requirementTestLifecycle, draftResumeReceipt } = normalized;
     if (![FLOW_CREATION_TRANSITION_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "advance_task_review_stage", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "fail_attempt", "record_failure", "confirm_attempt", "complete_acceptance_decision_noop", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", INTERRUPTED_FINALIZE_SYNC_OPERATION, ...LIFECYCLE_TRANSITION_OPERATIONS, ...POLICY_TRANSITION_OPERATIONS, ...OUTBOX_TRANSITION_OPERATIONS, ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS, ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS, ...OBSERVATION_TRANSITION_OPERATIONS, ...NONBLOCKING_TRANSITION_OPERATIONS, ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS].includes(operation)) {
       throw new CurrentFlowStateInvariantError(`activity.transition.operation is invalid: ${operation}`);
     }
@@ -6729,6 +6763,15 @@ export class ActivityTransition {
       : RequirementTestLifecycleDecision.fromJSON(requirementTestLifecycle);
     if ((operation === REQUIREMENT_TEST_TRANSITION_OPERATION) !== (this.requirementTestLifecycle !== null)) {
       throw new CurrentFlowStateInvariantError("only Requirement test advancement carries its sealed decision");
+    }
+    this.draftResumeReceipt = draftResumeReceipt === null
+      ? null
+      : draftResumeReceipt instanceof DraftQuestionResumeReceipt
+        ? draftResumeReceipt
+        : DraftQuestionResumeReceipt.fromJSON(draftResumeReceipt);
+    if (this.draftResumeReceipt !== null
+      && (operation !== "publish_artifacts" || nodeId !== "draft-refine")) {
+      throw new CurrentFlowStateInvariantError("Draft resume receipts belong only to draft-refine artifact publication");
     }
     const taskRequired = ["add_task", "add_approval_task"].includes(operation);
     if (taskRequired !== (this.task !== null)) {
@@ -6884,7 +6927,38 @@ export class ActivityTransition {
         && receipt.binding.attemptId === draftReceipt.binding.attemptId
         && receipt.binding.attemptSequence === draftReceipt.binding.attemptSequence
       ));
-      assertDraftSettlementReceiptTransition(priorReceipts, draftReceipt);
+      const resumeReceipts = priorActivities.map((entry) => entry.transition?.draftResumeReceipt)
+        .filter((receipt) => receipt?.binding.attemptId === draftReceipt.binding.attemptId
+          && receipt.binding.attemptSequence === draftReceipt.binding.attemptSequence);
+      assertDraftSettlementReceiptTransition(priorReceipts, draftReceipt, { resumeReceipts });
+    }
+    const resumeReceipt = this.draftResumeReceipt;
+    if (resumeReceipt !== null) {
+      if (state.current?.at(-1) !== "draft-refine" || state.attempt === null
+        || activity.attemptId !== state.attempt.id || activity.sequence !== state.attempt.sequence
+        || resumeReceipt.binding.runId !== state.runId || resumeReceipt.binding.specId !== state.specId
+        || resumeReceipt.binding.stepId !== "draft-refine"
+        || resumeReceipt.binding.attemptId !== state.attempt.id
+        || resumeReceipt.binding.attemptSequence !== state.attempt.sequence) {
+        throw new CurrentFlowStateConflictError("Draft resume receipt binding is stale");
+      }
+      const consumed = priorActivities.find((entry) => (
+        entry.result?.draftSettlementReceipt?.id === resumeReceipt.awaitReceiptId
+      ))?.result?.draftSettlementReceipt ?? null;
+      const latestSettlement = priorActivities.map((entry) => entry.result?.draftSettlementReceipt)
+        .filter((receipt) => receipt?.binding.attemptId === resumeReceipt.binding.attemptId
+          && receipt.binding.attemptSequence === resumeReceipt.binding.attemptSequence)
+        .at(-1) ?? null;
+      if (consumed?.settlementKind !== "await"
+        || consumed.binding.attemptId !== resumeReceipt.binding.attemptId
+        || consumed.binding.attemptSequence !== resumeReceipt.binding.attemptSequence
+        || latestSettlement?.id !== consumed.id) {
+        throw new CurrentFlowStateConflictError("Draft resume receipt does not consume this Attempt's Await settlement");
+      }
+      const priorResume = priorActivities.find((entry) => entry.transition?.draftResumeReceipt?.id === resumeReceipt.id);
+      if (priorResume !== undefined) {
+        throw new CurrentFlowStateConflictError("Draft resume receipt was already recorded");
+      }
     }
     if (this.operation === FLOW_CREATION_TRANSITION_OPERATION) {
       if (target.id !== state.root.id) {
@@ -7256,6 +7330,7 @@ export class ActivityTransition {
       taskReviewStagePlan: this.taskReviewStagePlan?.toJSON() ?? null,
       requirementTestInitialization: this.requirementTestInitialization?.toJSON() ?? null,
       requirementTestLifecycle: this.requirementTestLifecycle?.toJSON() ?? null,
+      draftResumeReceipt: this.draftResumeReceipt?.toJSON() ?? null,
     };
   }
 }

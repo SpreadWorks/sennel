@@ -1,12 +1,7 @@
 import { FlowCommand } from "./base-command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
-import { DraftTransitionFacts } from "./draft-transition-facts.js";
-import {
-  createConditionalWorkerSettlementPlan,
-  resolveDraftQuestionResolution,
-  resolveDraftTransition,
-} from "../definition.js";
+import { DraftQuestionResolutionIdentity } from "./draft-question-resume-receipt.js";
 
 function parseDraft(bytes) {
   try { return new DraftLifecycle(JSON.parse(bytes.toString("utf8"))); }
@@ -26,59 +21,89 @@ export default class SetDraftAnswerCommand extends FlowCommand {
     }
     if (dropping && (ctx.answer || ctx.why || ctx.considered)) return Envelope.fail("set", "draft-answer", "INVALID_USAGE", "--drop cannot be combined with --answer, --why, or --considered");
     if (!dropping && ctx.droppedReason) return Envelope.fail("set", "draft-answer", "INVALID_USAGE", "--dropped-reason requires --drop");
+    let resolution;
+    try {
+      resolution = dropping
+        ? DraftQuestionResolutionIdentity.discard(ctx.droppedReason)
+        : DraftQuestionResolutionIdentity.answer({
+          answer: ctx.answer,
+          why: ctx.why,
+          considered: ctx.considered || "",
+        });
+    } catch (error) {
+      return Envelope.fail("set", "draft-answer", "INVALID_USAGE", error.message);
+    }
 
     // Admission always reloads the only authority. A caller-held ctx is never
     // sufficient to mutate a question that may have changed after projection.
     const state = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
-    if (state.currentNodeId !== "draft-refine" || state.autoApprove === true) {
+    const canonical = ctx.flowManager.canonicalState(state.specId);
+    if (canonical.current?.at(-1) !== "draft-refine" || canonical.policy.autoApprove === true || canonical.attempt === null) {
       return Envelope.fail("set", "draft-answer", "DRAFT_ANSWER_NOT_SELECTED", "the Definition has not selected a manual draft answer action");
+    }
+    const binding = {
+      runId: state.runId,
+      specId: state.specId,
+      stepId: "draft-refine",
+      attempt: canonical.attempt,
+    };
+    const replay = ctx.flowManager.findDraftQuestionResumeReceipt({
+      binding,
+      questionId: ctx.questionId,
+      questionRevision,
+      resolution,
+    });
+    if (replay !== null) {
+      return {
+        questionId: replay.questionId,
+        status: replay.resolution.kind === "discard" ? "discarded" : "answered",
+        resumeReceiptId: replay.id,
+        replayed: true,
+      };
+    }
+    let projection;
+    try {
+      projection = ctx.flowManager.draftRefineStepState({ binding });
+    } catch (error) {
+      return Envelope.fail("set", "draft-answer", "DRAFT_ANSWER_NOT_SELECTED", error.message);
+    }
+    const awaitReceipt = projection.awaitReceiptFor({
+      questionId: ctx.questionId,
+      questionRevision,
+    });
+    if (awaitReceipt === null) {
+      return Envelope.fail("set", "draft-answer", "DRAFT_ANSWER_NOT_SELECTED", "the persisted Draft Await receipt does not select this question");
     }
     const source = ctx.flowManager.readArtifact({ specId: state.specId, logicalKey: "draft", consumerNodeId: "draft-refine" });
     let draft;
     try {
       draft = parseDraft(source.bytes);
       const ledger = draft.questionLedger;
-      const plan = resolveDraftQuestionResolution({
-        intent: dropping ? "discard" : "answer",
-        questionId: ctx.questionId,
-        questionRevision,
-        facts: DraftTransitionFacts.fromDraft(draft),
-        flowState: state,
-        answer: ctx.answer,
-        why: ctx.why,
-        considered: ctx.considered || "",
-        reason: ctx.droppedReason,
-      });
-      if (plan === null) {
-        throw new Error("draft answer does not match the Definition-selected action");
-      }
-      const nextLedger = plan.apply(ledger);
+      const nextLedger = resolution.kind === "answer"
+        ? ledger.answer(ctx.questionId, questionRevision, {
+          answer: resolution.answer,
+          why: resolution.why,
+          considered: resolution.considered,
+        })
+        : ledger.discard(ctx.questionId, questionRevision, resolution.reason);
       draft = draft.withQuestionLedger(nextLedger);
       draft.decisionMap.requiresUserJudgment = draft.decisionMap.requiresUserJudgment
         .filter((questionId) => questionId !== ctx.questionId);
     } catch (error) {
       return Envelope.fail("set", "draft-answer", "INVALID_DRAFT_ANSWER", error.message);
     }
-    const artifactBaselines = [{ logicalKey: "draft", digest: source.descriptor.hash, byteLength: source.descriptor.size }];
-    const artifactWrites = [{ logicalKey: "draft", mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(draft, null, 2)}\n`, "utf8") }];
-    const nextFacts = DraftTransitionFacts.fromDraft(new DraftLifecycle(draft), { workerStatus: "in_progress" });
-    const disposition = resolveDraftTransition({ stepId: "draft-refine", flowState: state, facts: nextFacts });
+    const outputBytes = Buffer.from(`${JSON.stringify(draft, null, 2)}\n`, "utf8");
+    let committed;
     try {
-      if (disposition.operation === "complete-worker") {
-        const plan = createConditionalWorkerSettlementPlan({
-          disposition,
-          flowState: ctx.flowManager.canonicalState(state.specId),
-          evidenceDigest: source.descriptor.hash,
-        });
-        ctx.flowManager.settleConditionalWorker({
-          specId: state.specId,
-          plan,
-          artifactBaselines,
-          artifactWrites,
-        });
-      } else {
-        ctx.flowManager.publishArtifacts({ specId: state.specId, nodeId: "draft-refine", artifactBaselines, artifactWrites });
-      }
+      committed = ctx.flowManager.recordDraftQuestionResume({
+        binding,
+        awaitReceipt,
+        questionId: ctx.questionId,
+        questionRevision,
+        resolution,
+        source,
+        outputBytes,
+      });
     } catch (error) {
       return Envelope.fail("set", "draft-answer", "DRAFT_ANSWER_STALE_PUBLICATION", error.message);
     }
@@ -86,7 +111,8 @@ export default class SetDraftAnswerCommand extends FlowCommand {
       questionId: ctx.questionId,
       status: dropping ? "discarded" : "answered",
       nextQuestionId: new DraftLifecycle(draft).nextUnresolvedQuestion()?.id ?? null,
-      draftRefineCompleted: disposition.operation === "complete-worker",
+      resumeReceiptId: committed.receipt.id,
+      replayed: false,
     };
   }
 }
