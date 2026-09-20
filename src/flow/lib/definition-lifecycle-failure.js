@@ -16,7 +16,7 @@ import { TaskStepIdentity } from "./task-step-identity.js";
 import { attachedCanonicalReviewWorkUnit } from "./canonical-review-artifacts.js";
 import { TaskReviewAbortedWorkUnit } from "./task-review-aborted-work-unit.js";
 
-export const DRAFT_STEP_ERROR_PERSISTENCE_FAILURE_CODE = "DRAFT_STEP_ERROR_PERSISTENCE_FAILED";
+export const DRAFT_RESULT_ERROR_PERSISTENCE_FAILURE_CODE = "DRAFT_RESULT_ERROR_PERSISTENCE_FAILED";
 
 /**
  * A failed Store commit has no Step result to record.  This explicit error
@@ -28,13 +28,13 @@ export class DraftStepPersistenceFailure extends Error {
     const message = cause instanceof Error ? cause.message : String(cause);
     super(message, cause instanceof Error ? { cause } : undefined);
     this.name = "DraftStepPersistenceFailure";
-    this.code = DRAFT_STEP_ERROR_PERSISTENCE_FAILURE_CODE;
+    this.code = DRAFT_RESULT_ERROR_PERSISTENCE_FAILURE_CODE;
   }
 }
 
 export function isDraftStepPersistenceFailure(error) {
   return error instanceof DraftStepPersistenceFailure
-    || error?.code === DRAFT_STEP_ERROR_PERSISTENCE_FAILURE_CODE
+    || error?.code === DRAFT_RESULT_ERROR_PERSISTENCE_FAILURE_CODE
     || error?.data?.failureKind === "draft-step-persistence";
 }
 

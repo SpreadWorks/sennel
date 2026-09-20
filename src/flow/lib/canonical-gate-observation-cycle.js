@@ -19,6 +19,7 @@ const ATTEMPT_ARTIFACT_PUBLICATION_OPERATIONS = new Set([
   "publish_artifacts",
   "confirm_attempt",
   "fail_attempt",
+  "plan_gate_repair",
 ]);
 
 function requiredObject(value, field) {
@@ -94,7 +95,9 @@ function repairActivityFor(record, activities) {
   const matches = activities.filter((activity) => {
     const references = activity?.references?.repairs;
     return activity?.transition?.operation === "plan_gate_repair"
-      && activity.nodeId === record.targetStepId
+      && (activity.nodeId === record.targetStepId
+        || (activity.nodeId === record.route.gateStepId
+          && activity.result?.stepResult?.kind === "draft-gate-repair-required"))
       && Array.isArray(references)
       && references.length === 1
       && references[0]?.id === record.idempotencyKey
@@ -105,9 +108,11 @@ function repairActivityFor(record, activities) {
   }
   const activity = matches[0];
   const targetAttempt = activity.transition?.attempt;
+  const prospectiveDraftSettlement = activity.nodeId === record.route.gateStepId
+    && activity.result?.stepResult?.kind === "draft-gate-repair-required";
   if (targetAttempt?.nodeId !== record.targetStepId
-    || activity.attemptId !== targetAttempt.id
-    || activity.sequence !== targetAttempt.sequence) {
+    || (!prospectiveDraftSettlement
+      && (activity.attemptId !== targetAttempt.id || activity.sequence !== targetAttempt.sequence))) {
     throw new Error("canonical plan Gate repair Activity has a mismatched target Attempt");
   }
   return Object.freeze({ activity, targetAttempt: { id: targetAttempt.id, sequence: targetAttempt.sequence } });
@@ -140,6 +145,9 @@ function gateResultPayloadMatchesScope(payload, { phase, route } = {}) {
 
 function attemptSettlement(activities, { nodeId, attempt } = {}) {
   const matching = activities.filter((activity) => matchingAttemptActivity(activity, { nodeId, attempt }));
+  if (matching.some((activity) => (
+    activity.result?.stepResult?.kind === "draft-gate-carry-forward"
+  ))) return "deferred";
   if (matching.some((activity) => activity.transition?.operation === "defer_failed_gate")) return "deferred";
   if (matching.some((activity) => (
     activity.transition?.operation === "continue_nonblocking"
@@ -515,9 +523,13 @@ export class CanonicalGateObservationCycle {
     if (sourcePublications.length !== 1) {
       throw new Error("canonical Gate repair source has no exact publication Activity");
     }
+    const atomicDraftSettlement = sourcePublications[0].id === repairActivity.id
+      && repairActivity.result?.stepResult?.kind === "draft-gate-repair-required";
     if (!Number.isSafeInteger(sourcePublications[0].confirmationOrder)
       || !Number.isSafeInteger(repairActivity.confirmationOrder)
-      || sourcePublications[0].confirmationOrder >= repairActivity.confirmationOrder) {
+      || sourcePublications[0].confirmationOrder > repairActivity.confirmationOrder
+      || (sourcePublications[0].confirmationOrder === repairActivity.confirmationOrder
+        && !atomicDraftSettlement)) {
       throw new Error("canonical Gate repair source publication is not prior to its repair Activity");
     }
     return resultHistory;
@@ -560,15 +572,17 @@ export class CanonicalGateObservationCycle {
     });
   }
 
-  #readMaterial({ includeStatus = false } = {}) {
+  #readMaterial({ includeStatus = false, includeCurrent = true } = {}) {
     const issueLog = this.#issueLog();
     const records = this.#records(issueLog);
     const outcomes = this.#outcomes(records);
     const occurrences = records.flatMap(({ record }) => record.observations.map((observation) => (
       new GateObservationOccurrence({ evidence: record.evidenceIdentity, observation: observation.canonical, blocking: true })
     )));
-    for (const occurrence of this.#currentOccurrenceRows()) {
-      if (!occurrences.some((candidate) => candidate.key() === occurrence.key())) occurrences.push(occurrence);
+    if (includeCurrent) {
+      for (const occurrence of this.#currentOccurrenceRows()) {
+        if (!occurrences.some((candidate) => candidate.key() === occurrence.key())) occurrences.push(occurrence);
+      }
     }
 
     const completedByRepairId = new Map(outcomes.map((entry) => [entry.outcome.repairId, entry]));
@@ -627,6 +641,11 @@ export class CanonicalGateObservationCycle {
     return this.transitionRead().readModel;
   }
 
+  /** Prior durable cycles only, for constructing an in-flight Gate settlement. */
+  readHistorical() {
+    return this.#readMaterial({ includeCurrent: false }).readModel;
+  }
+
   transitionRead() {
     const material = this.#readMaterial();
     return new CanonicalGateObservationTransitionRead(material.readModel, material.terminalRepairIds);
@@ -634,6 +653,17 @@ export class CanonicalGateObservationCycle {
 
   status() {
     const material = this.#readMaterial({ includeStatus: true });
+    return new GateObservationConvergenceStatus(
+      material.readModel,
+      material.postRepairResults,
+      material.occurrenceSettlements,
+      material.terminalRepairIds,
+    );
+  }
+
+  /** Convergence status before the active Gate command result is published. */
+  prospectiveStatus() {
+    const material = this.#readMaterial({ includeStatus: true, includeCurrent: false });
     return new GateObservationConvergenceStatus(
       material.readModel,
       material.postRepairResults,
@@ -734,6 +764,14 @@ export class GateObservationConvergenceStatus {
   }
 
   get empty() { return this.entries.length === 0; }
+
+  sameEvidenceFor({ phase, fingerprints } = {}) {
+    const candidates = fingerprints instanceof Set ? fingerprints : new Set(fingerprints ?? []);
+    return this.entries.some((entry) => entry.phase === phase
+      && candidates.has(entry.fingerprint)
+      && entry.repair !== null
+      && !(entry.repair.disposition === "applied" && entry.repair.changedEvidence));
+  }
 
   toJSON() {
     return {

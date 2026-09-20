@@ -37,6 +37,7 @@ const TYPE_FOR_OPERATION = Object.freeze({
   record_failure: "failure_recorded",
   confirm_attempt: "result_confirmed",
   complete_draft_completion: "result_confirmed",
+  record_draft_step_settlement: "result_confirmed",
   settle_conditional_worker: "result_confirmed",
   complete_task_review_stage: "result_confirmed",
   advance_task_review_stage: "result_confirmed",
@@ -444,6 +445,35 @@ export class CanonicalFlowRuntime {
     });
   }
 
+  /** Persist an Execution/Await Result without completing its current Attempt. */
+  recordDraftStepSettlement({
+    specId,
+    activityId,
+    result,
+    references = undefined,
+    specRecord = undefined,
+    artifactWrites = undefined,
+    artifactRemovals = undefined,
+    artifactBaselines = undefined,
+    testSourceBaseline = undefined,
+  } = {}) {
+    const state = this.#state(specId);
+    return this.#applyAttemptTransition(specId, state, {
+      id: activityId,
+      nodeId: this.#currentNodeId(state),
+      operation: "record_draft_step_settlement",
+      attempt: null,
+      result,
+      status: null,
+      references,
+      specRecord,
+      artifactWrites,
+      artifactRemovals,
+      artifactBaselines,
+      testSourceBaseline,
+    });
+  }
+
   settleConditionalWorker({ specId, activityId, stepId, result, admission = undefined } = {}) {
     const state = this.#state(specId);
     return this.apply(specId, this.#activity(state, {
@@ -678,13 +708,14 @@ export class CanonicalFlowRuntime {
   }
 
   /** Atomically record guarded evidence and replace an active gate Attempt. */
-  planGateRepair({ specId, activityId, nodeId, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, admission = undefined, gateTaskLifecycle = null } = {}) {
+  planGateRepair({ specId, activityId, nodeId, attempt, result = null, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, artifactBaselines = undefined, admission = undefined, gateTaskLifecycle = null } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
       nodeId,
       operation: "plan_gate_repair",
       attempt: requiredAttempt(attempt, "planGateRepair"),
+      result,
       timing,
       provider,
       model,
@@ -692,6 +723,7 @@ export class CanonicalFlowRuntime {
       usage,
       references,
       artifactWrites,
+      artifactBaselines,
       admission,
       gateTaskLifecycle,
     });
@@ -1220,6 +1252,8 @@ export class CanonicalFlowRuntime {
       : null;
     const activityAttempt = operation === "complete_draft_completion"
       ? stepConnectionReceipt?.sourceAttempt ?? null
+      : operation === "plan_gate_repair" && result !== null
+      ? state.attempt
       : new Set(["repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "recover_missing_producer_artifact", "recover_task_execution_overrun", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", "initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle"]).has(operation)
       ? state.attempt ?? attempt
       : ["start_attempt", "rewind", "rewind_test_evidence", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "retry_recovery_attempt", "accept_final_regression_failure"].includes(operation)

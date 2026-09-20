@@ -470,6 +470,30 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  settleDraftStepResult(input = {}) {
+    return this._store.settleDraftStepResult({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  readProspectiveDraftCoveragePassFacts(input = {}) {
+    return this._store.readProspectiveDraftCoveragePassFacts({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  findDraftStepSettlementReceipt(input = {}) {
+    return this._store.findDraftStepSettlementReceipt({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
+  findDraftAwaitSettlementReceipt(input = {}) {
+    return this._store.findDraftAwaitSettlementReceipt({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   settleConditionalWorker(input = {}) {
     return this._store.settleConditionalWorker({
       ...input,
@@ -804,9 +828,6 @@ export class FlowManager {
   }
   settleGateTransition(input = {}) {
     return this._store.settleGateTransition({ ...input, specId: input.specId ?? this._boundSpecId });
-  }
-  commitDraftGateTransition(input = {}) {
-    return this._store.commitDraftGateTransition({ ...input, specId: input.specId ?? this._boundSpecId });
   }
   recoverTaskExecutionOverrun(input = {}) {
     return this._store.recoverTaskExecutionOverrun({ ...input, specId: input.specId ?? this._boundSpecId });

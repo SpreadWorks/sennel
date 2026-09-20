@@ -69,6 +69,15 @@ export class CanonicalCommandResultPublication {
       : new CanonicalCommandResultPublication(value);
   }
 
+  toJSON() {
+    return {
+      logicalKey: this.logicalKey,
+      parameters: this.parameters,
+      mediaType: this.mediaType,
+      payload: this.payload,
+    };
+  }
+
   toArtifactWrite() {
     // Review evidence has a typed owner+digest address rather than the
     // generic `{ parameters }` spelling. Keep the public command result

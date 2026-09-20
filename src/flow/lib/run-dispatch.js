@@ -233,7 +233,7 @@ function settleRequirementTestStructuralHandoff(ctx, attempt, error) {
   return true;
 }
 
-/** Persist a pre-Step worker or handoff failure without inventing StepOutput. */
+/** Persist a pre-Step worker or handoff failure without inventing StepResult. */
 function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoffRequest?.stepId ?? null) {
   if (!stepId?.startsWith("draft")) return false;
   const request = attempt?.handoffRequest ?? null;
@@ -1750,7 +1750,7 @@ export default class RunDispatchCommand extends FlowCommand {
         handoffRequest,
         agentError,
         partialRepair: reconciliation?.partial === true,
-        stepOutput: reconciliation?.stepOutput ?? null,
+        stepResult: reconciliation?.stepResult ?? null,
         supervisorEvents,
         deferredMetric: holdsSpecRepairMetric ? deferredMetric : null,
       };
@@ -1770,16 +1770,20 @@ export default class RunDispatchCommand extends FlowCommand {
       flowManager: ctx.flowManager,
       binding,
       workerFacts: prepared.facts,
-      workerExecutor: (stepOutput) => {
+      workerExecutor: (stepResult, settlement, binding) => {
         return {
           error: null,
-          ...this.handoffCoordinator.commitDraftWorker({ ctx, request, preparation: prepared, stepOutput }),
+          ...this.handoffCoordinator.commitDraftWorker({
+            ctx, request, preparation: prepared, stepResult, settlement, binding,
+          }),
         };
       },
-      workerErrorCommitter: (stepOutput) => this.handoffCoordinator.commitDraftWorkerError({
+      workerErrorCommitter: (stepResult, settlement, binding) => this.handoffCoordinator.commitDraftWorkerError({
         ctx,
         request,
-        stepOutput,
+        stepResult,
+        settlement,
+        binding,
       }),
     });
     const step = new StepFactory()
@@ -1788,11 +1792,11 @@ export default class RunDispatchCommand extends FlowCommand {
     const output = await step.execute();
     const attempt = draftService.workerOutcome;
     if (attempt === null) throw new Error("Draft Step did not execute its bound worker handoff");
-    if ((attempt.error === null && attempt.stepOutput !== output)
+    if ((attempt.error === null && attempt.stepResult !== output)
       || (attempt.error !== null && output.type !== "error")) {
-      throw new Error("Draft Step output does not match its bound worker attempt");
+      throw new Error("Draft Step Result does not match its bound worker attempt");
     }
-    return { ...attempt, stepOutput: output };
+    return { ...attempt, stepResult: output };
   }
 
   async execute(ctx) {

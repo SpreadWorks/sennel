@@ -10,10 +10,12 @@ import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { FlowDispatchAction } from "../../../src/flow/lib/run-dispatch.js";
 import {
   buildCurrentFlowDefinition,
+  DraftStepSettlementPublication,
+  DraftStepSettlementReceipt,
   getFlowNode,
+  settleDraftStepResult,
   TaskReviewStageBinding,
   TaskReviewStageFacts,
-  resolveDraftStepRoute,
   resolveTaskReviewStageTransition,
 } from "../../../src/flow/definition.js";
 import {
@@ -44,23 +46,39 @@ import {
   TaskNode,
 } from "../../../src/flow/lib/current-flow-state.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../../src/flow/engine/step-output.js";
+import {
+  DraftQuestionsRepairChangedResult,
+  DraftQuestionsReviewFindingsResult,
+  DraftQuestionsReviewPassedResult,
+  StepResult,
+} from "../../../src/flow/engine/step-result.js";
 
 const NOW = "2026-08-07T00:00:00.000Z";
 const LATER = "2026-08-07T00:01:00.000Z";
 
-it("preserves a Draft StepOutput in a typed NodeResult readback", () => {
+it("preserves a Draft StepResult in a typed NodeResult readback", () => {
+  const stepResult = new DraftQuestionsReviewFindingsResult();
+  const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
+  const receipt = new DraftStepSettlementReceipt({
+    binding: {
+      runId: "run-1",
+      specId: "0001-draft-result-readback",
+      stepId: stepResult.stepId,
+      attempt: { id: "attempt-1", sequence: 1 },
+    },
+    result: stepResult,
+    settlement,
+    publication: new DraftStepSettlementPublication(),
+  });
   const result = new NodeResult({
     outcome: "passed", summary: "Draft review requested repair", confirmedAt: NOW,
-    artifactRefs: [], stepOutput: new StepOutput(STEP_OUTPUT_TYPE.BRANCH_REQUIRED),
-    draftRouteTargetStepId: "draft-questions-triage",
-    draftRouteEffects: { skipStepIds: [], resetStepIds: [] },
+    artifactRefs: [], stepResult, draftSettlementReceipt: receipt.toJSON(),
   });
   const restored = new NodeResult(JSON.parse(JSON.stringify(result)));
-  assert.equal(restored.stepOutput instanceof StepOutput, true);
-  assert.deepEqual(restored.stepOutput.toJSON(), { type: STEP_OUTPUT_TYPE.BRANCH_REQUIRED });
-  assert.equal(restored.draftRouteTargetStepId, "draft-questions-triage");
-  assert.deepEqual(restored.draftRouteEffects.toJSON(), { skipStepIds: [], resetStepIds: [] });
+  assert.equal(restored.stepResult instanceof StepResult, true);
+  assert.deepEqual(restored.stepResult.toJSON(), stepResult.toJSON());
+  assert.equal(restored.draftSettlementReceipt.targetStepId, "draft-questions-triage");
+  assert.deepEqual(restored.draftSettlementReceipt.effects.toJSON(), settlement.effects.toJSON());
   assert.deepEqual(new NodeResult(passedResult("ordinary completion")).toJSON(), passedResult("ordinary completion"));
 });
 
@@ -237,37 +255,48 @@ function advanceUntil(state, targetId, prefix = "advance") {
 }
 
 it("applies only Definition-selected Draft route effects", () => {
-  const routed = (sourceStepId, summary, type, target) => ({
-    ...passedResult(summary),
-    stepOutput: new StepOutput(type),
-    draftRouteTargetStepId: target,
-    draftRouteEffects: resolveDraftStepRoute(sourceStepId, new StepOutput(type)).effects.toJSON(),
-  });
+  const routed = (state, stepResult, summary) => {
+    const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
+    return {
+      ...passedResult(summary),
+      stepResult,
+      draftSettlementReceipt: new DraftStepSettlementReceipt({
+        binding: {
+          runId: state.runId,
+          specId: state.specId,
+          stepId: stepResult.stepId,
+          attempt: state.attempt,
+        },
+        result: stepResult,
+        settlement,
+        publication: new DraftStepSettlementPublication(),
+      }).toJSON(),
+    };
+  };
   let state = advanceUntil(CurrentFlowState.create({ definition: definition() }), "draft-questions-review", "draft-route");
-  state = startDescriptor(state, "draft-review-branch").confirmCurrentAttempt({
-    result: routed("draft-questions-review", "Questions need repair", STEP_OUTPUT_TYPE.BRANCH_REQUIRED, "draft-questions-triage"),
+  let active = startDescriptor(state, "draft-review-branch");
+  state = active.confirmCurrentAttempt({
+    result: routed(active, new DraftQuestionsReviewFindingsResult(), "Questions need repair"),
   });
   assert.equal(state.nextAction().nodeId, "draft-questions-triage");
   state = completeNext(state, "draft-triage");
-  state = startDescriptor(state, "draft-repair-loop").confirmCurrentAttempt({
-    result: routed("draft-questions-repair", "Questions repaired", STEP_OUTPUT_TYPE.LOOP_REQUIRED, "draft-questions-review"),
+  active = startDescriptor(state, "draft-repair-loop");
+  state = active.confirmCurrentAttempt({
+    result: routed(active, new DraftQuestionsRepairChangedResult(), "Questions repaired"),
   });
   assert.equal(state.nextAction().nodeId, "draft-questions-review");
   assert.equal(state.findNode("draft-questions-repair").status, "invalidated");
   const previousTriageSequence = state.findNode("draft-questions-triage").attemptSequence;
   const previousRepairSequence = state.findNode("draft-questions-repair").attemptSequence;
-  state = startDescriptor(state, "draft-review-pass").confirmCurrentAttempt({
-    result: routed("draft-questions-review", "Questions resolved", STEP_OUTPUT_TYPE.COMPLETED, "draft-refine"),
+  active = startDescriptor(state, "draft-review-pass");
+  state = active.confirmCurrentAttempt({
+    result: routed(active, new DraftQuestionsReviewPassedResult(), "Questions resolved"),
   });
   assert.equal(state.nextAction().nodeId, "draft-refine");
   assert.equal(state.findNode("draft-questions-triage").status, "skipped");
   assert.equal(state.findNode("draft-questions-repair").status, "skipped");
   assert.equal(state.findNode("draft-questions-triage").attemptSequence, previousTriageSequence + 1);
   assert.equal(state.findNode("draft-questions-repair").attemptSequence, previousRepairSequence + 1);
-  state = startDescriptor(state, "draft-refine-loop").confirmCurrentAttempt({
-    result: routed("draft-refine", "More refinement needed", STEP_OUTPUT_TYPE.LOOP_REQUIRED, "draft-refine"),
-  });
-  assert.equal(state.nextAction().nodeId, "draft-refine");
 });
 
 function flowActivity({

@@ -3,8 +3,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { describe, it } from "node:test";
 
-import { sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../../src/flow/engine/step-output.js";
+import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { DraftGateRepairAppliedResult } from "../../../src/flow/engine/step-result.js";
+import { DraftWorkerStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import { settleDraftStepResult } from "../../../src/flow/definition.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -144,13 +146,21 @@ describe("dedicated draft Gate repair handoff", () => {
         ctx: value.scenario.ctx,
         request,
       });
+      const binding = new DraftWorkerStepBinding({ request });
+      const stepResult = new DraftGateRepairAppliedResult();
       const result = value.scenario.coordinator.commitDraftWorker({
         ctx: value.scenario.ctx,
         request,
         preparation,
-        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+        stepResult,
+        settlement: settleDraftStepResult(stepResult.stepId, stepResult),
+        binding,
       });
       assert.equal(result.rejected, true);
+      const terminal = value.flowManager.canonicalState(value.scenario.specId)
+        .findNode("draft-gate-repair").result.draftSettlementReceipt;
+      assert.equal(result.receipt.id, terminal.id);
+      assert.equal(result.receipt.publicationDigest, terminal.publicationDigest);
       assert.equal(catalogEntry(value.flowManager, value.scenario.specId, "draft.gate.repair"), null);
       const outcomeEntry = catalogEntry(value.flowManager, value.scenario.specId, "plan.gate.repair.outcome");
       assert.notEqual(outcomeEntry, null);
@@ -164,6 +174,56 @@ describe("dedicated draft Gate repair handoff", () => {
         parameters: { repairId }, consumerNodeId: "system",
       });
       assert.equal(JSON.parse(persisted.bytes).disposition, "rejected-no-progress");
+    } finally {
+      removeTmpDir(value.root);
+    }
+  });
+
+  it("replays a no-progress terminal handoff after cleanup interruption without reopening its Step", () => {
+    const value = setup("521-gate-repair-no-progress-replay");
+    try {
+      const request = value.scenario.createRequest();
+      const payload = value.scenario.replacement("goal", "Incomplete retained behavior");
+      payload.operations = [];
+      seal(request, payload);
+      const preparation = value.scenario.coordinator.prepareDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+      });
+      const binding = new DraftWorkerStepBinding({ request });
+      const stepResult = new DraftGateRepairAppliedResult();
+      const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
+      const interrupted = new WorkerArtifactHandoffCoordinator({
+        faultInjector({ phase }) {
+          if (phase === "before-worker-handoff-cleanup-rename") throw new Error("retain terminal handoff");
+        },
+      });
+      assert.throws(
+        () => interrupted.commitDraftWorker({
+          ctx: value.scenario.ctx,
+          request,
+          preparation,
+          binding,
+          stepResult,
+          settlement,
+        }),
+        (error) => error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
+      );
+      const persisted = value.flowManager.canonicalState(value.scenario.specId)
+        .findNode("draft-gate-repair").result.draftSettlementReceipt;
+      const replay = value.scenario.coordinator.commitDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+        preparation,
+        binding,
+        stepResult,
+        settlement,
+      });
+      assert.equal(replay.replayed, true);
+      assert.equal(replay.receipt.id, persisted.id);
+      assert.equal(value.flowManager.canonicalState(value.scenario.specId)
+        .findNode("draft-gate-repair").status, "done");
+      assert.equal(fs.existsSync(request.directory), false);
     } finally {
       removeTmpDir(value.root);
     }
@@ -340,7 +400,7 @@ describe("dedicated draft Gate repair handoff", () => {
       seal(request, payload);
       assert.throws(
         () => recurring.coordinator.prepareDraftWorker({ ctx: recurring.ctx, request }),
-        (error) => error.code === "FLOW_ARTIFACT_HANDOFF_INVALID" || error.code === "FLOW_DRAFT_STEP_OUTPUT_REQUIRED",
+        (error) => error.code === "FLOW_ARTIFACT_HANDOFF_INVALID" || error.code === "FLOW_DRAFT_STEP_RESULT_REQUIRED",
       );
       const afterCatalog = value.flowManager.artifactCatalog(value.scenario.specId);
       assert.equal(value.flowManager.readArtifact({

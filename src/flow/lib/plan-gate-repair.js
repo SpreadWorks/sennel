@@ -386,6 +386,83 @@ function matchingGateIssueLogEntry(entry, route, gateResult) {
 }
 
 /**
+ * Build the normal repair handoff from a Draft Gate publication that will be
+ * committed by the same Activity. The prospective artifact bytes are the
+ * exact bytes the Version Store will catalog, so the resulting evidence
+ * identity is identical to one reconstructed after commit.
+ */
+export function createProspectiveDraftGateRepairRecord({
+  state,
+  issueLog,
+  gateResultPayload,
+  resultArtifactWrite,
+  sourceArtifactWrite,
+  publicationActivityId,
+  cycleReadModel,
+} = {}) {
+  const route = planGateRepairRouteForGateStep("draft-gate");
+  issueLogDocument(issueLog);
+  if (state?.current?.at(-1) !== route.gateStepId || state?.attempt == null) {
+    throw new Error("prospective Draft Gate repair requires its active source Attempt");
+  }
+  if (gateResultPayload?.result !== "fail"
+    || gateResultPayload?.artifacts?.gateTransitionAttemptId !== state.attempt.id
+    || gateResultPayload?.artifacts?.gateTransitionAttemptSequence !== state.attempt.sequence) {
+    throw new Error("prospective Draft Gate repair result has a stale Attempt binding");
+  }
+  if (resultArtifactWrite?.logicalKey !== "draft.gate"
+    || sourceArtifactWrite?.logicalKey !== "draft.gate.source"
+    || !Buffer.isBuffer(resultArtifactWrite.bytes)
+    || !Buffer.isBuffer(sourceArtifactWrite.bytes)) {
+    throw new Error("prospective Draft Gate repair requires its exact result and source writes");
+  }
+  const source = [...issueLog.entries].reverse().find((entry) => (
+    matchingGateIssueLogEntry(entry, route, { payload: gateResultPayload, descriptor: null })
+  )) ?? null;
+  if (source === null) {
+    throw new Error("prospective Draft Gate repair requires its canonical issue-log evidence");
+  }
+  const attempt = { id: state.attempt.id, sequence: state.attempt.sequence };
+  const catalogFingerprint = crypto.createHash("sha256").update(resultArtifactWrite.bytes).digest("hex");
+  const sourceFingerprint = crypto.createHash("sha256").update(sourceArtifactWrite.bytes).digest("hex");
+  const revision = gateResultPayload.artifacts.gateTransitionLineage;
+  const lineage = {
+    sourceAttempt: attempt,
+    canonicalAttempt: attempt,
+    sourceFingerprint,
+    canonicalFingerprint: catalogFingerprint,
+    sourceRevisionFingerprint: revision,
+    canonicalRevisionFingerprint: revision,
+  };
+  const connector = {
+    phase: route.phase,
+    sourceGateStepId: route.gateStepId,
+    sourceAttempt: attempt,
+    resultLogicalKey: "draft.gate",
+    resultArtifactId: FLOW_ARTIFACT_CONTRACTS.resolve("draft.gate").relativePath,
+    catalogFingerprint,
+    targetStepId: route.targetStepId,
+    resetStepIds: [...route.resetStepIds],
+    taskLifecycle: null,
+  };
+  return PlanGateRepairRecord.create({
+    state,
+    issueLogEntry: source,
+    gateFacts: {
+      currentAttempt: attempt,
+      catalogPublication: {
+        producerActivityId: publicationActivityId,
+        fingerprint: catalogFingerprint,
+      },
+      lineage,
+    },
+    connector,
+    cycleReadModel,
+    prospective: true,
+  });
+}
+
+/**
  * Resolve the single durable source entry for a currently failed plan gate.
  *
  * Eligibility is deliberately derived from existing Version-1 provenance:
@@ -540,7 +617,15 @@ export class PlanGateRepairRecord {
     Object.freeze(this);
   }
 
-  static create({ state, issueLogEntry, gateFacts, connector, cycleReadModel, requestedAt = new Date().toISOString() }) {
+  static create({
+    state,
+    issueLogEntry,
+    gateFacts,
+    connector,
+    cycleReadModel,
+    prospective = false,
+    requestedAt = new Date().toISOString(),
+  }) {
     if (gateFacts === null || typeof gateFacts !== "object" || connector === null || typeof connector !== "object") {
       throw new Error("plan gate repair creation requires Definition-selected Gate facts and connector");
     }
@@ -571,18 +656,19 @@ export class PlanGateRepairRecord {
     }
     const observationRequests = typedObservations.map((observation) => {
       const cycle = cycleReadModel.find(observation.fingerprint);
-      if (cycle === null || !cycle.occurrences.some((occurrence) => (
+      const hasCurrentOccurrence = cycle !== null && cycle.occurrences.some((occurrence) => (
         occurrence.blocking
         && occurrence.evidence.matches(evidenceIdentity)
         && occurrence.fingerprint.equals(observation.fingerprint)
-      ))) {
+      ));
+      if (!prospective && !hasCurrentOccurrence) {
         throw new Error("plan gate repair observation is absent from the exact canonical Gate cycle");
       }
-      const priorOccurrences = cycle.occurrences.filter((occurrence) => (
+      const priorOccurrences = (cycle?.occurrences ?? []).filter((occurrence) => (
         occurrence.evidence.resultLogicalKey === evidenceIdentity.resultLogicalKey
         && occurrence.evidence.sourceAttempt.sequence < evidenceIdentity.sourceAttempt.sequence
       ));
-      const priorOutcome = [...cycle.outcomes]
+      const priorOutcome = [...(cycle?.outcomes ?? [])]
         .filter((outcome) => (
           outcome.sourceEvidence.resultLogicalKey === evidenceIdentity.resultLogicalKey
           && outcome.sourceAttempt.sequence < evidenceIdentity.sourceAttempt.sequence

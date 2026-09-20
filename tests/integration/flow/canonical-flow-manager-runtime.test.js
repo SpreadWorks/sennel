@@ -7,7 +7,16 @@ import { execFileSync } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../../src/flow/engine/step-output.js";
+import {
+  DraftCreatedResult,
+  DraftCoverageReviewFindingsResult,
+  DraftQuestionsRepairChangedResult,
+  DraftQuestionsReviewFindingsResult,
+  DraftQuestionsReviewPassedResult,
+  DraftStepErrorResult,
+  STEP_RESULT_TYPE,
+} from "../../../src/flow/engine/step-result.js";
+import { DraftWorkerStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { Agent } from "../../../src/lib/agent.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
@@ -55,9 +64,10 @@ import { computeGitState } from "../../../src/lib/git-state.js";
 import { CanonicalGatePromotion, canonicalGateRevision } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
 import {
-  DRAFT_STEP_ERROR_CATEGORY,
+  DRAFT_RESULT_ERROR_CATEGORY,
   resolveGateTransition,
   resolveNonGateTransition,
+  settleDraftStepResult,
   testExecuteTransitionDefinition,
 } from "../../../src/flow/definition.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
@@ -746,13 +756,14 @@ afterEach(() => {
 
 describe("FlowManager canonical Version-1 runtime", () => {
   it("reads back Definition-selected Draft Review routes and rejects invalid output without mutation", () => {
-    for (const [stepId, outputType, targetStepId] of [
-      ["draft-questions-review", STEP_OUTPUT_TYPE.COMPLETED, "draft-refine"],
-      ["draft-questions-review", STEP_OUTPUT_TYPE.BRANCH_REQUIRED, "draft-questions-triage"],
-      ["draft-coverage-review", STEP_OUTPUT_TYPE.BRANCH_REQUIRED, "draft-coverage-triage"],
+    for (const [stepId, ResultClass, targetStepId] of [
+      ["draft-questions-review", DraftQuestionsReviewPassedResult, "draft-refine"],
+      ["draft-questions-review", DraftQuestionsReviewFindingsResult, "draft-questions-triage"],
+      ["draft-coverage-review", DraftCoverageReviewFindingsResult, "draft-coverage-triage"],
     ]) {
       const repository = root();
-      const specId = `001-${stepId}-${outputType}`;
+      const result = new ResultClass();
+      const specId = `001-${stepId}-${result.kind}`;
       const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
       new FlowAtStepFixture({
         flowManager: manager, specId, runId: `run-${specId}`,
@@ -760,26 +771,37 @@ describe("FlowManager canonical Version-1 runtime", () => {
       }).create();
       const before = manager.canonicalState(specId).toJSON();
       const beforeActivities = manager.activityLedger(specId).length;
-      assert.throws(() => manager.confirmCurrentAttempt({
-        specId, stepOutput: new StepOutput(STEP_OUTPUT_TYPE.LOOP_REQUIRED),
-      }), new RegExp(`${stepId} cannot return loop-required`));
+      const state = manager.canonicalState(specId);
+      const binding = {
+        runId: state.runId, specId, stepId, attempt: state.attempt,
+      };
+      const wrongResult = new DraftQuestionsRepairChangedResult();
+      assert.throws(() => manager.settleDraftStepResult({
+        binding,
+        stepResult: wrongResult,
+        settlement: settleDraftStepResult(wrongResult.stepId, wrongResult),
+      }), /exact Result binding/);
       assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
       assert.equal(manager.activityLedger(specId).length, beforeActivities);
 
       publishAttemptArtifact(manager, specId, stepId,
         stepId === "draft-questions-review" ? "draft.questions.review" : "draft.coverage.review",
         { phase: stepId === "draft-questions-review" ? "draft-questions" : "draft-coverage",
-          verdict: outputType === STEP_OUTPUT_TYPE.COMPLETED ? "PASS" : "REJECTED" });
-      manager.confirmCurrentAttempt({ specId, stepOutput: new StepOutput(outputType) });
+          verdict: result.type === STEP_RESULT_TYPE.COMPLETED ? "PASS" : "REJECTED" });
+      manager.settleDraftStepResult({
+        binding,
+        stepResult: result,
+        settlement: settleDraftStepResult(stepId, result),
+      });
       const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
       assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, targetStepId);
       const confirmation = reloaded.activityLedger(specId).at(-1);
-      assert.deepEqual(confirmation.result.stepOutput, { type: outputType });
-      assert.equal(confirmation.result.draftRouteTargetStepId, targetStepId);
+      assert.deepEqual(confirmation.result.stepResult, result.toJSON());
+      assert.equal(confirmation.result.draftSettlementReceipt.targetStepId, targetStepId);
     }
   });
 
-  it("persists a Draft repair loop route and refuses a mismatched StepOutput atomically", () => {
+  it("persists a Draft repair loop route and refuses a mismatched StepResult atomically", () => {
     const repository = root();
     const specId = "001-draft-route-readback";
     const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
@@ -789,25 +811,34 @@ describe("FlowManager canonical Version-1 runtime", () => {
     }).create();
     const before = manager.canonicalState(specId).toJSON();
     const beforeActivities = manager.activityLedger(specId).length;
-    assert.throws(() => manager.confirmCurrentAttempt({
-      specId, stepOutput: new StepOutput(STEP_OUTPUT_TYPE.BRANCH_REQUIRED),
-    }), /draft-questions-repair cannot return branch-required/);
+    const state = manager.canonicalState(specId);
+    const binding = {
+      runId: state.runId, specId, stepId: "draft-questions-repair", attempt: state.attempt,
+    };
+    const wrongResult = new DraftQuestionsReviewFindingsResult();
+    assert.throws(() => manager.settleDraftStepResult({
+      binding,
+      stepResult: wrongResult,
+      settlement: settleDraftStepResult(wrongResult.stepId, wrongResult),
+    }), /exact Result binding/);
     assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
     assert.equal(manager.activityLedger(specId).length, beforeActivities);
 
-    manager.confirmCurrentAttempt({
-      specId,
-      stepOutput: new StepOutput(STEP_OUTPUT_TYPE.LOOP_REQUIRED),
+    const result = new DraftQuestionsRepairChangedResult();
+    manager.settleDraftStepResult({
+      binding,
+      stepResult: result,
+      settlement: settleDraftStepResult(result.stepId, result),
     });
     const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const state = reloaded.canonicalState(specId);
-    assert.equal(state.nextAction().nodeId, "draft-questions-review");
+    const reloadedState = reloaded.canonicalState(specId);
+    assert.equal(reloadedState.nextAction().nodeId, "draft-questions-review");
     const confirmation = reloaded.activityLedger(specId).at(-1);
-    assert.deepEqual(confirmation.result.stepOutput, { type: STEP_OUTPUT_TYPE.LOOP_REQUIRED });
-    assert.equal(confirmation.result.draftRouteTargetStepId, "draft-questions-review");
+    assert.deepEqual(confirmation.result.stepResult, result.toJSON());
+    assert.equal(confirmation.result.draftSettlementReceipt.targetStepId, "draft-questions-review");
   });
 
-  it("persists a Draft Error StepOutput with its failed Attempt on readback", () => {
+  it("persists a Draft Error StepResult with its failed Attempt on readback", () => {
     const repository = root();
     const specId = "001-draft-error-readback";
     const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
@@ -816,25 +847,33 @@ describe("FlowManager canonical Version-1 runtime", () => {
       request: "Persist the Draft Step error.", targetStep: "draft-gate",
     }).create();
     const attemptId = manager.canonicalState(specId).attempt.id;
-    manager.failCurrentAttempt({
+    const stateBeforeFailure = manager.canonicalState(specId);
+    const binding = {
+      runId: stateBeforeFailure.runId,
       specId,
-      failure: { category: DRAFT_STEP_ERROR_CATEGORY, code: "DRAFT_GATE_ERROR", message: "Draft Gate failed.", retryable: false, retryKind: null },
-      stepOutput: new StepOutput(new Error("Draft Gate failed.")),
+      stepId: "draft-gate",
+      attempt: stateBeforeFailure.attempt,
+    };
+    const error = new Error("Draft Gate failed.");
+    error.code = "DRAFT_GATE_ERROR";
+    const result = new DraftStepErrorResult("draft-gate", error);
+    manager.settleDraftStepResult({
+      binding,
+      stepResult: result,
+      settlement: settleDraftStepResult(result.stepId, result),
     });
     const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     const state = reloaded.canonicalState(specId);
     assert.equal(state.current.at(-1), "draft-gate");
     assert.equal(state.attempt.id, attemptId);
     assert.equal(state.attempt.failure.code, "DRAFT_GATE_ERROR");
-    assert.equal(state.attempt.failure.category, DRAFT_STEP_ERROR_CATEGORY);
+    assert.equal(state.attempt.failure.category, DRAFT_RESULT_ERROR_CATEGORY);
     assert.equal(state.nextAction().operation, "blocked");
     assert.equal(state.retryEligibility().tooling, false);
     assert.equal(state.retryEligibility().semantic, false);
     const failure = reloaded.activityLedger(specId).at(-1);
-    assert.deepEqual(failure.result.stepOutput, {
-      type: STEP_OUTPUT_TYPE.ERROR,
-      error: { kind: "generic", message: "Draft Gate failed." },
-    });
+    assert.deepEqual(failure.result.stepResult, result.toJSON());
+    assert.equal(failure.result.draftSettlementReceipt.binding.attemptId, attemptId);
   });
   it("records context reads through the same metric path inside and outside managed handoff workers", () => {
     const previous = process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV];
@@ -3739,8 +3778,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     await FLOW_COMMANDS.run.review.post(ctx, result);
     const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     const confirmation = reloaded.canonicalState(created.specId).findNode("draft-questions-review").result;
-    assert.deepEqual(confirmation.stepOutput.toJSON(), { type: STEP_OUTPUT_TYPE.COMPLETED });
-    assert.equal(confirmation.draftRouteTargetStepId, "draft-refine");
+    assert.deepEqual(confirmation.stepResult.toJSON(), new DraftQuestionsReviewPassedResult().toJSON());
+    assert.equal(confirmation.draftSettlementReceipt.targetStepId, "draft-refine");
     assert.equal(reloaded.canonicalState(created.specId).nextAction().nodeId, "draft-refine");
   });
 
@@ -3883,9 +3922,9 @@ describe("FlowManager canonical Version-1 runtime", () => {
         assert.equal(state.findNode("draft-coverage-review").status, "done");
         assert.equal(state.findNode("draft-coverage-triage").status, "skipped");
         assert.equal(state.findNode("draft-coverage-repair").status, "skipped");
-        assert.deepEqual(state.findNode("draft-coverage-review").result.stepOutput.toJSON(),
-          { type: STEP_OUTPUT_TYPE.COMPLETED });
-        assert.equal(state.findNode("draft-coverage-review").result.draftRouteTargetStepId, "draft-gate");
+        assert.equal(state.findNode("draft-coverage-review").result.stepResult.kind,
+          "draft-coverage-review-passed");
+        assert.equal(state.findNode("draft-coverage-review").result.draftSettlementReceipt.targetStepId, "draft-gate");
         assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "draft-gate");
         assert.equal(completion.result.artifactRefs.at(-1).kind, "draft-completion-connector");
         assert.equal(completion.transition.stepConnectionReceipt.sourceStepId, "draft-coverage-review");
@@ -5588,7 +5627,16 @@ describe("FlowManager canonical Version-1 runtime", () => {
     fs.writeFileSync(handoff.payloadPath("draft.json"), draftBytes);
     sealWorkerArtifactHandoff({ requestPath: handoff.requestPath, invocationId: "canonical-handoff" });
 
-    const result = coordinator.reconcile({ ctx: context, request: handoff });
+    const preparation = coordinator.prepareDraftWorker({ ctx: context, request: handoff });
+    const stepResult = new DraftCreatedResult();
+    const result = coordinator.commitDraftWorker({
+      ctx: context,
+      request: handoff,
+      preparation,
+      stepResult,
+      settlement: settleDraftStepResult(stepResult.stepId, stepResult),
+      binding: new DraftWorkerStepBinding({ request: handoff }),
+    });
     const catalog = manager.artifactCatalog(created.specId);
     const draft = catalog.resolve("steps/draft/result.json");
 
@@ -5746,7 +5794,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       consumerNodeId: "draft-refine",
     });
     assert.equal(repaired.completed, true);
-    assert.equal(repaired.stepOutput.type, STEP_OUTPUT_TYPE.LOOP_REQUIRED);
+    assert.equal(repaired.stepResult.type, STEP_RESULT_TYPE.LOOP_REQUIRED);
     assert.equal(manager.canonicalState(created.specId).findNode("draft-questions-repair").status, "invalidated");
     assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "draft-questions-review");
     assert.equal(JSON.parse(draft.bytes.toString("utf8")).goal, "Repaired through the parent.");

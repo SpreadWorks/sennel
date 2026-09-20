@@ -557,10 +557,19 @@ export class StepConnectionAdmission {
   }
 
   assert(snapshot) {
-    this.sourceConsumerAdmission.assert(snapshot);
-    if (this.sourceProducerCompletionAdmission !== null) {
-      this.sourceProducerCompletionAdmission.assert(snapshot);
+    if (this.sourceProducerCompletionAdmission === null) {
+      this.sourceConsumerAdmission.assert(snapshot);
+      return;
     }
+    const sourceProducerNodeId = this.sourceProducerCompletionAdmission.readinesses[0].producerNodeId;
+    for (const readiness of this.sourceConsumerAdmission.readinesses) {
+      if (readiness.producerNodeId !== sourceProducerNodeId || readiness.isReady(snapshot)) {
+        readiness.assert(snapshot);
+        continue;
+      }
+      readiness.assertPublication(this.sourceProducerCompletionAdmission.artifactWrites);
+    }
+    this.sourceProducerCompletionAdmission.assert(snapshot);
   }
 }
 

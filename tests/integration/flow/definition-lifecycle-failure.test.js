@@ -7,7 +7,7 @@ import { flowCommands } from "../../../src/lib/command-registry.js";
 import { dispatch } from "../../../src/lib/dispatcher.js";
 import { Envelope } from "../../../src/lib/flow-envelope.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { buildCurrentFlowDefinition, DEFINITION_FAILURE_OWNERS, DRAFT_STEP_ERROR_CATEGORY, resolveGateTransition } from "../../../src/flow/definition.js";
+import { buildCurrentFlowDefinition, DEFINITION_FAILURE_OWNERS, DRAFT_RESULT_ERROR_CATEGORY, resolveGateTransition } from "../../../src/flow/definition.js";
 import RunGateCommand, { appendIssueLogFromGateResult } from "../../../src/flow/lib/run-gate.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
@@ -17,7 +17,7 @@ import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-trans
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
 import { TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION } from "../../../src/flow/lib/task-gate-classification-recovery.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../../src/flow/engine/step-output.js";
+import { STEP_RESULT_TYPE, StepResult } from "../../../src/flow/engine/step-result.js";
 import { GateService, ReviewService } from "../../../src/flow/services/review-service.js";
 import { CanonicalFlowFixture, TaskLifecycleFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -345,7 +345,7 @@ test("Draft Gate command errors persist tooling failure without creating a Step 
     assert.equal(state.attempt.failure.code, "DRAFT_GATE_PROVIDER_FAILED");
     assert.equal(state.failureDisposition().operation, "resolve-step-definition");
     assert.equal(failures.length, 1);
-    assert.equal(failures[0].result.stepOutput, undefined);
+    assert.equal(failures[0].result.stepResult, undefined);
   } finally {
     entry.command = originalCommand;
     removeTmpDir(root);
@@ -391,15 +391,15 @@ test("Draft Gate Error save failure stops without a dispatcher fallback", async 
 });
 
 test("Draft Gate Step Error is persisted without a dispatcher fallback", async () => {
-  const root = createTmpDir("definition-lifecycle-draft-gate-step-output-");
-  const originalPrepare = GateService.prototype.prepareGateResult;
+  const root = createTmpDir("definition-lifecycle-draft-gate-step-result-");
+  const originalInspect = GateService.prototype.inspectGateFacts;
   try {
-    const specId = "904-draft-gate-step-output";
+    const specId = "904-draft-gate-step-result";
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     const flow = new CanonicalFlowFixture({
       flowManager: manager,
       specId,
-      runId: "run-draft-gate-step-output",
+      runId: "run-draft-gate-step-result",
       execution: { mode: "direct", baseBranch: "main", featureBranch: null },
     }).create().registerActive();
     flow.activate("draft");
@@ -419,7 +419,7 @@ test("Draft Gate Step Error is persisted without a dispatcher fallback", async (
       static outputMode = "envelope";
       execute() { return result; }
     }
-    GateService.prototype.prepareGateResult = () => {
+    GateService.prototype.inspectGateFacts = () => {
       throw new Error("Draft Gate Step rejected its result.");
     };
     const envelope = await dispatchRegistryCommand({
@@ -428,17 +428,18 @@ test("Draft Gate Step Error is persisted without a dispatcher fallback", async (
     const state = manager.canonicalState(specId);
     const failures = manager.activityLedger(specId).filter((activity) => activity.type === "attempt_failed");
     assert.equal(envelope.ok, false);
-    assert.equal(envelope.errors.some((error) => error.code === "DRAFT_GATE_STEP_ERROR"), true);
+    assert.equal(envelope.errors.some((error) => error.code === "DRAFT_GATE_RESULT_ERROR"), true);
     assert.equal(state.current.at(-1), "draft-gate");
-    assert.equal(state.attempt.failure.category, DRAFT_STEP_ERROR_CATEGORY);
+    assert.equal(state.attempt.failure.category, DRAFT_RESULT_ERROR_CATEGORY);
     assert.equal(state.nextAction().operation, "blocked");
     assert.equal(failures.length, 1);
-    assert.deepEqual(failures[0].result.stepOutput, {
+    assert.deepEqual(failures[0].result.stepResult, {
+      kind: "draft-gate-error",
       type: "error",
       error: { kind: "generic", message: "Draft Gate Step rejected its result." },
     });
   } finally {
-    GateService.prototype.prepareGateResult = originalPrepare;
+    GateService.prototype.inspectGateFacts = originalInspect;
     removeTmpDir(root);
   }
 });
@@ -496,25 +497,25 @@ test("Draft Review command failure persists tooling failure without creating a S
     assert.equal(state.attempt.failure.agentStopEvidence.confirmed, true);
     assert.equal(state.failureDisposition().operation, "retry");
     assert.equal(failures.length, 1);
-    assert.equal(failures[0].result.stepOutput, undefined);
+    assert.equal(failures[0].result.stepResult, undefined);
     const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     const reloadedFailure = reloaded.activityLedger(specId).find((activity) => activity.type === "attempt_failed");
-    assert.deepEqual(reloadedFailure.result.stepOutput, failures[0].result.stepOutput);
+    assert.deepEqual(reloadedFailure.result.stepResult, failures[0].result.stepResult);
   } finally {
     removeTmpDir(root);
   }
 });
 
 test("Draft Review Step Error is persisted without a dispatcher fallback", async () => {
-  const root = createTmpDir("definition-lifecycle-draft-review-step-output-");
+  const root = createTmpDir("definition-lifecycle-draft-review-step-result-");
   const originalInspect = ReviewService.prototype.inspectReviewResult;
   try {
-    const specId = "904-draft-review-step-output";
+    const specId = "904-draft-review-step-result";
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     const flow = new CanonicalFlowFixture({
       flowManager: manager,
       specId,
-      runId: "run-draft-review-step-output",
+      runId: "run-draft-review-step-result",
       execution: { mode: "direct", baseBranch: "main", featureBranch: null },
     }).create().registerActive();
     flow.activate("draft");
@@ -547,12 +548,13 @@ test("Draft Review Step Error is persisted without a dispatcher fallback", async
     const state = manager.canonicalState(specId);
     const failures = manager.activityLedger(specId).filter((activity) => activity.type === "attempt_failed");
     assert.equal(envelope.ok, false);
-    assert.equal(envelope.errors.some((error) => error.code === "DRAFT_REVIEW_STEP_ERROR"), true);
+    assert.equal(envelope.errors.some((error) => error.code === "DRAFT_REVIEW_RESULT_ERROR"), true);
     assert.equal(state.current.at(-1), "draft-questions-review");
-    assert.equal(state.attempt.failure.category, DRAFT_STEP_ERROR_CATEGORY);
+    assert.equal(state.attempt.failure.category, DRAFT_RESULT_ERROR_CATEGORY);
     assert.equal(state.nextAction().operation, "blocked");
     assert.equal(failures.length, 1);
-    assert.deepEqual(failures[0].result.stepOutput, {
+    assert.deepEqual(failures[0].result.stepResult, {
+      kind: "draft-questions-review-error",
       type: "error",
       error: { kind: "generic", message: "Draft Review Step rejected its result." },
     });
@@ -610,7 +612,7 @@ test("Draft Review result-publication failure leaves the confirmed Attempt uncha
       static outputMode = "envelope";
       execute() { return result; }
     }
-    manager.publishCurrentAttemptResult = () => {
+    manager.settleDraftStepResult = () => {
       throw Object.assign(new Error("Draft Review result publication failed."), {
         code: "DRAFT_REVIEW_PUBLICATION_FAILED",
       });
@@ -621,7 +623,7 @@ test("Draft Review result-publication failure leaves the confirmed Attempt uncha
     const state = manager.canonicalState(specId);
     const failures = manager.activityLedger(specId).filter((activity) => activity.type === "attempt_failed");
     assert.equal(envelope.ok, false);
-    assert.equal(envelope.errors.some((error) => error.code === "DRAFT_REVIEW_STEP_OUTPUT_PERSISTENCE_FAILED"), true);
+    assert.equal(envelope.errors.some((error) => error.code === "DRAFT_REVIEW_STEP_RESULT_PERSISTENCE_FAILED"), true);
     assert.equal(state.current.at(-1), "draft-questions-review");
     assert.equal(state.attempt.failure, null);
     assert.equal(failures.length, 0);
@@ -678,9 +680,9 @@ test("Draft Review adopts a result artifact when publication reports after durab
       static outputMode = "envelope";
       execute() { return result; }
     }
-    const originalPublish = manager.publishCurrentAttemptResult.bind(manager);
-    manager.publishCurrentAttemptResult = (input) => {
-      originalPublish(input);
+    const originalSettle = manager.settleDraftStepResult.bind(manager);
+    manager.settleDraftStepResult = (input) => {
+      originalSettle(input);
       throw new Error("Draft Review publication response was lost after durable write.");
     };
     const envelope = await dispatchRegistryCommand({
@@ -715,8 +717,10 @@ test("Draft Gate result-publication failure leaves the confirmed Attempt unchang
       static outputMode = "envelope";
       execute() { return result; }
     }
-    const originalPublish = manager.publishCurrentAttemptResult.bind(manager);
-    manager.publishCurrentAttemptResult = () => {
+    const originalSettle = manager.settleDraftStepResult.bind(manager);
+    const beforeCatalog = manager.artifactCatalog(specId).toJSON();
+    const beforeActivities = manager.activityLedger(specId);
+    manager.settleDraftStepResult = () => {
       throw Object.assign(new Error("Draft Gate result publication failed."), {
         code: "DRAFT_GATE_PUBLICATION_FAILED",
       });
@@ -726,11 +730,19 @@ test("Draft Gate result-publication failure leaves the confirmed Attempt unchang
     const state = manager.canonicalState(specId);
     const failures = manager.activityLedger(specId).filter((activity) => activity.type === "attempt_failed");
     assert.equal(envelope.ok, false);
-    assert.equal(envelope.errors.some((error) => error.code === "DRAFT_GATE_STEP_OUTPUT_PERSISTENCE_FAILED"), true);
+    assert.equal(envelope.errors.some((error) => error.code === "DRAFT_GATE_STEP_RESULT_PERSISTENCE_FAILED"), true);
     assert.equal(state.current.at(-1), "draft-gate");
     assert.equal(state.attempt.failure, null);
     assert.equal(failures.length, 0);
-    manager.publishCurrentAttemptResult = originalPublish;
+    assert.deepEqual(manager.artifactCatalog(specId).toJSON(), beforeCatalog);
+    assert.deepEqual(manager.activityLedger(specId), beforeActivities);
+    assert.equal(manager.readProducerArtifact({
+      specId, nodeId: "draft-gate", logicalKey: "draft.gate", optional: true,
+    }), null);
+    assert.equal(manager.readArtifact({
+      specId, logicalKey: "issue.log", consumerNodeId: "draft-gate", optional: true,
+    }), null);
+    manager.settleDraftStepResult = originalSettle;
   } finally {
     entry.command = originalCommand;
     removeTmpDir(root);
@@ -757,9 +769,9 @@ test("Draft Gate adopts a result artifact when publication reports after durable
       static outputMode = "envelope";
       execute() { return result; }
     }
-    const originalPublish = manager.publishCurrentAttemptResult.bind(manager);
-    manager.publishCurrentAttemptResult = (input) => {
-      originalPublish(input);
+    const originalSettle = manager.settleDraftStepResult.bind(manager);
+    manager.settleDraftStepResult = (input) => {
+      originalSettle(input);
       throw new Error("Draft Gate publication response was lost after durable write.");
     };
     entry.command = async () => ({ default: PublishedDraftGateCommand });

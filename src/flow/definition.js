@@ -47,7 +47,33 @@ import {
   NodeContract as CurrentFlowNodeContract,
 } from "./lib/current-flow-state.js";
 import { draftReviewRouteForKey, draftReviewRouteForRetryPhase, draftReviewRouteForStepId } from "./lib/draft-review-routes.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "./engine/step-output.js";
+import {
+  DraftCoverageRepairChangedResult,
+  DraftCoverageRepairUnchangedResult,
+  DraftCoverageReviewExecutionRequiredResult,
+  DraftCoverageReviewFindingsResult,
+  DraftCoverageReviewPassedResult,
+  DraftCoverageTriageCompletedResult,
+  DraftCreatedResult,
+  DraftGateCarryForwardResult,
+  DraftGatePassedResult,
+  DraftGateRepairAppliedResult,
+  DraftGateRepairCarryForwardResult,
+  DraftGateRepairRequiredResult,
+  DraftGateRepairWorkerRequiredResult,
+  DraftQuestionsRepairChangedResult,
+  DraftQuestionsRepairUnchangedResult,
+  DraftQuestionsReviewExecutionRequiredResult,
+  DraftQuestionsReviewFindingsResult,
+  DraftQuestionsReviewPassedResult,
+  DraftQuestionsTriageCompletedResult,
+  DraftRefineAwaitingAnswerResult,
+  DraftRefineCompletedResult,
+  DraftRefineWorkerRequiredResult,
+  DraftStepErrorResult,
+  StepResult,
+  stepResultDigest,
+} from "./engine/step-result.js";
 import { DraftReviewConnector } from "./engine/connectors/draft/draft-review-connector.js";
 import { DraftTriageConnector } from "./engine/connectors/draft/draft-triage-connector.js";
 import { DraftRepairConnector } from "./engine/connectors/draft/draft-repair-connector.js";
@@ -1065,16 +1091,11 @@ const GATE_TRANSITION_TOKEN = Symbol("definition-gate-transition");
 export const SPEC_GATE_MAXIMUM_CYCLE = 4;
 const NONBLOCKING_ELIGIBILITY_TOKEN = Symbol("definition-nonblocking-eligibility");
 const DRAFT_COVERAGE_REPAIR_COMPLETION_TOKEN = Symbol("definition-draft-coverage-repair-completion");
+const DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN = Symbol("definition-draft-completion-settlement-application");
 export { DraftCompletionConnector } from "./lib/draft-completion-connector.js";
 
 /** Definition is the sole selector; stores and handoffs receive only this plan. */
 export function resolveDraftCompletionConnector(facts) {
-  if (!(facts instanceof DraftCompletionFacts)) {
-    throw new Error("resolveDraftCompletionConnector requires DraftCompletionFacts");
-  }
-  if (!facts.eligible) {
-    throw new Error(`draft completion connector is unavailable: ${facts.eligibilityIssues.join("; ")}`);
-  }
   return createDraftCompletionConnector(facts);
 }
 
@@ -1082,7 +1103,7 @@ export function resolveDraftCompletionConnector(facts) {
 export class DraftCoverageRepairCompletionDecision {
   constructor(token, { facts, connector }) {
     if (token !== DRAFT_COVERAGE_REPAIR_COMPLETION_TOKEN || !(facts instanceof DraftCompletionFacts)) {
-      throw new Error("Draft coverage repair completion is created only by the definition resolver");
+      throw new Error("Draft coverage repair completion is created only by its selected application");
     }
     if (!(connector instanceof DraftCompletionConnector)) {
       throw new Error("Draft coverage repair completion requires a DraftCompletionConnector");
@@ -1102,15 +1123,30 @@ export class DraftCoverageRepairCompletionDecision {
   }
 }
 
+/** Materializes only the DraftCompletionConnector already selected by a Draft settlement. */
+export class DraftCompletionSettlementApplication {
+  constructor(token) {
+    if (token !== DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN) {
+      throw new Error("Draft completion application is selected only by Definition");
+    }
+    Object.freeze(this);
+  }
+
+  materialize(facts) {
+    return new DraftCoverageRepairCompletionDecision(
+      DRAFT_COVERAGE_REPAIR_COMPLETION_TOKEN,
+      { facts, connector: createDraftCompletionConnector(facts) },
+    );
+  }
+
+  toJSON() { return { kind: "draft-completion" }; }
+}
+
 /** Definition selects the mandatory connector for the shared completion boundary. */
 export function resolveDraftCoverageRepairCompletion(facts) {
-  if (!(facts instanceof DraftCompletionFacts)) {
-    throw new Error("resolveDraftCoverageRepairCompletion requires DraftCompletionFacts");
-  }
-  const connector = resolveDraftCompletionConnector(facts);
-  return new DraftCoverageRepairCompletionDecision(
-    DRAFT_COVERAGE_REPAIR_COMPLETION_TOKEN, { facts, connector },
-  );
+  return new DraftCompletionSettlementApplication(
+    DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN,
+  ).materialize(facts);
 }
 
 export class GateTransitionDisposition {
@@ -3977,7 +4013,7 @@ function resolvePlanReviewLifecycle(input) {
   if (phase === "draft" || phase === "draft-questions" || phase === "draft-coverage") {
     // Draft Review lifecycle is committed by the typed Step/Service boundary.
     // Keeping this plan empty prevents generic hooks from settling a result
-    // without its StepOutput and canonical route receipt.
+    // without its StepResult and canonical route receipt.
     return [];
   }
   const actions = [];
@@ -4494,24 +4530,69 @@ function draftRouteEffects(sourceStepId, targetStepId) {
   ));
 }
 
-/** A Definition-selected Draft connection; the Connector performs the handoff. */
-export class DraftStepRoute {
-  constructor({ sourceStepId, targetStepId, connector, effects }) {
-    if (new.target === DraftStepRoute) throw new TypeError("DraftStepRoute is abstract");
-    this.sourceStepId = requireString(sourceStepId, "draft route source");
+const DRAFT_STEP_SETTLEMENT_TOKEN = Symbol("Definition-selected Draft Step settlement");
+const DRAFT_STEP_SETTLEMENT_RESULTS = new WeakMap();
+
+/** A complete Definition-selected disposition for one Draft Step Result. */
+export class DraftStepSettlement {
+  constructor(token, result, kind) {
+    if (new.target === DraftStepSettlement) throw new TypeError("DraftStepSettlement is abstract");
+    if (token !== DRAFT_STEP_SETTLEMENT_TOKEN) {
+      throw new TypeError("Draft settlements must be selected by Definition");
+    }
+    if (!(result instanceof StepResult)) throw new TypeError("Draft settlement requires its concrete Result");
+    this.sourceStepId = result.stepId;
+    this.resultKind = result.kind;
+    this.resultType = result.type;
+    this.kind = requireString(kind, "draft settlement kind");
+    DRAFT_STEP_SETTLEMENT_RESULTS.set(this, result);
+  }
+}
+
+/** A Definition-selected target connection; only this settlement owns a Connector. */
+export class DraftStepRoute extends DraftStepSettlement {
+  constructor(token, { result, targetStepId, connector, effects, application = null }) {
+    super(token, result, "target-connection");
     this.targetStepId = requireString(targetStepId, "draft route target");
     if (typeof connector !== "function") throw new TypeError("draft route requires a Connector");
     this.connector = connector;
+    const completionApplication = application instanceof DraftCompletionSettlementApplication
+      || application instanceof DraftCoverageRepairCompletionDecision;
+    if ((connector === DraftCompletionConnector) !== completionApplication) {
+      throw new TypeError("Draft completion route requires its selected connector application");
+    }
+    if (application instanceof DraftCoverageRepairCompletionDecision && (
+      application.facts.sourceStepId !== result.stepId
+      || application.facts.targetStepId !== this.targetStepId
+      || !(application.connector instanceof connector)
+    )) {
+      throw new TypeError("Draft completion decision does not match its selected route");
+    }
+    this.application = application;
     this.effects = effects instanceof DraftRouteEffects ? effects : new DraftRouteEffects(effects);
     Object.freeze(this);
   }
 
   toJSON() {
     return {
+      kind: this.kind,
       sourceStepId: this.sourceStepId,
       targetStepId: this.targetStepId,
       effects: this.effects.toJSON(),
     };
+  }
+
+  materializeDraftCompletion(facts) {
+    if (!(this.application instanceof DraftCompletionSettlementApplication)) {
+      throw new TypeError("Draft route has no unmaterialized completion application");
+    }
+    return new this.constructor(DRAFT_STEP_SETTLEMENT_TOKEN, {
+      result: DRAFT_STEP_SETTLEMENT_RESULTS.get(this),
+      targetStepId: this.targetStepId,
+      connector: this.connector,
+      effects: this.effects,
+      application: this.application.materialize(facts),
+    });
   }
 }
 
@@ -4519,83 +4600,207 @@ export class DraftNextRoute extends DraftStepRoute {}
 export class DraftBranchRoute extends DraftStepRoute {}
 export class DraftLoopRoute extends DraftStepRoute {}
 
-export class DraftAwaitUserDecision {
-  constructor(stepId) {
-    if (stepId !== "draft-refine") throw new TypeError("only draft-refine may await user input");
-    this.stepId = stepId;
+export class DraftExecutionSettlement extends DraftStepSettlement {
+  constructor(token, result) {
+    super(token, result, "execution");
     Object.freeze(this);
+  }
+
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
+}
+
+export class DraftAwaitUserDecision extends DraftStepSettlement {
+  constructor(token, result) {
+    if (!(result instanceof DraftRefineAwaitingAnswerResult)) {
+      throw new TypeError("only draft-refine awaiting-answer may await user input");
+    }
+    super(token, result, "await");
+    this.stepId = result.stepId;
+    Object.freeze(this);
+  }
+
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
+}
+
+/** Failure category reserved for a persisted terminal Draft StepResult Error. */
+export const DRAFT_RESULT_ERROR_CATEGORY = "draft-result-error";
+
+export class DraftStepErrorDecision extends DraftStepSettlement {
+  constructor(token, result) {
+    if (!(result instanceof DraftStepErrorResult)) {
+      throw new TypeError("draft error decision requires an Error Result");
+    }
+    super(token, result, "failure");
+    this.stepId = result.stepId;
+    this.error = result.error;
+    Object.freeze(this);
+  }
+
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
+}
+
+/**
+ * Content identity for the durable publications owned by one Draft settlement.
+ *
+ * A Result and Definition-selected Settlement alone are not enough to make a
+ * retry exact: the same binding could otherwise silently accept different
+ * artifact bytes or optimistic baselines after the original transaction has
+ * committed.  The Store supplies only canonical publication intent here; this
+ * value deliberately has no knowledge of unrelated command-local inputs.
+ */
+export class DraftStepSettlementPublication {
+  constructor(intent = {}) {
+    if (intent === null || typeof intent !== "object" || Array.isArray(intent)) {
+      throw new TypeError("Draft settlement publication identity requires an object");
+    }
+    let canonical;
+    try {
+      canonical = JSON.parse(JSON.stringify(intent));
+    } catch (error) {
+      throw new TypeError(`Draft settlement publication identity must be JSON-serializable: ${error.message}`);
+    }
+    this.digest = createHash("sha256").update(stableJson(canonical)).digest("hex");
+    Object.freeze(this);
+  }
+
+  toJSON() { return { digest: this.digest }; }
+}
+
+/** Durable identity of one Result and its already-selected settlement. */
+export class DraftStepSettlementReceipt {
+  constructor({ binding, result, settlement, publication } = {}) {
+    if (!(result instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
+      throw new TypeError("Draft settlement receipt requires a Result and Settlement");
+    }
+    if (!(publication instanceof DraftStepSettlementPublication)) {
+      throw new TypeError("Draft settlement receipt requires its publication identity");
+    }
+    if (binding?.runId === undefined || binding?.specId === undefined
+      || binding?.stepId !== result.stepId || settlement.sourceStepId !== result.stepId
+      || settlement.resultKind !== result.kind || settlement.resultType !== result.type
+      || typeof binding.attempt?.id !== "string" || !Number.isSafeInteger(binding.attempt?.sequence)) {
+      throw new TypeError("Draft settlement receipt requires the exact Result binding");
+    }
+    this.binding = Object.freeze({
+      runId: binding.runId,
+      specId: binding.specId,
+      stepId: binding.stepId,
+      attemptId: binding.attempt.id,
+      attemptSequence: binding.attempt.sequence,
+    });
+    this.resultKind = result.kind;
+    this.resultType = result.type;
+    this.resultDigest = stepResultDigest(result);
+    this.settlementKind = settlement.kind;
+    this.targetStepId = settlement instanceof DraftStepRoute ? settlement.targetStepId : null;
+    this.effects = settlement instanceof DraftStepRoute ? settlement.effects : null;
+    this.connector = settlement instanceof DraftStepRoute
+      ? Object.freeze({ name: settlement.connector.name })
+      : null;
+    this.publicationDigest = publication.digest;
+    const identity = {
+      binding: this.binding,
+      resultKind: this.resultKind,
+      resultType: this.resultType,
+      resultDigest: this.resultDigest,
+      settlementKind: this.settlementKind,
+      targetStepId: this.targetStepId,
+      effects: this.effects?.toJSON() ?? null,
+      connector: this.connector,
+      publicationDigest: this.publicationDigest,
+    };
+    this.id = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      binding: { ...this.binding },
+      resultKind: this.resultKind,
+      resultType: this.resultType,
+      resultDigest: this.resultDigest,
+      settlementKind: this.settlementKind,
+      targetStepId: this.targetStepId,
+      effects: this.effects?.toJSON() ?? null,
+      connector: this.connector === null ? null : { ...this.connector },
+      publicationDigest: this.publicationDigest,
+    };
   }
 }
 
-/** Failure category reserved for a persisted terminal Draft StepOutput Error. */
-export const DRAFT_STEP_ERROR_CATEGORY = "draft-step-error";
-
-export class DraftStepErrorDecision {
-  constructor(stepId, error) {
-    this.stepId = requireString(stepId, "draft error step");
-    if (!(error instanceof Error)) throw new TypeError("draft error decision requires an Error");
-    this.error = error;
-    Object.freeze(this);
+/** Select exactly one settlement from a concrete semantic Draft Step Result. */
+export function settleDraftStepResult(stepId, result) {
+  if (!(result instanceof StepResult) || result.stepId !== stepId) {
+    throw new TypeError("draft settlement requires the Step's concrete Result");
   }
-}
-
-/** Map one persisted StepOutput to the Route selected by Definition. */
-export function resolveDraftStepRoute(stepId, output) {
-  if (!(output instanceof StepOutput)) throw new TypeError("draft route requires a StepOutput");
-  const reviewRoute = draftReviewRouteForStepId(stepId);
-  if (!["draft", "draft-refine", "draft-gate-repair", "draft-gate"].includes(stepId) && reviewRoute === null) {
-    throw new TypeError(`unknown Draft Step: ${stepId}`);
+  if (result instanceof DraftStepErrorResult) {
+    return new DraftStepErrorDecision(DRAFT_STEP_SETTLEMENT_TOKEN, result);
   }
-  if (output.type === STEP_OUTPUT_TYPE.ERROR) return new DraftStepErrorDecision(stepId, output.error);
-  if (output.type === STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED) {
-    if (stepId !== "draft-refine") throw new TypeError(`${stepId} cannot await user input`);
-    return new DraftAwaitUserDecision(stepId);
-  }
-
-  const route = (Route, targetStepId, connector) => new Route({
-    sourceStepId: stepId,
+  const route = (Route, targetStepId, connector) => new Route(DRAFT_STEP_SETTLEMENT_TOKEN, {
+    result,
     targetStepId,
     connector,
     effects: draftRouteEffects(stepId, targetStepId),
+    application: connector === DraftCompletionConnector
+      ? new DraftCompletionSettlementApplication(DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN)
+      : null,
   });
-  if (reviewRoute !== null) {
-    if (stepId === reviewRoute.reviewStepId) {
-      if (output.type === STEP_OUTPUT_TYPE.BRANCH_REQUIRED) {
-        return route(DraftBranchRoute, reviewRoute.triageStepId, DraftTriageConnector);
-      }
-      if (output.type === STEP_OUTPUT_TYPE.COMPLETED) {
-        return route(DraftNextRoute, reviewRoute.passNextStepId,
-          reviewRoute === DRAFT_COVERAGE_ROUTE ? DraftCompletionConnector : DraftRefineConnector);
-      }
-    }
-    if (stepId === reviewRoute.triageStepId && output.type === STEP_OUTPUT_TYPE.COMPLETED) {
-      return route(DraftNextRoute, reviewRoute.repairStepId, DraftRepairConnector);
-    }
-    if (stepId === reviewRoute.repairStepId) {
-      if (output.type === STEP_OUTPUT_TYPE.LOOP_REQUIRED) {
-        return route(DraftLoopRoute, reviewRoute.reviewStepId, DraftReviewConnector);
-      }
-      if (output.type === STEP_OUTPUT_TYPE.COMPLETED) {
-        return route(DraftNextRoute, reviewRoute.passNextStepId,
-          reviewRoute === DRAFT_COVERAGE_ROUTE ? DraftCompletionConnector : DraftRefineConnector);
-      }
-    }
-  } else if (stepId === "draft" && output.type === STEP_OUTPUT_TYPE.COMPLETED) {
+  if (result instanceof DraftCreatedResult) {
     return route(DraftNextRoute, DRAFT_QUESTIONS_ROUTE.reviewStepId, DraftReviewConnector);
-  } else if (stepId === "draft-refine") {
-    if (output.type === STEP_OUTPUT_TYPE.LOOP_REQUIRED) return route(DraftLoopRoute, stepId, DraftRefineConnector);
-    if (output.type === STEP_OUTPUT_TYPE.COMPLETED) {
-      return route(DraftNextRoute, DRAFT_COVERAGE_ROUTE.reviewStepId, DraftReviewConnector);
-    }
-  } else if (stepId === "draft-gate-repair" && output.type === STEP_OUTPUT_TYPE.COMPLETED) {
-    return route(DraftNextRoute, DRAFT_COVERAGE_ROUTE.reviewStepId, DraftReviewConnector);
-  } else if (stepId === "draft-gate") {
-    if (output.type === STEP_OUTPUT_TYPE.LOOP_REQUIRED) {
-      return route(DraftLoopRoute, "draft-gate-repair", PlanGateRepairConnector);
-    }
-    if (output.type === STEP_OUTPUT_TYPE.COMPLETED) return route(DraftNextRoute, "spec", DraftSpecConnector);
   }
-  throw new TypeError(`${stepId} cannot return ${output.type}`);
+  if (result instanceof DraftQuestionsReviewExecutionRequiredResult
+    || result instanceof DraftCoverageReviewExecutionRequiredResult
+    || result instanceof DraftRefineWorkerRequiredResult
+    || result instanceof DraftGateRepairWorkerRequiredResult) {
+    return new DraftExecutionSettlement(DRAFT_STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof DraftQuestionsReviewPassedResult) {
+    return route(DraftNextRoute, "draft-refine", DraftRefineConnector);
+  }
+  if (result instanceof DraftQuestionsReviewFindingsResult) {
+    return route(DraftBranchRoute, "draft-questions-triage", DraftTriageConnector);
+  }
+  if (result instanceof DraftQuestionsTriageCompletedResult) {
+    return route(DraftNextRoute, "draft-questions-repair", DraftRepairConnector);
+  }
+  if (result instanceof DraftQuestionsRepairChangedResult) {
+    return route(DraftLoopRoute, "draft-questions-review", DraftReviewConnector);
+  }
+  if (result instanceof DraftQuestionsRepairUnchangedResult) {
+    return route(DraftNextRoute, "draft-refine", DraftRefineConnector);
+  }
+  if (result instanceof DraftRefineAwaitingAnswerResult) {
+    return new DraftAwaitUserDecision(DRAFT_STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof DraftRefineCompletedResult) {
+    return route(DraftNextRoute, "draft-coverage-review", DraftReviewConnector);
+  }
+  if (result instanceof DraftCoverageReviewPassedResult) {
+    return route(DraftNextRoute, "draft-gate", DraftCompletionConnector);
+  }
+  if (result instanceof DraftCoverageReviewFindingsResult) {
+    return route(DraftBranchRoute, "draft-coverage-triage", DraftTriageConnector);
+  }
+  if (result instanceof DraftCoverageTriageCompletedResult) {
+    return route(DraftNextRoute, "draft-coverage-repair", DraftRepairConnector);
+  }
+  if (result instanceof DraftCoverageRepairChangedResult) {
+    return route(DraftLoopRoute, "draft-coverage-review", DraftReviewConnector);
+  }
+  if (result instanceof DraftCoverageRepairUnchangedResult) {
+    return route(DraftNextRoute, "draft-gate", DraftCompletionConnector);
+  }
+  if (result instanceof DraftGateRepairRequiredResult) {
+    return route(DraftLoopRoute, "draft-gate-repair", PlanGateRepairConnector);
+  }
+  if (result instanceof DraftGatePassedResult || result instanceof DraftGateCarryForwardResult) {
+    return route(DraftNextRoute, "spec", DraftSpecConnector);
+  }
+  if (result instanceof DraftGateRepairAppliedResult || result instanceof DraftGateRepairCarryForwardResult) {
+    return route(DraftNextRoute, "draft-coverage-review", DraftReviewConnector);
+  }
+  throw new TypeError(`${stepId} has no settlement for ${result.kind}`);
 }
 
 const DRAFT_REVIEW_ROUTE_EXPECTATIONS = Object.freeze([

@@ -4245,7 +4245,7 @@ export {
 };
 
 export class GateIssueLogEntry {
-  constructor({ ctx, result }) {
+  constructor({ ctx, result, timestamp = new Date().toISOString() }) {
     if (result?.result !== "pass" && result?.result !== "fail") {
       throw new Error("gate issue-log entry requires a pass or fail result");
     }
@@ -4308,7 +4308,7 @@ export class GateIssueLogEntry {
       phase,
       reason: reasons || `gate ${canonicalResult.result.toUpperCase()} (no details)`,
       trigger: "gate post hook (auto)",
-      timestamp: new Date().toISOString(),
+      timestamp,
       passedGuardrails: buildPassedGuardrails(canonicalResult?.artifacts?.evaluations),
     };
     if (taskGateStepId !== null) {

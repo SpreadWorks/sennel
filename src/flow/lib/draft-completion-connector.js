@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { validateDraftLifecycleForCompletion } from "./draft-lifecycle.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
+import { attachedCanonicalCommandResultArtifact } from "./canonical-command-result.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const SOURCES = new Set(["coverage-pass", "coverage-repair"]);
@@ -542,6 +543,12 @@ export function createDraftCompletionReceipt({ connector, sourceAttempt, draftIn
 }
 
 export function createDraftCompletionConnector(facts) {
+  if (!(facts instanceof DraftCompletionFacts)) {
+    throw new Error("draft completion connector requires DraftCompletionFacts");
+  }
+  if (!facts.eligible) {
+    throw new Error(`draft completion connector is unavailable: ${facts.eligibilityIssues.join("; ")}`);
+  }
   return new DraftCompletionConnector(CONNECTOR_TOKEN, facts);
 }
 
@@ -586,6 +593,32 @@ export function readCoveragePassDraftCompletionFacts({ flowManager, specId, sour
     reviewVerdict: document.verdict,
     reviewDraftDigest: document.sourceDraftRevision?.digest ?? null,
     reviewArtifactDigest: review.descriptor.hash,
+    questionsReviewArtifactDigest,
+  });
+}
+
+/** Build coverage-PASS facts from the proposed Review write without publishing it. */
+export function readProspectiveCoveragePassDraftCompletionFacts({
+  flowManager, specId, commandResult, reviewArtifactBytes, sourceStepId = "draft-coverage-review",
+} = {}) {
+  const artifact = attachedCanonicalCommandResultArtifact(commandResult);
+  if (artifact?.logicalKey !== "draft.coverage.review" || !Buffer.isBuffer(reviewArtifactBytes)) {
+    throw new Error("prospective coverage completion requires its canonical Review history write");
+  }
+  const draft = flowManager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: sourceStepId });
+  const questionsReviewArtifactDigest = readDraftCompletionCatalogDigest({
+    flowManager, specId, logicalKey: "draft.questions.review",
+  });
+  return new DraftCompletionFacts({
+    source: "coverage-pass",
+    sourceStepId,
+    targetStepId: "draft-gate",
+    draft: JSON.parse(draft.bytes.toString("utf8")),
+    draftDigest: draft.descriptor.hash,
+    draftByteLength: draft.descriptor.size,
+    reviewVerdict: artifact.payload.verdict,
+    reviewDraftDigest: artifact.payload.sourceDraftRevision?.digest ?? null,
+    reviewArtifactDigest: createHash("sha256").update(reviewArtifactBytes).digest("hex"),
     questionsReviewArtifactDigest,
   });
 }

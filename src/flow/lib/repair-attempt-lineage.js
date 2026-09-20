@@ -16,7 +16,11 @@ export class RepairAttemptLineageError extends Error {
 }
 
 function entryTargetsStep(activity, targetStepId) {
-  return activity.nodeId === targetStepId;
+  return activity.nodeId === targetStepId || (
+    activity.transition?.operation === "plan_gate_repair"
+    && activity.transition?.attempt?.nodeId === targetStepId
+    && activity.result?.draftSettlementReceipt?.targetStepId === targetStepId
+  );
 }
 
 function matchingEntry({ activities, attempt, targetStepId }) {

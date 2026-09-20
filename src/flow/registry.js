@@ -71,7 +71,7 @@ import { readCurrentNonGateTransitionFacts } from "./lib/non-gate-transition-fac
 import { readCurrentTestChainTransitionFacts } from "./lib/test-chain-transition-facts.js";
 import { CurrentTaskSourceSnapshot, TaskMutationLineageSet } from "./lib/task-mutation-lineage.js";
 import { RequirementTestLifecycleAuthority } from "./lib/requirement-test-lifecycle.js";
-import { STEP_OUTPUT_TYPE } from "./engine/step-output.js";
+import { STEP_RESULT_TYPE } from "./engine/step-result.js";
 import { StepFactory } from "./engine/step-factory.js";
 import { isDraftStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
 
@@ -121,12 +121,12 @@ async function executePublishedDraftReviewStep(ctx, result) {
     output = await step.execute();
   } catch (error) {
     if (isDraftStepPersistenceFailure(error)) {
-      throw fatalDraftPersistenceFailure(error, "DRAFT_REVIEW_STEP_OUTPUT_PERSISTENCE_FAILED");
+      throw fatalDraftPersistenceFailure(error, "DRAFT_REVIEW_STEP_RESULT_PERSISTENCE_FAILED");
     }
     throw error;
   }
-  if (output.type === STEP_OUTPUT_TYPE.ERROR) {
-    throw fatalDraftStepError(output.error, "DRAFT_REVIEW_STEP_ERROR");
+  if (output.type === STEP_RESULT_TYPE.ERROR) {
+    throw fatalDraftStepError(output.error, "DRAFT_REVIEW_RESULT_ERROR");
   }
   const specId = ctx.specId ?? ctx.flowState.specId;
   ctx.flowState = ctx.flowManager.loadReadOnly(specId);
@@ -134,29 +134,54 @@ async function executePublishedDraftReviewStep(ctx, result) {
 }
 
 async function executePublishedDraftGateStep(ctx, result) {
-  const [{ DraftGateEvaluationBinding }, { GateService }, { DraftGateStep }] = await Promise.all([
+  const [
+    { DraftGateEvaluationBinding },
+    { GateService },
+    { DraftGateStep },
+    { GateIssueLogEntry },
+    { DraftGateIssuePublication },
+  ] = await Promise.all([
     import("./engine/connectors/draft/draft-step-binding.js"),
     import("./services/review-service.js"),
     import("./steps/draft/draft-gate.js"),
+    import("./lib/run-gate.js"),
+    import("./lib/draft-gate-prospective.js"),
   ]);
   const binding = new DraftGateEvaluationBinding({
     flowManager: ctx.flowManager,
     specId: ctx.specId ?? ctx.flowState.specId,
   });
+  const state = binding.assertCurrent();
+  const attached = attachedCanonicalCommandResultArtifact(result);
+  const issuePublication = attached?.payload?.result === "fail"
+    ? new DraftGateIssuePublication({
+        binding,
+        entry: new GateIssueLogEntry({
+          ctx,
+          result,
+          timestamp: state.attempt.startedAt,
+        }).toJSON(),
+      })
+    : null;
   const step = new StepFactory()
-    .provideArguments(GateService, { flowManager: ctx.flowManager, binding, commandResult: result })
+    .provideArguments(GateService, {
+      flowManager: ctx.flowManager,
+      binding,
+      commandResult: result,
+      issuePublication,
+    })
     .create(DraftGateStep);
   let output;
   try {
     output = await step.execute();
   } catch (error) {
     if (isDraftStepPersistenceFailure(error)) {
-      throw fatalDraftPersistenceFailure(error, "DRAFT_GATE_STEP_OUTPUT_PERSISTENCE_FAILED");
+      throw fatalDraftPersistenceFailure(error, "DRAFT_GATE_STEP_RESULT_PERSISTENCE_FAILED");
     }
     throw error;
   }
-  if (output.type === STEP_OUTPUT_TYPE.ERROR) {
-    throw fatalDraftStepError(output.error, "DRAFT_GATE_STEP_ERROR");
+  if (output.type === STEP_RESULT_TYPE.ERROR) {
+    throw fatalDraftStepError(output.error, "DRAFT_GATE_RESULT_ERROR");
   }
   return output;
 }
@@ -1670,14 +1695,6 @@ export const FLOW_COMMANDS = {
         const canonicalResult = attached !== null;
         const specId = ctx.specId ?? ctx.flowState.specId;
         if (canonicalResult && (phase === "draft" || attached.logicalKey === "draft.gate")) {
-          // Draft Gate owns its Step transition, but the common Gate issue-log
-          // evidence must be recorded before that Step can commit a repair
-          // loop. The append is idempotent on the current Attempt, so a
-          // post-hook retry cannot create a second repair receipt.
-          if (result.result === "fail") {
-            const { appendIssueLogFromGateResult } = await import("./lib/run-gate.js");
-            appendIssueLogFromGateResult(ctx, result);
-          }
           await executePublishedDraftGateStep(ctx, result);
           ctx.flowState = ctx.flowManager.loadReadOnly(specId);
           return;
@@ -1752,6 +1769,7 @@ export const FLOW_COMMANDS = {
         const errorCtx = { ...ctx, phase };
         if (ctx.terminalGateRevalidation === true) return;
         if (phase === "draft") {
+          if (isDraftStepPersistenceFailure(err)) return;
           tryAppendIssueLog(() => appendIssueLogFromGateError(errorCtx, err));
           return;
         }

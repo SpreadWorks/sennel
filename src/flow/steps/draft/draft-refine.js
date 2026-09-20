@@ -1,5 +1,10 @@
 import { Step } from "../../engine/step.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../engine/step-output.js";
+import {
+  DraftRefineAwaitingAnswerResult,
+  DraftRefineCompletedResult,
+  DraftRefineWorkerRequiredResult,
+  DraftStepErrorResult,
+} from "../../engine/step-result.js";
 import { DraftService } from "../../services/draft-service.js";
 import { isDraftStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
 
@@ -20,17 +25,22 @@ export class DraftRefineStep extends Step {
 
   async _execute() {
     if (this.#draftService.awaitingUserInput()) {
-      return new StepOutput(STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED);
+      const result = new DraftRefineAwaitingAnswerResult();
+      await result.persist(this.#draftService);
+      return result;
     }
     try {
       const facts = this.#draftService.inspectWorkerFacts();
-      const output = new StepOutput(facts.hasCandidateQuestion
-        ? (facts.autoApprove ? STEP_OUTPUT_TYPE.LOOP_REQUIRED : STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED)
-        : STEP_OUTPUT_TYPE.COMPLETED);
-      return await this.#draftService.commitWorker(output);
+      const result = facts.hasCandidateQuestion
+        ? (facts.autoApprove ? new DraftRefineWorkerRequiredResult() : new DraftRefineAwaitingAnswerResult())
+        : new DraftRefineCompletedResult();
+      await result.persist(this.#draftService);
+      return result;
     } catch (error) {
       if (isDraftStepPersistenceFailure(error)) throw error;
-      return this.#draftService.commitWorkerError(new StepOutput(error));
+      const result = new DraftStepErrorResult("draft-refine", error);
+      await result.persist(this.#draftService);
+      return result;
     }
   }
 }

@@ -13,7 +13,9 @@
 - `run-*` コマンドは、選択済み Action の実行、外部出力の境界検証、観測事実の保存を担う。semantic result から retry 回数、上限、repair、次の route を独自に決めてはならない。
 - transport、protocol、tooling failure の限定的な再試行は実行責務に含めてよい。ただし semantic retry budget と Flow の遷移方針は definition layer が所有する。
 - registry、hook、永続化層は、definition layer が選んだ transition plan の原子的な適用と監査記録を担う。未選択の fallback route を決めてはならない。
+- Draft Step の境界は `facts -> concrete StepResult`、Definition の境界は `stepId + StepResult -> concrete Settlement` とする。Service は Definition を一度だけ呼び、Store は選択済み Settlement を再解決せずに適用する。
 - Step と Step の間をつなぐ副作用は Definition-owned `StepConnector` として表現し、独立した Flow Step にしない。Connector は Definition が facts から選択し、Store は選択済み Connector を source Attempt の確認・成果物 publication・次 Step への promotion と同一 transaction で適用する。
+- Draft の Result、Result 固有の Activity／artifact、Settlement effect、exact binding を含む durable receipt、target activation／Await／Failure は同一 Store transaction で保存する。target connection だけが durable connector receipt を持ち、完全一致 replay 以外は binding、Result kind、Settlement kind、target の差を conflict とする。
 - 直接 CLI 実行にも admission check を設け、最新の永続状態で definition layer が別の Action を選んでいる場合は worker 起動と状態変更の前に拒否する。
 
 ## 状態と証拠の同一性

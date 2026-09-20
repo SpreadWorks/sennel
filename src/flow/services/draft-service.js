@@ -2,7 +2,8 @@ import {
   DraftRefineAwaitBinding,
   DraftStepBinding,
 } from "../engine/connectors/draft/draft-step-binding.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../engine/step-output.js";
+import { STEP_RESULT_TYPE, StepResult } from "../engine/step-result.js";
+import { DraftAwaitUserDecision, settleDraftStepResult } from "../definition.js";
 import { DraftStepPersistenceFailure, isDraftStepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
 
 /** Access the sealed worker request for one Connector-bound Draft Step. */
@@ -15,6 +16,9 @@ export class DraftService {
     }
     if (binding.flowManager !== flowManager) {
       throw new Error("DraftService binding belongs to a different FlowManager");
+    }
+    if (typeof flowManager.findDraftAwaitSettlementReceipt !== "function") {
+      throw new TypeError("DraftService requires the canonical Await receipt reader");
     }
     this.binding = binding;
     if (workerExecutor !== null && typeof workerExecutor !== "function") {
@@ -47,34 +51,68 @@ export class DraftService {
     return this.workerFacts;
   }
 
-  async commitWorker(stepOutput) {
+  async persistStepResult(stepResult) {
+    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
+      throw new TypeError("DraftService requires its bound Step's concrete Result");
+    }
+    let settlement = settleDraftStepResult(this.binding.stepId, stepResult);
+    if (settlement.application !== null && settlement.application !== undefined) {
+      settlement = settlement.materializeDraftCompletion(this.workerFacts?.draftCompletionFacts ?? null);
+    }
+    if (stepResult.type === STEP_RESULT_TYPE.ERROR) {
+      return this.#commitWorkerError(stepResult, settlement);
+    }
+    if (this.workerExecutor === null) {
+      try {
+        if (settlement instanceof DraftAwaitUserDecision) {
+          const replay = this.binding.flowManager.findDraftAwaitSettlementReceipt({
+            binding: this.binding,
+            stepResult,
+            settlement,
+          });
+          if (replay !== null) return replay;
+        }
+        const committed = await this.binding.flowManager.settleDraftStepResult({
+          binding: this.binding,
+          stepResult,
+          settlement,
+        });
+        return committed.receipt;
+      } catch (error) {
+        if (isDraftStepPersistenceFailure(error)) throw error;
+        throw new DraftStepPersistenceFailure(error);
+      }
+    }
     let outcome;
     try {
-      outcome = await this.workerExecutor(stepOutput);
+      outcome = await this.workerExecutor(stepResult, settlement, this.binding);
     } catch (error) {
       if (isDraftStepPersistenceFailure(error)) throw error;
       throw new DraftStepPersistenceFailure(error);
     }
     this.#workerOutcome = outcome;
     if (outcome.error !== null) throw outcome.error;
-    return outcome.stepOutput;
+    if (outcome.receipt === null || outcome.receipt === undefined) {
+      throw new DraftStepPersistenceFailure(new Error("Draft worker did not return its durable settlement receipt"));
+    }
+    return outcome.receipt;
   }
 
-  async commitWorkerError(stepOutput) {
-    if (!(stepOutput instanceof StepOutput) || stepOutput.type !== STEP_OUTPUT_TYPE.ERROR) {
-      throw new TypeError("Draft worker error commit requires an Error StepOutput");
-    }
-    if (this.workerErrorCommitter === null) throw stepOutput.error;
+  async #commitWorkerError(stepResult, settlement) {
+    if (this.workerErrorCommitter === null) throw stepResult.error;
     let outcome;
     try {
-      outcome = await this.workerErrorCommitter(stepOutput);
+      outcome = await this.workerErrorCommitter(stepResult, settlement, this.binding);
     } catch (error) {
       if (isDraftStepPersistenceFailure(error)) throw error;
       throw new DraftStepPersistenceFailure(error);
     }
     this.#workerOutcome = outcome;
     if (outcome.error !== null) throw outcome.error;
-    return outcome.stepOutput;
+    if (outcome.receipt === null || outcome.receipt === undefined) {
+      throw new DraftStepPersistenceFailure(new Error("Draft worker did not return its durable settlement receipt"));
+    }
+    return outcome.receipt;
   }
 
   get workerOutcome() {

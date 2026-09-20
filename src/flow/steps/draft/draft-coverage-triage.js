@@ -1,6 +1,7 @@
 import { Step } from "../../engine/step.js";
 import { DraftService } from "../../services/draft-service.js";
 import { executeDraftWorker } from "./draft.js";
+import { DraftCoverageTriageCompletedResult } from "../../engine/step-result.js";
 
 /**
  * Classify coverage-review findings and produce the triage record.
@@ -18,6 +19,6 @@ export class DraftCoverageTriageStep extends Step {
   }
 
   async _execute() {
-    return executeDraftWorker(this.#draftService);
+    return executeDraftWorker(this.#draftService, DraftCoverageTriageCompletedResult);
   }
 }

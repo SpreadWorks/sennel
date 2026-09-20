@@ -1,4 +1,4 @@
-/** Flow-specific failure information carried by an error StepOutput. */
+/** Flow-specific failure information carried by an error StepResult. */
 export class FlowExecutionError extends Error {
   constructor({ code, message, runId, stepId, attemptId = null, cause = null } = {}) {
     if (typeof code !== "string" || code.trim() === "") {

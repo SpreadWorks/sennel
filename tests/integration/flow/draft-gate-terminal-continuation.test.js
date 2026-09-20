@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { it, mock } from "node:test";
 
 import { DraftGateEvaluationBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
-import { DraftSpecConnector } from "../../../src/flow/engine/connectors/draft/draft-spec-connector.js";
 import { DraftGateStep } from "../../../src/flow/steps/draft/draft-gate.js";
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
@@ -11,7 +10,6 @@ import { GateService } from "../../../src/flow/services/review-service.js";
 import { CanonicalGateObservationCycle } from "../../../src/flow/lib/canonical-gate-observation-cycle.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { AnsweredQuestion } from "../../../src/flow/lib/draft-question-ledger.js";
-import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -32,16 +30,9 @@ const semanticObservations = [{
 it("connects a normal Draft Gate PASS to Spec before applying its lifecycle", async () => {
   const root = createTmpDir("draft-gate-post-spec-connector-");
   const specId = "523-draft-gate-post-spec-connector";
-  const originalConnect = DraftSpecConnector.prototype.connect;
   const originalExecute = DraftGateStep.prototype.execute;
-  const connected = [];
   const executed = mock.method(DraftGateStep.prototype, "execute", function () {
     return originalExecute.call(this);
-  });
-  const connect = mock.method(DraftSpecConnector.prototype, "connect", async function () {
-    const binding = await originalConnect.call(this);
-    connected.push(binding);
-    return binding;
   });
   try {
     initGitRepo(root);
@@ -66,14 +57,16 @@ it("connects a normal Draft Gate PASS to Spec before applying its lifecycle", as
       root, mainRoot: root, executionRoot: root, specId, phase: "draft",
       flowManager: manager, flowState: manager.loadReadOnly(specId),
     }, result);
-    assert.equal(connect.mock.callCount(), 1);
     assert.equal(executed.mock.callCount(), 1);
-    assert.equal(connected[0].stepId, "draft-gate");
     const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
-    assert.equal(reloaded.canonicalState(specId).findNode("draft-gate").result.stepOutput.type, "completed");
+    const gateResult = reloaded.canonicalState(specId).findNode("draft-gate").result;
+    assert.equal(gateResult.stepResult.kind, "draft-gate-passed");
+    assert.equal(gateResult.draftSettlementReceipt.connector.name, "DraftSpecConnector");
     assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "spec");
+    assert.equal(reloaded.readArtifact({
+      specId, logicalKey: "issue.log", consumerNodeId: "spec", optional: true,
+    }), null);
   } finally {
-    connect.mock.restore();
     executed.mock.restore();
     removeTmpDir(root);
   }
@@ -104,23 +97,97 @@ it("persists the Draft Gate repair loop from the normal post path", async () => 
       phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
       nextAction: { diagnosis: { observations: semanticObservations } },
     } });
+    const settle = manager.settleDraftStepResult.bind(manager);
+    let settleCalls = 0;
+    manager.settleDraftStepResult = (input) => {
+      settleCalls += 1;
+      const committed = settle(input);
+      throw new Error("Draft Gate repair settlement response was lost after commit");
+    };
     await FLOW_COMMANDS.run.gate.post({
       root, mainRoot: root, executionRoot: root, specId, phase: "draft",
       flowManager: manager, flowState: manager.loadReadOnly(specId),
     }, result);
+    manager.settleDraftStepResult = settle;
 
     const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
-    const failure = reloaded.activityLedger(specId).findLast((activity) => (
-      activity.nodeId === "draft-gate" && activity.transition.operation === "fail_attempt"
+    const repair = reloaded.activityLedger(specId).findLast((activity) => (
+      activity.nodeId === "draft-gate" && activity.transition.operation === "plan_gate_repair"
     ));
-    assert.deepEqual(failure.result.stepOutput, { type: "loop-required" });
-    assert.equal(failure.result.draftRouteTargetStepId, "draft-gate-repair");
-    const selected = new RunRepairPlanGateCommand().execute({
-      root, mainRoot: root, executionRoot: root, specId,
-      flowManager: reloaded, flowState: reloaded.loadReadOnly(specId),
+    assert.equal(repair.result.stepResult.kind, "draft-gate-repair-required");
+    assert.equal(repair.result.draftSettlementReceipt.targetStepId, "draft-gate-repair");
+    assert.equal(reloaded.canonicalState(specId).current.at(-1), "draft-gate-repair");
+    const issues = JSON.parse(reloaded.readArtifact({
+      specId, logicalKey: "issue.log", consumerNodeId: "draft-gate-repair",
+    }).bytes.toString("utf8")).entries;
+    assert.equal(issues.length, 2);
+    assert.equal(issues.filter((entry) => entry.kind === "plan-gate-repair").length, 1);
+    const source = issues.find((entry) => entry.kind !== "plan-gate-repair");
+    const repairIssue = issues.find((entry) => entry.kind === "plan-gate-repair");
+    assert.equal(repairIssue.planGateRepair.sourceIssueLogId, source.issueLogId);
+    assert.equal(settleCalls, 1);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("rolls back Gate evidence, issue source, Result, and repair route when settlement is interrupted", async () => {
+  const root = createTmpDir("draft-gate-atomic-settlement-");
+  const specId = "525-draft-gate-atomic-settlement";
+  let interrupt = false;
+  let catalogFile = null;
+  try {
+    initGitRepo(root);
+    fs.writeFileSync(`${root}/README.md`, "draft Gate atomic settlement\n");
+    commitAll(root, "draft Gate atomic settlement");
+    const manager = new FlowManager({
+      root, mainRoot: root, inWorktree: false, specId,
+      versionStoreFaultInjector: ({ phase, filePath }) => {
+        if (interrupt && phase === "before-json-rename" && filePath === catalogFile) {
+          throw new Error("injected Draft Gate settlement interruption");
+        }
+      },
     });
-    assert.equal(selected.ok, true, JSON.stringify(selected));
-    assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "draft-gate-repair");
+    const fixture = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-draft-gate-atomic", issue: 525,
+      request: "Publish Draft Gate evidence atomically.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft");
+    manager.confirmCurrentAttempt({ specId, artifactWrites: [{
+      logicalKey: "draft", mediaType: "application/json",
+      bytes: Buffer.from(`${JSON.stringify(draftWithAnsweredQuestion("Atomic behavior"), null, 2)}\n`),
+    }] });
+    fixture.activate("draft-gate");
+    const location = fixture.location();
+    catalogFile = location.catalogFile;
+    const paths = [
+      location.flowStateFile,
+      location.activitiesFile,
+      location.catalogFile,
+      location.artifact("draft.gate"),
+      location.artifact("draft.gate.source"),
+      location.artifact("issue.log"),
+    ];
+    const snapshot = () => paths.map((file) => (
+      fs.existsSync(file) ? fs.readFileSync(file) : null
+    ));
+    const before = snapshot();
+    const result = new CanonicalGatePromotion({
+      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
+    }).promote({ result: "fail", artifacts: {
+      phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
+      nextAction: { diagnosis: { observations: semanticObservations } },
+    } });
+
+    interrupt = true;
+    await assert.rejects(() => FLOW_COMMANDS.run.gate.post({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId),
+    }, result), /injected Draft Gate settlement interruption/);
+
+    assert.deepEqual(snapshot(), before);
+    assert.equal(manager.canonicalState(specId).current.at(-1), "draft-gate");
+    assert.equal(manager.canonicalState(specId).attempt.failure, null);
   } finally {
     removeTmpDir(root);
   }
@@ -129,6 +196,10 @@ it("persists the Draft Gate repair loop from the normal post path", async () => 
 it("uses the evaluated Gate result once when the Draft Gate Step settles it", async () => {
   const root = createTmpDir("draft-gate-step-result-");
   const specId = "524-draft-gate-step-result";
+  const originalInspect = GateService.prototype.inspectGateFacts;
+  const inspected = mock.method(GateService.prototype, "inspectGateFacts", function () {
+    return originalInspect.call(this);
+  });
   try {
     initGitRepo(root);
     fs.writeFileSync(`${root}/README.md`, "draft Gate Step result\n");
@@ -150,19 +221,26 @@ it("uses the evaluated Gate result once when the Draft Gate Step settles it", as
     }).promote({ result: "pass", artifacts: { phase: "draft", evaluations: [] } });
     const binding = new DraftGateEvaluationBinding({ flowManager: manager, specId });
     const step = new StepFactory()
-      .provideArguments(GateService, { flowManager: manager, binding, commandResult: result })
+      .provideArguments(GateService, {
+        flowManager: manager, binding, commandResult: result,
+      })
       .create(DraftGateStep);
 
-    assert.deepEqual((await step.execute()).toJSON(), { type: "completed" });
+    assert.deepEqual((await step.execute()).toJSON(), {
+      kind: "draft-gate-passed",
+      type: "completed",
+    });
     const history = JSON.parse(manager.readArtifact({
       specId, logicalKey: "draft.gate", consumerNodeId: "spec",
     }).bytes.toString("utf8"));
     assert.deepEqual(history.attempts.map((attempt) => attempt.attempt), [1]);
     assert.equal(manager.activityLedger(specId).filter((activity) => (
-      activity.nodeId === "draft-gate" && activity.transition.operation === "publish_artifacts"
+      activity.nodeId === "draft-gate" && activity.transition.operation === "confirm_attempt"
     )).length, 1);
+    assert.equal(inspected.mock.callCount(), 1);
     assert.equal(manager.canonicalState(specId).nextAction().nodeId, "spec");
   } finally {
+    inspected.mock.restore();
     removeTmpDir(root);
   }
 });
@@ -214,11 +292,6 @@ async function selectDraftGateRepair({ root, manager, specId, observations }) {
     root, mainRoot: root, executionRoot: root, specId,
     flowManager: manager, flowState: manager.loadReadOnly(specId), phase: "draft",
   }, result);
-  const selected = new RunRepairPlanGateCommand().execute({
-    root, mainRoot: root, executionRoot: root, specId,
-    flowManager: manager, flowState: manager.loadReadOnly(specId),
-  });
-  assert.equal(selected.ok, true, JSON.stringify(selected));
   assert.equal(manager.canonicalState(specId).current.at(-1), "draft-gate-repair");
 }
 
@@ -280,8 +353,8 @@ async function exerciseTerminalContinuation(kind) {
     const terminalConfirmation = reloaded.activityLedger(specId).findLast((activity) => (
       activity.nodeId === "draft-gate-repair" && activity.transition.operation === "confirm_attempt"
     ));
-    assert.deepEqual(terminalConfirmation.result.stepOutput, { type: "completed" });
-    assert.equal(terminalConfirmation.result.draftRouteTargetStepId, "draft-coverage-review");
+    assert.equal(terminalConfirmation.result.stepResult.kind, "draft-gate-repair-applied");
+    assert.equal(terminalConfirmation.result.draftSettlementReceipt.targetStepId, "draft-coverage-review");
     assert.equal(reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-coverage-review" }).descriptor.hash, before);
 
     fixture.flowManager = reloaded;
@@ -293,15 +366,21 @@ async function exerciseTerminalContinuation(kind) {
 
     const finalReload = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     assert.equal(finalReload.canonicalState(specId).nextAction().nodeId, "spec");
-    assert.equal(finalReload.canonicalState(specId).findNode("draft-gate").result.stepOutput.type, "completed");
+    assert.equal(finalReload.canonicalState(specId).findNode("draft-gate").result.stepResult.kind, "draft-gate-carry-forward");
     assert.equal(finalReload.activityLedger(specId).filter((entry) => (
       entry.transition.operation === "defer_failed_gate"
-    )).length, 1);
+    )).length, 0);
     assert.equal(finalReload.activityLedger(specId).length > activityCount, true);
     const findings = finalReload.readArtifact({
       specId, logicalKey: "flow.findings", consumerNodeId: "system",
     });
     assert.equal(JSON.parse(findings.bytes).entries.length > 0, true);
+    const issueEntries = JSON.parse(finalReload.readArtifact({
+      specId, logicalKey: "issue.log", consumerNodeId: "system",
+    }).bytes.toString("utf8")).entries;
+    assert.equal(issueEntries.filter((entry) => entry.trigger === "gate post hook (auto)").length, 2);
+    assert.equal(issueEntries.filter((entry) => entry.kind === "plan-gate-repair").length, 1);
+    assert.equal(new Set(issueEntries.map((entry) => entry.issueLogId)).size, issueEntries.length);
     assert.equal(new CanonicalGateObservationCycle({
       flowManager: finalReload, state: finalReload.loadReadOnly(specId),
     }).status().entries[0].finalDisposition, "deferred");
@@ -393,10 +472,10 @@ it("settles the fifth draft Gate failure after four completed repair and coverag
     }, finalResult);
     const settled = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     assert.equal(settled.canonicalState(specId).nextAction().nodeId, "spec");
-    assert.equal(settled.canonicalState(specId).findNode("draft-gate").result.stepOutput.type, "completed");
+    assert.equal(settled.canonicalState(specId).findNode("draft-gate").result.stepResult.kind, "draft-gate-carry-forward");
     assert.equal(settled.activityLedger(specId).filter((entry) => (
       entry.transition.operation === "defer_failed_gate"
-    )).length, 1);
+    )).length, 0);
     settled.beginNextAction(specId);
     const findings = settled.readArtifact({
       specId, logicalKey: "flow.findings", consumerNodeId: "system",

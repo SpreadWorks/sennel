@@ -1,83 +1,39 @@
-import {
-  attachedCanonicalCommandResultArtifact,
-  CanonicalCommandAttemptArtifactHistory,
-} from "../lib/canonical-command-result.js";
+import { attachedCanonicalCommandResultArtifact } from "../lib/canonical-command-result.js";
 import { DraftReviewArtifactDocument, DraftReviewEvidenceSet } from "../lib/draft-review-artifacts.js";
 import { draftReviewRouteForStepId } from "../lib/draft-review-routes.js";
-import { readCoveragePassDraftCompletionFacts } from "../lib/draft-completion-connector.js";
-import { readCurrentGateTransitionFacts } from "../lib/gate-transition-facts.js";
+import { readProspectiveDraftGateFacts } from "../lib/gate-transition-facts.js";
+import { settleDraftStepResult } from "../definition.js";
 import {
-  DRAFT_STEP_ERROR_CATEGORY,
-  resolveDraftCoverageRepairCompletion,
-  resolveGateTransition,
-} from "../definition.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../engine/step-output.js";
+  DraftCoverageReviewPassedResult,
+  StepResult,
+} from "../engine/step-result.js";
 import {
   DraftGateEvaluationBinding,
   DraftReviewStepBinding,
 } from "../engine/connectors/draft/draft-step-binding.js";
 import { DraftStepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
-import { persistReviewTransitionFacts } from "../lib/review-transition-persistence.js";
+import {
+  DraftGateIssuePublication,
+  DraftGatePublicationIntent,
+} from "../lib/draft-gate-prospective.js";
 
-function hasCommittedStepOutput(flowManager, binding, stepOutput) {
-  const node = flowManager.canonicalState(binding.specId)?.findNode(binding.stepId) ?? null;
-  const persisted = node?.result?.stepOutput;
-  if (node?.attemptSequence !== binding.attempt.sequence
-    || persisted === null || persisted === undefined) return false;
-  const activity = flowManager.activityLedger(binding.specId).findLast((entry) => (
-    entry.nodeId === binding.stepId
-      && entry.attemptId === binding.attempt.id
-      && entry.sequence === binding.attempt.sequence
-      && entry.result?.stepOutput !== null
-      && entry.result?.stepOutput !== undefined
-  ));
-  return activity !== undefined
-    && JSON.stringify(activity.result.stepOutput) === JSON.stringify(stepOutput.toJSON())
-    && JSON.stringify(persisted.toJSON?.() ?? persisted) === JSON.stringify(stepOutput.toJSON());
+function committedReceipt(flowManager, input) {
+  return flowManager.findDraftStepSettlementReceipt(input);
 }
 
-function hasPublishedCommandResult(flowManager, binding, commandResult) {
-  const attached = attachedCanonicalCommandResultArtifact(commandResult);
-  if (attached === null) return false;
-  let source;
-  try {
-    source = flowManager.readProducerArtifact({
-      specId: binding.specId,
-      nodeId: binding.stepId,
-      logicalKey: attached.logicalKey,
-      optional: true,
-    });
-    if (source === null) return false;
-    const publication = flowManager.activityLedger(binding.specId).find((entry) => (
-      entry.id === source.descriptor?.activityId
-        && entry.nodeId === binding.stepId
-        && entry.attemptId === binding.attempt.id
-        && entry.sequence === binding.attempt.sequence
-    ));
-    if (publication === undefined) return false;
-    const history = CanonicalCommandAttemptArtifactHistory.fromBytes({
-      logicalKey: attached.logicalKey,
-      bytes: source.bytes,
-    });
-    return history.current.attempt === binding.attempt.sequence
-      && JSON.stringify(history.current.payload) === JSON.stringify(attached.payload);
-  } catch {
-    return false;
-  }
-}
-
-/** Validate and publish the bound Draft Review command result. */
+/** Validate a Draft Review observation and settle it in one canonical transaction. */
 export class ReviewService {
+  #reviewDocument = null;
+
   constructor({ flowManager, binding, commandResult }) {
-    if (!flowManager || typeof flowManager.publishCurrentAttemptResult !== "function") {
-      throw new TypeError("ReviewService requires canonical Review publication");
+    if (!flowManager || typeof flowManager.settleDraftStepResult !== "function"
+      || typeof flowManager.findDraftStepSettlementReceipt !== "function") {
+      throw new TypeError("ReviewService requires canonical Result settlement and receipt readback");
     }
     if (!(binding instanceof DraftReviewStepBinding)) {
       throw new TypeError("ReviewService requires a typed Draft review binding");
     }
-    if (binding.flowManager !== flowManager) {
-      throw new Error("ReviewService binding belongs to a different FlowManager");
-    }
+    if (binding.flowManager !== flowManager) throw new Error("ReviewService binding belongs to a different FlowManager");
     const route = draftReviewRouteForStepId(binding.stepId);
     if (route === null) throw new Error(`ReviewService has no draft review route for ${binding.stepId}`);
     this.flowManager = flowManager;
@@ -87,221 +43,120 @@ export class ReviewService {
     Object.freeze(this);
   }
 
-  /** Validate the existing command result against its bound Draft revision. */
   inspectReviewResult(result = this.commandResult) {
-    const state = this.#assertCurrent(this.route.reviewStepId);
+    if (result === this.commandResult && this.#reviewDocument !== null) return this.#reviewDocument;
+    const state = this.binding.assertCurrent();
     const artifact = attachedCanonicalCommandResultArtifact(result);
     if (artifact?.logicalKey !== this.route.reviewLogicalKey) {
       throw new Error("draft review command result does not match the bound review route");
     }
     const document = DraftReviewArtifactDocument.fromStored(artifact.payload);
-    if (!(this.binding instanceof DraftReviewStepBinding)
-      || JSON.stringify(document.sourceDraftRevision) !== JSON.stringify(this.binding.revision)) {
+    if (JSON.stringify(document.sourceDraftRevision) !== JSON.stringify(this.binding.revision)) {
       throw new Error("draft review command result does not match the bound canonical Draft revision");
     }
-    this.#validate({ state, review: document });
+    const issues = new DraftReviewEvidenceSet({
+      route: this.route,
+      state,
+      reviewFile: { document: document.toJSON() },
+    }).validateReview({ validateBinding: false });
+    if (issues.length > 0) throw new Error(issues.join("; "));
+    if (result === this.commandResult) this.#reviewDocument = document;
     return document;
   }
 
-  /**
-   * Persist the command observation and the Step-selected outcome.  The
-   * coverage PASS connector is a distinct Store operation because it carries
-   * the completed Draft forward without rewriting its bytes.
-   */
-  commitReviewResult(stepOutput, inspectedReview = null) {
-    if (!(stepOutput instanceof StepOutput) || stepOutput.type === STEP_OUTPUT_TYPE.ERROR) {
-      throw new TypeError("Draft Review completion requires a non-error StepOutput");
+  async persistStepResult(stepResult) {
+    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
+      throw new TypeError("ReviewService requires its bound Step's concrete Result");
     }
-    const document = inspectedReview ?? this.inspectReviewResult();
-    if (!(document instanceof DraftReviewArtifactDocument)) {
-      throw new TypeError("Draft Review completion requires an inspected review document");
-    }
-    this.#assertCurrent(this.route.reviewStepId);
-    if (JSON.stringify(document.sourceDraftRevision) !== JSON.stringify(this.binding.revision)) {
-      throw new Error("draft review completion does not match the bound canonical Draft revision");
-    }
-    try {
-      this.flowManager.publishCurrentAttemptResult({
-        specId: this.binding.specId,
+    if (stepResult.error === null) this.inspectReviewResult();
+    let settlement = settleDraftStepResult(this.binding.stepId, stepResult);
+    if (stepResult instanceof DraftCoverageReviewPassedResult) {
+      const facts = this.flowManager.readProspectiveDraftCoveragePassFacts({
+        binding: this.binding,
         commandResult: this.commandResult,
       });
-    } catch (error) {
-      if (!hasPublishedCommandResult(this.flowManager, this.binding, this.commandResult)) {
-        throw new DraftStepPersistenceFailure(error);
-      }
+      settlement = settlement.materializeDraftCompletion(facts);
     }
+    const input = {
+      binding: this.binding,
+      stepResult,
+      settlement,
+      commandResult: stepResult.error === null ? this.commandResult : undefined,
+    };
     try {
-      // Retry accounting is an observation of this published result. Keep it
-      // before the Step settlement so a metric write failure leaves the exact
-      // Attempt active and can be retried from the same canonical result.
-      persistReviewTransitionFacts({
-        flowManager: this.flowManager,
-        flowState: this.flowManager.loadReadOnly(this.binding.specId),
-        specId: this.binding.specId,
-      }, this.commandResult);
-      if (this.route.key === "coverage" && stepOutput.type === STEP_OUTPUT_TYPE.COMPLETED) {
-        const facts = readCoveragePassDraftCompletionFacts({
-          flowManager: this.flowManager,
-          specId: this.binding.specId,
-          sourceStepId: this.binding.stepId,
-        });
-        this.flowManager.confirmDraftCoverageRepairCompletion({
-          specId: this.binding.specId,
-          decision: resolveDraftCoverageRepairCompletion(facts),
-          draft: facts.draft,
-          stepOutput,
-        });
-      } else {
-        this.flowManager.confirmCurrentAttempt({ specId: this.binding.specId, stepOutput });
-      }
-      return document;
+      const committed = await this.flowManager.settleDraftStepResult(input);
+      return committed.receipt;
     } catch (error) {
-      if (hasCommittedStepOutput(this.flowManager, this.binding, stepOutput)) {
-        return document;
-      }
+      const replay = committedReceipt(this.flowManager, input);
+      if (replay !== null) return replay;
       throw new DraftStepPersistenceFailure(error);
     }
   }
-
-  /** Persist a Step execution error against this exact bound Attempt. */
-  commitStepError(stepOutput) {
-    if (!(stepOutput instanceof StepOutput) || stepOutput.type !== STEP_OUTPUT_TYPE.ERROR) {
-      throw new TypeError("Draft Review Step Error requires an error StepOutput");
-    }
-    const error = stepOutput.error;
-    try {
-      this.binding.assertCurrent();
-      this.flowManager.failCurrentAttempt({
-        specId: this.binding.specId,
-        failure: {
-          category: DRAFT_STEP_ERROR_CATEGORY,
-          code: error?.code || "DRAFT_REVIEW_STEP_ERROR",
-          message: stepOutput.error.message,
-          retryable: false,
-          retryKind: null,
-        },
-        stepOutput,
-      });
-    } catch (cause) {
-      if (hasCommittedStepOutput(this.flowManager, this.binding, stepOutput)) return;
-      throw new DraftStepPersistenceFailure(cause);
-    }
-  }
-
-  #assertCurrent(expectedStepId) {
-    if (this.binding.stepId !== expectedStepId) {
-      throw new Error(`ReviewService ${expectedStepId} operation requires its bound Step`);
-    }
-    return this.binding.assertCurrent();
-  }
-
-  #validate({ state, review }) {
-    const evidence = new DraftReviewEvidenceSet({
-      route: this.route,
-      state,
-      reviewFile: { document: review.toJSON() },
-    });
-    const issues = evidence.validateReview({ validateBinding: false });
-    if (issues.length > 0) throw new Error(issues.join("; "));
-  }
 }
 
-/** Persist one evaluated Draft Gate and the Step-selected transition. */
+/** Validate a prospective Draft Gate observation without publishing it. */
 export class GateService {
-  constructor({ flowManager, binding, commandResult }) {
-    if (!flowManager || typeof flowManager.publishCurrentAttemptResult !== "function"
-      || typeof flowManager.commitDraftGateTransition !== "function") {
-      throw new TypeError("GateService requires canonical Gate publication and settlement");
+  #facts = null;
+
+  constructor({ flowManager, binding, commandResult, issuePublication = null }) {
+    if (!flowManager || typeof flowManager.settleDraftStepResult !== "function"
+      || typeof flowManager.findDraftStepSettlementReceipt !== "function") {
+      throw new TypeError("GateService requires canonical Result settlement and receipt readback");
     }
     if (!(binding instanceof DraftGateEvaluationBinding)) {
       throw new TypeError("GateService requires a typed Draft Gate evaluation binding");
     }
-    if (binding.flowManager !== flowManager) {
-      throw new Error("GateService binding belongs to a different FlowManager");
-    }
+    if (binding.flowManager !== flowManager) throw new Error("GateService binding belongs to a different FlowManager");
     if (attachedCanonicalCommandResultArtifact(commandResult)?.logicalKey !== "draft.gate") {
       throw new Error("GateService requires the evaluated Draft Gate result");
+    }
+    if (issuePublication !== null && (
+      !(issuePublication instanceof DraftGateIssuePublication) || !issuePublication.matches(binding)
+    )) {
+      throw new Error("GateService received an invalid Draft Gate issue publication");
     }
     this.flowManager = flowManager;
     this.binding = binding;
     this.commandResult = commandResult;
+    this.issuePublication = issuePublication;
     Object.freeze(this);
   }
 
-  /**
-   * Make the common command's observation durable once and return the
-   * Definition-selected disposition for the Step to turn into StepOutput.
-   */
-  async prepareGateResult() {
-    this.binding.assertCurrent();
-    try {
-      this.flowManager.publishCurrentAttemptResult({
-        specId: this.binding.specId,
-        commandResult: this.commandResult,
-      });
-    } catch (error) {
-      if (!hasPublishedCommandResult(this.flowManager, this.binding, this.commandResult)) {
-        throw new DraftStepPersistenceFailure(error);
-      }
-    }
-    // Resolving the published observation is part of Step evaluation. A
-    // stale or malformed observation must become the Step's Error result;
-    // only publication failure is a persistence failure.
-    const decision = this.#decision();
-    return decision;
+  inspectGateFacts() {
+    if (this.#facts !== null) return this.#facts;
+    this.#facts = readProspectiveDraftGateFacts({
+      flowManager: this.flowManager,
+      binding: this.binding,
+      commandResult: this.commandResult,
+    });
+    return this.#facts;
   }
 
-  /** Apply the previously prepared, Definition-selected Gate transition. */
-  async commitGateResult({ decision, stepOutput }) {
-    if (!(stepOutput instanceof StepOutput) || stepOutput.type === STEP_OUTPUT_TYPE.ERROR) {
-      throw new TypeError("Draft Gate completion requires a non-error StepOutput");
+  async persistStepResult(stepResult) {
+    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
+      throw new TypeError("GateService requires its bound Step's concrete Result");
     }
+    const settlement = settleDraftStepResult(this.binding.stepId, stepResult);
+    if (stepResult.error === null && this.#facts === null) {
+      throw new Error("Draft Gate Result requires the facts observed by its Step");
+    }
+    const gatePublication = stepResult.error === null
+      ? new DraftGatePublicationIntent({ facts: this.#facts, issue: this.issuePublication })
+      : null;
+    const input = {
+      binding: this.binding,
+      stepResult,
+      settlement,
+      commandResult: this.commandResult,
+      gatePublication,
+    };
     try {
-      return await this.flowManager.commitDraftGateTransition({
-        specId: this.binding.specId,
-        decision,
-        stepOutput,
-      });
+      const committed = await this.flowManager.settleDraftStepResult(input);
+      return committed.receipt;
     } catch (error) {
-      if (hasCommittedStepOutput(this.flowManager, this.binding, stepOutput)) {
-        return this.flowManager.canonicalState(this.binding.specId);
-      }
+      const replay = committedReceipt(this.flowManager, input);
+      if (replay !== null) return replay;
       throw new DraftStepPersistenceFailure(error);
     }
-  }
-
-  /** Persist a Step execution error against this exact bound Attempt. */
-  commitStepError(stepOutput) {
-    if (!(stepOutput instanceof StepOutput) || stepOutput.type !== STEP_OUTPUT_TYPE.ERROR) {
-      throw new TypeError("Draft Gate Step Error requires an error StepOutput");
-    }
-    const error = stepOutput.error;
-    try {
-      this.binding.assertCurrent();
-      this.flowManager.failCurrentAttempt({
-        specId: this.binding.specId,
-        failure: {
-          category: DRAFT_STEP_ERROR_CATEGORY,
-          code: error?.code || "DRAFT_GATE_STEP_ERROR",
-          message: stepOutput.error.message,
-          retryable: false,
-          retryKind: null,
-        },
-        stepOutput,
-      });
-    } catch (cause) {
-      if (hasCommittedStepOutput(this.flowManager, this.binding, stepOutput)) return;
-      throw new DraftStepPersistenceFailure(cause);
-    }
-  }
-
-  #decision() {
-    const facts = readCurrentGateTransitionFacts({
-      flowManager: this.flowManager,
-      flowState: this.flowManager.loadReadOnly(this.binding.specId),
-      phase: "draft",
-    });
-    if (facts === null) throw new Error("Draft Gate result was not published for its bound Attempt");
-    return resolveGateTransition(facts);
   }
 }

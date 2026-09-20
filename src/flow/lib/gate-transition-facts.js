@@ -17,6 +17,7 @@ import {
   TaskGateSettlementProgress,
 } from "./gate-transition.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
+import { attachedCanonicalCommandResultArtifact } from "./canonical-command-result.js";
 import {
   canonicalGateNodeId,
   taskGateSettlementIssueLogActivityId,
@@ -32,8 +33,71 @@ import {
   TaskGateClassificationRecoveryIdentity,
 } from "./task-gate-classification-recovery.js";
 import { CanonicalGateObservationCycle } from "./canonical-gate-observation-cycle.js";
+import { PlanGateRepairObservation } from "./plan-gate-repair.js";
+import { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
+export { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
+
+function gateRetryUsage({ state, activities, nodeId, attempt, phase, failureCategory }) {
+  const contract = state.definition.contractForNode(state.findNode(nodeId));
+  const priorDraftSemanticFailures = phase === "draft" && failureCategory === "semantic"
+    ? new Set(activities.filter((activity) => (
+      activity.nodeId === nodeId
+      && (
+        (activity.transition?.operation === "fail_attempt" && activity.failure?.category === "semantic")
+        || (activity.transition?.operation === "plan_gate_repair"
+          && activity.result?.stepResult?.kind === "draft-gate-repair-required")
+      )
+      && (activity.attemptId !== attempt.id || activity.sequence !== attempt.sequence)
+    )).map((activity) => `${activity.attemptId}:${activity.sequence}`)).size
+    : 0;
+  const used = failureCategory === "semantic"
+    ? (phase === "draft"
+      ? Math.min(contract.semanticRetryLimit, Math.max(attempt.consumption.semantic, priorDraftSemanticFailures))
+      : attempt.consumption.semantic)
+    : attempt.consumption.tooling;
+  const maximum = failureCategory === "semantic" ? contract.semanticRetryLimit : (contract.toolingRetryLimit ?? 0);
+  return Object.freeze({ used, maximum: Math.max(1, maximum), exhausted: used >= maximum });
+}
+
+export function readProspectiveDraftGateFacts({ flowManager, binding, commandResult } = {}) {
+  const state = binding.assertCurrent();
+  const artifact = attachedCanonicalCommandResultArtifact(commandResult);
+  if (artifact?.logicalKey !== "draft.gate") throw new Error("prospective Draft Gate requires draft.gate");
+  const payload = artifact.payload;
+  if (payload?.artifacts?.gateTransitionAttemptId !== binding.attempt.id
+    || payload?.artifacts?.gateTransitionAttemptSequence !== binding.attempt.sequence
+    || payload?.artifacts?.gateTransitionLineage !== canonicalGateRevision(state, "draft-gate")) {
+    throw new Error("prospective Draft Gate observation has a stale binding or lineage");
+  }
+  if (payload.result === "pass") return new DraftGateProspectiveFacts({ result: "pass" });
+  if (payload.result !== "fail") throw new Error("prospective Draft Gate result is invalid");
+  const failure = GateFailureCategory.fromObservedGateResult(payload);
+  const raw = payload?.artifacts?.nextAction?.diagnosis?.observations ?? [];
+  if (!Array.isArray(raw)) throw new Error("prospective Draft Gate observations must be an array");
+  const fingerprints = new Set(raw.filter((entry) => entry?.severity === "blocking").map((entry) => (
+    new PlanGateRepairObservation({ ...entry, phase: "draft", scope: "flow", taskId: null }).fingerprint.toString()
+  )));
+  const convergence = new CanonicalGateObservationCycle({ flowManager, state }).prospectiveStatus();
+  const sameEvidence = convergence.sameEvidenceFor({ phase: "draft", fingerprints });
+  const retry = gateRetryUsage({
+    state,
+    activities: flowManager.activityLedger(state.specId),
+    nodeId: "draft-gate",
+    attempt: state.attempt,
+    phase: "draft",
+    failureCategory: failure.category,
+  });
+  return new DraftGateProspectiveFacts({
+    result: "fail",
+    failureCategory: failure.category,
+    sameEvidence,
+    retryExhausted: retry.exhausted,
+    retryUsed: retry.used,
+    retryMaximum: retry.maximum,
+  });
+}
 
 function required(value, field) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
@@ -586,33 +650,19 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
     canonicalRevisionFingerprint = resultRevision;
     }
   }
-  const contract = state.definition.contractForNode(state.findNode(nodeId));
   const failureCategory = failure?.category ?? "semantic";
   // Consumption is persisted on the Attempt that is being evaluated.  It
   // counts retries that have already started; the failed observation itself
   // must not be added a second time here.  Thus a limit of four permits the
   // initial evaluation plus four replacement Attempts, and the fifth failed
   // evaluation (consumption=4) is the one that settles.
-  const priorDraftSemanticFailures = persistedPhase === "draft"
-    ? new Set(activities.filter((activity) => (
-      activity.nodeId === nodeId
-      && activity.transition?.operation === "fail_attempt"
-      && activity.failure?.category === "semantic"
-      && (activity.attemptId !== attempt.id || activity.sequence !== attempt.sequence)
-    )).map((activity) => `${activity.attemptId}:${activity.sequence}`)).size
-    : 0;
-  const used = failureCategory === "semantic"
-    ? (persistedPhase === "draft"
-      ? Math.min(contract.semanticRetryLimit, Math.max(attempt.consumption.semantic, priorDraftSemanticFailures))
-      : attempt.consumption.semantic)
-    : attempt.consumption.tooling;
-  const maximum = failureCategory === "semantic"
-    ? contract.semanticRetryLimit
-    : (contract.toolingRetryLimit ?? 0);
+  const retryUsage = gateRetryUsage({
+    state, activities, nodeId, attempt, phase: persistedPhase, failureCategory,
+  });
   // GateRetryMetrics intentionally requires a positive maximum. Tooling
   // failures are terminal at the common boundary; a zero tooling budget is
   // represented by one exhausted slot rather than an invented retry.
-  const retry = { used, maximum: Math.max(1, maximum) };
+  const retry = { used: retryUsage.used, maximum: retryUsage.maximum };
   // A repair receipt is observation evidence, never a route decision.  It is
   // intentionally read from the same current Attempt and catalog lineage as
   // the Gate result; Definition decides whether that evidence can be used.

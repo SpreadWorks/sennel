@@ -5,7 +5,9 @@ import fs from "node:fs";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { DraftRepairPath } from "../../../src/flow/lib/draft-repair-operations.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../../src/flow/engine/step-output.js";
+import { DraftGateRepairAppliedResult } from "../../../src/flow/engine/step-result.js";
+import { DraftWorkerStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import { settleDraftStepResult } from "../../../src/flow/definition.js";
 import {
   WorkerArtifactHandoffCoordinator,
   sealWorkerArtifactHandoff,
@@ -95,11 +97,15 @@ export class DraftGateRepairScenario {
       ctx: this.ctx,
       request: this.request,
     });
+    const binding = new DraftWorkerStepBinding({ request: this.request });
+    const stepResult = new DraftGateRepairAppliedResult();
     const result = this.coordinator.commitDraftWorker({
       ctx: this.ctx,
       request: this.request,
       preparation,
-      stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+      stepResult,
+      settlement: settleDraftStepResult(stepResult.stepId, stepResult),
+      binding,
     });
     assert.equal(result.completed, true, JSON.stringify(result));
     const source = this.flowManager.readArtifact({ specId: this.specId, logicalKey: "draft", consumerNodeId: "draft-coverage-review" });

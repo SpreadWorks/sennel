@@ -16,6 +16,7 @@ import {
   buildInitialNestedSteps,
   buildInitialTaskSteps,
   resolveSourceHandoffTransitionPlan,
+  settleDraftStepResult,
 } from "../../../src/flow/definition.js";
 import { SourceHandoffFailureFacts } from "../../../src/flow/lib/source-handoff-failure.js";
 import { FLOW_ARTIFACT_AUTHORITY_MATRIX } from "../../../src/flow/lib/flow-artifact-authority.js";
@@ -35,15 +36,23 @@ import { FlowTargetExpectation } from "../../../src/lib/flow-target-guard.js";
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { DraftEntryConnector } from "../../../src/flow/engine/connectors/draft/draft-entry-connector.js";
 import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
+import { DraftWorkerStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
 import { DraftStep } from "../../../src/flow/steps/draft/draft.js";
 import { DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../../src/flow/engine/step-output.js";
+import {
+  DraftCreatedResult,
+  DraftRefineCompletedResult,
+  DraftRefineAwaitingAnswerResult,
+  DraftRefineWorkerRequiredResult,
+  STEP_RESULT_TYPE,
+} from "../../../src/flow/engine/step-result.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { canonicalTaskReviewFileMap } from "../../../src/flow/commands/review.js";
 import { validateAssignedRequirementTestHeaders } from "../../../src/flow/lib/test-headers.js";
 import SetStepCommand from "../../../src/flow/lib/set-step.js";
 import SetMetricCommand from "../../../src/flow/lib/set-metric.js";
+import SetDraftAnswerCommand from "../../../src/flow/lib/set-draft-answer.js";
 import { loadSpecJsonSchema } from "../../../src/lib/spec-json.js";
 import { validateSchema } from "../../../src/lib/schema-validate.js";
 import { adaptJsonSchemaForProvider } from "../../../src/lib/provider-schema.js";
@@ -108,6 +117,19 @@ import {
 
 const ACTION_DIGEST = "a".repeat(64);
 const SOURCE_REQUEST_LIFECYCLES = new WeakMap();
+
+function commitDraftResult(coordinator, { ctx, request, preparation, stepResult }) {
+  const binding = new DraftWorkerStepBinding({ request });
+  return coordinator.commitDraftWorker({
+    ctx,
+    request,
+    preparation,
+    stepResult,
+    settlement: settleDraftStepResult(stepResult.stepId, stepResult),
+    binding,
+  });
+}
+
 const WORKER_ARTIFACT_HANDOFF_SCHEMA_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../src/flow/schemas/next-action/worker-artifact-handoff.schema.json",
@@ -271,11 +293,11 @@ function draftWithQuestionLedger(questions) {
   });
 }
 
-function candidateDraftQuestion({ id = "q1", revision = 0 } = {}) {
+function candidateDraftQuestion({ id = "q1", revision = 0, question = "Which public behavior should be selected?" } = {}) {
   return {
     state: "CandidateQuestion",
     id,
-    question: "Which public behavior should be selected?",
+    question,
     category: "user-visible-behavior",
     revision,
     provenance: { producer: "worker-handoff-fixture" },
@@ -2036,11 +2058,11 @@ describe("worker artifact handoff", () => {
       });
       const preparation = value.coordinator.prepareDraftWorker({ ctx: value.ctx, request });
       assert.throws(
-        () => crashing.commitDraftWorker({
+        () => commitDraftResult(crashing, {
           ctx: value.ctx,
           request,
           preparation,
-          stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+          stepResult: new DraftCreatedResult(),
         }),
         (error) => error instanceof WorkerArtifactHandoffError
           && error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
@@ -3299,11 +3321,11 @@ describe("worker artifact handoff", () => {
       seal(request);
 
       const preparation = value.coordinator.prepareDraftWorker({ ctx: value.ctx, request });
-      const result = value.coordinator.commitDraftWorker({
+      const result = commitDraftResult(value.coordinator, {
         ctx: value.ctx,
         request,
         preparation,
-        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+        stepResult: new DraftCreatedResult(),
       });
       const state = value.flowManager.load();
       const published = value.flowManager.readArtifact({
@@ -3332,7 +3354,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("rejects direct Draft reconcile without a Step-selected output", () => {
+  it("rejects direct Draft reconcile without a Step-selected Result", () => {
     const value = fixture("draft");
     try {
       const request = value.coordinator.createRequest({
@@ -3349,7 +3371,7 @@ describe("worker artifact handoff", () => {
       assert.throws(
         () => value.coordinator.reconcile({ ctx: value.ctx, request }),
         (error) => error instanceof WorkerArtifactHandoffError
-          && error.code === "FLOW_DRAFT_STEP_OUTPUT_REQUIRED",
+          && error.code === "FLOW_DRAFT_STEP_RESULT_REQUIRED",
       );
       assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), beforeState);
       assert.deepEqual(value.flowManager.activityLedger(value.specId), beforeActivities);
@@ -3379,11 +3401,11 @@ describe("worker artifact handoff", () => {
       seal(request);
 
       const preparation = value.coordinator.prepareDraftWorker({ ctx: value.ctx, request });
-      value.coordinator.commitDraftWorker({
+      commitDraftResult(value.coordinator, {
         ctx: value.ctx,
         request,
         preparation,
-        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+        stepResult: new DraftCreatedResult(),
       });
 
       assert.deepEqual(readCatalogJson(value, "draft", "draft-questions-review"), expectedDraft);
@@ -4418,11 +4440,11 @@ describe("worker artifact handoff", () => {
         ctx: value.ctx,
         request,
       });
-      const completed = value.coordinator.commitDraftWorker({
+      const completed = commitDraftResult(value.coordinator, {
         ctx: value.ctx,
         request,
         preparation,
-        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED),
+        stepResult: new DraftRefineAwaitingAnswerResult(),
       });
       const persisted = readCatalogJson(value, "draft", "draft-refine");
       const activity = value.flowManager.activityLedger(value.specId).at(-1);
@@ -4435,6 +4457,8 @@ describe("worker artifact handoff", () => {
       assert.equal(completed.completed, true);
       assert.equal(completed.replayed, false);
       assert.equal(completed.handoffDigest, submission.handoffDigest);
+      assert.equal(completed.receipt.id, activity.result.draftSettlementReceipt.id);
+      assert.equal(completed.receipt.publicationDigest, activity.result.draftSettlementReceipt.publicationDigest);
       assert.equal(fs.existsSync(request.directory), false, "completed handoff must be cleaned up");
       assert.equal(findStepById(value.flowManager.load().steps, "draft-refine").status, "in_progress");
       assert.equal(value.flowManager.canonicalState(value.specId).current.at(-1), "draft-refine");
@@ -4465,18 +4489,117 @@ describe("worker artifact handoff", () => {
       const waitingStep = new StepFactory()
         .provideArguments(DraftService, { flowManager: value.flowManager, binding })
         .create(DraftRefineStep);
-      assert.equal((await waitingStep.execute()).type, STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED);
+      const waitingActivities = value.flowManager.activityLedger(value.specId).length;
+      assert.equal((await waitingStep.execute()).type, STEP_RESULT_TYPE.USER_INPUT_REQUIRED);
+      assert.equal(value.flowManager.activityLedger(value.specId).length, waitingActivities);
+      assert.equal(value.flowManager.activityLedger(value.specId).at(-1).result.draftSettlementReceipt.id,
+        activity.result.draftSettlementReceipt.id);
 
-      const replay = value.coordinator.commitDraftWorker({
+      const replay = commitDraftResult(value.coordinator, {
         ctx: value.ctx,
         request,
         preparation,
-        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED),
+        stepResult: new DraftRefineAwaitingAnswerResult(),
       });
       assert.equal(replay.completed, true);
       assert.equal(replay.replayed, true);
+      assert.equal(replay.receipt.id, activity.result.draftSettlementReceipt.id);
       assert.equal(value.flowManager.activityLedger(value.specId).length, beforeActivities + 1);
       assert.equal(readCatalogJson(value, "draft", "draft-refine").questionLedger.questions[0].revision, 5);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("persists the existing draft-refine Await Result once and replays it without duplication", async () => {
+    const awaiting = draftWithQuestionLedger([{
+      state: "AwaitingUserAnswer",
+      id: "q1",
+      category: "goal-confirmation",
+      question: "Which public behavior should be selected?",
+      revision: 0,
+      provenance: { producer: "worker-handoff-fixture" },
+      evidenceDigest: "a".repeat(64),
+    }]);
+    const value = fixture("draft-refine", {
+      beforeActivate(fixtureValue) {
+        publishDraftBeforeTarget(fixtureValue, awaiting);
+      },
+    });
+    try {
+      const binding = await new DraftRefineConnector({
+        flowManager: value.flowManager,
+        specId: value.specId,
+      }).connect();
+      const step = new StepFactory()
+        .provideArguments(DraftService, { flowManager: value.flowManager, binding })
+        .create(DraftRefineStep);
+      const before = value.flowManager.activityLedger(value.specId).length;
+
+      const first = await step.execute();
+      const afterFirst = value.flowManager.activityLedger(value.specId);
+      const firstActivity = afterFirst.at(-1);
+      assert.equal(first.type, STEP_RESULT_TYPE.USER_INPUT_REQUIRED);
+      assert.equal(afterFirst.length, before + 1);
+      assert.equal(firstActivity.transition.operation, "record_draft_step_settlement");
+      assert.equal(firstActivity.result.stepResult.kind, "draft-refine-awaiting-answer");
+      assert.equal(firstActivity.result.draftSettlementReceipt.settlementKind, "await");
+
+      const second = await step.execute();
+      const afterReplay = value.flowManager.activityLedger(value.specId);
+      assert.equal(second.type, STEP_RESULT_TYPE.USER_INPUT_REQUIRED);
+      assert.equal(afterReplay.length, before + 1);
+      assert.equal(afterReplay.at(-1).result.draftSettlementReceipt.id,
+        firstActivity.result.draftSettlementReceipt.id);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("rejects a changed sealed Draft payload instead of accepting the committed handoff as a replay", () => {
+    const value = fixture();
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      fs.writeFileSync(request.payloadPath("draft.json"), json(draftDocument("original sealed draft")));
+      seal(request);
+      const preparation = value.coordinator.prepareDraftWorker({ ctx: value.ctx, request });
+      const binding = new DraftWorkerStepBinding({ request });
+      const stepResult = new DraftCreatedResult();
+      const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
+      const interrupted = new WorkerArtifactHandoffCoordinator({
+        faultInjector({ phase }) {
+          if (phase === "before-worker-handoff-cleanup-rename") throw new Error("retain sealed handoff for replay check");
+        },
+      });
+      assert.throws(
+        () => interrupted.commitDraftWorker({
+          ctx: value.ctx,
+          request,
+          preparation,
+          stepResult,
+          settlement,
+          binding,
+        }),
+        (error) => error instanceof WorkerArtifactHandoffError
+          && error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
+      );
+      fs.writeFileSync(request.payloadPath("draft.json"), json(draftDocument("changed after settlement")));
+      assert.throws(
+        () => value.coordinator.commitDraftWorker({
+          ctx: value.ctx,
+          request,
+          preparation,
+          stepResult,
+          settlement,
+          binding,
+        }),
+        (error) => error instanceof WorkerArtifactHandoffError
+          && error.code === "FLOW_ARTIFACT_HANDOFF_INVALID",
+      );
     } finally {
       removeTmpDir(value.mainRoot);
     }
@@ -4504,7 +4627,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("keeps auto-approved draft-refine LOOP and invalidates downstream Gate repair", async () => {
+  it("keeps auto-approved draft-refine Execution on the same Attempt", async () => {
     for (const { name, autoApprove, source } of [
       { name: "autoApprove Candidate", autoApprove: true, source: draftWithQuestionLedger([candidateDraftQuestion()]) },
     ]) {
@@ -4526,11 +4649,11 @@ describe("worker artifact handoff", () => {
           ctx: value.ctx,
           request,
         });
-        value.coordinator.commitDraftWorker({
+        commitDraftResult(value.coordinator, {
           ctx: value.ctx,
           request,
           preparation,
-          stepOutput: new StepOutput(STEP_OUTPUT_TYPE.LOOP_REQUIRED),
+          stepResult: new DraftRefineWorkerRequiredResult(),
         });
         const next = await new GetNextActionCommand().execute({
           ...value.ctx,
@@ -4538,12 +4661,129 @@ describe("worker artifact handoff", () => {
           flowState: value.flowManager.load(value.specId),
         });
 
-        assert.equal(findStepById(value.flowManager.load().steps, "draft-refine").status, "invalidated", name);
-        assert.equal(findStepById(value.flowManager.load().steps, "draft-gate-repair").status, "invalidated", name);
+        assert.equal(findStepById(value.flowManager.load().steps, "draft-refine").status, "in_progress", name);
+        assert.equal(findStepById(value.flowManager.load().steps, "draft-gate-repair").status, "pending", name);
         assert.equal(next.step, "draft-refine", name);
       } finally {
         removeTmpDir(value.mainRoot);
       }
+    }
+  });
+
+  it("settles the next auto-approved draft-refine Result on that retained Attempt", () => {
+    const initial = draftWithQuestionLedger([candidateDraftQuestion()]);
+    const completedDraft = draftWithQuestionLedger([]);
+    const value = fixture("draft-refine", {
+      autoApprove: true,
+      beforeActivate(fixtureValue) {
+        publishDraftBeforeTarget(fixtureValue, initial);
+      },
+    });
+    try {
+      const firstRequest = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      fs.writeFileSync(firstRequest.payloadPath("draft.json"), json(initial));
+      seal(firstRequest);
+      const firstPreparation = value.coordinator.prepareDraftWorker({ ctx: value.ctx, request: firstRequest });
+      const first = commitDraftResult(value.coordinator, {
+        ctx: value.ctx,
+        request: firstRequest,
+        preparation: firstPreparation,
+        stepResult: new DraftRefineWorkerRequiredResult(),
+      });
+      const retained = value.flowManager.canonicalState(value.specId).attempt;
+
+      const secondRequest = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: { ...value.invocation, id: "dispatch-worker-handoff-next" },
+      });
+      fs.writeFileSync(secondRequest.payloadPath("draft.json"), json(completedDraft));
+      seal(secondRequest);
+      const second = commitDraftResult(value.coordinator, {
+        ctx: value.ctx,
+        request: secondRequest,
+        preparation: value.coordinator.prepareDraftWorker({ ctx: value.ctx, request: secondRequest }),
+        stepResult: new DraftRefineCompletedResult(),
+      });
+
+      assert.equal(first.receipt.binding.attemptId, retained.id);
+      assert.equal(second.receipt.binding.attemptId, retained.id);
+      assert.equal(second.receipt.binding.attemptSequence, retained.sequence);
+      assert.equal(value.flowManager.canonicalState(value.specId).nextAction().nodeId, "draft-coverage-review");
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("records each fresh Candidate promotion selected after the prior answer on its retained Attempt", async () => {
+    const q1 = candidateDraftQuestion({ id: "q1" });
+    const q2 = candidateDraftQuestion({ id: "q2", question: "Which compatibility boundary applies?" });
+    const initial = draftWithQuestionLedger([q1, q2]);
+    const value = fixture("draft-refine", {
+      beforeActivate(fixtureValue) {
+        publishDraftBeforeTarget(fixtureValue, initial);
+      },
+    });
+    try {
+      const executeSelectedWorker = async (request, preparation) => {
+        const binding = new DraftWorkerStepBinding({ request });
+        const service = new DraftService({
+          flowManager: value.flowManager,
+          binding,
+          workerFacts: preparation.facts,
+          workerExecutor: (stepResult, settlement, selectedBinding) => ({
+            error: null,
+            ...value.coordinator.commitDraftWorker({
+              ctx: value.ctx, request, preparation, stepResult, settlement, binding: selectedBinding,
+            }),
+          }),
+        });
+        const result = await new DraftRefineStep(service).execute();
+        return { result, receipt: service.workerOutcome.receipt };
+      };
+      const firstRequest = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      fs.writeFileSync(firstRequest.payloadPath("draft.json"), json(initial));
+      seal(firstRequest);
+      const first = await executeSelectedWorker(firstRequest, value.coordinator.prepareDraftWorker({
+        ctx: value.ctx, request: firstRequest,
+      }));
+      assert.equal(first.result.type, STEP_RESULT_TYPE.USER_INPUT_REQUIRED);
+      const answer = new SetDraftAnswerCommand().execute({
+        ...value.ctx,
+        flowState: value.flowManager.load(),
+        questionId: "q1",
+        questionRevision: 1,
+        answer: "Keep the established public behavior.",
+        why: "The user selected the existing compatibility contract.",
+      });
+      assert.equal(answer.status, "answered");
+      const retained = value.flowManager.canonicalState(value.specId).attempt;
+      const secondRequest = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: { ...value.invocation, id: "dispatch-worker-handoff-second-candidate" },
+      });
+      fs.writeFileSync(secondRequest.payloadPath("draft.json"), value.flowManager.readArtifact({
+        specId: value.specId, logicalKey: "draft", consumerNodeId: "draft-refine",
+      }).bytes);
+      seal(secondRequest);
+      const second = await executeSelectedWorker(secondRequest, value.coordinator.prepareDraftWorker({
+        ctx: value.ctx, request: secondRequest,
+      }));
+
+      assert.equal(second.result.type, STEP_RESULT_TYPE.USER_INPUT_REQUIRED);
+      assert.notEqual(first.receipt.id, second.receipt.id);
+      assert.equal(second.receipt.binding.attemptId, retained.id);
+      assert.equal(second.receipt.binding.attemptSequence, retained.sequence);
+      assert.equal(value.flowManager.canonicalState(value.specId).current.at(-1), "draft-refine");
+    } finally {
+      removeTmpDir(value.mainRoot);
     }
   });
 
@@ -4622,11 +4862,11 @@ describe("worker artifact handoff", () => {
       const preparation = value.coordinator.prepareDraftWorker({ ctx: value.ctx, request });
 
       assert.throws(
-        () => crashing.commitDraftWorker({
+        () => commitDraftResult(crashing, {
           ctx: value.ctx,
           request,
           preparation,
-          stepOutput: new StepOutput(STEP_OUTPUT_TYPE.USER_INPUT_REQUIRED),
+          stepResult: new DraftRefineAwaitingAnswerResult(),
         }),
         (error) => error instanceof WorkerArtifactHandoffError
           && error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
@@ -4995,7 +5235,7 @@ describe("worker artifact handoff", () => {
       });
       const failure = reloaded.activityLedger(value.specId).findLast((entry) => entry.transition.operation === "fail_attempt");
       assert.ok(failure);
-      assert.equal(Object.hasOwn(failure.result, "stepOutput"), false);
+      assert.equal(Object.hasOwn(failure.result, "stepResult"), false);
       assert.equal(reloaded.canonicalState(value.specId).attempt.failure.category, "tooling");
       assert.match(reloaded.canonicalState(value.specId).attempt.failure.message, /remained invalid after one fresh retry/);
       assert.equal(reloaded.canonicalState(value.specId).current.at(-1), "draft");
@@ -5038,7 +5278,7 @@ describe("worker artifact handoff", () => {
         flowState: value.flowManager.load(),
       }, invocation, null, agent);
       assert.equal(attempt.error, null);
-      assert.equal(attempt.stepOutput.type, STEP_OUTPUT_TYPE.COMPLETED);
+      assert.equal(attempt.stepResult.type, STEP_RESULT_TYPE.COMPLETED);
       const reloaded = new FlowManager({
         root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
       });
@@ -5771,11 +6011,11 @@ describe("worker artifact handoff", () => {
       value.flowManager.rewindTo("draft", { specId: value.specId });
 
       assert.throws(
-        () => value.coordinator.commitDraftWorker({
+        () => commitDraftResult(value.coordinator, {
           ctx: value.ctx,
           request,
           preparation,
-          stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+          stepResult: new DraftCreatedResult(),
         }),
         (error) => error instanceof WorkerArtifactHandoffError
           && error.classification === "stale"
@@ -6449,11 +6689,11 @@ describe("worker artifact handoff", () => {
       seal(request);
 
       const preparation = value.coordinator.prepareDraftWorker({ ctx: value.ctx, request });
-      value.coordinator.commitDraftWorker({
+      commitDraftResult(value.coordinator, {
         ctx: value.ctx,
         request,
         preparation,
-        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+        stepResult: new DraftCreatedResult(),
       });
 
       assert.equal(fs.existsSync(executionHandoffRoot(value)), false);
@@ -6486,11 +6726,11 @@ describe("worker artifact handoff", () => {
         });
         const preparation = value.coordinator.prepareDraftWorker({ ctx: value.ctx, request });
         assert.throws(
-          () => interrupted.commitDraftWorker({
+          () => commitDraftResult(interrupted, {
             ctx: value.ctx,
             request,
             preparation,
-            stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+            stepResult: new DraftCreatedResult(),
           }),
           (error) => error instanceof WorkerArtifactHandoffError
             && error.classification === "recovery-required"
@@ -6535,11 +6775,11 @@ describe("worker artifact handoff", () => {
       });
       const preparation = value.coordinator.prepareDraftWorker({ ctx: value.ctx, request });
       assert.throws(
-        () => interrupted.commitDraftWorker({
+        () => commitDraftResult(interrupted, {
           ctx: value.ctx,
           request,
           preparation,
-          stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+          stepResult: new DraftCreatedResult(),
         }),
         (error) => error instanceof WorkerArtifactHandoffError
           && error.classification === "recovery-required",
@@ -6582,11 +6822,11 @@ describe("worker artifact handoff", () => {
       });
       const preparation = interrupted.prepareDraftWorker({ ctx: value.ctx, request });
       assert.throws(
-        () => interrupted.commitDraftWorker({
+        () => commitDraftResult(interrupted, {
           ctx: value.ctx,
           request,
           preparation,
-          stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+          stepResult: new DraftCreatedResult(),
         }),
         (error) => error instanceof WorkerArtifactHandoffError
           && error.classification === "recovery-required",

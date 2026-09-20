@@ -1,10 +1,12 @@
 import { Step } from "../../engine/step.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../engine/step-output.js";
+import { DraftCreatedResult } from "../../engine/step-result.js";
 import { DraftService } from "../../services/draft-service.js";
 
-/** Select and commit a completed Draft worker Step through its Service. */
-export function executeDraftWorker(draftService) {
-  return draftService.commitWorker(new StepOutput(STEP_OUTPUT_TYPE.COMPLETED));
+/** Create and persist one concrete Draft worker Result through its Service. */
+export async function executeDraftWorker(draftService, ResultClass) {
+  const result = new ResultClass();
+  await result.persist(draftService);
+  return result;
 }
 
 /** Create the initial Draft from facts prepared by the parent handoff. */
@@ -20,6 +22,6 @@ export class DraftStep extends Step {
   }
 
   async _execute() {
-    return executeDraftWorker(this.#draftService);
+    return executeDraftWorker(this.#draftService, DraftCreatedResult);
   }
 }

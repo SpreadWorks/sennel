@@ -1,6 +1,10 @@
 import { Step } from "../../engine/step.js";
 import { DraftService } from "../../services/draft-service.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../engine/step-output.js";
+import {
+  DraftQuestionsRepairChangedResult,
+  DraftQuestionsRepairUnchangedResult,
+  DraftStepErrorResult,
+} from "../../engine/step-result.js";
 import { isDraftStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
 
 /**
@@ -19,15 +23,19 @@ export class DraftQuestionsRepairStep extends Step {
   }
 
   async _execute() {
-    let output;
+    let result;
     try {
       const facts = this.#draftService.inspectWorkerFacts();
-      output = new StepOutput(facts.draftChanged
-        ? STEP_OUTPUT_TYPE.LOOP_REQUIRED : STEP_OUTPUT_TYPE.COMPLETED);
+      result = facts.draftChanged
+        ? new DraftQuestionsRepairChangedResult()
+        : new DraftQuestionsRepairUnchangedResult();
     } catch (error) {
       if (isDraftStepPersistenceFailure(error)) throw error;
-      return this.#draftService.commitWorkerError(new StepOutput(error));
+      const failure = new DraftStepErrorResult("draft-questions-repair", error);
+      await failure.persist(this.#draftService);
+      return failure;
     }
-    return this.#draftService.commitWorker(output);
+    await result.persist(this.#draftService);
+    return result;
   }
 }

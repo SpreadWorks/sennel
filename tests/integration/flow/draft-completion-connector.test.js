@@ -6,14 +6,25 @@ import { describe, it } from "node:test";
 
 import {
   DraftCompletionConnector,
+  DraftCoverageRepairCompletionDecision,
+  DraftStepSettlementPublication,
+  DraftStepSettlementReceipt,
   resolveDraftCoverageRepairCompletion,
   resolveDraftCompletionConnector,
   resolveLifecyclePlan,
+  settleDraftStepResult,
 } from "../../../src/flow/definition.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../../src/flow/engine/step-output.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import {
+  DraftCoverageRepairChangedResult,
+  DraftCoverageRepairUnchangedResult,
+  DraftCoverageReviewFindingsResult,
+  DraftCoverageReviewPassedResult,
+} from "../../../src/flow/engine/step-result.js";
 import { FlowArtifactAttemptHistory, FlowArtifactAttemptRecord } from "../../../src/lib/flow-artifact-contract.js";
 import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
+import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
 import {
   DraftCompletionAbsentLineage,
   DraftCompletionCatalogBinding,
@@ -42,6 +53,25 @@ function stableValue(value) {
 function receiptId(value) {
   const { id: _id, ...content } = value;
   return crypto.createHash("sha256").update(JSON.stringify(stableValue(content))).digest("hex");
+}
+
+function draftSettlement(flowManager, specId, stepResult) {
+  const state = flowManager.canonicalState(specId);
+  const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
+  return {
+    settlement,
+    receipt: new DraftStepSettlementReceipt({
+      binding: {
+        runId: state.runId,
+        specId,
+        stepId: stepResult.stepId,
+        attempt: state.attempt,
+      },
+      result: stepResult,
+      settlement,
+      publication: new DraftStepSettlementPublication(),
+    }),
+  };
 }
 
 function draft({ questions = [] } = {}) {
@@ -306,6 +336,58 @@ function confirmAttemptWithoutStorePublication(flowManager, specId, attempt) {
 }
 
 describe("DraftCompletionConnector", () => {
+  it("materializes the selected coverage PASS connector through the production Review path", async () => {
+    const repository = createTmpDir("draft-coverage-review-production-path-");
+    const specId = "715f-coverage-review-production-path";
+    const flowManager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    try {
+      const fixture = new CanonicalFlowFixture({ flowManager, specId, runId: "715f-review-production-run" });
+      fixture.create().registerActive().activate("draft");
+      const source = draft();
+      const sourceBytes = Buffer.from(`${JSON.stringify(source, null, 2)}\n`, "utf8");
+      flowManager.confirmCurrentAttempt({
+        specId,
+        artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: sourceBytes }],
+      });
+      fixture.activate("draft-coverage-review");
+      const history = JSON.parse(coverageReviewArtifactBytes(flowManager, specId, sourceBytes).toString("utf8"));
+      const payload = history.attempts.at(-1).artifact.payload;
+      const result = attachCanonicalCommandResultArtifact({
+        result: "ok",
+        artifacts: { phase: "draft-coverage", retryPhase: "draft-coverage", verdict: "PASS" },
+      }, { logicalKey: "draft.coverage.review", payload });
+      const settle = flowManager.settleDraftStepResult.bind(flowManager);
+      flowManager.settleDraftStepResult = (input) => {
+        assert.ok(input.settlement.application instanceof DraftCoverageRepairCompletionDecision);
+        assert.equal(Object.hasOwn(input, "draftCompletionFacts"), false);
+        return settle(input);
+      };
+
+      await FLOW_COMMANDS.run.review.post({
+        root: repository,
+        mainRoot: repository,
+        executionRoot: repository,
+        specId,
+        phase: "draft-coverage",
+        flowManager,
+        flowState: flowManager.loadReadOnly(specId),
+      }, result);
+
+      const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+      const state = reloaded.canonicalState(specId);
+      assert.equal(state.nextAction().nodeId, "draft-gate");
+      assert.equal(state.findNode("draft-coverage-review").result.stepResult.kind, "draft-coverage-review-passed");
+      assert.equal(state.findNode("draft-coverage-review").result.draftSettlementReceipt.targetStepId, "draft-gate");
+      assert.equal(reloaded.activityLedger(specId).at(-1).transition.stepConnectionReceipt.sourceStepId,
+        "draft-coverage-review");
+      assert.deepEqual(reloaded.readArtifact({
+        specId, logicalKey: "draft", consumerNodeId: "draft-gate",
+      }).bytes, sourceBytes);
+    } finally {
+      removeTmpDir(repository);
+    }
+  });
+
   it("confirms coverage PASS on its Review Attempt with a durable completion receipt", () => {
     const repository = createTmpDir("draft-coverage-review-completion-");
     const specId = "715f-coverage-review-source";
@@ -340,14 +422,18 @@ describe("DraftCompletionConnector", () => {
         ...selected.facts.toJSON(), sourceStepId: "draft-coverage-review", draft: source,
       }));
       const publishedButUnconfirmed = persistedSnapshot(flowManager, specId);
+      const invalidResult = new DraftCoverageReviewFindingsResult();
       assert.throws(() => flowManager.confirmDraftCoverageRepairCompletion({
         specId, decision: reviewSelected, draft: source,
-        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.BRANCH_REQUIRED),
-      }), /requires completed StepOutput/);
+        stepResult: invalidResult,
+      }), /requires completed StepResult/);
       assert.equal(persistedSnapshot(flowManager, specId), publishedButUnconfirmed);
+      const passedResult = new DraftCoverageReviewPassedResult();
+      const { receipt } = draftSettlement(flowManager, specId, passedResult);
       flowManager.confirmDraftCoverageRepairCompletion({
         specId, decision: reviewSelected, draft: source,
-        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+        stepResult: passedResult,
+        settlementReceipt: receipt,
       });
       const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
       const state = reloaded.canonicalState(specId);
@@ -360,9 +446,9 @@ describe("DraftCompletionConnector", () => {
         sourceBytes,
         "coverage PASS must preserve canonical Draft bytes",
       );
-      assert.deepEqual(state.findNode("draft-coverage-review").result.stepOutput.toJSON(),
-        { type: STEP_OUTPUT_TYPE.COMPLETED });
-      assert.equal(state.findNode("draft-coverage-review").result.draftRouteTargetStepId, "draft-gate");
+      assert.deepEqual(state.findNode("draft-coverage-review").result.stepResult.toJSON(),
+        passedResult.toJSON());
+      assert.equal(state.findNode("draft-coverage-review").result.draftSettlementReceipt.targetStepId, "draft-gate");
       assert.equal(reloaded.activityLedger(specId).at(-1).transition.stepConnectionReceipt.sourceStepId,
         "draft-coverage-review");
     } finally {
@@ -479,14 +565,18 @@ describe("DraftCompletionConnector", () => {
         .find((artifact) => artifact.logicalKey === "draft");
       const before = flowManager.activityLedger(specId).length;
       const beforeInvalidOutput = persistedSnapshot(flowManager, specId);
+      const invalidResult = new DraftCoverageRepairChangedResult();
       assert.throws(() => flowManager.confirmDraftCoverageRepairCompletion({
         specId, decision: selected, draft: source,
-        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.LOOP_REQUIRED),
-      }), /requires completed StepOutput/);
+        stepResult: invalidResult,
+      }), /requires completed StepResult/);
       assert.equal(persistedSnapshot(flowManager, specId), beforeInvalidOutput);
+      const completedResult = new DraftCoverageRepairUnchangedResult();
+      const { receipt } = draftSettlement(flowManager, specId, completedResult);
       flowManager.confirmDraftCoverageRepairCompletion({
         specId, decision: selected, draft: source,
-        stepOutput: new StepOutput(STEP_OUTPUT_TYPE.COMPLETED),
+        stepResult: completedResult,
+        settlementReceipt: receipt,
       });
 
       const state = flowManager.loadReadOnly(specId);
@@ -504,7 +594,7 @@ describe("DraftCompletionConnector", () => {
       assert.equal(ledger.length, before + 1);
       assert.deepEqual(published.descriptor, draftBeforeCompletion);
       assert.equal(ledger.at(-1).result.artifactRefs.at(-1).kind, "draft-completion-connector");
-      assert.deepEqual(ledger.at(-1).result.stepOutput, { type: STEP_OUTPUT_TYPE.COMPLETED });
+      assert.deepEqual(ledger.at(-1).result.stepResult, completedResult.toJSON());
       assert.equal(ledger.at(-1).transition.stepConnectionReceipt.kind, "draft-completion");
       assert.equal(ledger.at(-1).transition.stepConnectionReceipt.targetStepId, "draft-gate");
       assert.equal(ledger.at(-1).transition.stepConnectionReceipt.lineage.coverageReview.logicalKey, "draft.coverage.review");

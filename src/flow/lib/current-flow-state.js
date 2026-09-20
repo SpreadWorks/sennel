@@ -44,7 +44,7 @@ import {
   taskReviewStagePlanFromJSON,
 } from "./task-review-stage-transition.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../engine/step-output.js";
+import { STEP_RESULT_TYPE, StepResult, stepResultDigest } from "../engine/step-result.js";
 import {
   REQUIREMENT_TEST_LEAF_IDS,
   RequirementTestInitializationEffect,
@@ -126,11 +126,12 @@ const TRANSITION_ATTEMPT_OPERATIONS = new Set([
   "advance_requirement_test_lifecycle",
 ]);
 const DRAFT_COMPLETION_TRANSITION_OPERATION = "complete_draft_completion";
+const DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION = "record_draft_step_settlement";
 const CONDITIONAL_WORKER_SETTLEMENT_OPERATION = "settle_conditional_worker";
 const TASK_REVIEW_STAGE_TRANSITION_OPERATION = "complete_task_review_stage";
 const REQUIREMENT_TEST_INITIALIZATION_OPERATION = "initialize_requirement_test_lifecycle";
 const REQUIREMENT_TEST_TRANSITION_OPERATION = "advance_requirement_test_lifecycle";
-const REPLACEMENT_ATTEMPT_OPERATIONS = new Set(["repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "recover_missing_producer_artifact", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION]);
+const REPLACEMENT_ATTEMPT_OPERATIONS = new Set(["repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "plan_gate_repair", "recover_missing_producer_artifact", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION]);
 const SOURCE_WORKER_COMPLETION_OPERATIONS = new Set([
   "confirm_attempt",
   "repair_implementation",
@@ -200,6 +201,7 @@ const FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS = new Set(["skip_finalize_downst
 const STATE_CHANGING_TRANSITION_OPERATIONS = new Set([
   FLOW_CREATION_TRANSITION_OPERATION,
   DRAFT_COMPLETION_TRANSITION_OPERATION,
+  DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION,
   CONDITIONAL_WORKER_SETTLEMENT_OPERATION,
   TASK_REVIEW_STAGE_TRANSITION_OPERATION,
   REQUIREMENT_TEST_INITIALIZATION_OPERATION,
@@ -1889,10 +1891,89 @@ class PersistedDraftRouteEffects {
   }
 }
 
+class PersistedDraftSettlementReceipt {
+  constructor(value) {
+    requireExactFields(value, new Set([
+      "id", "binding", "resultKind", "resultType", "resultDigest", "settlementKind",
+      "targetStepId", "effects", "connector", "publicationDigest",
+    ]), "result.draftSettlementReceipt");
+    if (!/^[a-f0-9]{64}$/.test(value.id)) {
+      throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt.id is invalid");
+    }
+    requireExactFields(value.binding, new Set([
+      "runId", "specId", "stepId", "attemptId", "attemptSequence",
+    ]), "result.draftSettlementReceipt.binding");
+    for (const field of ["runId", "specId", "stepId", "attemptId"]) {
+      requireString(value.binding[field], `result.draftSettlementReceipt.binding.${field}`);
+    }
+    if (!Number.isSafeInteger(value.binding.attemptSequence) || value.binding.attemptSequence < 1) {
+      throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt binding sequence is invalid");
+    }
+    this.id = value.id;
+    this.binding = Object.freeze({ ...value.binding });
+    this.resultKind = requireString(value.resultKind, "result.draftSettlementReceipt.resultKind");
+    this.resultType = requireString(value.resultType, "result.draftSettlementReceipt.resultType");
+    if (!/^[a-f0-9]{64}$/.test(value.resultDigest)) {
+      throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt.resultDigest is invalid");
+    }
+    this.resultDigest = value.resultDigest;
+    if (!/^[a-f0-9]{64}$/.test(value.publicationDigest)) {
+      throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt.publicationDigest is invalid");
+    }
+    this.publicationDigest = value.publicationDigest;
+    if (!["target-connection", "execution", "await", "failure"].includes(value.settlementKind)) {
+      throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt settlement kind is invalid");
+    }
+    this.settlementKind = value.settlementKind;
+    const target = this.settlementKind === "target-connection";
+    this.targetStepId = target ? requireString(value.targetStepId, "result.draftSettlementReceipt.targetStepId") : null;
+    this.effects = target ? new PersistedDraftRouteEffects(value.effects) : null;
+    if (target) {
+      requireExactFields(value.connector, new Set(["name"]), "result.draftSettlementReceipt.connector");
+      this.connector = Object.freeze({ name: requireString(value.connector.name, "result.draftSettlementReceipt.connector.name") });
+    } else if (value.targetStepId !== null || value.effects !== null || value.connector !== null) {
+      throw new CurrentFlowStateInvariantError("non-connection Draft settlement cannot carry Connector data");
+    } else {
+      this.connector = null;
+    }
+    const identity = {
+      binding: this.binding,
+      resultKind: this.resultKind,
+      resultType: this.resultType,
+      resultDigest: this.resultDigest,
+      settlementKind: this.settlementKind,
+      targetStepId: this.targetStepId,
+      effects: this.effects?.toJSON() ?? null,
+      connector: this.connector,
+      publicationDigest: this.publicationDigest,
+    };
+    const expectedId = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+    if (this.id !== expectedId) {
+      throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt.id does not match its contents");
+    }
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      id: this.id,
+      binding: { ...this.binding },
+      resultKind: this.resultKind,
+      resultType: this.resultType,
+      resultDigest: this.resultDigest,
+      settlementKind: this.settlementKind,
+      targetStepId: this.targetStepId,
+      effects: this.effects?.toJSON() ?? null,
+      connector: this.connector === null ? null : { ...this.connector },
+      publicationDigest: this.publicationDigest,
+    };
+  }
+}
+
 export class NodeResult {
   constructor(value) {
-    requireExactFields(value, new Set(["outcome", "summary", "confirmedAt", "artifactRefs", ...(value != null && Object.hasOwn(value, "stepOutput") ? ["stepOutput"] : []), ...(value != null && Object.hasOwn(value, "draftRouteTargetStepId") ? ["draftRouteTargetStepId"] : []), ...(value != null && Object.hasOwn(value, "draftRouteEffects") ? ["draftRouteEffects"] : [])]), "result");
-    const { outcome, summary, confirmedAt, artifactRefs, stepOutput, draftRouteTargetStepId, draftRouteEffects } = value;
+    requireExactFields(value, new Set(["outcome", "summary", "confirmedAt", "artifactRefs", ...(value != null && Object.hasOwn(value, "stepResult") ? ["stepResult"] : []), ...(value != null && Object.hasOwn(value, "draftSettlementReceipt") ? ["draftSettlementReceipt"] : [])]), "result");
+    const { outcome, summary, confirmedAt, artifactRefs, stepResult, draftSettlementReceipt } = value;
     if (!RESULT_OUTCOMES.has(outcome)) {
       throw new CurrentFlowStateInvariantError(`result.outcome is invalid: ${outcome}`);
     }
@@ -1901,13 +1982,21 @@ export class NodeResult {
     this.confirmedAt = requireIso(confirmedAt, "result.confirmedAt");
     if (!Array.isArray(artifactRefs)) throw new CurrentFlowStateInvariantError("result.artifactRefs must be an array");
     this.artifactRefs = Object.freeze(artifactRefs.map((ref) => ref instanceof ArtifactReference ? ref : new ArtifactReference(ref)));
-    this.stepOutput = stepOutput === undefined ? null : stepOutput instanceof StepOutput ? stepOutput : StepOutput.fromStored(stepOutput);
-    this.draftRouteTargetStepId = draftRouteTargetStepId === undefined ? null : requireString(draftRouteTargetStepId, "result.draftRouteTargetStepId");
-    this.draftRouteEffects = draftRouteEffects === undefined ? null : new PersistedDraftRouteEffects(draftRouteEffects);
-    if ((this.stepOutput === null && (this.draftRouteTargetStepId !== null || this.draftRouteEffects !== null))
-      || (this.stepOutput !== null && this.stepOutput.type !== STEP_OUTPUT_TYPE.ERROR && (this.draftRouteTargetStepId === null || this.draftRouteEffects === null))
-      || (this.stepOutput?.type === STEP_OUTPUT_TYPE.ERROR && (this.draftRouteTargetStepId !== null || this.draftRouteEffects !== null))) {
-      throw new CurrentFlowStateInvariantError("Draft StepOutput and selected route target are inconsistent");
+    this.draftSettlementReceipt = draftSettlementReceipt === undefined
+      ? null : new PersistedDraftSettlementReceipt(draftSettlementReceipt);
+    this.stepResult = stepResult === undefined
+      ? null
+      : stepResult instanceof StepResult
+        ? stepResult
+        : StepResult.fromStored(this.draftSettlementReceipt?.binding.stepId, stepResult);
+    if ((this.stepResult === null) !== (this.draftSettlementReceipt === null)
+      || (this.stepResult !== null
+        && (this.stepResult.stepId !== this.draftSettlementReceipt.binding.stepId
+          || this.stepResult.kind !== this.draftSettlementReceipt.resultKind
+          || this.stepResult.type !== this.draftSettlementReceipt.resultType
+          || stepResultDigest(this.stepResult)
+            !== this.draftSettlementReceipt.resultDigest))) {
+      throw new CurrentFlowStateInvariantError("Draft StepResult and Settlement receipt are inconsistent");
     }
     if (new Set(this.artifactRefs.map((ref) => ref.kind)).size !== this.artifactRefs.length) {
       throw new CurrentFlowStateInvariantError("result.artifactRefs must contain at most one artifact per resource kind");
@@ -1921,9 +2010,8 @@ export class NodeResult {
       summary: this.summary,
       confirmedAt: this.confirmedAt,
       artifactRefs: this.artifactRefs.map((ref) => ref.toJSON()),
-      ...(this.stepOutput === null ? {} : { stepOutput: this.stepOutput.toJSON() }),
-      ...(this.draftRouteTargetStepId === null ? {} : { draftRouteTargetStepId: this.draftRouteTargetStepId }),
-      ...(this.draftRouteEffects === null ? {} : { draftRouteEffects: this.draftRouteEffects.toJSON() }),
+      ...(this.stepResult === null ? {} : { stepResult: this.stepResult.toJSON() }),
+      ...(this.draftSettlementReceipt === null ? {} : { draftSettlementReceipt: this.draftSettlementReceipt.toJSON() }),
     };
   }
 }
@@ -2509,11 +2597,11 @@ export class DefinitionFailurePolicy {
         reason: "unaccepted source effects require explicit reconciliation before execution can continue",
       });
     }
-    // A persisted Draft Step Error is a terminal execution boundary. Its
+    // A persisted Draft Result Error is a terminal execution boundary. Its
     // failure record retains the exact Attempt and Error;
     // retrying or selecting a successor would discard that explicit Step
     // decision in favor of a generic command failure policy.
-    if (failure.category === "draft-step-error") {
+    if (failure.category === "draft-result-error") {
       return new DefinitionFailureDecision({
         policy: this, operation: "blocked", retryKind: null, remaining: 0, targetNodeId: null,
         reason: "the Draft Step returned an Error and requires explicit recovery before execution can continue",
@@ -4664,8 +4752,8 @@ export class CurrentFlowState {
       throw new CurrentFlowStateInvariantError("confirmed current Attempt status must be done or skipped");
     }
     const confirmed = result instanceof NodeResult ? result : new NodeResult(result);
-    if (confirmed.stepOutput?.type === STEP_OUTPUT_TYPE.ERROR) {
-      throw new CurrentFlowStateInvariantError("Error StepOutput must settle a failed Attempt");
+    if (confirmed.stepResult?.type === STEP_RESULT_TYPE.ERROR) {
+      throw new CurrentFlowStateInvariantError("Error StepResult must settle a failed Attempt");
     }
     if (status === "done" && confirmed.outcome !== "passed") {
       throw new CurrentFlowStateInvariantError("done confirmation requires a passed result");
@@ -4684,7 +4772,7 @@ export class CurrentFlowState {
       replaceNode(this.root, leafId, transitionNode(leaf, status, this.definition, { result: confirmed })),
       this.definition,
     );
-    const routedRoot = confirmed.draftRouteTargetStepId === null
+    const routedRoot = confirmed.draftSettlementReceipt?.settlementKind !== "target-connection"
       ? root
       : this.#applyDraftStepRoute(root, leafId, confirmed);
     const next = this.#replaceRoot(routedRoot, null, null);
@@ -4693,16 +4781,23 @@ export class CurrentFlowState {
   }
 
   #applyDraftStepRoute(root, sourceStepId, result) {
-    if (result.outcome !== "passed" || result.stepOutput === null || result.draftRouteEffects === null) {
-      throw new CurrentFlowStateInvariantError("Draft route requires a passed StepOutput result");
+    const receipt = result.draftSettlementReceipt;
+    if (result.outcome !== "passed" || result.stepResult === null
+      || receipt?.settlementKind !== "target-connection" || receipt.effects === null) {
+      throw new CurrentFlowStateInvariantError("Draft route requires a passed StepResult result");
     }
-    if (this.findNode(result.draftRouteTargetStepId) === null) {
+    if (this.runId !== receipt.binding.runId || this.specId !== receipt.binding.specId
+      || sourceStepId !== receipt.binding.stepId || this.attempt?.id !== receipt.binding.attemptId
+      || this.attempt?.sequence !== receipt.binding.attemptSequence) {
+      throw new CurrentFlowStateInvariantError("Draft settlement receipt binding is stale");
+    }
+    if (this.findNode(receipt.targetStepId) === null) {
       throw new CurrentFlowStateInvariantError("Draft route target is absent");
     }
     // Route effects are selected and sealed by Definition at the Store
     // boundary. State validates only their IDs and applicability while
     // replaying the already selected transition.
-    for (const stepId of result.draftRouteEffects.skipStepIds) {
+    for (const stepId of receipt.effects.skipStepIds) {
       const node = findNodeInRoot(root, stepId);
       if (node === null || node.steps.length !== 0 || !["pending", "invalidated"].includes(node.status)) {
         throw new CurrentFlowStateInvariantError(`Draft route cannot skip ${stepId}`);
@@ -4717,7 +4812,7 @@ export class CurrentFlowState {
             }),
           }));
     }
-    for (const stepId of result.draftRouteEffects.resetStepIds) {
+    for (const stepId of receipt.effects.resetStepIds) {
       const node = findNodeInRoot(root, stepId);
       if (node === null || node.steps.length !== 0) {
         throw new CurrentFlowStateInvariantError(`Draft route cannot reset ${stepId}`);
@@ -4727,7 +4822,7 @@ export class CurrentFlowState {
     root = reconcileCompletedParents(root, this.definition);
     root = reconcileInvalidatedParents(root, this.definition);
     const selected = this.#replaceRoot(root, null, null).nextAction()?.nodeId ?? null;
-    if (selected !== result.draftRouteTargetStepId) {
+    if (selected !== receipt.targetStepId) {
       throw new CurrentFlowStateInvariantError("Draft route did not reach its Definition-selected successor");
     }
     return root;
@@ -5137,9 +5232,9 @@ export class CurrentFlowState {
     );
     const next = this.#replaceRoot(root, null, null);
     this.#assertTaskGateSuccessor(next, lifecycle);
-    if (settled.draftRouteTargetStepId !== null
-      && (leaf.id !== "draft-gate" || settled.stepOutput.type !== STEP_OUTPUT_TYPE.COMPLETED
-        || next.nextAction()?.nodeId !== settled.draftRouteTargetStepId)) {
+    if (settled.draftSettlementReceipt?.settlementKind === "target-connection"
+      && (leaf.id !== "draft-gate" || settled.stepResult.type !== STEP_RESULT_TYPE.COMPLETED
+        || next.nextAction()?.nodeId !== settled.draftSettlementReceipt.targetStepId)) {
       throw new CurrentFlowStateInvariantError("deferred Draft Gate did not reach its Definition-selected successor");
     }
     return next;
@@ -5531,7 +5626,7 @@ export class CurrentFlowState {
    * mutable status patch.  It may leave an active gate only after the route
    * has recorded blocking evidence in the same Version Store operation.
    */
-  repairPlanGate({ path: currentPath, attempt, taskLifecycle = null }) {
+  repairPlanGate({ path: currentPath, attempt, taskLifecycle = null, result = null }) {
     this.#assertExecutionActive();
     const target = nodeAtPath(this.root, currentPath);
     const route = planGateRepairRouteForTargetStep(target.id);
@@ -5540,6 +5635,15 @@ export class CurrentFlowState {
     }
     if (this.current === null || this.attempt === null || this.current.at(-1) !== route.gateStepId) {
       throw new CurrentFlowStateInvariantError("plan gate repair requires its mapped active gate Attempt");
+    }
+    const prospective = result == null ? null : result instanceof NodeResult ? result : new NodeResult(result);
+    if (route.phase === "draft" && prospective?.stepResult?.kind === "draft-gate-repair-required") {
+      if (prospective.draftSettlementReceipt?.targetStepId !== target.id
+        || prospective.draftSettlementReceipt?.settlementKind !== "target-connection") {
+        throw new CurrentFlowStateInvariantError("Draft Gate repair requires its Definition-selected target receipt");
+      }
+      const confirmed = this.confirmCurrentAttempt({ result: prospective, status: "done" });
+      return confirmed.executableStepClaim({ nodeId: target.id, attempt }).materialize(confirmed);
     }
     if (!isPlanGateRepairEligibleFailure(this, route)) {
       throw new CurrentFlowStateInvariantError("plan gate repair requires its mapped blocked semantic gate failure");
@@ -6380,7 +6484,7 @@ export class ActivityTransition {
       : value;
     requireExactFields(normalized, ACTIVITY_TRANSITION_FIELDS, "activity.transition");
     const { operation, nodeId, task, attempt, status, policy, outbox, approval, nonblocking, finalizeSteps, gateTaskLifecycle, stepConnectionReceipt, taskReviewStagePlan, requirementTestInitialization, requirementTestLifecycle } = normalized;
-    if (![FLOW_CREATION_TRANSITION_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "advance_task_review_stage", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "fail_attempt", "record_failure", "confirm_attempt", "complete_acceptance_decision_noop", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", INTERRUPTED_FINALIZE_SYNC_OPERATION, ...LIFECYCLE_TRANSITION_OPERATIONS, ...POLICY_TRANSITION_OPERATIONS, ...OUTBOX_TRANSITION_OPERATIONS, ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS, ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS, ...OBSERVATION_TRANSITION_OPERATIONS, ...NONBLOCKING_TRANSITION_OPERATIONS, ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS].includes(operation)) {
+    if (![FLOW_CREATION_TRANSITION_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "advance_task_review_stage", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, "fail_attempt", "record_failure", "confirm_attempt", "complete_acceptance_decision_noop", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", INTERRUPTED_FINALIZE_SYNC_OPERATION, ...LIFECYCLE_TRANSITION_OPERATIONS, ...POLICY_TRANSITION_OPERATIONS, ...OUTBOX_TRANSITION_OPERATIONS, ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS, ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS, ...OBSERVATION_TRANSITION_OPERATIONS, ...NONBLOCKING_TRANSITION_OPERATIONS, ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS].includes(operation)) {
       throw new CurrentFlowStateInvariantError(`activity.transition.operation is invalid: ${operation}`);
     }
     this.operation = operation;
@@ -6729,7 +6833,16 @@ export class ActivityTransition {
         });
       }
       if (this.operation === "plan_gate_repair") {
-        return state.repairPlanGate({ path: currentPath, attempt: this.attempt, taskLifecycle: this.gateTaskLifecycle });
+        const repairPath = state.definition.pathFor(state.root, this.attempt.nodeId);
+        if (repairPath === null) {
+          throw new CurrentFlowStateInvariantError("plan_gate_repair target is absent from the Flow definition");
+        }
+        return state.repairPlanGate({
+          path: repairPath,
+          attempt: this.attempt,
+          taskLifecycle: this.gateTaskLifecycle,
+          result: activity.result,
+        });
       }
       if (this.operation === "recover_missing_producer_artifact") {
         return state.recoverMissingProducerArtifact({ path: currentPath, attempt: this.attempt });
@@ -6802,6 +6915,19 @@ export class ActivityTransition {
         throw new CurrentFlowStateInvariantError("draft completion Activity must bind its source Attempt receipt");
       }
       return state.completeDraftCompletion({ result: activity.result, receipt: this.stepConnectionReceipt });
+    }
+    if (this.operation === DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION) {
+      const receipt = activity.result?.draftSettlementReceipt;
+      if (receipt === null || receipt === undefined
+        || !["execution", "await"].includes(receipt.settlementKind)
+        || state.current?.at(-1) !== targetId
+        || activity.attemptId !== state.attempt?.id
+        || activity.sequence !== state.attempt?.sequence
+        || receipt.binding.attemptId !== state.attempt.id
+        || receipt.binding.attemptSequence !== state.attempt.sequence) {
+        throw new CurrentFlowStateInvariantError("non-terminal Draft settlement must bind the active Attempt");
+      }
+      return state;
     }
     if (this.operation === CONDITIONAL_WORKER_SETTLEMENT_OPERATION) {
       if (activity.result == null || activity.attemptId !== null || activity.sequence !== null) {
@@ -6937,6 +7063,7 @@ export class FlowActivity {
       record_failure: "failure_recorded",
       confirm_attempt: "result_confirmed",
       [DRAFT_COMPLETION_TRANSITION_OPERATION]: "result_confirmed",
+      [DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION]: "result_confirmed",
       [CONDITIONAL_WORKER_SETTLEMENT_OPERATION]: "result_confirmed",
       [TASK_REVIEW_STAGE_TRANSITION_OPERATION]: "result_confirmed",
       advance_task_review_stage: "result_confirmed",
@@ -6995,10 +7122,10 @@ export class FlowActivity {
       throw new CurrentFlowStateInvariantError("flow_created Activity requires its deterministic first-Activity identity");
     }
     this.result = result == null ? null : result instanceof NodeResult ? result : new NodeResult(result);
-    if (["confirm_attempt", DRAFT_COMPLETION_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "complete_acceptance_decision_noop", "fail_attempt", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result == null) {
+    if (["confirm_attempt", DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "complete_acceptance_decision_noop", "fail_attempt", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result == null) {
       throw new CurrentFlowStateInvariantError("completed Attempt Activity requires a result");
     }
-    if (!["confirm_attempt", DRAFT_COMPLETION_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "complete_acceptance_decision_noop", "fail_attempt", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result !== null) {
+    if (!["confirm_attempt", DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "complete_acceptance_decision_noop", "fail_attempt", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "plan_gate_repair"].includes(this.transition.operation) && this.result !== null) {
       throw new CurrentFlowStateInvariantError("only completed Attempt Activity may carry a result");
     }
     if (["fail_attempt", "record_failure"].includes(this.transition.operation) && !["failed", "incomplete"].includes(this.result.outcome)) {

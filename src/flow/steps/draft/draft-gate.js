@@ -1,5 +1,10 @@
 import { Step } from "../../engine/step.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../engine/step-output.js";
+import {
+  DraftGateCarryForwardResult,
+  DraftGatePassedResult,
+  DraftGateRepairRequiredResult,
+  DraftStepErrorResult,
+} from "../../engine/step-result.js";
 import { GateService } from "../../services/review-service.js";
 import { isDraftStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
 
@@ -20,23 +25,24 @@ export class DraftGateStep extends Step {
 
   async _execute() {
     try {
-      const decision = await this.#gateService.prepareGateResult();
-      let outputType;
-      if (decision.disposition.operation === "pass" || decision.disposition.operation === "defer") {
-        outputType = STEP_OUTPUT_TYPE.COMPLETED;
-      } else if (decision.disposition.operation === "repair") {
-        outputType = STEP_OUTPUT_TYPE.LOOP_REQUIRED;
+      const facts = this.#gateService.inspectGateFacts();
+      let result;
+      if (facts.result === "pass") {
+        result = new DraftGatePassedResult();
+      } else if (facts.failureCategory !== "semantic") {
+        throw new Error("Draft Gate observation cannot be settled as a semantic Result");
+      } else if (facts.sameEvidence || facts.retryExhausted) {
+        result = new DraftGateCarryForwardResult();
       } else {
-        throw new Error(`Draft Gate selected unsupported Step disposition: ${decision.disposition.operation}`);
+        result = new DraftGateRepairRequiredResult();
       }
-      const output = new StepOutput(outputType);
-      await this.#gateService.commitGateResult({ decision, stepOutput: output });
-      return output;
+      await result.persist(this.#gateService);
+      return result;
     } catch (error) {
       if (isDraftStepPersistenceFailure(error)) throw error;
-      const output = new StepOutput(error);
-      this.#gateService.commitStepError(output);
-      return output;
+      const result = new DraftStepErrorResult("draft-gate", error);
+      await result.persist(this.#gateService);
+      return result;
     }
   }
 }

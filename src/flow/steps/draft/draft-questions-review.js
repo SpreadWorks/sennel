@@ -1,5 +1,9 @@
 import { Step } from "../../engine/step.js";
-import { STEP_OUTPUT_TYPE, StepOutput } from "../../engine/step-output.js";
+import {
+  DraftQuestionsReviewFindingsResult,
+  DraftQuestionsReviewPassedResult,
+  DraftStepErrorResult,
+} from "../../engine/step-result.js";
 import { ReviewService } from "../../services/review-service.js";
 import { isDraftStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
 
@@ -21,16 +25,16 @@ export class DraftQuestionsReviewStep extends Step {
   async _execute() {
     try {
       const review = this.#reviewService.inspectReviewResult();
-      const output = new StepOutput(review.verdict === "PASS"
-        ? STEP_OUTPUT_TYPE.COMPLETED
-        : STEP_OUTPUT_TYPE.BRANCH_REQUIRED);
-      this.#reviewService.commitReviewResult(output, review);
-      return output;
+      const result = review.verdict === "PASS"
+        ? new DraftQuestionsReviewPassedResult()
+        : new DraftQuestionsReviewFindingsResult();
+      await result.persist(this.#reviewService);
+      return result;
     } catch (error) {
       if (isDraftStepPersistenceFailure(error)) throw error;
-      const output = new StepOutput(error);
-      this.#reviewService.commitStepError(output);
-      return output;
+      const result = new DraftStepErrorResult("draft-questions-review", error);
+      await result.persist(this.#reviewService);
+      return result;
     }
   }
 }
