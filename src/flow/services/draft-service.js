@@ -8,6 +8,23 @@ import {
   createDraftCompletionSettlementApplication,
 } from "../lib/draft-completion-connector.js";
 
+const COMPLETED_WORKER_STEP_IDS = Object.freeze([
+  "draft",
+  "draft-questions-triage",
+  "draft-coverage-triage",
+]);
+
+/** Typed evidence that one worker-only Draft Step has a validated output ready to settle. */
+export class DraftWorkerCompletionFacts {
+  constructor(stepId) {
+    if (!COMPLETED_WORKER_STEP_IDS.includes(stepId)) {
+      throw new TypeError("Draft worker completion facts require a completed worker Step");
+    }
+    this.stepId = stepId;
+    Object.freeze(this);
+  }
+}
+
 /** Access the sealed worker request for one Connector-bound Draft Step. */
 export class DraftService {
   #workerOutcome = null;
@@ -73,6 +90,16 @@ export class DraftService {
     if (this.workerFacts === null) throw new Error("Draft worker has no prepared facts");
     this.binding.assertCurrent();
     return this.workerFacts;
+  }
+
+  /** Read the typed completion fact created only after worker payload validation. */
+  inspectWorkerCompletion() {
+    const facts = this.inspectWorkerFacts();
+    if (!COMPLETED_WORKER_STEP_IDS.includes(this.binding.stepId)
+      || facts.stepId !== this.binding.stepId) {
+      throw new Error("Draft worker completion does not match the bound Step");
+    }
+    return new DraftWorkerCompletionFacts(this.binding.stepId);
   }
 
   /** Read the canonical repair binding selected for the active pre-worker Step. */

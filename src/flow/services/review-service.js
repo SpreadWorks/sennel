@@ -165,7 +165,7 @@ export class GateService {
     Object.freeze(this);
   }
 
-  inspectGateFacts() {
+  #readGateFacts() {
     if (this.#facts !== null) return this.#facts;
     this.#facts = readProspectiveDraftGateFacts({
       flowManager: this.flowManager,
@@ -173,6 +173,15 @@ export class GateService {
       commandResult: this.commandResult,
     });
     return this.#facts;
+  }
+
+  /** Complete system-boundary admission before the Step classifies its observed facts. */
+  assertGateResultAdmission() {
+    this.#readGateFacts();
+  }
+
+  inspectGateFacts() {
+    return this.#readGateFacts();
   }
 
   async persistStepResult(stepResult) {

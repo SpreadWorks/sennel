@@ -1,6 +1,14 @@
 import { Step } from "../../engine/step.js";
-import { DraftService } from "../../services/draft-service.js";
+import { DraftService, DraftWorkerCompletionFacts } from "../../services/draft-service.js";
 import { DraftQuestionsTriageCompletedResult } from "../../engine/step-result.js";
+
+/** Pure mapping from validated question-triage completion facts to its Result. */
+export function draftQuestionsTriageResult(facts) {
+  if (!(facts instanceof DraftWorkerCompletionFacts) || facts.stepId !== "draft-questions-triage") {
+    throw new TypeError("draft questions Triage Result requires its typed completion facts");
+  }
+  return new DraftQuestionsTriageCompletedResult();
+}
 
 /**
  * Classify question-review findings and produce the triage record.
@@ -18,7 +26,8 @@ export class DraftQuestionsTriageStep extends Step {
   }
 
   async _execute() {
-    const result = new DraftQuestionsTriageCompletedResult();
+    const facts = this.#draftService.inspectWorkerCompletion();
+    const result = draftQuestionsTriageResult(facts);
     await result.persist(this.#draftService);
     return result;
   }

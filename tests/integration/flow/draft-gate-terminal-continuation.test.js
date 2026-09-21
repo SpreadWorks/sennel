@@ -9,6 +9,10 @@ import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { GateService } from "../../../src/flow/services/review-service.js";
 import { CanonicalGateObservationCycle } from "../../../src/flow/lib/canonical-gate-observation-cycle.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
+import {
+  attachCanonicalCommandResultArtifact,
+  attachedCanonicalCommandResultArtifact,
+} from "../../../src/flow/lib/canonical-command-result.js";
 import { AnsweredQuestion } from "../../../src/flow/lib/draft-question-ledger.js";
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
@@ -241,6 +245,53 @@ it("uses the evaluated Gate result once when the Draft Gate Step settles it", as
     assert.equal(manager.canonicalState(specId).nextAction().nodeId, "spec");
   } finally {
     inspected.mock.restore();
+    removeTmpDir(root);
+  }
+});
+
+it("rejects stale Draft Gate admission without persisting an Error Result", async () => {
+  const root = createTmpDir("draft-gate-stale-admission-");
+  const specId = "524-draft-gate-stale-admission";
+  try {
+    initGitRepo(root);
+    fs.writeFileSync(`${root}/README.md`, "draft Gate stale admission\n");
+    commitAll(root, "draft Gate stale admission");
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const fixture = new CanonicalFlowFixture({
+      flowManager: manager, specId, runId: "run-draft-gate-stale-admission", issue: 524,
+      request: "Reject stale Draft Gate evidence before Result selection.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft");
+    manager.confirmCurrentAttempt({ specId, artifactWrites: [{
+      logicalKey: "draft", mediaType: "application/json",
+      bytes: Buffer.from(`${JSON.stringify(draftWithAnsweredQuestion("Bound behavior"), null, 2)}\n`),
+    }] });
+    fixture.activate("draft-gate");
+    const evaluated = new CanonicalGatePromotion({
+      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
+    }).promote({ result: "pass", artifacts: { phase: "draft", evaluations: [] } });
+    const artifact = attachedCanonicalCommandResultArtifact(evaluated);
+    const stalePayload = structuredClone(artifact.payload);
+    stalePayload.artifacts.gateTransitionAttemptId = "stale-attempt";
+    const stale = attachCanonicalCommandResultArtifact({ ...evaluated }, {
+      logicalKey: artifact.logicalKey,
+      payload: stalePayload,
+    });
+    const binding = new DraftGateEvaluationBinding({ flowManager: manager, specId });
+    const step = new StepFactory()
+      .provideArguments(GateService, {
+        flowManager: manager, binding, commandResult: stale,
+      })
+      .create(DraftGateStep);
+    const before = manager.canonicalState(specId).toJSON();
+    const activities = manager.activityLedger(specId).length;
+
+    await assert.rejects(() => step.execute(), /stale binding or lineage/);
+
+    assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
+    assert.equal(manager.activityLedger(specId).length, activities);
+    assert.equal(manager.canonicalState(specId).findNode("draft-gate").result, null);
+  } finally {
     removeTmpDir(root);
   }
 });

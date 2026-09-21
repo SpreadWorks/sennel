@@ -3,6 +3,11 @@ import test from "node:test";
 
 import { DraftReviewArtifactDocument } from "../../src/flow/lib/draft-review-artifacts.js";
 import { DraftRepairResultFacts } from "../../src/flow/lib/worker-artifact-handoff.js";
+import { DraftWorkerCompletionFacts } from "../../src/flow/services/draft-service.js";
+import { draftResult } from "../../src/flow/steps/draft/draft.js";
+import { draftQuestionsTriageResult } from "../../src/flow/steps/draft/draft-questions-triage.js";
+import { draftCoverageTriageResult } from "../../src/flow/steps/draft/draft-coverage-triage.js";
+import { draftGateResult } from "../../src/flow/steps/draft/draft-gate.js";
 import { draftQuestionsReviewResult } from "../../src/flow/steps/draft/draft-questions-review.js";
 import { draftCoverageReviewResult } from "../../src/flow/steps/draft/draft-coverage-review.js";
 import { draftQuestionsRepairResult } from "../../src/flow/steps/draft/draft-questions-repair.js";
@@ -19,6 +24,12 @@ import {
   PlanGateRepairOutcomeDraft,
 } from "../../src/flow/lib/gate-observation-convergence.js";
 import {
+  DraftCreatedResult,
+  DraftQuestionsTriageCompletedResult,
+  DraftCoverageTriageCompletedResult,
+  DraftGatePassedResult,
+  DraftGateCarryForwardResult,
+  DraftGateRepairRequiredResult,
   DraftCoverageRepairChangedResult,
   DraftCoverageRepairUnchangedResult,
   DraftCoverageReviewFindingsResult,
@@ -32,6 +43,7 @@ import {
   DraftGateRepairWorkerRequiredResult,
   DraftStepErrorResult,
 } from "../../src/flow/engine/step-result.js";
+import { DraftGateProspectiveFacts } from "../../src/flow/lib/draft-gate-prospective.js";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -160,6 +172,36 @@ function reviewFacts(phase, findings = false) {
   });
 }
 
+test("worker-only Draft Result factories map their Step-specific typed completion facts without I/O", () => {
+  const cases = [
+    [draftResult, "draft", DraftCreatedResult],
+    [draftQuestionsTriageResult, "draft-questions-triage", DraftQuestionsTriageCompletedResult],
+    [draftCoverageTriageResult, "draft-coverage-triage", DraftCoverageTriageCompletedResult],
+  ];
+  for (const [factory, stepId, Result] of cases) {
+    assert.equal(factory(new DraftWorkerCompletionFacts(stepId)) instanceof Result, true);
+  }
+});
+
+test("Draft Gate Result factory maps pass, convergence, exhaustion, repair, and typed errors without I/O", () => {
+  assert.equal(draftGateResult(new DraftGateProspectiveFacts({ result: "pass" })) instanceof DraftGatePassedResult, true);
+  assert.equal(draftGateResult(new DraftGateProspectiveFacts({
+    result: "fail", failureCategory: "semantic", sameEvidence: true,
+  })) instanceof DraftGateCarryForwardResult, true);
+  assert.equal(draftGateResult(new DraftGateProspectiveFacts({
+    result: "fail", failureCategory: "semantic", retryExhausted: true, retryUsed: 1,
+  })) instanceof DraftGateCarryForwardResult, true);
+  assert.equal(draftGateResult(new DraftGateProspectiveFacts({
+    result: "fail", failureCategory: "semantic",
+  })) instanceof DraftGateRepairRequiredResult, true);
+  assert.equal(draftGateResult(new DraftGateProspectiveFacts({
+    result: "fail", failureCategory: "tooling",
+  })) instanceof DraftStepErrorResult, true);
+  const failed = draftGateResult(new Error("prospective facts unavailable"));
+  assert.equal(failed instanceof DraftStepErrorResult, true);
+  assert.equal(failed.error.message, "prospective facts unavailable");
+});
+
 test("Draft Review Result factories map typed PASS, findings, and Error facts without I/O", () => {
   const cases = [
     [draftQuestionsReviewResult, "draft-questions", DraftQuestionsReviewPassedResult, DraftQuestionsReviewFindingsResult],
@@ -200,6 +242,15 @@ test("Draft Gate Repair Result factory maps binding, outcomes, and accepted sema
 });
 
 test("Draft Result factories reject facts typed for a different Step", () => {
+  assert.throws(
+    () => draftResult(new DraftWorkerCompletionFacts("draft-questions-triage")),
+    /typed completion facts/,
+  );
+  assert.throws(
+    () => draftQuestionsTriageResult(new DraftWorkerCompletionFacts("draft-coverage-triage")),
+    /typed completion facts/,
+  );
+  assert.throws(() => draftGateResult({ result: "pass" }), /typed prospective facts/);
   assert.throws(
     () => draftQuestionsRepairResult(new DraftRepairResultFacts({
       stepId: "draft-coverage-repair", draftChanged: true,

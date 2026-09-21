@@ -1,6 +1,14 @@
 import { Step } from "../../engine/step.js";
 import { DraftCreatedResult } from "../../engine/step-result.js";
-import { DraftService } from "../../services/draft-service.js";
+import { DraftService, DraftWorkerCompletionFacts } from "../../services/draft-service.js";
+
+/** Pure mapping from validated initial-Draft completion facts to its Result. */
+export function draftResult(facts) {
+  if (!(facts instanceof DraftWorkerCompletionFacts) || facts.stepId !== "draft") {
+    throw new TypeError("initial Draft Result requires its typed completion facts");
+  }
+  return new DraftCreatedResult();
+}
 
 /** Create the initial Draft from facts prepared by the parent handoff. */
 export class DraftStep extends Step {
@@ -15,7 +23,8 @@ export class DraftStep extends Step {
   }
 
   async _execute() {
-    const result = new DraftCreatedResult();
+    const facts = this.#draftService.inspectWorkerCompletion();
+    const result = draftResult(facts);
     await result.persist(this.#draftService);
     return result;
   }
