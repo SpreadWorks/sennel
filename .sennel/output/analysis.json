@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-21T01:44:01.766Z",
+  "analyzedAt": "2026-09-21T04:17:20.024Z",
   "package": {
     "entries": [
       {
@@ -3609,9 +3609,9 @@
       },
       {
         "file": "src/flow/definition.js",
-        "hash": "260881f90ecab4e9ed9b1efc2cfd2cc2",
-        "lines": 6332,
-        "mtime": "2026-09-21T01:42:38.625Z",
+        "hash": "617c4f43ecba898dd657735f15393863",
+        "lines": 6341,
+        "mtime": "2026-09-21T04:16:46.084Z",
         "className": "definition",
         "methods": [
           "RetryRecoveryBasis",
@@ -4178,24 +4178,24 @@
           "src/flow/registry.js"
         ],
         "id": "2cb27b93",
-        "summary": "Centralizes flow orchestration, typed transition policies, lifecycle plans, execution-state resolution, branching, recovery, and task reconciliation.",
-        "detail": "Defines typed decision models and resolvers for retry recovery, requirement-test lifecycles, source handoffs, review and gate transitions, finalization recovery, non-gate steps, draft settlement, lifecycle actions, and flow/task definition traversal. Resolves retry and tooling limits, side effects, ownership, phase maps, nodes, active tasks, in-progress leaves, next actions, nested steps, prerequisites, and branch membership while enforcing traversal and scan limits and caching definition ordering. Validates state, evidence, identities, attempts, bindings, prerequisites, and recovered-attempt integrity, including orphaned or invalid attempts, before producing immutable transition plans, connector routes, step updates, metric effects, reconciliation decisions, and public outcomes.",
+        "summary": "Central flow-definition and transition-orchestration module",
+        "detail": "Defines flow and task node structures; resolves retry limits, tooling retry limits, side effects, lifecycle ownership, dispatcher-owned actions, prerequisites, branch leaves, phase mappings, nodes, active steps, task identifiers, next actions, and initial nested or task-step state. Orchestrates lifecycle plans, gate and non-gate transitions, retry and recovery policies, draft-step settlement, finalization recovery, test-chain transitions, nonblocking eligibility, and source-quality recovery while enforcing typed facts, canonical evidence bindings, valid step transitions, retry limits, lifecycle ownership, and consistency among decisions, effects, and persisted execution state. Recursive traversal is depth-limited, active-step scanning is bounded and cached by definition ordering, and Task Review reconciliation is authorized only for an unpublished recovered Attempt without a baseline or prior reconciliation.",
         "chapter": "internal_design",
-        "role": "controller",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-21T01:45:29.890Z",
+          "processedAt": "2026-09-21T04:18:36.594Z",
           "attempts": 1
         },
         "app": "senti",
         "keywords": [
-          "flow orchestration",
-          "transition policies",
-          "lifecycle plans",
-          "branch traversal",
-          "task reconciliation",
-          "recovery logic",
-          "typed state validation",
-          "workflow definitions"
+          "flow definition",
+          "transition orchestration",
+          "lifecycle planning",
+          "retry recovery",
+          "step traversal",
+          "branch mapping",
+          "draft settlement",
+          "task reconciliation"
         ]
       },
       {
@@ -5729,9 +5729,9 @@
       },
       {
         "file": "src/flow/lib/canonical-flow-manager-store.js",
-        "hash": "d33f82556d31e72dbfc1173d5d8389b8",
-        "lines": 7356,
-        "mtime": "2026-09-21T01:42:38.627Z",
+        "hash": "e0053c5d03e45bcfda3c2f665c5ba231",
+        "lines": 7357,
+        "mtime": "2026-09-21T04:16:46.085Z",
         "className": "canonical-flow-manager-store",
         "methods": [
           "CanonicalRawActivityReplayOnlyError",
@@ -5881,24 +5881,24 @@
           "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "041f2538",
-        "summary": "Canonical flow manager store for validated state transitions, execution recovery, and artifact publication.",
-        "detail": "Centralizes durable canonical Flow state operations and orchestration. It validates flow creation, transitions, JSON identities, payloads, typed admissions, nonblocking activations and decisions, and producer readiness; projects runtime state; manages task and step attempts, command attempt history, step connections, gates, reviews, retries, recovery archives, and test-chain outcomes; persists artifacts, issue logs, metrics, notes, and outbox operations; settles and publishes drafts; coordinates source handoffs and canonical command results; enforces immutable identity bindings, producer ownership, active-Attempt requirements, stale-state detection, idempotent publication, unambiguous multi-flow selection, and filesystem-backed state transitions; reads artifacts only through resolved catalog contracts and exposes canonical Flow Version 1 location resolution.",
+        "summary": "Canonical flow manager store coordinating durable flow state, lifecycle transitions, attempts, artifacts, reviews, gates, and recovery.",
+        "detail": "Implements the central CanonicalFlowManagerStore with validation and admission logic for canonical flow creation, task and step identity, execution modes, attempts, retries, failures, recoveries, draft settlements, requirement-test lifecycles, Task Review stages, Gate decisions, source handoffs, artifact publication, issue logs, metrics, notes, outbox operations, approvals, upgrades, nonblocking activations, step connections, command attempt history, and Flow Version resolution. It enforces canonical contracts and durable invariants through snapshots, typed decisions, activity ledgers, artifact catalogs, digests, idempotency checks, conflict detection, and invariant errors. The store rejects stale definition selections, identity or ownership conflicts, invalid catalog mappings, incomplete publications, and mutations that do not match the active attempt or canonical contract; it projects runtime state for consumers and delegates durable persistence and specialized operations to CanonicalFlowRuntime.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-21T01:45:29.890Z",
+          "processedAt": "2026-09-21T04:18:36.594Z",
           "attempts": 1
         },
-        "app": "sennel",
+        "app": "senti",
         "keywords": [
           "canonical flow state",
-          "state transitions",
-          "task orchestration",
+          "lifecycle transitions",
+          "attempt management",
           "artifact catalog",
+          "task review",
+          "gate decisions",
           "retry recovery",
-          "draft publication",
-          "attempt history",
-          "Flow Version"
+          "draft publication"
         ]
       },
       {
@@ -13426,9 +13426,9 @@
       },
       {
         "file": "src/flow/lib/run-dispatch.js",
-        "hash": "f3ee2acb762bdbb1e2d2014b73d52acb",
-        "lines": 2841,
-        "mtime": "2026-09-21T01:42:38.628Z",
+        "hash": "e058799b8b9c5d0ebbe06e9717cbbb4d",
+        "lines": 2818,
+        "mtime": "2026-09-21T04:16:46.086Z",
         "className": "run-dispatch",
         "methods": [
           "draftWorkerStepDefinition",
@@ -13531,23 +13531,23 @@
         "extends": "Error",
         "usedBy": null,
         "id": "6c7fd82a",
-        "summary": "Dispatches Flow actions through guarded worker handoffs, approval receipts, retries, recovery boundaries, and canonical command execution.",
-        "detail": "Run dispatch builds and validates worker and dispatcher-owned invocations, target bindings, repository fingerprints, approval receipt mutations, and nonblocking agent decisions. It classifies agent and worker failures, persists canonical diagnostics and draft execution facts, quarantines rejected handoffs, supports retry feedback, flushes deferred metrics, and returns bounded Flow dispatch boundaries or failures. Dispatch is constrained by process locks, authority leases, registered commands, immutable action meaning, and canonical parent-store operations.",
-        "chapter": "project_structure",
+        "summary": "Flow dispatch controller coordinating command execution, worker handoffs, approvals, retries, and repository integrity checks.",
+        "detail": "Defines dispatch commands, worker invocation and handoff models, failure classification, nonblocking agent decisions, approval receipts, dispatch leases, process locking, repository fingerprints, and boundary outcomes. It validates next-action bindings and schemas, persists authorized approval mutations, records canonical diagnostics, handles Draft and requirement-test worker failures, and returns structured flow envelopes or blocked and retryable boundaries.",
+        "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-21T01:45:29.890Z",
+          "processedAt": "2026-09-21T04:18:36.594Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "Flow dispatch",
+          "flow dispatch",
           "worker handoff",
-          "approval receipts",
+          "approval receipt",
           "repository fingerprint",
-          "retry feedback",
-          "process locks",
-          "agent failures"
+          "dispatch lease",
+          "agent failure",
+          "nonblocking decision",
+          "retry feedback"
         ]
       },
       {
@@ -18997,9 +18997,9 @@
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "9fc0224dff1fb058c40dc731d0e23cd3",
-        "lines": 10029,
-        "mtime": "2026-09-21T01:42:38.631Z",
+        "hash": "52dc4d1246e052b782bbacd302228d2f",
+        "lines": 10016,
+        "mtime": "2026-09-21T04:16:46.088Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "WorkerArtifactHandoffError",
@@ -19214,6 +19214,7 @@
           "./draft-completion-connector.js",
           "./draft-transition-facts.js",
           "../engine/step-result.js",
+          "../engine/connectors/draft/draft-step-binding.js",
           "./definition-lifecycle-failure.js",
           "./flow-findings.js",
           "./task-step-identity.js",
@@ -19328,24 +19329,23 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Coordinates durable worker artifact handoffs across source, draft, and test-review flow steps.",
-        "detail": "Implements contracts, policies, authority snapshots, payload manifests, validation, sealing, publication, receipts, replay, cleanup, quarantine, recovery, rollback, and structured failure reporting for worker handoffs. It protects repository and canonical Flow state integrity through bounded file handling, digest and manifest verification, path-boundary checks, immutable baseline and checkpoint binding, source mutation authority checks, and canonical publication validation. It supports retry handling, idempotent reconciliation, draft repair, test-review repair, payload publication, and recovery-required errors while reporting typed source effects.",
+        "summary": "Coordinates secure worker artifact handoffs, validation, publication, mutation tracking, rollback, and recovery.",
+        "detail": "Implements the worker artifact handoff lifecycle for source and draft workers. It validates bounded JSON inputs, sealed submissions, payload manifests, and step-specific artifact policies; binds artifacts to immutable Flow and repository authority checkpoints; verifies source ownership and mutation manifests; records publication and settlement receipts; serializes handoff requests and submissions; seals parent- and worker-produced artifacts; and maintains canonical handoff state and observation advances. The module tracks source mutations, creates rollback checkpoints, enforces rollback and recovery when execution cannot be trusted, quarantines invalid handoffs, performs safe cleanup, and supports replay and reconciliation. It also coordinates draft repair, test-review repair, typed repair reports, Requirement test recovery, retry exhaustion, upgrade results, publication baselines, and immutable identity binding across execution paths.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-21T01:45:29.890Z",
+          "processedAt": "2026-09-21T04:18:36.594Z",
           "attempts": 1
         },
         "app": "senti",
         "keywords": [
           "worker handoff",
-          "artifact publication",
-          "payload validation",
+          "artifact validation",
+          "checkpoint validation",
           "source mutation",
-          "checkpoint recovery",
-          "rollback",
-          "draft repair",
-          "quarantine",
+          "rollback recovery",
+          "artifact publication",
+          "repair reports",
           "reconciliation"
         ]
       },
@@ -26871,5 +26871,5 @@
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-21T01:45:29.890Z"
+  "enrichedAt": "2026-09-21T04:18:36.594Z"
 }
