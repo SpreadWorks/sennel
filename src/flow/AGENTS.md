@@ -4,17 +4,17 @@
 
 ## 状態遷移方針の所有者
 
-- **MUST:** 永続化された現在状態と観測済みの事実から disposition、Step lifecycle、次の遷移先を決める責務は definition layer が単独で所有する。現在の中心は `definition.js` とし、意味のある facts、disposition、transition plan は専用クラスで表現する。
+- **MUST:** definition layer は、永続化された現在状態からFlow全体の実行方針を決める責務を所有する。Draft Stepでは、StepがServiceから受け取ったtyped factsを具体的な`StepResult`へ確定し、Definitionは`stepId + StepResult`だけからSettlementと次の遷移先を選ぶ。DefinitionがDraftのfactsを別途受け取り、StepResultの意味を再判定してはならない。意味のあるfacts、disposition、transition planは専用クラスで表現する。
 - **MUST:** retry、retry exhaustion、repair、defer、block、external block、Step status、次の route の選択を、実行コマンド、registry、状態読取り、`get-next-action` に重複実装しない。
 - command の返却値に含まれる `next` や成果物内の `nextAction` は、必要であれば互換用の投影値として保持できるが、遷移判断の権限として使用してはならない。
 
 ## 実行と永続化
 
-- `run-*` コマンドは、選択済み Action の実行、外部出力の境界検証、観測事実の保存を担う。semantic result から retry 回数、上限、repair、次の route を独自に決めてはならない。
+- `run-*` コマンドは、選択済み Action の実行、外部出力の境界検証、観測事実の保存を担う。Draftでは、StepのpureなResult factoryだけがtyped factsからsemantic Resultを決める。実行コマンドはsemantic resultからretry回数、上限、repair、次のrouteを独自に決めてはならない。
 - transport、protocol、tooling failure の限定的な再試行は実行責務に含めてよい。ただし semantic retry budget と Flow の遷移方針は definition layer が所有する。
 - registry、hook、永続化層は、definition layer が選んだ transition plan の原子的な適用と監査記録を担う。未選択の fallback route を決めてはならない。
 - Draft Step の境界は `facts -> concrete StepResult`、Definition の境界は `stepId + StepResult -> concrete Settlement` とする。Service は Definition を一度だけ呼び、Store は選択済み Settlement を再解決せずに適用する。
-- Step と Step の間をつなぐ副作用は Definition-owned `StepConnector` として表現し、独立した Flow Step にしない。Connector は Definition が facts から選択し、Store は選択済み Connector を source Attempt の確認・成果物 publication・次 Step への promotion と同一 transaction で適用する。
+- Step と Step の間をつなぐ副作用は Definition-owned `StepConnector` として表現し、独立した Flow Step にしない。Draftでは、Definitionが`stepId + StepResult`からSettlementとConnector種別を選択し、Serviceが選択済みSettlementに必要なConnectorをcanonical factsから組み立てる。Storeは選択済みConnectorをsource Attemptの確認・成果物publication・次Stepへのpromotionと同一transactionで適用し、遷移先を再判断しない。
 - Draft の Result、Result 固有の Activity／artifact、Settlement effect、exact binding を含む durable receipt、target activation／Await／Failure は同一 Store transaction で保存する。target connection だけが durable connector receipt を持ち、完全一致 replay 以外は binding、Result kind、Settlement kind、target の差を conflict とする。
 - 直接 CLI 実行にも admission check を設け、最新の永続状態で definition layer が別の Action を選んでいる場合は worker 起動と状態変更の前に拒否する。
 
