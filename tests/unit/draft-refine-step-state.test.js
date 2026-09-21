@@ -96,6 +96,15 @@ test("DraftRefineStepState projects unselected, execution, Await, and resumed se
     questionRevision: 3,
   });
 
+  const autoReselected = new DraftRefineStepState({
+    binding: binding(),
+    settlement: awaitReceipt,
+    autoApprove: true,
+  });
+  assert.equal(autoReselected.requiresStepSelection, true);
+  assert.equal(autoReselected.awaitQuestionIdentity(), null);
+  assert.equal(autoReselected.dispositionForQuestion(), null);
+
   const resume = new DraftQuestionResumeReceipt({
     binding: awaitReceipt.binding,
     awaitReceiptId: awaitReceipt.id,

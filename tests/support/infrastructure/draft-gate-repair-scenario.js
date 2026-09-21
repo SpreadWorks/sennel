@@ -58,6 +58,7 @@ export class DraftGateRepairScenario {
     });
     const stepResult = new DraftGateRepairRequiredResult();
     this.flowManager.settleDraftStepResult({
+      specId: this.specId,
       binding,
       stepResult,
       settlement: settleDraftStepResult(stepResult.stepId, stepResult),

@@ -7,7 +7,6 @@ import {
   DraftQuestionsReviewExecutionRequiredResult,
   DraftQuestionsRepairChangedResult,
   DraftQuestionsRepairUnchangedResult,
-  DraftRefineAwaitingAnswerResult,
   DraftRefineWorkerRequiredResult,
   DraftStepErrorResult,
 } from "../../../src/flow/engine/step-result.js";
@@ -128,27 +127,26 @@ describe("Draft Step Result settlement", () => {
     assert.deepEqual(reloaded.canonicalState(specId).toJSON(), beforeConflict);
     assert.equal(reloaded.activityLedger(specId).length, activitiesBeforeConflict);
 
-    const awaiting = new DraftRefineAwaitingAnswerResult();
-    const awaitingLifecycle = {
+    const publicationLifecycle = {
       outcome: "incomplete",
-      summary: "Waiting for an answer.",
+      summary: "Preparing the next execution generation.",
       confirmedAt: "2026-09-20T01:03:00.000Z",
       artifactRefs: [],
     };
     const publication = reloaded.settleDraftStepResult({
       binding,
-      stepResult: awaiting,
-      settlement: settleDraftStepResult(awaiting.stepId, awaiting),
-      lifecycleResult: awaitingLifecycle,
+      stepResult: required,
+      settlement,
+      lifecycleResult: publicationLifecycle,
     });
     assert.equal(publication.receipt.executionLifecycle.phase, "publication");
     assert.equal(reloaded.canonicalState(specId).findNode("draft-refine").result, null);
     const publicationActivities = reloaded.activityLedger(specId).length;
     const publicationReplay = reloaded.settleDraftStepResult({
       binding,
-      stepResult: awaiting,
-      settlement: settleDraftStepResult(awaiting.stepId, awaiting),
-      lifecycleResult: awaitingLifecycle,
+      stepResult: required,
+      settlement,
+      lifecycleResult: publicationLifecycle,
     });
     assert.equal(publicationReplay.receipt.id, publication.receipt.id);
     assert.equal(reloaded.activityLedger(specId).length, publicationActivities);

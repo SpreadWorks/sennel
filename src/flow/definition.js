@@ -4933,7 +4933,13 @@ export class DraftRefineStepState {
   #settlement;
   #executionIdentity;
 
-  constructor({ binding, settlement = null, resume = null, resumeAfterSettlement = false } = {}) {
+  constructor({
+    binding,
+    settlement = null,
+    resume = null,
+    resumeAfterSettlement = false,
+    autoApprove = false,
+  } = {}) {
     if (binding?.stepId !== "draft-refine"
       || typeof binding?.runId !== "string" || binding.runId === ""
       || typeof binding?.specId !== "string" || binding.specId === ""
@@ -4943,6 +4949,9 @@ export class DraftRefineStepState {
     }
     if (typeof resumeAfterSettlement !== "boolean") {
       throw new TypeError("Draft refine state resume ordering must be boolean");
+    }
+    if (typeof autoApprove !== "boolean") {
+      throw new TypeError("Draft refine state requires the canonical autoApprove policy");
     }
     if (settlement !== null && !(settlement instanceof DraftStepSettlementReceiptValue)) {
       throw new TypeError("Draft refine settlement must be a typed receipt");
@@ -4980,7 +4989,7 @@ export class DraftRefineStepState {
       if (resumeAfterSettlement && !awaitingAnswer) {
         throw new TypeError("Draft refine resume authority can consume only an Await settlement");
       }
-      this.#selection = resumeAfterSettlement
+      this.#selection = resumeAfterSettlement || (awaitingAnswer && autoApprove)
         ? "step-selection-required"
         : workerExecution ? "worker-execution" : "await-user-answer";
     }

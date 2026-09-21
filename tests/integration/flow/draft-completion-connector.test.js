@@ -86,6 +86,7 @@ function settleCompletion(flowManager, {
         sequence: priorBinding.attemptSequence,
       };
   return flowManager.settleDraftStepResult({
+    specId,
     binding: { runId: state.runId, specId, stepId: expectedResult.stepId, attempt },
     stepResult: stepResult ?? expectedResult,
     settlement: settleDraftStepResult(expectedResult.stepId, expectedResult, {
@@ -1040,8 +1041,28 @@ describe("DraftCompletionConnector", () => {
     try {
       for (const stepId of ["draft", "draft-questions-repair", "draft-refine", "draft-gate-repair", "draft-coverage-repair"]) {
         const specId = `715f-${stepId}`;
-        new CanonicalFlowFixture({ flowManager, specId, runId: `draft-publication-${stepId}` })
-          .create().registerActive().activate(stepId);
+        if (stepId === "draft-gate-repair") {
+          completeInitialDraftCoveragePass({
+            flowManager,
+            specId,
+            runId: `draft-publication-${stepId}`,
+          });
+          new DraftGateRepairScenario({ flowManager, root: repository, specId }).select({
+            issueLogId: `draft-publication-${stepId}`,
+            observations: [{
+              kind: "violation",
+              failureMode: "guardrail-violation",
+              requirementRef: "R-1",
+              where: { file: "spec.json", locator: "requirements[0]" },
+              observed: "The draft is incomplete.",
+              severity: "blocking",
+              refs: ["R-1"],
+            }],
+          });
+        } else {
+          new CanonicalFlowFixture({ flowManager, specId, runId: `draft-publication-${stepId}` })
+            .create().registerActive().activate(stepId);
+        }
         for (const [caseName, bytes] of [
           ["malformed", Buffer.from("{ invalid", "utf8")],
           ["incomplete", Buffer.from(JSON.stringify({ ...draft(), goal: "" }), "utf8")],

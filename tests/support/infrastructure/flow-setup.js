@@ -133,6 +133,7 @@ export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status 
       throw new Error(`canonical fixture cannot auto-settle ${result.kind}`);
     }
     flowManager.settleDraftStepResult({
+      specId: resolvedSpecId,
       binding: {
         runId: canonical.runId,
         specId: canonical.specId,

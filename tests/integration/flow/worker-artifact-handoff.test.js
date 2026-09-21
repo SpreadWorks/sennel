@@ -4867,6 +4867,77 @@ describe("worker artifact handoff", () => {
     }
   });
 
+  it("delegates a published next-generation Result to Coordinator completion", async () => {
+    const source = draftWithQuestionLedger([candidateDraftQuestion()]);
+    const value = fixture("draft-refine", {
+      autoApprove: true,
+      beforeActivate(fixtureValue) {
+        publishDraftBeforeTarget(fixtureValue, source);
+      },
+    });
+    try {
+      const session = new FlowDispatchSession({
+        target: new FlowDispatchTarget({
+          expectation: new FlowTargetExpectation({ expectRunId: "run-worker-handoff", expectSpec: value.specId }),
+        }),
+      });
+      const action = session.captureAction(draftWorkerAction("draft-refine"), "conditional-draft-next-generation");
+      const invocation = new FlowDispatchInvocation({
+        session,
+        action,
+        authorization: new UnapprovedFlowDispatchAuthorization(action),
+      });
+      class CandidateAgent extends Agent {
+        constructor() { super({}); }
+        async call(_prompt, options) {
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const requestDocument = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          const payloadPath = requestDocument.payloads.find((entry) => entry.logicalName === "draft.json").payloadPath;
+          fs.writeFileSync(payloadPath, json(source));
+          sealWorkerArtifactHandoff({
+            requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+          });
+          return "sealed";
+        }
+      }
+      class TrackingCoordinator extends WorkerArtifactHandoffCoordinator {
+        completionCalls = 0;
+
+        completePublishedDraftWorker(input) {
+          const execution = input.ctx.flowManager.draftStepExecutionState({ binding: input.binding });
+          assert.equal(execution.lifecycle.phase, "publication");
+          this.completionCalls += 1;
+          return super.completePublishedDraftWorker(input);
+        }
+      }
+      const coordinator = new TrackingCoordinator();
+      const attempt = await new RunDispatchCommand({ handoffCoordinator: coordinator }).runWorkerAttempt({
+        ...value.ctx,
+        flowState: value.flowManager.load(),
+      }, invocation, null, new CandidateAgent());
+
+      assert.equal(attempt.error, null);
+      assert.equal(attempt.stepResult.kind, "draft-refine-worker-required");
+      assert.equal(coordinator.completionCalls, 1);
+      const canonical = value.flowManager.canonicalState(value.specId);
+      const binding = {
+        runId: canonical.runId,
+        specId: value.specId,
+        stepId: "draft-refine",
+        attempt: canonical.attempt,
+      };
+      const execution = value.flowManager.draftStepExecutionState({ binding });
+      assert.equal(execution.lifecycle.phase, "checkpoint");
+      assert.equal(execution.lifecycle.executionGeneration, 1);
+      assert.deepEqual(value.flowManager.activityLedger(value.specId)
+        .map((activity) => activity.result?.draftSettlementReceipt?.executionLifecycle?.phase)
+        .filter((phase) => phase !== undefined), ["checkpoint", "claimed", "publication", "checkpoint"]);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
   it("reenters the same sealed worker generation after publication interruption", async () => {
     const value = fixture("draft-refine", {
       autoApprove: true,
@@ -4989,18 +5060,27 @@ describe("worker artifact handoff", () => {
         },
       });
       try {
-        const request = value.coordinator.createRequest({
+        const coordinator = value.coordinator;
+        let completionCalls = 0;
+        const completePublishedDraftWorker = coordinator.completePublishedDraftWorker.bind(coordinator);
+        coordinator.completePublishedDraftWorker = (input) => {
+          assert.equal(input.ctx.flowManager.draftStepExecutionState({ binding: input.binding }).lifecycle.phase,
+            "publication");
+          completionCalls += 1;
+          return completePublishedDraftWorker(input);
+        };
+        const request = coordinator.createRequest({
           ctx: value.ctx,
           state: value.flowManager.load(),
           invocation: value.invocation,
         });
         fs.writeFileSync(request.payloadPath("draft.json"), json(source));
         seal(request);
-        const preparation = value.coordinator.prepareDraftWorker({
+        const preparation = coordinator.prepareDraftWorker({
           ctx: value.ctx,
           request,
         });
-        commitDraftResult(value.coordinator, {
+        commitDraftResult(coordinator, {
           ctx: value.ctx,
           request,
           preparation,
@@ -5015,6 +5095,8 @@ describe("worker artifact handoff", () => {
         assert.equal(findStepById(value.flowManager.load().steps, "draft-refine").status, "in_progress", name);
         assert.equal(findStepById(value.flowManager.load().steps, "draft-gate-repair").status, "pending", name);
         assert.equal(next.step, "draft-refine", name);
+        assert.equal(completionCalls, 1, name);
+        assert.equal(fs.existsSync(request.directory), false, name);
       } finally {
         removeTmpDir(value.mainRoot);
       }

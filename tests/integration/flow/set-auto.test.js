@@ -4,6 +4,9 @@ import {
   canonicalDraftDocument,
   makeFlowManager,
 } from "../../support/infrastructure/flow-setup.js";
+import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
+import { DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
+import { DraftService } from "../../../src/flow/services/draft-service.js";
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
@@ -70,16 +73,20 @@ function createFlowState(tmp, request = "add a progress bar") {
   }).create();
 }
 
-function runSetAuto(tmp, value, extraArgs = []) {
+function runFlowCommand(tmp, args) {
   const script = path.resolve("src/sennel.js");
-  const args = ["flow", "set", "auto"];
-  if (value !== undefined) args.push(value);
-  args.push(...extraArgs);
   return spawnSync("node", [script, ...args], {
     encoding: "utf8",
     cwd: tmp,
     env: { ...process.env, SENNEL_WORK_ROOT: tmp },
   });
+}
+
+function runSetAuto(tmp, value, extraArgs = []) {
+  const args = ["flow", "set", "auto"];
+  if (value !== undefined) args.push(value);
+  args.push(...extraArgs);
+  return runFlowCommand(tmp, args);
 }
 
 describe("flow set auto", () => {
@@ -100,6 +107,94 @@ describe("flow set auto", () => {
     const state = makeFlowManager(tmp).load();
     assert.equal(state.autoApprove, true);
     assert.equal(Object.hasOwn(state, "autoCheck"), false);
+  });
+
+  it("reselects draft-refine on the same Attempt when auto is enabled after a persisted Await", async () => {
+    tmp = createTmpProject(passResponse());
+    const specId = "001-test";
+    const manager = makeFlowManager(tmp);
+    const scenario = new CanonicalAutoCheckScenario({
+      flowManager: manager,
+      specId,
+      runId: "run-001-test",
+      request: "Resolve a persisted Draft question automatically.",
+      execution: { mode: "branch", baseBranch: "main", featureBranch: "feature/001-test" },
+    }).create();
+    const source = canonicalDraftDocument({
+      questions: [{
+        state: "AwaitingUserAnswer",
+        id: "q1",
+        category: "user-visible-behavior",
+        question: "Which public behavior should be selected?",
+        revision: 0,
+        provenance: { producer: "set-auto-regression" },
+        evidenceDigest: "a".repeat(64),
+      }],
+    });
+    scenario.draftSavedBeforeGate(`${JSON.stringify(source, null, 2)}\n`);
+    scenario.flow.activate("draft-refine");
+    const manualBinding = await new DraftRefineConnector({ flowManager: manager, specId }).connect();
+    const awaiting = await new DraftRefineStep(new DraftService({
+      flowManager: manager,
+      binding: manualBinding,
+    })).execute();
+    assert.equal(awaiting.kind, "draft-refine-awaiting-answer");
+    const retainedAttempt = manager.canonicalState(specId).attempt.toJSON();
+    const beforeAutoActivities = manager.activityLedger(specId).length;
+
+    const enabled = runSetAuto(tmp, "on");
+    assert.equal(enabled.status, 0, enabled.stderr);
+    assert.equal(JSON.parse(enabled.stdout).data.autoApprove, true);
+
+    const reloaded = makeFlowManager(tmp);
+    const next = runFlowCommand(tmp, ["flow", "get", "next-action"]);
+    assert.equal(next.status, 0, next.stderr);
+    const nextData = JSON.parse(next.stdout).data;
+    assert.equal(nextData.step, "draft-refine");
+    assert.equal(nextData.directive.kind, "execute_step");
+    assert.equal(nextData.directive.requiresUserAction, false);
+
+    const rejectedAnswer = runFlowCommand(tmp, [
+      "flow", "set", "draft-answer", "q1",
+      "--question-revision", "0",
+      "--answer", "A fabricated answer must not be accepted.",
+      "--why", "Auto mode owns the next Step selection.",
+    ]);
+    assert.notEqual(rejectedAnswer.status, 0);
+    assert.equal(JSON.parse(rejectedAnswer.stdout).errors[0].code, "DRAFT_ANSWER_NOT_SELECTED");
+
+    const binding = await new DraftRefineConnector({ flowManager: reloaded, specId }).connect();
+    const execution = reloaded.draftStepExecutionState({ binding });
+    const executionBinding = execution.workerBinding({
+      inputDigest: "b".repeat(64),
+      inputRevision: "c".repeat(64),
+    });
+    const selected = await new DraftRefineStep(new DraftService({
+      flowManager: reloaded,
+      binding,
+      executionCheckpointer: (stepResult, settlement, selectedBinding) => (
+        reloaded.checkpointDraftStepExecution({
+          binding: selectedBinding,
+          stepResult,
+          settlement,
+          executionBinding,
+        })
+      ),
+    })).execute();
+
+    assert.equal(selected.kind, "draft-refine-worker-required");
+    assert.deepEqual(reloaded.canonicalState(specId).attempt.toJSON(), retainedAttempt);
+    assert.equal(reloaded.draftStepExecutionState({ binding }).lifecycle.phase, "checkpoint");
+    const autoActivities = reloaded.activityLedger(specId).slice(beforeAutoActivities);
+    assert.equal(autoActivities.filter((activity) => (
+      activity.type === "policy_updated" && activity.transition?.policy?.autoApprove === true
+    )).length, 1);
+    assert.equal(autoActivities.filter((activity) => (
+      activity.result?.draftSettlementReceipt?.executionLifecycle?.phase === "checkpoint"
+    )).length, 1);
+    assert.equal(autoActivities.some((activity) => (
+      activity.transition?.draftResumeReceipt != null
+    )), false);
   });
 
   it("rejects 'on' with non-zero exit when auto-check is ineligible (AI scores)", () => {

@@ -66,7 +66,6 @@ import {
 import { buildFlowCommandHookContext } from "./flow-context.js";
 import {
   ConfirmAndAdvance,
-  DraftExecutionSettlement,
   DraftWorkerExecutionBinding,
   DraftWorkerExecutionClaim,
   resolveDefinitionRoute,
@@ -2056,28 +2055,6 @@ export default class RunDispatchCommand extends FlowCommand {
       binding,
       workerFacts: prepared.facts,
       workerExecutor: (stepResult, settlement, binding) => {
-        if (conditionalExecution && settlement instanceof DraftExecutionSettlement) {
-          const state = ctx.flowManager.canonicalState(request.specId);
-          const nextRequest = this.handoffCoordinator.createRequest({
-            ctx,
-            state,
-            invocation: request.invocation,
-            deferPreparation: true,
-          });
-          const execution = ctx.flowManager.draftStepExecutionState({ binding });
-          const committed = ctx.flowManager.checkpointDraftStepExecution({
-            binding,
-            stepResult,
-            settlement,
-            executionBinding: new DraftWorkerExecutionBinding({
-              executionGeneration: execution.lifecycle.executionGeneration + 1,
-              inputDigest: nextRequest.inputDigest,
-              inputRevision: nextRequest.inputRevision,
-            }),
-          });
-          this.handoffCoordinator.cleanupPublishedDraftWorker({ request, preparation: prepared });
-          return { error: null, completed: true, stepResult, receipt: committed.receipt };
-        }
         return {
           error: null,
           ...(conditionalExecution

@@ -4032,6 +4032,7 @@ export class CanonicalFlowManagerStore {
       resume: resumeActivity?.transition.draftResumeReceipt ?? null,
       resumeAfterSettlement: resumeActivity !== null
         && (settlementActivity === null || resumeActivity.confirmationOrder > settlementActivity.confirmationOrder),
+      autoApprove: state.policy.autoApprove,
     });
   }
 

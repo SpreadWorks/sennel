@@ -43,6 +43,7 @@ import {
 } from "./draft-completion-connector.js";
 import { DraftTransitionFacts } from "./draft-transition-facts.js";
 import { STEP_RESULT_TYPE, StepResult } from "../engine/step-result.js";
+import { DraftWorkerExecutionStepBinding } from "../engine/connectors/draft/draft-step-binding.js";
 import { DraftStepPersistenceFailure } from "./definition-lifecycle-failure.js";
 import { CanonicalFlowFindingsStore } from "./flow-findings.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
@@ -9309,7 +9310,14 @@ export class WorkerArtifactHandoffCoordinator {
       };
     }
     if (isConditionalDraftWorkerStep(request.stepId)) {
-      const executionIdentity = ctx.flowManager.draftStepExecutionState({ binding }).executionIdentity();
+      const executionBinding = binding instanceof DraftWorkerExecutionStepBinding
+        ? binding
+        : new DraftWorkerExecutionStepBinding({
+            flowManager: ctx.flowManager,
+            specId: request.specId,
+            stepId: request.stepId,
+          });
+      const executionIdentity = ctx.flowManager.draftStepExecutionState({ binding: executionBinding }).executionIdentity();
       if (executionIdentity === null) {
         throw new WorkerArtifactHandoffError(
           "conflict",
@@ -9324,39 +9332,10 @@ export class WorkerArtifactHandoffCoordinator {
         preparation,
         stepResult: executionIdentity.stepResult,
         settlement: executionIdentity.settlement,
-        binding,
+        binding: executionBinding,
       });
-      if (settlement instanceof DraftExecutionSettlement) {
-        const state = ctx.flowManager.canonicalState(request.specId);
-        const nextRequest = this.createRequest({
-          ctx,
-          state,
-          invocation: request.invocation,
-          deferPreparation: true,
-        });
-        const execution = ctx.flowManager.draftStepExecutionState({ binding });
-        const committed = ctx.flowManager.checkpointDraftStepExecution({
-          binding,
-          stepResult,
-          settlement,
-          executionBinding: new DraftWorkerExecutionBinding({
-            executionGeneration: execution.lifecycle.executionGeneration + 1,
-            inputDigest: nextRequest.inputDigest,
-            inputRevision: nextRequest.inputRevision,
-          }),
-        });
-        this.cleanupPublishedDraftWorker({ request, preparation });
-        return {
-          completed: true,
-          replayed: false,
-          stepId: request.stepId,
-          stepResult,
-          settlementReceipt: committed.receipt,
-          receipt: committed.receipt,
-        };
-      }
       return this.completePublishedDraftWorker({
-        ctx, request, preparation, stepResult, settlement, binding,
+        ctx, request, preparation, stepResult, settlement, binding: executionBinding,
       });
     }
     try {
@@ -9431,12 +9410,12 @@ export class WorkerArtifactHandoffCoordinator {
     });
   }
 
-  /** Settle the Result selected by the same Step after its publication receipt. */
+  /** Complete the Result selected by the same Step after its publication receipt. */
   completePublishedDraftWorker({ ctx, request, preparation, stepResult, settlement, binding }) {
     if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)
       || !(preparation instanceof DraftWorkerPreparation) || preparation.request !== request
-      || !(stepResult instanceof StepResult) || settlement instanceof DraftExecutionSettlement) {
-      throw new TypeError("Published Draft worker completion requires a terminal Step Result");
+      || !(stepResult instanceof StepResult)) {
+      throw new TypeError("Published Draft worker completion requires its Step Result");
     }
     const state = ctx.flowManager.load(request.specId);
     requireCanonicalDraftExecutionClaimForStored({
@@ -9453,7 +9432,25 @@ export class WorkerArtifactHandoffCoordinator {
     )) ?? null;
     if (publication === null) throw new Error("Published Draft worker Activity is missing");
     let committed;
-    if (request.stepId === "draft-refine" && settlement instanceof DraftAwaitUserDecision) {
+    if (settlement instanceof DraftExecutionSettlement) {
+      const nextRequest = this.createRequest({
+        ctx,
+        state: ctx.flowManager.canonicalState(request.specId),
+        invocation: request.invocation,
+        deferPreparation: true,
+      });
+      const execution = ctx.flowManager.draftStepExecutionState({ binding });
+      committed = ctx.flowManager.checkpointDraftStepExecution({
+        binding,
+        stepResult,
+        settlement,
+        executionBinding: new DraftWorkerExecutionBinding({
+          executionGeneration: execution.lifecycle.executionGeneration + 1,
+          inputDigest: nextRequest.inputDigest,
+          inputRevision: nextRequest.inputRevision,
+        }),
+      });
+    } else if (request.stepId === "draft-refine" && settlement instanceof DraftAwaitUserDecision) {
       const candidate = preparation.facts.draftTransitionFacts?.candidateQuestion ?? null;
       if (candidate === null) {
         throw new WorkerArtifactHandoffError(
@@ -9505,24 +9502,14 @@ export class WorkerArtifactHandoffCoordinator {
       completed: true,
       replayed: false,
       stepId: request.stepId,
-      handoffDigest: handoffReceipt.handoffDigest,
-      payloadDigest: handoffReceipt.payloadDigest,
+      ...(settlement instanceof DraftExecutionSettlement ? {} : {
+        handoffDigest: handoffReceipt.handoffDigest,
+        payloadDigest: handoffReceipt.payloadDigest,
+      }),
       stepResult,
       settlementReceipt: committed.receipt,
       receipt: committed.receipt,
     };
-  }
-
-  cleanupPublishedDraftWorker({ request, preparation }) {
-    if (!(request instanceof WorkerArtifactHandoffRequest)
-      || !(preparation instanceof DraftWorkerPreparation) || preparation.request !== request) {
-      throw new TypeError("Draft worker publication cleanup requires its preparation");
-    }
-    cleanupCompletedHandoff(
-      request.handoffRoot,
-      canonicalHandoffReceipt(request, preparation.submission, this.now),
-      this.faultInjector,
-    );
   }
 
   /** Commit a Draft Step error against the same bound Attempt. */

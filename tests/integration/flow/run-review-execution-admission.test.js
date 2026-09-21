@@ -3,7 +3,8 @@ import { afterEach, describe, it } from "node:test";
 
 import { Envelope } from "../../../src/lib/flow-envelope.js";
 import { RunReviewCommand } from "../../../src/flow/lib/run-review.js";
-import { CanonicalSpecReview } from "../../../src/flow/lib/spec-review-artifacts.js";
+import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 const roots = [];
@@ -30,46 +31,21 @@ class BlockingReviewCommand extends RunReviewCommand {
 }
 
 function reviewContext(root) {
-  const review = new CanonicalSpecReview({
-    version: 2,
-    identity: { specId: "review-admission-spec", revision: 1, digest: "a".repeat(64), byteLength: 0 },
-    generation: 0,
-    findings: [],
-    audit: [],
-  });
-  const bytes = Buffer.from(`${JSON.stringify(review.toJSON(), null, 2)}\n`, "utf8");
-  const state = {
+  const specId = "review-admission-spec";
+  const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+  new CanonicalFlowFixture({
+    flowManager,
+    specId,
     runId: "review-admission-run",
-    current: ["spec-review"],
-    attempt: { id: "spec-review-attempt-1", failure: null },
-  };
-  const flowState = {
-    schemaRevision: 3,
-    specId: "review-admission-spec",
-    currentNodeId: "spec-review",
-    currentTaskId: null,
-  };
+  }).create().registerActive().activate("spec-review");
   return {
     root,
     mainRoot: root,
     executionRoot: root,
     phase: "spec",
-    specId: "review-admission-spec",
-    flowState,
-    flowManager: {
-      canonicalState: () => state,
-      loadReadOnly: () => flowState,
-      activityLedger: () => [],
-      readCurrentSpecReview: () => ({
-        revision: 1,
-        review,
-        bytes,
-        descriptor: { logicalKey: "spec.review", relativePath: "revisions/001/review.json", hash: review.digest, size: bytes.length },
-      }),
-      readArtifact: () => null,
-      readProducerArtifact: () => null,
-      publishArtifacts: () => { throw new Error("admission must not publish artifacts"); },
-    },
+    specId,
+    flowState: flowManager.loadReadOnly(specId),
+    flowManager,
   };
 }
 
@@ -78,12 +54,16 @@ describe("RunReviewCommand execution admission", () => {
     const root = createTmpDir("run-review-execution-admission-");
     roots.push(root);
     const command = new BlockingReviewCommand();
-    const direct = command.execute(reviewContext(root));
+    const ctx = reviewContext(root);
+    const direct = command.execute(ctx);
     await command.entered;
 
     // Dispatch resolves the same registered run-review command, so its call
     // must share the direct command's run/node/Attempt lease.
-    const dispatched = await command.execute(reviewContext(root));
+    const dispatched = await command.execute({
+      ...ctx,
+      flowState: ctx.flowManager.loadReadOnly(ctx.specId),
+    });
     assert.equal(dispatched.ok, false);
     assert.equal(dispatched.errors[0].code, "REVIEW_EXECUTION_BUSY");
     assert.equal(command.calls, 1);
