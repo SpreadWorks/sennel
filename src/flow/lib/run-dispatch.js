@@ -1683,109 +1683,108 @@ export default class RunDispatchCommand extends FlowCommand {
     let agentOptions = {};
     let draftDefinition = null;
     try {
-      handoffPolicy = workerArtifactHandoffPolicy(action.nextAction.step);
-      if (handoffPolicy === null) {
-        throw new WorkerArtifactHandoffError(
-          "invalid",
-          "FLOW_ARTIFACT_HANDOFF_REQUIRED",
-          `dispatcher worker action requires a handoff policy: ${action.nextAction.step}`,
-          { retryable: false, data: { stepId: action.nextAction.step } },
+      try {
+        handoffPolicy = workerArtifactHandoffPolicy(action.nextAction.step);
+        if (handoffPolicy === null) {
+          throw new WorkerArtifactHandoffError(
+            "invalid",
+            "FLOW_ARTIFACT_HANDOFF_REQUIRED",
+            `dispatcher worker action requires a handoff policy: ${action.nextAction.step}`,
+            { retryable: false, data: { stepId: action.nextAction.step } },
+          );
+        }
+        const workerOptions = workerArtifactAgentOptions(
+          action.nextAction.step,
+          action.nextAction.output_schema,
         );
-      }
-      const workerOptions = workerArtifactAgentOptions(
-        action.nextAction.step,
-        action.nextAction.output_schema,
-      );
-      const { workerRequestGuidance = null, ...providerOptions } = workerOptions;
-      agentOptions = providerOptions;
-      draftDefinition = await draftWorkerStepDefinition(action.nextAction.step);
-      const conditionalDraftExecution = isConditionalDraftWorkerStep(action.nextAction.step);
-      const workerInstructions = new WorkerArtifactWorkerInstructions({
-        // Conditional Draft retry authority is fully reconstructible from
-        // canonical generation state; transient error prose is not identity.
-        retryFeedback: conditionalDraftExecution ? null : retryFeedback?.toJSON() ?? null,
-        schemaGuidance: workerRequestGuidance,
-      });
-      handoffAuthority = new FlowHandoffAuthorityLease({
-        mainRoot: ctx.mainRoot || ctx.root,
-        executionRoot: ctx.executionRoot || ctx.root,
-      });
-      // The authority is acquired before parent input capture. External
-      // upgrades therefore cannot alter immutable handoff inputs between
-      // request construction and its mutation snapshot.
-      handoffAuthority.acquire();
-      handoffAuthorityAcquired = true;
-      const state = readFlowState(ctx);
-      let workerInvocation = invocation;
-      if (conditionalDraftExecution) {
-        const prepared = await this.prepareConditionalDraftWorker({
-          ctx,
-          state,
-          invocation,
-          workerInstructions,
-          definition: draftDefinition,
-          retrying: retryFeedback !== null,
+        const { workerRequestGuidance = null, ...providerOptions } = workerOptions;
+        agentOptions = providerOptions;
+        draftDefinition = await draftWorkerStepDefinition(action.nextAction.step);
+        const conditionalDraftExecution = isConditionalDraftWorkerStep(action.nextAction.step);
+        const workerInstructions = new WorkerArtifactWorkerInstructions({
+          // Conditional Draft retry authority is fully reconstructible from
+          // canonical generation state; transient error prose is not identity.
+          retryFeedback: conditionalDraftExecution ? null : retryFeedback?.toJSON() ?? null,
+          schemaGuidance: workerRequestGuidance,
         });
-        if (prepared.request === null) {
-          return {
-            error: null,
-            handoffRequest: null,
-            agentError: null,
-            stepResult: prepared.stepResult,
-            supervisorEvents: [],
-            deferredMetric: null,
+        handoffAuthority = new FlowHandoffAuthorityLease({
+          mainRoot: ctx.mainRoot || ctx.root,
+          executionRoot: ctx.executionRoot || ctx.root,
+        });
+        // The authority is acquired before parent input capture. External
+        // upgrades therefore cannot alter immutable handoff inputs between
+        // request construction and its mutation snapshot.
+        handoffAuthority.acquire();
+        handoffAuthorityAcquired = true;
+        const state = readFlowState(ctx);
+        let workerInvocation = invocation;
+        if (conditionalDraftExecution) {
+          const prepared = await this.prepareConditionalDraftWorker({
+            ctx,
+            state,
+            invocation,
+            workerInstructions,
+            definition: draftDefinition,
+            retrying: retryFeedback !== null,
+          });
+          if (prepared.request === null) {
+            return {
+              error: null,
+              handoffRequest: null,
+              agentError: null,
+              stepResult: prepared.stepResult,
+              supervisorEvents: [],
+              deferredMetric: null,
+            };
+          }
+          handoffRequest = prepared.request;
+          workerInvocation = prepared.invocation;
+          publicationRecovery = prepared.publicationRecovery;
+        } else {
+          handoffRequest = this.handoffCoordinator.createRequest({
+            ctx,
+            state,
+            invocation,
+            workerInstructions,
+          });
+        }
+        resumeSealedDraftExecution = conditionalDraftExecution
+          && fs.existsSync(handoffRequest.submissionPath);
+        if (!resumeSealedDraftExecution) {
+          work = new FlowDispatchWork(workerInvocation, handoffRequest);
+        }
+        if (handoffRequest.policy.kind === "source") {
+          // The Definition-owned action schema remains the canonical base. A
+          // source request may refine only response values it owns immutably
+          // (for example, Task repair keys and source authority paths) before
+          // the existing Agent/provider projection adapts it for the CLI.
+          agentOptions = {
+            ...agentOptions,
+            jsonSchema: handoffRequest.sourceResponseSchema(),
           };
         }
-        handoffRequest = prepared.request;
-        workerInvocation = prepared.invocation;
-        publicationRecovery = prepared.publicationRecovery;
-      } else {
-        handoffRequest = this.handoffCoordinator.createRequest({
-          ctx,
-          state,
-          invocation,
-          workerInstructions,
-        });
+      } catch (error) {
+        if (handoffPolicy !== null && !handoffAuthorityAcquired && !(error instanceof WorkerArtifactHandoffError)) {
+          return {
+            error: new WorkerArtifactHandoffError(
+              "recovery-required",
+              "FLOW_ARTIFACT_HANDOFF_AUTHORITY_LOCK_REQUIRED",
+              `worker artifact handoff authority cannot be acquired: ${error.message}`,
+              {
+                cause: error,
+                retryable: false,
+                recoveryPossible: false,
+                data: { stepId: action.nextAction.step },
+              },
+            ),
+            handoffRequest: null,
+            agentError: null,
+          };
+        }
+        if (!(error instanceof WorkerArtifactHandoffError)) throw error;
+        return { error, handoffRequest, agentError: null };
       }
-      resumeSealedDraftExecution = conditionalDraftExecution
-        && fs.existsSync(handoffRequest.submissionPath);
-      if (!resumeSealedDraftExecution) {
-        work = new FlowDispatchWork(workerInvocation, handoffRequest);
-      }
-      if (handoffRequest.policy.kind === "source") {
-        // The Definition-owned action schema remains the canonical base. A
-        // source request may refine only response values it owns immutably
-        // (for example, Task repair keys and source authority paths) before
-        // the existing Agent/provider projection adapts it for the CLI.
-        agentOptions = {
-          ...agentOptions,
-          jsonSchema: handoffRequest.sourceResponseSchema(),
-        };
-      }
-    } catch (error) {
-      handoffAuthority?.release();
-      if (handoffPolicy !== null && !handoffAuthorityAcquired && !(error instanceof WorkerArtifactHandoffError)) {
-        return {
-          error: new WorkerArtifactHandoffError(
-            "recovery-required",
-            "FLOW_ARTIFACT_HANDOFF_AUTHORITY_LOCK_REQUIRED",
-            `worker artifact handoff authority cannot be acquired: ${error.message}`,
-            {
-              cause: error,
-              retryable: false,
-              recoveryPossible: false,
-              data: { stepId: action.nextAction.step },
-            },
-          ),
-          handoffRequest: null,
-          agentError: null,
-        };
-      }
-      if (!(error instanceof WorkerArtifactHandoffError)) throw error;
-      return { error, handoffRequest, agentError: null };
-    }
 
-    try {
       let workerArtifactAuthority = null;
       try {
         workerArtifactAuthority = handoffRequest?.policy.kind !== "source"
