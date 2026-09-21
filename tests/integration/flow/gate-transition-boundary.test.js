@@ -711,7 +711,7 @@ describe("definition-owned Gate transition boundary", () => {
 
   it("keeps eligible Review, Gate, and acceptance routes in the Definition-owned behavior table", () => {
     assert.deepEqual(NONBLOCKING_ROUTES.map((route) => route.sourceStep).sort(), [
-      "acceptance-review", "draft-gate", "final-regression", "impl-gate", "impl-review", "retro",
+      "acceptance-review", "final-regression", "impl-gate", "impl-review", "retro",
       "spec-gate", "task-gate", "task-review", "test-result-review",
     ]);
     for (const [sourceStep, phase] of [
@@ -751,7 +751,7 @@ describe("definition-owned Gate transition boundary", () => {
       });
       selected.set(sourceStep, reviewNonblockingEligibilityForDisposition({ stepId: sourceStep, disposition }));
     }
-    for (const [sourceStep, phase] of [["draft-gate", "draft"], ["spec-gate", "spec"], ["impl-gate", "integration"]]) {
+    for (const [sourceStep, phase] of [["spec-gate", "spec"], ["impl-gate", "integration"]]) {
       selected.set(sourceStep, gateNonblockingEligibilityForDecision(resolveGateTransition(facts({
         phase,
         result: "fail",
@@ -775,7 +775,7 @@ describe("definition-owned Gate transition boundary", () => {
       assert.deepEqual(eligibility.effectFor("continue").skippedStepIds, route.skippedSteps);
     }
     assert.deepEqual([...selected.keys()].sort(), [
-      "acceptance-review", "draft-gate", "impl-gate", "impl-review", "retro",
+      "acceptance-review", "impl-gate", "impl-review", "retro",
       "spec-gate", "task-gate", "task-review",
     ]);
   });

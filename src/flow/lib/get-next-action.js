@@ -607,6 +607,10 @@ function draftQuestionDirective(disposition) {
 }
 
 function persistedDraftRefineDisposition({ flowManager, typedState }) {
+  // A pending Draft Step has no Result or Settlement to project yet. Its
+  // ordinary claim must create the Attempt before the Step selects either an
+  // execution or Await receipt.
+  if (typedState.attempt === null) return null;
   const binding = {
     runId: typedState.runId,
     specId: typedState.specId,

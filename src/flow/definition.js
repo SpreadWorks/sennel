@@ -4670,20 +4670,42 @@ export class DraftStepExecutionLifecycle {
 
 /** Canonical read model for restart-safe generation selection and claim recovery. */
 export class DraftStepExecutionState {
-  constructor({ binding, receiptId = null, lifecycle = null } = {}) {
+  #executionIdentity;
+
+  constructor({ binding, receipt = null } = {}) {
     if (binding?.runId === undefined || binding?.specId === undefined
       || typeof binding?.stepId !== "string" || typeof binding?.attempt?.id !== "string"
       || !Number.isSafeInteger(binding?.attempt?.sequence)) {
       throw new TypeError("Draft execution state requires its exact Attempt binding");
     }
-    if (receiptId !== null && !SHA256_DIGEST.test(receiptId)) {
+    if (receipt !== null && (!(receipt instanceof DraftStepSettlementReceiptValue)
+      || receipt.executionLifecycle == null)) {
+      throw new TypeError("Draft execution state receipt must be typed");
+    }
+    const selectedReceiptId = receipt?.id ?? null;
+    const selectedLifecycle = receipt === null
+      ? null
+      : DraftStepExecutionLifecycle.fromJSON(
+          receipt.executionLifecycle.toJSON?.() ?? receipt.executionLifecycle,
+        );
+    if (selectedReceiptId !== null && !SHA256_DIGEST.test(selectedReceiptId)) {
       throw new TypeError("Draft execution state receipt ID is invalid");
     }
-    if (lifecycle !== null && !(lifecycle instanceof DraftStepExecutionLifecycle)) {
+    if (selectedLifecycle !== null && !(selectedLifecycle instanceof DraftStepExecutionLifecycle)) {
       throw new TypeError("Draft execution state lifecycle must be typed");
     }
-    if ((receiptId === null) !== (lifecycle === null)) {
+    if ((selectedReceiptId === null) !== (selectedLifecycle === null)) {
       throw new TypeError("Draft execution state receipt and lifecycle must be present together");
+    }
+    if (receipt !== null && (
+      receipt.binding.runId !== binding.runId
+      || receipt.binding.specId !== binding.specId
+      || receipt.binding.stepId !== binding.stepId
+      || receipt.binding.attemptId !== binding.attempt.id
+      || receipt.binding.attemptSequence !== binding.attempt.sequence
+      || receipt.id !== selectedReceiptId
+    )) {
+      throw new TypeError("Draft execution state receipt does not match its Attempt binding");
     }
     this.flowBinding = Object.freeze({
       runId: binding.runId,
@@ -4692,8 +4714,11 @@ export class DraftStepExecutionState {
       attemptId: binding.attempt.id,
       attemptSequence: binding.attempt.sequence,
     });
-    this.receiptId = receiptId;
-    this.lifecycle = lifecycle;
+    this.receiptId = selectedReceiptId;
+    this.lifecycle = selectedLifecycle;
+    this.#executionIdentity = receipt?.settlementKind === "execution"
+      ? draftStepExecutionIdentity(binding, receipt)
+      : null;
     Object.freeze(this);
   }
 
@@ -4719,6 +4744,13 @@ export class DraftStepExecutionState {
       inputDigest,
       inputRevision,
     });
+  }
+
+  /** Rehydrate only the Result and Settlement selected by the persisted receipt. */
+  executionIdentity() {
+    return ["checkpoint", "claimed", "publication"].includes(this.lifecycle?.phase)
+      ? this.#executionIdentity
+      : null;
   }
 
   toJSON() {
@@ -4825,20 +4857,62 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
   }
 }
 
-const DRAFT_REFINE_EXECUTION_IDENTITY_TOKEN = Symbol("draft-refine-execution-identity");
+const DRAFT_STEP_EXECUTION_IDENTITY_TOKEN = Symbol("draft-step-execution-identity");
 
-/** Step-selected execution identity rehydrated from one persisted refine receipt. */
-export class DraftRefineExecutionIdentity {
-  constructor(token, receiptId) {
-    if (token !== DRAFT_REFINE_EXECUTION_IDENTITY_TOKEN
-      || typeof receiptId !== "string" || !SHA256_DIGEST.test(receiptId)) {
-      throw new TypeError("Draft refine execution identity requires its persisted receipt");
+/** Step-selected execution identity rehydrated from one exact persisted receipt. */
+export class DraftStepExecutionIdentity {
+  constructor(token, { binding, receipt } = {}) {
+    if (token !== DRAFT_STEP_EXECUTION_IDENTITY_TOKEN
+      || !(receipt instanceof DraftStepSettlementReceiptValue)
+      || receipt.binding?.runId !== binding?.runId
+      || receipt.binding?.specId !== binding?.specId
+      || receipt.binding?.stepId !== binding?.stepId
+      || receipt.binding?.attemptId !== binding?.attempt?.id
+      || receipt.binding?.attemptSequence !== binding?.attempt?.sequence
+      || typeof receipt.id !== "string" || !SHA256_DIGEST.test(receipt.id)
+      || receipt.settlementKind !== "execution") {
+      throw new TypeError("Draft execution identity requires its exact persisted receipt");
     }
-    this.receiptId = receiptId;
-    this.stepResult = new DraftRefineWorkerRequiredResult();
-    this.settlement = settleDraftStepResult(this.stepResult.stepId, this.stepResult);
+    const lifecycle = DraftStepExecutionLifecycle.fromJSON(
+      receipt.executionLifecycle?.toJSON?.() ?? receipt.executionLifecycle,
+    );
+    if (!["checkpoint", "claimed", "publication"].includes(lifecycle.phase)) {
+      throw new TypeError("Draft execution identity requires an executable lifecycle phase");
+    }
+    const stepResult = StepResult.fromStored(binding.stepId, {
+      kind: receipt.resultKind,
+      type: receipt.resultType,
+    });
+    if (stepResultDigest(stepResult) !== receipt.resultDigest) {
+      throw new TypeError("Draft execution identity Result digest is invalid");
+    }
+    const settlement = settleDraftStepResult(binding.stepId, stepResult);
+    if (!(settlement instanceof DraftExecutionSettlement)
+      || settlement.kind !== receipt.settlementKind
+      || settlement.resultKind !== receipt.resultKind
+      || settlement.resultType !== receipt.resultType) {
+      throw new TypeError("Draft execution identity Settlement is invalid");
+    }
+    this.receiptId = receipt.id;
+    this.stepResult = stepResult;
+    this.settlement = settlement;
     Object.freeze(this);
   }
+
+  matches(stepResult, settlement) {
+    return stepResult instanceof StepResult
+      && settlement instanceof DraftExecutionSettlement
+      && stepResult.stepId === this.stepResult.stepId
+      && stepResultDigest(stepResult) === stepResultDigest(this.stepResult)
+      && settlement.kind === this.settlement.kind
+      && settlement.sourceStepId === this.settlement.sourceStepId
+      && settlement.resultKind === this.settlement.resultKind
+      && settlement.resultType === this.settlement.resultType;
+  }
+}
+
+function draftStepExecutionIdentity(binding, receipt) {
+  return new DraftStepExecutionIdentity(DRAFT_STEP_EXECUTION_IDENTITY_TOKEN, { binding, receipt });
 }
 
 function draftRefineReceiptMatchesBinding(receipt, binding) {
@@ -4857,6 +4931,7 @@ function draftRefineReceiptMatchesBinding(receipt, binding) {
 export class DraftRefineStepState {
   #selection;
   #settlement;
+  #executionIdentity;
 
   constructor({ binding, settlement = null, resume = null, resumeAfterSettlement = false } = {}) {
     if (binding?.stepId !== "draft-refine"
@@ -4917,6 +4992,9 @@ export class DraftRefineStepState {
       attemptSequence: binding.attempt.sequence,
     });
     this.#settlement = settlement;
+    this.#executionIdentity = this.#selection === "worker-execution"
+      ? draftStepExecutionIdentity(binding, settlement)
+      : null;
     this.resumeReceiptId = resume?.id ?? null;
     Object.freeze(this);
   }
@@ -4924,12 +5002,7 @@ export class DraftRefineStepState {
   get requiresStepSelection() { return this.#selection === "step-selection-required"; }
 
   executionIdentity() {
-    return this.#selection === "worker-execution"
-      ? new DraftRefineExecutionIdentity(
-          DRAFT_REFINE_EXECUTION_IDENTITY_TOKEN,
-          this.#settlement.id,
-        )
-      : null;
+    return this.#executionIdentity;
   }
 
   awaitQuestionIdentity() {

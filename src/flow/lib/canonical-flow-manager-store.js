@@ -3737,8 +3737,8 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  #draftSettlementBindingActivities(resolved, receiptBinding) {
-    return this.activityLedger(resolved).filter((entry) => {
+  #draftSettlementBindingActivities(resolved, receiptBinding, activities = null) {
+    return (activities ?? this.activityLedger(resolved)).filter((entry) => {
       const persisted = entry.result?.draftSettlementReceipt;
       return persisted?.binding.runId === receiptBinding.runId
         && persisted.binding.specId === receiptBinding.specId
@@ -3767,29 +3767,29 @@ export class CanonicalFlowManagerStore {
   draftStepExecutionState({ specId = null, binding } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const state = this.runtime.load(resolved);
+    const snapshot = this.runtime.loadSnapshot(resolved);
+    if (snapshot === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const state = snapshot.state;
     if (binding?.runId !== state.runId || binding?.specId !== state.specId
       || binding?.stepId !== state.current?.at(-1)
       || binding?.attempt?.id !== state.attempt?.id
       || binding?.attempt?.sequence !== state.attempt?.sequence) {
       throw new CurrentFlowStateConflictError("Draft execution state binding is stale");
     }
-    const receipts = this.#draftSettlementBindingActivities(resolved, {
+    const receiptBinding = {
       runId: binding.runId,
       specId: binding.specId,
       stepId: binding.stepId,
       attemptId: binding.attempt.id,
       attemptSequence: binding.attempt.sequence,
-    }).map((entry) => entry.result.draftSettlementReceipt)
+    };
+    const receipts = this.#draftSettlementBindingActivities(resolved, receiptBinding, snapshot.activities)
+      .map((entry) => entry.result.draftSettlementReceipt)
       .filter((receipt) => receipt.executionLifecycle !== null);
     const latest = receipts.at(-1) ?? null;
     return new DraftStepExecutionState({
       binding,
-      receiptId: latest?.id ?? null,
-      lifecycle: latest === null
-        ? null : DraftStepExecutionLifecycle.fromJSON(
-          latest.executionLifecycle.toJSON?.() ?? latest.executionLifecycle,
-        ),
+      receipt: latest,
     });
   }
 

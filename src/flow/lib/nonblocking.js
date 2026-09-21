@@ -43,7 +43,6 @@ const MAX_TEXT = 2_000;
 const ACTIONS = Object.freeze(["repair", "retry", "continue"]);
 const RESULT_KINDS = Object.freeze(["quality", "tooling", "unavailable"]);
 const CANONICAL_EVIDENCE_KEYS = Object.freeze({
-  "draft-gate": "draft.gate",
   "spec-gate": "spec.gate",
   "test-result-review": "test.result.review",
   "task-review": "task.review",

@@ -90,6 +90,7 @@ export class DraftGateRepairScenario {
       state,
       invocation,
       deferPreparation: true,
+      deferConditionalAdmission: true,
     });
     const binding = new DraftWorkerExecutionStepBinding({
       flowManager: this.flowManager,
@@ -117,6 +118,11 @@ export class DraftGateRepairScenario {
         actionDigest: this.request.actionDigest,
         requestDigest: this.request.requestDigest,
       }),
+    });
+    this.coordinator.admitConditionalDraftRequest({
+      ctx: this.ctx,
+      state: this.flowManager.loadReadOnly(this.specId),
+      request: this.request,
     });
     this.request.prepare();
     return this.request;

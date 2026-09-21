@@ -33,7 +33,6 @@ import {
   DraftReviewExecutionClaim,
   DraftReviewExecutionTargetIdentity,
   flowLeafIdsBetween,
-  settleDraftStepResult,
   TaskReviewFailureFacts,
   resolveTaskReviewFailure,
 } from "../definition.js";
@@ -233,7 +232,6 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
     stepId: stepResult.stepId,
     attempt: state.attempt,
   });
-  const settlement = settleDraftStepResult(binding.stepId, stepResult);
   const executionState = flowManager.draftStepExecutionState({ binding });
   const target = new DraftReviewExecutionTargetIdentity(manifest.target.toJSON());
   const current = executionState.lifecycle;
@@ -282,19 +280,24 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
   }
   const source = new CanonicalDraftReviewSource({ flowManager, state, phase });
   const stepBinding = await new DraftReviewConnector(source).connect();
+  const recoveredIdentity = executionState.executionIdentity();
+  let selectedStepResult = recoveredIdentity?.stepResult ?? null;
+  let selectedSettlement = recoveredIdentity?.settlement ?? null;
   let selected = stepResult;
   if (checkpointRequired) {
     const service = new ReviewService({
       flowManager,
       binding: stepBinding,
-      executionCheckpointer: (selectedResult, selectedSettlement, selectedBinding) => (
-        flowManager.checkpointDraftStepExecution({
+      executionCheckpointer: (selectedResult, settlementSelection, selectedBinding) => {
+        selectedStepResult = selectedResult;
+        selectedSettlement = settlementSelection;
+        return flowManager.checkpointDraftStepExecution({
           binding: selectedBinding,
           stepResult: selectedResult,
-          settlement: selectedSettlement,
+          settlement: settlementSelection,
           executionBinding,
-        })
-      ),
+        });
+      },
     });
     selected = await new StepFactory()
       .provide(ReviewService, service)
@@ -304,10 +307,13 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
   if (selected.kind !== stepResult.kind) {
     throw new Error("Draft review pre-execution Step selected an invalid Result");
   }
+  if (selectedStepResult?.kind !== selected.kind || selectedSettlement === null) {
+    throw new Error("Draft review execution lacks its persisted Step selection");
+  }
   flowManager.claimDraftStepExecution({
     binding: stepBinding,
-    stepResult: selected,
-    settlement,
+    stepResult: selectedStepResult,
+    settlement: selectedSettlement,
     executionBinding,
     executionClaim: new DraftReviewExecutionClaim(),
   });
@@ -327,10 +333,12 @@ function checkpointFailedDraftReviewExecution({ flowManager, state, phase }) {
   if (execution.lifecycle?.phase !== "claimed"
     || !(execution.lifecycle.binding instanceof DraftReviewExecutionBinding)) return false;
   const prior = execution.lifecycle.binding;
+  const executionIdentity = execution.executionIdentity();
+  if (executionIdentity === null) return false;
   flowManager.checkpointDraftStepExecution({
     binding,
-    stepResult,
-    settlement: settleDraftStepResult(binding.stepId, stepResult),
+    stepResult: executionIdentity.stepResult,
+    settlement: executionIdentity.settlement,
     executionBinding: new DraftReviewExecutionBinding({
       executionGeneration: prior.executionGeneration + 1,
       manifestDigest: prior.manifestDigest,

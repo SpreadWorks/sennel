@@ -8,6 +8,7 @@ import {
   DraftGateRepairAppliedResult,
   DraftGateRepairCarryForwardResult,
   DraftGateRepairWorkerRequiredResult,
+  DraftRefineWorkerRequiredResult,
 } from "../../../src/flow/engine/step-result.js";
 import {
   GateObservationRepair,
@@ -156,6 +157,46 @@ describe("dedicated draft Gate repair handoff", () => {
       request.prepare();
       assert.equal(fs.existsSync(request.requestPath), true);
       assert.equal(value.flowManager.draftStepExecutionState({ binding }).lifecycle.phase, "claimed");
+    } finally {
+      removeTmpDir(value.root);
+    }
+  });
+
+  it("rejects publication with a different persisted execution selection before mutation", () => {
+    const value = setup("521-gate-repair-execution-selection-mismatch");
+    try {
+      const request = value.scenario.createRequest();
+      seal(request, value.scenario.replacement("goal", "Retain the complete behavior explicitly."));
+      const preparation = value.scenario.coordinator.prepareDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+      });
+      const binding = new DraftWorkerExecutionStepBinding({
+        flowManager: value.flowManager,
+        specId: value.scenario.specId,
+        stepId: "draft-gate-repair",
+      });
+      const mismatchedResult = new DraftRefineWorkerRequiredResult();
+      const before = {
+        state: value.flowManager.canonicalState(value.scenario.specId).toJSON(),
+        activities: value.flowManager.activityLedger(value.scenario.specId),
+        catalog: value.flowManager.artifactCatalog(value.scenario.specId).toJSON(),
+      };
+
+      assert.throws(
+        () => value.scenario.coordinator.publishDraftWorker({
+          ctx: value.scenario.ctx,
+          request,
+          preparation,
+          stepResult: mismatchedResult,
+          settlement: settleDraftStepResult(mismatchedResult.stepId, mismatchedResult),
+          binding,
+        }),
+        (error) => error.code === "FLOW_DRAFT_EXECUTION_SELECTION_MISMATCH",
+      );
+      assert.deepEqual(value.flowManager.canonicalState(value.scenario.specId).toJSON(), before.state);
+      assert.deepEqual(value.flowManager.activityLedger(value.scenario.specId), before.activities);
+      assert.deepEqual(value.flowManager.artifactCatalog(value.scenario.specId).toJSON(), before.catalog);
     } finally {
       removeTmpDir(value.root);
     }
@@ -627,6 +668,10 @@ describe("dedicated draft Gate repair handoff", () => {
     try {
       const request = value.scenario.createRequest();
       seal(request, value.scenario.replacement("goal", "Retain the complete behavior explicitly."));
+      const preparation = value.scenario.coordinator.prepareDraftWorker({
+        ctx: value.scenario.ctx,
+        request,
+      });
       const source = value.flowManager.readArtifact({
         specId: value.scenario.specId, logicalKey: "issue.log", consumerNodeId: "draft-gate-repair",
       });
@@ -641,7 +686,31 @@ describe("dedicated draft Gate repair handoff", () => {
       const draftBefore = value.flowManager.readArtifact({
         specId: value.scenario.specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair",
       }).descriptor.hash;
-      assert.throws(() => value.scenario.coordinator.reconcile({ ctx: value.scenario.ctx, request }));
+      const before = {
+        state: value.flowManager.canonicalState(value.scenario.specId).toJSON(),
+        activities: value.flowManager.activityLedger(value.scenario.specId),
+        catalog: value.flowManager.artifactCatalog(value.scenario.specId).toJSON(),
+      };
+      const binding = new DraftWorkerExecutionStepBinding({
+        flowManager: value.flowManager,
+        specId: value.scenario.specId,
+        stepId: "draft-gate-repair",
+      });
+      const executionIdentity = value.flowManager.draftStepExecutionState({ binding }).executionIdentity();
+      assert.throws(
+        () => value.scenario.coordinator.publishDraftWorker({
+          ctx: value.scenario.ctx,
+          request,
+          preparation,
+          stepResult: executionIdentity.stepResult,
+          settlement: executionIdentity.settlement,
+          binding,
+        }),
+        /canonical plan gate repair source evidence changed or is missing/,
+      );
+      assert.deepEqual(value.flowManager.canonicalState(value.scenario.specId).toJSON(), before.state);
+      assert.deepEqual(value.flowManager.activityLedger(value.scenario.specId), before.activities);
+      assert.deepEqual(value.flowManager.artifactCatalog(value.scenario.specId).toJSON(), before.catalog);
       assertNoRepairPublication(value.flowManager, value.scenario.specId, draftBefore);
     } finally {
       removeTmpDir(value.root);

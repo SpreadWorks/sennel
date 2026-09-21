@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import {
   DraftAwaitQuestionIdentity,
-  DraftRefineExecutionIdentity,
+  DraftStepExecutionIdentity,
   DraftRefineStepState,
   DraftStepExecutionLifecycle,
   DraftStepSettlementPublication,
@@ -65,7 +65,7 @@ test("DraftRefineStepState projects unselected, execution, Await, and resumed se
   const executing = new DraftRefineStepState({ binding: binding(), settlement: workerReceipt });
   const executionIdentity = executing.executionIdentity();
   assert.equal(executing.requiresStepSelection, false);
-  assert.equal(executionIdentity instanceof DraftRefineExecutionIdentity, true);
+  assert.equal(executionIdentity instanceof DraftStepExecutionIdentity, true);
   assert.equal(executionIdentity.receiptId, workerReceipt.id);
   assert.equal(executionIdentity.stepResult instanceof DraftRefineWorkerRequiredResult, true);
   assert.equal(executionIdentity.settlement.kind, "execution");

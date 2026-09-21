@@ -72,7 +72,6 @@ import {
   resolveDefinitionRoute,
   resolveDispatcherOwnedFlowAction,
   resolveSourceHandoffTransitionPlan,
-  settleDraftStepResult,
 } from "../definition.js";
 import { CanonicalSpecApproval } from "./canonical-spec-approval.js";
 import { reconcileCompletedReviewWorkUnits } from "./review-work-unit.js";
@@ -92,9 +91,6 @@ import {
   DraftWorkerExecutionStepBinding,
   DraftWorkerStepBinding,
 } from "../engine/connectors/draft/draft-step-binding.js";
-import {
-  DraftGateRepairWorkerRequiredResult,
-} from "../engine/step-result.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 
 const DEFAULT_MAX_DISPATCHES = 256;
@@ -125,13 +121,6 @@ const NON_REPLAYABLE_HANDOFF_ERROR_CODES = new Set([
   "FLOW_SOURCE_HANDOFF_CANONICAL_PATH_VIOLATION",
 ]);
 const REQUIREMENT_TEST_WORKER_LEAVES = new Set(["test-generate", "test-repair"]);
-function draftGateRepairExecutionIdentity(stepId) {
-  if (stepId !== "draft-gate-repair") {
-    throw new Error(`no Draft Gate repair execution Result for ${stepId}`);
-  }
-  const stepResult = new DraftGateRepairWorkerRequiredResult();
-  return Object.freeze({ stepResult, settlement: settleDraftStepResult(stepId, stepResult) });
-}
 
 export async function draftWorkerStepDefinition(stepId) {
   switch (stepId) {
@@ -274,9 +263,7 @@ function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoff
       && error.classification === "recovery-required"
       && error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED";
     if (execution.lifecycle?.phase === "claimed" && !publicationRecoveryPending) {
-      const executionIdentity = stepId === "draft-refine"
-        ? ctx.flowManager.draftRefineStepState({ binding }).executionIdentity()
-        : draftGateRepairExecutionIdentity(stepId);
+      const executionIdentity = execution.executionIdentity();
       if (executionIdentity === null) {
         throw new Error("conditional Draft worker failure has no persisted execution identity");
       }
@@ -1518,9 +1505,8 @@ export default class RunDispatchCommand extends FlowCommand {
 
   async prepareConditionalDraftWorker({ ctx, state, invocation, workerInstructions, definition, retrying }) {
     const stepId = invocation.action.nextAction.step;
-    let executionIdentity = stepId === "draft-gate-repair"
-      ? draftGateRepairExecutionIdentity(stepId)
-      : null;
+    let selectedStepResult = null;
+    let selectedSettlement = null;
     const stepBinding = new DraftWorkerExecutionStepBinding({
       flowManager: ctx.flowManager,
       specId: state.specId,
@@ -1550,8 +1536,10 @@ export default class RunDispatchCommand extends FlowCommand {
       );
     }
     const reusePrior = !stepFirst && !retrying && ["checkpoint", "claimed", "publication"].includes(prior?.phase);
-    if (reusePrior && stepId === "draft-refine") {
-      executionIdentity = refineProjection.executionIdentity();
+    if (reusePrior) {
+      const recoveredIdentity = executionState.executionIdentity();
+      selectedStepResult = recoveredIdentity?.stepResult ?? null;
+      selectedSettlement = recoveredIdentity?.settlement ?? null;
     }
     const executionGeneration = reusePrior
       ? prior.executionGeneration
@@ -1591,7 +1579,10 @@ export default class RunDispatchCommand extends FlowCommand {
           workerInstructions,
           generatedAt: claimed?.generatedAt ?? null,
           deferPreparation: true,
-          deferConditionalAdmission: stepFirst,
+          // The request identity supplies the execution binding digests. The
+          // Step persists that exact selection before the request is admitted
+          // or materialized below.
+          deferConditionalAdmission: !reusePrior,
         });
     if (!(reusePrior && prior?.phase === "publication") && persistedRequest !== null
       && persistedRequest.requestDigest !== request.requestDigest) {
@@ -1620,7 +1611,8 @@ export default class RunDispatchCommand extends FlowCommand {
         flowManager: ctx.flowManager,
         binding: stepBinding,
         executionCheckpointer: (stepResult, settlement, binding) => {
-          executionIdentity = Object.freeze({ stepResult, settlement });
+          selectedStepResult = stepResult;
+          selectedSettlement = settlement;
           return ctx.flowManager.checkpointDraftStepExecution({
             binding,
             stepResult,
@@ -1646,7 +1638,7 @@ export default class RunDispatchCommand extends FlowCommand {
       }
       this.handoffCoordinator.admitConditionalDraftRequest({ ctx, state, request });
     }
-    if (executionIdentity === null) {
+    if (selectedStepResult === null || selectedSettlement === null) {
       throw new Error("conditional Draft execution lacks its Step-selected identity");
     }
     if (claimed === null) {
@@ -1658,8 +1650,8 @@ export default class RunDispatchCommand extends FlowCommand {
       });
       ctx.flowManager.claimDraftStepExecution({
         binding: stepBinding,
-        stepResult: executionIdentity.stepResult,
-        settlement: executionIdentity.settlement,
+        stepResult: selectedStepResult,
+        settlement: selectedSettlement,
         executionBinding,
         executionClaim,
       });
@@ -2043,27 +2035,18 @@ export default class RunDispatchCommand extends FlowCommand {
         stepId: request.stepId,
       });
       const execution = ctx.flowManager.draftStepExecutionState({ binding: attemptBinding });
-      const publicationBinding = execution.lifecycle?.phase === "publication"
-        ? attemptBinding
-        : request.stepId === "draft-gate-repair"
-          ? new DraftWorkerStepBinding({ request })
-          : await new definition.Connector(request).connect();
-      const publicationService = new DraftService({
-        flowManager: ctx.flowManager,
-        binding: publicationBinding,
-        executionCheckpointer: (stepResult, settlement, executionBinding) => (
-          this.handoffCoordinator.publishDraftWorker({
-            ctx, request, preparation: prepared, stepResult, settlement, binding: executionBinding,
-          })
-        ),
-      });
-      const publicationOutput = await new StepFactory()
-        .provide(DraftService, publicationService)
-        .create(definition.StepClass)
-        .execute();
-      if (!(settleDraftStepResult(request.stepId, publicationOutput) instanceof DraftExecutionSettlement)) {
-        throw new Error("Draft worker publication Step did not select its Execution Result");
+      const executionIdentity = execution.executionIdentity();
+      if (executionIdentity === null) {
+        throw new Error("Draft worker publication has no persisted execution selection");
       }
+      this.handoffCoordinator.publishDraftWorker({
+        ctx,
+        request,
+        preparation: prepared,
+        stepResult: executionIdentity.stepResult,
+        settlement: executionIdentity.settlement,
+        binding: attemptBinding,
+      });
       binding = attemptBinding;
     } else {
       binding = await new definition.Connector(request).connect();

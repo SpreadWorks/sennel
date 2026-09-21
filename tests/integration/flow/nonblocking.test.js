@@ -37,7 +37,7 @@ function attemptHistory(nodeId, logicalKey, payload) {
 }
 
 const EVIDENCE_KEY = {
-  "draft-gate": "draft.gate", "spec-gate": "spec.gate",
+  "spec-gate": "spec.gate",
   "test-result-review": "test.result.review",
   "impl-review": "impl.review", "impl-gate": "impl.gate", "acceptance-review": "acceptance.review",
   "final-regression": "final.regression", retro: "retro",

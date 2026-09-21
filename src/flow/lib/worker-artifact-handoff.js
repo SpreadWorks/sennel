@@ -32,7 +32,6 @@ import {
   DraftWorkerExecutionBinding,
   resolveRequirementTestLifecycle,
   resolveSourceHandoffTransitionPlan,
-  settleDraftStepResult,
   SourceHandoffTransitionPlan,
 } from "../definition.js";
 import { SourceHandoffFailureFacts } from "./source-handoff-failure.js";
@@ -43,12 +42,7 @@ import {
   readDraftCompletionCatalogDigest,
 } from "./draft-completion-connector.js";
 import { DraftTransitionFacts } from "./draft-transition-facts.js";
-import {
-  DraftGateRepairWorkerRequiredResult,
-  DraftRefineWorkerRequiredResult,
-  STEP_RESULT_TYPE,
-  StepResult,
-} from "../engine/step-result.js";
+import { STEP_RESULT_TYPE, StepResult } from "../engine/step-result.js";
 import { DraftStepPersistenceFailure } from "./definition-lifecycle-failure.js";
 import { CanonicalFlowFindingsStore } from "./flow-findings.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
@@ -4807,24 +4801,15 @@ function assertConditionalWorkerExecutionSelected({ flowManager, state, policy }
       { retryable: false, data: { stepId: policy.stepId } },
     );
   }
-  let workerSelected;
-  if (policy.stepId === "draft-refine") {
-    const typed = flowManager.canonicalState(canonical.specId);
-    const binding = {
-      runId: typed.runId,
-      specId: typed.specId,
-      stepId: "draft-refine",
-      attempt: typed.attempt,
-    };
-    const projected = flowManager.draftRefineStepState({ binding });
-    const lifecycle = flowManager.draftStepExecutionState({ binding }).lifecycle;
-    workerSelected = projected.executionIdentity() !== null
-      && ["checkpoint", "claimed", "publication"].includes(lifecycle?.phase);
-  } else {
-    const repair = currentPlanGateRepair({ flowManager, state: canonical, stepId: policy.stepId });
-    workerSelected = repair?.targetStepId === policy.stepId;
-  }
-  if (!workerSelected) {
+  const typed = flowManager.canonicalState(canonical.specId);
+  const binding = {
+    runId: typed.runId,
+    specId: typed.specId,
+    stepId: policy.stepId,
+    attempt: typed.attempt,
+  };
+  const execution = flowManager.draftStepExecutionState({ binding });
+  if (execution.executionIdentity() === null) {
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_WORKER_ACTION_NOT_SELECTED",
@@ -5293,6 +5278,11 @@ export class WorkerArtifactHandoffRequest {
         { retryable: false, recoveryPossible: false },
       );
     }
+    assertConditionalWorkerExecutionSelected({
+      flowManager: this.flowManager,
+      state: this.state,
+      policy: this.policy,
+    });
     // The handoff is an uncommitted work unit, not a Flow artifact. Keep it
     // inside the execution checkout that the worker is allowed to mutate.
     ensureRealDirectory(this.handoffRoot, this.executionRoot);
@@ -8395,6 +8385,9 @@ export class WorkerArtifactHandoffCoordinator {
     deferPreparation = false,
     deferConditionalAdmission = false,
   }) {
+    const stepId = invocation?.action?.nextAction?.step;
+    const deferAdmissionForPlanning = deferConditionalAdmission
+      || (deferPreparation && isConditionalDraftWorkerStep(stepId));
     const request = WorkerArtifactHandoffRequest.create({
       mainRoot: ctx.mainRoot || ctx.root,
       executionRoot: ctx.executionRoot || ctx.root,
@@ -8404,7 +8397,7 @@ export class WorkerArtifactHandoffCoordinator {
       now: this.now,
       generatedAt,
       workerInstructions,
-      deferConditionalAdmission,
+      deferConditionalAdmission: deferAdmissionForPlanning,
     });
     if (request === null) return null;
     if (request.policy.kind !== "source") return deferPreparation ? request : request.prepare();
@@ -9316,15 +9309,21 @@ export class WorkerArtifactHandoffCoordinator {
       };
     }
     if (isConditionalDraftWorkerStep(request.stepId)) {
-      const executionResult = request.stepId === "draft-refine"
-        ? new DraftRefineWorkerRequiredResult()
-        : new DraftGateRepairWorkerRequiredResult();
+      const executionIdentity = ctx.flowManager.draftStepExecutionState({ binding }).executionIdentity();
+      if (executionIdentity === null) {
+        throw new WorkerArtifactHandoffError(
+          "conflict",
+          "FLOW_DRAFT_EXECUTION_SELECTION_MISSING",
+          "conditional Draft worker publication requires its persisted execution selection",
+          { retryable: false, recoveryPossible: false, data: { stepId: request.stepId } },
+        );
+      }
       this.publishDraftWorker({
         ctx,
         request,
         preparation,
-        stepResult: executionResult,
-        settlement: settleDraftStepResult(request.stepId, executionResult),
+        stepResult: executionIdentity.stepResult,
+        settlement: executionIdentity.settlement,
         binding,
       });
       if (settlement instanceof DraftExecutionSettlement) {
@@ -9403,6 +9402,15 @@ export class WorkerArtifactHandoffCoordinator {
       stored: request,
     });
     const execution = ctx.flowManager.draftStepExecutionState({ binding });
+    const executionIdentity = execution.executionIdentity();
+    if (executionIdentity === null || !executionIdentity.matches(stepResult, settlement)) {
+      throw new WorkerArtifactHandoffError(
+        "conflict",
+        "FLOW_DRAFT_EXECUTION_SELECTION_MISMATCH",
+        "Draft worker publication does not match its persisted execution selection",
+        { retryable: false, recoveryPossible: false, data: { stepId: request.stepId } },
+      );
+    }
     if (execution.lifecycle?.phase === "publication") {
       const receipt = ctx.flowManager.activityLedger(request.specId).findLast((activity) => (
         activity.result?.draftSettlementReceipt?.id === execution.receiptId

@@ -58,6 +58,8 @@ import {
 import RunReviewCommand from "../../../../src/flow/lib/run-review.js";
 import { ReviewExecutionLease } from "../../../../src/flow/lib/review-execution-lease.js";
 import RunClaimNextActionCommand from "../../../../src/flow/lib/run-claim-next-action.js";
+import { WorkerArtifactHandoffCoordinator } from "../../../../src/flow/lib/worker-artifact-handoff.js";
+import { prepareConditionalDraftWorkerThroughStep } from "../../../support/infrastructure/draft-worker-step.js";
 import {
   createMemoryWorkUnitCheckpointStore,
   WorkUnitToolingFailure,
@@ -962,18 +964,31 @@ it("claims each Draft review manifest before provider execution and settles that
 
     fixture.activate("draft-questions-review");
     await runPhase("draft-questions");
-    for (const stepId of ["draft-refine", "draft-gate-repair"]) {
-      const skipped = await new RunClaimNextActionCommand().execute({
-        root, mainRoot: root, executionRoot: root, specId, phase: "draft",
-        flowManager: manager, flowState: manager.loadReadOnly(specId), config: {},
-      });
-      assert.equal(skipped.ok, true, JSON.stringify(skipped));
-      assert.equal(skipped.data.step, stepId);
-    }
-    manager.updateStepStatus(
-      { stepId: "draft-coverage-review", requestedStatus: "in_progress" },
-      { specId },
-    );
+    const commandCtx = {
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId), config: {},
+    };
+    const refineClaim = await new RunClaimNextActionCommand().execute(commandCtx);
+    assert.equal(refineClaim.ok, true, JSON.stringify(refineClaim));
+    assert.equal(refineClaim.data.step, "draft-refine");
+    const refine = await prepareConditionalDraftWorkerThroughStep({
+      coordinator: new WorkerArtifactHandoffCoordinator(),
+      ctx: commandCtx,
+      state: manager.loadReadOnly(specId),
+      invocation: {
+        id: "draft-review-execution-refine",
+        target: { digest: "c".repeat(64) },
+        action: { digest: "d".repeat(64), nextAction: { step: "draft-refine" } },
+      },
+    });
+    assert.equal(refine.request, null);
+    assert.equal(refine.stepResult.kind, "draft-refine-completed");
+    const coverageClaim = await new RunClaimNextActionCommand().execute({
+      ...commandCtx,
+      flowState: manager.loadReadOnly(specId),
+    });
+    assert.equal(coverageClaim.ok, true, JSON.stringify(coverageClaim));
+    assert.equal(coverageClaim.data.step, "draft-coverage-review");
     await runPhase("draft-coverage");
   } finally {
     removeTmpDir(root);

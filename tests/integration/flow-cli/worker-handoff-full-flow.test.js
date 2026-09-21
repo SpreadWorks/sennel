@@ -8,6 +8,8 @@ import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunFilterTaskReviewCommand from "../../../src/flow/lib/run-filter-task-review.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
+import RunClaimNextActionCommand from "../../../src/flow/lib/run-claim-next-action.js";
+import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import {
   flowArtifactAuthorityForStep,
   WORKER_ARTIFACT_HANDOFF_STEPS,
@@ -43,7 +45,10 @@ import {
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { validWorkerHandoffSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
-import { completeDraftWorkerThroughStep } from "../../support/infrastructure/draft-worker-step.js";
+import {
+  completeDraftWorkerThroughStep,
+  prepareConditionalDraftWorkerThroughStep,
+} from "../../support/infrastructure/draft-worker-step.js";
 
 const TASK_IDS = Object.freeze(["T1", "T2"]);
 const PREPARATION_LEAVES = new Set([
@@ -787,23 +792,47 @@ describe("deterministic full Flow worker handoff", () => {
     }
   });
 
-  it("routes a repaired draft through the coordinator and promotes one authorized operation", async () => {
+  it("runs Draft entry, a repair loop, reload, and terminal Spec connection through production APIs", async () => {
     const temporaryRoot = createTmpDir("worker-handoff-draft-coverage-repair-");
     try {
       const repository = temporaryRoot;
       const specId = "715f-worker-handoff-draft-coverage-repair";
-      const flowManager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false, specId });
-      const fixture = new CanonicalFlowFixture({ flowManager, specId, runId: "run-worker-handoff-draft-coverage-repair" });
+      let flowManager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false, specId });
+      const fixture = new CanonicalFlowFixture({
+        flowManager,
+        specId,
+        runId: "run-worker-handoff-draft-coverage-repair",
+        autoApprove: true,
+      });
       fixture.create().registerActive().activate("draft");
 
-      const sourceDraft = emptyQuestionLedgerDraft("draft coverage repair");
-      const sourceDraftBytes = Buffer.from(workerArtifactJson(sourceDraft), "utf8");
-      flowManager.confirmCurrentAttempt({
-        specId,
-        artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: sourceDraftBytes }],
-      });
+      const candidateQuestion = {
+        state: "CandidateQuestion",
+        id: "q1",
+        question: "Which validation behavior must the Draft retain?",
+        category: "user-visible-behavior",
+        revision: 0,
+        provenance: { producer: "production-scenario" },
+        evidenceDigest: "a".repeat(64),
+      };
+      const emptyDraft = emptyQuestionLedgerDraft("draft coverage repair");
+      const sourceDraft = {
+        ...emptyDraft,
+        decisionMap: { ...emptyDraft.decisionMap, requiresUserJudgment: [candidateQuestion.id] },
+        questionLedger: { ...emptyDraft.questionLedger, questions: [candidateQuestion] },
+      };
+      class InterruptAfterPublicationCoordinator extends WorkerArtifactHandoffCoordinator {
+        interrupted = false;
 
-      const coordinator = new WorkerArtifactHandoffCoordinator();
+        completePublishedDraftWorker(input) {
+          if (!this.interrupted) {
+            this.interrupted = true;
+            throw new Error("simulated interruption after conditional publication");
+          }
+          return super.completePublishedDraftWorker(input);
+        }
+      }
+      const coordinator = new InterruptAfterPublicationCoordinator();
       const ctx = {
         root: repository,
         mainRoot: repository,
@@ -811,16 +840,117 @@ describe("deterministic full Flow worker handoff", () => {
         specId,
         flowManager,
       };
-      fixture.settleBefore("draft-refine");
-      confirmCanonicalFixtureStep(flowManager, specId, "draft-refine");
-      confirmCanonicalFixtureStep(flowManager, specId, "draft-gate-repair");
+      const runDraftReview = async (manager, phase, { verdict, summary, repairTargets = [] }) => {
+        const command = new RunReviewCommand({
+          resolveTreeSha: () => "a".repeat(40),
+          resolveTargetStateDigest: () => "b".repeat(64),
+          runCommand(_command, _args, options) {
+            const worker = ReviewWorkUnit.fromEnvironment(options.env);
+            const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+            fs.writeFileSync(path.join(worker.root, worker.manifestDocument.output.basename), `${JSON.stringify({
+              version: 2,
+              phase,
+              sourceDraft: "draft.json",
+              sourceDraftRevision: source.revision,
+              generatedAt: "2026-09-20T00:00:00.000Z",
+              verdict,
+              summary,
+              blockingFindings: [],
+              advisoryFindings: [],
+              repairTargets,
+            }, null, 2)}\n`);
+            worker.seal();
+            return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+          },
+        });
+        const reviewCtx = {
+          ...ctx,
+          flowManager: manager,
+          phase: "draft",
+          flowState: manager.loadReadOnly(specId),
+          config: {},
+        };
+        const commandResult = await command.execute(reviewCtx);
+        assert.equal(commandResult.result, "ok", JSON.stringify(commandResult));
+        assert.equal(commandResult.artifacts.phase, phase);
+        await FLOW_COMMANDS.run.review.post(reviewCtx, commandResult);
+      };
 
-      fixture.activate("draft-coverage-review");
-      const draftArtifact = flowManager.readArtifact({
-        specId,
-        logicalKey: "draft",
-        consumerNodeId: "draft-coverage-review",
+      await completeArtifactHandoff({
+        coordinator,
+        ctx,
+        stepId: "draft",
+        invocationId: "draft-production-entry",
+        logicalName: "draft.json",
+        payload: sourceDraft,
       });
+      assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, "draft-questions-review");
+      flowManager.beginNextAction(specId);
+      await runDraftReview(flowManager, "draft-questions", {
+        verdict: "PASS",
+        summary: "No question-review finding remains.",
+      });
+      assert.equal(
+        flowManager.canonicalState(specId).nextAction().operation,
+        "start",
+        JSON.stringify(flowManager.loadReadOnly(specId), null, 2),
+      );
+      flowManager.beginNextAction(specId);
+      const refineState = flowManager.loadReadOnly(specId);
+      const refine = await prepareConditionalDraftWorkerThroughStep({
+        coordinator,
+        ctx,
+        state: refineState,
+        invocation: {
+          id: "draft-production-refine",
+          target: { digest: "5".repeat(64) },
+          action: { digest: "6".repeat(64), nextAction: { step: "draft-refine" } },
+        },
+      });
+      assert.notEqual(refine.request, null);
+      assert.equal(
+        flowManager.draftStepExecutionState({
+          binding: {
+            runId: flowManager.canonicalState(specId).runId,
+            specId,
+            stepId: "draft-refine",
+            attempt: flowManager.canonicalState(specId).attempt,
+          },
+        }).lifecycle.phase,
+        "claimed",
+      );
+      fs.writeFileSync(refine.request.payloadPath("draft.json"), workerArtifactJson(emptyDraft));
+      sealWorkerArtifactHandoff({
+        requestPath: refine.request.requestPath,
+        invocationId: refine.request.dispatchInvocationId,
+      });
+      await assert.rejects(
+        () => completeDraftWorkerThroughStep({ coordinator, ctx, request: refine.request }),
+        /simulated interruption after conditional publication/,
+      );
+      flowManager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false, specId });
+      ctx.flowManager = flowManager;
+      const publicationBinding = {
+        runId: flowManager.canonicalState(specId).runId,
+        specId,
+        stepId: "draft-refine",
+        attempt: flowManager.canonicalState(specId).attempt,
+      };
+      assert.equal(flowManager.draftStepExecutionState({ binding: publicationBinding }).lifecycle.phase, "publication");
+      const recoveredRefine = await completeDraftWorkerThroughStep({
+        coordinator,
+        ctx,
+        request: refine.request,
+      });
+      assert.equal(recoveredRefine.stepResult.kind, "draft-refine-completed");
+      assert.deepEqual(
+        flowManager.activityLedger(specId)
+          .filter((activity) => activity.nodeId === "draft-refine")
+          .map((activity) => activity.result?.draftSettlementReceipt?.executionLifecycle?.phase)
+          .filter((phase) => phase !== undefined),
+        ["checkpoint", "claimed", "publication", "terminal"],
+      );
+      flowManager.beginNextAction(specId);
       const reviewFinding = {
         title: "Clarify validation coverage",
         target: "analysis.validation",
@@ -828,32 +958,13 @@ describe("deterministic full Flow worker handoff", () => {
         evidence: "The current validation statement omits the repaired coverage behavior.",
         classification: "repair_target",
       };
-      publishAttemptArtifact(flowManager, specId, "draft-coverage-review", "draft.coverage.review", {
-        version: 2,
-        phase: "draft-coverage",
-        sourceDraft: "draft.json",
-        sourceDraftRevision: {
-          version: 1,
-          runId: flowManager.load(specId).runId,
-          specId,
-          sourceStepId: draftArtifact.descriptor.publicationStep,
-          digest: draftArtifact.descriptor.hash,
-          byteLength: draftArtifact.descriptor.size,
-          finalizedAt: "2026-08-28T00:00:00.000Z",
-        },
-        generatedAt: "2026-08-28T00:00:00.000Z",
+      await runDraftReview(flowManager, "draft-coverage", {
         verdict: "ADVISORY",
         summary: "One coverage repair is required.",
-        blockingFindings: [],
-        advisoryFindings: [],
         repairTargets: [reviewFinding],
-      }, new Map());
-      flowManager.updateStepStatus(
-        { stepId: "draft-coverage-review", requestedStatus: "done" },
-        { specId },
-      );
-
-      fixture.activate("draft-coverage-triage");
+      });
+      assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, "draft-coverage-triage");
+      flowManager.beginNextAction(specId);
       const triage = {
         version: 1,
         phase: "draft-coverage-triage",
@@ -875,7 +986,8 @@ describe("deterministic full Flow worker handoff", () => {
         payload: triage,
       });
 
-      fixture.activate("draft-coverage-repair");
+      assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, "draft-coverage-repair");
+      flowManager.beginNextAction(specId);
       const repairHandoff = coordinator.createRequest({
         ctx,
         state: flowManager.load(specId),
@@ -962,6 +1074,58 @@ describe("deterministic full Flow worker handoff", () => {
       assert.equal(
         reloaded.activityLedger(specId).filter((activity) => activity.transition.stepConnectionReceipt?.kind === "draft-completion").length,
         0,
+      );
+
+      reloaded.beginNextAction(specId);
+      await runDraftReview(reloaded, "draft-coverage", {
+        verdict: "PASS",
+        summary: "The repaired Draft now covers the required behavior.",
+      });
+      assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "draft-gate");
+      reloaded.beginNextAction(specId);
+      const gateResult = new CanonicalGatePromotion({
+        state: reloaded.canonicalState(specId),
+        phase: "draft",
+        nodeId: "draft-gate",
+      }).promote({ result: "pass", artifacts: { phase: "draft", evaluations: [] } });
+      await FLOW_COMMANDS.run.gate.post({
+        ...ctx,
+        flowManager: reloaded,
+        flowState: reloaded.loadReadOnly(specId),
+        phase: "draft",
+      }, gateResult);
+      const specAction = await new GetNextActionCommand().execute({
+        ...ctx,
+        flowManager: reloaded,
+        flowState: reloaded.loadReadOnly(specId),
+        config: {},
+      });
+      assert.equal(specAction.step, "spec");
+      assert.equal(specAction.directive.actionId, "CLAIM_NEXT_ACTION");
+      const claimedSpec = await new RunClaimNextActionCommand().execute({
+        ...ctx,
+        flowManager: reloaded,
+        flowState: reloaded.loadReadOnly(specId),
+        config: {},
+      });
+      assert.equal(claimedSpec.ok, true, JSON.stringify(claimedSpec));
+      const specRequest = coordinator.createRequest({
+        ctx: { ...ctx, flowManager: reloaded },
+        state: reloaded.loadReadOnly(specId),
+        invocation: {
+          id: "draft-production-spec-connection",
+          target: { digest: "3".repeat(64) },
+          action: { digest: "4".repeat(64), nextAction: { step: "spec" } },
+        },
+        deferPreparation: true,
+      });
+      const draftInput = specRequest.inputs.find((entry) => entry.name === "draft.json");
+      assert.equal(draftInput.document.analysis.validation, repairedValue);
+      assert.equal(
+        reloaded.activityLedger(specId).filter((activity) => (
+          activity.result?.draftSettlementReceipt?.targetStepId === "spec"
+        )).length,
+        1,
       );
     } finally {
       removeTmpDir(temporaryRoot);
