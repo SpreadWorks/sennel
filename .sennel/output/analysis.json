@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-21T04:17:20.024Z",
+  "analyzedAt": "2026-09-21T06:19:43.912Z",
   "package": {
     "entries": [
       {
@@ -3609,9 +3609,9 @@
       },
       {
         "file": "src/flow/definition.js",
-        "hash": "617c4f43ecba898dd657735f15393863",
-        "lines": 6341,
-        "mtime": "2026-09-21T04:16:46.084Z",
+        "hash": "0c5d423a0be5909955b032f79646aa2a",
+        "lines": 6284,
+        "mtime": "2026-09-21T05:38:21.884Z",
         "className": "definition",
         "methods": [
           "RetryRecoveryBasis",
@@ -3627,8 +3627,6 @@
           "SourceHandoffTransitionPlan",
           "resolveSourceHandoffTransitionPlan",
           "resolveTaskReviewStageTransition",
-          "resolveDraftCompletionConnector",
-          "DraftCompletionSettlementApplication",
           "GateTransitionDisposition",
           "GatePassDisposition",
           "GateRetryDisposition",
@@ -3924,8 +3922,6 @@
           "SourceHandoffTransitionPlan",
           "resolveSourceHandoffTransitionPlan",
           "resolveTaskReviewStageTransition",
-          "resolveDraftCompletionConnector",
-          "DraftCompletionSettlementApplication",
           "GateTransitionDisposition",
           "GatePassDisposition",
           "GateRetryDisposition",
@@ -4178,24 +4174,23 @@
           "src/flow/registry.js"
         ],
         "id": "2cb27b93",
-        "summary": "Central flow-definition and transition-orchestration module",
-        "detail": "Defines flow and task node structures; resolves retry limits, tooling retry limits, side effects, lifecycle ownership, dispatcher-owned actions, prerequisites, branch leaves, phase mappings, nodes, active steps, task identifiers, next actions, and initial nested or task-step state. Orchestrates lifecycle plans, gate and non-gate transitions, retry and recovery policies, draft-step settlement, finalization recovery, test-chain transitions, nonblocking eligibility, and source-quality recovery while enforcing typed facts, canonical evidence bindings, valid step transitions, retry limits, lifecycle ownership, and consistency among decisions, effects, and persisted execution state. Recursive traversal is depth-limited, active-step scanning is bounded and cached by definition ordering, and Task Review reconciliation is authorized only for an unpublished recovered Attempt without a baseline or prior reconciliation.",
+        "summary": "Defines the flow engine’s typed policies, traversal utilities, step-state initialization, routing, lifecycle, recovery, and reconciliation behavior.",
+        "detail": "This module centralizes validated domain objects and resolvers for retry and finalization recovery, requirement-test and task-review lifecycles, source handoff, Gate and non-Gate decisions, draft-step settlement, route selection, lifecycle actions, flow definitions, prerequisite discovery, and persisted execution consistency. It recursively flattens branch leaves, collects leaf IDs, derives phase maps and prerequisites, resolves nodes and branch membership, locates active tasks and the latest in-progress leaf, derives next actions, and builds initial nested and task step states. Traversal is guarded by maximum-depth and 500-step scan limits, definition order is cached with a WeakMap, and typed facts, dispositions, plans, identities, immutable configuration, digest checks, and guarded constructors preserve consistency. Task Review reconciliation rejects unauthorized orphaned or improperly recovered states.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-21T04:18:36.594Z",
+          "processedAt": "2026-09-21T06:21:43.495Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
-          "flow definition",
-          "transition orchestration",
-          "lifecycle planning",
-          "retry recovery",
-          "step traversal",
-          "branch mapping",
-          "draft settlement",
-          "task reconciliation"
+          "flow traversal",
+          "recovery planning",
+          "step state",
+          "prerequisites",
+          "branch resolution",
+          "task review",
+          "lifecycle actions",
+          "typed decisions"
         ]
       },
       {
@@ -5729,9 +5724,9 @@
       },
       {
         "file": "src/flow/lib/canonical-flow-manager-store.js",
-        "hash": "e0053c5d03e45bcfda3c2f665c5ba231",
-        "lines": 7357,
-        "mtime": "2026-09-21T04:16:46.085Z",
+        "hash": "55ccb0cc925a7ded99a740f7ac09f42d",
+        "lines": 7380,
+        "mtime": "2026-09-21T05:38:21.886Z",
         "className": "canonical-flow-manager-store",
         "methods": [
           "CanonicalRawActivityReplayOnlyError",
@@ -5881,24 +5876,23 @@
           "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "041f2538",
-        "summary": "Canonical flow manager store coordinating durable flow state, lifecycle transitions, attempts, artifacts, reviews, gates, and recovery.",
-        "detail": "Implements the central CanonicalFlowManagerStore with validation and admission logic for canonical flow creation, task and step identity, execution modes, attempts, retries, failures, recoveries, draft settlements, requirement-test lifecycles, Task Review stages, Gate decisions, source handoffs, artifact publication, issue logs, metrics, notes, outbox operations, approvals, upgrades, nonblocking activations, step connections, command attempt history, and Flow Version resolution. It enforces canonical contracts and durable invariants through snapshots, typed decisions, activity ledgers, artifact catalogs, digests, idempotency checks, conflict detection, and invariant errors. The store rejects stale definition selections, identity or ownership conflicts, invalid catalog mappings, incomplete publications, and mutations that do not match the active attempt or canonical contract; it projects runtime state for consumers and delegates durable persistence and specialized operations to CanonicalFlowRuntime.",
+        "summary": "Canonical flow manager store that validates, persists, and advances workflow state across tasks, reviews, gates, drafts, tests, artifacts, and recovery paths.",
+        "detail": "This module is the central controller for canonical Flow state. It builds projected runtime views; validates typed requests, admissions, Definition-selected nonblocking activations, decisions, continuations, and restarts; enforces optimistic consistency and canonical identity checks; manages active Attempts, retries, history, and Task Review retry archives; settles task, review, draft, and requirement-test lifecycles; records metrics and notes; catalogs artifacts, validates producer ownership, reads filesystem-backed content, publishes artifacts and issue logs, coordinates source handoffs, manages outbox operations, and resolves Flow Version locations. Persistence is protected by fingerprints, sealed decisions, lineage bindings, stable activity identifiers, conflict detection, and artifact contracts so stale, mismatched, unauthorized, malformed, or incomplete effects cannot overwrite active state; invalid conditions raise CurrentFlowStateInvariantError. Recovery and rewind operations restore or advance state while preserving these durable invariants.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-21T04:18:36.594Z",
+          "processedAt": "2026-09-21T06:21:43.495Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
           "canonical flow state",
-          "lifecycle transitions",
-          "attempt management",
-          "artifact catalog",
-          "task review",
-          "gate decisions",
-          "retry recovery",
-          "draft publication"
+          "workflow orchestration",
+          "attempt settlement",
+          "artifact publication",
+          "draft lifecycle",
+          "task review retries",
+          "optimistic consistency",
+          "recovery handling"
         ]
       },
       {
@@ -7181,9 +7175,9 @@
       },
       {
         "file": "src/flow/lib/draft-completion-connector.js",
-        "hash": "db85aabd8c9a2eb6fac8162794de2d5c",
-        "lines": 629,
-        "mtime": "2026-09-20T02:18:09.326Z",
+        "hash": "34dffa6bcea28150dfce082faa10ac68",
+        "lines": 669,
+        "mtime": "2026-09-21T05:38:21.886Z",
         "className": "draft-completion-connector",
         "methods": [
           "DraftCompletionAttemptIdentity",
@@ -7194,9 +7188,11 @@
           "DraftCompletionDecisionEvidence",
           "DraftCompletionFacts",
           "DraftCompletionConnector",
+          "DraftCompletionSettlementApplication",
           "StepConnectionReceipt",
           "createDraftCompletionReceipt",
           "createDraftCompletionConnector",
+          "createDraftCompletionSettlementApplication",
           "isDraftCompletionConnector",
           "readDraftCompletionCatalogDigest",
           "readCoveragePassDraftCompletionFacts",
@@ -7230,9 +7226,11 @@
           "DraftCompletionDecisionEvidence",
           "DraftCompletionFacts",
           "DraftCompletionConnector",
+          "DraftCompletionSettlementApplication",
           "StepConnectionReceipt",
           "createDraftCompletionReceipt",
           "createDraftCompletionConnector",
+          "createDraftCompletionSettlementApplication",
           "isDraftCompletionConnector",
           "readDraftCompletionCatalogDigest",
           "readCoveragePassDraftCompletionFacts",
@@ -7247,22 +7245,22 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "0a48a12e",
-        "summary": "Provides typed connector and receipt infrastructure for completing draft artifacts.",
-        "detail": "Defines draft completion facts, revision and lineage identities, decision evidence, connector creation, catalog digest readers, and immutable step-connection receipts. It validates source and target bindings, canonical draft digests, lifecycle eligibility, publication consistency, and prospective or coverage-pass completion data.",
+        "summary": "Typed connector for validating and settling draft-completion transitions.",
+        "detail": "The module defines immutable completion identities, revisions, catalog bindings, lineage, decision evidence, facts, connectors, settlement applications, and step-connection receipts. It computes stable SHA-256 digests, validates JSON-shaped inputs and eligibility, preserves canonical draft lineage, serializes published drafts, and reads coverage-pass or prospective completion facts through the flow manager. Receipt consistency checks ensure that decision source and canonical draft lineage remain aligned.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-20T02:20:54.779Z",
+          "processedAt": "2026-09-21T06:21:43.495Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
           "draft completion",
-          "artifact lineage",
-          "canonical digest",
-          "step receipt",
-          "coverage pass",
-          "lifecycle validation"
+          "typed connector",
+          "lineage",
+          "catalog digest",
+          "settlement receipt",
+          "decision evidence",
+          "coverage pass"
         ]
       },
       {
@@ -13426,9 +13424,9 @@
       },
       {
         "file": "src/flow/lib/run-dispatch.js",
-        "hash": "e058799b8b9c5d0ebbe06e9717cbbb4d",
-        "lines": 2818,
-        "mtime": "2026-09-21T04:16:46.086Z",
+        "hash": "3b52aea11736c2571379868f2935e4ee",
+        "lines": 2820,
+        "mtime": "2026-09-21T05:38:21.887Z",
         "className": "run-dispatch",
         "methods": [
           "draftWorkerStepDefinition",
@@ -13531,12 +13529,12 @@
         "extends": "Error",
         "usedBy": null,
         "id": "6c7fd82a",
-        "summary": "Flow dispatch controller coordinating command execution, worker handoffs, approvals, retries, and repository integrity checks.",
-        "detail": "Defines dispatch commands, worker invocation and handoff models, failure classification, nonblocking agent decisions, approval receipts, dispatch leases, process locking, repository fingerprints, and boundary outcomes. It validates next-action bindings and schemas, persists authorized approval mutations, records canonical diagnostics, handles Draft and requirement-test worker failures, and returns structured flow envelopes or blocked and retryable boundaries.",
-        "chapter": "internal_design",
+        "summary": "Flow dispatch command coordinating approvals, worker handoffs, retries, and dispatch boundaries.",
+        "detail": "The dispatcher loads flow context and commands, acquires dispatch leases and process locks, captures targets and repository fingerprints, persists approval receipts, and executes registered or dispatcher-owned actions. It validates next-action bindings, handles nonblocking agent decisions, manages worker artifact handoffs and retry feedback, integrates Draft and requirement-test workers, records failures and deferred metrics, and returns FlowDispatchBoundary or Envelope results for blocked, failed, or progressing execution.",
+        "chapter": "project_structure",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-21T04:18:36.594Z",
+          "processedAt": "2026-09-21T06:21:43.495Z",
           "attempts": 1
         },
         "keywords": [
@@ -13545,9 +13543,8 @@
           "approval receipt",
           "repository fingerprint",
           "dispatch lease",
-          "agent failure",
-          "nonblocking decision",
-          "retry feedback"
+          "retry feedback",
+          "agent decision"
         ]
       },
       {
@@ -18997,9 +18994,9 @@
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "52dc4d1246e052b782bbacd302228d2f",
-        "lines": 10016,
-        "mtime": "2026-09-21T04:16:46.088Z",
+        "hash": "fe56f2b935003136805ee3827b4ea929",
+        "lines": 10028,
+        "mtime": "2026-09-21T05:38:21.889Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "WorkerArtifactHandoffError",
@@ -19329,24 +19326,26 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Coordinates secure worker artifact handoffs, validation, publication, mutation tracking, rollback, and recovery.",
-        "detail": "Implements the worker artifact handoff lifecycle for source and draft workers. It validates bounded JSON inputs, sealed submissions, payload manifests, and step-specific artifact policies; binds artifacts to immutable Flow and repository authority checkpoints; verifies source ownership and mutation manifests; records publication and settlement receipts; serializes handoff requests and submissions; seals parent- and worker-produced artifacts; and maintains canonical handoff state and observation advances. The module tracks source mutations, creates rollback checkpoints, enforces rollback and recovery when execution cannot be trusted, quarantines invalid handoffs, performs safe cleanup, and supports replay and reconciliation. It also coordinates draft repair, test-review repair, typed repair reports, Requirement test recovery, retry exhaustion, upgrade results, publication baselines, and immutable identity binding across execution paths.",
+        "summary": "Implements the durable worker artifact handoff protocol for Flow workers, covering validation, publication, source-mutation authority, recovery, rollback, quarantine, retries, and cleanup.",
+        "detail": "This module defines the contracts, identity bindings, policies, validation rules, and filesystem workflows used to exchange artifacts between parent Flow processes and worker executions. It supports artifact-only and source-mutating workers, validates sealed manifests, bounded payloads, paths, immutable baselines, receipts, publication records, canonical inputs, and semantic revisions, and verifies repository authority through Git or filesystem snapshots. It records source-mutation manifests, enforces checkpoint-bound authority, detects stale, malformed, ambiguous, or untrusted handoffs, and provides atomic digest-checked publication, retry classification, canonical observation advances, rollback checkpoints, recovery, quarantine, and safe cleanup. Requirement-test, review-repair, triage, plan-gate repair, and implementation workflows receive specialized typed handoff structures.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-21T04:18:36.594Z",
+          "processedAt": "2026-09-21T06:21:43.495Z",
           "attempts": 1
         },
         "app": "senti",
         "keywords": [
           "worker handoff",
           "artifact validation",
-          "checkpoint validation",
-          "source mutation",
-          "rollback recovery",
           "artifact publication",
-          "repair reports",
-          "reconciliation"
+          "source mutation tracking",
+          "repository authority",
+          "checkpoint recovery",
+          "rollback",
+          "payload integrity",
+          "quarantine",
+          "Flow workers"
         ]
       },
       {
@@ -19722,11 +19721,12 @@
       },
       {
         "file": "src/flow/services/draft-service.js",
-        "hash": "a909bedafb86e07ded7ff70e89138af9",
-        "lines": 215,
-        "mtime": "2026-09-20T18:40:43.544Z",
+        "hash": "7c0a3194e101a82d5b6daf0d415c10d9",
+        "lines": 249,
+        "mtime": "2026-09-21T06:04:02.392Z",
         "className": "draft-service",
         "methods": [
+          "DraftWorkerCompletionFacts",
           "DraftService"
         ],
         "imports": [
@@ -19735,36 +19735,38 @@
           "../definition.js",
           "../lib/definition-lifecycle-failure.js",
           "../lib/draft-transition-facts.js",
-          "../lib/plan-gate-repair.js"
+          "../lib/plan-gate-repair.js",
+          "../lib/draft-completion-connector.js"
         ],
         "exports": [
+          "DraftWorkerCompletionFacts",
           "DraftService"
         ],
         "extends": null,
         "usedBy": null,
         "id": "10278908",
-        "summary": "Provides the service layer for executing, checkpointing, settling, and persisting Draft worker results.",
-        "detail": "DraftService validates typed step bindings and canonical dependencies, manages Draft transition facts and gate-repair records, delegates worker execution and error commits, and converts persistence failures into durable Draft-specific failures and receipts.",
+        "summary": "Provides the Draft worker service for executing, settling, and durably persisting Draft step outcomes.",
+        "detail": "DraftService validates typed bindings, canonical settlement readers, worker facts, executors, error committers, and execution checkpointing. It creates completion facts, handles Draft refinement and plan-gate repair constraints, commits successful or failed worker results, and converts persistence problems into DraftStepPersistenceFailure instances.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "other",
         "enrich": {
-          "processedAt": "2026-09-20T18:42:48.790Z",
+          "processedAt": "2026-09-21T06:21:43.495Z",
           "attempts": 1
         },
         "keywords": [
           "DraftService",
           "worker execution",
           "step settlement",
-          "checkpointing",
-          "persistence failure",
-          "gate repair"
+          "result persistence",
+          "execution checkpoint",
+          "persistence failure"
         ]
       },
       {
         "file": "src/flow/services/review-service.js",
-        "hash": "4dbe4115a955bd3f499031d46a53a4fc",
-        "lines": 202,
-        "mtime": "2026-09-20T14:07:40.057Z",
+        "hash": "b8071e3ebc52ec3762f35f4bf294b515",
+        "lines": 215,
+        "mtime": "2026-09-21T06:04:02.392Z",
         "className": "review-service",
         "methods": [
           "ReviewService",
@@ -19780,7 +19782,8 @@
           "../engine/step-result.js",
           "../engine/connectors/draft/draft-step-binding.js",
           "../lib/definition-lifecycle-failure.js",
-          "../lib/draft-gate-prospective.js"
+          "../lib/draft-gate-prospective.js",
+          "../lib/draft-completion-connector.js"
         ],
         "exports": [
           "ReviewService",
@@ -19789,22 +19792,21 @@
         "extends": null,
         "usedBy": null,
         "id": "4ea8e8c7",
-        "summary": "Provides review and gate services for persisting canonical Draft review and gate results.",
-        "detail": "ReviewService validates typed review bindings, execution checkpoints, route identity, canonical Draft revisions, and concrete step results before committing settlements. GateService validates gate evaluation bindings, observed facts, and issue publications before persisting the gate result and receipt.",
+        "summary": "Implements Draft review and Gate services for validating command results, evaluating gate outcomes, and persisting settlements.",
+        "detail": "ReviewService binds review commands to the expected route and canonical Draft revision, requires execution settlement for pre-execution results, and commits durable receipts. GateService reads prospective gate facts, validates evaluated results and issue publications, rejects semantic misuse of observations, and persists valid Gate outcomes while reporting persistence failures.",
         "chapter": "internal_design",
-        "role": "controller",
+        "role": "other",
         "enrich": {
-          "processedAt": "2026-09-20T14:09:37.997Z",
+          "processedAt": "2026-09-21T06:21:43.495Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
           "ReviewService",
           "GateService",
-          "draft review",
+          "Draft review",
           "gate evaluation",
-          "settlement receipt",
-          "canonical result"
+          "route binding",
+          "settlement receipt"
         ]
       },
       {
@@ -19891,11 +19893,12 @@
       },
       {
         "file": "src/flow/steps/draft/draft-coverage-triage.js",
-        "hash": "87db4155b800d58bea3dea877d9a49dd",
-        "lines": 26,
-        "mtime": "2026-09-20T14:07:40.057Z",
+        "hash": "ea86c9d1e9106b13a7723a920e1b5d75",
+        "lines": 35,
+        "mtime": "2026-09-21T06:04:02.392Z",
         "className": "draft-coverage-triage",
         "methods": [
+          "draftCoverageTriageResult",
           "DraftCoverageTriageStep"
         ],
         "imports": [
@@ -19904,25 +19907,26 @@
           "../../engine/step-result.js"
         ],
         "exports": [
+          "draftCoverageTriageResult",
           "DraftCoverageTriageStep"
         ],
         "extends": "Step",
         "usedBy": null,
         "id": "d9b9b1a0",
-        "summary": "Defines the Draft coverage triage step and persists its completed result through DraftService.",
-        "detail": "DraftCoverageTriageStep is a Step implementation that uses DraftService and produces a DraftCoverageTriageCompletedResult. Its execution persists the result and returns the persisted outcome.",
+        "summary": "Defines the Draft coverage triage step and its typed completion result.",
+        "detail": "The module converts DraftWorkerCompletionFacts into a DraftCoverageTriageCompletedResult and rejects untyped facts. DraftCoverageTriageStep delegates execution to DraftService, persists the resulting step outcome, and returns the persisted result.",
         "chapter": "internal_design",
-        "role": "controller",
+        "role": "other",
         "enrich": {
-          "processedAt": "2026-09-20T14:09:37.997Z",
+          "processedAt": "2026-09-21T06:21:43.495Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
           "coverage triage",
-          "DraftCoverageTriageStep",
-          "triage result",
-          "DraftService"
+          "Draft step",
+          "completion result",
+          "DraftService",
+          "result persistence"
         ]
       },
       {
@@ -19967,41 +19971,42 @@
       },
       {
         "file": "src/flow/steps/draft/draft-gate.js",
-        "hash": "8e755e7b16d39589dd19277dd6379b0a",
-        "lines": 49,
-        "mtime": "2026-09-20T02:18:09.331Z",
+        "hash": "2ad70ed6e382a183696fcedf6c32cb58",
+        "lines": 55,
+        "mtime": "2026-09-21T06:04:02.392Z",
         "className": "draft-gate",
         "methods": [
+          "draftGateResult",
           "DraftGateStep"
         ],
         "imports": [
           "../../engine/step.js",
           "../../engine/step-result.js",
           "../../services/review-service.js",
-          "../../lib/definition-lifecycle-failure.js"
+          "../../lib/draft-gate-prospective.js"
         ],
         "exports": [
+          "draftGateResult",
           "DraftGateStep"
         ],
         "extends": "Step",
         "usedBy": null,
         "id": "9f8c937a",
-        "summary": "Observes and settles the Draft Gate through GateService while separating observations from semantic results.",
-        "detail": "DraftGateStep uses GateService for gate evaluation and result persistence. It explicitly rejects settling a raw Gate observation as a semantic Result, then persists valid results and routes Draft persistence failures through the lifecycle failure handling path.",
+        "summary": "Defines the Draft Gate step and its result handling for prospective evaluation and repair-required outcomes.",
+        "detail": "The module requires typed DraftGateProspectiveFacts to create a result, supports DraftStepErrorResult and DraftGateRepairRequiredResult, and prevents a Gate observation from being settled as a semantic result. DraftGateStep uses GateService to persist and return the outcome.",
         "chapter": "internal_design",
-        "role": "controller",
+        "role": "other",
         "enrich": {
-          "processedAt": "2026-09-20T02:20:54.779Z",
+          "processedAt": "2026-09-21T06:21:43.495Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
           "Draft Gate",
-          "GateService",
-          "gate observation",
+          "prospective facts",
+          "gate repair",
           "semantic result",
-          "result persistence",
-          "failure handling"
+          "GateService",
+          "step persistence"
         ]
       },
       {
@@ -20088,11 +20093,12 @@
       },
       {
         "file": "src/flow/steps/draft/draft-questions-triage.js",
-        "hash": "bcf84ffc7ba87e2a294bd341858208ce",
-        "lines": 26,
-        "mtime": "2026-09-20T14:07:40.057Z",
+        "hash": "0a8ee75c6c0b7ce157acc5ae95229296",
+        "lines": 35,
+        "mtime": "2026-09-21T06:04:02.392Z",
         "className": "draft-questions-triage",
         "methods": [
+          "draftQuestionsTriageResult",
           "DraftQuestionsTriageStep"
         ],
         "imports": [
@@ -20101,25 +20107,26 @@
           "../../engine/step-result.js"
         ],
         "exports": [
+          "draftQuestionsTriageResult",
           "DraftQuestionsTriageStep"
         ],
         "extends": "Step",
         "usedBy": null,
         "id": "227a865e",
-        "summary": "Defines the Draft questions triage step and persists its completed result.",
-        "detail": "DraftQuestionsTriageStep is a Step implementation backed by DraftService and produces DraftQuestionsTriageCompletedResult. It persists the result and returns the durable outcome.",
+        "summary": "Defines the Draft questions triage step and its typed completion result.",
+        "detail": "draftQuestionsTriageResult requires DraftWorkerCompletionFacts and creates a DraftQuestionsTriageCompletedResult. DraftQuestionsTriageStep delegates its work to DraftService, persists the result, and returns the completed step outcome.",
         "chapter": "internal_design",
-        "role": "controller",
+        "role": "other",
         "enrich": {
-          "processedAt": "2026-09-20T14:09:37.997Z",
+          "processedAt": "2026-09-21T06:21:43.495Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
           "questions triage",
-          "DraftQuestionsTriageStep",
-          "triage result",
-          "DraftService"
+          "Draft step",
+          "completion result",
+          "DraftService",
+          "typed facts"
         ]
       },
       {
@@ -20165,11 +20172,12 @@
       },
       {
         "file": "src/flow/steps/draft/draft.js",
-        "hash": "c94cd7e49775ea1194b0019c7137f995",
-        "lines": 23,
-        "mtime": "2026-09-20T14:07:40.057Z",
+        "hash": "ca96669d2c0431e7df065685770f3531",
+        "lines": 32,
+        "mtime": "2026-09-21T06:04:02.392Z",
         "className": "draft",
         "methods": [
+          "draftResult",
           "DraftStep"
         ],
         "imports": [
@@ -20178,25 +20186,26 @@
           "../../services/draft-service.js"
         ],
         "exports": [
+          "draftResult",
           "DraftStep"
         ],
         "extends": "Step",
         "usedBy": null,
         "id": "d54b4e45",
-        "summary": "Defines the primary Draft step and persists its creation result.",
-        "detail": "DraftStep extends Step, uses DraftService for worker execution and settlement persistence, and returns the persisted DraftCreatedResult.",
+        "summary": "Defines the initial Draft step and its typed creation result.",
+        "detail": "draftResult requires DraftWorkerCompletionFacts and creates a DraftCreatedResult. DraftStep delegates execution to DraftService, persists the resulting outcome, and returns the completed Draft step result.",
         "chapter": "internal_design",
-        "role": "controller",
+        "role": "other",
         "enrich": {
-          "processedAt": "2026-09-20T14:09:37.997Z",
+          "processedAt": "2026-09-21T06:21:43.495Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
-          "DraftStep",
-          "draft creation",
+          "Draft creation",
+          "Draft step",
           "DraftCreatedResult",
-          "DraftService"
+          "DraftService",
+          "worker completion"
         ]
       },
       {
@@ -26867,9 +26876,9 @@
     ],
     "summary": {
       "total": 467,
-      "totalMethods": 5016
+      "totalMethods": 5021
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-21T04:18:36.594Z"
+  "enrichedAt": "2026-09-21T06:21:43.495Z"
 }
