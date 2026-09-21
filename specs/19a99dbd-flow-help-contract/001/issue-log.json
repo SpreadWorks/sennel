@@ -1,0 +1,675 @@
+{
+  "entries": [
+    {
+      "step": "draft-gate",
+      "level": "parent",
+      "phase": "draft",
+      "reason": "「意味上必要な順序」が何を指すか判定条件がなく、display-order metadata で上書きすべきケースを二人のレビュアーが同じように判断できない。; 名前順を例外扱いにするための「意味上必要」の基準が未定義で、実装が満たしたかを独立したレビュアーが判定できない。; 「関連する一貫性」の対象範囲と検証条件が定義されていない。; 「focused E2E test」がどの入力、経路、期待結果を含むかがこの箇所では定義されていない。; 「focused E2E test」の具体的な対象、入力、期待結果が未定義で、テスト構成の完了条件が曖昧である。; 「focused E2E test」の検証対象と期待結果が列挙されておらず、追加・更新すべきテストの判定条件が曖昧である。; 既存の parser/help 挙動を共通モデルや renderer に移す変更であるにもかかわらず、移行対象の既存公開挙動を、ユーザー向け command、API、hook、設定項目、生成物、side effect ごとに明示的に棚卸ししていない。; 各 retained behavior を CommandDefinition、共有 renderer、既存の実行経路などの新しい所有者へ個別に対応付けた表、または削除判断がない。; registry/help contract test と focused E2E test の実施は示されているが、保持する command execution semantics、target guard evaluation、runtime directory behavior、command-specific descriptions/examples の各公開挙動について、新経路での behavior-level acceptance verification が個別に定義されていない。",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-21T06:36:33.790Z",
+      "passedGuardrails": [],
+      "headSha": "1094f5ad32cb16d6da6d9e9cd43a0130d2f4dfb8",
+      "worktreeHash": "c12780896d4123f0400891a59887ee14e7c5a5250ee0bacd3cf7c194f7d61595",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[3]"
+          },
+          "observed": "「意味上必要な順序」が何を指すか判定条件がなく、display-order metadata で上書きすべきケースを二人のレビュアーが同じように判断できない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[3]"
+          },
+          "observed": "名前順を例外扱いにするための「意味上必要」の基準が未定義で、実装が満たしたかを独立したレビュアーが判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.resolvedByProjectRules[3]"
+          },
+          "observed": "「関連する一貫性」の対象範囲と検証条件が定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "「focused E2E test」がどの入力、経路、期待結果を含むかがこの箇所では定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[2].relevance"
+          },
+          "observed": "「focused E2E test」の具体的な対象、入力、期待結果が未定義で、テスト構成の完了条件が曖昧である。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification.in[2]"
+          },
+          "observed": "「focused E2E test」の検証対象と期待結果が列挙されておらず、追加・更新すべきテストの判定条件が曖昧である。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "migration-parity.inventory"
+          },
+          "observed": "既存の parser/help 挙動を共通モデルや renderer に移す変更であるにもかかわらず、移行対象の既存公開挙動を、ユーザー向け command、API、hook、設定項目、生成物、side effect ごとに明示的に棚卸ししていない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "migration-parity.mapping"
+          },
+          "observed": "各 retained behavior を CommandDefinition、共有 renderer、既存の実行経路などの新しい所有者へ個別に対応付けた表、または削除判断がない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "registry/help contract test と focused E2E test の実施は示されているが、保持する command execution semantics、target guard evaluation、runtime directory behavior、command-specific descriptions/examples の各公開挙動について、新経路での behavior-level acceptance verification が個別に定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「意味上必要な順序」が何を指すか判定条件がなく、display-order metadata で上書きすべきケースを二人のレビュアーが同じように判断できない。"
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "名前順を例外扱いにするための「意味上必要」の基準が未定義で、実装が満たしたかを独立したレビュアーが判定できない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「関連する一貫性」の対象範囲と検証条件が定義されていない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「focused E2E test」がどの入力、経路、期待結果を含むかがこの箇所では定義されていない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「focused E2E test」の具体的な対象、入力、期待結果が未定義で、テスト構成の完了条件が曖昧である。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「focused E2E test」の検証対象と期待結果が列挙されておらず、追加・更新すべきテストの判定条件が曖昧である。"
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "既存の parser/help 挙動を共通モデルや renderer に移す変更であるにもかかわらず、移行対象の既存公開挙動を、ユーザー向け command、API、hook、設定項目、生成物、side effect ごとに明示的に棚卸ししていない。"
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "各 retained behavior を CommandDefinition、共有 renderer、既存の実行経路などの新しい所有者へ個別に対応付けた表、または削除判断がない。"
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "registry/help contract test と focused E2E test の実施は示されているが、保持する command execution semantics、target guard evaluation、runtime directory behavior、command-specific descriptions/examples の各公開挙動について、新経路での behavior-level acceptance verification が個別に定義されていない。"
+        }
+      ],
+      "issueLogId": "draft-gate-result-90f10fc1080031b21fdfac3b01e23211a7d4a82647b1eb1ebfc477c4033d433c"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "draft-gate",
+      "phase": "draft",
+      "reason": "Guarded draft gate repair rewound to draft-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[3]"
+          },
+          "observed": "「意味上必要な順序」が何を指すか判定条件がなく、display-order metadata で上書きすべきケースを二人のレビュアーが同じように判断できない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "9ebbd13232952dcd15d6235bd673f22f97515d9ea75a2f45e73a90fd4e5e520e"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[3]"
+          },
+          "observed": "名前順を例外扱いにするための「意味上必要」の基準が未定義で、実装が満たしたかを独立したレビュアーが判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "fb2fde1ae3d50b12cad33e7f0c82a3525e4dc8855193cf7ded86da51beeff5cb"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.resolvedByProjectRules[3]"
+          },
+          "observed": "「関連する一貫性」の対象範囲と検証条件が定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "abcbd2101febe50668c452c55abb5e661daa2226261fe49661f6c637dd27eb79"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "「focused E2E test」がどの入力、経路、期待結果を含むかがこの箇所では定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "fff62e917f4987a9ba78ce0a26c0b71e560fd6cc815c0f9a0b145d3cabfd36fb"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[2].relevance"
+          },
+          "observed": "「focused E2E test」の具体的な対象、入力、期待結果が未定義で、テスト構成の完了条件が曖昧である。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "2d3359538a478c1d3e9973d537f0513858308209b14be7e996268bc9880a7cb0"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification.in[2]"
+          },
+          "observed": "「focused E2E test」の検証対象と期待結果が列挙されておらず、追加・更新すべきテストの判定条件が曖昧である。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "c89954e3387b9113bfb950647de956095de505bad905d8f27ead6cc205962e69"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "migration-parity.inventory"
+          },
+          "observed": "既存の parser/help 挙動を共通モデルや renderer に移す変更であるにもかかわらず、移行対象の既存公開挙動を、ユーザー向け command、API、hook、設定項目、生成物、side effect ごとに明示的に棚卸ししていない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "3845d46804279c5a910244a247cc631a2e7845b3c2530ee57179974bc1409fb8"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "migration-parity.mapping"
+          },
+          "observed": "各 retained behavior を CommandDefinition、共有 renderer、既存の実行経路などの新しい所有者へ個別に対応付けた表、または削除判断がない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "b058bfcbd96f4758680524494d2979607d62795db6e7581cf09cfbe6f98679a4"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "registry/help contract test と focused E2E test の実施は示されているが、保持する command execution semantics、target guard evaluation、runtime directory behavior、command-specific descriptions/examples の各公開挙動について、新経路での behavior-level acceptance verification が個別に定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "501a6829658e7a406eb052b39c888e366a676e94244a1b10bfe902fe39234893"
+        }
+      ],
+      "timestamp": "2026-09-21T06:38:57.088Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "19a99dbd-323c-4633-940a-9de2057eb6d8",
+        "specId": "19a99dbd-flow-help-contract",
+        "issue": 521,
+        "phase": "draft",
+        "targetStepId": "draft-gate-repair",
+        "connector": {
+          "phase": "draft",
+          "sourceGateStepId": "draft-gate",
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-654180f7-a116-4f2b-b5d1-e02011abfc32",
+            "sequence": 1
+          },
+          "resultLogicalKey": "draft.gate",
+          "resultArtifactId": "steps/draft-gate/result.json",
+          "catalogFingerprint": "17832d804360fb6dc45f180d7b24caf9e21a6326b641fba72d06cecfb7d2a017",
+          "targetStepId": "draft-gate-repair",
+          "resetStepIds": [
+            "draft-gate-repair",
+            "draft-coverage-review",
+            "draft-coverage-triage",
+            "draft-coverage-repair",
+            "draft-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-654180f7-a116-4f2b-b5d1-e02011abfc32",
+            "sequence": 1
+          },
+          "resultLogicalKey": "draft.gate",
+          "publicationActivityId": "plan-gate-repaired-77f649b0-da1e-4cf2-80a6-ee71db8e443e",
+          "catalogFingerprint": "17832d804360fb6dc45f180d7b24caf9e21a6326b641fba72d06cecfb7d2a017",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-draft-gate-654180f7-a116-4f2b-b5d1-e02011abfc32",
+              "sequence": 1
+            },
+            "canonicalAttempt": {
+              "id": "attempt-draft-gate-654180f7-a116-4f2b-b5d1-e02011abfc32",
+              "sequence": 1
+            },
+            "sourceFingerprint": "cf0349507cbae37f54fd5cfeaeb8549dd904e18855e1cd4bdd7f29d170615304",
+            "canonicalFingerprint": "17832d804360fb6dc45f180d7b24caf9e21a6326b641fba72d06cecfb7d2a017",
+            "sourceRevisionFingerprint": "82e2ccdd9d445fb9d41d223d2fd4d955d5fef0ec4d23bcb779b95ce5bfe2a219",
+            "canonicalRevisionFingerprint": "82e2ccdd9d445fb9d41d223d2fd4d955d5fef0ec4d23bcb779b95ce5bfe2a219"
+          }
+        },
+        "sourceIssueLogId": "draft-gate-result-90f10fc1080031b21fdfac3b01e23211a7d4a82647b1eb1ebfc477c4033d433c",
+        "sourceEntryDigest": "e2a41c9cb2cb6e09a8cd88e7438d6ef5a9341da73b754722346647575110f2b0",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[3]"
+            },
+            "observed": "「意味上必要な順序」が何を指すか判定条件がなく、display-order metadata で上書きすべきケースを二人のレビュアーが同じように判断できない。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "9ebbd13232952dcd15d6235bd673f22f97515d9ea75a2f45e73a90fd4e5e520e"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[3]"
+            },
+            "observed": "名前順を例外扱いにするための「意味上必要」の基準が未定義で、実装が満たしたかを独立したレビュアーが判定できない。",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "fb2fde1ae3d50b12cad33e7f0c82a3525e4dc8855193cf7ded86da51beeff5cb"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.resolvedByProjectRules[3]"
+            },
+            "observed": "「関連する一貫性」の対象範囲と検証条件が定義されていない。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "abcbd2101febe50668c452c55abb5e661daa2226261fe49661f6c637dd27eb79"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.validation"
+            },
+            "observed": "「focused E2E test」がどの入力、経路、期待結果を含むかがこの箇所では定義されていない。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "fff62e917f4987a9ba78ce0a26c0b71e560fd6cc815c0f9a0b145d3cabfd36fb"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.deferredToSpec[2].relevance"
+            },
+            "observed": "「focused E2E test」の具体的な対象、入力、期待結果が未定義で、テスト構成の完了条件が曖昧である。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "2d3359538a478c1d3e9973d537f0513858308209b14be7e996268bc9880a7cb0"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "scopeVerification.in[2]"
+            },
+            "observed": "「focused E2E test」の検証対象と期待結果が列挙されておらず、追加・更新すべきテストの判定条件が曖昧である。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "c89954e3387b9113bfb950647de956095de505bad905d8f27ead6cc205962e69"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "spec.json",
+              "locator": "migration-parity.inventory"
+            },
+            "observed": "既存の parser/help 挙動を共通モデルや renderer に移す変更であるにもかかわらず、移行対象の既存公開挙動を、ユーザー向け command、API、hook、設定項目、生成物、side effect ごとに明示的に棚卸ししていない。",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "3845d46804279c5a910244a247cc631a2e7845b3c2530ee57179974bc1409fb8"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "spec.json",
+              "locator": "migration-parity.mapping"
+            },
+            "observed": "各 retained behavior を CommandDefinition、共有 renderer、既存の実行経路などの新しい所有者へ個別に対応付けた表、または削除判断がない。",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "b058bfcbd96f4758680524494d2979607d62795db6e7581cf09cfbe6f98679a4"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "spec.json",
+              "locator": "analysis.validation"
+            },
+            "observed": "registry/help contract test と focused E2E test の実施は示されているが、保持する command execution semantics、target guard evaluation、runtime directory behavior、command-specific descriptions/examples の各公開挙動について、新経路での behavior-level acceptance verification が個別に定義されていない。",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "501a6829658e7a406eb052b39c888e366a676e94244a1b10bfe902fe39234893"
+          }
+        ],
+        "observationFingerprints": [
+          "9ebbd13232952dcd15d6235bd673f22f97515d9ea75a2f45e73a90fd4e5e520e",
+          "fb2fde1ae3d50b12cad33e7f0c82a3525e4dc8855193cf7ded86da51beeff5cb",
+          "abcbd2101febe50668c452c55abb5e661daa2226261fe49661f6c637dd27eb79",
+          "fff62e917f4987a9ba78ce0a26c0b71e560fd6cc815c0f9a0b145d3cabfd36fb",
+          "2d3359538a478c1d3e9973d537f0513858308209b14be7e996268bc9880a7cb0",
+          "c89954e3387b9113bfb950647de956095de505bad905d8f27ead6cc205962e69",
+          "3845d46804279c5a910244a247cc631a2e7845b3c2530ee57179974bc1409fb8",
+          "b058bfcbd96f4758680524494d2979607d62795db6e7581cf09cfbe6f98679a4",
+          "501a6829658e7a406eb052b39c888e366a676e94244a1b10bfe902fe39234893"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "9ebbd13232952dcd15d6235bd673f22f97515d9ea75a2f45e73a90fd4e5e520e",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "fb2fde1ae3d50b12cad33e7f0c82a3525e4dc8855193cf7ded86da51beeff5cb",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "abcbd2101febe50668c452c55abb5e661daa2226261fe49661f6c637dd27eb79",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "fff62e917f4987a9ba78ce0a26c0b71e560fd6cc815c0f9a0b145d3cabfd36fb",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "2d3359538a478c1d3e9973d537f0513858308209b14be7e996268bc9880a7cb0",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "c89954e3387b9113bfb950647de956095de505bad905d8f27ead6cc205962e69",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "3845d46804279c5a910244a247cc631a2e7845b3c2530ee57179974bc1409fb8",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "b058bfcbd96f4758680524494d2979607d62795db6e7581cf09cfbe6f98679a4",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "501a6829658e7a406eb052b39c888e366a676e94244a1b10bfe902fe39234893",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-09-21T06:38:57.088Z"
+      },
+      "issueLogId": "plan-gate-repair-229513c646c22eff925c98dfcad50182613eda644e3fa2bb14b243867fad8069"
+    },
+    {
+      "step": "draft-gate-repair",
+      "reason": "Worker artifact handoff recovery-required: worker artifact handoff authority cannot be acquired: file lock is already held by this process: /home/nakano/workspace/sennel/.sennel/.flow-handoff-worktree-8f76629f4c9827bcc8472299.lock",
+      "trigger": "Parent dispatcher rejected or could not complete a worker artifact handoff.",
+      "resolution": "Correct the worker artifact payload and dispatch the current action again.",
+      "taskId": null,
+      "timestamp": "2026-09-21T06:38:59.007Z",
+      "issueLogId": "worker-handoff-unknown-recovery-required"
+    }
+  ]
+}

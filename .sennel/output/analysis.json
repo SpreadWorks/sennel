@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-21T06:19:43.912Z",
+  "analyzedAt": "2026-09-21T12:17:37.010Z",
   "package": {
     "entries": [
       {
@@ -13424,9 +13424,9 @@
       },
       {
         "file": "src/flow/lib/run-dispatch.js",
-        "hash": "3b52aea11736c2571379868f2935e4ee",
-        "lines": 2820,
-        "mtime": "2026-09-21T05:38:21.887Z",
+        "hash": "128f22672e4e5f9da8a5451a40f3be23",
+        "lines": 2819,
+        "mtime": "2026-09-21T12:15:17.757Z",
         "className": "run-dispatch",
         "methods": [
           "draftWorkerStepDefinition",
@@ -13529,22 +13529,23 @@
         "extends": "Error",
         "usedBy": null,
         "id": "6c7fd82a",
-        "summary": "Flow dispatch command coordinating approvals, worker handoffs, retries, and dispatch boundaries.",
-        "detail": "The dispatcher loads flow context and commands, acquires dispatch leases and process locks, captures targets and repository fingerprints, persists approval receipts, and executes registered or dispatcher-owned actions. It validates next-action bindings, handles nonblocking agent decisions, manages worker artifact handoffs and retry feedback, integrates Draft and requirement-test workers, records failures and deferred metrics, and returns FlowDispatchBoundary or Envelope results for blocked, failed, or progressing execution.",
-        "chapter": "project_structure",
+        "summary": "Central flow dispatch controller for executing, approving, retrying, and recovering workflow actions.",
+        "detail": "Implements the flow runtime’s dispatch orchestration. It validates and binds next actions, manages dispatch leases and process locks, captures repository fingerprints, persists approval receipts, invokes registered or dispatcher-owned commands, and coordinates worker handoffs. The module also handles conditional Draft steps, requirement-test failures, tooling and external agent failures, artifact validation and quarantine, nonblocking agent decisions, deferred metrics, stalled dispatches, retries, blocked boundaries, and failure observations while preserving canonical flow-manager state and authorization rules.",
+        "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-21T06:21:43.495Z",
+          "processedAt": "2026-09-21T12:17:50.545Z",
           "attempts": 1
         },
         "keywords": [
           "flow dispatch",
+          "workflow orchestration",
           "worker handoff",
           "approval receipt",
           "repository fingerprint",
-          "dispatch lease",
-          "retry feedback",
-          "agent decision"
+          "retry handling",
+          "process lock",
+          "failure recovery"
         ]
       },
       {
@@ -26880,5 +26881,5 @@
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-21T06:21:43.495Z"
+  "enrichedAt": "2026-09-21T12:17:50.545Z"
 }

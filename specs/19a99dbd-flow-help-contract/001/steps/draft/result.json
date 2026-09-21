@@ -1,0 +1,75 @@
+{
+  "devType": "feature",
+  "goal": "sennel flow の全 leaf と get/set/run/report group で、実際に受理される option と表示される help の契約を一致させ、利用者が help だけで正確な CLI 入力を判断できるようにする。",
+  "analysis": {
+    "problem": "Issue #521 の監査で、FLOW_COMMANDS の 67 leaf において parser が受理する option の help への欠落、implicit help の欠落、group help の誤表示、長い subcommand 名の区切り不足、登録順依存が確認されている。これは parser 契約と help 契約が別々に管理されているため、利用者向けの仕様表示が実際の CLI 契約を正しく表していない問題である。",
+    "proposedApproach": "Issue #521 の方針に従い、既存の CommandDefinition を option 契約の権威として拡張し、parser、leaf help、group help が同じ option model を参照するようにする。group option は配下 leaf の共通契約から導出し、subcommand の並びと整列は共有された help 表示契約で扱う。",
+    "validation": "全 67 leaf の parser option と implicit help が leaf help に一度ずつ現れること、get/set/run/report の group option と subcommand の順序・区切りが契約どおりであること、flow 側 help と help flow 側 help が一致することを registry/help contract test と focused E2E test で確認する。既存の command execution semantics、target guard evaluation、runtime directory behavior、command-specific descriptions/examples が維持されることも確認する。"
+  },
+  "decisionMap": {
+    "knownFacts": [
+      "must: 対象範囲は Issue #521 に記載された src/flow/registry.js、src/lib/dispatcher.js、src/lib/command-registry.js、src/help.js と関連する registry/help test である。",
+      "must: 現状は 67 leaf 中 41 leaf で少なくとも一つの parser option が help から欠落し、67 leaf 全てで implicit -h, --help が表示されていない。",
+      "must: flow get/set/report の group help に、配下 leaf が受理しない --agent-work-dir が表示されている。",
+      "must: 14 文字以上の subcommand 名で名前と summary の境界が見えず、subcommand の表示順が FLOW_COMMANDS の登録順に依存している。",
+      "must: abort、target guard を持つ get/set/run、長い名前、名前順、resume、prepare を含む test coverage が受け入れ条件に含まれる。",
+      "must: command execution semantics、target guard evaluation、runtime directory behavior、既存の command-specific descriptions/examples は変更対象外として維持する。"
+    ],
+    "decisionPoints": [
+      "must: parser と help の共通 authority は新しい command abstraction ではなく既存の CommandDefinition の拡張とする。",
+      "must: option は flag、必須 value、任意 value を区別し、value を取る option は placeholder と description を持つ。",
+      "must: group help の option は子 leaf の option 契約の intersection から求め、group ごとの固定 option 配列を使わない。",
+      "must: subcommand は名前昇順を既定とし、意味上必要な順序だけ明示的な display-order metadata で上書きできるようにする。",
+      "must: subcommand 名と summary の間には常に可視の区切りを置き、flow group help と help flow group で同じ並び・レイアウトを使う。"
+    ],
+    "resolvedByProjectRules": [
+      "must: 外部 npm 依存を追加せず、Node.js 組み込みモジュールと既存のプロジェクト API を利用する。",
+      "must: 同じ責務を担う既存 API を確認して再利用し、parser/help の契約や表示処理を別実装へ重複させない。",
+      "must: alpha 版ポリシーに従い、旧フォーマットや非推奨パスを後方互換目的で残さない。",
+      "must: 変更した既存ファイル内の関連する一貫性を保ち、実行制御や target guard の判断を表示修正の責務へ持ち込まない。"
+    ],
+    "requiresUserJudgment": [],
+    "deferredToSpec": [
+      {
+        "boundary": "option model の具体的なクラス構成と既存 CommandDefinition への統合方法",
+        "relevance": "must: parser args、leaf Usage/Options、group Options を同じ契約から投影し、値種別・placeholder・description の情報を失わない実装詳細を定義する必要がある。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "subcommand の共有 renderer と明示的な display-order metadata の具体的な境界",
+        "relevance": "must: flow group help と help flow group の順序、整列、長い名前の可視区切りを重複なく保証する実装詳細を定義する必要がある。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "registry/help contract test と focused E2E test の具体的な構成",
+        "relevance": "must: 全 leaf、group option の intersection、abort、target guard、resume、prepare、長い名前、名前順、二つの help 経路の一致を結果ベースで検証する詳細を定義する必要がある。",
+        "owner": "spec"
+      }
+    ]
+  },
+  "scopeVerification": {
+    "in": [
+      "must: FLOW_COMMANDS の全 67 leaf について parser option と implicit -h, --help の help 表示契約を一致させる。",
+      "must: flow get/set/run/report の group help について、子 leaf の共通 option、subcommand の名前順、表示区切り、flow/help の経路間一致を検証する。",
+      "must: abort、get/set/run の target guard、resume、prepare、長い subcommand 名、名前順を含む registry/help contract test と focused E2E test を追加または更新する。"
+    ],
+    "out": [
+      "must: command の実行 semantics、target guard の評価規則、runtime directory の挙動を変更しない。",
+      "must: command-specific descriptions/examples の内容を help 契約修正と無関係に変更しない。",
+      "must: Issue #521 の対象外である docs 生成、外部 agent lifecycle、無関係な CLI namespace の仕様変更を含めない。"
+    ]
+  },
+  "impactOnExisting": [
+    "must: 既存の FLOW_COMMANDS leaf は、受理できる flag/option と implicit help が help に明示されることで、利用者向け Usage と Options の表示が変わる。",
+    "must: flow get/set/report の group help から実際には受理されない --agent-work-dir を除き、flow run では受理される --agent-work-dir を表示する。",
+    "must: subcommand help の表示順と行レイアウトは登録順依存から名前順・可視区切りの契約へ変わるが、command の実行結果と既存の説明文は維持する。",
+    "should: 既存の command-registry と help の利用箇所が共有 option・renderer の契約変更後も同じ help surface を提供することを回帰テストで確認する。"
+  ],
+  "questionLedger": {
+    "revision": 0,
+    "publication": "draft-worker-publication",
+    "evidenceDigest": "830d28a0fae085acef9882545267db5595d08c1e122cbc13304d20e9c24d4add",
+    "questions": []
+  },
+  "openQuestions": []
+}
