@@ -25,7 +25,9 @@ import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { sourceWorkerEffectJsonSchema } from "../../../src/flow/lib/source-worker-effect-schema.js";
 import {
   DraftCompletionCatalogBinding,
+  DraftCompletionFacts,
   DraftCompletionLineage,
+  DraftCompletionSettlementApplication,
   StepConnectionReceipt,
 } from "../../../src/flow/lib/draft-completion-connector.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
@@ -1076,11 +1078,79 @@ describe("deterministic full Flow worker handoff", () => {
         0,
       );
 
+      ctx.flowManager = reloaded;
       reloaded.beginNextAction(specId);
       await runDraftReview(reloaded, "draft-coverage", {
-        verdict: "PASS",
-        summary: "The repaired Draft now covers the required behavior.",
+        verdict: "ADVISORY",
+        summary: "The repaired Draft retains one already-resolved coverage target.",
+        repairTargets: [reviewFinding],
       });
+      reloaded.beginNextAction(specId);
+      await completeArtifactHandoff({
+        coordinator,
+        ctx,
+        stepId: "draft-coverage-triage",
+        invocationId: "draft-coverage-unchanged-triage",
+        logicalName: "draft-coverage-triage.json",
+        payload: {
+          ...triage,
+          summary: "The coverage target is already resolved by the prior repair.",
+          items: triage.items.map((item) => ({ ...item, decision: "already_resolved" })),
+        },
+      });
+      reloaded.beginNextAction(specId);
+      const unchangedHandoff = coordinator.createRequest({
+        ctx,
+        state: reloaded.load(specId),
+        invocation: {
+          id: "draft-coverage-unchanged-repair",
+          target: { digest: "7".repeat(64) },
+          action: { digest: "8".repeat(64), nextAction: { step: "draft-coverage-repair" } },
+        },
+      });
+      fs.writeFileSync(unchangedHandoff.payloadPath("draft-coverage-repair.json"), workerArtifactJson({
+        version: 1,
+        baseRevision: `sha256:${unchangedHandoff.inputRevision}`,
+        operations: [],
+      }));
+      sealWorkerArtifactHandoff({
+        requestPath: unchangedHandoff.requestPath,
+        invocationId: unchangedHandoff.dispatchInvocationId,
+      });
+      let sealedFacts = null;
+      let handoffApplication = null;
+      let storeApplication = null;
+      const prepareDraftWorker = coordinator.prepareDraftWorker.bind(coordinator);
+      coordinator.prepareDraftWorker = (input) => {
+        const preparation = prepareDraftWorker(input);
+        if (input.request === unchangedHandoff) {
+          sealedFacts = preparation.facts.draftCompletionFacts;
+          assert.ok(sealedFacts instanceof DraftCompletionFacts);
+        }
+        return preparation;
+      };
+      const commitDraftWorker = coordinator.commitDraftWorker.bind(coordinator);
+      coordinator.commitDraftWorker = (input) => {
+        if (input.request === unchangedHandoff) {
+          handoffApplication = input.draftCompletionApplication;
+          assert.ok(handoffApplication instanceof DraftCompletionSettlementApplication);
+          assert.equal(handoffApplication.facts, sealedFacts);
+        }
+        return commitDraftWorker(input);
+      };
+      const settleDraftStepResult = reloaded.settleDraftStepResult.bind(reloaded);
+      reloaded.settleDraftStepResult = (input) => {
+        if (input.binding?.stepId === "draft-coverage-repair") {
+          storeApplication = input.draftCompletionApplication;
+        }
+        return settleDraftStepResult(input);
+      };
+      const unchanged = await completeDraftWorkerThroughStep({
+        coordinator, ctx, request: unchangedHandoff,
+      });
+      assert.equal(unchanged.stepResult.kind, "draft-coverage-repair-unchanged");
+      assert.equal(storeApplication, handoffApplication);
+      assert.ok(storeApplication instanceof DraftCompletionSettlementApplication);
       assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "draft-gate");
       reloaded.beginNextAction(specId);
       const gateResult = new CanonicalGatePromotion({

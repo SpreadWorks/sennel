@@ -99,9 +99,7 @@ import { DraftQuestionResumeReceipt } from "./lib/draft-question-resume-receipt.
 import { DraftStepSettlementReceiptValue } from "./lib/draft-step-settlement-receipt.js";
 export { DraftStepSettlementReceiptValue } from "./lib/draft-step-settlement-receipt.js";
 import {
-  DraftCompletionFacts,
   DraftCompletionConnector,
-  createDraftCompletionConnector,
 } from "./lib/draft-completion-connector.js";
 import {
   flowReviewRouteForPhase,
@@ -1092,38 +1090,7 @@ const GATE_DISPOSITIONS = new Set([
 const GATE_TRANSITION_TOKEN = Symbol("definition-gate-transition");
 export const SPEC_GATE_MAXIMUM_CYCLE = 4;
 const NONBLOCKING_ELIGIBILITY_TOKEN = Symbol("definition-nonblocking-eligibility");
-const DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN = Symbol("definition-draft-completion-settlement-application");
 export { DraftCompletionConnector } from "./lib/draft-completion-connector.js";
-
-/** Definition is the sole selector; stores and handoffs receive only this plan. */
-export function resolveDraftCompletionConnector(facts) {
-  return createDraftCompletionConnector(facts);
-}
-
-/** The concrete completion application selected with a Draft Step settlement. */
-export class DraftCompletionSettlementApplication {
-  constructor(token, { facts, connector }) {
-    if (token !== DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN
-      || !(facts instanceof DraftCompletionFacts)) {
-      throw new Error("Draft completion application is selected only by Definition");
-    }
-    if (!(connector instanceof DraftCompletionConnector)) {
-      throw new Error("Draft completion application requires its selected connector");
-    }
-    this.facts = facts;
-    this.connector = connector;
-    this.kind = "draft-completion";
-    Object.freeze(this);
-  }
-
-  toJSON() {
-    return {
-      kind: this.kind,
-      facts: this.facts.toJSON(),
-      connector: this.connector.toJSON(),
-    };
-  }
-}
 
 export class GateTransitionDisposition {
   constructor(token, { operation, reason = null } = {}) {
@@ -4313,23 +4280,11 @@ export class DraftStepSettlement {
 
 /** A Definition-selected target connection; only this settlement owns a Connector. */
 export class DraftStepRoute extends DraftStepSettlement {
-  constructor(token, { result, targetStepId, connector, effects, application = null }) {
+  constructor(token, { result, targetStepId, connector, effects }) {
     super(token, result, "target-connection");
     this.targetStepId = requireString(targetStepId, "draft route target");
     if (typeof connector !== "function") throw new TypeError("draft route requires a Connector");
     this.connector = connector;
-    const completionApplication = application instanceof DraftCompletionSettlementApplication;
-    if ((connector === DraftCompletionConnector) !== completionApplication) {
-      throw new TypeError("Draft completion route requires its selected connector application");
-    }
-    if (completionApplication && (
-      application.facts.sourceStepId !== result.stepId
-      || application.facts.targetStepId !== this.targetStepId
-      || !(application.connector instanceof connector)
-    )) {
-      throw new TypeError("Draft completion application does not match its selected route");
-    }
-    this.application = application;
     this.effects = effects instanceof DraftRouteEffects ? effects : new DraftRouteEffects(effects);
     Object.freeze(this);
   }
@@ -5054,7 +5009,7 @@ export class DraftRefineStepState {
 }
 
 /** Select exactly one settlement from a concrete semantic Draft Step Result. */
-export function settleDraftStepResult(stepId, result, { draftCompletionFacts = null } = {}) {
+export function settleDraftStepResult(stepId, result) {
   if (!(result instanceof StepResult) || result.stepId !== stepId) {
     throw new TypeError("draft settlement requires the Step's concrete Result");
   }
@@ -5062,23 +5017,11 @@ export function settleDraftStepResult(stepId, result, { draftCompletionFacts = n
     return new DraftStepErrorDecision(DRAFT_STEP_SETTLEMENT_TOKEN, result);
   }
   const route = (Route, targetStepId, connector) => {
-    const completion = connector === DraftCompletionConnector;
-    if (completion !== (draftCompletionFacts instanceof DraftCompletionFacts)) {
-      throw new TypeError(completion
-        ? "Draft completion settlement requires typed completion facts"
-        : "Draft completion facts do not belong to this settlement");
-    }
     return new Route(DRAFT_STEP_SETTLEMENT_TOKEN, {
       result,
       targetStepId,
       connector,
       effects: draftRouteEffects(stepId, targetStepId),
-      application: completion
-        ? new DraftCompletionSettlementApplication(DRAFT_COMPLETION_SETTLEMENT_APPLICATION_TOKEN, {
-            facts: draftCompletionFacts,
-            connector: createDraftCompletionConnector(draftCompletionFacts),
-          })
-        : null,
     });
   };
   if (result instanceof DraftCreatedResult) {

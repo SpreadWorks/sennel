@@ -8,6 +8,7 @@ const SHA256 = /^[a-f0-9]{64}$/;
 const SOURCES = new Set(["coverage-pass", "coverage-repair"]);
 const CONNECTOR_TOKEN = Symbol("draft-completion-connector");
 const RECEIPT_TOKEN = Symbol("draft-completion-receipt");
+const APPLICATION_TOKEN = Symbol("draft-completion-settlement-application");
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -344,11 +345,11 @@ export class DraftCompletionFacts {
   }
 }
 
-/** A sealed Definition-selected connector for an eligible canonical draft. */
+/** A sealed completion connector for an eligible canonical draft. */
 export class DraftCompletionConnector {
   constructor(token, facts) {
     if (token !== CONNECTOR_TOKEN || !(facts instanceof DraftCompletionFacts)) {
-      throw new Error("DraftCompletionConnector is created only by the definition resolver");
+      throw new Error("DraftCompletionConnector is created only by its typed factory");
     }
     if (!facts.eligible) throw new Error("DraftCompletionConnector requires eligible canonical facts");
     this.source = facts.source;
@@ -391,6 +392,38 @@ export class DraftCompletionConnector {
       reviewVerdict: this.reviewVerdict,
       reviewDraftDigest: this.reviewDraftDigest,
       receiptId: this.receiptId,
+    };
+  }
+}
+
+/** Typed inputs for applying a separately selected Draft completion route. */
+export class DraftCompletionSettlementApplication {
+  constructor(token, { facts, connector } = {}) {
+    if (token !== APPLICATION_TOKEN || !(facts instanceof DraftCompletionFacts)) {
+      throw new Error("Draft completion applications are created only from typed completion facts");
+    }
+    if (!(connector instanceof DraftCompletionConnector)) {
+      throw new Error("Draft completion application requires its typed connector");
+    }
+    if (connector.source !== facts.source
+      || connector.sourceStepId !== facts.sourceStepId
+      || connector.targetStepId !== facts.targetStepId
+      || connector.expectedDraftDigest !== facts.draftDigest
+      || connector.expectedDraftByteLength !== facts.draftByteLength
+      || connector.expectedDraftDocumentDigest !== facts.draftDocumentDigest) {
+      throw new Error("Draft completion application connector does not match its facts");
+    }
+    this.facts = facts;
+    this.connector = connector;
+    this.kind = "draft-completion";
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      kind: this.kind,
+      facts: this.facts.toJSON(),
+      connector: this.connector.toJSON(),
     };
   }
 }
@@ -550,6 +583,13 @@ export function createDraftCompletionConnector(facts) {
     throw new Error(`draft completion connector is unavailable: ${facts.eligibilityIssues.join("; ")}`);
   }
   return new DraftCompletionConnector(CONNECTOR_TOKEN, facts);
+}
+
+export function createDraftCompletionSettlementApplication(facts) {
+  return new DraftCompletionSettlementApplication(APPLICATION_TOKEN, {
+    facts,
+    connector: createDraftCompletionConnector(facts),
+  });
 }
 
 export function isDraftCompletionConnector(value) {

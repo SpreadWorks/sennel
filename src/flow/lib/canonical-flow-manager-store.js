@@ -31,7 +31,6 @@ import {
   resolveTaskExecutionOverrun,
   testExecuteTransitionDefinition,
   testResultReviewTransitionDefinition,
-  DraftCompletionSettlementApplication,
   DefinitionNonblockingEligibility,
   resolveSourceQualityIssueRecoveryPlan,
   TaskReviewStageBinding, TaskReviewStageFacts, TaskReviewUnavailableEvidence, TaskReviewFailureFacts, TaskReviewFailurePlan, resolveTaskReviewFailure, resolveTaskReviewStageTransition,
@@ -174,6 +173,8 @@ import { DraftLifecycle } from "./draft-lifecycle.js";
 import { DRAFT_ARTIFACT_WRITER_STEPS } from "./draft-artifact-promotion.js";
 import {
   createDraftCompletionReceipt,
+  DraftCompletionConnector,
+  DraftCompletionSettlementApplication,
   DraftCompletionAbsentLineage,
   DraftCompletionCatalogBinding,
   DraftCompletionDecisionEvidence,
@@ -3701,6 +3702,7 @@ export class CanonicalFlowManagerStore {
     binding,
     stepResult,
     settlement,
+    draftCompletionApplication = null,
     commandResult = undefined,
     gatePublication = null,
     artifactWrites = [],
@@ -3721,6 +3723,7 @@ export class CanonicalFlowManagerStore {
       publication: this.#draftSettlementPublicationIdentity({
         binding,
         settlement,
+        draftCompletionApplication,
         artifactWrites,
         artifactRemovals,
         artifactBaselines,
@@ -3934,6 +3937,7 @@ export class CanonicalFlowManagerStore {
     binding,
     stepResult,
     settlement,
+    draftCompletionApplication = null,
     commandResult = undefined,
     gatePublication = null,
     artifactWrites = [],
@@ -3951,6 +3955,7 @@ export class CanonicalFlowManagerStore {
     if (resolved === null || !(stepResult instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
       return null;
     }
+    this.#assertDraftCompletionApplication({ settlement, application: draftCompletionApplication });
     const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
       resolved, binding, settlement, executionLifecycle,
     });
@@ -3958,6 +3963,7 @@ export class CanonicalFlowManagerStore {
       binding,
       stepResult,
       settlement,
+      draftCompletionApplication,
       commandResult,
       gatePublication,
       artifactWrites,
@@ -4136,6 +4142,7 @@ export class CanonicalFlowManagerStore {
     binding,
     stepResult,
     settlement,
+    draftCompletionApplication = null,
     commandResult = undefined,
     gatePublication = null,
     lifecycleResult = null,
@@ -4154,6 +4161,7 @@ export class CanonicalFlowManagerStore {
     if (!(stepResult instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
       throw new CurrentFlowStateInvariantError("Draft settlement requires typed Result and Settlement");
     }
+    this.#assertDraftCompletionApplication({ settlement, application: draftCompletionApplication });
     const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
       resolved, binding, settlement, executionLifecycle,
     });
@@ -4161,6 +4169,7 @@ export class CanonicalFlowManagerStore {
       binding,
       stepResult,
       settlement,
+      draftCompletionApplication,
       commandResult,
       gatePublication,
       artifactWrites,
@@ -4234,8 +4243,7 @@ export class CanonicalFlowManagerStore {
       });
       return Object.freeze({ state: next, receipt });
     }
-    if (settlement.application instanceof DraftCompletionSettlementApplication) {
-      const draftCompletionApplication = settlement.application;
+    if (draftCompletionApplication instanceof DraftCompletionSettlementApplication) {
       const facts = draftCompletionApplication.facts;
       const reviewWrite = writes.find((entry) => entry.logicalKey === "draft.coverage.review") ?? null;
       const publishedReviewBytes = facts.sourceStepId === "draft-coverage-review"
@@ -4266,11 +4274,6 @@ export class CanonicalFlowManagerStore {
         },
       });
       return Object.freeze({ state: next, receipt });
-    }
-    if (settlement.application !== null) {
-      throw new CurrentFlowStateInvariantError(
-        "Draft completion settlement must contain its Definition-selected concrete decision",
-      );
     }
     if (binding.stepId === "draft-gate") {
       if (!(gatePublication instanceof DraftGatePublicationIntent)
@@ -4844,10 +4847,30 @@ export class CanonicalFlowManagerStore {
   }
 
   /**
-   * Apply the one Definition-selected completion application. The Store never
-   * chooses a connector: it validates the selected facts, publishes the
+   * Apply the Service-supplied application for one Definition-selected route.
+   * The Store never chooses a connector: it validates the selected facts, publishes the
    * selected draft derivation, and confirms the source Step together.
    */
+  #assertDraftCompletionApplication({ settlement, application }) {
+    const completionRoute = settlement instanceof DraftStepRoute
+      && settlement.connector === DraftCompletionConnector;
+    if (completionRoute !== (application instanceof DraftCompletionSettlementApplication)) {
+      throw new CurrentFlowStateInvariantError(
+        completionRoute
+          ? "Draft completion settlement requires its typed application"
+          : "Draft completion application does not belong to the selected settlement",
+      );
+    }
+    if (!completionRoute) return;
+    if (application.facts.sourceStepId !== settlement.sourceStepId
+      || application.facts.targetStepId !== settlement.targetStepId
+      || !(application.connector instanceof settlement.connector)) {
+      throw new CurrentFlowStateInvariantError(
+        "Draft completion application does not match the selected Result and Settlement",
+      );
+    }
+  }
+
   #applyDraftCompletionApplication({
     specId = null,
     application,
@@ -7189,6 +7212,7 @@ export class CanonicalFlowManagerStore {
   #draftSettlementPublicationIdentity({
     binding,
     settlement,
+    draftCompletionApplication,
     artifactWrites,
     artifactRemovals,
     artifactBaselines,
@@ -7268,10 +7292,9 @@ export class CanonicalFlowManagerStore {
       command: commandIdentity,
       gatePublication: settlement instanceof DraftStepErrorDecision
         ? null : jsonIdentity(gatePublication, "Gate publication"),
-      draftCompletionApplication: settlement instanceof DraftStepRoute
-        && settlement.application instanceof DraftCompletionSettlementApplication
-          ? jsonIdentity(settlement.application, "Draft completion application")
-          : null,
+      draftCompletionApplication: draftCompletionApplication instanceof DraftCompletionSettlementApplication
+        ? jsonIdentity(draftCompletionApplication, "Draft completion application")
+        : null,
       lifecycleResult: jsonIdentity(lifecycleResult, "lifecycle result"),
       references: settlement instanceof DraftStepErrorDecision ? null : jsonIdentity(references, "references"),
       specRecord: settlement instanceof DraftStepErrorDecision ? null : jsonIdentity(specRecord, "Spec record"),

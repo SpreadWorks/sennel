@@ -6,12 +6,10 @@ import { describe, it } from "node:test";
 
 import {
   DraftCompletionConnector,
-  DraftCompletionSettlementApplication,
   DraftExecutionSettlement,
   DraftReviewExecutionBinding,
   DraftReviewExecutionClaim,
   DraftReviewExecutionTargetIdentity,
-  resolveDraftCompletionConnector,
   resolveLifecyclePlan,
   settleDraftStepResult,
 } from "../../../src/flow/definition.js";
@@ -31,7 +29,10 @@ import {
   DraftCompletionAbsentLineage,
   DraftCompletionCatalogBinding,
   DraftCompletionFacts,
+  DraftCompletionSettlementApplication,
   StepConnectionReceipt,
+  createDraftCompletionConnector,
+  createDraftCompletionSettlementApplication,
 } from "../../../src/flow/lib/draft-completion-connector.js";
 import { ActivityStepConnectionReceipt, CurrentAttempt } from "../../../src/flow/lib/current-flow-state.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
@@ -58,12 +59,7 @@ function receiptId(value) {
 }
 
 function completionApplication(completionFacts) {
-  const stepResult = completionFacts.sourceStepId === "draft-coverage-review"
-    ? new DraftCoverageReviewPassedResult()
-    : new DraftCoverageRepairUnchangedResult();
-  return settleDraftStepResult(stepResult.stepId, stepResult, {
-    draftCompletionFacts: completionFacts,
-  }).application;
+  return createDraftCompletionSettlementApplication(completionFacts);
 }
 
 function settleCompletion(flowManager, {
@@ -89,9 +85,8 @@ function settleCompletion(flowManager, {
     specId,
     binding: { runId: state.runId, specId, stepId: expectedResult.stepId, attempt },
     stepResult: stepResult ?? expectedResult,
-    settlement: settleDraftStepResult(expectedResult.stepId, expectedResult, {
-      draftCompletionFacts: application.facts,
-    }),
+    settlement: settleDraftStepResult(expectedResult.stepId, expectedResult),
+    draftCompletionApplication: application,
     artifactWrites,
     artifactBaselines,
   });
@@ -415,8 +410,8 @@ describe("DraftCompletionConnector", () => {
       flowManager.settleDraftStepResult = (input) => {
         observedSettlements.push(input.settlement);
         if (!(input.settlement instanceof DraftExecutionSettlement)) {
-          assert.ok(input.settlement.application instanceof DraftCompletionSettlementApplication);
-          assert.equal(Object.hasOwn(input, "draftCompletionFacts"), false);
+          assert.ok(input.draftCompletionApplication instanceof DraftCompletionSettlementApplication);
+          assert.equal(Object.hasOwn(input.settlement, "application"), false);
         }
         return settle(input);
       };
@@ -526,7 +521,7 @@ describe("DraftCompletionConnector", () => {
 
   it("is selected by Definition for the no-repair coverage path without changing the draft", () => {
     const source = draft();
-    const connector = resolveDraftCompletionConnector(facts({ draftDocument: source }));
+    const connector = createDraftCompletionConnector(facts({ draftDocument: source }));
 
     assert.ok(connector instanceof DraftCompletionConnector);
     assert.equal(connector.source, "coverage-pass");
@@ -540,7 +535,7 @@ describe("DraftCompletionConnector", () => {
 
   it("is selected after a valid coverage repair while keeping discarded unrelated operations auditable", () => {
     const source = draft();
-    const connector = resolveDraftCompletionConnector(facts({
+    const connector = createDraftCompletionConnector(facts({
       source: "coverage-repair",
       draftDocument: source,
       reviewVerdict: "REJECTED",
@@ -576,7 +571,7 @@ describe("DraftCompletionConnector", () => {
     ];
 
     for (const candidate of cases) {
-      assert.throws(() => resolveDraftCompletionConnector(candidate), /connector is unavailable/);
+      assert.throws(() => createDraftCompletionConnector(candidate), /connector is unavailable/);
       assert.throws(() => completionApplication(candidate), /connector is unavailable/);
     }
     assert.throws(() => facts({ reviewArtifactDigest: null }), /review artifact digest/i);
@@ -589,7 +584,7 @@ describe("DraftCompletionConnector", () => {
 
   it("binds connector application to the exact canonical draft revision", () => {
     const source = draft();
-    const connector = resolveDraftCompletionConnector(facts({ draftDocument: source }));
+    const connector = createDraftCompletionConnector(facts({ draftDocument: source }));
     const changed = { ...source, goal: "A different canonical draft." };
 
     assert.throws(
@@ -671,6 +666,90 @@ describe("DraftCompletionConnector", () => {
         /different Result, Settlement, or Publication/i,
       );
       assert.equal(persistedSnapshot(flowManager, specId), beforeStaleReplay);
+    } finally {
+      removeTmpDir(repository);
+    }
+  });
+
+  it("rejects missing, unrelated, and route-mismatched completion applications without side effects", () => {
+    const repository = createTmpDir("draft-completion-application-admission-");
+    const specId = "715f-draft-completion-application-admission";
+    const flowManager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    try {
+      const fixture = new CanonicalFlowFixture({
+        flowManager, specId, runId: "715f-draft-completion-application-admission-run",
+      });
+      fixture.create().registerActive().activate("draft");
+      const source = draft();
+      const sourceBytes = Buffer.from(`${JSON.stringify(source, null, 2)}\n`, "utf8");
+      flowManager.confirmCurrentAttempt({
+        specId,
+        artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: sourceBytes }],
+      });
+      fixture.activate("draft-coverage-review");
+      publishCoverageReviewEvidence(flowManager, specId, sourceBytes);
+      fixture.activate("draft-coverage-repair");
+      const evidence = completionEvidence(flowManager, specId);
+      const repairApplication = completionApplication(facts({ draftDocument: source, ...evidence }));
+      const reviewApplication = completionApplication(new DraftCompletionFacts({
+        source: "coverage-pass",
+        sourceStepId: "draft-coverage-review",
+        targetStepId: "draft-gate",
+        draft: source,
+        draftDigest: repairApplication.facts.draftDigest,
+        draftByteLength: repairApplication.facts.draftByteLength,
+        reviewVerdict: evidence.reviewVerdict,
+        reviewDraftDigest: evidence.reviewDraftDigest,
+        reviewArtifactDigest: evidence.reviewArtifactDigest,
+        questionsReviewArtifactDigest: evidence.questionsReviewArtifactDigest,
+      }));
+      const state = flowManager.canonicalState(specId);
+      const binding = {
+        runId: state.runId,
+        specId,
+        stepId: "draft-coverage-repair",
+        attempt: state.attempt,
+      };
+      const completionResult = new DraftCoverageRepairUnchangedResult();
+      const cases = [
+        {
+          label: "missing application",
+          result: completionResult,
+          settlement: settleDraftStepResult(completionResult.stepId, completionResult),
+          application: null,
+          message: /requires its typed application/i,
+        },
+        {
+          label: "unrelated application",
+          result: new DraftCoverageRepairChangedResult(),
+          settlement: settleDraftStepResult(
+            "draft-coverage-repair", new DraftCoverageRepairChangedResult(),
+          ),
+          application: repairApplication,
+          message: /does not belong to the selected settlement/i,
+        },
+        {
+          label: "route-mismatched application",
+          result: completionResult,
+          settlement: settleDraftStepResult(completionResult.stepId, completionResult),
+          application: reviewApplication,
+          message: /does not match the selected Result and Settlement/i,
+        },
+      ];
+      for (const candidate of cases) {
+        const before = persistedSnapshot(flowManager, specId);
+        assert.throws(() => flowManager.settleDraftStepResult({
+          binding,
+          stepResult: candidate.result,
+          settlement: candidate.settlement,
+          draftCompletionApplication: candidate.application,
+        }), candidate.message, candidate.label);
+        assert.equal(
+          persistedSnapshot(flowManager, specId),
+          before,
+          `${candidate.label} rejection must be side-effect free`,
+        );
+      }
     } finally {
       removeTmpDir(repository);
     }
@@ -1115,7 +1194,7 @@ describe("DraftCompletionConnector", () => {
       assert.equal(flowManager.canonicalState(specId).findNode("draft").status, "done");
       assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, "draft-questions-review");
       assert.throws(
-        () => resolveDraftCompletionConnector(facts({ draftDocument: unresolvedDraft })),
+        () => createDraftCompletionConnector(facts({ draftDocument: unresolvedDraft })),
         /connector is unavailable/,
       );
     } finally {

@@ -2,9 +2,8 @@ import { attachedCanonicalCommandResultArtifact } from "../lib/canonical-command
 import { DraftReviewArtifactDocument, DraftReviewEvidenceSet } from "../lib/draft-review-artifacts.js";
 import { draftReviewRouteForStepId } from "../lib/draft-review-routes.js";
 import { readProspectiveDraftGateFacts } from "../lib/gate-transition-facts.js";
-import { DraftExecutionSettlement, settleDraftStepResult } from "../definition.js";
+import { DraftCompletionConnector, DraftExecutionSettlement, settleDraftStepResult } from "../definition.js";
 import {
-  DraftCoverageReviewPassedResult,
   StepResult,
 } from "../engine/step-result.js";
 import {
@@ -16,6 +15,9 @@ import {
   DraftGateIssuePublication,
   DraftGatePublicationIntent,
 } from "../lib/draft-gate-prospective.js";
+import {
+  createDraftCompletionSettlementApplication,
+} from "../lib/draft-completion-connector.js";
 
 function committedReceipt(flowManager, input) {
   try {
@@ -86,14 +88,15 @@ export class ReviewService {
     if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
       throw new TypeError("ReviewService requires its bound Step's concrete Result");
     }
-    let draftCompletionFacts = null;
-    if (stepResult instanceof DraftCoverageReviewPassedResult) {
-      draftCompletionFacts = this.flowManager.readProspectiveDraftCoveragePassFacts({
+    const settlement = settleDraftStepResult(this.binding.stepId, stepResult);
+    let draftCompletionApplication = null;
+    if (settlement.connector === DraftCompletionConnector) {
+      const facts = this.flowManager.readProspectiveDraftCoveragePassFacts({
         binding: this.binding,
         commandResult: this.commandResult,
       });
+      draftCompletionApplication = createDraftCompletionSettlementApplication(facts);
     }
-    const settlement = settleDraftStepResult(this.binding.stepId, stepResult, { draftCompletionFacts });
     if (this.executionCheckpointer !== null) {
       if (!(settlement instanceof DraftExecutionSettlement)) {
         throw new DraftStepPersistenceFailure(new Error("Draft review pre-execution Step must select an Execution settlement"));
@@ -118,6 +121,7 @@ export class ReviewService {
       binding: this.binding,
       stepResult,
       settlement,
+      draftCompletionApplication,
       // Terminal routing still supplies the exact already-published bytes so
       // producer-readiness can bind the downstream confirmation to them.
       commandResult: stepResult.error === null ? this.commandResult : undefined,

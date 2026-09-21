@@ -1,9 +1,12 @@
 import { DraftStepBinding } from "../engine/connectors/draft/draft-step-binding.js";
 import { STEP_RESULT_TYPE, StepResult } from "../engine/step-result.js";
-import { DraftAwaitQuestionIdentity, DraftAwaitUserDecision, DraftExecutionSettlement, settleDraftStepResult } from "../definition.js";
+import { DraftAwaitQuestionIdentity, DraftAwaitUserDecision, DraftCompletionConnector, DraftExecutionSettlement, settleDraftStepResult } from "../definition.js";
 import { DraftStepPersistenceFailure, isDraftStepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
 import { DraftTransitionFacts, readDraftTransitionFacts } from "../lib/draft-transition-facts.js";
 import { canonicalPlanGateRepairForTarget, PlanGateRepairRecord } from "../lib/plan-gate-repair.js";
+import {
+  createDraftCompletionSettlementApplication,
+} from "../lib/draft-completion-connector.js";
 
 /** Access the sealed worker request for one Connector-bound Draft Step. */
 export class DraftService {
@@ -111,9 +114,10 @@ export class DraftService {
     if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
       throw new TypeError("DraftService requires its bound Step's concrete Result");
     }
-    const settlement = settleDraftStepResult(this.binding.stepId, stepResult, {
-      draftCompletionFacts: this.workerFacts?.draftCompletionFacts ?? null,
-    });
+    const settlement = settleDraftStepResult(this.binding.stepId, stepResult);
+    const draftCompletionApplication = settlement.connector === DraftCompletionConnector
+      ? createDraftCompletionSettlementApplication(this.workerFacts?.draftCompletionFacts ?? null)
+      : null;
     if (stepResult.type === STEP_RESULT_TYPE.ERROR) {
       return this.#commitWorkerError(stepResult, settlement);
     }
@@ -153,6 +157,7 @@ export class DraftService {
           binding: this.binding,
           stepResult,
           settlement,
+          draftCompletionApplication,
           awaitQuestion,
         });
         return committed.receipt;
@@ -163,7 +168,9 @@ export class DraftService {
     }
     let outcome;
     try {
-      outcome = await this.workerExecutor(stepResult, settlement, this.binding, awaitQuestion);
+      outcome = await this.workerExecutor(
+        stepResult, settlement, this.binding, awaitQuestion, draftCompletionApplication,
+      );
     } catch (error) {
       if (isDraftStepPersistenceFailure(error)) throw error;
       throw new DraftStepPersistenceFailure(error);

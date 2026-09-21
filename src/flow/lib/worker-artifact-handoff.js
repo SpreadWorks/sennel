@@ -7071,7 +7071,7 @@ function hasCommittedDraftStepResult({ ctx, request, stepResult, requireReceipt 
     && JSON.stringify(persisted.toJSON?.() ?? persisted) === JSON.stringify(stepResult.toJSON());
 }
 
-/** Build facts later bound by the application already selected in the Step settlement. */
+/** Build facts later bound by the Service to the already selected Step settlement. */
 function draftCoverageRepairCompletionFacts(request, route, repair) {
   if (route?.retryPhase !== "draft-coverage" || repair === null) return null;
   const draft = request.inputs.find((input) => input.name === "draft.json");
@@ -9279,7 +9279,7 @@ export class WorkerArtifactHandoffCoordinator {
   }
 
   /** Commit a Step-selected result through the existing canonical handoff. */
-  commitDraftWorker({ ctx, request, preparation, stepResult, settlement, binding }) {
+  commitDraftWorker({ ctx, request, preparation, stepResult, settlement, binding, draftCompletionApplication = null }) {
     if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)) {
       throw new TypeError("Draft worker commit requires a Draft worker handoff request");
     }
@@ -9336,6 +9336,7 @@ export class WorkerArtifactHandoffCoordinator {
       });
       return this.completePublishedDraftWorker({
         ctx, request, preparation, stepResult, settlement, binding: executionBinding,
+        draftCompletionApplication,
       });
     }
     try {
@@ -9346,6 +9347,7 @@ export class WorkerArtifactHandoffCoordinator {
         draftStepResult: stepResult,
         draftWorkerBinding: binding,
         draftWorkerSettlement: settlement,
+        draftCompletionApplication,
       });
     } catch (cause) {
       if (cause instanceof WorkerArtifactHandoffError
@@ -9411,7 +9413,9 @@ export class WorkerArtifactHandoffCoordinator {
   }
 
   /** Complete the Result selected by the same Step after its publication receipt. */
-  completePublishedDraftWorker({ ctx, request, preparation, stepResult, settlement, binding }) {
+  completePublishedDraftWorker({
+    ctx, request, preparation, stepResult, settlement, binding, draftCompletionApplication = null,
+  }) {
     if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)
       || !(preparation instanceof DraftWorkerPreparation) || preparation.request !== request
       || !(stepResult instanceof StepResult)) {
@@ -9489,6 +9493,7 @@ export class WorkerArtifactHandoffCoordinator {
         binding,
         stepResult,
         settlement,
+        draftCompletionApplication,
         lifecycleResult: failed
           ? null
           : canonicalHandoffResult(request, preparation.submission, this.now),
@@ -9531,7 +9536,10 @@ export class WorkerArtifactHandoffCoordinator {
     }
   }
 
-  reconcile({ ctx, request, mutationAuthority = null, preparedDraft = null, draftStepResult = null, draftWorkerBinding = null, draftWorkerSettlement = null }) {
+  reconcile({
+    ctx, request, mutationAuthority = null, preparedDraft = null, draftStepResult = null,
+    draftWorkerBinding = null, draftWorkerSettlement = null, draftCompletionApplication = null,
+  }) {
     if (!(request instanceof WorkerArtifactHandoffRequest)) return null;
     // A sealed V1 payload sits in `.runtime/` until the parent accepts it.
     // Validate that untrusted surface before loading the Version Store: a
@@ -9560,6 +9568,7 @@ export class WorkerArtifactHandoffCoordinator {
         draftStepResult,
         draftWorkerBinding,
         draftWorkerSettlement,
+        draftCompletionApplication,
         preparedDraft,
       });
     }
@@ -9631,13 +9640,14 @@ export class WorkerArtifactHandoffCoordinator {
     return this.#reconcileCanonical({
       ctx, request, state, submission, mutationAuthority, preparedDraft, draftStepResult,
       draftWorkerBinding, draftWorkerSettlement,
+      draftCompletionApplication,
     });
   }
 
   #reconcileCanonical({
     ctx, request, state, submission = null, mutationAuthority = null,
     preparedDraft = null, draftStepResult = null, draftWorkerBinding = null,
-    draftWorkerSettlement = null, publicationOnly = false,
+    draftWorkerSettlement = null, draftCompletionApplication = null, publicationOnly = false,
   }) {
     if (preparedDraft !== null) {
       if (!(preparedDraft instanceof DraftWorkerPreparation) || preparedDraft.request !== request) {
@@ -9777,6 +9787,7 @@ export class WorkerArtifactHandoffCoordinator {
             binding: draftWorkerBinding,
             stepResult: selectedDraftStepResult,
             settlement: draftWorkerSettlement,
+            draftCompletionApplication,
             lifecycleResult: canonicalHandoffResult(request, submission, this.now),
             references: {
               evaluations: [], findings: [], repairs: [],
@@ -9844,6 +9855,7 @@ export class WorkerArtifactHandoffCoordinator {
               binding: draftWorkerBinding,
               stepResult: selectedDraftStepResult,
               settlement: draftWorkerSettlement,
+              draftCompletionApplication,
               lifecycleResult: confirmation.result,
               references: confirmation.references,
               specRecord: confirmation.specRecord,

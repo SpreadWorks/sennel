@@ -2054,15 +2054,17 @@ export default class RunDispatchCommand extends FlowCommand {
       flowManager: ctx.flowManager,
       binding,
       workerFacts: prepared.facts,
-      workerExecutor: (stepResult, settlement, binding) => {
+      workerExecutor: (stepResult, settlement, binding, _awaitQuestion, draftCompletionApplication) => {
         return {
           error: null,
           ...(conditionalExecution
             ? this.handoffCoordinator.completePublishedDraftWorker({
                 ctx, request, preparation: prepared, stepResult, settlement, binding,
+                draftCompletionApplication,
               })
             : this.handoffCoordinator.commitDraftWorker({
                 ctx, request, preparation: prepared, stepResult, settlement, binding,
+                draftCompletionApplication,
               })),
         };
       },

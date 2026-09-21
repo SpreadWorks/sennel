@@ -4847,6 +4847,12 @@ describe("worker artifact handoff", () => {
           return "sealed";
         }
       }
+      const settle = value.flowManager.settleDraftStepResult.bind(value.flowManager);
+      const terminalSettlementInputs = [];
+      value.flowManager.settleDraftStepResult = (input) => {
+        if (input.stepResult?.kind === "draft-refine-completed") terminalSettlementInputs.push(input);
+        return settle(input);
+      };
       const dispatcher = new RunDispatchCommand({ handoffCoordinator: value.coordinator });
       const attempt = await dispatcher.runWorkerAttempt({
         ...value.ctx,
@@ -4858,6 +4864,9 @@ describe("worker artifact handoff", () => {
         .findNode("draft-refine").result.draftSettlementReceipt.executionLifecycle;
       assert.equal(terminal.phase, "terminal");
       assert.equal(terminal.executionGeneration, 0);
+      assert.equal(terminalSettlementInputs.length, 1);
+      assert.equal(Object.hasOwn(terminalSettlementInputs[0], "draftCompletionApplication"), true);
+      assert.equal(terminalSettlementInputs[0].draftCompletionApplication, null);
       const phases = value.flowManager.activityLedger(value.specId)
         .map((activity) => activity.result?.draftSettlementReceipt?.executionLifecycle?.phase)
         .filter((phase) => phase !== undefined);
