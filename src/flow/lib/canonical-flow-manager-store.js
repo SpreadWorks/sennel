@@ -69,6 +69,9 @@ import {
   DraftGateRepairCarryForwardResult,
   DraftGateRepairRequiredResult,
   SpecCreatedResult,
+  SpecTriageCompletedResult,
+  SpecRepairChangedResult,
+  SpecRepairUnchangedResult,
   STEP_RESULT_TYPE,
   StepResult,
   stepResultDigest,
@@ -101,6 +104,7 @@ import {
   CanonicalFlowRuntimeArtifactWrite,
   FlowExecution,
   CurrentFlowSpecRecord,
+  CanonicalWorkerSpecPublication,
   CanonicalSourceWorkerSpecCompletion,
   CanonicalSourceWorkerUpgradeResult,
   CurrentFlowPolicy,
@@ -244,6 +248,8 @@ import {
 } from "./producer-artifact-readiness.js";
 
 const EXECUTION_MODES = new Set(["direct", "branch", "worktree"]);
+// Only settleSpecStepResult may enter the generic writer for migrated Spec workers.
+const SPEC_REVIEW_WORKER_SETTLEMENT = Symbol("Spec Review worker settlement");
 const TERMINAL_STATUSES = new Set(["done", "skipped"]);
 const TASK_RUNTIME_STEP_ALIASES = new Set(["task-impl", "task-review", "task-triage", "task-repair", "task-gate"]);
 const RAW_ACTIVITY_MUTATION_OPTION_FIELDS = Object.freeze([
@@ -3569,12 +3575,20 @@ export class CanonicalFlowManagerStore {
    * and replaces the catalog descriptors.  It deliberately accepts no
    * mutable flow-state callback.
    */
-  confirmCurrentAttempt({ specId = null, status = "done", result = null, stepResult = null, settlementReceipt = null, commandResult = undefined, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null, admission = undefined } = {}) {
+  confirmCurrentAttempt({ specId = null, status = "done", result = null, stepResult = null, settlementReceipt = null, commandResult = undefined, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null, admission = undefined, specWorkerSettlement = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
     if (state.current === null) throw new CurrentFlowStateInvariantError("canonical completion requires an active Attempt");
     const nodeId = state.current.at(-1);
+    if (["spec-triage", "spec-repair"].includes(nodeId)
+      && (specWorkerSettlement !== SPEC_REVIEW_WORKER_SETTLEMENT
+        || !(stepResult instanceof SpecTriageCompletedResult
+          || stepResult instanceof SpecRepairChangedResult
+          || stepResult instanceof SpecRepairUnchangedResult)
+        || settlementReceipt === null)) {
+      throw new CurrentFlowStateInvariantError("Spec Review worker completion requires its selected Step Result and receipt");
+    }
     const confirmation = resultWithDraftStepResult(result ?? resultFor(status, nodeId), nodeId, stepResult, settlementReceipt);
     const confirmationActivityId = activityId("attempt-confirmed");
     const writes = [
@@ -4437,6 +4451,7 @@ export class CanonicalFlowManagerStore {
     stepResult,
     settlement,
     application,
+    specRecord = undefined,
     lifecycleResult = null,
     references = undefined,
     artifactWrites = [],
@@ -4459,7 +4474,7 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const errorSettlement = settlement instanceof StepErrorDecision;
-    const routedSettlement = stepResult instanceof SpecCreatedResult
+    const initialRoute = stepResult instanceof SpecCreatedResult
       && settlement instanceof SpecNextRoute
       && application instanceof SpecReviewSettlementApplication
       && application.sourceStepId === "spec"
@@ -4468,17 +4483,31 @@ export class CanonicalFlowManagerStore {
       && application.specId === binding?.specId
       && application.sourceAttempt.id === binding?.attempt?.id
       && application.sourceAttempt.sequence === binding?.attempt?.sequence;
+    const reviewWorkerRoute = (stepResult instanceof SpecTriageCompletedResult
+      || stepResult instanceof SpecRepairChangedResult
+      || stepResult instanceof SpecRepairUnchangedResult)
+      && settlement instanceof SpecNextRoute
+      && settlement.sourceStepId === binding?.stepId
+      && settlement.targetStepId === (binding.stepId === "spec-triage" ? "spec-repair" : "spec-gate")
+      && (application === null || application === undefined)
+      && (stepResult instanceof SpecRepairChangedResult
+        ? specRecord instanceof CanonicalWorkerSpecPublication
+        : specRecord === undefined)
+      && artifactWrites.length === 1 && artifactWrites[0].logicalKey === "spec.review"
+      && artifactBaselines.length === 1
+      && CanonicalFlowArtifactBaseline.from(artifactBaselines[0]).artifact.logicalKey === "spec.review";
+    const routedSettlement = initialRoute || reviewWorkerRoute;
     if (!(stepResult instanceof StepResult)
-      || binding?.stepId !== "spec"
-      || settlement?.sourceStepId !== "spec"
+      || !["spec", "spec-triage", "spec-repair"].includes(binding?.stepId)
+      || settlement?.sourceStepId !== binding.stepId
       || (!routedSettlement && !(errorSettlement
         && stepResult.type === STEP_RESULT_TYPE.ERROR
         && (application === null || application === undefined)))) {
       throw new CurrentFlowStateInvariantError(
-        "initial Spec settlement requires its typed Result, route, and connection application",
+        "Spec settlement requires its typed Result, route, and publication",
       );
     }
-    if (routedSettlement) {
+    if (initialRoute) {
       const baseline = artifactBaselines
         .map((entry) => CanonicalFlowArtifactBaseline.from(entry))
         .find((entry) => entry.artifact.logicalKey === "spec.record") ?? null;
@@ -4495,7 +4524,7 @@ export class CanonicalFlowManagerStore {
       settlement,
       lifecycleResult,
       references,
-      specRecord: routedSettlement ? application.publication : undefined,
+      specRecord: initialRoute ? application.publication : specRecord,
       artifactWrites,
       artifactRemovals,
       artifactBaselines,
@@ -4518,8 +4547,9 @@ export class CanonicalFlowManagerStore {
       result: lifecycleResult,
       stepResult,
       settlementReceipt: receipt,
+      ...(reviewWorkerRoute && { specWorkerSettlement: SPEC_REVIEW_WORKER_SETTLEMENT }),
       references,
-      specRecord: application.publication,
+      specRecord: initialRoute ? application.publication : specRecord,
       artifactWrites,
       artifactRemovals,
       artifactBaselines,

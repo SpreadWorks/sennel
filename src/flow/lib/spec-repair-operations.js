@@ -29,6 +29,10 @@ function canonicalJson(value) {
   if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
   return JSON.stringify(value);
 }
+/** Stable audit identity for a rejected Spec repair proposal. */
+export function specRepairProposalDigest(proposal) {
+  return crypto.createHash("sha256").update(canonicalJson(proposal)).digest("hex");
+}
 /** Finds the actual edit, independent of worker prose or which finding named it. */
 function semanticOperationDigest(operation) {
   const json = operation.toJSON?.() ?? operation;

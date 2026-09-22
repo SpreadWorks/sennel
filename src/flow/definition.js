@@ -72,6 +72,9 @@ import {
   DraftRefineCompletedResult,
   DraftRefineWorkerRequiredResult,
   SpecCreatedResult,
+  SpecTriageCompletedResult,
+  SpecRepairChangedResult,
+  SpecRepairUnchangedResult,
   SpecReviewPassedResult,
   SpecReviewAdvisoryResult,
   SpecReviewRejectedResult,
@@ -87,6 +90,8 @@ import { DraftRefineConnector } from "./engine/connectors/draft/draft-refine-con
 import { DraftSpecConnector } from "./engine/connectors/draft/draft-spec-connector.js";
 import { SpecReviewConnector } from "./engine/connectors/spec/spec-review-connector.js";
 import { SpecTriageConnector } from "./engine/connectors/spec/spec-triage-connector.js";
+import { SpecRepairConnector } from "./engine/connectors/spec/spec-repair-connector.js";
+import { SpecGateConnector } from "./engine/connectors/spec/spec-gate-connector.js";
 import {
   flattenSteps,
   findFirstPendingLeaf,
@@ -5146,6 +5151,22 @@ export function settleSpecStepResult(stepId, result) {
       connector: SpecTriageConnector,
       effects: new StepRouteEffects(contiguousLeafRouteEffects(
         collectFlowLeafIds(), stepId, "spec-triage",
+      )),
+    });
+  }
+  if (result instanceof SpecTriageCompletedResult) {
+    return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
+      result, targetStepId: "spec-repair", connector: SpecRepairConnector,
+      effects: new StepRouteEffects(contiguousLeafRouteEffects(
+        collectFlowLeafIds(), stepId, "spec-repair",
+      )),
+    });
+  }
+  if (result instanceof SpecRepairChangedResult || result instanceof SpecRepairUnchangedResult) {
+    return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
+      result, targetStepId: "spec-gate", connector: SpecGateConnector,
+      effects: new StepRouteEffects(contiguousLeafRouteEffects(
+        collectFlowLeafIds(), stepId, "spec-gate",
       )),
     });
   }

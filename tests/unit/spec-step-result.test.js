@@ -7,8 +7,13 @@ import {
   settleSpecStepResult,
 } from "../../src/flow/definition.js";
 import { SpecReviewConnector } from "../../src/flow/engine/connectors/spec/spec-review-connector.js";
+import { SpecRepairConnector } from "../../src/flow/engine/connectors/spec/spec-repair-connector.js";
+import { SpecGateConnector } from "../../src/flow/engine/connectors/spec/spec-gate-connector.js";
 import {
   SpecCreatedResult,
+  SpecTriageCompletedResult,
+  SpecRepairChangedResult,
+  SpecRepairUnchangedResult,
   StepErrorResult,
   StepResult,
 } from "../../src/flow/engine/step-result.js";
@@ -58,4 +63,18 @@ test("Spec Error Results select the shared failure settlement", () => {
   assert.equal(settlement instanceof StepErrorDecision, true);
   assert.equal(settlement.error.message, "initial Spec unavailable");
   assert.equal(Object.hasOwn(settlement, "connector"), false);
+});
+
+test("Spec Triage and Repair Results select the next route after readback", () => {
+  for (const [result, target, connector] of [
+    [new SpecTriageCompletedResult(), "spec-repair", SpecRepairConnector],
+    [new SpecRepairChangedResult(), "spec-gate", SpecGateConnector],
+    [new SpecRepairUnchangedResult(), "spec-gate", SpecGateConnector],
+  ]) {
+    const restored = StepResult.fromStored(result.stepId, result.toJSON());
+    const settlement = settleSpecStepResult(result.stepId, restored);
+    assert.equal(settlement instanceof SpecNextRoute, true);
+    assert.equal(settlement.targetStepId, target);
+    assert.equal(settlement.connector, connector);
+  }
 });

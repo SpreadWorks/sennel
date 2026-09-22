@@ -143,6 +143,15 @@ export const DraftCreatedResult = resultClass("DraftCreatedResult", {
 export const SpecCreatedResult = resultClass("SpecCreatedResult", {
   stepId: "spec", kind: "spec-created", type: STEP_RESULT_TYPE.COMPLETED,
 });
+export const SpecTriageCompletedResult = resultClass("SpecTriageCompletedResult", {
+  stepId: "spec-triage", kind: "spec-triage-completed", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const SpecRepairChangedResult = resultClass("SpecRepairChangedResult", {
+  stepId: "spec-repair", kind: "spec-repair-changed", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const SpecRepairUnchangedResult = resultClass("SpecRepairUnchangedResult", {
+  stepId: "spec-repair", kind: "spec-repair-unchanged", type: STEP_RESULT_TYPE.COMPLETED,
+});
 export const SpecReviewExecutionRequiredResult = resultClass("SpecReviewExecutionRequiredResult", {
   stepId: "spec-review", kind: "spec-review-execution-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
 });

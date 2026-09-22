@@ -168,12 +168,26 @@ export async function draftWorkerStepDefinition(stepId) {
 }
 
 export async function specWorkerStepDefinition(stepId) {
-  if (stepId !== "spec") return null;
-  const [{ SpecEntryConnector: Connector }, { SpecStep: StepClass }] = await Promise.all([
-    import("../engine/connectors/spec/spec-entry-connector.js"),
-    import("../steps/spec/spec.js"),
-  ]);
-  return { Connector, StepClass };
+  switch (stepId) {
+    case "spec": {
+      const [{ SpecEntryConnector: Connector }, { SpecStep: StepClass }] = await Promise.all([
+        import("../engine/connectors/spec/spec-entry-connector.js"),
+        import("../steps/spec/spec.js"),
+      ]);
+      return { Connector, StepClass };
+    }
+    case "spec-triage":
+    case "spec-repair": {
+      const [{ SpecEntryConnector: Connector }, steps] = await Promise.all([
+        import("../engine/connectors/spec/spec-entry-connector.js"),
+        stepId === "spec-triage"
+          ? import("../steps/spec/spec-triage.js")
+          : import("../steps/spec/spec-repair.js"),
+      ]);
+      return { Connector, StepClass: stepId === "spec-triage" ? steps.SpecTriageStep : steps.SpecRepairStep };
+    }
+    default: return null;
+  }
 }
 
 function agentFailuresFor(error, agentError = null) {
@@ -1929,12 +1943,14 @@ export default class RunDispatchCommand extends FlowCommand {
             : await this.runDraftWorkerStep(ctx, handoffRequest, draftDefinition, prepared);
         } else if (specDefinition !== null) {
           const { SpecService } = await import("../services/spec-service.js");
-          const prepared = await SpecService.prepare({
+          const { SpecReviewWorkerService } = await import("../services/spec-worker-review-service.js");
+          const Service = handoffRequest.stepId === "spec" ? SpecService : SpecReviewWorkerService;
+          const prepared = await Service.prepare({
             ctx, request: handoffRequest,
             Connector: specDefinition.Connector,
             handoffCoordinator: this.handoffCoordinator,
           });
-          reconciliation = prepared instanceof SpecService
+          reconciliation = prepared instanceof Service
             ? await this.runSpecWorkerStep(specDefinition, prepared)
             : { error: null, ...prepared };
         } else {
@@ -2115,10 +2131,13 @@ export default class RunDispatchCommand extends FlowCommand {
   /** Execute the initial Spec worker through its Step and selected connection. */
   async runSpecWorkerStep(definition, service) {
     const { SpecService } = await import("../services/spec-service.js");
-    if (definition === null || !(service instanceof SpecService)) {
-      throw new Error("initial Spec Step definition is missing");
+    const { SpecReviewWorkerService } = await import("../services/spec-worker-review-service.js");
+    if (definition === null || !(service instanceof SpecService || service instanceof SpecReviewWorkerService)) {
+      throw new Error("Spec Step definition is missing");
     }
-    const step = new StepFactory().provide(SpecService, service).create(definition.StepClass);
+    const step = new StepFactory()
+      .provide(service instanceof SpecService ? SpecService : SpecReviewWorkerService, service)
+      .create(definition.StepClass);
     const stepResult = await step.execute();
     return { ...service.workerOutcome, stepResult };
   }

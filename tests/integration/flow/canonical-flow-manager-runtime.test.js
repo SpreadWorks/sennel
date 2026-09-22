@@ -20,6 +20,9 @@ import {
   DraftQuestionsReviewFindingsResult,
   DraftQuestionsReviewPassedResult,
   SpecReviewRejectedResult,
+  SpecTriageCompletedResult,
+  SpecRepairChangedResult,
+  SpecRepairUnchangedResult,
   StepErrorResult,
   STEP_RESULT_TYPE,
 } from "../../../src/flow/engine/step-result.js";
@@ -29,8 +32,12 @@ import {
   DraftWorkerStepBinding,
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { SpecReviewStepBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
+import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
 import { specReviewResult } from "../../../src/flow/steps/spec/spec-review.js";
+import { SpecTriageStep } from "../../../src/flow/steps/spec/spec-triage.js";
+import { SpecRepairStep } from "../../../src/flow/steps/spec/spec-repair.js";
 import { SpecReviewService } from "../../../src/flow/services/spec-review-service.js";
+import { SpecReviewWorkerService } from "../../../src/flow/services/spec-worker-review-service.js";
 import { Agent } from "../../../src/lib/agent.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
@@ -43,6 +50,8 @@ import {
 import { CanonicalFlowCreateRequest } from "../../../src/flow/lib/canonical-flow-manager-store.js";
 import {
   ActivityReviewPublication,
+  CanonicalFlowArtifactBaseline,
+  CanonicalWorkerSpecPublication,
   CurrentFlowSpecRecord,
   CurrentFlowState,
   CurrentFlowStateStore,
@@ -337,6 +346,30 @@ function writeSpecReviewDeltaOutput(options, findings = []) {
   fs.writeFileSync(path.join(outputDirectory, "review.delta.json"), `${JSON.stringify(delta.toJSON(), null, 2)}\n`);
 }
 
+/** Run a sealed Spec Triage or Repair handoff through the same Step runner as dispatch. */
+async function settleSealedSpecReviewWorker({ ctx, coordinator, stepId, payload }) {
+  const request = coordinator.createRequest({
+    ctx,
+    state: ctx.flowManager.load(ctx.specId),
+    invocation: {
+      id: `canonical-spec-review-${stepId}`,
+      target: { digest: crypto.createHash("sha256").update(`target:${stepId}`).digest("hex") },
+      action: {
+        digest: crypto.createHash("sha256").update(`action:${stepId}`).digest("hex"),
+        nextAction: { step: stepId },
+      },
+    },
+  });
+  fs.writeFileSync(request.payloadPath("review.delta.json"), `${JSON.stringify(payload(request), null, 2)}\n`);
+  sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
+  const service = await SpecReviewWorkerService.prepare({
+    ctx, request, Connector: SpecEntryConnector, handoffCoordinator: coordinator,
+  });
+  assert.ok(service instanceof SpecReviewWorkerService);
+  const StepClass = stepId === "spec-triage" ? SpecTriageStep : SpecRepairStep;
+  return new RunDispatchCommand().runSpecWorkerStep({ StepClass }, service);
+}
+
 function reviewPublicationWrite(review, stage) {
   const delta = new SpecReviewDelta({
     version: 2,
@@ -356,6 +389,29 @@ function reviewPublicationWrite(review, stage) {
       bytes: Buffer.from(`${JSON.stringify(next.toJSON(), null, 2)}\n`, "utf8"),
     },
   };
+}
+
+function settleFixtureSpecReviewWorker(manager, specId, stepResult, { specRecord } = {}) {
+  const state = manager.canonicalState(specId);
+  const binding = {
+    runId: state.runId, specId, stepId: stepResult.stepId, attempt: state.attempt,
+  };
+  const current = manager.readCurrentSpecReview({ specId, consumerNodeId: stepResult.stepId });
+  const publication = reviewPublicationWrite(current.review, stepResult.stepId);
+  manager.settleSpecStepResult({
+    binding,
+    stepResult,
+    settlement: settleSpecStepResult(stepResult.stepId, stepResult),
+    specRecord,
+    artifactWrites: [publication.write],
+    artifactBaselines: [new CanonicalFlowArtifactBaseline({
+      logicalKey: "spec.review",
+      parameters: { revision: current.review.identity.revision.toString() },
+      digest: current.descriptor.hash,
+      byteLength: current.descriptor.size,
+    })],
+  });
+  return publication;
 }
 
 function noOpSpecReviewCommandResult(review) {
@@ -3471,43 +3527,147 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(manager.activityLedger(created.specId).length, before);
   });
 
-  it("rejects a saved Spec Review binding after a legal Spec repair advances the revision", async () => {
+  it("publishes a changed Spec repair through sealed workers and reads its revision at Spec Gate", async () => {
     const { repository, manager, created } = activeSpecReviewFixture("001-spec-review-repaired-revision");
-    const binding = new SpecReviewStepBinding({ flowManager: manager, specId: created.specId });
+    const findingId = "repair-canonical-goal";
     let providerCalls = 0;
     const review = new RunReviewCommand({
       resolveTreeSha: () => "a".repeat(40),
       resolveTargetStateDigest: () => "b".repeat(64),
       runCommand(_command, _args, options) {
         providerCalls += 1;
-        writeSpecReviewDeltaOutput(options);
+        writeSpecReviewDeltaOutput(options, [{
+          findingId,
+          kind: "blocking",
+          title: "Clarify the Spec goal",
+          target: "goal",
+          body: "The canonical Spec needs the reviewed goal wording.",
+          issue: "The initial goal omits the reviewed publication outcome.",
+          requiredChange: "Replace the root goal with the reviewed wording.",
+          whyBlocking: "The repaired Spec must preserve the approved publication scope.",
+        }]);
         ReviewWorkUnit.fromEnvironment(options.env).seal();
-        return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+        return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
       },
     });
-    const result = await review.execute({
+    const reviewCtx = {
       root: repository, mainRoot: repository, executionRoot: repository,
       specId: created.specId, phase: "spec", flowManager: manager,
       flowState: manager.load(created.specId),
       config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
-    });
-    assert.equal(result.artifacts.verdict, "PASS");
-    advanceTo(manager, created.specId, "spec-repair");
+    };
+    const result = await review.execute(reviewCtx);
+    assert.equal(result.artifacts.verdict, "REJECTED");
+    // Review's own production settlement has completed; activation does not
+    // synthesize a triage result and leaves that worker as the only producer.
+    advanceTo(manager, created.specId, "spec-triage");
+    assert.equal(manager.canonicalState(created.specId).current.at(-1), "spec-triage");
     const before = currentSpecRevisionAuthority(manager, created.specId);
-    const document = JSON.parse(before.root.toString("utf8"));
-    document.goal = "Publish a revised canonical Spec after the original review.";
-    const repair = reviewPublicationWrite(before.review, "spec-repair");
-    manager.confirmCurrentAttempt({
-      specId: created.specId,
-      specRecord: new CurrentFlowSpecRecord(document, { specId: created.specId }),
-      artifactWrites: [repair.write],
+    const ctx = {
+      root: repository, mainRoot: repository, executionRoot: repository,
+      specId: created.specId, flowManager: manager,
+    };
+    const coordinator = new WorkerArtifactHandoffCoordinator({
+      now: () => new Date("2026-09-22T00:00:00.000Z"),
     });
+    const activityCountBeforeWorkers = manager.activityLedger(created.specId).length;
+    const triage = await settleSealedSpecReviewWorker({
+      ctx, coordinator, stepId: "spec-triage",
+      payload(request) {
+        const canonicalReview = new CanonicalSpecReview(
+          request.inputs.find((entry) => entry.name === "review.json").document,
+        );
+        return {
+          version: 2,
+          stage: "spec-triage",
+          identity: canonicalReview.identity.toJSON(),
+          baseReviewDigest: canonicalReview.digest,
+          findings: [{
+            findingId,
+            disposition: "apply",
+            evidence: "The root goal is an existing reviewed field.",
+            allowedTargets: [{
+              target: { entity: "spec", field: "goal" },
+              operationKinds: ["replace-field"],
+            }],
+          }],
+          operations: [],
+        };
+      },
+    });
+    assert.equal(triage.stepResult.kind, "spec-triage-completed");
+    assert.equal(triage.receipt.targetStepId, "spec-repair");
+    const activityCountAfterTriage = manager.activityLedger(created.specId).length;
+    assert.equal(activityCountAfterTriage, activityCountBeforeWorkers + 1);
+    advanceTo(manager, created.specId, "spec-repair");
+    assert.equal(manager.canonicalState(created.specId).current.at(-1), "spec-repair");
+    const activityCountAfterRepairActivation = manager.activityLedger(created.specId).length;
+    assert.equal(activityCountAfterRepairActivation, activityCountAfterTriage + 1);
+    const repair = await settleSealedSpecReviewWorker({
+      ctx, coordinator, stepId: "spec-repair",
+      payload(request) {
+        const canonicalReview = new CanonicalSpecReview(
+          request.inputs.find((entry) => entry.name === "review.json").document,
+        );
+        const spec = request.inputs.find((entry) => entry.name === "spec.json").document;
+        return {
+          version: 2,
+          stage: "spec-repair",
+          identity: canonicalReview.identity.toJSON(),
+          baseReviewDigest: canonicalReview.digest,
+          findings: [],
+          operations: [{
+            findingIds: [findingId],
+            kind: "replace-field",
+            target: { entity: "spec", field: "goal" },
+            expectedDigest: crypto.createHash("sha256").update(JSON.stringify(spec.goal)).digest("hex"),
+            replacement: "Publish a revised canonical Spec after the original review.",
+            reason: "Apply the reviewed root goal correction.",
+          }],
+        };
+      },
+    });
+    assert.equal(repair.stepResult.kind, "spec-repair-changed");
+    assert.equal(repair.receipt.targetStepId, "spec-gate");
     const after = currentSpecRevisionAuthority(manager, created.specId);
     assertSpecRevisionAdvanced(before, after);
-    const ledgerLength = manager.activityLedger(created.specId).length;
-    assert.throws(() => binding.assertCurrent());
+    assert.equal(JSON.parse(after.root.toString("utf8")).goal, "Publish a revised canonical Spec after the original review.");
+    const gateReview = manager.readCurrentSpecReview({
+      specId: created.specId,
+      consumerNodeId: "spec-gate",
+    }).review;
+    assert.equal(gateReview.identity.revision.value, after.revision);
+    assert.equal(gateReview.identity.digest, crypto.createHash("sha256").update(after.root).digest("hex"));
+    assert.equal(gateReview.findings.byId(findingId).disposition, "apply");
+    assert.equal(gateReview.audit.at(-1).stage, "spec-repair");
+    const activityCount = manager.activityLedger(created.specId).length;
+    assert.equal(activityCount, activityCountAfterRepairActivation + 1);
+    assert.deepEqual(
+      manager.activityLedger(created.specId)
+        .filter((activity) => ["spec-triage", "spec-repair"].includes(activity.nodeId)
+          && activity.result?.draftSettlementReceipt !== undefined)
+        .map((activity) => ({ nodeId: activity.nodeId, receiptId: activity.result.draftSettlementReceipt.id })),
+      [
+        { nodeId: "spec-triage", receiptId: triage.receipt.id },
+        { nodeId: "spec-repair", receiptId: repair.receipt.id },
+      ],
+    );
+    const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const reloadedReview = reloaded.readCurrentSpecReview({
+      specId: created.specId,
+      consumerNodeId: "spec-gate",
+    }).review;
+    const reloadedSpec = reloaded.readArtifact({
+      specId: created.specId,
+      logicalKey: "spec.record",
+      consumerNodeId: "spec-gate",
+    });
+    assert.deepEqual(reloadedReview.identity.toJSON(), gateReview.identity.toJSON());
+    assert.deepEqual(reloadedSpec.bytes, after.root);
+    assert.equal(reloaded.canonicalState(created.specId).nextAction().nodeId, "spec-gate");
+    assert.equal(reloaded.activityLedger(created.specId).length, activityCount);
     assert.equal(providerCalls, 1);
-    assert.equal(manager.activityLedger(created.specId).length, ledgerLength);
+    assert.equal(manager.activityLedger(created.specId).length, activityCount);
   });
 
   it("admits one Spec Review provider while direct and dispatcher calls overlap", async () => {
@@ -3838,26 +3998,10 @@ describe("FlowManager canonical Version-1 runtime", () => {
     manager.addActiveFlow(created.specId, "direct");
     advanceTo(manager, created.specId, "spec-triage");
 
-    const triageInput = manager.readCurrentSpecReview({
-      specId: created.specId,
-      consumerNodeId: "spec-triage",
-    }).review;
-    const triage = reviewPublicationWrite(triageInput, "spec-triage");
-    manager.confirmCurrentAttempt({
-      specId: created.specId,
-      artifactWrites: [triage.write],
-    });
+    settleFixtureSpecReviewWorker(manager, created.specId, new SpecTriageCompletedResult());
 
     manager.updateStepStatus({ stepId: "spec-repair", requestedStatus: "in_progress" }, { specId: created.specId });
-    const repairInput = manager.readCurrentSpecReview({
-      specId: created.specId,
-      consumerNodeId: "spec-repair",
-    }).review;
-    const repair = reviewPublicationWrite(repairInput, "spec-repair");
-    manager.confirmCurrentAttempt({
-      specId: created.specId,
-      artifactWrites: [repair.write],
-    });
+    settleFixtureSpecReviewWorker(manager, created.specId, new SpecRepairUnchangedResult());
 
     const current = manager.readCurrentSpecReview({
       specId: created.specId,
@@ -3903,11 +4047,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const before = currentSpecRevisionAuthority(manager, created.specId);
     const document = JSON.parse(before.root.toString("utf8"));
     document.goal = "Publish the repaired revision with its canonical review audit.";
-    const repair = reviewPublicationWrite(before.review, "spec-repair");
-    manager.confirmCurrentAttempt({
-      specId: created.specId,
-      specRecord: new CurrentFlowSpecRecord(document, { specId: created.specId }),
-      artifactWrites: [repair.write],
+    const repair = settleFixtureSpecReviewWorker(manager, created.specId, new SpecRepairChangedResult(), {
+      specRecord: new CanonicalWorkerSpecPublication(document),
     });
     const after = currentSpecRevisionAuthority(manager, created.specId);
     assertSpecRevisionAdvanced(before, after);

@@ -19,6 +19,9 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
   const expected = [
     ["DraftCreatedResult", "draft", "draft-created", "completed"],
     ["SpecCreatedResult", "spec", "spec-created", "completed"],
+    ["SpecTriageCompletedResult", "spec-triage", "spec-triage-completed", "completed"],
+    ["SpecRepairChangedResult", "spec-repair", "spec-repair-changed", "completed"],
+    ["SpecRepairUnchangedResult", "spec-repair", "spec-repair-unchanged", "completed"],
     ["SpecReviewExecutionRequiredResult", "spec-review", "spec-review-execution-required", "loop-required"],
     ["SpecReviewPassedResult", "spec-review", "spec-review-passed", "completed"],
     ["SpecReviewAdvisoryResult", "spec-review", "spec-review-advisory", "completed"],
@@ -45,7 +48,7 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     ["DraftGateRepairAppliedResult", "draft-gate-repair", "draft-gate-repair-applied", "completed"],
     ["DraftGateRepairCarryForwardResult", "draft-gate-repair", "draft-gate-repair-carry-forward", "completed"],
     ...[
-      "draft", "spec", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
+      "draft", "spec", "spec-triage", "spec-repair", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
       "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "draft-gate-repair",
     ].map((stepId) => ["StepErrorResult", stepId, `${stepId}-error`, "error"]),
   ];

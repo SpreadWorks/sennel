@@ -3,13 +3,13 @@ import { WorkerArtifactHandoffRequest } from "../../../lib/worker-artifact-hando
 import { StepBinding, canonicalStepState } from "../../step-binding.js";
 import { SpecRevisionIdentity } from "../../../lib/spec-review-artifacts.js";
 
-/** Binds the initial Spec worker publication to its exact active Attempt. */
+/** Binds a Spec worker publication to its exact active Attempt. */
 export class SpecWorkerStepBinding extends StepBinding {
   constructor({ request } = {}) {
     if (!(request instanceof WorkerArtifactHandoffRequest)
-      || request.stepId !== "spec"
+      || !["spec", "spec-triage", "spec-repair"].includes(request.stepId)
       || !requiresWorkerArtifactHandoff(request.stepId)) {
-      throw new TypeError("Spec worker binding requires the spec handoff request");
+      throw new TypeError("Spec worker binding requires a Spec handoff request");
     }
     const state = canonicalStepState(request.flowManager, request.specId);
     super({ flowManager: request.flowManager, state, stepId: request.stepId, attempt: state.attempt });

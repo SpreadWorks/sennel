@@ -48,6 +48,7 @@ import { StepPersistenceFailure } from "./definition-lifecycle-failure.js";
 import {
   SpecWorkerCompletionFacts,
 } from "./spec-step-connection.js";
+import { SpecReviewWorkerFacts } from "../services/spec-worker-review-service.js";
 import { CanonicalFlowFindingsStore } from "./flow-findings.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { findStepById } from "./step-tree.js";
@@ -61,14 +62,11 @@ import {
 import {
   CanonicalSpecReview,
   SpecReviewDelta,
-  mergeSpecReviewDelta,
   validateSpecRepairDeltaFormat,
   validateSpecTriageDeltaFormat,
 } from "./spec-review-artifacts.js";
 import {
-  applySpecRepairOperations,
   SpecRepairOperationsError,
-  validateSpecRepairTriageFinding,
 } from "./spec-repair-operations.js";
 import {
   applyDraftRepairOperations,
@@ -6940,12 +6938,13 @@ class DraftWorkerPreparation {
   }
 }
 
-/** Private in-memory boundary between initial Spec validation and settlement. */
+/** Private in-memory boundary between Spec worker validation and settlement. */
 class SpecWorkerPreparation {
   constructor({ request, state, submission, publications, facts } = {}) {
-    if (!(request instanceof WorkerArtifactHandoffRequest) || request.stepId !== "spec"
-      || !(facts instanceof SpecWorkerCompletionFacts)) {
-      throw new TypeError("Spec worker preparation requires typed initial Spec facts");
+    if (!(request instanceof WorkerArtifactHandoffRequest)
+      || !(facts instanceof SpecWorkerCompletionFacts || facts instanceof SpecReviewWorkerFacts)
+      || facts instanceof SpecReviewWorkerFacts && facts.stepId !== request.stepId) {
+      throw new TypeError("Spec worker preparation requires typed Spec facts");
     }
     this.request = request;
     this.state = state;
@@ -6962,9 +6961,9 @@ class SpecWorkerPreparation {
         evaluations: [], findings: [], repairs: [],
         artifacts: [{ id: this.submission.handoffDigest, label: this.request.stepId }],
       },
-      artifactWrites: this.publications.artifactWrites,
-      artifactRemovals: this.publications.artifactRemovals,
-      artifactBaselines: this.publications.artifactBaselines,
+      artifactWrites: this.publications?.artifactWrites ?? [],
+      artifactRemovals: this.publications?.artifactRemovals ?? [],
+      artifactBaselines: this.publications?.artifactBaselines ?? [],
     };
   }
 }
@@ -6978,6 +6977,19 @@ function prepareSpecWorkerCanonical({ request, state, submission }) {
       `sealed worker artifact handoff is quarantined after ${quarantine.code}: ${quarantine.message}`,
       { retryable: false, recoveryPossible: false, data: { stepId: request.stepId, handoffDirectory: request.directory } },
     );
+  }
+  if (request.stepId === "spec-triage" || request.stepId === "spec-repair") {
+    const reviewInput = request.inputs.find((input) => input.name === "review.json");
+    const specInput = request.inputs.find((input) => input.name === "spec.json");
+    const delta = request.stepId === "spec-triage"
+      ? validateSpecTriagePayloadAtProducerBoundary(request, payloadDocument(request, submission, "review.delta.json"))
+      : validateSpecRepairPayloadAtProducerBoundary(request, payloadDocument(request, submission, "review.delta.json"));
+    const facts = new SpecReviewWorkerFacts({
+      stepId: request.stepId, spec: specInput.document,
+      review: new CanonicalSpecReview(reviewInput.document), delta,
+      reviewDigest: reviewInput.digest, reviewByteLength: reviewInput.byteLength,
+    });
+    return new SpecWorkerPreparation({ request, state, submission, publications: null, facts });
   }
   let publications;
   try {
@@ -7816,87 +7828,6 @@ function canonicalTestTreeBaselineForPublication(request) {
 }
 
 function canonicalHandoffPublications(request, submission) {
-  if (request.stepId === "spec-triage") {
-    const reviewInput = request.inputs.find((input) => input.name === "review.json");
-    const specInput = request.inputs.find((input) => input.name === "spec.json");
-    const current = new CanonicalSpecReview(reviewInput.document);
-    const delta = new SpecReviewDelta(payloadDocument(request, submission, "review.delta.json"));
-    const validFindings = [];
-    const discardedOperations = [];
-    for (const update of delta.findings.findings) {
-      try {
-        validateSpecRepairTriageFinding(update.toJSON(), specInput.document);
-        validFindings.push(update.toJSON());
-      } catch (cause) {
-        discardedOperations.push({ findingId: update.findingId, reason: `invalid triage permission: ${cause.message}` });
-      }
-    }
-    const permitted = delta.withPermittedFindings(validFindings);
-    const next = mergeSpecReviewDelta({ review: current, delta: permitted, discardedOperations });
-    const parameters = { revision: current.identity.revision.toString() };
-    return Object.freeze({
-      specRecord: undefined,
-      artifactWrites: Object.freeze([{
-        logicalKey: "spec.review", parameters, mediaType: "application/json",
-        bytes: Buffer.from(`${JSON.stringify(next.toJSON(), null, 2)}\n`, "utf8"),
-      }]),
-      artifactRemovals: Object.freeze([]),
-      artifactBaselines: Object.freeze([new CanonicalFlowArtifactBaseline({
-        logicalKey: "spec.review", parameters,
-        digest: request.inputs.find((input) => input.name === "review.json").digest,
-        byteLength: request.inputs.find((input) => input.name === "review.json").byteLength,
-      })]),
-      testSourceBaseline: undefined, draftCoverageRepairFacts: null,
-    });
-  }
-  if (request.stepId === "spec-repair") {
-    const reviewInput = request.inputs.find((input) => input.name === "review.json");
-    const specInput = request.inputs.find((input) => input.name === "spec.json");
-    if (!reviewInput || !specInput) throw new Error("spec-repair requires canonical spec and review inputs");
-    const current = new CanonicalSpecReview(reviewInput.document);
-    const delta = new SpecReviewDelta(payloadDocument(request, submission, "review.delta.json"));
-    const repairResult = applySpecRepairOperations({
-      spec: specInput.document,
-      // Permissions are taken only from the immutable canonical review input.
-      // A repair delta can propose operations, never grant itself authority.
-      triage: current.toJSON(),
-      repair: delta.toJSON(),
-      inputRevision: delta.identity.digest,
-    });
-    const acceptedOperations = repairResult.audit.acceptedOperations
-      .map((entry) => entry.operation ?? entry);
-    const discardedOperations = [
-      ...repairResult.audit.discardedOperations,
-      ...repairResult.audit.scopeExpansions.map(({ proposal }) => ({
-        findingIds: [], kind: null, target: null,
-        operationDigest: digest(stableStringify(proposal)),
-        reason: "scope expansion requires definition-owned admission",
-      })),
-    ];
-    const next = mergeSpecReviewDelta({
-      review: current,
-      delta,
-      acceptedOperations,
-      discardedOperations,
-    });
-    const parameters = { revision: current.identity.revision.toString() };
-    return Object.freeze({
-      // `confirmCurrentAttempt` submits both of these to CurrentFlowVersionStore
-      // together. The Store then publishes the new snapshot/review revision
-      // atomically with the audit of the revision that authorised the repair.
-      specRecord: new CanonicalWorkerSpecPublication(repairResult.spec),
-      artifactWrites: Object.freeze([{
-        logicalKey: "spec.review", parameters, mediaType: "application/json",
-        bytes: Buffer.from(`${JSON.stringify(next.toJSON(), null, 2)}\n`, "utf8"),
-      }]),
-      artifactRemovals: Object.freeze([]),
-      artifactBaselines: Object.freeze([new CanonicalFlowArtifactBaseline({
-        logicalKey: "spec.review", parameters,
-        digest: reviewInput.digest, byteLength: reviewInput.byteLength,
-      })]),
-      testSourceBaseline: undefined, draftCoverageRepairFacts: null,
-    });
-  }
   const artifactWrites = [];
   const artifactRemovals = [];
   const artifactBaselines = new Map();
@@ -9233,10 +9164,11 @@ export class WorkerArtifactHandoffCoordinator {
       : null;
   }
 
-  /** Validate one sealed initial Spec result without publishing it. */
+  /** Validate one sealed Spec worker result without publishing it. */
   prepareSpecWorker({ ctx, request }) {
-    if (!(request instanceof WorkerArtifactHandoffRequest) || request.stepId !== "spec") {
-      throw new TypeError("Spec worker preparation requires the initial Spec handoff request");
+    if (!(request instanceof WorkerArtifactHandoffRequest)
+      || !["spec", "spec-triage", "spec-repair"].includes(request.stepId)) {
+      throw new TypeError("Spec worker preparation requires a Spec handoff request");
     }
     let state = ctx.flowManager.load(request.specId);
     const committed = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
@@ -9247,7 +9179,7 @@ export class WorkerArtifactHandoffCoordinator {
         throw new WorkerArtifactHandoffError(
           "recovery-required",
           "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
-          "initial Spec handoff receipt has no persisted Step Result",
+          "Spec worker handoff receipt has no persisted Step Result",
           { retryable: false, data: { stepId: request.stepId } },
         );
       }
@@ -9272,6 +9204,10 @@ export class WorkerArtifactHandoffCoordinator {
       request.assertCurrent(state);
       return prepareSpecWorkerCanonical({ request, state, submission });
     } catch (cause) {
+      if (request.stepId !== "spec" && cause instanceof WorkerArtifactHandoffError && cause.classification === "missing") {
+        const payloadError = unsealedFilePayloadError(request);
+        if (payloadError !== null) throw payloadError;
+      }
       if (cause instanceof WorkerArtifactHandoffError) throw cause;
       throw new WorkerArtifactHandoffError(
         "invalid",
@@ -9283,7 +9219,8 @@ export class WorkerArtifactHandoffCoordinator {
   }
 
   completeSpecWorkerHandoff({ request, preparation, stepResult, receipt, replayed = false }) {
-    if (!(request instanceof WorkerArtifactHandoffRequest) || request.stepId !== "spec"
+    if (!(request instanceof WorkerArtifactHandoffRequest)
+      || !["spec", "spec-triage", "spec-repair"].includes(request.stepId)
       || !(preparation instanceof SpecWorkerPreparation) || preparation.request !== request
       || !(stepResult instanceof StepResult) || receipt?.id === undefined) {
       throw new TypeError("Spec handoff completion requires its prepared publication and durable receipt");
@@ -9860,10 +9797,11 @@ export class WorkerArtifactHandoffCoordinator {
         throw new RequirementTestStructuralHandoffError(recoverableValidation);
       }
     }
-    if (isDraftWorkerStep(request.stepId) && preparedDraft === null) {
+    if ((isDraftWorkerStep(request.stepId) || ["spec-triage", "spec-repair"].includes(request.stepId))
+      && preparedDraft === null) {
       throw new WorkerArtifactHandoffError(
-        "invalid", "FLOW_DRAFT_STEP_RESULT_REQUIRED",
-        "Draft worker handoff must be committed through its prepared Step Result",
+        "invalid", isDraftWorkerStep(request.stepId) ? "FLOW_DRAFT_STEP_RESULT_REQUIRED" : "FLOW_SPEC_STEP_RESULT_REQUIRED",
+        "worker handoff must be committed through its prepared Step Result",
         { retryable: false, data: { stepId: request.stepId } },
       );
     }
