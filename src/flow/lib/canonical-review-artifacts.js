@@ -949,21 +949,17 @@ export class CanonicalReviewPromotion {
   /**
    * Stdout is transient and is unavailable after a promotion crash.  Rebuild
    * the lifecycle result solely from the sealed artifact so replay preserves
-   * the same PASS/ADVISORY/REJECTED route without another Agent invocation.
+   * the same transport evidence without another Agent invocation. Spec Review
+   * meaning is selected from the accepted publication by its Step.
    */
   resultFromSealedArtifact() {
     if (this.phase === "spec") {
       const { sealed, delta, next } = this.sealedArtifact();
-      const blockingCount = next.findings.findings.filter((finding) => finding.kind === "blocking").length;
-      const advisoryCount = next.findings.findings.filter((finding) => finding.kind === "improvement").length;
-      const verdict = blockingCount > 0 ? "REJECTED" : advisoryCount > 0 ? "ADVISORY" : "PASS";
       return {
         result: "ok",
         changed: [],
         artifacts: {
           phase: this.phase,
-          verdict,
-          canonicalVerdict: verdict,
           // The worker's delta receipt is the only transient evidence. The
           // durable authority is the parent-merged revision review below.
           evidenceDigest: sealed.seal.output.digest,

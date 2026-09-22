@@ -6,6 +6,7 @@ import {
   DraftCreatedResult,
   DraftGatePassedResult,
   SpecCreatedResult,
+  SpecReviewPassedResult,
   StepErrorResult,
   STEP_RESULT_TYPE,
   StepResult,
@@ -18,6 +19,10 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
   const expected = [
     ["DraftCreatedResult", "draft", "draft-created", "completed"],
     ["SpecCreatedResult", "spec", "spec-created", "completed"],
+    ["SpecReviewExecutionRequiredResult", "spec-review", "spec-review-execution-required", "loop-required"],
+    ["SpecReviewPassedResult", "spec-review", "spec-review-passed", "completed"],
+    ["SpecReviewAdvisoryResult", "spec-review", "spec-review-advisory", "completed"],
+    ["SpecReviewRejectedResult", "spec-review", "spec-review-rejected", "completed"],
     ["DraftQuestionsReviewExecutionRequiredResult", "draft-questions-review", "draft-questions-review-execution-required", "loop-required"],
     ["DraftQuestionsReviewPassedResult", "draft-questions-review", "draft-questions-review-passed", "completed"],
     ["DraftQuestionsReviewFindingsResult", "draft-questions-review", "draft-questions-review-findings", "branch-required"],
@@ -40,7 +45,7 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     ["DraftGateRepairAppliedResult", "draft-gate-repair", "draft-gate-repair-applied", "completed"],
     ["DraftGateRepairCarryForwardResult", "draft-gate-repair", "draft-gate-repair-carry-forward", "completed"],
     ...[
-      "draft", "spec", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
+      "draft", "spec", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
       "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "draft-gate-repair",
     ].map((stepId) => ["StepErrorResult", stepId, `${stepId}-error`, "error"]),
   ];
@@ -69,11 +74,10 @@ test("StepResult readback rejects unknown kind, mismatched type, and wrong Step"
     true,
   );
   assert.throws(() => rehydrateStepResult("spec-review", new SpecCreatedResult().toJSON()), TypeError);
-  assert.throws(() => new StepErrorResult("spec-review", new Error("not migrated")), /unknown Step/);
-  assert.throws(() => rehydrateStepResult("spec-review", {
-    kind: "spec-review-error", type: STEP_RESULT_TYPE.ERROR,
-    error: { kind: "generic", message: "not migrated" },
-  }), /unknown Step/);
+  assert.equal(rehydrateStepResult("spec-review", new SpecReviewPassedResult().toJSON())
+    instanceof SpecReviewPassedResult, true);
+  assert.equal(rehydrateStepResult("spec-review", new StepErrorResult("spec-review", new Error("semantic failure")).toJSON())
+    instanceof StepErrorResult, true);
 });
 
 test("stepResultDigest accepts only a concrete StepResult", () => {

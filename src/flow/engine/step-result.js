@@ -143,6 +143,18 @@ export const DraftCreatedResult = resultClass("DraftCreatedResult", {
 export const SpecCreatedResult = resultClass("SpecCreatedResult", {
   stepId: "spec", kind: "spec-created", type: STEP_RESULT_TYPE.COMPLETED,
 });
+export const SpecReviewExecutionRequiredResult = resultClass("SpecReviewExecutionRequiredResult", {
+  stepId: "spec-review", kind: "spec-review-execution-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
+});
+export const SpecReviewPassedResult = resultClass("SpecReviewPassedResult", {
+  stepId: "spec-review", kind: "spec-review-passed", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const SpecReviewAdvisoryResult = resultClass("SpecReviewAdvisoryResult", {
+  stepId: "spec-review", kind: "spec-review-advisory", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const SpecReviewRejectedResult = resultClass("SpecReviewRejectedResult", {
+  stepId: "spec-review", kind: "spec-review-rejected", type: STEP_RESULT_TYPE.COMPLETED,
+});
 export const DraftQuestionsReviewExecutionRequiredResult = resultClass("DraftQuestionsReviewExecutionRequiredResult", {
   stepId: "draft-questions-review", kind: "draft-questions-review-execution-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
 });

@@ -1967,7 +1967,16 @@ class PersistedDraftExecutionBinding {
 class PersistedDraftExecutionClaim {
   constructor(value) {
     if (value?.kind === "review") {
-      requireExactFields(value, new Set(["kind"]), "result.draftSettlementReceipt.executionLifecycle.claim");
+      requireExactFields(value, new Set(value.request === undefined
+        ? ["kind"] : ["kind", "request"]), "result.draftSettlementReceipt.executionLifecycle.claim");
+      if (value.request !== undefined) {
+        requireExactFields(value.request, new Set(["skipConfirm"]),
+          "result.draftSettlementReceipt.executionLifecycle.claim.request");
+        if (typeof value.request.skipConfirm !== "boolean") {
+          throw new CurrentFlowStateInvariantError("Review provider request identity is invalid");
+        }
+      }
+      this.request = value.request === undefined ? null : Object.freeze({ skipConfirm: value.request.skipConfirm });
       this.dispatchInvocationId = null;
       this.generatedAt = null;
       this.actionDigest = null;
@@ -1994,7 +2003,7 @@ class PersistedDraftExecutionClaim {
 
   toJSON() {
     return this.kind === "review"
-      ? { kind: this.kind }
+      ? { kind: this.kind, ...(this.request === null ? {} : { request: { ...this.request } }) }
       : {
           kind: this.kind,
           dispatchInvocationId: this.dispatchInvocationId,
@@ -2147,6 +2156,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
     const reviewExecutionKinds = new Set([
       "draft-questions-review-execution-required",
       "draft-coverage-review-execution-required",
+      "spec-review-execution-required",
     ]);
     const workerExecutionKinds = new Set([
       "draft-refine-worker-required",
@@ -2158,6 +2168,12 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       throw new CurrentFlowStateInvariantError(
         "Draft settlement execution binding does not match its Step Result",
       );
+    }
+    if (this.binding.stepId === "spec-review"
+      && this.executionLifecycle !== null
+      && this.executionLifecycle.phase !== "checkpoint"
+      && this.executionLifecycle.claim?.request === null) {
+      throw new CurrentFlowStateInvariantError("Spec Review claim has no provider request identity");
     }
     if (!["target-connection", "execution", "await", "failure"].includes(value.settlementKind)) {
       throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt settlement kind is invalid");
@@ -7506,7 +7522,8 @@ export class FlowActivity {
     if (this.reviewPublication !== null) {
       const expectedStage = REVIEW_PUBLICATION_STAGE_BY_NODE.get(this.nodeId) ?? null;
       if (expectedStage === null
-        || this.transition.operation !== "confirm_attempt"
+        || !(this.transition.operation === "confirm_attempt"
+          || isSpecReviewExecutionPublication(this))
         || this.type !== "result_confirmed"
         || this.reviewPublication.stage !== expectedStage) {
         throw new CurrentFlowStateInvariantError("review publication facts are reserved for confirmed canonical Spec review stages");
@@ -7652,6 +7669,15 @@ const REVIEW_PUBLICATION_STAGE_BY_NODE = new Map([
   ["spec-triage", "spec-triage"],
   ["spec-repair", "spec-repair"],
 ]);
+
+function isSpecReviewExecutionPublication(activity) {
+  const receipt = activity.result?.draftSettlementReceipt;
+  return activity.nodeId === "spec-review"
+    && activity.transition.operation === DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION
+    && receipt?.resultKind === "spec-review-execution-required"
+    && receipt.settlementKind === "execution"
+    && receipt.executionLifecycle?.phase === "publication";
+}
 
 /** Exact immutable Spec identity recorded beside a canonical review publication. */
 export class ActivityReviewPublicationIdentity {
@@ -9427,7 +9453,8 @@ export class CurrentFlowVersionStore {
     const reviews = writes.filter((write) => write.artifact.logicalKey === "spec.review");
     if (reviews.length === 0) return;
     const expectedStage = REVIEW_PUBLICATION_STAGE_BY_NODE.get(activity.nodeId) ?? null;
-    if (reviews.length !== 1 || expectedStage === null || activity.transition.operation !== "confirm_attempt") {
+    if (reviews.length !== 1 || expectedStage === null
+      || !(activity.transition.operation === "confirm_attempt" || isSpecReviewExecutionPublication(activity))) {
       throw new CurrentFlowStateInvariantError("spec.review artifacts require one confirmed canonical Spec review stage");
     }
     const authority = this.catalogStore.read({
@@ -9523,7 +9550,8 @@ export class CurrentFlowVersionStore {
       throw new CurrentFlowStateInvariantError("canonical review publication requires exactly one requested spec.review artifact");
     }
     const expectedStage = REVIEW_PUBLICATION_STAGE_BY_NODE.get(activity.nodeId) ?? null;
-    if (expectedStage === null || activity.transition.operation !== "confirm_attempt") {
+    if (expectedStage === null
+      || !(activity.transition.operation === "confirm_attempt" || isSpecReviewExecutionPublication(activity))) {
       throw new CurrentFlowStateInvariantError("spec.review artifacts may be published only by confirmed canonical Spec review stages");
     }
     const reviewWrite = specRevisionPlan?.writes.find((write) => write.artifact.logicalKey === "spec.review")

@@ -210,17 +210,14 @@ describe("flow get next-action", () => {
     }
   });
 
-  it("always advances the Spec review funnel without semantic retry accounting", () => {
+  it("leaves Spec review routing to the typed Step settlement", () => {
     for (const verdict of ["PASS", "ADVISORY", "REJECTED"]) {
       const actions = resolveLifecycle({
         event: "review:post", phase: "spec", currentStepId: "spec-review",
         flowState: { metrics: Array.from({ length: 8 }, () => ({ phase: "spec", counter: "reviewRetry", delta: 1 })), policy: { nonblocking: { enabled: true } } },
         result: { artifacts: { phase: "spec", verdict } },
       });
-      assert.equal(actions.some((action) => action.constructor.name === "SetStepStatus" && action.step === "spec-review" && action.status === "done"), true);
-      assert.equal(actions.some((action) => action.constructor.name === "SetStepStatus" && ["spec-triage", "spec-repair"].includes(action.step)), false);
-      assert.equal(actions.some((action) => action.constructor.name === "IncrementMetric" && action.phase === "spec"), false);
-      assert.equal(actions.some((action) => action.constructor.name === "PersistReviewResult"), false);
+      assert.deepEqual(actions, [], `${verdict} must not bypass the Spec Review Step receipt`);
     }
   });
 

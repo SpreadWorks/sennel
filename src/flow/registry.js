@@ -2003,6 +2003,12 @@ export const FLOW_COMMANDS = {
           return;
         }
         await persistNonTerminalReviewResult(ctx, result);
+        if (result?.artifacts?.phase === "spec") {
+          ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
+          const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
+          attachedCanonicalReviewWorkUnit(result)?.cleanup();
+          return;
+        }
         const draftOutput = await executePublishedDraftReviewStep(ctx, result);
         if (draftOutput !== null) {
           const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");

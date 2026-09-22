@@ -853,6 +853,13 @@ export function reconcileCompletedReviewWorkUnits({ flowManager, specId, executi
       const manifestPath = path.join(directory, "manifest.json");
       const sealPath = path.join(directory, "seal.json");
       if (!fs.existsSync(manifestPath) || !fs.existsSync(sealPath)) {
+        // A concurrent dispatcher may reconcile while the direct Review
+        // provider is still writing its exact active Attempt work unit.
+        const activeNodeId = state.current?.at(-1) ?? null;
+        if (activeNodeId !== null && state.attempt !== null
+          && path.basename(directory) === digest(`${activeNodeId}:${state.attempt.id}`).slice(0, 32)) {
+          continue;
+        }
         if (fs.existsSync(manifestPath) && !fs.existsSync(sealPath)) {
           const worker = ReviewWorkUnit.fromEnvironment({ [REVIEW_WORK_UNIT_MANIFEST_ENV]: manifestPath }, { expectedDirectory: directory });
           const manifest = worker.manifestDocument;

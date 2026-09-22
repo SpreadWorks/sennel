@@ -42,6 +42,7 @@ import {
   SpecReviewDelta,
 } from "../../../src/flow/lib/spec-review-artifacts.js";
 import { CanonicalTaskContext } from "../../../src/flow/lib/task-canonical-context.js";
+import { specReviewResult } from "../../../src/flow/steps/spec/spec-review.js";
 import { RequirementTestReviewSource } from "../../../src/flow/lib/requirement-test-artifacts.js";
 
 const roots = [];
@@ -529,7 +530,13 @@ describe("ReviewWorkUnit", () => {
         if (taskId !== null) parsed.artifacts.taskId = taskId;
         assert.equal(Object.hasOwn(recovered, "next"), false, `${phase}/${verdict} recovered route projection`);
         assert.equal(Object.hasOwn(parsed, "next"), false, `${phase}/${verdict} subprocess route projection`);
-        assert.equal(recovered.artifacts.verdict, parsed.artifacts.verdict, `${phase}/${verdict} verdict`);
+        if (phase === "spec") {
+          assert.equal(Object.hasOwn(recovered.artifacts, "verdict"), false);
+          assert.equal(specReviewResult(promotion.sealedArtifact().next).kind,
+            `spec-review-${verdict === "PASS" ? "passed" : verdict.toLowerCase()}`);
+        } else {
+          assert.equal(recovered.artifacts.verdict, parsed.artifacts.verdict, `${phase}/${verdict} verdict`);
+        }
         assert.equal(recovered.artifacts.taskId || null, parsed.artifacts.taskId || null, `${phase}/${verdict} task`);
         if (phase.startsWith("draft-")) assert.equal(recovered.artifacts.issueCount, parsed.artifacts.issueCount);
         if (phase === "spec") assert.equal(recovered.artifacts.proposalCount, parsed.artifacts.proposalCount);

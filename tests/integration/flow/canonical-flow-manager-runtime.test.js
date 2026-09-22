@@ -19,6 +19,7 @@ import {
   DraftQuestionsRepairChangedResult,
   DraftQuestionsReviewFindingsResult,
   DraftQuestionsReviewPassedResult,
+  SpecReviewRejectedResult,
   StepErrorResult,
   STEP_RESULT_TYPE,
 } from "../../../src/flow/engine/step-result.js";
@@ -27,6 +28,9 @@ import {
   DraftWorkerExecutionStepBinding,
   DraftWorkerStepBinding,
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import { SpecReviewStepBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
+import { specReviewResult } from "../../../src/flow/steps/spec/spec-review.js";
+import { SpecReviewService } from "../../../src/flow/services/spec-review-service.js";
 import { Agent } from "../../../src/lib/agent.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
@@ -63,6 +67,7 @@ import {
   REVIEW_WORK_UNIT_MANIFEST_ENV,
   reconcileCompletedReviewWorkUnits,
   ReviewWorkUnit,
+  ReviewWorkUnitManifest,
   ReviewWorkUnitOutput,
 } from "../../../src/flow/lib/review-work-unit.js";
 import { attachedCanonicalReviewWorkUnit } from "../../../src/flow/lib/canonical-review-artifacts.js";
@@ -85,6 +90,7 @@ import {
   resolveGateTransition,
   resolveNonGateTransition,
   settleDraftStepResult,
+  settleSpecStepResult,
   testExecuteTransitionDefinition,
 } from "../../../src/flow/definition.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
@@ -523,6 +529,19 @@ function confirmFixtureStep(manager, stepId, opts = {}) {
     return manager.updateStepStatus({ stepId, requestedStatus: "done" }, opts);
   }
   return confirmCanonicalFixtureStep(manager, opts.specId, stepId);
+}
+
+function activeSpecReviewFixture(specId = "001-canonical-manager") {
+  const repository = root();
+  initializeReviewSource(repository);
+  const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+  const created = manager.createFresh(request(specId));
+  manager.addActiveFlow(created.specId, "direct");
+  const ordered = leaves(manager.load(created.specId).steps);
+  const reviewIndex = ordered.findIndex((entry) => entry.id === "spec-review");
+  for (const entry of ordered.slice(0, reviewIndex)) confirmFixtureStep(manager, entry.id);
+  manager.updateStepStatus({ stepId: "spec-review", requestedStatus: "in_progress" });
+  return { repository, manager, created };
 }
 
 function attemptHistoryBytes(nodeId, logicalKey, payload, attempt = 1) {
@@ -3128,17 +3147,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
   });
 
   it("runs the normal spec-review worker in a transient V1 work unit and confirms its result through the Store", async () => {
-    const repository = root();
-    initializeReviewSource(repository);
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request());
-    manager.addActiveFlow(created.specId, "direct");
-    const ordered = leaves(manager.load(created.specId).steps);
-    const reviewIndex = ordered.findIndex((entry) => entry.id === "spec-review");
-    for (const entry of ordered.slice(0, reviewIndex)) {
-      confirmFixtureStep(manager, entry.id);
-    }
-    manager.updateStepStatus({ stepId: "spec-review", requestedStatus: "in_progress" });
+    const { repository, manager, created } = activeSpecReviewFixture();
 
     let invocation = null;
     const review = new RunReviewCommand({
@@ -3257,6 +3266,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(invocation.options.env.GIT_CONFIG_NOSYSTEM, undefined);
     assert.equal(result.artifacts.phase, "spec");
     assert.equal(result.artifacts.evidenceDigest.length, 64);
+    assert.equal(result.artifacts.proposalCount, 0);
+    assert.equal(result.artifacts.verdict, "PASS");
     assert.equal(attachedCanonicalCommandResultArtifact(result), null);
     assert.equal(attachedCanonicalCommandResultPublications(result)[0].logicalKey, "spec.review");
     assert.deepEqual(attachedCanonicalCommandResultPublications(result)[0].parameters, { revision: "001" });
@@ -3288,10 +3299,391 @@ describe("FlowManager canonical Version-1 runtime", () => {
     });
     assert.equal(publicationActivity.id, canonicalReview.descriptor.activityId);
     assert.equal(publicationActivity.reviewPublication.reviewDigest, canonicalReview.descriptor.hash);
+    assert.equal(publicationActivity.result.stepResult.kind, "spec-review-execution-required");
+    assert.equal(publicationActivity.result.draftSettlementReceipt.executionLifecycle.phase, "publication");
+    const terminal = manager.activityLedger(created.specId).findLast((activity) => (
+      activity.nodeId === "spec-review"
+      && activity.result?.draftSettlementReceipt?.executionLifecycle?.phase === "terminal"
+    ));
+    assert.equal(terminal.result.stepResult.kind, "spec-review-passed");
+    assert.equal(terminal.result.draftSettlementReceipt.targetStepId, "spec-triage");
+    assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "spec-triage");
     assert.equal(leaves(state.steps).find((entry) => entry.id === "spec-review").status, "done");
     assert.equal(fs.existsSync(path.join(location.directory, "spec-review.json")), false);
     assert.equal(fs.existsSync(path.join(location.directory, "review-history")), false);
   });
+
+  it("settles a published Spec Review after manager restart without another provider call", async () => {
+    const fixture = activeSpecReviewFixture("001-spec-review-publication-recovery");
+    const { repository, created } = fixture;
+    let { manager } = fixture;
+
+    const settle = manager.settleSpecStepResult.bind(manager);
+    manager.settleSpecStepResult = (input) => {
+      if (input.stepResult.kind !== "spec-review-execution-required") {
+        throw new Error("interrupted after durable publication");
+      }
+      return settle(input);
+    };
+    let providerCalls = 0;
+    const review = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand(_command, _args, options) {
+        providerCalls += 1;
+        writeSpecReviewDeltaOutput(options);
+        ReviewWorkUnit.fromEnvironment(options.env).seal();
+        return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+      },
+    });
+    const ctx = {
+      root: repository, mainRoot: repository, executionRoot: repository,
+      specId: created.specId, phase: "spec", flowManager: manager,
+      flowState: manager.load(created.specId),
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+    };
+    const interrupted = await review.execute(ctx);
+    assert.equal(interrupted.errors[0].code, "SPEC_REVIEW_SETTLEMENT_INTERRUPTED");
+    assert.equal(providerCalls, 1);
+    const attemptSequence = manager.canonicalState(created.specId).attempt.sequence;
+    const published = manager.activityLedger(created.specId).findLast((activity) => (
+      activity.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication"
+      && activity.nodeId === "spec-review"
+    ));
+    assert.equal(published.result.stepResult.kind, "spec-review-execution-required");
+    assert.equal(manager.load(created.specId).currentNodeId, "spec-review");
+
+    manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const resumed = await review.execute({ ...ctx, flowManager: manager, flowState: manager.load(created.specId) });
+    assert.equal(resumed.artifacts.verdict, "PASS");
+    assert.equal(providerCalls, 1);
+    assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "spec-triage");
+    const receipts = manager.activityLedger(created.specId).filter((activity) => (
+      activity.nodeId === "spec-review" && activity.result?.draftSettlementReceipt !== null
+      && activity.result?.draftSettlementReceipt !== undefined
+    )).map((activity) => activity.result.draftSettlementReceipt);
+    assert.deepEqual(receipts.map((receipt) => receipt.executionLifecycle.phase), [
+      "checkpoint", "claimed", "publication", "terminal",
+    ]);
+    assert.deepEqual(receipts.map((receipt) => receipt.executionLifecycle.binding.executionGeneration), [0, 0, 0, 0]);
+    assert.ok(receipts.every((receipt) => receipt.binding.attemptSequence === attemptSequence));
+    const replay = await review.execute({ ...ctx, flowManager: manager, flowState: manager.load(created.specId) });
+    assert.equal(replay.artifacts.verdict, "PASS");
+    assert.equal(providerCalls, 1);
+    assert.equal(manager.activityLedger(created.specId).filter((activity) => (
+      activity.nodeId === "spec-review" && activity.result?.draftSettlementReceipt !== null
+      && activity.result?.draftSettlementReceipt !== undefined
+    )).length, receipts.length);
+  });
+
+  it("refuses a changed Spec Review target before a second provider call", async () => {
+    const { repository, manager, created } = activeSpecReviewFixture("001-spec-review-target-mismatch");
+    let targetDigest = "b".repeat(64);
+    let providerCalls = 0;
+    let admittedManifest = null;
+    const review = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => targetDigest,
+      runCommand(_command, _args, options) {
+        providerCalls += 1;
+        admittedManifest = ReviewWorkUnit.fromEnvironment(options.env).manifestDocument;
+        writeSpecReviewDeltaOutput(options);
+        ReviewWorkUnit.fromEnvironment(options.env).seal();
+        targetDigest = "c".repeat(64);
+        return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+      },
+    });
+    const ctx = {
+      root: repository, mainRoot: repository, executionRoot: repository,
+      specId: created.specId, phase: "spec", flowManager: manager,
+      flowState: manager.load(created.specId),
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+    };
+    const stale = await review.execute(ctx);
+    assert.equal(stale.errors[0].code, "STALE_REVIEW_TARGET");
+    assert.equal(providerCalls, 1);
+    assert.equal(specReviewResult(admittedManifest).kind, "spec-review-execution-required");
+    const publicationCount = () => manager.activityLedger(created.specId).filter((activity) => (
+      activity.reviewPublication?.stage === "spec-review"
+    )).length;
+    assert.equal(publicationCount(), 0);
+    targetDigest = "b".repeat(64);
+    const beforeRejectedClaims = manager.activityLedger(created.specId).length;
+    for (const changed of [
+      new ReviewWorkUnitManifest({
+        ...admittedManifest.toJSON(),
+        inputs: admittedManifest.inputs.map((input, index) => (
+          index === 0 ? { ...input.toJSON(), digest: "d".repeat(64) } : input.toJSON()
+        )),
+      }),
+      new ReviewWorkUnitManifest({
+        ...admittedManifest.toJSON(),
+        output: { ...admittedManifest.output.toJSON(), basename: "other-review.json" },
+      }),
+    ]) {
+      if (changed.output.basename === "other-review.json") {
+        assert.throws(() => specReviewResult(changed), /canonical inputs and delta output/);
+      }
+      await assert.rejects(SpecReviewService.claimExecution({
+        flowManager: manager,
+        state: manager.canonicalState(created.specId),
+        manifest: changed,
+        skipConfirm: false,
+      }));
+    }
+    assert.equal(manager.activityLedger(created.specId).length, beforeRejectedClaims);
+    const changedRequest = await review.execute({
+      ...ctx, skipConfirm: true, flowState: manager.load(created.specId),
+    });
+    assert.equal(changedRequest.errors[0].code, "SPEC_REVIEW_EXECUTION_ADMISSION_REJECTED");
+    assert.equal(providerCalls, 1);
+    targetDigest = "c".repeat(64);
+    const mismatched = await review.execute({ ...ctx, flowState: manager.load(created.specId) });
+    assert.equal(mismatched.errors[0].code, "SPEC_REVIEW_EXECUTION_ADMISSION_REJECTED");
+    assert.equal(providerCalls, 1);
+    assert.equal(publicationCount(), 0);
+  });
+
+  it("refuses a stale canonical Spec revision before provider or receipt mutation", async () => {
+    const { repository, manager, created } = activeSpecReviewFixture("001-spec-review-stale-revision");
+    const specPath = path.join(manager.specLocation(created.specId).directory, "spec.json");
+    const originalSpec = fs.readFileSync(specPath);
+    const before = manager.activityLedger(created.specId).length;
+    const flowState = manager.load(created.specId);
+    fs.writeFileSync(specPath, "{}\n");
+    let providerCalls = 0;
+    const review = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() { providerCalls += 1; throw new Error("provider must not start"); },
+    });
+    try {
+      await assert.rejects(review.execute({
+        root: repository, mainRoot: repository, executionRoot: repository,
+        specId: created.specId, phase: "spec", flowManager: manager,
+        flowState,
+        config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+      }), /artifact content does not match the catalog: spec.json/);
+    } finally {
+      fs.writeFileSync(specPath, originalSpec);
+    }
+    assert.equal(providerCalls, 0);
+    assert.equal(manager.activityLedger(created.specId).length, before);
+  });
+
+  it("rejects a saved Spec Review binding after a legal Spec repair advances the revision", async () => {
+    const { repository, manager, created } = activeSpecReviewFixture("001-spec-review-repaired-revision");
+    const binding = new SpecReviewStepBinding({ flowManager: manager, specId: created.specId });
+    let providerCalls = 0;
+    const review = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand(_command, _args, options) {
+        providerCalls += 1;
+        writeSpecReviewDeltaOutput(options);
+        ReviewWorkUnit.fromEnvironment(options.env).seal();
+        return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+      },
+    });
+    const result = await review.execute({
+      root: repository, mainRoot: repository, executionRoot: repository,
+      specId: created.specId, phase: "spec", flowManager: manager,
+      flowState: manager.load(created.specId),
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+    });
+    assert.equal(result.artifacts.verdict, "PASS");
+    advanceTo(manager, created.specId, "spec-repair");
+    const before = currentSpecRevisionAuthority(manager, created.specId);
+    const document = JSON.parse(before.root.toString("utf8"));
+    document.goal = "Publish a revised canonical Spec after the original review.";
+    const repair = reviewPublicationWrite(before.review, "spec-repair");
+    manager.confirmCurrentAttempt({
+      specId: created.specId,
+      specRecord: new CurrentFlowSpecRecord(document, { specId: created.specId }),
+      artifactWrites: [repair.write],
+    });
+    const after = currentSpecRevisionAuthority(manager, created.specId);
+    assertSpecRevisionAdvanced(before, after);
+    const ledgerLength = manager.activityLedger(created.specId).length;
+    assert.throws(() => binding.assertCurrent());
+    assert.equal(providerCalls, 1);
+    assert.equal(manager.activityLedger(created.specId).length, ledgerLength);
+  });
+
+  it("admits one Spec Review provider while direct and dispatcher calls overlap", async () => {
+    const { repository, manager, created } = activeSpecReviewFixture("001-spec-review-concurrent");
+    let releaseProvider;
+    const providerRelease = new Promise((resolve) => { releaseProvider = resolve; });
+    let notifyProvider;
+    const providerEntered = new Promise((resolve) => { notifyProvider = resolve; });
+    let providerCalls = 0;
+    const review = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      async runCommand(_command, _args, options) {
+        providerCalls += 1;
+        notifyProvider();
+        await providerRelease;
+        writeSpecReviewDeltaOutput(options);
+        ReviewWorkUnit.fromEnvironment(options.env).seal();
+        return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+      },
+    });
+    const ctx = {
+      root: repository, mainRoot: repository, executionRoot: repository,
+      specId: created.specId, phase: "spec", flowManager: manager,
+      flowState: manager.load(created.specId),
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+    };
+    const direct = review.execute(ctx);
+    await providerEntered;
+    let dispatcherCommand = null;
+    let dispatcherReviewResult = null;
+    const dispatcher = new RunDispatchCommand({
+      nextAction: {
+        async run() {
+          return new GetNextActionCommand().execute({
+            ...ctx, flowState: manager.loadReadOnly(created.specId),
+          });
+        },
+      },
+      commandRunner: async ({ command }) => {
+        dispatcherCommand = command.commandName;
+        dispatcherReviewResult = await review.execute({ ...ctx, flowState: manager.loadReadOnly(created.specId) });
+        return dispatcherReviewResult;
+      },
+      maxDispatches: 1,
+      leaseFactory: () => ({ acquire() {}, release() {} }),
+    });
+    const dispatched = await dispatcher.execute({
+      ...ctx, expectRunId: manager.canonicalState(created.specId).runId,
+      expectSpec: created.specId,
+    });
+    assert.equal(dispatcherCommand, "review");
+    assert.equal(dispatcherReviewResult.errors[0].code, "REVIEW_EXECUTION_BUSY");
+    assert.equal(dispatched.ok, false);
+    assert.equal(providerCalls, 1);
+    releaseProvider();
+    const completed = await direct;
+    assert.equal(completed.artifacts.verdict, "PASS");
+    assert.equal(providerCalls, 1);
+    const claims = manager.activityLedger(created.specId).filter((activity) => (
+      activity.nodeId === "spec-review"
+      && activity.result?.draftSettlementReceipt?.executionLifecycle?.phase === "claimed"
+    ));
+    assert.equal(claims.length, 1);
+    const receipts = manager.activityLedger(created.specId).filter((activity) => (
+      activity.nodeId === "spec-review" && activity.result?.draftSettlementReceipt
+    )).map((activity) => activity.result.draftSettlementReceipt);
+    assert.deepEqual(receipts.map((receipt) => receipt.executionLifecycle.phase), [
+      "checkpoint", "claimed", "publication", "terminal",
+    ]);
+    assert.deepEqual(receipts.map((receipt) => receipt.executionLifecycle.binding.executionGeneration), [0, 0, 0, 0]);
+    assert.ok(receipts.every((receipt) => receipt.binding.attemptSequence === claims[0].sequence));
+    assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "spec-triage");
+  });
+
+  it("rejects a conflicting terminal Spec Review Result for one Attempt", async () => {
+    const { repository, manager, created } = activeSpecReviewFixture("001-spec-review-terminal-conflict");
+    const binding = new SpecReviewStepBinding({ flowManager: manager, specId: created.specId });
+    const review = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand(_command, _args, options) {
+        writeSpecReviewDeltaOutput(options);
+        ReviewWorkUnit.fromEnvironment(options.env).seal();
+        return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+      },
+    });
+    const result = await review.execute({
+      root: repository, mainRoot: repository, executionRoot: repository,
+      specId: created.specId, phase: "spec", flowManager: manager,
+      flowState: manager.load(created.specId),
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+    });
+    assert.equal(result.artifacts.verdict, "PASS");
+    const before = manager.activityLedger(created.specId).length;
+    const conflicting = new SpecReviewRejectedResult();
+    assert.throws(() => manager.settleSpecStepResult({
+      binding,
+      stepResult: conflicting,
+      settlement: settleSpecStepResult(binding.stepId, conflicting),
+    }), (error) => error?.code === "CURRENT_FLOW_STATE_CONFLICT");
+    assert.equal(manager.activityLedger(created.specId).length, before);
+    assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "spec-triage");
+  });
+
+  it("settles a semantic Spec Review Error Result into Failure", () => {
+    const { manager, created } = activeSpecReviewFixture("001-spec-review-semantic-error");
+    const binding = new SpecReviewStepBinding({ flowManager: manager, specId: created.specId });
+    const result = specReviewResult(Object.assign(new Error("review cannot accept its findings"), {
+      code: "SPEC_REVIEW_SEMANTIC_ERROR",
+    }));
+    manager.settleSpecStepResult({
+      binding,
+      stepResult: result,
+      settlement: settleSpecStepResult(binding.stepId, result),
+    });
+    assert.equal(result.kind, "spec-review-error");
+    const failed = manager.canonicalState(created.specId);
+    assert.equal(failed.attempt.failure.category, STEP_RESULT_ERROR_CATEGORY);
+    assert.equal(failed.attempt.failure.code, "SPEC_REVIEW_SEMANTIC_ERROR");
+    const receipt = manager.activityLedger(created.specId).at(-1).result.draftSettlementReceipt;
+    assert.equal(receipt.resultKind, "spec-review-error");
+    assert.equal(receipt.settlementKind, "failure");
+  });
+
+  for (const { verdict, kind, finding } of [
+    {
+      verdict: "ADVISORY", kind: "spec-review-advisory",
+      finding: {
+        kind: "improvement", findingId: "optional-context", title: "Add context", target: "R1",
+        body: "Related context can be added.", improvement: "Add context.",
+        whyNonBlocking: "The requirement is already actionable.",
+      },
+    },
+    {
+      verdict: "REJECTED", kind: "spec-review-rejected",
+      finding: {
+        kind: "blocking", findingId: "missing-behavior", title: "Define behavior", target: "R1",
+        body: "Required behavior is absent.", issue: "Behavior is absent.",
+        requiredChange: "Define the behavior.", whyBlocking: "Implementation cannot be verified.",
+      },
+    },
+  ]) {
+    it(`routes accepted ${verdict} Spec Review through its concrete Result to triage`, async () => {
+      const { repository, manager, created } = activeSpecReviewFixture(`001-spec-review-${verdict.toLowerCase()}`);
+      const review = new RunReviewCommand({
+        resolveTreeSha: () => "a".repeat(40),
+        resolveTargetStateDigest: () => "b".repeat(64),
+        runCommand(_command, _args, options) {
+          writeSpecReviewDeltaOutput(options, [finding]);
+          ReviewWorkUnit.fromEnvironment(options.env).seal();
+          return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+        },
+      });
+      const result = await review.execute({
+        root: repository, mainRoot: repository, executionRoot: repository,
+        specId: created.specId, phase: "spec", flowManager: manager,
+        flowState: manager.load(created.specId),
+        config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+      });
+      assert.equal(result.artifacts.verdict, verdict);
+      const terminal = manager.activityLedger(created.specId).findLast((activity) => (
+        activity.nodeId === "spec-review"
+        && activity.result?.draftSettlementReceipt?.executionLifecycle?.phase === "terminal"
+      ));
+      assert.equal(terminal.result.stepResult.kind, kind);
+      assert.equal(terminal.result.draftSettlementReceipt.targetStepId, "spec-triage");
+      assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "spec-triage");
+      const canonicalReview = manager.readCurrentSpecReview({
+        specId: created.specId, consumerNodeId: "spec-triage",
+      });
+      assert.deepEqual(canonicalReview.review.findings.findings.map((entry) => (
+        [entry.findingId, entry.kind]
+      )), [[finding.findingId, finding.kind]]);
+    });
+  }
 
   it("carries capacity exhaustion through provider attempts, a Definition retry, reload, publication, and spec-triage admission", async () => {
     const repository = root();
@@ -3702,7 +4094,10 @@ describe("FlowManager canonical Version-1 runtime", () => {
 
     assert.equal(result.ok, false);
     assert.equal(result.errors[0].code, "STALE_REVIEW_TARGET");
-    assert.equal(manager.activityLedger(created.specId).length, before);
+    const admitted = manager.activityLedger(created.specId).slice(before);
+    assert.deepEqual(admitted.map((activity) => (
+      activity.result?.draftSettlementReceipt?.executionLifecycle?.phase
+    )), ["checkpoint", "claimed"]);
     assert.equal(
       manager.activityLedger(created.specId).some((activity) => activity.reviewPublication !== null),
       false,
@@ -4628,18 +5023,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(manager.load(created.specId).currentNodeId, "test-execute", "journal reload preserves the replacement Attempt");
   });
 
-  it("routes the normal review post-hook through the Version Store result history", async () => {
-    const repository = root();
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request());
-    manager.addActiveFlow(created.specId, "direct");
-    const ordered = leaves(manager.load(created.specId).steps);
-    const reviewIndex = ordered.findIndex((entry) => entry.id === "spec-review");
-    for (const entry of ordered.slice(0, reviewIndex)) {
-      confirmFixtureStep(manager, entry.id);
-    }
-    manager.updateStepStatus({ stepId: "spec-review", requestedStatus: "in_progress" });
-
+  it("keeps the typed Spec Review settlement intact through the normal post-hook", async () => {
+    const { repository, manager, created } = activeSpecReviewFixture("001-spec-review-post-hook");
     const ctx = {
       root: repository,
       mainRoot: repository,
@@ -4648,14 +5033,23 @@ describe("FlowManager canonical Version-1 runtime", () => {
       phase: "spec",
       flowManager: manager,
       flowState: manager.load(created.specId),
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
     };
-    const beforeReview = manager.readCurrentSpecReviewInput({
-      specId: created.specId,
-      consumerNodeId: "spec-review",
-    }).review;
-    const result = noOpSpecReviewCommandResult(beforeReview);
+    const review = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand(_command, _args, options) {
+        writeSpecReviewDeltaOutput(options);
+        ReviewWorkUnit.fromEnvironment(options.env).seal();
+        return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+      },
+    });
+    const result = await review.execute(ctx);
+    assert.equal(result.artifacts.verdict, "PASS");
     result.artifacts.command = "run-review";
+    const settledLedgerLength = manager.activityLedger(created.specId).length;
     await FLOW_COMMANDS.run.review.post(ctx, result);
+    assert.equal(manager.activityLedger(created.specId).length, settledLedgerLength);
 
     const state = manager.load(created.specId);
     const canonicalReview = manager.readCurrentSpecReview({

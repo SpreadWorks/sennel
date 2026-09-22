@@ -72,6 +72,10 @@ import {
   DraftRefineCompletedResult,
   DraftRefineWorkerRequiredResult,
   SpecCreatedResult,
+  SpecReviewPassedResult,
+  SpecReviewAdvisoryResult,
+  SpecReviewRejectedResult,
+  SpecReviewExecutionRequiredResult,
   StepErrorResult,
   StepResult,
   stepResultDigest,
@@ -82,6 +86,7 @@ import { DraftRepairConnector } from "./engine/connectors/draft/draft-repair-con
 import { DraftRefineConnector } from "./engine/connectors/draft/draft-refine-connector.js";
 import { DraftSpecConnector } from "./engine/connectors/draft/draft-spec-connector.js";
 import { SpecReviewConnector } from "./engine/connectors/spec/spec-review-connector.js";
+import { SpecTriageConnector } from "./engine/connectors/spec/spec-triage-connector.js";
 import {
   flattenSteps,
   findFirstPendingLeaf,
@@ -3773,10 +3778,8 @@ function resolvePlanReviewLifecycle(input) {
   // the persistence adapter deliberately does not consume semantic budget.
   const recordRetry = true;
   if (phase === "spec") {
-    if (["PASS", "ADVISORY", "REJECTED"].includes(verdict)) {
-      actions.push(new SetStepStatus({ step: "spec-review", status: "done" }));
-    }
-    return actions;
+    // The Spec Review Step and its receipt select and commit this route.
+    return [];
   }
   if (phase === "test") {
     if (input.flowState?.policy?.nonblocking?.enabled === true && (verdict === "REJECTED" || toolingOutcome)) {
@@ -4524,13 +4527,31 @@ function draftExecutionBindingFromJSON(value) {
 }
 
 /** First claim for a review generation; the manifest itself is the exact request. */
-export class DraftReviewExecutionClaim {
-  constructor() {
-    this.kind = "review";
+export class ReviewProviderRequestIdentity {
+  constructor({ skipConfirm } = {}) {
+    if (typeof skipConfirm !== "boolean") throw new TypeError("Review provider skipConfirm must be boolean");
+    this.skipConfirm = skipConfirm;
     Object.freeze(this);
   }
 
-  toJSON() { return { kind: this.kind }; }
+  toJSON() { return { skipConfirm: this.skipConfirm }; }
+
+  equals(other) {
+    return other instanceof ReviewProviderRequestIdentity && this.skipConfirm === other.skipConfirm;
+  }
+}
+
+export class DraftReviewExecutionClaim {
+  constructor({ request = null } = {}) {
+    if (request !== null && !(request instanceof ReviewProviderRequestIdentity)) {
+      throw new TypeError("Review execution request identity must be typed");
+    }
+    this.kind = "review";
+    this.request = request;
+    Object.freeze(this);
+  }
+
+  toJSON() { return { kind: this.kind, ...(this.request === null ? {} : { request: this.request.toJSON() }) }; }
 }
 
 /** First claim for the exact worker request which may be materialized after commit. */
@@ -4561,8 +4582,12 @@ export class DraftWorkerExecutionClaim {
 function draftExecutionClaimFromJSON(value) {
   if (!isPlainObject(value)) throw new TypeError("Draft execution claim must be an object");
   if (value.kind === "review") {
-    requireExactObject(value, ["kind"], "Draft review execution claim");
-    return new DraftReviewExecutionClaim();
+    requireExactObject(value, value.request === undefined ? ["kind"] : ["kind", "request"], "Draft review execution claim");
+    return new DraftReviewExecutionClaim({
+      request: value.request === undefined ? null : new ReviewProviderRequestIdentity(
+        requireExactObject(value.request, ["skipConfirm"], "Review provider request identity"),
+      ),
+    });
   }
   if (value.kind === "worker") {
     requireExactObject(value, ["kind", "dispatchInvocationId", "generatedAt", "actionDigest", "requestDigest"], "Draft worker execution claim");
@@ -4741,13 +4766,18 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       throw new TypeError("Draft settlement receipt execution lifecycle must be typed");
     }
     const reviewExecution = result instanceof DraftQuestionsReviewExecutionRequiredResult
-      || result instanceof DraftCoverageReviewExecutionRequiredResult;
+      || result instanceof DraftCoverageReviewExecutionRequiredResult
+      || result instanceof SpecReviewExecutionRequiredResult;
     const workerExecution = result instanceof DraftRefineWorkerRequiredResult
       || result instanceof DraftGateRepairWorkerRequiredResult;
     if (executionLifecycle !== null
       && ((reviewExecution && !(executionLifecycle.binding instanceof DraftReviewExecutionBinding))
         || (workerExecution && !(executionLifecycle.binding instanceof DraftWorkerExecutionBinding)))) {
       throw new TypeError("Draft settlement receipt execution binding does not match its Step Result");
+    }
+    if (binding.stepId === "spec-review" && executionLifecycle?.phase !== "checkpoint"
+      && executionLifecycle?.claim?.request === null) {
+      throw new TypeError("Spec Review execution claim requires its durable provider request identity");
     }
     const executionSettlement = settlement instanceof DraftExecutionSettlement;
     const awaitSettlement = settlement instanceof DraftAwaitUserDecision;
@@ -4844,7 +4874,9 @@ export class DraftStepExecutionIdentity {
     if (stepResultDigest(stepResult) !== receipt.resultDigest) {
       throw new TypeError("Draft execution identity Result digest is invalid");
     }
-    const settlement = settleDraftStepResult(binding.stepId, stepResult);
+    const settlement = binding.stepId === "spec-review"
+      ? settleSpecStepResult(binding.stepId, stepResult)
+      : settleDraftStepResult(binding.stepId, stepResult);
     if (!(settlement instanceof DraftExecutionSettlement)
       || settlement.kind !== receipt.settlementKind
       || settlement.resultKind !== receipt.resultKind
@@ -5099,6 +5131,21 @@ export function settleSpecStepResult(stepId, result) {
       connector: SpecReviewConnector,
       effects: new StepRouteEffects(contiguousLeafRouteEffects(
         collectFlowLeafIds(), stepId, "spec-review",
+      )),
+    });
+  }
+  if (result instanceof SpecReviewExecutionRequiredResult) {
+    return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof SpecReviewPassedResult
+    || result instanceof SpecReviewAdvisoryResult
+    || result instanceof SpecReviewRejectedResult) {
+    return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
+      result,
+      targetStepId: "spec-triage",
+      connector: SpecTriageConnector,
+      effects: new StepRouteEffects(contiguousLeafRouteEffects(
+        collectFlowLeafIds(), stepId, "spec-triage",
       )),
     });
   }

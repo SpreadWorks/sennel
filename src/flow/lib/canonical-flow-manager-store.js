@@ -4442,7 +4442,20 @@ export class CanonicalFlowManagerStore {
     artifactWrites = [],
     artifactRemovals = undefined,
     artifactBaselines = [],
+    commandResult = undefined,
   } = {}) {
+    if (binding?.stepId === "spec-review") {
+      if (!(stepResult instanceof StepResult)
+        || !(settlement instanceof StepSettlement)
+        || settlement.sourceStepId !== "spec-review"
+        || (settlement instanceof StepRoute && settlement.targetStepId !== "spec-triage")) {
+        throw new CurrentFlowStateInvariantError("Spec Review settlement requires its typed Result and route");
+      }
+      return this.settleDraftStepResult({
+        specId, binding, stepResult, settlement, commandResult,
+        lifecycleResult, references, artifactWrites, artifactRemovals, artifactBaselines,
+      });
+    }
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const errorSettlement = settlement instanceof StepErrorDecision;

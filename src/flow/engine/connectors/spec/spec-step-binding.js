@@ -1,6 +1,7 @@
 import { requiresWorkerArtifactHandoff } from "../../../lib/flow-artifact-authority.js";
 import { WorkerArtifactHandoffRequest } from "../../../lib/worker-artifact-handoff.js";
 import { StepBinding, canonicalStepState } from "../../step-binding.js";
+import { SpecRevisionIdentity } from "../../../lib/spec-review-artifacts.js";
 
 /** Binds the initial Spec worker publication to its exact active Attempt. */
 export class SpecWorkerStepBinding extends StepBinding {
@@ -19,6 +20,31 @@ export class SpecWorkerStepBinding extends StepBinding {
   assertCurrent() {
     const state = super.assertCurrent();
     this.request.assertCurrent(this.flowManager.loadReadOnly(this.specId));
+    return state;
+  }
+}
+
+/** Binds Spec Review execution or settlement to its revision and active Attempt. */
+export class SpecReviewStepBinding extends StepBinding {
+  constructor({ flowManager, specId } = {}) {
+    const state = canonicalStepState(flowManager, specId);
+    if (state.current?.at(-1) !== "spec-review" || state.attempt?.failure !== null) {
+      throw new Error("Spec Review requires its active Attempt");
+    }
+    super({ flowManager, state, stepId: "spec-review", attempt: state.attempt });
+    const source = flowManager.readCurrentSpecReviewInput({ specId, consumerNodeId: "spec-review" });
+    this.revision = new SpecRevisionIdentity(source.review.identity.toJSON());
+    Object.freeze(this);
+  }
+
+  assertCurrent() {
+    const state = super.assertCurrent();
+    const source = this.flowManager.readCurrentSpecReviewInput({
+      specId: this.specId, consumerNodeId: "spec-review",
+    });
+    if (!this.revision.equals(source.review.identity)) {
+      throw new Error("Spec Review binding is stale for the canonical Spec revision");
+    }
     return state;
   }
 }
