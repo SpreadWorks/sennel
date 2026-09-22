@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-22T12:29:05.411Z",
+  "analyzedAt": "2026-09-22T14:27:05.451Z",
   "package": {
     "entries": [
       {
@@ -3609,9 +3609,9 @@
       },
       {
         "file": "src/flow/definition.js",
-        "hash": "2d296d05ca2c78738ccb1d99c8e89095",
-        "lines": 6355,
-        "mtime": "2026-09-22T12:22:09.374Z",
+        "hash": "5fbee8d4b28fb1beb2ab02dea69b4358",
+        "lines": 6376,
+        "mtime": "2026-09-22T14:26:05.124Z",
         "className": "definition",
         "methods": [
           "RetryRecoveryBasis",
@@ -3895,6 +3895,8 @@
           "./engine/connectors/draft/draft-spec-connector.js",
           "./engine/connectors/spec/spec-review-connector.js",
           "./engine/connectors/spec/spec-triage-connector.js",
+          "./engine/connectors/spec/spec-repair-connector.js",
+          "./engine/connectors/spec/spec-gate-connector.js",
           "./lib/step-tree.js",
           "./lib/nonblocking-route.js",
           "./lib/task-step-identity.js",
@@ -4182,24 +4184,24 @@
           "src/flow/registry.js"
         ],
         "id": "2cb27b93",
-        "summary": "Central workflow flow-definition module for typed routing, task progression, recovery, lifecycle management, and step settlement.",
-        "detail": "Defines workflow and task graphs, prerequisite and completion-plan resolution, active-step and next-action discovery, branch and leaf relationships, phase maps, nested initial state, and ordering utilities. Validates domain facts, identities, typed evidence, attempt bindings, route consistency, required baselines, retry limits, and durable recovery constraints. Resolves Gate and non-Gate transitions; selects retry, repair, blocking, nonblocking, approval, and recovery plans; manages tooling attempts, side effects, lifecycle ownership, dispatcher-owned actions, review, finalization, and draft/spec execution settlement. Reconciles Task Review decisions, including validation of unpublished recovered attempts, and exposes policies for maximum attempts and flow progression.",
+        "summary": "Central flow definition model for execution, transitions, branching, and recovery",
+        "detail": "Defines the workflow engine's typed domain model and definition-driven decision logic for flows and task steps. It resolves Task Review completion and reconciliation, step execution policies, prerequisites, next actions, initial nested and task steps, phases, nodes, branches, ordered leaves, and the latest in-progress leaf with bounded scanning. It governs retry recovery, requirement-test lifecycle facts, source handoffs, Gate and non-Gate outcomes, finalization recovery, nonblocking eligibility, lifecycle ownership and effects, review routing, draft and specification settlements, execution identities, quality-issue recovery routes, and connector-directed transitions. The module preserves durable evidence, attempt identity, approval, acceptance, state consistency, and definition-owned recovery invariants through explicit errors and immutable decision objects.",
         "chapter": "internal_design",
-        "role": "controller",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-22T12:26:30.853Z",
+          "processedAt": "2026-09-22T14:28:34.426Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
-          "workflow routing",
-          "task progression",
-          "transition policy",
-          "recovery plans",
-          "lifecycle management",
-          "step settlement",
-          "typed evidence",
-          "attempt policy"
+          "workflow definition",
+          "state transitions",
+          "task review",
+          "step resolution",
+          "branching",
+          "retry recovery",
+          "lifecycle planning",
+          "gate evaluation",
+          "flow nodes"
         ]
       },
       {
@@ -4503,6 +4505,76 @@
         ]
       },
       {
+        "file": "src/flow/engine/connectors/spec/spec-gate-connector.js",
+        "hash": "15d12c6f8cc721a7546561c3221a4d3f",
+        "lines": 7,
+        "mtime": "2026-09-22T14:26:05.124Z",
+        "className": "spec-gate-connector",
+        "methods": [
+          "SpecGateConnector"
+        ],
+        "imports": [
+          "../../step-connector.js"
+        ],
+        "exports": [
+          "SpecGateConnector"
+        ],
+        "extends": "StepConnector",
+        "usedBy": [
+          "src/flow/definition.js"
+        ],
+        "id": "b376d7ca",
+        "summary": "Provides the connector for the Spec Gate flow step.",
+        "detail": "SpecGateConnector extends the shared StepConnector abstraction and specializes connector behavior for the Spec Gate stage.",
+        "chapter": "project_structure",
+        "role": "middleware",
+        "enrich": {
+          "processedAt": "2026-09-22T14:28:34.426Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "Spec Gate",
+          "connector",
+          "StepConnector",
+          "flow step"
+        ]
+      },
+      {
+        "file": "src/flow/engine/connectors/spec/spec-repair-connector.js",
+        "hash": "b4f4189410a7507d75939f914ff07eed",
+        "lines": 7,
+        "mtime": "2026-09-22T14:26:05.124Z",
+        "className": "spec-repair-connector",
+        "methods": [
+          "SpecRepairConnector"
+        ],
+        "imports": [
+          "../../step-connector.js"
+        ],
+        "exports": [
+          "SpecRepairConnector"
+        ],
+        "extends": "StepConnector",
+        "usedBy": [
+          "src/flow/definition.js"
+        ],
+        "id": "db2c2a1d",
+        "summary": "Provides the connector for the Spec Repair flow step.",
+        "detail": "SpecRepairConnector extends the shared StepConnector abstraction and specializes connector behavior for the Spec Repair stage.",
+        "chapter": "project_structure",
+        "role": "middleware",
+        "enrich": {
+          "processedAt": "2026-09-22T14:28:34.426Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "Spec Repair",
+          "connector",
+          "StepConnector",
+          "flow step"
+        ]
+      },
+      {
         "file": "src/flow/engine/connectors/spec/spec-review-connector.js",
         "hash": "0532738055daf4d0577708a7ab50fffd",
         "lines": 27,
@@ -4539,9 +4611,9 @@
       },
       {
         "file": "src/flow/engine/connectors/spec/spec-step-binding.js",
-        "hash": "0dda600cb485d426af26f70674db37d1",
+        "hash": "930338830719f9167e6b6b05210dba71",
         "lines": 51,
-        "mtime": "2026-09-22T12:22:09.374Z",
+        "mtime": "2026-09-22T14:26:05.125Z",
         "className": "spec-step-binding",
         "methods": [
           "SpecWorkerStepBinding",
@@ -4562,21 +4634,21 @@
           "src/flow/engine/connectors/spec/spec-entry-connector.js"
         ],
         "id": "64cd7e0a",
-        "summary": "Implements specification worker and review step bindings with handoff, active-attempt, and canonical-revision validation.",
-        "detail": "SpecWorkerStepBinding requires a spec handoff request and applies canonical step state handling. SpecReviewStepBinding requires an active Attempt and rejects bindings that are stale for the canonical Spec revision.",
+        "summary": "Binds worker and review execution for Spec stages while enforcing handoff and revision consistency.",
+        "detail": "This module defines SpecWorkerStepBinding and SpecReviewStepBinding on top of StepBinding. The worker binding requires a Spec handoff request, while the review binding requires an active Attempt and rejects stale bindings that do not match the canonical Spec revision. The module uses artifact-authority, worker-handoff, canonical step-state, and Spec revision identity helpers to produce validated step state.",
         "chapter": "internal_design",
-        "role": "middleware",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-22T12:26:30.853Z",
+          "processedAt": "2026-09-22T14:28:34.426Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
-          "spec binding",
+          "Spec binding",
           "worker handoff",
+          "Spec review",
+          "canonical revision",
           "step state",
-          "active attempt",
-          "revision validation"
+          "Attempt"
         ]
       },
       {
@@ -4752,9 +4824,9 @@
       },
       {
         "file": "src/flow/engine/step-result.js",
-        "hash": "08243db530dbfcfdf62bc293995aedc0",
-        "lines": 261,
-        "mtime": "2026-09-22T12:22:09.374Z",
+        "hash": "e0b1d357372d18fe90990bd30e4481bc",
+        "lines": 270,
+        "mtime": "2026-09-22T14:26:05.125Z",
         "className": "step-result",
         "methods": [
           "StepResult",
@@ -4782,6 +4854,9 @@
           "STEP_RESULT_TYPE",
           "DraftCreatedResult",
           "SpecCreatedResult",
+          "SpecTriageCompletedResult",
+          "SpecRepairChangedResult",
+          "SpecRepairUnchangedResult",
           "SpecReviewExecutionRequiredResult",
           "SpecReviewPassedResult",
           "SpecReviewAdvisoryResult",
@@ -4816,22 +4891,21 @@
           "src/flow/registry.js"
         ],
         "id": "886fac8d",
-        "summary": "Defines immutable typed StepResult objects, persistence validation, error handling, rehydration, digests, and result registries.",
-        "detail": "The module declares registered result classes for draft, specification review, question review, refinement, coverage review, and gate outcomes. It serializes and rehydrates results, preserves structured error data, validates Step service persistence and fixed result types, computes SHA-256 digests, and exposes registries and per-step result kinds.",
+        "summary": "Defines immutable, typed, persistable step results and their registry and rehydration mechanisms.",
+        "detail": "This module implements the StepResult base class, error serialization and rehydration, SHA-256 result digests, typed result-class declarations, and a registry of supported outcomes across Draft, Spec, and related flow stages. It validates registered step identifiers, fixed result types, persistence services, stored fields, and StepResult compatibility during rehydration. It also exposes error results, the complete registry, and per-step result kinds.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-22T12:26:30.853Z",
+          "processedAt": "2026-09-22T14:28:34.426Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
-          "step result",
+          "StepResult",
           "result registry",
           "rehydration",
           "persistence",
-          "error handling",
-          "digest"
+          "error serialization",
+          "flow outcomes"
         ]
       },
       {
@@ -5915,9 +5989,9 @@
       },
       {
         "file": "src/flow/lib/canonical-flow-manager-store.js",
-        "hash": "edf197bf8fa9ecb9b0dd0c1624bda9c0",
-        "lines": 7493,
-        "mtime": "2026-09-22T12:22:09.376Z",
+        "hash": "1677568ead35c5106212790cfe0939ff",
+        "lines": 7523,
+        "mtime": "2026-09-22T14:26:05.126Z",
         "className": "canonical-flow-manager-store",
         "methods": [
           "CanonicalRawActivityReplayOnlyError",
@@ -6068,24 +6142,24 @@
           "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "041f2538",
-        "summary": "Canonical flow manager store for durable state transitions, artifact-backed execution, and runtime invariant enforcement",
-        "detail": "Implements the central persistence and orchestration layer for canonical flows. It validates canonical metadata, flow creation, task and step identities, execution attempts, retries, failures, recovery routes, gate and nonblocking activation decisions, reviews, requirement-test settlements, source handoffs, draft execution and publication, approvals, issue logs, policies, metrics, notes, producer-owned artifacts, artifact catalog entries, outbox operations, command attempt history, Flow Version resolution, and transition snapshots. The store enforces stable identities, catalog and policy checks, activity and lineage bindings, canonical snapshots, optimistic concurrency, and conflict detection, consistently rejecting stale, malformed, conflicting, or unauthorized state through CurrentFlowStateInvariantError before delegating durable mutations to the runtime.",
+        "summary": "Canonical flow manager store for validating, persisting, and advancing durable flow execution state.",
+        "detail": "Implements the canonical orchestration and persistence boundary for specification, task, review, gate, test-chain, draft, source-handoff, approval, artifact, issue-log, and outbox workflows. It coordinates canonical Version and runtime state through atomic files, typed artifact catalogs, explicit Flow Version resolution, producer ownership checks, active Attempt and snapshot consistency requirements, and typed decision and settlement receipt validation. The store detects stale, conflicting, incomplete, or malformed evidence; records canonical activities, artifacts, metrics, notes, policies, nonblocking activation decisions, step settlements, command Attempt history, and command result publications; archives Task Review retries; publishes drafts; supports retries, recovery, rewinds, deferred findings, and failure handling; and projects persisted runtime state for consumers while enforcing publication and ownership invariants.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-22T12:26:30.853Z",
+          "processedAt": "2026-09-22T14:28:34.426Z",
           "attempts": 1
         },
-        "app": "senti",
+        "app": "flow",
         "keywords": [
-          "canonical flow manager",
-          "state transitions",
+          "canonical flow store",
           "workflow orchestration",
-          "artifact persistence",
-          "policy validation",
+          "runtime persistence",
+          "artifact ownership",
+          "attempt settlement",
           "retry recovery",
-          "attempt history",
-          "concurrency control"
+          "draft publication",
+          "state invariants"
         ]
       },
       {
@@ -13620,9 +13694,9 @@
       },
       {
         "file": "src/flow/lib/run-dispatch.js",
-        "hash": "55a7ea9305466883e890a6e557c7698a",
-        "lines": 2851,
-        "mtime": "2026-09-22T08:35:02.354Z",
+        "hash": "48b5155366e29195ad70d4e31fa25e39",
+        "lines": 2870,
+        "mtime": "2026-09-22T14:26:05.127Z",
         "className": "run-dispatch",
         "methods": [
           "draftWorkerStepDefinition",
@@ -13727,22 +13801,23 @@
         "extends": "Error",
         "usedBy": null,
         "id": "6c7fd82a",
-        "summary": "Orchestrates flow command dispatch, worker handoffs, approvals, retries, and failure recovery.",
-        "detail": "The module coordinates registered commands and worker steps, dispatch leases, repository fingerprints, approval receipts, nonblocking decisions, artifact handoffs, deferred metrics, continuation boundaries, and structured failure outcomes.",
-        "chapter": "project_structure",
+        "summary": "Flow dispatch orchestrates command execution, worker handoffs, approvals, retries, failures, and dispatch boundaries.",
+        "detail": "The dispatcher defines worker and command resolution, dispatch leases, repository fingerprints, approval receipts, action authorization, nonblocking agent decisions, worker artifact handoffs, retry feedback, and failure classification. RunDispatchCommand validates action bindings, persists authorized approval mutations, invokes registered or dispatcher-owned commands, coordinates Draft and Spec workers, flushes deferred metrics, and returns structured flow boundaries or failures.",
+        "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-22T08:41:14.710Z",
+          "processedAt": "2026-09-22T14:28:34.426Z",
           "attempts": 1
         },
-        "app": "senti",
+        "app": "flow",
         "keywords": [
-          "command dispatch",
+          "flow dispatch",
+          "command execution",
           "worker handoff",
           "approval receipt",
           "dispatch lease",
-          "retry recovery",
-          "flow orchestration"
+          "retry feedback",
+          "failure handling"
         ]
       },
       {
@@ -16780,11 +16855,12 @@
       },
       {
         "file": "src/flow/lib/spec-repair-operations.js",
-        "hash": "f49bf23e71cef8faa990744a025a76be",
-        "lines": 595,
-        "mtime": "2026-09-15T04:21:01.469Z",
+        "hash": "e5cd81f6a55155cf03ac20aa09efc1b3",
+        "lines": 599,
+        "mtime": "2026-09-22T14:26:05.128Z",
         "className": "spec-repair-operations",
         "methods": [
+          "specRepairProposalDigest",
           "SpecRepairOperationsError",
           "SpecRepairOperationValidationError",
           "SpecRepairTarget",
@@ -16837,6 +16913,7 @@
           "../../lib/spec-json.js"
         ],
         "exports": [
+          "specRepairProposalDigest",
           "SpecRepairOperationsError",
           "SpecRepairOperationValidationError",
           "SpecRepairTarget",
@@ -16862,23 +16939,23 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "4f196bfc",
-        "summary": "Defines validated, auditable operations for repairing specification JSON against an immutable revision.",
-        "detail": "This module models repair targets, permissions, text edits, field replacements, array mutations, operation batches, and attempt audits. It enforces strict keys, bounded sizes, canonical ordering, unique finding references, UTF-8-safe non-overlapping edits, target existence, authorization, lineage checks, and immutable-base replay before returning the repaired specification and audit record.",
+        "summary": "Spec repair operations validate, authorize, audit, and apply bounded immutable specification edits.",
+        "detail": "The module models repair targets, permissions, operations, text edits, array mutations, operation batches, and audit records. It enforces canonical keys and ordering, size and overlap limits, stable digests, valid triage targets, finding permissions, attempt conflict rules, and immutable-base replay before returning an updated specification with accepted and discarded audit information.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-15T04:24:56.696Z",
+          "processedAt": "2026-09-22T14:28:34.426Z",
           "attempts": 1
         },
-        "app": "sennel",
+        "app": "flow",
         "keywords": [
           "spec repair",
-          "immutable revision",
           "operation validation",
-          "repair permissions",
-          "array lineage",
-          "audit trail",
-          "JSON mutation"
+          "text edits",
+          "array mutations",
+          "triage targets",
+          "permission checks",
+          "audit trail"
         ]
       },
       {
@@ -19233,9 +19310,9 @@
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "d52a4fd26a85bdf1138e0ca7a2bc03a3",
-        "lines": 10153,
-        "mtime": "2026-09-22T08:35:02.358Z",
+        "hash": "f416f8c0cb5ba57f3e2caa296b923d38",
+        "lines": 10091,
+        "mtime": "2026-09-22T14:26:05.130Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "WorkerArtifactHandoffError",
@@ -19454,6 +19531,7 @@
           "../engine/connectors/draft/draft-step-binding.js",
           "./definition-lifecycle-failure.js",
           "./spec-step-connection.js",
+          "../services/spec-worker-review-service.js",
           "./flow-findings.js",
           "./task-step-identity.js",
           "./step-tree.js",
@@ -19567,24 +19645,25 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Implements the Flow worker artifact handoff protocol, coordinating validation, publication, recovery, rollback, cleanup, and reconciliation.",
-        "detail": "Defines contracts and policies for safely exchanging source and artifact worker outputs. The module prepares canonical Draft and Spec worker executions, binds handoffs to Flow and task identities, validates typed source effects, repair reports, submissions, payload manifests, and mutation checkpoints, and restricts repository changes through authority snapshots and mutation manifests. It records publication and settlement receipts, persists validated requests, submissions, and manifests with atomic file operations, detects stale or unauthorized mutations, seals published payloads, and supports quarantine, retry, rollback, recovery, reconciliation, and transient-directory cleanup.",
+        "summary": "Implements the secure worker artifact handoff lifecycle for Flow execution, source mutation control, publication, recovery, rollback, quarantine, and canonical state synchronization.",
+        "detail": "This module defines versioned worker handoff requests, policies, input snapshots, payload manifests, submissions, retry instructions, typed source and artifact effects, checkpoints, immutable baselines, durable receipts, publication journals, and final sealing. It validates bounded JSON, file payloads, sealed submissions, and repository-relative paths; enforces authority boundaries; captures Git or filesystem mutation baselines; detects unauthorized changes; creates sealed source mutation manifests; supports guarded rollback, checkpoint restoration, recovery validation, quarantine, and cleanup; reconciles replayed results; and persists handoff progress. It coordinates canonical Flow observations, requirement-test artifacts, review and gate-repair inputs, source response contracts, worker context snapshots, upgrade results, draft and spec preparation, test-review repairs, publication outcomes, and settlement invariants, with typed errors classifying invalid, stale, retryable, and authority-violation states.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-22T08:41:14.710Z",
+          "processedAt": "2026-09-22T14:28:34.426Z",
           "attempts": 1
         },
         "app": "senti",
         "keywords": [
-          "worker handoff",
+          "worker artifact handoff",
           "artifact validation",
-          "payload publication",
           "source mutation",
-          "checkpoint validation",
           "rollback recovery",
-          "canonical inputs",
-          "payload sealing"
+          "publication journal",
+          "repository authority",
+          "payload manifest",
+          "quarantine cleanup",
+          "canonical state"
         ]
       },
       {
@@ -20134,6 +20213,52 @@
         ]
       },
       {
+        "file": "src/flow/services/spec-worker-review-service.js",
+        "hash": "a92b82baca0bacc0548fde637ada2dfd",
+        "lines": 141,
+        "mtime": "2026-09-22T14:26:05.130Z",
+        "className": "spec-worker-review-service",
+        "methods": [
+          "SpecReviewWorkerFacts",
+          "SpecReviewWorkerSelection",
+          "SpecReviewWorkerService"
+        ],
+        "imports": [
+          "../lib/current-flow-state.js",
+          "../lib/spec-review-artifacts.js",
+          "../engine/connectors/spec/spec-step-binding.js",
+          "../engine/step-result.js",
+          "../definition.js",
+          "../lib/current-flow-state.js",
+          "../lib/definition-lifecycle-failure.js"
+        ],
+        "exports": [
+          "SpecReviewWorkerFacts",
+          "SpecReviewWorkerSelection",
+          "SpecReviewWorkerService"
+        ],
+        "extends": null,
+        "usedBy": null,
+        "id": "c44d8840",
+        "summary": "Provides the service layer that binds spec-review worker facts, selections, publications, and durable step outcomes.",
+        "detail": "SpecReviewWorkerFacts requires bound canonical inputs, and SpecReviewWorkerSelection requires a matching result and publication. SpecReviewWorkerService constructs the worker service from execution context, request, binding, preparation, and handoff coordination; validates prepared handoffs and connector-selected results; serializes the selected review artifact; and exposes the durable outcome receipt. The service connects spec worker execution with step-result persistence and canonical flow publication.",
+        "chapter": "internal_design",
+        "role": "controller",
+        "enrich": {
+          "processedAt": "2026-09-22T14:28:34.426Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "spec review service",
+          "worker facts",
+          "worker selection",
+          "canonical publication",
+          "step result",
+          "handoff coordination",
+          "outcome receipt"
+        ]
+      },
+      {
         "file": "src/flow/steps/draft/draft-coverage-repair.js",
         "hash": "4560461afb70e7b4a2861f81f62b53f6",
         "lines": 49,
@@ -20528,6 +20653,50 @@
         ]
       },
       {
+        "file": "src/flow/steps/spec/spec-repair.js",
+        "hash": "841a22c10f11b4f8b590240f5736f554",
+        "lines": 61,
+        "mtime": "2026-09-22T14:26:05.130Z",
+        "className": "spec-repair",
+        "methods": [
+          "specRepairSelection",
+          "SpecRepairStep"
+        ],
+        "imports": [
+          "node:util",
+          "../../engine/step.js",
+          "../../engine/step-result.js",
+          "../../services/spec-worker-review-service.js",
+          "../../lib/spec-review-artifacts.js",
+          "../../lib/spec-repair-operations.js",
+          "../../lib/current-flow-state.js"
+        ],
+        "exports": [
+          "specRepairSelection",
+          "SpecRepairStep"
+        ],
+        "extends": "Step",
+        "usedBy": null,
+        "id": "b1b39576",
+        "summary": "Implements the spec repair step and selects, applies, persists, and returns the appropriate repair result.",
+        "detail": "The module derives a typed repair selection from SpecReviewWorkerFacts, rejecting untyped inputs. SpecRepairStep uses the worker review service and repair operations to process the selected review, persist the resulting StepResult through the service, and return either the initially computed or already selected result. The imported utilities support deep comparison, repair operation application, proposal digesting, review-delta merging, and canonical worker publication handling.",
+        "chapter": "internal_design",
+        "role": "controller",
+        "enrich": {
+          "processedAt": "2026-09-22T14:28:34.426Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "spec repair",
+          "repair selection",
+          "worker review",
+          "repair operations",
+          "step persistence",
+          "review delta",
+          "proposal digest"
+        ]
+      },
+      {
         "file": "src/flow/steps/spec/spec-review.js",
         "hash": "83376ec383232db63f93a8187747c10a",
         "lines": 64,
@@ -20567,6 +20736,48 @@
           "result persistence",
           "work unit",
           "accepted review"
+        ]
+      },
+      {
+        "file": "src/flow/steps/spec/spec-triage.js",
+        "hash": "efb0eeac7a700f9329cff774bc265991",
+        "lines": 51,
+        "mtime": "2026-09-22T14:26:05.131Z",
+        "className": "spec-triage",
+        "methods": [
+          "specTriageSelection",
+          "SpecTriageStep"
+        ],
+        "imports": [
+          "../../engine/step.js",
+          "../../engine/step-result.js",
+          "../../services/spec-worker-review-service.js",
+          "../../lib/spec-review-artifacts.js",
+          "../../lib/spec-repair-operations.js"
+        ],
+        "exports": [
+          "specTriageSelection",
+          "SpecTriageStep"
+        ],
+        "extends": "Step",
+        "usedBy": null,
+        "id": "b25d128d",
+        "summary": "Implements the spec triage step that validates triage findings, persists the selected result, and returns the completed outcome.",
+        "detail": "The module creates a typed SpecReviewWorkerSelection from SpecReviewWorkerFacts and rejects inputs that are not worker facts. SpecTriageStep uses the shared worker review service and triage validation utilities to process spec-review findings, merge review deltas, persist the resulting StepResult, and return the selected result. Its result handling distinguishes completed triage from step errors while preserving the worker handoff and selection contract.",
+        "chapter": "internal_design",
+        "role": "controller",
+        "enrich": {
+          "processedAt": "2026-09-22T14:28:34.426Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "spec triage",
+          "triage findings",
+          "worker review",
+          "selection",
+          "review delta",
+          "step persistence",
+          "error result"
         ]
       },
       {
@@ -27275,10 +27486,10 @@
       }
     ],
     "summary": {
-      "total": 477,
-      "totalMethods": 5042
+      "total": 482,
+      "totalMethods": 5052
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-22T12:26:30.853Z"
+  "enrichedAt": "2026-09-22T14:28:34.426Z"
 }
