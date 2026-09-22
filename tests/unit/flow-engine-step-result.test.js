@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { FlowExecutionError } from "../../src/flow/engine/flow-execution-error.js";
 import {
-  DRAFT_STEP_RESULT_REGISTRY,
+  STEP_RESULT_REGISTRY,
   DraftCreatedResult,
   DraftGatePassedResult,
-  DraftStepErrorResult,
+  SpecCreatedResult,
+  StepErrorResult,
   STEP_RESULT_TYPE,
   StepResult,
   rehydrateStepResult,
@@ -13,9 +14,10 @@ import {
 } from "../../src/flow/engine/step-result.js";
 import { Step } from "../../src/flow/engine/step.js";
 
-test("StepResult is abstract and every concrete Draft Result has one unique fixed contract", () => {
+test("StepResult is abstract and every concrete Result has one unique fixed contract", () => {
   const expected = [
     ["DraftCreatedResult", "draft", "draft-created", "completed"],
+    ["SpecCreatedResult", "spec", "spec-created", "completed"],
     ["DraftQuestionsReviewExecutionRequiredResult", "draft-questions-review", "draft-questions-review-execution-required", "loop-required"],
     ["DraftQuestionsReviewPassedResult", "draft-questions-review", "draft-questions-review-passed", "completed"],
     ["DraftQuestionsReviewFindingsResult", "draft-questions-review", "draft-questions-review-findings", "branch-required"],
@@ -38,17 +40,17 @@ test("StepResult is abstract and every concrete Draft Result has one unique fixe
     ["DraftGateRepairAppliedResult", "draft-gate-repair", "draft-gate-repair-applied", "completed"],
     ["DraftGateRepairCarryForwardResult", "draft-gate-repair", "draft-gate-repair-carry-forward", "completed"],
     ...[
-      "draft", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
+      "draft", "spec", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
       "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "draft-gate-repair",
-    ].map((stepId) => ["DraftStepErrorResult", stepId, `${stepId}-error`, "error"]),
+    ].map((stepId) => ["StepErrorResult", stepId, `${stepId}-error`, "error"]),
   ];
   assert.throws(() => new StepResult(), /abstract/);
-  assert.deepEqual(DRAFT_STEP_RESULT_REGISTRY.map(({ ResultClass, stepId, kind, type }) => (
+  assert.deepEqual(STEP_RESULT_REGISTRY.map(({ ResultClass, stepId, kind, type }) => (
     [ResultClass.name, stepId, kind, type]
   )), expected);
-  assert.equal(new Set(DRAFT_STEP_RESULT_REGISTRY.map(({ kind }) => kind)).size, DRAFT_STEP_RESULT_REGISTRY.length);
-  for (const { ResultClass, stepId, kind, type } of DRAFT_STEP_RESULT_REGISTRY) {
-    if (ResultClass === DraftStepErrorResult) continue;
+  assert.equal(new Set(STEP_RESULT_REGISTRY.map(({ kind }) => kind)).size, STEP_RESULT_REGISTRY.length);
+  for (const { ResultClass, stepId, kind, type } of STEP_RESULT_REGISTRY) {
+    if (ResultClass === StepErrorResult) continue;
     const result = new ResultClass();
     assert.equal(result.stepId, stepId);
     assert.equal(result.kind, kind);
@@ -62,6 +64,16 @@ test("StepResult readback rejects unknown kind, mismatched type, and wrong Step"
   assert.throws(() => rehydrateStepResult("draft-gate", { ...stored, kind: "unknown" }), TypeError);
   assert.throws(() => rehydrateStepResult("draft-gate", { ...stored, type: STEP_RESULT_TYPE.LOOP_REQUIRED }), TypeError);
   assert.throws(() => rehydrateStepResult("draft", stored), TypeError);
+  assert.equal(
+    rehydrateStepResult("spec", new SpecCreatedResult().toJSON()) instanceof SpecCreatedResult,
+    true,
+  );
+  assert.throws(() => rehydrateStepResult("spec-review", new SpecCreatedResult().toJSON()), TypeError);
+  assert.throws(() => new StepErrorResult("spec-review", new Error("not migrated")), /unknown Step/);
+  assert.throws(() => rehydrateStepResult("spec-review", {
+    kind: "spec-review-error", type: STEP_RESULT_TYPE.ERROR,
+    error: { kind: "generic", message: "not migrated" },
+  }), /unknown Step/);
 });
 
 test("stepResultDigest accepts only a concrete StepResult", () => {
@@ -69,20 +81,20 @@ test("stepResultDigest accepts only a concrete StepResult", () => {
   assert.throws(() => stepResultDigest({ toJSON() { return {}; } }), TypeError);
 });
 
-test("DraftStepErrorResult preserves generic code/data and Flow error identity on readback", () => {
+test("StepErrorResult preserves generic code/data and Flow error identity on readback", () => {
   const generic = new Error("provider failed");
   generic.code = "PROVIDER_DOWN";
   generic.data = { provider: "test", retryAfter: 5 };
   const restored = rehydrateStepResult(
     "draft-refine",
-    new DraftStepErrorResult("draft-refine", generic).toJSON(),
+    new StepErrorResult("draft-refine", generic).toJSON(),
   );
-  assert.equal(restored instanceof DraftStepErrorResult, true);
+  assert.equal(restored instanceof StepErrorResult, true);
   assert.equal(restored.error.code, "PROVIDER_DOWN");
   assert.deepEqual(restored.error.data, { provider: "test", retryAfter: 5 });
 
   const mutable = { nested: { retryAfter: 5 } };
-  const immutable = new DraftStepErrorResult("draft-refine", Object.assign(new Error("immutable"), {
+  const immutable = new StepErrorResult("draft-refine", Object.assign(new Error("immutable"), {
     data: mutable,
   }));
   mutable.nested.retryAfter = 10;
@@ -98,7 +110,7 @@ test("DraftStepErrorResult preserves generic code/data and Flow error identity o
   });
   const restoredFlow = StepResult.fromStored(
     "draft-refine",
-    new DraftStepErrorResult("draft-refine", flow).toJSON(),
+    new StepErrorResult("draft-refine", flow).toJSON(),
   );
   assert.equal(restoredFlow.error instanceof FlowExecutionError, true);
   assert.equal(restoredFlow.error.code, "STEP_TIMEOUT");

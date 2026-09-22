@@ -10,7 +10,7 @@ import { FlowManager } from "../../../src/lib/flow-manager.js";
 import {
   buildCurrentFlowDefinition,
   DEFINITION_FAILURE_OWNERS,
-  DRAFT_RESULT_ERROR_CATEGORY,
+  STEP_RESULT_ERROR_CATEGORY,
   DraftReviewExecutionBinding,
   DraftReviewExecutionClaim,
   DraftReviewExecutionTargetIdentity,
@@ -472,7 +472,7 @@ test("Draft Gate Step Error is persisted without a dispatcher fallback", async (
     assert.equal(envelope.ok, false);
     assert.equal(envelope.errors.some((error) => error.code === "DRAFT_GATE_RESULT_ERROR"), true);
     assert.equal(state.current.at(-1), "draft-gate");
-    assert.equal(state.attempt.failure.category, DRAFT_RESULT_ERROR_CATEGORY);
+    assert.equal(state.attempt.failure.category, STEP_RESULT_ERROR_CATEGORY);
     assert.equal(state.nextAction().operation, "blocked");
     assert.equal(failures.length, 1);
     assert.deepEqual(failures[0].result.stepResult, {
@@ -593,7 +593,7 @@ test("Draft Review Step Error is persisted without a dispatcher fallback", async
     assert.equal(envelope.ok, false);
     assert.equal(envelope.errors.some((error) => error.code === "DRAFT_REVIEW_RESULT_ERROR"), true);
     assert.equal(state.current.at(-1), "draft-questions-review");
-    assert.equal(state.attempt.failure.category, DRAFT_RESULT_ERROR_CATEGORY);
+    assert.equal(state.attempt.failure.category, STEP_RESULT_ERROR_CATEGORY);
     assert.equal(state.nextAction().operation, "blocked");
     assert.equal(failures.length, 1);
     assert.deepEqual(failures[0].result.stepResult, {

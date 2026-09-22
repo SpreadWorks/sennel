@@ -10,7 +10,7 @@ import {
   DraftGateEvaluationBinding,
   DraftReviewStepBinding,
 } from "../engine/connectors/draft/draft-step-binding.js";
-import { DraftStepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
+import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
 import {
   DraftGateIssuePublication,
   DraftGatePublicationIntent,
@@ -21,7 +21,7 @@ import {
 
 function committedReceipt(flowManager, input) {
   try {
-    return flowManager.findDraftStepSettlementReceipt(input);
+    return flowManager.findStepSettlementReceipt(input);
   } catch {
     return null;
   }
@@ -38,7 +38,7 @@ export class ReviewService {
     executionCheckpointer = null,
   }) {
     if (!flowManager || typeof flowManager.settleDraftStepResult !== "function"
-      || typeof flowManager.findDraftStepSettlementReceipt !== "function") {
+      || typeof flowManager.findStepSettlementReceipt !== "function") {
       throw new TypeError("ReviewService requires canonical Result settlement and receipt readback");
     }
     if (!(binding instanceof DraftReviewStepBinding)) {
@@ -99,7 +99,7 @@ export class ReviewService {
     }
     if (this.executionCheckpointer !== null) {
       if (!(settlement instanceof DraftExecutionSettlement)) {
-        throw new DraftStepPersistenceFailure(new Error("Draft review pre-execution Step must select an Execution settlement"));
+        throw new StepPersistenceFailure(new Error("Draft review pre-execution Step must select an Execution settlement"));
       }
       const input = {
         binding: this.binding,
@@ -113,7 +113,7 @@ export class ReviewService {
       } catch (error) {
         const replay = committedReceipt(this.flowManager, input);
         if (replay !== null) return replay;
-        throw error instanceof DraftStepPersistenceFailure ? error : new DraftStepPersistenceFailure(error);
+        throw error instanceof StepPersistenceFailure ? error : new StepPersistenceFailure(error);
       }
     }
     if (stepResult.error === null && this.#reviewDocument === null) this.inspectReviewResult();
@@ -132,7 +132,7 @@ export class ReviewService {
     } catch (error) {
       const replay = committedReceipt(this.flowManager, input);
       if (replay !== null) return replay;
-      throw new DraftStepPersistenceFailure(error);
+      throw new StepPersistenceFailure(error);
     }
   }
 }
@@ -143,7 +143,7 @@ export class GateService {
 
   constructor({ flowManager, binding, commandResult, issuePublication = null }) {
     if (!flowManager || typeof flowManager.settleDraftStepResult !== "function"
-      || typeof flowManager.findDraftStepSettlementReceipt !== "function") {
+      || typeof flowManager.findStepSettlementReceipt !== "function") {
       throw new TypeError("GateService requires canonical Result settlement and receipt readback");
     }
     if (!(binding instanceof DraftGateEvaluationBinding)) {
@@ -208,7 +208,7 @@ export class GateService {
     } catch (error) {
       const replay = committedReceipt(this.flowManager, input);
       if (replay !== null) return replay;
-      throw new DraftStepPersistenceFailure(error);
+      throw new StepPersistenceFailure(error);
     }
   }
 }

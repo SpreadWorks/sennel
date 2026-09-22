@@ -45,7 +45,7 @@ import { ReviewService } from "../../../../src/flow/services/review-service.js";
 import { CanonicalDraftReviewSource } from "../../../../src/flow/lib/canonical-review-artifacts.js";
 import {
   DraftCoverageReviewExecutionRequiredResult,
-  DraftStepErrorResult,
+  StepErrorResult,
   DraftQuestionsReviewExecutionRequiredResult,
   DraftQuestionsReviewPassedResult,
 } from "../../../../src/flow/engine/step-result.js";
@@ -727,7 +727,7 @@ it("fails closed when a Draft review becomes terminal after lease readmission", 
             settlement: executionSettlement,
             commandResult: published,
           });
-          const failed = new DraftStepErrorResult(
+          const failed = new StepErrorResult(
             "draft-questions-review",
             new Error("concurrent Draft review execution failed terminally"),
           );

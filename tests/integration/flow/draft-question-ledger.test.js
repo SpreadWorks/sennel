@@ -169,7 +169,7 @@ test("DraftRefineStep commits a fact-read failure without re-reading transition 
     assert.equal(result.kind, "draft-refine-error");
     assert.equal(readAttempts, 1);
     const canonical = manager.canonicalState(specId);
-    assert.equal(canonical.attempt.failure.category, "draft-result-error");
+    assert.equal(canonical.attempt.failure.category, "step-result-error");
     assert.equal(manager.activityLedger(specId).at(-1).result.stepResult.kind, "draft-refine-error");
     assert.equal(manager.activityLedger(specId).at(-1).result.draftSettlementReceipt.settlementKind, "failure");
   } finally {

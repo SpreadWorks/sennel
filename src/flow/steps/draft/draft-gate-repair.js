@@ -4,14 +4,14 @@ import {
   DraftGateRepairAppliedResult,
   DraftGateRepairCarryForwardResult,
   DraftGateRepairWorkerRequiredResult,
-  DraftStepErrorResult,
+  StepErrorResult,
 } from "../../engine/step-result.js";
 import { PlanGateRepairOutcomeDraft } from "../../lib/gate-observation-convergence.js";
 import { PlanGateRepairRecord } from "../../lib/plan-gate-repair.js";
 
 /** Pure mapping from a canonical repair binding or sealed outcome to this Step's Result. */
 export function draftGateRepairResult(facts) {
-  if (facts instanceof Error) return new DraftStepErrorResult("draft-gate-repair", facts);
+  if (facts instanceof Error) return new StepErrorResult("draft-gate-repair", facts);
   if (facts instanceof PlanGateRepairRecord) {
     if (facts.phase !== "draft" || facts.targetStepId !== "draft-gate-repair") {
       throw new TypeError("draft Gate Repair binding does not target its Step");

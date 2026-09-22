@@ -3,20 +3,20 @@ import {
   DraftGateCarryForwardResult,
   DraftGatePassedResult,
   DraftGateRepairRequiredResult,
-  DraftStepErrorResult,
+  StepErrorResult,
 } from "../../engine/step-result.js";
 import { GateService } from "../../services/review-service.js";
 import { DraftGateProspectiveFacts } from "../../lib/draft-gate-prospective.js";
 
 /** Pure mapping from one validated prospective Gate observation to its semantic Result. */
 export function draftGateResult(facts) {
-  if (facts instanceof Error) return new DraftStepErrorResult("draft-gate", facts);
+  if (facts instanceof Error) return new StepErrorResult("draft-gate", facts);
   if (!(facts instanceof DraftGateProspectiveFacts)) {
     throw new TypeError("Draft Gate Result requires typed prospective facts");
   }
   if (facts.result === "pass") return new DraftGatePassedResult();
   if (facts.failureCategory !== "semantic") {
-    return new DraftStepErrorResult(
+    return new StepErrorResult(
       "draft-gate",
       new Error("Draft Gate observation cannot be settled as a semantic Result"),
     );

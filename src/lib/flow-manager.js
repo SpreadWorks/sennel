@@ -476,6 +476,12 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  settleSpecStepResult(input = {}) {
+    return this._store.settleSpecStepResult({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   checkpointDraftStepExecution(input = {}) {
     return this._store.checkpointDraftStepExecution({
       ...input,
@@ -500,8 +506,8 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
-  findDraftStepSettlementReceipt(input = {}) {
-    return this._store.findDraftStepSettlementReceipt({
+  findStepSettlementReceipt(input = {}) {
+    return this._store.findStepSettlementReceipt({
       ...input,
       specId: input.specId ?? this._boundSpecId,
     });

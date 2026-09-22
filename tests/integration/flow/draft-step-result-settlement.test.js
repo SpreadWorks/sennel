@@ -8,7 +8,7 @@ import {
   DraftQuestionsRepairChangedResult,
   DraftQuestionsRepairUnchangedResult,
   DraftRefineWorkerRequiredResult,
-  DraftStepErrorResult,
+  StepErrorResult,
 } from "../../../src/flow/engine/step-result.js";
 import {
   DraftReviewExecutionClaim,
@@ -151,7 +151,7 @@ describe("Draft Step Result settlement", () => {
     assert.equal(publicationReplay.receipt.id, publication.receipt.id);
     assert.equal(reloaded.activityLedger(specId).length, publicationActivities);
 
-    const error = new DraftStepErrorResult("draft-refine", new Error("worker result is terminally invalid"));
+    const error = new StepErrorResult("draft-refine", new Error("worker result is terminally invalid"));
     const errorLifecycle = {
       outcome: "failed",
       summary: "worker result is terminally invalid",
@@ -300,7 +300,7 @@ describe("Draft Step Result settlement", () => {
       executionBinding: reviewBinding,
     }), /binding does not match its Step Result/);
 
-    const error = new DraftStepErrorResult("draft-refine", new Error("terminal before execution"));
+    const error = new StepErrorResult("draft-refine", new Error("terminal before execution"));
     manager.settleDraftStepResult({
       binding,
       stepResult: error,
@@ -551,7 +551,7 @@ describe("Draft Step Result settlement", () => {
       code: "PROVIDER_UNAVAILABLE",
       data: { retryAfter: 5 },
     });
-    const result = new DraftStepErrorResult("draft-questions-repair", error);
+    const result = new StepErrorResult("draft-questions-repair", error);
     const settlement = settleDraftStepResult(result.stepId, result);
 
     const lifecycleResult = {
@@ -567,7 +567,7 @@ describe("Draft Step Result settlement", () => {
       lifecycleResult,
     });
     const activityCount = manager.activityLedger(specId).length;
-    const identical = new DraftStepErrorResult("draft-questions-repair", error);
+    const identical = new StepErrorResult("draft-questions-repair", error);
     const replay = manager.settleDraftStepResult({
       binding,
       stepResult: identical,
@@ -585,7 +585,7 @@ describe("Draft Step Result settlement", () => {
     }), CurrentFlowStateConflictError);
     assert.equal(manager.activityLedger(specId).length, activityCount);
 
-    const changed = new DraftStepErrorResult(
+    const changed = new StepErrorResult(
       "draft-questions-repair",
       Object.assign(new Error("provider unavailable"), {
         code: "PROVIDER_UNAVAILABLE",

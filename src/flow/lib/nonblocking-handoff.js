@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import {
   buildDeferredFlowFindingPublication,
   DeferredFlowFindingsPublication,
+  FlowFindingSourceIdentity,
   MAX_SOURCE_ARTIFACT_READ_BYTES,
   normalizeSourceArtifactPath,
   readCatalogedSourceArtifact,
@@ -105,10 +106,13 @@ export class NonBlockingAcceptanceHandoffPublication {
       throw new Error("nonblocking acceptance handoff publication is invalid");
     }
     const deferred = findingsPublication.deferred;
-    if (deferred.length !== 1
-      || deferred[0].sourceArtifact !== handoffWrite.artifact.relativePath
-      || deferred[0].sourceFindingId !== finding.findingId
-      || deferred[0].fingerprint !== finding.fingerprint) {
+    const sourceIdentity = new FlowFindingSourceIdentity({
+      sourceArtifact: handoffWrite.artifact.relativePath,
+      sourceStep: finding.sourceStep,
+      sourceFindingId: finding.findingId,
+      fingerprint: finding.fingerprint,
+    });
+    if (deferred.length !== 1 || !deferred[0].sourceIdentity().equals(sourceIdentity)) {
       throw new Error("nonblocking acceptance handoff publication does not bind its deferred finding");
     }
     this.handoffWrite = handoffWrite;

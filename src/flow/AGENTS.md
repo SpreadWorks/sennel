@@ -4,7 +4,7 @@
 
 ## 状態遷移方針の所有者
 
-- **MUST:** definition layer は、永続化された現在状態からFlow全体の実行方針を決める責務を所有する。Draft Stepでは、StepがServiceから受け取ったtyped factsを具体的な`StepResult`へ確定し、Definitionは`stepId + StepResult`だけからSettlementと次の遷移先を選ぶ。DefinitionがDraftのfactsを別途受け取り、StepResultの意味を再判定してはならない。意味のあるfacts、disposition、transition planは専用クラスで表現する。
+- **MUST:** definition layer は、永続化された現在状態からFlow全体の実行方針を決める責務を所有する。StepはServiceから受け取ったtyped factsを具体的な`StepResult`へ確定し、Definitionは`stepId + StepResult`だけからSettlementと次の遷移先を選ぶ。Definitionがfactsを別途受け取り、StepResultの意味を再判定してはならない。意味のあるfacts、disposition、transition planは専用クラスで表現する。
 - **MUST:** retry、retry exhaustion、repair、defer、block、external block、Step status、次の route の選択を、実行コマンド、registry、状態読取り、`get-next-action` に重複実装しない。
 - command の返却値に含まれる `next` や成果物内の `nextAction` は、必要であれば互換用の投影値として保持できるが、遷移判断の権限として使用してはならない。
 
@@ -13,9 +13,9 @@
 - `run-*` コマンドは、選択済み Action の実行、外部出力の境界検証、観測事実の保存を担う。Draftでは、StepのpureなResult factoryだけがtyped factsからsemantic Resultを決める。実行コマンドはsemantic resultからretry回数、上限、repair、次のrouteを独自に決めてはならない。
 - transport、protocol、tooling failure の限定的な再試行は実行責務に含めてよい。ただし semantic retry budget と Flow の遷移方針は definition layer が所有する。
 - registry、hook、永続化層は、definition layer が選んだ transition plan の原子的な適用と監査記録を担う。未選択の fallback route を決めてはならない。
-- Draft Step の境界は `facts -> concrete StepResult`、Definition の境界は `stepId + StepResult -> concrete Settlement` とする。Service は Definition を一度だけ呼び、Store は選択済み Settlement を再解決せずに適用する。
+- Step の境界は `facts -> concrete StepResult`、Definition の境界は `stepId + StepResult -> concrete Settlement` とする。Service は Definition を一度だけ呼び、Store は選択済み Settlement を再解決せずに適用する。
 - Step と Step の間をつなぐ副作用は Definition-owned `StepConnector` として表現し、独立した Flow Step にしない。Draftでは、Definitionが`stepId + StepResult`からSettlementとConnector種別を選択し、Serviceが選択済みSettlementに必要なConnectorをcanonical factsから組み立てる。Storeは選択済みConnectorをsource Attemptの確認・成果物publication・次Stepへのpromotionと同一transactionで適用し、遷移先を再判断しない。
-- Draft の Result、Result 固有の Activity／artifact、Settlement effect、exact binding を含む durable receipt、target activation／Await／Failure は同一 Store transaction で保存する。target connection だけが durable connector receipt を持ち、完全一致 replay 以外は binding、Result kind、Settlement kind、target の差を conflict とする。
+- Result、Result 固有の Activity／artifact、Settlement effect、exact binding を含む durable receipt、target activation／Await／Failure は同一 Store transaction で保存する。target connection だけが durable connector receipt を持ち、完全一致 replay 以外は binding、Result kind、Settlement kind、target、publication の差を conflict とする。
 - 直接 CLI 実行にも admission check を設け、最新の永続状態で definition layer が別の Action を選んでいる場合は worker 起動と状態変更の前に拒否する。
 
 ## 状態と証拠の同一性
@@ -25,6 +25,34 @@
 - 判断に使う成果物は current Attempt の ID と sequence、および catalog publication と一致しなければならない。source artifact、canonical artifact、repair evidence、finding は lineage または fingerprint で同じ revision に結び付ける。
 - Action identity と fingerprint には永続化済みの安定値だけを使う。`now()` のように読取りごとに変わる fallback を含めてはならない。必要な値がない場合は、安定した unavailable 状態として扱うか、安全側で拒否する。
 - transition plan の適用層は、definition layer が選んだ方針だけを適用する。適用時に別の遷移を再判断してはならない。
+- Flow finding の canonical identity は `sourceArtifact + sourceStep + sourceFindingId + fingerprint` の4項目とする。Storeと全consumerはこの完全なidentityで解決し、`sourceFindingId`または`fingerprint`だけで代替検索してはならない。同じsource上で同じ`sourceFindingId`を持ちfingerprintが異なるfindingは別identityとして保持する。
+
+## Spec Step Result 契約
+
+`StepResult` の型は `completed`、`branch-required`、`loop-required`、`user-input-required`、`error` の5種だけとする。表は後続Stepの意味上の分岐と担当境界を示し、初期`spec`の具体kindのみaa84で確定する。後続Stepの具体kind/class、registry entry、effects、direct/dispatch/recovery consumer、readback testは、production callerを移行する所有タスクで確定・追加する。将来のResultを先行登録・空実装してはならない。
+
+| Step | producer / canonical storage | semantic Result contract | Definition Settlement / effect | next・stop・recovery・readback | production owner |
+| --- | --- | --- | --- | --- | --- |
+| `spec` | sealed worker handoff / `spec.record`、Step Result、settlement receipt | `spec-created: completed`、`spec-error: error` | `SpecNextRoute`が`SpecReviewConnector`を選択。publication、source Attempt確認、receipt、`spec-review`へのrouteを単一Store transactionで適用 | 完全一致replayだけ同じreceiptを返す。revision、publication、Result、bindingの差は適用前にconflict。再読込み後もResultから同じSettlementを復元 | aa84 |
+| `spec-review` | canonical review work unit / review artifactとStep Result | 実行要求:`loop-required`、PASS／ADVISORY／REJECTEDの受理済みReview:`completed`、失敗:`error` | 実行継続、受理済みReviewはすべて`spec-triage`へのnext、failureをResultだけから選択 | stale work unitを拒否し、欠損publicationは明示的recoveryだけで整理。retryは同一review identityに拘束 | 9219 |
+| `spec-triage` | sealed triage handoff / triage artifactとStep Result | triage完了:`completed`、失敗:`error` | `spec-repair`へのnextまたはfailure | findingは4項目identityでreadbackし、別revision・別fingerprintへのfallbackを禁止 | e363 |
+| `spec-repair` | sealed repair handoff / repair audit、更新済み`spec.record`、Step Result | 変更あり:`completed`、変更なし:`completed`、失敗:`error` | 変更あり・変更なしとも`spec-gate`へnext、失敗はfailure | optimistic baseline差はpublication前に拒否。replayは同一operationとpublicationに限定 | e363 |
+| `spec-gate`（`task-spec`と共有するGate phase） | canonical gate evaluation / gate result artifactとStep Result | pass:`completed`、carry-forward:`completed`、repair要求:`loop-required`、ユーザー判断待ち:`user-input-required`、失敗:`error` | pass/carry-forward、repair loop、Await、FailureをResultだけから選択 | `spec`と`task-spec`のblocking stop、nonblocking decision、retry exhaustion、gate publication recoveryはDefinition-owned。復旧実行はService／Storeが担い、再開時は保存済みResult・receipt・evidence identityを再読込みしてGateを再判定しない。publication-only reconcileは正規経路としない | b645 |
+
+初期`spec`の候補は、handoffが検証した`spec.json`から既存の`CanonicalWorkerSpecPublication`へ型付けされる。`SpecStep`はその候補を採用して`SpecCreatedResult`を確定するだけでよく、Spec内容の加工やファイル選択は行わない。Serviceは採用候補・Result・bindingを同じAttemptのStore入力へ渡す。StoreのreceiptがResultとpublicationを一体で識別し、正規writerがruntime-owned Tasksの統合とrevision snapshotを保存する。意味上のError Resultと、admission拒否・保存失敗は別経路で扱う。
+
+### Production caller ledger
+
+| migration | production caller | Result / Settlement authority | Store application |
+| --- | --- | --- | --- |
+| aa84 | initial Spec worker handoff | `SpecStep` / `settleSpecStepResult` | initial Spec publicationと`spec-review` routeを原子的にcommit |
+| 9219 | Spec Review executionとpublication | Spec Review専用Step / Definition | review execution、pass、findingのreceiptとrouteをcommit |
+| e363 | Spec Triage / Repair worker handoff | Triage・Repair専用Step / Definition | finding identityに結び付くtriage・repair publicationとrouteをcommit |
+| b645 | Spec Gate evaluation | Spec Gate専用Step / Definition | pass、repair、stop、retryの選択結果をcommit |
+| 5c91 | 残存production caller監査 | 各所有Taskの保存済みResult / Definition readback | 未移行callerや重複判断を検出し、所有Taskへ差し戻す。Gate／recovery／nonblockingの実装を引き取らない |
+| 6065 | end-to-end caller convergence | 全Spec Stepの保存済みResult / Definition readback | 旧caller判断を除去し、全経路の再開・回帰検証を完成 |
+
+各行の移行までは既存production callerを維持するが、別のResult registry、別名のError Result、呼出し側独自のSettlement判断を追加してはならない。移行済みStepは単一の`STEP_RESULT_REGISTRY`、`StepErrorResult`、`StepBinding`、settlement receipt経路を共有し、後続Stepも所有タスクで同じ経路へ登録する。
 
 ### Historical Flow continuation
 

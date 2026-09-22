@@ -44,7 +44,10 @@ import {
 import { DraftTransitionFacts } from "./draft-transition-facts.js";
 import { STEP_RESULT_TYPE, StepResult } from "../engine/step-result.js";
 import { DraftWorkerExecutionStepBinding } from "../engine/connectors/draft/draft-step-binding.js";
-import { DraftStepPersistenceFailure } from "./definition-lifecycle-failure.js";
+import { StepPersistenceFailure } from "./definition-lifecycle-failure.js";
+import {
+  SpecWorkerCompletionFacts,
+} from "./spec-step-connection.js";
 import { CanonicalFlowFindingsStore } from "./flow-findings.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { findStepById } from "./step-tree.js";
@@ -2153,12 +2156,7 @@ class SpecDeferredFindingsDocument {
     this.entries = Object.freeze(artifact.entries
       .filter((entry) => entry.sourceStep === "draft-gate" && entry.finalDisposition === "still_open")
       .map((entry) => {
-        const source = store.sourceArtifact(entry.sourceArtifact);
-        const sourceObservation = source?.findFinding(
-          entry.sourceStep,
-          entry.sourceFindingId,
-          entry.fingerprint,
-        ) ?? null;
+        const sourceObservation = store.resolveFinding(entry.sourceIdentity());
         if (sourceObservation === null) {
           throw new WorkerArtifactHandoffError(
             "invalid",
@@ -6942,6 +6940,65 @@ class DraftWorkerPreparation {
   }
 }
 
+/** Private in-memory boundary between initial Spec validation and settlement. */
+class SpecWorkerPreparation {
+  constructor({ request, state, submission, publications, facts } = {}) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || request.stepId !== "spec"
+      || !(facts instanceof SpecWorkerCompletionFacts)) {
+      throw new TypeError("Spec worker preparation requires typed initial Spec facts");
+    }
+    this.request = request;
+    this.state = state;
+    this.submission = submission;
+    this.publications = publications;
+    this.facts = facts;
+    Object.freeze(this);
+  }
+
+  settlementPublication(now) {
+    return {
+      lifecycleResult: canonicalHandoffResult(this.request, this.submission, now),
+      references: {
+        evaluations: [], findings: [], repairs: [],
+        artifacts: [{ id: this.submission.handoffDigest, label: this.request.stepId }],
+      },
+      artifactWrites: this.publications.artifactWrites,
+      artifactRemovals: this.publications.artifactRemovals,
+      artifactBaselines: this.publications.artifactBaselines,
+    };
+  }
+}
+
+function prepareSpecWorkerCanonical({ request, state, submission }) {
+  const quarantine = readHandoffQuarantine(request, submission);
+  if (quarantine !== null) {
+    throw new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_ARTIFACT_HANDOFF_QUARANTINED",
+      `sealed worker artifact handoff is quarantined after ${quarantine.code}: ${quarantine.message}`,
+      { retryable: false, recoveryPossible: false, data: { stepId: request.stepId, handoffDirectory: request.directory } },
+    );
+  }
+  let publications;
+  try {
+    publications = canonicalHandoffPublications(request, submission);
+  } catch (cause) {
+    throw cause instanceof WorkerArtifactHandoffError
+      ? cause
+      : new WorkerArtifactHandoffError(
+          "invalid",
+          "FLOW_ARTIFACT_HANDOFF_INVALID",
+          `canonical Spec publication cannot be resolved: ${cause.message}`,
+          { cause, retryable: false },
+        );
+  }
+  const baseline = publications.artifactBaselines.find((entry) => (
+    entry.artifact.logicalKey === "spec.record"
+  )) ?? null;
+  const facts = new SpecWorkerCompletionFacts({ publication: publications.specRecord, baseline });
+  return new SpecWorkerPreparation({ request, state, submission, publications, facts });
+}
+
 function prepareDraftWorkerCanonical({ request, state, submission }) {
   const quarantine = readHandoffQuarantine(request, submission);
   if (quarantine !== null) {
@@ -6990,7 +7047,7 @@ function prepareDraftWorkerCanonical({ request, state, submission }) {
   });
 }
 
-function replayedDraftStepResult({ ctx, request }) {
+function replayedStepResult({ ctx, request }) {
   const state = ctx.flowManager.canonicalState(request.specId);
   const terminal = state?.findNode(request.stepId)?.result?.stepResult ?? null;
   if (terminal !== null) return terminal;
@@ -7007,7 +7064,7 @@ function replayedDraftStepResult({ ctx, request }) {
     : StepResult.fromStored(request.stepId, stored);
 }
 
-function replayedDraftStepSettlementReceipt({ ctx, request }) {
+function replayedStepSettlementReceipt({ ctx, request }) {
   const state = ctx.flowManager.canonicalState(request.specId);
   const terminal = state?.findNode(request.stepId)?.result?.draftSettlementReceipt ?? null;
   if (terminal !== null) return terminal;
@@ -7049,11 +7106,11 @@ function assertReplayedDraftStepResult({ ctx, request, stepResult }) {
   );
 }
 
-function hasCommittedDraftStepResult({ ctx, request, stepResult, requireReceipt = false }) {
+function hasCommittedStepResult({ ctx, request, stepResult, requireReceipt = false }) {
   if (!(stepResult instanceof StepResult)) return false;
   const state = ctx.flowManager.canonicalState(request.specId);
   const node = state?.findNode(request.stepId) ?? null;
-  const persisted = replayedDraftStepResult({ ctx, request });
+  const persisted = replayedStepResult({ ctx, request });
   if (persisted === null) return false;
   const expectedAttempt = request.state?.attempt ?? state?.attempt ?? null;
   const expectedSequence = expectedAttempt?.sequence ?? node?.attemptSequence ?? null;
@@ -9176,10 +9233,78 @@ export class WorkerArtifactHandoffCoordinator {
       : null;
   }
 
+  /** Validate one sealed initial Spec result without publishing it. */
+  prepareSpecWorker({ ctx, request }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || request.stepId !== "spec") {
+      throw new TypeError("Spec worker preparation requires the initial Spec handoff request");
+    }
+    let state = ctx.flowManager.load(request.specId);
+    const committed = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
+    if (committed !== null && !fs.existsSync(request.directory)) {
+      const stepResult = replayedStepResult({ ctx, request });
+      const receipt = replayedStepSettlementReceipt({ ctx, request });
+      if (!(stepResult instanceof StepResult) || receipt === null) {
+        throw new WorkerArtifactHandoffError(
+          "recovery-required",
+          "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
+          "initial Spec handoff receipt has no persisted Step Result",
+          { retryable: false, data: { stepId: request.stepId } },
+        );
+      }
+      return {
+        completed: true,
+        replayed: true,
+        stepId: request.stepId,
+        handoffDigest: committed.id,
+        payloadDigest: null,
+        stepResult,
+        settlementReceipt: receipt,
+        receipt,
+      };
+    }
+    let submission;
+    try {
+      submission = readSubmission(request);
+      validateSubmission(request, submission);
+      request.assertCurrent(state);
+      validatePayload(request, submission, state);
+      state = ctx.flowManager.load(request.specId);
+      request.assertCurrent(state);
+      return prepareSpecWorkerCanonical({ request, state, submission });
+    } catch (cause) {
+      if (cause instanceof WorkerArtifactHandoffError) throw cause;
+      throw new WorkerArtifactHandoffError(
+        "invalid",
+        "FLOW_ARTIFACT_HANDOFF_INVALID",
+        `canonical Spec handoff preparation failed: ${cause.message}`,
+        { cause, retryable: false },
+      );
+    }
+  }
+
+  completeSpecWorkerHandoff({ request, preparation, stepResult, receipt, replayed = false }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || request.stepId !== "spec"
+      || !(preparation instanceof SpecWorkerPreparation) || preparation.request !== request
+      || !(stepResult instanceof StepResult) || receipt?.id === undefined) {
+      throw new TypeError("Spec handoff completion requires its prepared publication and durable receipt");
+    }
+    const handoffReceipt = canonicalHandoffReceipt(request, preparation.submission, this.now);
+    cleanupCompletedHandoff(request.handoffRoot, handoffReceipt, this.faultInjector);
+    return {
+      completed: true,
+      replayed,
+      stepId: request.stepId,
+      handoffDigest: handoffReceipt.handoffDigest,
+      payloadDigest: handoffReceipt.payloadDigest,
+      stepResult,
+      settlementReceipt: receipt,
+      receipt,
+    };
+  }
+
   /**
    * Validate one sealed Draft worker result and expose only the facts its
-   * Step needs to choose a result.  Publication is deliberately deferred
-   * until commitDraftWorker receives that choice.
+   * Step needs to choose a result. Publication is deferred until commit.
    */
   prepareDraftWorker({ ctx, request, publicationRecovery = false }) {
     if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)) {
@@ -9219,7 +9344,7 @@ export class WorkerArtifactHandoffCoordinator {
           payloadDigest: null,
           facts: null,
           stepResult: assertReplayedDraftStepResult({
-            ctx, request, stepResult: replayedDraftStepResult({ ctx, request, state }),
+            ctx, request, stepResult: replayedStepResult({ ctx, request, state }),
           }),
         };
       }
@@ -9289,10 +9414,10 @@ export class WorkerArtifactHandoffCoordinator {
     if (!(preparation instanceof DraftWorkerPreparation) || preparation.request !== request) {
       throw new TypeError("Draft worker commit requires its prepared handoff");
     }
-    if (hasCommittedDraftStepResult({ ctx, request, stepResult, requireReceipt: true })) {
+    if (hasCommittedStepResult({ ctx, request, stepResult, requireReceipt: true })) {
       const state = ctx.flowManager.canonicalState(request.specId);
       const handoffReceipt = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
-      const settlementReceipt = replayedDraftStepSettlementReceipt({ ctx, request });
+      const settlementReceipt = replayedStepSettlementReceipt({ ctx, request });
       cleanupCompletedHandoff(
         request.handoffRoot,
         canonicalHandoffReceipt(request, preparation.submission, this.now),
@@ -9352,10 +9477,10 @@ export class WorkerArtifactHandoffCoordinator {
     } catch (cause) {
       if (cause instanceof WorkerArtifactHandoffError
         && ["invalid", "stale", "conflict"].includes(cause.classification)) throw cause;
-      if (!hasCommittedDraftStepResult({ ctx, request, stepResult, requireReceipt: true })) throw cause;
+      if (!hasCommittedStepResult({ ctx, request, stepResult, requireReceipt: true })) throw cause;
       const state = ctx.flowManager.canonicalState(request.specId);
       const handoffReceipt = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
-      const settlementReceipt = replayedDraftStepSettlementReceipt({ ctx, request });
+      const settlementReceipt = replayedStepSettlementReceipt({ ctx, request });
       return {
         completed: true,
         replayed: false,
@@ -9529,10 +9654,10 @@ export class WorkerArtifactHandoffCoordinator {
       const committed = ctx.flowManager.settleDraftStepResult({ binding, stepResult, settlement });
       return { error: null, stepResult, receipt: committed.receipt };
     } catch (cause) {
-      if (hasCommittedDraftStepResult({ ctx, request, stepResult })) {
-        return { error: null, stepResult, receipt: replayedDraftStepSettlementReceipt({ ctx, request }) };
+      if (hasCommittedStepResult({ ctx, request, stepResult })) {
+        return { error: null, stepResult, receipt: replayedStepSettlementReceipt({ ctx, request }) };
       }
-      throw new DraftStepPersistenceFailure(cause);
+      throw new StepPersistenceFailure(cause);
     }
   }
 
@@ -9586,7 +9711,7 @@ export class WorkerArtifactHandoffCoordinator {
       ? null : canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
     if (committed !== null && !fs.existsSync(request.directory)) {
       const settlementReceipt = isDraftWorkerStep(request.stepId)
-        ? replayedDraftStepSettlementReceipt({ ctx, request })
+        ? replayedStepSettlementReceipt({ ctx, request })
         : null;
       return {
         completed: true,
@@ -9596,7 +9721,7 @@ export class WorkerArtifactHandoffCoordinator {
         payloadDigest: null,
         ...(isDraftWorkerStep(request.stepId) ? {
           stepResult: assertReplayedDraftStepResult({
-            ctx, request, stepResult: replayedDraftStepResult({ ctx, request, state }),
+            ctx, request, stepResult: replayedStepResult({ ctx, request, state }),
           }),
           settlementReceipt,
           receipt: settlementReceipt,
@@ -9693,7 +9818,7 @@ export class WorkerArtifactHandoffCoordinator {
     if (canonicalHandoffIsCommitted(state, request, submission, ctx.flowManager)) {
       const committed = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
       const settlementReceipt = isDraftWorkerStep(request.stepId)
-        ? replayedDraftStepSettlementReceipt({ ctx, request })
+        ? replayedStepSettlementReceipt({ ctx, request })
         : null;
       cleanupCompletedHandoff(
         request.handoffRoot,
@@ -9708,7 +9833,7 @@ export class WorkerArtifactHandoffCoordinator {
         payloadDigest: manifestDigest(submission.payloadManifest),
         ...(isDraftWorkerStep(request.stepId) ? {
           stepResult: assertReplayedDraftStepResult({
-            ctx, request, stepResult: replayedDraftStepResult({ ctx, request, state }),
+            ctx, request, stepResult: replayedStepResult({ ctx, request, state }),
           }),
           settlementReceipt,
           receipt: settlementReceipt,

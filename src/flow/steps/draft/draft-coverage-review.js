@@ -3,15 +3,15 @@ import {
   DraftCoverageReviewFindingsResult,
   DraftCoverageReviewPassedResult,
   DraftCoverageReviewExecutionRequiredResult,
-  DraftStepErrorResult,
+  StepErrorResult,
 } from "../../engine/step-result.js";
 import { ReviewService } from "../../services/review-service.js";
 import { DraftReviewArtifactDocument } from "../../lib/draft-review-artifacts.js";
-import { isDraftStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
+import { isStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
 
 /** Pure mapping from typed terminal Review facts to this Step's Result. */
 export function draftCoverageReviewResult(facts) {
-  if (facts instanceof Error) return new DraftStepErrorResult("draft-coverage-review", facts);
+  if (facts instanceof Error) return new StepErrorResult("draft-coverage-review", facts);
   if (!(facts instanceof DraftReviewArtifactDocument) || facts.phase !== "draft-coverage") {
     throw new TypeError("draft coverage Review Result requires typed Review facts");
   }
@@ -45,7 +45,7 @@ export class DraftCoverageReviewStep extends Step {
     try {
       result = draftCoverageReviewResult(this.#reviewService.inspectReviewResult());
     } catch (error) {
-      if (isDraftStepPersistenceFailure(error)) throw error;
+      if (isStepPersistenceFailure(error)) throw error;
       result = draftCoverageReviewResult(error);
     }
     await result.persist(this.#reviewService);

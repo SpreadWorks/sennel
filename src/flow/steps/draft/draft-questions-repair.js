@@ -3,14 +3,14 @@ import { DraftService } from "../../services/draft-service.js";
 import {
   DraftQuestionsRepairChangedResult,
   DraftQuestionsRepairUnchangedResult,
-  DraftStepErrorResult,
+  StepErrorResult,
 } from "../../engine/step-result.js";
 import { DraftRepairResultFacts } from "../../lib/worker-artifact-handoff.js";
-import { isDraftStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
+import { isStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
 
 /** Pure mapping from typed Repair facts to this Step's terminal Result. */
 export function draftQuestionsRepairResult(facts) {
-  if (facts instanceof Error) return new DraftStepErrorResult("draft-questions-repair", facts);
+  if (facts instanceof Error) return new StepErrorResult("draft-questions-repair", facts);
   if (!(facts instanceof DraftRepairResultFacts) || facts.stepId !== "draft-questions-repair") {
     throw new TypeError("draft questions Repair Result requires its typed worker facts");
   }
@@ -39,7 +39,7 @@ export class DraftQuestionsRepairStep extends Step {
     try {
       result = draftQuestionsRepairResult(this.#draftService.inspectWorkerFacts().repairResult);
     } catch (error) {
-      if (isDraftStepPersistenceFailure(error)) throw error;
+      if (isStepPersistenceFailure(error)) throw error;
       result = draftQuestionsRepairResult(error);
     }
     await result.persist(this.#draftService);

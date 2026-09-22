@@ -423,7 +423,7 @@ describe("dedicated draft Gate repair handoff", () => {
       assert.equal(result.error.code, "DRAFT_GATE_REPAIR_INTEGRITY");
       const state = value.flowManager.canonicalState(value.scenario.specId);
       assert.equal(state.current.at(-1), "draft-gate-repair");
-      assert.equal(state.attempt.failure.category, "draft-result-error");
+      assert.equal(state.attempt.failure.category, "step-result-error");
       assert.equal(state.attempt.failure.code, "DRAFT_GATE_REPAIR_INTEGRITY");
       const failure = value.flowManager.activityLedger(value.scenario.specId).at(-1);
       assert.equal(failure.transition.operation, "fail_attempt");

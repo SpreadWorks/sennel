@@ -77,12 +77,12 @@ import {
   STEP_RESULT_TYPE,
 } from "./engine/step-result.js";
 import { StepFactory } from "./engine/step-factory.js";
-import { isDraftStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
+import { isStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
 
 function fatalDraftPersistenceFailure(error, fallbackCode) {
   const failure = new FatalPostHookError(fallbackCode, error?.message || String(error), {
     cause: error instanceof Error ? error : null,
-    data: { failureKind: "draft-step-persistence" },
+    data: { failureKind: "step-persistence" },
   });
   return failure;
 }
@@ -139,7 +139,7 @@ async function executePublishedDraftReviewStep(ctx, result) {
   try {
     published = await publicationStep.execute();
   } catch (error) {
-    if (isDraftStepPersistenceFailure(error)) {
+    if (isStepPersistenceFailure(error)) {
       throw fatalDraftPersistenceFailure(error, "DRAFT_REVIEW_STEP_RESULT_PERSISTENCE_FAILED");
     }
     throw error;
@@ -158,7 +158,7 @@ async function executePublishedDraftReviewStep(ctx, result) {
   try {
     output = await step.execute();
   } catch (error) {
-    if (isDraftStepPersistenceFailure(error)) {
+    if (isStepPersistenceFailure(error)) {
       throw fatalDraftPersistenceFailure(error, "DRAFT_REVIEW_STEP_RESULT_PERSISTENCE_FAILED");
     }
     throw error;
@@ -213,7 +213,7 @@ async function executePublishedDraftGateStep(ctx, result) {
   try {
     output = await step.execute();
   } catch (error) {
-    if (isDraftStepPersistenceFailure(error)) {
+    if (isStepPersistenceFailure(error)) {
       throw fatalDraftPersistenceFailure(error, "DRAFT_GATE_STEP_RESULT_PERSISTENCE_FAILED");
     }
     throw error;
@@ -1810,7 +1810,7 @@ export const FLOW_COMMANDS = {
         const errorCtx = { ...ctx, phase };
         if (ctx.terminalGateRevalidation === true) return;
         if (phase === "draft") {
-          if (isDraftStepPersistenceFailure(err)) return;
+          if (isStepPersistenceFailure(err)) return;
           tryAppendIssueLog(() => appendIssueLogFromGateError(errorCtx, err));
           return;
         }

@@ -2850,7 +2850,7 @@ export class DefinitionFailurePolicy {
     // failure record retains the exact Attempt and Error;
     // retrying or selecting a successor would discard that explicit Step
     // decision in favor of a generic command failure policy.
-    if (failure.category === "draft-result-error") {
+    if (failure.category === "step-result-error") {
       return new DefinitionFailureDecision({
         policy: this, operation: "blocked", retryKind: null, remaining: 0, targetNodeId: null,
         reason: "the Draft Step returned an Error and requires explicit recovery before execution can continue",

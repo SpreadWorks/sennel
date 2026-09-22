@@ -19,7 +19,7 @@ import {
   DraftQuestionsRepairChangedResult,
   DraftQuestionsReviewFindingsResult,
   DraftQuestionsReviewPassedResult,
-  DraftStepErrorResult,
+  StepErrorResult,
   STEP_RESULT_TYPE,
 } from "../../../src/flow/engine/step-result.js";
 import {
@@ -81,7 +81,7 @@ import {
   DraftGatePublicationIntent,
 } from "../../../src/flow/lib/draft-gate-prospective.js";
 import {
-  DRAFT_RESULT_ERROR_CATEGORY,
+  STEP_RESULT_ERROR_CATEGORY,
   resolveGateTransition,
   resolveNonGateTransition,
   settleDraftStepResult,
@@ -873,7 +873,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     };
     const error = new Error("Draft Gate failed.");
     error.code = "DRAFT_GATE_ERROR";
-    const result = new DraftStepErrorResult("draft-gate", error);
+    const result = new StepErrorResult("draft-gate", error);
     manager.settleDraftStepResult({
       binding,
       stepResult: result,
@@ -884,7 +884,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(state.current.at(-1), "draft-gate");
     assert.equal(state.attempt.id, attemptId);
     assert.equal(state.attempt.failure.code, "DRAFT_GATE_ERROR");
-    assert.equal(state.attempt.failure.category, DRAFT_RESULT_ERROR_CATEGORY);
+    assert.equal(state.attempt.failure.category, STEP_RESULT_ERROR_CATEGORY);
     assert.equal(state.nextAction().operation, "blocked");
     assert.equal(state.retryEligibility().tooling, false);
     assert.equal(state.retryEligibility().semantic, false);

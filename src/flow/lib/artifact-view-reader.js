@@ -22,7 +22,8 @@ import { validateSchema } from "../../lib/schema-validate.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { validateAcceptanceReviewArtifact } from "./acceptance-review-artifacts.js";
 import {
-  findSourceFinding,
+  CanonicalFlowFindingSourceArtifact,
+  FlowFindingSourceIdentity,
   FlowFindingsArtifact,
   normalizeSourceArtifactPath,
 } from "./flow-findings.js";
@@ -77,17 +78,6 @@ function immutableJson(value, field) {
 
 function readSpecSchema() {
   return JSON.parse(fs.readFileSync(SPEC_SCHEMA_PATH, "utf8"));
-}
-
-function sourcePayload(source) {
-  try {
-    return CanonicalCommandAttemptArtifactHistory.fromBytes({
-      logicalKey: source.logicalKey,
-      bytes: source.bytes(),
-    }).current.payload;
-  } catch {
-    return parsedJson(source.bytes(), `canonical ${source.logicalKey}`);
-  }
 }
 
 function deferredProjection(value, field) {
@@ -242,11 +232,13 @@ export class ArtifactViewSource {
  * deferral and the final decision-relevant disposition.
  */
 export class ArtifactViewFlowFindingProjection {
-  constructor({ findingId, sourceStep, sourceArtifact, sourceFindingId, rationale, disposition, finalDisposition = null } = {}) {
+  constructor({ findingId, sourceStep, sourceArtifact, sourceFindingId, fingerprint, rationale, disposition, finalDisposition = null } = {}) {
     this.findingId = text(findingId, "artifact view flow findingId");
-    this.sourceStep = text(sourceStep, "artifact view flow finding sourceStep");
-    this.sourceArtifact = normalizeSourceArtifactPath(sourceArtifact, "artifact view flow finding sourceArtifact");
-    this.sourceFindingId = text(sourceFindingId, "artifact view flow finding sourceFindingId");
+    const identity = new FlowFindingSourceIdentity({ sourceStep, sourceArtifact, sourceFindingId, fingerprint });
+    this.sourceStep = identity.sourceStep;
+    this.sourceArtifact = identity.sourceArtifact;
+    this.sourceFindingId = identity.sourceFindingId;
+    this.fingerprint = identity.fingerprint;
     this.rationale = text(rationale, "artifact view flow finding rationale");
     this.disposition = text(disposition, "artifact view flow finding disposition");
     if (this.disposition !== "deferred") throw new Error("artifact view flow finding disposition must be deferred");
@@ -263,6 +255,7 @@ export class ArtifactViewFlowFindingProjection {
       sourceStep: this.sourceStep,
       sourceArtifact: this.sourceArtifact,
       sourceFindingId: this.sourceFindingId,
+      fingerprint: this.fingerprint,
       rationale: this.rationale,
       disposition: this.disposition,
       finalDisposition: this.finalDisposition,
@@ -272,11 +265,13 @@ export class ArtifactViewFlowFindingProjection {
 
 /** One catalog-verified deferred-finding source expansion. */
 export class ArtifactViewResolvedReference {
-  constructor({ findingId, sourceStep, sourceArtifact, sourceFindingId, source, finding, flowFinding } = {}) {
+  constructor({ findingId, sourceStep, sourceArtifact, sourceFindingId, fingerprint, source, finding, flowFinding } = {}) {
     this.findingId = text(findingId, "artifact view findingId");
-    this.sourceStep = text(sourceStep, "artifact view sourceStep");
-    this.sourceArtifact = normalizeSourceArtifactPath(sourceArtifact, "artifact view sourceArtifact");
-    this.sourceFindingId = text(sourceFindingId, "artifact view sourceFindingId");
+    const identity = new FlowFindingSourceIdentity({ sourceStep, sourceArtifact, sourceFindingId, fingerprint });
+    this.sourceStep = identity.sourceStep;
+    this.sourceArtifact = identity.sourceArtifact;
+    this.sourceFindingId = identity.sourceFindingId;
+    this.fingerprint = identity.fingerprint;
     if (!(source instanceof ArtifactViewSource)) throw new Error("artifact view resolved reference requires an ArtifactViewSource");
     if (finding === null || typeof finding !== "object" || Array.isArray(finding)) {
       throw new Error("artifact view resolved reference finding must be an object");
@@ -289,6 +284,7 @@ export class ArtifactViewResolvedReference {
       || flowFinding.sourceStep !== this.sourceStep
       || flowFinding.sourceArtifact !== this.sourceArtifact
       || flowFinding.sourceFindingId !== this.sourceFindingId
+      || flowFinding.fingerprint !== this.fingerprint
     ) {
       throw new Error(`artifact view authoritative flow finding is not linked: ${this.findingId}`);
     }
@@ -304,6 +300,7 @@ export class ArtifactViewResolvedReference {
       sourceStep: this.sourceStep,
       sourceArtifact: this.sourceArtifact,
       sourceFindingId: this.sourceFindingId,
+      fingerprint: this.fingerprint,
       source: this.source.toJSON(),
       finding: this.finding,
       flowFinding: this.flowFinding.toJSON(),
@@ -580,7 +577,7 @@ export class ArtifactViewReader {
       ) {
         throw new Error(`acceptance.review deferred finding conflicts with canonical flow.findings: ${deferred.findingId}`);
       }
-      const reference = referenceRule.assertReference(deferred);
+      const reference = referenceRule.assertReference(authoritativeFinding);
       const expectedEvidenceRef = `${reference.sourceArtifact}#${reference.sourceFindingId}`;
       if (!deferred.evidenceRefs.includes(expectedEvidenceRef)) {
         throw new Error(`acceptance.review deferred finding lacks its canonical evidence reference: ${deferred.findingId}`);
@@ -591,12 +588,16 @@ export class ArtifactViewReader {
         logicalKey: sourceLogicalKey,
         relativePath: reference.sourceArtifact,
       });
-      const sourceIdentity = `${source.relativePath}#${reference.sourceFindingId}`;
+      const sourceIdentity = reference.toString();
       if (sourceIdentities.has(sourceIdentity)) {
         throw new Error(`acceptance.review has duplicate deferred finding source reference: ${sourceIdentity}`);
       }
       sourceIdentities.add(sourceIdentity);
-      const finding = findSourceFinding(sourcePayload(source), deferred.sourceStep, reference.sourceFindingId);
+      const finding = CanonicalFlowFindingSourceArtifact.fromBytes({
+        logicalKey: source.logicalKey,
+        relativePath: source.relativePath,
+        bytes: source.bytes(),
+      }).resolveFinding(reference);
       if (finding === null) {
         throw new Error(`acceptance.review deferred finding source cannot be resolved: ${sourceIdentity}`);
       }
@@ -605,6 +606,7 @@ export class ArtifactViewReader {
         sourceStep: deferred.sourceStep,
         sourceArtifact: reference.sourceArtifact,
         sourceFindingId: reference.sourceFindingId,
+        fingerprint: reference.fingerprint,
         source,
         finding,
         flowFinding: new ArtifactViewFlowFindingProjection({
@@ -612,6 +614,7 @@ export class ArtifactViewReader {
           sourceStep: authoritativeFinding.sourceStep,
           sourceArtifact: authoritativeFinding.sourceArtifact,
           sourceFindingId: authoritativeFinding.sourceFindingId,
+          fingerprint: authoritativeFinding.fingerprint,
           rationale: authoritativeFinding.rationale,
           disposition: authoritativeFinding.disposition,
           finalDisposition: authoritativeFinding.finalDisposition,

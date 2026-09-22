@@ -137,6 +137,47 @@ export class FlowFinding {
       ...(this.planRewindAt && { planRewindAt: this.planRewindAt }),
     };
   }
+
+  sourceIdentity() {
+    return new FlowFindingSourceIdentity(this);
+  }
+}
+
+/** Exact identity of one finding within one canonical source artifact. */
+export class FlowFindingSourceIdentity {
+  constructor({ sourceArtifact, sourceStep, sourceFindingId, fingerprint } = {}) {
+    this.sourceArtifact = normalizeSourceArtifactPath(sourceArtifact, "finding source identity sourceArtifact");
+    this.sourceStep = requireString(sourceStep, "finding source identity sourceStep");
+    this.sourceFindingId = requireString(sourceFindingId, "finding source identity sourceFindingId");
+    this.fingerprint = requireFindingFingerprint(fingerprint, "finding source identity fingerprint");
+    Object.freeze(this);
+  }
+
+  equals(other) {
+    return other instanceof FlowFindingSourceIdentity
+      && other.sourceArtifact === this.sourceArtifact
+      && other.sourceStep === this.sourceStep
+      && other.sourceFindingId === this.sourceFindingId
+      && other.fingerprint === this.fingerprint;
+  }
+
+  toString() {
+    return JSON.stringify([
+      this.sourceArtifact,
+      this.sourceStep,
+      this.sourceFindingId,
+      this.fingerprint,
+    ]);
+  }
+
+  toJSON() {
+    return {
+      sourceArtifact: this.sourceArtifact,
+      sourceStep: this.sourceStep,
+      sourceFindingId: this.sourceFindingId,
+      fingerprint: this.fingerprint,
+    };
+  }
 }
 
 export class FlowFindingsArtifact {
@@ -283,7 +324,7 @@ function sourcePayloads({ logicalKey, bytes }) {
 export class CanonicalFlowFindingSourceArtifact {
   constructor({ logicalKey, relativePath, descriptor, bytes, payloads } = {}) {
     this.logicalKey = requireString(logicalKey, "finding source logicalKey");
-    this.relativePath = requireString(relativePath, "finding source relativePath");
+    this.relativePath = normalizeSourceArtifactPath(relativePath, "finding source relativePath");
     if (!Buffer.isBuffer(bytes)) throw new Error("finding source bytes must be a Buffer");
     if (!Array.isArray(payloads) || payloads.length === 0) {
       throw new Error("finding source must retain at least one producer payload");
@@ -295,14 +336,24 @@ export class CanonicalFlowFindingSourceArtifact {
     Object.freeze(this);
   }
 
-  findFinding(sourceStep, sourceFindingId, fingerprint = null) {
-    const expectedFingerprint = fingerprint === null
-      ? null
-      : requireFindingFingerprint(fingerprint, "source finding fingerprint");
+  static fromBytes({ logicalKey, relativePath, descriptor, bytes } = {}) {
+    return new CanonicalFlowFindingSourceArtifact({
+      logicalKey,
+      relativePath,
+      descriptor,
+      bytes,
+      payloads: sourcePayloads({ logicalKey, bytes }),
+    });
+  }
+
+  resolveFinding(identity) {
+    if (!(identity instanceof FlowFindingSourceIdentity)
+      || identity.sourceArtifact !== this.relativePath) {
+      throw new Error("finding source resolution requires its exact source artifact identity");
+    }
     for (const payload of this.payloads.toReversed()) {
-      const finding = findSourceFinding(payload, sourceStep, sourceFindingId);
-      if (finding !== null && (expectedFingerprint === null
-        || sourceFindingFingerprint(sourceStep, finding) === expectedFingerprint)) return finding;
+      const finding = findSourceFinding(payload, identity);
+      if (finding !== null) return finding;
     }
     return null;
   }
@@ -382,13 +433,11 @@ export class CanonicalFlowFindingsStore {
         consumerNodeId: this.nodeId,
       });
       const bytes = Buffer.from(current.bytes);
-      const payloads = sourcePayloads({ logicalKey, bytes });
-      return new CanonicalFlowFindingSourceArtifact({
+      return CanonicalFlowFindingSourceArtifact.fromBytes({
         logicalKey,
         relativePath: current.descriptor.relativePath,
         descriptor: current.descriptor,
         bytes,
-        payloads,
       });
     }
     const contract = FLOW_ARTIFACT_CONTRACTS.require(logicalKey);
@@ -422,13 +471,19 @@ export class CanonicalFlowFindingsStore {
       });
     if (resolved === null) return null;
     const bytes = Buffer.from(resolved.bytes);
-    return new CanonicalFlowFindingSourceArtifact({
+    return CanonicalFlowFindingSourceArtifact.fromBytes({
       logicalKey,
       relativePath: resolved.relativePath,
       descriptor: resolved.descriptor,
       bytes,
-      payloads: sourcePayloads({ logicalKey, bytes }),
     });
+  }
+
+  resolveFinding(identity) {
+    if (!(identity instanceof FlowFindingSourceIdentity)) {
+      throw new Error("canonical finding resolution requires a FlowFindingSourceIdentity");
+    }
+    return this.sourceArtifact(identity.sourceArtifact)?.resolveFinding(identity) ?? null;
   }
 }
 
@@ -471,10 +526,15 @@ function appendDeferredFindingToArtifact({
 }) {
   const existing = artifact instanceof FlowFindingsArtifact ? artifact : new FlowFindingsArtifact(artifact);
   const planRewindAt = cycle.planRewindAt;
-  const normalizedFingerprint = requireFindingFingerprint(fingerprint);
+  const sourceIdentity = new FlowFindingSourceIdentity({
+    sourceArtifact,
+    sourceStep,
+    sourceFindingId,
+    fingerprint,
+  });
   const runId = flowState?.runId == null ? null : requireString(flowState.runId, "flowState.runId");
   const existingIndex = existing.entries.findIndex((entry) => (
-    entry.fingerprint === normalizedFingerprint
+    entry.sourceIdentity().equals(sourceIdentity)
       && entry.runId === runId
       && entry.planRewindAt === planRewindAt
   ));
@@ -508,7 +568,7 @@ function appendDeferredFindingToArtifact({
     sourceStep,
     sourceArtifact,
     sourceFindingId,
-    fingerprint: normalizedFingerprint,
+    fingerprint: sourceIdentity.fingerprint,
     disposition: "deferred",
     rationale: requireMirrorString(rationale, "rationale"),
     runId,
@@ -621,9 +681,13 @@ function sourceFindingsForArtifact(artifact, sourceStep) {
   return blockingObservations(source);
 }
 
-export function findSourceFinding(artifact, sourceStep, sourceFindingId) {
-  return sourceFindingsForArtifact(artifact, sourceStep).find((finding, index) => (
-    stableSourceFindingId(sourceStep, finding, index) === sourceFindingId
+function findSourceFinding(artifact, identity) {
+  if (!(identity instanceof FlowFindingSourceIdentity)) {
+    throw new Error("source finding resolution requires a FlowFindingSourceIdentity");
+  }
+  return sourceFindingsForArtifact(artifact, identity.sourceStep).find((finding, index) => (
+    stableSourceFindingId(identity.sourceStep, finding, index) === identity.sourceFindingId
+      && sourceFindingFingerprint(identity.sourceStep, finding) === identity.fingerprint
   )) || null;
 }
 
@@ -688,24 +752,27 @@ export function buildDeferredSemanticFindingsPublication({
   const sourceFindings = sourceFindingsForArtifact(artifact, sourceStep).filter((finding) => (
     selectedFingerprints === null || selectedFingerprints.has(sourceFindingFingerprint(sourceStep, finding))
   ));
-  const byFingerprint = new Map();
+  const byIdentity = new Map();
   sourceFindings.forEach((finding, index) => {
     const fingerprint = sourceFindingFingerprint(sourceStep, finding);
-    if (!byFingerprint.has(fingerprint)) byFingerprint.set(fingerprint, { finding, index });
+    const identity = new FlowFindingSourceIdentity({
+      sourceArtifact: source.relativePath,
+      sourceStep,
+      sourceFindingId: stableSourceFindingId(sourceStep, finding, index),
+      fingerprint,
+    });
+    if (!byIdentity.has(identity.toString())) byIdentity.set(identity.toString(), { identity, finding });
   });
   const snapshot = store.readSnapshot();
   const existing = snapshot.artifact;
   let nextArtifact = existing;
   const deferred = [];
-  for (const [fingerprint, { finding, index }] of byFingerprint) {
+  for (const { identity, finding } of byIdentity.values()) {
     const update = appendDeferredFindingToArtifact({
       artifact: nextArtifact,
       cycle: store.cycle,
       flowState,
-      sourceStep,
-      sourceArtifact: source.relativePath,
-      sourceFindingId: stableSourceFindingId(sourceStep, finding, index),
-      fingerprint,
+      ...identity.toJSON(),
       rationale: sourceFindingRationale(finding),
       attempts,
       round,

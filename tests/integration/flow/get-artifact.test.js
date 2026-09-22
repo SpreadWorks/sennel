@@ -232,7 +232,7 @@ function migratedVersionFixture(directory, { specId, goal }) {
   return { flowManager, migration };
 }
 
-function acceptanceFixture(directory, { specId } = {}) {
+function acceptanceFixture(directory, { specId, missingFingerprint = false } = {}) {
   const flowManager = makeFlowManager(directory);
   const created = new CanonicalFlowFixture({
     flowManager,
@@ -285,7 +285,7 @@ function acceptanceFixture(directory, { specId } = {}) {
             sourceArtifact: deferred.sourceArtifact,
             sourceFindingId: deferred.sourceFindingId,
             runId: state.runId,
-            fingerprint: "b".repeat(64),
+            fingerprint: missingFingerprint ? "d".repeat(64) : sourceFinding.fingerprint,
             disposition: "deferred",
             rationale: "The finding remains visible for an explicit decision.",
             retryExhausted: true,
@@ -615,6 +615,22 @@ describe("flow get artifact", () => {
       fs.readFileSync(path.join(cacheDirectory, name), "utf8"),
     ]);
     assert.deepEqual(cacheAfterCorruption, cacheBeforeCorruption);
+  });
+
+  it("rejects an artifact view reference whose authoritative fingerprint is absent from its source", async () => {
+    const directory = root();
+    const { flowManager } = acceptanceFixture(directory, {
+      specId: "004-acceptance-missing-fingerprint",
+      missingFingerprint: true,
+    });
+    const { container, agent } = commandContainer(directory, flowManager);
+
+    const result = await new GetArtifactCommand().run(container, input({ logicalKey: "acceptance.review" }));
+
+    assert.equal(result.ok, false);
+    assert.equal(result.errors[0].code, "ARTIFACT_VIEW_READ_FAILED");
+    assert.equal(agent.resolveCalls, 0);
+    assert.equal(agent.calls, 0);
   });
 
 });

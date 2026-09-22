@@ -19,6 +19,7 @@ import {
   DraftWorkerExecutionClaim,
   resolveSourceHandoffTransitionPlan,
   settleDraftStepResult,
+  settleSpecStepResult,
 } from "../../../src/flow/definition.js";
 import { SourceHandoffFailureFacts } from "../../../src/flow/lib/source-handoff-failure.js";
 import { FLOW_ARTIFACT_AUTHORITY_MATRIX } from "../../../src/flow/lib/flow-artifact-authority.js";
@@ -38,11 +39,15 @@ import { FlowTargetExpectation } from "../../../src/lib/flow-target-guard.js";
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { DraftEntryConnector } from "../../../src/flow/engine/connectors/draft/draft-entry-connector.js";
 import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
+import { SpecReviewConnector } from "../../../src/flow/engine/connectors/spec/spec-review-connector.js";
+import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
 import {
   DraftWorkerExecutionStepBinding,
   DraftWorkerStepBinding,
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { SpecService } from "../../../src/flow/services/spec-service.js";
+import { SpecStep } from "../../../src/flow/steps/spec/spec.js";
 import { DraftStep } from "../../../src/flow/steps/draft/draft.js";
 import { createDraftRefineResult, DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
 import { readDraftTransitionFacts } from "../../../src/flow/lib/draft-transition-facts.js";
@@ -52,7 +57,10 @@ import {
   DraftRefineCompletedResult,
   DraftRefineAwaitingAnswerResult,
   DraftRefineWorkerRequiredResult,
+  SpecCreatedResult,
   STEP_RESULT_TYPE,
+  StepErrorResult,
+  stepResultDigest,
 } from "../../../src/flow/engine/step-result.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { canonicalTaskReviewFileMap } from "../../../src/flow/commands/review.js";
@@ -88,7 +96,9 @@ import { GateRepairObservationRequest } from "../../../src/flow/lib/gate-observa
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import {
   ApprovalTaskAdmission,
+  CanonicalFlowArtifactBaseline,
   CanonicalWorkerSpecPublication,
+  CurrentFlowStateConflictError,
   CurrentFlowSpecRecord,
 } from "../../../src/flow/lib/current-flow-state.js";
 import { CanonicalSpecApproval } from "../../../src/flow/lib/canonical-spec-approval.js";
@@ -6752,6 +6762,12 @@ describe("worker artifact handoff", () => {
       let workerPrompt = null;
       let workerRequest = null;
       let calls = 0;
+      const settlementInputs = [];
+      const settleSpec = value.flowManager.settleSpecStepResult.bind(value.flowManager);
+      value.flowManager.settleSpecStepResult = (input) => {
+        settlementInputs.push(input);
+        return settleSpec(input);
+      };
       const dispatcher = new RunDispatchCommand({
         nextAction: {
           async run() {
@@ -6804,6 +6820,486 @@ describe("worker artifact handoff", () => {
       assert.equal(result.dispatch.boundary, "completed", JSON.stringify(result, null, 2));
       assert.equal(result.dispatch.dispatchCount, 1);
       assert.equal(calls, 1);
+      assert.equal(settlementInputs.length, 1);
+      assert.equal(
+        settlementInputs[0].application.publication.document.goal,
+        validWorkerHandoffTaskSpec().goal,
+      );
+      assert.equal(
+        JSON.parse(fs.readFileSync(value.flowManager.specLocation(value.specId).specFile, "utf8")).goal,
+        validWorkerHandoffTaskSpec().goal,
+      );
+      const canonical = value.flowManager.canonicalState(value.specId);
+      const specNode = canonical.findNode("spec");
+      assert.equal(specNode.result.stepResult.kind, "spec-created");
+      assert.equal(specNode.result.draftSettlementReceipt.targetStepId, "spec-review");
+      assert.equal(specNode.result.draftSettlementReceipt.settlementKind, "target-connection");
+      assert.equal(canonical.nextAction().nodeId, "spec-review");
+
+      const activityCount = value.flowManager.activityLedger(value.specId).length;
+      const replay = settleSpec(settlementInputs[0]);
+      assert.equal(replay.receipt.id, specNode.result.draftSettlementReceipt.id);
+      assert.equal(value.flowManager.activityLedger(value.specId).length, activityCount);
+
+      const beforeConflict = value.flowManager.canonicalState(value.specId).toJSON();
+      assert.throws(() => settleSpec({
+        ...settlementInputs[0],
+        lifecycleResult: {
+          ...settlementInputs[0].lifecycleResult,
+          summary: "changed publication identity",
+        },
+      }), CurrentFlowStateConflictError);
+      assert.throws(() => settleSpec({
+        ...settlementInputs[0],
+        artifactBaselines: settlementInputs[0].artifactBaselines.map((baseline) => (
+          baseline.artifact.logicalKey === "spec.record"
+            ? new CanonicalFlowArtifactBaseline({
+                logicalKey: "spec.record",
+                digest: "c".repeat(64),
+                byteLength: 1,
+              })
+            : baseline
+        )),
+      }), CurrentFlowStateConflictError);
+      const changedResult = new StepErrorResult("spec", new Error("changed result"));
+      assert.throws(() => settleSpec({
+        ...settlementInputs[0],
+        stepResult: changedResult,
+        settlement: settleSpecStepResult("spec", changedResult),
+      }));
+      assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), beforeConflict);
+      assert.equal(value.flowManager.activityLedger(value.specId).length, activityCount);
+
+      const restarted = new FlowManager({
+        root: value.executionRoot,
+        mainRoot: value.mainRoot,
+        inWorktree: true,
+        specId: value.specId,
+      }).canonicalState(value.specId);
+      assert.equal(restarted.findNode("spec").result.stepResult.kind, "spec-created");
+      assert.equal(restarted.findNode("spec").result.draftSettlementReceipt.id,
+        specNode.result.draftSettlementReceipt.id);
+      assert.equal(restarted.nextAction().nodeId, "spec-review");
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("binds same-id deferred findings to distinct fingerprints in the Spec worker input", () => {
+    const sourceFindingId = "shared-draft-gate-finding";
+    const observations = ["a", "b"].map((prefix, index) => ({
+      sourceFindingId,
+      fingerprint: prefix.repeat(64),
+      severity: "blocking",
+      issue: `Deferred observation ${index + 1}`,
+    }));
+    const value = fixture("spec", {
+      beforeActivate(candidate) {
+        publishDraftBeforeTarget(candidate, draftDocument("Resolve exact deferred findings."));
+        candidate.flow.activate("draft-gate");
+        candidate.flowManager.publishArtifacts({
+          specId: candidate.specId,
+          nodeId: "draft-gate",
+          artifactWrites: [{
+            logicalKey: "draft.gate",
+            mediaType: "application/json",
+            bytes: Buffer.from(json({
+              attempts: [{
+                attempt: 1,
+                artifact: { logicalKey: "draft.gate", payload: { observations } },
+              }],
+            })),
+          }],
+        });
+        const sourceArtifact = candidate.flowManager.artifactCatalog(candidate.specId).artifacts
+          .find((entry) => entry.logicalKey === "draft.gate").relativePath;
+        candidate.flowManager.publishArtifacts({
+          specId: candidate.specId,
+          nodeId: "draft-gate",
+          artifactWrites: [{
+            logicalKey: "flow.findings",
+            mediaType: "application/json",
+            bytes: Buffer.from(json({
+              version: 2,
+              entries: observations.map((observation, index) => ({
+                findingId: `DF-${index + 1}`,
+                sourceStep: "draft-gate",
+                sourceArtifact,
+                sourceFindingId,
+                runId: candidate.flowManager.load().runId,
+                fingerprint: observation.fingerprint,
+                disposition: "deferred",
+                rationale: `Retain observation ${index + 1}.`,
+                retryExhausted: true,
+                attempts: 1,
+                round: index + 1,
+                completionKind: "deferred",
+                finalDisposition: "still_open",
+              })),
+            })),
+          }],
+        });
+      },
+    });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      const input = request.inputs.find((entry) => entry.name === "flow-findings.json");
+
+      assert.deepEqual(
+        input.document.entries.map((entry) => ({
+          sourceFindingId: entry.sourceFindingId,
+          fingerprint: entry.fingerprint,
+          issue: entry.sourceObservation.issue,
+        })),
+        observations.map((observation) => ({
+          sourceFindingId,
+          fingerprint: observation.fingerprint,
+          issue: observation.issue,
+        })),
+      );
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("rejects a re-sealed initial Spec publication after an exact settlement committed", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) {
+        publishDraftBeforeTarget(candidate, draftDocument("Reject conflicting Spec replay."));
+      },
+    });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      fs.writeFileSync(request.payloadPath("spec.json"), json(validWorkerHandoffTaskSpec()));
+      seal(request);
+      const original = value.coordinator.prepareSpecWorker({ ctx: value.ctx, request });
+      const service = await SpecService.prepare({
+        ctx: value.ctx,
+        request,
+        Connector: SpecEntryConnector,
+        handoffCoordinator: value.coordinator,
+      });
+      assert.ok(service instanceof SpecService);
+
+      fs.writeFileSync(request.payloadPath("spec.json"), json({
+        ...validWorkerHandoffTaskSpec(),
+        goal: "Changed re-sealed specification",
+      }));
+      seal(request);
+      const changed = value.coordinator.prepareSpecWorker({ ctx: value.ctx, request });
+      assert.notEqual(original.submission.handoffDigest, changed.submission.handoffDigest);
+      assert.notDeepEqual(
+        original.facts.publication.document,
+        changed.facts.publication.document,
+      );
+
+      const binding = service.binding;
+      const changedApplication = await new SpecReviewConnector({
+        binding,
+        facts: changed.facts,
+      }).connect();
+      let settlementInput = null;
+      const settleSpec = value.flowManager.settleSpecStepResult.bind(value.flowManager);
+      value.flowManager.settleSpecStepResult = (input) => {
+        settlementInput = input;
+        return settleSpec(input);
+      };
+      const stepResult = await new StepFactory().provide(SpecService, service).create(SpecStep).execute();
+      const settlement = settleSpecStepResult("spec", stepResult);
+      assert.deepEqual(
+        settlementInput.application.publication.document,
+        original.facts.publication.document,
+      );
+      const durableReceipt = value.flowManager.canonicalState(value.specId)
+        .findNode("spec").result.draftSettlementReceipt;
+      assert.equal(durableReceipt.resultKind, stepResult.kind);
+      assert.equal(durableReceipt.resultDigest, stepResultDigest(stepResult));
+      assert.equal(durableReceipt.settlementKind, settlement.kind);
+      assert.equal(durableReceipt.targetStepId, settlement.targetStepId);
+      assert.equal(durableReceipt.connector?.name, settlement.connector.name);
+      assert.deepEqual(durableReceipt.effects?.toJSON?.() ?? durableReceipt.effects, settlement.effects.toJSON());
+      assert.deepEqual(value.flowManager.activityLedger(value.specId).findLast((entry) => (
+        entry.nodeId === "spec" && entry.result?.stepResult != null
+      ))?.result.stepResult, stepResult.toJSON());
+      assert.deepEqual(durableReceipt.binding, {
+        runId: request.runId,
+        specId: request.specId,
+        stepId: request.stepId,
+        attemptId: binding.attempt.id,
+        attemptSequence: binding.attempt.sequence,
+      });
+      const matchingActivity = value.flowManager.activityLedger(value.specId).findLast((entry) => (
+        entry.nodeId === request.stepId
+        && entry.attemptId === binding.attempt.id
+        && entry.sequence === binding.attempt.sequence
+        && entry.result?.stepResult != null
+      ));
+      assert.ok(matchingActivity);
+      assert.deepEqual(matchingActivity.result.stepResult, stepResult.toJSON());
+      assert.deepEqual(
+        value.flowManager.canonicalState(value.specId).findNode("spec").result.stepResult.toJSON(),
+        stepResult.toJSON(),
+      );
+      const exactReplay = settleSpec(settlementInput);
+      assert.equal(exactReplay.receipt.id, durableReceipt.id);
+      const changedResult = new StepErrorResult("spec", new Error("Changed result"));
+      assert.throws(() => settleSpec({
+        ...settlementInput,
+        stepResult: changedResult,
+        settlement: settleSpecStepResult("spec", changedResult),
+        application: null,
+      }), CurrentFlowStateConflictError);
+
+      assert.throws(() => settleSpec({
+        ...settlementInput,
+        application: changedApplication,
+        artifactBaselines: changed.publications.artifactBaselines,
+      }), CurrentFlowStateConflictError);
+      assert.equal(
+        JSON.parse(fs.readFileSync(value.flowManager.specLocation(value.specId).specFile, "utf8")).goal,
+        validWorkerHandoffTaskSpec().goal,
+      );
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("persists an initial Spec Error Result through the shared failure contract", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) {
+        publishDraftBeforeTarget(candidate, draftDocument("Persist a Spec failure."));
+      },
+    });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      fs.writeFileSync(request.payloadPath("spec.json"), json(validWorkerHandoffTaskSpec()));
+      seal(request);
+      const service = await SpecService.prepare({
+        ctx: value.ctx,
+        request,
+        Connector: SpecEntryConnector,
+        handoffCoordinator: value.coordinator,
+      });
+      assert.ok(service instanceof SpecService);
+      const binding = service.binding;
+      const stepResult = new StepErrorResult("spec", new Error("Spec worker failed"));
+      const settlement = settleSpecStepResult("spec", stepResult);
+      const receipt = await stepResult.persist(service);
+      const committed = service.workerOutcome;
+
+      const failed = value.flowManager.canonicalState(value.specId);
+      assert.equal(failed.attempt.failure.category, "step-result-error");
+      assert.equal(failed.attempt.failure.message, "Spec worker failed");
+      const failure = value.flowManager.activityLedger(value.specId).at(-1);
+      assert.equal(failure.result.stepResult.kind, "spec-error");
+      assert.equal(failure.result.draftSettlementReceipt.id, receipt.id);
+      assert.equal(failed.findNode("spec-review").status, "pending");
+      const replay = value.flowManager.settleSpecStepResult({
+        binding,
+        stepResult,
+        settlement,
+        application: null,
+      });
+      assert.equal(replay.receipt.id, receipt.id);
+      assert.equal(committed.receipt.id, receipt.id);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("publishes only the Spec candidate adopted by its Step", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) {
+        publishDraftBeforeTarget(candidate, draftDocument("Adopt the worker's specification."));
+      },
+    });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      const candidate = validWorkerHandoffTaskSpec();
+      fs.writeFileSync(request.payloadPath("spec.json"), json(candidate));
+      seal(request);
+      const service = await SpecService.prepare({
+        ctx: value.ctx,
+        request,
+        Connector: SpecEntryConnector,
+        handoffCoordinator: value.coordinator,
+      });
+      assert.ok(service instanceof SpecService);
+      const previousRevision = value.flowManager.readCurrentSpecReviewInput({
+        specId: value.specId,
+        consumerNodeId: "spec-review",
+      }).revision;
+      const before = value.flowManager.canonicalState(value.specId).toJSON();
+      await assert.rejects(() => new SpecCreatedResult().persist(service), TypeError);
+      assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), before);
+
+      const result = await new StepFactory().provide(SpecService, service).create(SpecStep).execute();
+      assert.ok(result instanceof SpecCreatedResult);
+      const state = value.flowManager.canonicalState(value.specId);
+      const receipt = state.findNode("spec").result.draftSettlementReceipt;
+      const persisted = JSON.parse(fs.readFileSync(value.flowManager.specLocation(value.specId).specFile, "utf8"));
+      assert.equal(persisted.goal, candidate.goal);
+      assert.deepEqual(persisted.tasks, candidate.tasks);
+      assert.equal(value.flowManager.readCurrentSpecReviewInput({
+        specId: value.specId,
+        consumerNodeId: "spec-review",
+      }).revision, previousRevision + 1);
+      assert.equal(receipt.binding.attemptId, service.binding.attempt.id);
+      assert.equal(receipt.binding.attemptSequence, service.binding.attempt.sequence);
+      assert.equal(receipt.resultDigest, stepResultDigest(result));
+      assert.equal(service.workerOutcome.receipt.id, receipt.id);
+      const replayReceipt = await result.persist(service);
+      assert.equal(replayReceipt.id, receipt.id);
+      assert.equal(service.workerOutcome.replayed, true);
+      const committed = state.toJSON();
+      await assert.rejects(
+        () => new StepFactory().provide(SpecService, service).create(SpecStep).execute(),
+        /stale/,
+      );
+      assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), committed);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("reads back the exact initial Spec receipt when Store reports an error after commit", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) {
+        publishDraftBeforeTarget(candidate, draftDocument("Recover a committed specification."));
+      },
+    });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      const candidate = validWorkerHandoffTaskSpec();
+      fs.writeFileSync(request.payloadPath("spec.json"), json(candidate));
+      seal(request);
+      const service = await SpecService.prepare({
+        ctx: value.ctx,
+        request,
+        Connector: SpecEntryConnector,
+        handoffCoordinator: value.coordinator,
+      });
+      assert.ok(service instanceof SpecService);
+      const settleSpec = value.flowManager.settleSpecStepResult.bind(value.flowManager);
+      let reportedFailure = false;
+      value.flowManager.settleSpecStepResult = (input) => {
+        const committed = settleSpec(input);
+        reportedFailure = true;
+        throw new Error("simulated error after durable Spec settlement");
+      };
+
+      const result = await new StepFactory().provide(SpecService, service).create(SpecStep).execute();
+      const state = value.flowManager.canonicalState(value.specId);
+      const receipt = state.findNode("spec").result.draftSettlementReceipt;
+      assert.equal(reportedFailure, true);
+      assert.ok(result instanceof SpecCreatedResult);
+      assert.equal(service.workerOutcome.receipt.id, receipt.id);
+      assert.equal(state.nextAction().nodeId, "spec-review");
+      assert.equal(JSON.parse(fs.readFileSync(value.flowManager.specLocation(value.specId).specFile, "utf8")).goal,
+        candidate.goal);
+      assert.equal(value.flowManager.activityLedger(value.specId).filter((activity) => (
+        activity.nodeId === "spec" && activity.result?.stepResult?.kind === "spec-created"
+      )).length, 1);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("does not partially publish the initial Spec Result when its atomic commit is interrupted", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) {
+        publishDraftBeforeTarget(candidate, draftDocument("Create an atomic specification."));
+      },
+    });
+    try {
+      const beforeState = value.flowManager.canonicalState(value.specId);
+      const before = {
+        attempt: beforeState.attempt.toJSON(),
+        specCatalogEntry: value.flowManager.artifactCatalog(value.specId).toJSON().artifacts
+          .find((entry) => entry.logicalKey === "spec.record"),
+        spec: fs.readFileSync(value.flowManager.specLocation(value.specId).specFile),
+      };
+      let workerCalls = 0;
+      const dispatcher = new RunDispatchCommand({
+        nextAction: { async run() {
+          return {
+            ...draftWorkerAction(),
+            step: "spec",
+            action: "write-spec",
+            instructions: { key: "plan.spec", content: "Write the specification." },
+            output_schema: loadWorkerArtifactHandoffSchema(),
+          };
+        } },
+        agent: { async call(_prompt, options) {
+          workerCalls += 1;
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          fs.writeFileSync(
+            request.payloads.find((entry) => entry.logicalName === "spec.json").payloadPath,
+            json(validWorkerHandoffTaskSpec()),
+          );
+          sealWorkerArtifactHandoff({
+            requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+          });
+        } },
+        repositoryFingerprint: () => "stable-fixture",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+        handoffCoordinator: new WorkerArtifactHandoffCoordinator({
+          faultInjector({ phase }) {
+            if (phase === "before-worker-handoff-publication") throw new Error("simulated initial Spec commit crash");
+          },
+        }),
+      });
+      dispatcher.container = {};
+
+      await assert.rejects(() => dispatcher.execute({
+        ...value.ctx,
+        flowState: value.flowManager.load(),
+        expectRunId: value.flowManager.load().runId,
+        expectSpec: value.specId,
+        _envelopeType: "run",
+        _envelopeKey: "dispatch",
+      }), (error) => error?.code === "STEP_RESULT_ERROR_PERSISTENCE_FAILED");
+
+      assert.equal(workerCalls, 1);
+      const afterState = value.flowManager.canonicalState(value.specId);
+      assert.deepEqual(afterState.attempt.toJSON(), before.attempt);
+      assert.equal(afterState.current.at(-1), "spec");
+      assert.equal(afterState.findNode("spec").status, "in_progress");
+      assert.equal(afterState.findNode("spec").result, null);
+      assert.equal(afterState.findNode("spec-review").status, "pending");
+      assert.equal(value.flowManager.activityLedger(value.specId).some((activity) => (
+        activity.nodeId === "spec"
+        && (activity.result?.stepResult !== undefined
+          || activity.result?.draftSettlementReceipt !== undefined)
+      )), false);
+      assert.deepEqual(
+        value.flowManager.artifactCatalog(value.specId).toJSON().artifacts
+          .find((entry) => entry.logicalKey === "spec.record"),
+        before.specCatalogEntry,
+      );
+      assert.deepEqual(fs.readFileSync(value.flowManager.specLocation(value.specId).specFile), before.spec);
     } finally {
       removeTmpDir(value.mainRoot);
     }

@@ -293,7 +293,7 @@ function acceptanceDecisionScenario(root) {
             sourceArtifact: deferred.sourceArtifact,
             sourceFindingId: deferred.sourceFindingId,
             runId: created.state().runId,
-            fingerprint: "b".repeat(64),
+            fingerprint: sourceFinding.fingerprint,
             disposition: "deferred",
             rationale: "The finding remains visible for an explicit decision.",
             retryExhausted: true,
@@ -869,7 +869,7 @@ describe("flow dispatch CLI", () => {
     assert.equal(answered.findNode("draft-coverage-review").status, "done");
     assert.equal(answered.findNode("draft-coverage-review").result.stepResult.kind, "draft-coverage-review-passed");
     assert.equal(answered.attempt.nodeId, "draft-gate");
-    assert.equal(answered.attempt.failure.code, "DRAFT_RESULT_ERROR");
+    assert.equal(answered.attempt.failure.code, "STEP_RESULT_ERROR");
     const resumedActivities = scenario.manager.activityLedger(scenario.state.specId)
       .slice(beforeResumeActivities);
     assert.equal(resumedActivities.some((entry) => (

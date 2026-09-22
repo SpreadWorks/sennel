@@ -9,25 +9,12 @@ export const STEP_RESULT_TYPE = Object.freeze({
   ERROR: "error",
 });
 
-const DRAFT_STEP_IDS = Object.freeze([
-  "draft",
-  "draft-questions-review",
-  "draft-questions-triage",
-  "draft-questions-repair",
-  "draft-refine",
-  "draft-coverage-review",
-  "draft-coverage-triage",
-  "draft-coverage-repair",
-  "draft-gate",
-  "draft-gate-repair",
-]);
-
 const DEFINITION_TOKEN = Symbol("StepResult definition");
 const registryByKind = new Map();
 const registryByStep = new Map();
 
-function requireDraftStepId(stepId) {
-  if (!DRAFT_STEP_IDS.includes(stepId)) throw new TypeError(`unknown Draft Step: ${stepId}`);
+function requireRegisteredStepId(stepId) {
+  if (!registryByStep.has(stepId)) throw new TypeError(`unknown Step: ${stepId}`);
   return stepId;
 }
 
@@ -54,7 +41,7 @@ function storedError(error) {
 
 function rehydrateError(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError("stored Draft Step Result error is invalid");
+    throw new TypeError("stored Step Result error is invalid");
   }
   const { kind, ...details } = value;
   if (kind === "flow") return FlowExecutionError.fromStored(details);
@@ -66,7 +53,7 @@ function rehydrateError(value) {
     if (details.data !== undefined) error.data = structuredClone(details.data);
     return error;
   }
-  throw new TypeError("stored Draft Step Result error is invalid");
+  throw new TypeError("stored Step Result error is invalid");
 }
 
 /** Immutable semantic result produced by one executable Flow Step. */
@@ -79,7 +66,7 @@ export class StepResult {
   constructor(token, { stepId, kind, type, error = null } = {}) {
     if (new.target === StepResult) throw new TypeError("StepResult is abstract");
     if (token !== DEFINITION_TOKEN) throw new TypeError("StepResult subclasses must use their declared contract");
-    this.#stepId = requireDraftStepId(stepId);
+    this.#stepId = requireRegisteredStepId(stepId);
     if (typeof kind !== "string" || kind === "") throw new TypeError("StepResult kind is required");
     if (!Object.values(STEP_RESULT_TYPE).includes(type)) throw new TypeError("StepResult type is invalid");
     if ((type === STEP_RESULT_TYPE.ERROR) !== (error instanceof Error)) {
@@ -132,8 +119,8 @@ export function stepResultDigest(result) {
 }
 
 function declareResult(ResultClass, { stepId, kind, type }) {
-  requireDraftStepId(stepId);
-  if (registryByKind.has(kind)) throw new Error(`duplicate Draft Step Result kind: ${kind}`);
+  if (typeof stepId !== "string" || stepId === "") throw new TypeError("StepResult Step is required");
+  if (registryByKind.has(kind)) throw new Error(`duplicate Step Result kind: ${kind}`);
   const entry = Object.freeze({ ResultClass, stepId, kind, type });
   registryByKind.set(kind, entry);
   const entries = registryByStep.get(stepId) ?? [];
@@ -152,6 +139,9 @@ function resultClass(className, definition) {
 
 export const DraftCreatedResult = resultClass("DraftCreatedResult", {
   stepId: "draft", kind: "draft-created", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const SpecCreatedResult = resultClass("SpecCreatedResult", {
+  stepId: "spec", kind: "spec-created", type: STEP_RESULT_TYPE.COMPLETED,
 });
 export const DraftQuestionsReviewExecutionRequiredResult = resultClass("DraftQuestionsReviewExecutionRequiredResult", {
   stepId: "draft-questions-review", kind: "draft-questions-review-execution-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
@@ -217,25 +207,25 @@ export const DraftGateRepairCarryForwardResult = resultClass("DraftGateRepairCar
   stepId: "draft-gate-repair", kind: "draft-gate-repair-carry-forward", type: STEP_RESULT_TYPE.COMPLETED,
 });
 
-const errorDefinitionByStep = new Map(DRAFT_STEP_IDS.map((stepId) => [stepId, Object.freeze({
+const errorDefinitionByStep = new Map([...registryByStep.keys()].map((stepId) => [stepId, Object.freeze({
   stepId,
   kind: `${stepId}-error`,
   type: STEP_RESULT_TYPE.ERROR,
 })]));
 
-export class DraftStepErrorResult extends StepResult {
+export class StepErrorResult extends StepResult {
   constructor(stepId, error) {
-    if (!(error instanceof Error)) throw new TypeError("DraftStepErrorResult requires an Error");
-    const definition = errorDefinitionByStep.get(requireDraftStepId(stepId));
+    if (!(error instanceof Error)) throw new TypeError("StepErrorResult requires an Error");
+    const definition = errorDefinitionByStep.get(requireRegisteredStepId(stepId));
     super(DEFINITION_TOKEN, { ...definition, error });
   }
 }
-for (const definition of errorDefinitionByStep.values()) declareResult(DraftStepErrorResult, definition);
+for (const definition of errorDefinitionByStep.values()) declareResult(StepErrorResult, definition);
 
-export const DRAFT_STEP_RESULT_REGISTRY = Object.freeze([...registryByKind.values()]);
+export const STEP_RESULT_REGISTRY = Object.freeze([...registryByKind.values()]);
 
 export function rehydrateStepResult(stepId, value) {
-  requireDraftStepId(stepId);
+  requireRegisteredStepId(stepId);
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("stored StepResult must be an object");
   }
@@ -248,11 +238,11 @@ export function rehydrateStepResult(stepId, value) {
     throw new TypeError("stored StepResult fields are invalid");
   }
   return entry.type === STEP_RESULT_TYPE.ERROR
-    ? new DraftStepErrorResult(stepId, rehydrateError(value.error))
+    ? new StepErrorResult(stepId, rehydrateError(value.error))
     : new entry.ResultClass();
 }
 
-export function draftStepResultKinds(stepId) {
-  requireDraftStepId(stepId);
+export function stepResultKinds(stepId) {
+  requireRegisteredStepId(stepId);
   return Object.freeze((registryByStep.get(stepId) ?? []).map(({ kind }) => kind));
 }

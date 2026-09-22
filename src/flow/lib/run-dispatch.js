@@ -167,6 +167,15 @@ export async function draftWorkerStepDefinition(stepId) {
   }
 }
 
+export async function specWorkerStepDefinition(stepId) {
+  if (stepId !== "spec") return null;
+  const [{ SpecEntryConnector: Connector }, { SpecStep: StepClass }] = await Promise.all([
+    import("../engine/connectors/spec/spec-entry-connector.js"),
+    import("../steps/spec/spec.js"),
+  ]);
+  return { Connector, StepClass };
+}
+
 function agentFailuresFor(error, agentError = null) {
   return Object.freeze([
     ...(agentError instanceof AgentFailure ? [agentError] : []),
@@ -1682,6 +1691,7 @@ export default class RunDispatchCommand extends FlowCommand {
     let publicationRecovery = false;
     let agentOptions = {};
     let draftDefinition = null;
+    let specDefinition = null;
     try {
       try {
         handoffPolicy = workerArtifactHandoffPolicy(action.nextAction.step);
@@ -1700,6 +1710,7 @@ export default class RunDispatchCommand extends FlowCommand {
         const { workerRequestGuidance = null, ...providerOptions } = workerOptions;
         agentOptions = providerOptions;
         draftDefinition = await draftWorkerStepDefinition(action.nextAction.step);
+        specDefinition = await specWorkerStepDefinition(action.nextAction.step);
         const conditionalDraftExecution = isConditionalDraftWorkerStep(action.nextAction.step);
         const workerInstructions = new WorkerArtifactWorkerInstructions({
           // Conditional Draft retry authority is fully reconstructible from
@@ -1916,6 +1927,16 @@ export default class RunDispatchCommand extends FlowCommand {
           reconciliation = prepared.completed
             ? { error: null, ...prepared }
             : await this.runDraftWorkerStep(ctx, handoffRequest, draftDefinition, prepared);
+        } else if (specDefinition !== null) {
+          const { SpecService } = await import("../services/spec-service.js");
+          const prepared = await SpecService.prepare({
+            ctx, request: handoffRequest,
+            Connector: specDefinition.Connector,
+            handoffCoordinator: this.handoffCoordinator,
+          });
+          reconciliation = prepared instanceof SpecService
+            ? await this.runSpecWorkerStep(specDefinition, prepared)
+            : { error: null, ...prepared };
         } else {
           reconciliation = this.handoffCoordinator.reconcile({
             ctx,
@@ -2089,6 +2110,17 @@ export default class RunDispatchCommand extends FlowCommand {
       throw new Error("Draft Step Result does not match its bound worker attempt");
     }
     return { ...attempt, stepResult: output };
+  }
+
+  /** Execute the initial Spec worker through its Step and selected connection. */
+  async runSpecWorkerStep(definition, service) {
+    const { SpecService } = await import("../services/spec-service.js");
+    if (definition === null || !(service instanceof SpecService)) {
+      throw new Error("initial Spec Step definition is missing");
+    }
+    const step = new StepFactory().provide(SpecService, service).create(definition.StepClass);
+    const stepResult = await step.execute();
+    return { ...service.workerOutcome, stepResult };
   }
 
   async execute(ctx) {

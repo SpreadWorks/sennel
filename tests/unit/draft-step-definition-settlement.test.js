@@ -6,7 +6,7 @@ import {
   DraftExecutionSettlement,
   DraftLoopRoute,
   DraftNextRoute,
-  DraftStepErrorDecision,
+  StepErrorDecision,
   settleDraftStepResult,
 } from "../../src/flow/definition.js";
 import * as results from "../../src/flow/engine/step-result.js";
@@ -74,9 +74,9 @@ test("Definition selects connector-free Execution, Await, and Failure settlement
 
   const failed = settleDraftStepResult(
     "draft-gate",
-    new results.DraftStepErrorResult("draft-gate", new Error("provider failed")),
+    new results.StepErrorResult("draft-gate", new Error("provider failed")),
   );
-  assert.equal(failed instanceof DraftStepErrorDecision, true);
+  assert.equal(failed instanceof StepErrorDecision, true);
   assert.equal(Object.hasOwn(failed, "connector"), false);
 });
 

@@ -16,26 +16,26 @@ import { TaskStepIdentity } from "./task-step-identity.js";
 import { attachedCanonicalReviewWorkUnit } from "./canonical-review-artifacts.js";
 import { TaskReviewAbortedWorkUnit } from "./task-review-aborted-work-unit.js";
 
-export const DRAFT_RESULT_ERROR_PERSISTENCE_FAILURE_CODE = "DRAFT_RESULT_ERROR_PERSISTENCE_FAILED";
+export const STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE = "STEP_RESULT_ERROR_PERSISTENCE_FAILED";
 
 /**
  * A failed Store commit has no Step result to record.  This explicit error
  * crosses the command boundary so dispatcher fallback can stop without
  * manufacturing a second failure for the still-current Attempt.
  */
-export class DraftStepPersistenceFailure extends Error {
+export class StepPersistenceFailure extends Error {
   constructor(cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
     super(message, cause instanceof Error ? { cause } : undefined);
-    this.name = "DraftStepPersistenceFailure";
-    this.code = DRAFT_RESULT_ERROR_PERSISTENCE_FAILURE_CODE;
+    this.name = "StepPersistenceFailure";
+    this.code = STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE;
   }
 }
 
-export function isDraftStepPersistenceFailure(error) {
-  return error instanceof DraftStepPersistenceFailure
-    || error?.code === DRAFT_RESULT_ERROR_PERSISTENCE_FAILURE_CODE
-    || error?.data?.failureKind === "draft-step-persistence";
+export function isStepPersistenceFailure(error) {
+  return error instanceof StepPersistenceFailure
+    || error?.code === STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE
+    || error?.data?.failureKind === "step-persistence";
 }
 
 function nonEmptyText(value, field) {
@@ -142,7 +142,7 @@ export class DefinitionLifecycleAttemptBinding {
   }
 
   toolingFailure(error, fallbackCode, commandResult = null) {
-    if (isDraftStepPersistenceFailure(error)) return false;
+    if (isStepPersistenceFailure(error)) return false;
     const facts = failureFacts(error, fallbackCode);
     const state = this.flowManager.canonicalState(this.specId);
     if (state === null || state.runId !== this.runId || !this.attempt.matches(state)) return false;

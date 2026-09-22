@@ -41,11 +41,11 @@ import {
   RequirementTestStructuralRejectionObservation,
   RequirementTestStepObservation,
   resolveRequirementTestLifecycle,
-  DraftStepErrorDecision,
+  StepErrorDecision,
   DraftAwaitUserDecision,
-  DraftStepRoute,
+  StepRoute,
   DraftExecutionSettlement,
-  DraftStepSettlement,
+  StepSettlement,
   DraftStepSettlementReceipt,
   DraftStepSettlementReceiptValue,
   DraftAwaitQuestionIdentity,
@@ -57,7 +57,8 @@ import {
   DraftWorkerExecutionBinding,
   DraftReviewExecutionClaim,
   DraftWorkerExecutionClaim,
-  DRAFT_RESULT_ERROR_CATEGORY,
+  SpecNextRoute,
+  STEP_RESULT_ERROR_CATEGORY,
 } from "../definition.js";
 import {
   DraftCoverageReviewPassedResult,
@@ -67,10 +68,12 @@ import {
   DraftGateRepairAppliedResult,
   DraftGateRepairCarryForwardResult,
   DraftGateRepairRequiredResult,
+  SpecCreatedResult,
   STEP_RESULT_TYPE,
   StepResult,
   stepResultDigest,
 } from "../engine/step-result.js";
+import { SpecReviewSettlementApplication } from "./spec-step-connection.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { normalizeAgentMetricDimension } from "../../lib/agent-metrics.js";
 import { managedDir } from "../../lib/config.js";
@@ -3697,8 +3700,8 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  /** Apply one service-selected Draft settlement and return its durable receipt. */
-  #draftSettlementReceipt({
+  /** Build the one durable receipt shared by service-selected Step settlements. */
+  #stepSettlementReceipt({
     binding,
     stepResult,
     settlement,
@@ -3720,7 +3723,7 @@ export class CanonicalFlowManagerStore {
       binding,
       result: stepResult,
       settlement,
-      publication: this.#draftSettlementPublicationIdentity({
+      publication: this.#stepSettlementPublicationIdentity({
         binding,
         settlement,
         draftCompletionApplication,
@@ -3740,7 +3743,7 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  #draftSettlementBindingActivities(resolved, receiptBinding, activities = null) {
+  #stepSettlementBindingActivities(resolved, receiptBinding, activities = null) {
     return (activities ?? this.activityLedger(resolved)).filter((entry) => {
       const persisted = entry.result?.draftSettlementReceipt;
       return persisted?.binding.runId === receiptBinding.runId
@@ -3759,7 +3762,7 @@ export class CanonicalFlowManagerStore {
       attemptId: binding?.attempt?.id,
       attemptSequence: binding?.attempt?.sequence,
     };
-    const latest = this.#draftSettlementBindingActivities(resolved, receiptBinding)
+    const latest = this.#stepSettlementBindingActivities(resolved, receiptBinding)
       .map((entry) => entry.result.draftSettlementReceipt)
       .filter((receipt) => receipt.executionLifecycle !== null)
       .at(-1)?.executionLifecycle ?? null;
@@ -3786,7 +3789,7 @@ export class CanonicalFlowManagerStore {
       attemptId: binding.attempt.id,
       attemptSequence: binding.attempt.sequence,
     };
-    const receipts = this.#draftSettlementBindingActivities(resolved, receiptBinding, snapshot.activities)
+    const receipts = this.#stepSettlementBindingActivities(resolved, receiptBinding, snapshot.activities)
       .map((entry) => entry.result.draftSettlementReceipt)
       .filter((receipt) => receipt.executionLifecycle !== null);
     const latest = receipts.at(-1) ?? null;
@@ -3825,13 +3828,13 @@ export class CanonicalFlowManagerStore {
     return latest.phase === "terminal" ? latest : null;
   }
 
-  #admitDraftSettlement({ resolved, state, binding, stepResult, settlement, receipt }) {
-    const bindingActivities = this.#draftSettlementBindingActivities(resolved, receipt.binding);
+  #admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt }) {
+    const bindingActivities = this.#stepSettlementBindingActivities(resolved, receipt.binding);
     const replay = bindingActivities.find((entry) => entry.result.draftSettlementReceipt.id === receipt.id);
     if (replay !== undefined) {
       const latest = bindingActivities.at(-1)?.result?.draftSettlementReceipt ?? null;
       if (latest?.id === receipt.id) return replay.result.draftSettlementReceipt;
-      throw new CurrentFlowStateConflictError("Draft settlement replay is stale for the latest execution generation");
+      throw new CurrentFlowStateConflictError("Step settlement replay is stale for the latest execution generation");
     }
     const currentBinding = binding?.runId === state.runId && binding?.specId === state.specId
       && binding?.stepId === state.current?.at(-1) && binding.stepId === stepResult.stepId
@@ -3846,8 +3849,41 @@ export class CanonicalFlowManagerStore {
       receipt,
       { resumeReceipts },
     );
-    if (!currentBinding) throw new CurrentFlowStateConflictError("Draft settlement binding is stale");
+    if (!currentBinding) throw new CurrentFlowStateConflictError("Step settlement binding is stale");
     return null;
+  }
+
+  #settleStepErrorResult({
+    resolved,
+    binding,
+    stepResult,
+    settlement,
+    receipt,
+    lifecycleResult = null,
+    commandResult = undefined,
+  }) {
+    const base = lifecycleResult ?? {
+      outcome: "failed",
+      summary: stepResult.error.message,
+      confirmedAt: new Date().toISOString(),
+      artifactRefs: [],
+    };
+    const result = resultWithDraftStepResult(base, binding.stepId, stepResult, receipt);
+    const next = this.failCurrentAttempt({
+      specId: resolved,
+      failure: {
+        category: STEP_RESULT_ERROR_CATEGORY,
+        code: stepResult.error?.code || "STEP_RESULT_ERROR",
+        message: stepResult.error.message,
+        retryable: false,
+        retryKind: null,
+      },
+      result,
+      stepResult,
+      settlementReceipt: receipt,
+      commandResult,
+    });
+    return Object.freeze({ state: next, receipt });
   }
 
   #recordDraftExecutionLifecycle({ resolved, binding, stepResult, settlement, executionLifecycle }) {
@@ -3859,7 +3895,7 @@ export class CanonicalFlowManagerStore {
         "Draft execution checkpoint requires its typed Execution Result, Settlement, and lifecycle",
       );
     }
-    const receipt = this.#draftSettlementReceipt({
+    const receipt = this.#stepSettlementReceipt({
       binding,
       stepResult,
       settlement,
@@ -3869,7 +3905,7 @@ export class CanonicalFlowManagerStore {
     if (state.attempt?.failure !== null && state.attempt?.failure !== undefined) {
       throw new CurrentFlowStateConflictError("Draft execution cannot continue a failed Attempt");
     }
-    const replay = this.#admitDraftSettlement({
+    const replay = this.#admitStepSettlement({
       resolved, state, binding, stepResult, settlement, receipt,
     });
     if (replay !== null) return Object.freeze({ state, receipt: replay });
@@ -3932,7 +3968,7 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  findDraftStepSettlementReceipt({
+  findStepSettlementReceipt({
     specId = null,
     binding,
     stepResult,
@@ -3952,14 +3988,14 @@ export class CanonicalFlowManagerStore {
     awaitQuestion = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
-    if (resolved === null || !(stepResult instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
+    if (resolved === null || !(stepResult instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       return null;
     }
     this.#assertDraftCompletionApplication({ settlement, application: draftCompletionApplication });
     const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
       resolved, binding, settlement, executionLifecycle,
     });
-    const receipt = this.#draftSettlementReceipt({
+    const receipt = this.#stepSettlementReceipt({
       binding,
       stepResult,
       settlement,
@@ -4158,14 +4194,14 @@ export class CanonicalFlowManagerStore {
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    if (!(stepResult instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
+    if (!(stepResult instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       throw new CurrentFlowStateInvariantError("Draft settlement requires typed Result and Settlement");
     }
     this.#assertDraftCompletionApplication({ settlement, application: draftCompletionApplication });
     const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
       resolved, binding, settlement, executionLifecycle,
     });
-    const receipt = this.#draftSettlementReceipt({
+    const receipt = this.#stepSettlementReceipt({
       binding,
       stepResult,
       settlement,
@@ -4184,44 +4220,24 @@ export class CanonicalFlowManagerStore {
       awaitQuestion,
     });
     const state = this.runtime.load(resolved);
-    const replay = this.#admitDraftSettlement({
+    const replay = this.#admitStepSettlement({
       resolved, state, binding, stepResult, settlement, receipt,
     });
     if (replay !== null) return Object.freeze({ state, receipt: replay });
     if (state.attempt?.failure !== null && state.attempt?.failure !== undefined) {
       throw new CurrentFlowStateConflictError("Draft settlement cannot overwrite a failed Attempt");
     }
-    const base = lifecycleResult ?? (settlement instanceof DraftStepErrorDecision
-      ? {
-          outcome: "failed",
-          summary: stepResult.error.message,
-          confirmedAt: new Date().toISOString(),
-          artifactRefs: [],
-        }
-      : resultFor("done", binding.stepId));
+    if (settlement instanceof StepErrorDecision) {
+      return this.#settleStepErrorResult({
+        resolved, binding, stepResult, settlement, receipt, lifecycleResult, commandResult,
+      });
+    }
     const baseResult = resultWithDraftStepResult(
-      base,
+      lifecycleResult ?? resultFor("done", binding.stepId),
       binding.stepId,
       stepResult,
       receipt,
     );
-    if (settlement instanceof DraftStepErrorDecision) {
-      const next = this.failCurrentAttempt({
-        specId: resolved,
-        failure: {
-          category: DRAFT_RESULT_ERROR_CATEGORY,
-          code: stepResult.error?.code || "DRAFT_RESULT_ERROR",
-          message: stepResult.error.message,
-          retryable: false,
-          retryKind: null,
-        },
-        result: baseResult,
-        stepResult,
-        settlementReceipt: receipt,
-        commandResult,
-      });
-      return Object.freeze({ state: next, receipt });
-    }
     const writes = [
       ...artifactWrites,
       ...(commandResult === undefined ? [] : [
@@ -4229,7 +4245,7 @@ export class CanonicalFlowManagerStore {
         ...this.#commandPublicationWrites(commandResult),
       ]),
     ];
-    if (!(settlement instanceof DraftStepRoute)) {
+    if (!(settlement instanceof StepRoute)) {
       const next = this.runtime.recordDraftStepSettlement({
         specId: resolved,
         activityId: activityId("draft-step-settled"),
@@ -4410,6 +4426,90 @@ export class CanonicalFlowManagerStore {
       artifactBaselines,
       testSourceBaseline,
       planGateRepairOutcome,
+    });
+    return Object.freeze({ state: next, receipt });
+  }
+
+  /** Atomically publish the initial Spec Result and expose spec-review. */
+  settleSpecStepResult({
+    specId = null,
+    binding,
+    stepResult,
+    settlement,
+    application,
+    lifecycleResult = null,
+    references = undefined,
+    artifactWrites = [],
+    artifactRemovals = undefined,
+    artifactBaselines = [],
+  } = {}) {
+    const resolved = this.#resolveSpecId(specId ?? binding?.specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const errorSettlement = settlement instanceof StepErrorDecision;
+    const routedSettlement = stepResult instanceof SpecCreatedResult
+      && settlement instanceof SpecNextRoute
+      && application instanceof SpecReviewSettlementApplication
+      && application.sourceStepId === "spec"
+      && application.targetStepId === settlement.targetStepId
+      && application.runId === binding?.runId
+      && application.specId === binding?.specId
+      && application.sourceAttempt.id === binding?.attempt?.id
+      && application.sourceAttempt.sequence === binding?.attempt?.sequence;
+    if (!(stepResult instanceof StepResult)
+      || binding?.stepId !== "spec"
+      || settlement?.sourceStepId !== "spec"
+      || (!routedSettlement && !(errorSettlement
+        && stepResult.type === STEP_RESULT_TYPE.ERROR
+        && (application === null || application === undefined)))) {
+      throw new CurrentFlowStateInvariantError(
+        "initial Spec settlement requires its typed Result, route, and connection application",
+      );
+    }
+    if (routedSettlement) {
+      const baseline = artifactBaselines
+        .map((entry) => CanonicalFlowArtifactBaseline.from(entry))
+        .find((entry) => entry.artifact.logicalKey === "spec.record") ?? null;
+      if (baseline === null
+        || baseline.digest !== application.baseline.digest
+        || baseline.byteLength !== application.baseline.byteLength
+        || baseline.artifact.relativePath !== application.baseline.artifact.relativePath) {
+        throw new CurrentFlowStateConflictError("initial Spec publication baseline changed before settlement");
+      }
+    }
+    const receipt = this.#stepSettlementReceipt({
+      binding,
+      stepResult,
+      settlement,
+      lifecycleResult,
+      references,
+      specRecord: routedSettlement ? application.publication : undefined,
+      artifactWrites,
+      artifactRemovals,
+      artifactBaselines,
+    });
+    const state = this.runtime.load(resolved);
+    const replay = this.#admitStepSettlement({
+      resolved, state, binding, stepResult, settlement, receipt,
+    });
+    if (replay !== null) return Object.freeze({ state, receipt: replay });
+    if (state.attempt?.failure !== null && state.attempt?.failure !== undefined) {
+      throw new CurrentFlowStateConflictError("Spec settlement cannot overwrite a failed Attempt");
+    }
+    if (errorSettlement) {
+      return this.#settleStepErrorResult({
+        resolved, binding, stepResult, settlement, receipt, lifecycleResult,
+      });
+    }
+    const next = this.confirmCurrentAttempt({
+      specId: resolved,
+      result: lifecycleResult,
+      stepResult,
+      settlementReceipt: receipt,
+      references,
+      specRecord: application.publication,
+      artifactWrites,
+      artifactRemovals,
+      artifactBaselines,
     });
     return Object.freeze({ state: next, receipt });
   }
@@ -4852,7 +4952,7 @@ export class CanonicalFlowManagerStore {
    * selected draft derivation, and confirms the source Step together.
    */
   #assertDraftCompletionApplication({ settlement, application }) {
-    const completionRoute = settlement instanceof DraftStepRoute
+    const completionRoute = settlement instanceof StepRoute
       && settlement.connector === DraftCompletionConnector;
     if (completionRoute !== (application instanceof DraftCompletionSettlementApplication)) {
       throw new CurrentFlowStateInvariantError(
@@ -5643,9 +5743,9 @@ export class CanonicalFlowManagerStore {
           || settlementReceipt.settlementKind !== "failure") {
           throw new CurrentFlowStateInvariantError("Draft Error Result requires its Failure settlement receipt");
         }
-        if (failure.category !== DRAFT_RESULT_ERROR_CATEGORY) {
+        if (failure.category !== STEP_RESULT_ERROR_CATEGORY) {
           throw new CurrentFlowStateInvariantError(
-            "Draft Error StepResult requires draft-result-error failure facts",
+            "Error StepResult requires step-result-error failure facts",
           );
         }
         failureResult = resultWithDraftStepResult(failureResult, nodeId, stepResult, settlementReceipt);
@@ -7204,12 +7304,12 @@ export class CanonicalFlowManagerStore {
   }
 
   /**
-   * Seal only the artifacts and lineage this Draft settlement can publish.
+   * Seal only the artifacts and lineage this Step settlement can publish.
    * Command-local values which do not cross the canonical boundary are
    * intentionally absent: replay identity protects durable effects, not a
    * caller's incidental object identity.
    */
-  #draftSettlementPublicationIdentity({
+  #stepSettlementPublicationIdentity({
     binding,
     settlement,
     draftCompletionApplication,
@@ -7271,7 +7371,7 @@ export class CanonicalFlowManagerStore {
       try {
         return JSON.parse(JSON.stringify(value.toJSON?.() ?? value));
       } catch (error) {
-        throw new CurrentFlowStateInvariantError(`Draft settlement ${field} must be JSON-serializable: ${error.message}`);
+        throw new CurrentFlowStateInvariantError(`Step settlement ${field} must be JSON-serializable: ${error.message}`);
       }
     };
     const planGateRepair = planGateRepairOutcome === null ? null : {
@@ -7282,23 +7382,23 @@ export class CanonicalFlowManagerStore {
     return new DraftStepSettlementPublication({
       // Error settlements delegate their only publication to failCurrentAttempt,
       // so raw artifact arguments cannot affect that durable transaction.
-      artifactWrites: settlement instanceof DraftStepErrorDecision
+      artifactWrites: settlement instanceof StepErrorDecision
         ? [] : artifactWrites.map(writeIdentity),
-      artifactRemovals: settlement instanceof DraftStepErrorDecision
+      artifactRemovals: settlement instanceof StepErrorDecision
         ? [] : (artifactRemovals ?? []).map(removalIdentity),
-      artifactBaselines: settlement instanceof DraftStepErrorDecision
+      artifactBaselines: settlement instanceof StepErrorDecision
         ? [] : (artifactBaselines ?? []).map(baselineIdentity),
-      testSourceBaseline: settlement instanceof DraftStepErrorDecision ? null : testSource,
+      testSourceBaseline: settlement instanceof StepErrorDecision ? null : testSource,
       command: commandIdentity,
-      gatePublication: settlement instanceof DraftStepErrorDecision
+      gatePublication: settlement instanceof StepErrorDecision
         ? null : jsonIdentity(gatePublication, "Gate publication"),
       draftCompletionApplication: draftCompletionApplication instanceof DraftCompletionSettlementApplication
         ? jsonIdentity(draftCompletionApplication, "Draft completion application")
         : null,
       lifecycleResult: jsonIdentity(lifecycleResult, "lifecycle result"),
-      references: settlement instanceof DraftStepErrorDecision ? null : jsonIdentity(references, "references"),
-      specRecord: settlement instanceof DraftStepErrorDecision ? null : jsonIdentity(specRecord, "Spec record"),
-      planGateRepairOutcome: settlement instanceof DraftStepErrorDecision ? null : planGateRepair,
+      references: settlement instanceof StepErrorDecision ? null : jsonIdentity(references, "references"),
+      specRecord: settlement instanceof StepErrorDecision ? null : jsonIdentity(specRecord, "Spec record"),
+      planGateRepairOutcome: settlement instanceof StepErrorDecision ? null : planGateRepair,
     });
   }
 

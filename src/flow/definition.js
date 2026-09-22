@@ -71,7 +71,8 @@ import {
   DraftRefineAwaitingAnswerResult,
   DraftRefineCompletedResult,
   DraftRefineWorkerRequiredResult,
-  DraftStepErrorResult,
+  SpecCreatedResult,
+  StepErrorResult,
   StepResult,
   stepResultDigest,
 } from "./engine/step-result.js";
@@ -80,6 +81,7 @@ import { DraftTriageConnector } from "./engine/connectors/draft/draft-triage-con
 import { DraftRepairConnector } from "./engine/connectors/draft/draft-repair-connector.js";
 import { DraftRefineConnector } from "./engine/connectors/draft/draft-refine-connector.js";
 import { DraftSpecConnector } from "./engine/connectors/draft/draft-spec-connector.js";
+import { SpecReviewConnector } from "./engine/connectors/spec/spec-review-connector.js";
 import {
   flattenSteps,
   findFirstPendingLeaf,
@@ -4234,16 +4236,16 @@ const DRAFT_COVERAGE_ROUTE = draftReviewRouteForKey("coverage");
  * this from the Definition once, then persistence carries these exact IDs to
  * the state machine.  State never infers a skip or reset range from topology.
  */
-export class DraftRouteEffects {
+export class StepRouteEffects {
   constructor({ skipStepIds = [], resetStepIds = [] } = {}) {
     for (const [field, stepIds] of Object.entries({ skipStepIds, resetStepIds })) {
       if (!Array.isArray(stepIds) || stepIds.some((stepId) => typeof stepId !== "string" || stepId === "")) {
-        throw new TypeError(`Draft route ${field} must contain Step IDs`);
+        throw new TypeError(`Step route ${field} must contain Step IDs`);
       }
-      if (new Set(stepIds).size !== stepIds.length) throw new TypeError(`Draft route ${field} must not contain duplicates`);
+      if (new Set(stepIds).size !== stepIds.length) throw new TypeError(`Step route ${field} must not contain duplicates`);
     }
     if (skipStepIds.some((stepId) => resetStepIds.includes(stepId))) {
-      throw new TypeError("Draft route effects cannot skip and reset the same Step");
+      throw new TypeError("Step route effects cannot skip and reset the same Step");
     }
     this.skipStepIds = Object.freeze([...skipStepIds]);
     this.resetStepIds = Object.freeze([...resetStepIds]);
@@ -4256,36 +4258,36 @@ export class DraftRouteEffects {
 }
 
 function draftRouteEffects(sourceStepId, targetStepId) {
-  return new DraftRouteEffects(contiguousLeafRouteEffects(
+  return new StepRouteEffects(contiguousLeafRouteEffects(
     collectFlowLeafIds(), sourceStepId, targetStepId,
   ));
 }
 
-const DRAFT_STEP_SETTLEMENT_TOKEN = Symbol("Definition-selected Draft Step settlement");
+const STEP_SETTLEMENT_TOKEN = Symbol("Definition-selected Step settlement");
 
-/** A complete Definition-selected disposition for one Draft Step Result. */
-export class DraftStepSettlement {
+/** A complete Definition-selected disposition for one concrete Step Result. */
+export class StepSettlement {
   constructor(token, result, kind) {
-    if (new.target === DraftStepSettlement) throw new TypeError("DraftStepSettlement is abstract");
-    if (token !== DRAFT_STEP_SETTLEMENT_TOKEN) {
-      throw new TypeError("Draft settlements must be selected by Definition");
+    if (new.target === StepSettlement) throw new TypeError("StepSettlement is abstract");
+    if (token !== STEP_SETTLEMENT_TOKEN) {
+      throw new TypeError("Step settlements must be selected by Definition");
     }
-    if (!(result instanceof StepResult)) throw new TypeError("Draft settlement requires its concrete Result");
+    if (!(result instanceof StepResult)) throw new TypeError("Step settlement requires its concrete Result");
     this.sourceStepId = result.stepId;
     this.resultKind = result.kind;
     this.resultType = result.type;
-    this.kind = requireString(kind, "draft settlement kind");
+    this.kind = requireString(kind, "step settlement kind");
   }
 }
 
 /** A Definition-selected target connection; only this settlement owns a Connector. */
-export class DraftStepRoute extends DraftStepSettlement {
+export class StepRoute extends StepSettlement {
   constructor(token, { result, targetStepId, connector, effects }) {
     super(token, result, "target-connection");
-    this.targetStepId = requireString(targetStepId, "draft route target");
-    if (typeof connector !== "function") throw new TypeError("draft route requires a Connector");
+    this.targetStepId = requireString(targetStepId, "step route target");
+    if (typeof connector !== "function") throw new TypeError("step route requires a Connector");
     this.connector = connector;
-    this.effects = effects instanceof DraftRouteEffects ? effects : new DraftRouteEffects(effects);
+    this.effects = effects instanceof StepRouteEffects ? effects : new StepRouteEffects(effects);
     Object.freeze(this);
   }
 
@@ -4300,11 +4302,12 @@ export class DraftStepRoute extends DraftStepSettlement {
 
 }
 
-export class DraftNextRoute extends DraftStepRoute {}
-export class DraftBranchRoute extends DraftStepRoute {}
-export class DraftLoopRoute extends DraftStepRoute {}
+export class DraftNextRoute extends StepRoute {}
+export class DraftBranchRoute extends StepRoute {}
+export class DraftLoopRoute extends StepRoute {}
+export class SpecNextRoute extends StepRoute {}
 
-export class DraftExecutionSettlement extends DraftStepSettlement {
+export class DraftExecutionSettlement extends StepSettlement {
   constructor(token, result) {
     super(token, result, "execution");
     Object.freeze(this);
@@ -4313,7 +4316,7 @@ export class DraftExecutionSettlement extends DraftStepSettlement {
   toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
 }
 
-export class DraftAwaitUserDecision extends DraftStepSettlement {
+export class DraftAwaitUserDecision extends StepSettlement {
   constructor(token, result) {
     if (!(result instanceof DraftRefineAwaitingAnswerResult)) {
       throw new TypeError("only draft-refine awaiting-answer may await user input");
@@ -4326,13 +4329,13 @@ export class DraftAwaitUserDecision extends DraftStepSettlement {
   toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
 }
 
-/** Failure category reserved for a persisted terminal Draft StepResult Error. */
-export const DRAFT_RESULT_ERROR_CATEGORY = "draft-result-error";
+/** Failure category reserved for a persisted terminal StepResult Error. */
+export const STEP_RESULT_ERROR_CATEGORY = "step-result-error";
 
-export class DraftStepErrorDecision extends DraftStepSettlement {
+export class StepErrorDecision extends StepSettlement {
   constructor(token, result) {
-    if (!(result instanceof DraftStepErrorResult)) {
-      throw new TypeError("draft error decision requires an Error Result");
+    if (!(result instanceof StepErrorResult)) {
+      throw new TypeError("error decision requires an Error Result");
     }
     super(token, result, "failure");
     this.stepId = result.stepId;
@@ -4722,8 +4725,8 @@ export class DraftStepExecutionState {
 export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue {
   constructor({ binding, result, settlement, publication, executionLifecycle = null, awaitQuestion = null } = {}) {
     super();
-    if (!(result instanceof StepResult) || !(settlement instanceof DraftStepSettlement)) {
-      throw new TypeError("Draft settlement receipt requires a Result and Settlement");
+    if (!(result instanceof StepResult) || !(settlement instanceof StepSettlement)) {
+      throw new TypeError("Step settlement receipt requires a Result and Settlement");
     }
     if (!(publication instanceof DraftStepSettlementPublication)) {
       throw new TypeError("Draft settlement receipt requires its publication identity");
@@ -4769,9 +4772,9 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
     this.resultType = result.type;
     this.resultDigest = stepResultDigest(result);
     this.settlementKind = settlement.kind;
-    this.targetStepId = settlement instanceof DraftStepRoute ? settlement.targetStepId : null;
-    this.effects = settlement instanceof DraftStepRoute ? settlement.effects : null;
-    this.connector = settlement instanceof DraftStepRoute
+    this.targetStepId = settlement instanceof StepRoute ? settlement.targetStepId : null;
+    this.effects = settlement instanceof StepRoute ? settlement.effects : null;
+    this.connector = settlement instanceof StepRoute
       ? Object.freeze({ name: settlement.connector.name })
       : null;
     this.publicationDigest = publication.digest;
@@ -5013,11 +5016,11 @@ export function settleDraftStepResult(stepId, result) {
   if (!(result instanceof StepResult) || result.stepId !== stepId) {
     throw new TypeError("draft settlement requires the Step's concrete Result");
   }
-  if (result instanceof DraftStepErrorResult) {
-    return new DraftStepErrorDecision(DRAFT_STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof StepErrorResult) {
+    return new StepErrorDecision(STEP_SETTLEMENT_TOKEN, result);
   }
   const route = (Route, targetStepId, connector) => {
-    return new Route(DRAFT_STEP_SETTLEMENT_TOKEN, {
+    return new Route(STEP_SETTLEMENT_TOKEN, {
       result,
       targetStepId,
       connector,
@@ -5031,7 +5034,7 @@ export function settleDraftStepResult(stepId, result) {
     || result instanceof DraftCoverageReviewExecutionRequiredResult
     || result instanceof DraftRefineWorkerRequiredResult
     || result instanceof DraftGateRepairWorkerRequiredResult) {
-    return new DraftExecutionSettlement(DRAFT_STEP_SETTLEMENT_TOKEN, result);
+    return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
   }
   if (result instanceof DraftQuestionsReviewPassedResult) {
     return route(DraftNextRoute, "draft-refine", DraftRefineConnector);
@@ -5049,7 +5052,7 @@ export function settleDraftStepResult(stepId, result) {
     return route(DraftNextRoute, "draft-refine", DraftRefineConnector);
   }
   if (result instanceof DraftRefineAwaitingAnswerResult) {
-    return new DraftAwaitUserDecision(DRAFT_STEP_SETTLEMENT_TOKEN, result);
+    return new DraftAwaitUserDecision(STEP_SETTLEMENT_TOKEN, result);
   }
   if (result instanceof DraftRefineCompletedResult) {
     return route(DraftNextRoute, "draft-coverage-review", DraftReviewConnector);
@@ -5077,6 +5080,27 @@ export function settleDraftStepResult(stepId, result) {
   }
   if (result instanceof DraftGateRepairAppliedResult || result instanceof DraftGateRepairCarryForwardResult) {
     return route(DraftNextRoute, "draft-coverage-review", DraftReviewConnector);
+  }
+  throw new TypeError(`${stepId} has no settlement for ${result.kind}`);
+}
+
+/** Select exactly one settlement from a concrete semantic Spec Step Result. */
+export function settleSpecStepResult(stepId, result) {
+  if (!(result instanceof StepResult) || result.stepId !== stepId) {
+    throw new TypeError("spec settlement requires the Step's concrete Result");
+  }
+  if (result instanceof StepErrorResult) {
+    return new StepErrorDecision(STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof SpecCreatedResult) {
+    return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
+      result,
+      targetStepId: "spec-review",
+      connector: SpecReviewConnector,
+      effects: new StepRouteEffects(contiguousLeafRouteEffects(
+        collectFlowLeafIds(), stepId, "spec-review",
+      )),
+    });
   }
   throw new TypeError(`${stepId} has no settlement for ${result.kind}`);
 }

@@ -58,7 +58,7 @@ test("acceptance has no Task Review handoff when no Task review artifact is a fo
   assert.deepEqual(store.taskReviewHandoffs(), []);
 });
 
-test("acceptance resolves deferred findings from a historical Attempt payload", () => {
+test("acceptance resolves the exact fingerprint when a historical Attempt repeats a source finding id", () => {
   const finding = {
     findingId: "R1-review-blocker",
     fingerprint: "a".repeat(64),
@@ -90,7 +90,14 @@ test("acceptance resolves deferred findings from a historical Attempt payload", 
         attempt: 1,
         artifact: {
           logicalKey: "test.requirement.review",
-          payload: { verdict: "REJECTED", blockingFindings: [finding] },
+          payload: {
+            verdict: "REJECTED",
+            blockingFindings: [{
+              ...finding,
+              fingerprint: "b".repeat(64),
+              reason: "a different observation reused the producer finding id",
+            }, finding],
+          },
         },
       },
       {
@@ -138,6 +145,14 @@ test("acceptance resolves deferred findings from a historical Attempt payload", 
   assert.deepEqual(blockers, []);
   assert.equal(deferred.evidence.length, 1);
   assert.equal(deferred.evidence[0].sourceFinding.findingId, finding.findingId);
+  assert.equal(deferred.evidence[0].sourceFinding.fingerprint, finding.fingerprint);
+
+  flowFindings.entries[0].fingerprint = "c".repeat(64);
+  const wrongFingerprintBlockers = [];
+  const missing = store.deferredFindings(wrongFingerprintBlockers);
+  assert.equal(missing.evidence.length, 0);
+  assert.equal(wrongFingerprintBlockers.length, 1);
+  assert.equal(wrongFingerprintBlockers[0].kind, "missing_deferred_source");
 });
 
 test("rejects a retired root-artifact acceptance fixture", async () => {

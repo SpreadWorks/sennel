@@ -41,7 +41,7 @@ import {
   DraftGateRepairAppliedResult,
   DraftGateRepairCarryForwardResult,
   DraftGateRepairWorkerRequiredResult,
-  DraftStepErrorResult,
+  StepErrorResult,
 } from "../../src/flow/engine/step-result.js";
 import { DraftGateProspectiveFacts } from "../../src/flow/lib/draft-gate-prospective.js";
 
@@ -196,9 +196,9 @@ test("Draft Gate Result factory maps pass, convergence, exhaustion, repair, and 
   })) instanceof DraftGateRepairRequiredResult, true);
   assert.equal(draftGateResult(new DraftGateProspectiveFacts({
     result: "fail", failureCategory: "tooling",
-  })) instanceof DraftStepErrorResult, true);
+  })) instanceof StepErrorResult, true);
   const failed = draftGateResult(new Error("prospective facts unavailable"));
-  assert.equal(failed instanceof DraftStepErrorResult, true);
+  assert.equal(failed instanceof StepErrorResult, true);
   assert.equal(failed.error.message, "prospective facts unavailable");
 });
 
@@ -212,7 +212,7 @@ test("Draft Review Result factories map typed PASS, findings, and Error facts wi
     assert.equal(factory(reviewFacts(phase, true)) instanceof FindingsResult, true);
     const error = new Error(`${phase} facts unavailable`);
     const failed = factory(error);
-    assert.equal(failed instanceof DraftStepErrorResult, true);
+    assert.equal(failed instanceof StepErrorResult, true);
     assert.equal(failed.error.message, error.message);
   }
 });
@@ -227,7 +227,7 @@ test("Draft Repair Result factories map typed changed, unchanged, and Error fact
     assert.equal(factory(new DraftRepairResultFacts({ stepId, draftChanged: false })) instanceof UnchangedResult, true);
     const error = new Error(`${stepId} facts unavailable`);
     const failed = factory(error);
-    assert.equal(failed instanceof DraftStepErrorResult, true);
+    assert.equal(failed instanceof StepErrorResult, true);
     assert.equal(failed.error.message, error.message);
   }
 });
@@ -237,7 +237,7 @@ test("Draft Gate Repair Result factory maps binding, outcomes, and accepted sema
   assert.equal(draftGateRepairResult(planGateRepairFacts("applied")) instanceof DraftGateRepairAppliedResult, true);
   assert.equal(draftGateRepairResult(planGateRepairFacts("rejected-no-progress")) instanceof DraftGateRepairCarryForwardResult, true);
   const failed = draftGateRepairResult(new Error("accepted outcome is inconsistent"));
-  assert.equal(failed instanceof DraftStepErrorResult, true);
+  assert.equal(failed instanceof StepErrorResult, true);
   assert.equal(failed.error.message, "accepted outcome is inconsistent");
 });
 

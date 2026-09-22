@@ -6,6 +6,8 @@
  * explicitly reviewed singleton and its renderer-declared dependencies.
  */
 
+import { FlowFindingSourceIdentity } from "./flow-findings.js";
+
 const IDENTIFIER = /^[A-Za-z][A-Za-z0-9_-]*$/;
 
 function text(value, field) {
@@ -135,11 +137,20 @@ export class ArtifactViewDependency {
  * arbitrary catalog browser.
  */
 export class ArtifactViewReferenceRule {
-  constructor({ name, sourceArtifactField, sourceFindingIdField, allowedLogicalKeys } = {}) {
+  constructor({
+    name,
+    sourceArtifactField,
+    sourceStepField,
+    sourceFindingIdField,
+    fingerprintField,
+    allowedLogicalKeys,
+  } = {}) {
     this.name = text(name, "artifact view reference rule name");
     if (!IDENTIFIER.test(this.name)) throw new Error("artifact view reference rule name must be an identifier");
     this.sourceArtifactField = text(sourceArtifactField, "artifact view reference sourceArtifactField");
+    this.sourceStepField = text(sourceStepField, "artifact view reference sourceStepField");
     this.sourceFindingIdField = text(sourceFindingIdField, "artifact view reference sourceFindingIdField");
+    this.fingerprintField = text(fingerprintField, "artifact view reference fingerprintField");
     this.allowedLogicalKeys = uniqueLogicalKeys(allowedLogicalKeys, "artifact view reference allowedLogicalKeys");
     Object.freeze(this);
   }
@@ -148,9 +159,12 @@ export class ArtifactViewReferenceRule {
     if (reference === null || typeof reference !== "object" || Array.isArray(reference)) {
       throw new Error(`${this.name} reference must be an object`);
     }
-    const sourceArtifact = text(reference[this.sourceArtifactField], `${this.name}.${this.sourceArtifactField}`);
-    const sourceFindingId = text(reference[this.sourceFindingIdField], `${this.name}.${this.sourceFindingIdField}`);
-    return Object.freeze({ sourceArtifact, sourceFindingId });
+    return new FlowFindingSourceIdentity({
+      sourceArtifact: reference[this.sourceArtifactField],
+      sourceStep: reference[this.sourceStepField],
+      sourceFindingId: reference[this.sourceFindingIdField],
+      fingerprint: reference[this.fingerprintField],
+    });
   }
 
   assertSourceLogicalKey(value) {
@@ -165,7 +179,9 @@ export class ArtifactViewReferenceRule {
     return {
       name: this.name,
       sourceArtifactField: this.sourceArtifactField,
+      sourceStepField: this.sourceStepField,
       sourceFindingIdField: this.sourceFindingIdField,
+      fingerprintField: this.fingerprintField,
       allowedLogicalKeys: [...this.allowedLogicalKeys],
     };
   }
@@ -335,7 +351,9 @@ export const FLOW_ARTIFACT_VIEW_REGISTRY = new ArtifactViewRegistry([
       new ArtifactViewReferenceRule({
         name: "deferredFindingSource",
         sourceArtifactField: "sourceArtifact",
+        sourceStepField: "sourceStep",
         sourceFindingIdField: "sourceFindingId",
+        fingerprintField: "fingerprint",
         allowedLogicalKeys: DEFERRED_FINDING_SOURCE_KEYS,
       }),
     ],

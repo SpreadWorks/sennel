@@ -149,6 +149,7 @@ function acceptanceDocument(location, {
     ...reviewOverride,
   };
   const original = {
+    fingerprint: "b".repeat(64),
     title: "Implementation review proposal",
     issue: "The user-visible source body remains exact.",
     file: "src/flow/lib/artifact-view.js",
@@ -160,6 +161,7 @@ function acceptanceDocument(location, {
   const originalSource = source("impl.review", deferred.sourceArtifact, { proposals: [original] });
   const reference = new ArtifactViewResolvedReference({
     ...deferred,
+    fingerprint: original.fingerprint,
     source: originalSource,
     finding: original,
     flowFinding: new ArtifactViewFlowFindingProjection({
@@ -167,6 +169,7 @@ function acceptanceDocument(location, {
       sourceStep: deferred.sourceStep,
       sourceArtifact: deferred.sourceArtifact,
       sourceFindingId: deferred.sourceFindingId,
+      fingerprint: original.fingerprint,
       rationale: "Retry exhaustion left this finding for an explicit acceptance decision.",
       disposition: "deferred",
       finalDisposition: deferred.finalDisposition,

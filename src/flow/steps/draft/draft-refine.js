@@ -3,10 +3,10 @@ import {
   DraftRefineAwaitingAnswerResult,
   DraftRefineCompletedResult,
   DraftRefineWorkerRequiredResult,
-  DraftStepErrorResult,
+  StepErrorResult,
 } from "../../engine/step-result.js";
 import { DraftService } from "../../services/draft-service.js";
-import { isDraftStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
+import { isStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
 import { DraftTransitionFacts } from "../../lib/draft-transition-facts.js";
 
 /** The sole draft-refine facts-to-Result decision. */
@@ -50,8 +50,8 @@ export class DraftRefineStep extends Step {
       await result.persist(this.#draftService);
       return result;
     } catch (error) {
-      if (isDraftStepPersistenceFailure(error)) throw error;
-      const result = new DraftStepErrorResult("draft-refine", error);
+      if (isStepPersistenceFailure(error)) throw error;
+      const result = new StepErrorResult("draft-refine", error);
       await result.persist(this.#draftService);
       return result;
     }

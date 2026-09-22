@@ -27,8 +27,8 @@ import {
   attachCanonicalCommandResultPublications,
 } from "./canonical-command-result.js";
 import {
+  CanonicalFlowFindingsStore,
   FlowFindingsArtifact,
-  readCatalogedSourceArtifact,
 } from "./flow-findings.js";
 import { collectUntrackedDiff } from "./run-gate.js";
 import { matchUpgradeRequiredSourcePaths, validateCanonicalUpgradeEvidence } from "./test-artifacts.js";
@@ -282,6 +282,11 @@ export class CanonicalAcceptanceArtifactStore {
     const flowFindings = this.readDocument("flow.findings", { optional: true });
     if (flowFindings === null) return Object.freeze({ findings: [], evidence: [] });
     const stored = new FlowFindingsArtifact(flowFindings.value);
+    const sourceStore = new CanonicalFlowFindingsStore({
+      flowManager: this.flowManager,
+      flowState: this.state,
+      nodeId: this.nodeId,
+    });
     const findings = [];
     const evidence = [];
     for (const entry of stored.entries) {
@@ -295,20 +300,12 @@ export class CanonicalAcceptanceArtifactStore {
         evidenceRefs: [],
       };
       findings.push(finding);
-      let source = null;
+      let sourceFinding = null;
       try {
-        source = readCatalogedSourceArtifact({
-          flowManager: this.flowManager,
-          flowState: this.state,
-          nodeId: this.nodeId,
-          sourceArtifact: finding.sourceArtifact,
-        });
+        sourceFinding = sourceStore.resolveFinding(entry.sourceIdentity());
       } catch (_) {
-        source = null;
+        sourceFinding = null;
       }
-      const sourceFinding = source === null
-        ? null
-        : source.findFinding(finding.sourceStep, finding.sourceFindingId);
       if (sourceFinding === null) {
         blocker(
           blockers,
