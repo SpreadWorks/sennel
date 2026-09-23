@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-22T14:27:05.451Z",
+  "analyzedAt": "2026-09-23T03:45:15.819Z",
   "package": {
     "entries": [
       {
@@ -3609,9 +3609,9 @@
       },
       {
         "file": "src/flow/definition.js",
-        "hash": "5fbee8d4b28fb1beb2ab02dea69b4358",
-        "lines": 6376,
-        "mtime": "2026-09-22T14:26:05.124Z",
+        "hash": "2a933100a2768a70b0b0d018e1079c3c",
+        "lines": 6449,
+        "mtime": "2026-09-23T03:44:31.567Z",
         "className": "definition",
         "methods": [
           "RetryRecoveryBasis",
@@ -3648,6 +3648,7 @@
           "GateNonblockingHandoff",
           "DefinitionNonblockingDecisionEffect",
           "DefinitionNonblockingEligibility",
+          "specGateNonblockingEligibilityForResult",
           "reviewNonblockingEligibilityForDisposition",
           "acceptanceBoundaryNonblockingEligibility",
           "resolveActiveNonblockingEligibility",
@@ -3757,6 +3758,7 @@
           "DraftLoopRoute",
           "SpecNextRoute",
           "DraftExecutionSettlement",
+          "SpecGateAwaitDecision",
           "DraftAwaitUserDecision",
           "StepErrorDecision",
           "DraftStepSettlementPublication",
@@ -3889,6 +3891,7 @@
           "./lib/draft-review-routes.js",
           "./engine/step-result.js",
           "./engine/connectors/draft/draft-review-connector.js",
+          "./engine/connectors/spec/spec-gate-target-connectors.js",
           "./engine/connectors/draft/draft-triage-connector.js",
           "./engine/connectors/draft/draft-repair-connector.js",
           "./engine/connectors/draft/draft-refine-connector.js",
@@ -3950,6 +3953,7 @@
           "GateNonblockingHandoff",
           "DefinitionNonblockingDecisionEffect",
           "DefinitionNonblockingEligibility",
+          "specGateNonblockingEligibilityForResult",
           "reviewNonblockingEligibilityForDisposition",
           "acceptanceBoundaryNonblockingEligibility",
           "resolveActiveNonblockingEligibility",
@@ -4059,6 +4063,7 @@
           "DraftLoopRoute",
           "SpecNextRoute",
           "DraftExecutionSettlement",
+          "SpecGateAwaitDecision",
           "DraftAwaitUserDecision",
           "StepErrorDecision",
           "DraftStepSettlementPublication",
@@ -4184,24 +4189,23 @@
           "src/flow/registry.js"
         ],
         "id": "2cb27b93",
-        "summary": "Central flow definition model for execution, transitions, branching, and recovery",
-        "detail": "Defines the workflow engine's typed domain model and definition-driven decision logic for flows and task steps. It resolves Task Review completion and reconciliation, step execution policies, prerequisites, next actions, initial nested and task steps, phases, nodes, branches, ordered leaves, and the latest in-progress leaf with bounded scanning. It governs retry recovery, requirement-test lifecycle facts, source handoffs, Gate and non-Gate outcomes, finalization recovery, nonblocking eligibility, lifecycle ownership and effects, review routing, draft and specification settlements, execution identities, quality-issue recovery routes, and connector-directed transitions. The module preserves durable evidence, attempt identity, approval, acceptance, state consistency, and definition-owned recovery invariants through explicit errors and immutable decision objects.",
+        "summary": "Defines the typed flow engine models and orchestration rules for state transitions, recovery, lifecycle actions, step resolution, routing, and flow/task definitions.",
+        "detail": "This module centralizes orchestration across draft, specification, task, gate, test, finalization, reporting, and acceptance stages. It validates typed facts and identities; derives prerequisites, phases, active steps, and nested steps; traverses leaves and branches; resolves Task Review completion and reconciliation; validates source-quality recovery plans; applies retry and tooling limits; assigns side-effect ownership; selects blocking or nonblocking transitions; constructs dispatcher and lifecycle actions; settles step results into routes; manages execution and publication evidence; and provides node lookup plus the ordered flow and task definitions consumed by the runtime.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-22T14:28:34.426Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
         "keywords": [
-          "workflow definition",
+          "flow orchestration",
           "state transitions",
-          "task review",
+          "recovery planning",
           "step resolution",
-          "branching",
-          "retry recovery",
-          "lifecycle planning",
-          "gate evaluation",
-          "flow nodes"
+          "prerequisite derivation",
+          "lifecycle actions",
+          "branch traversal",
+          "route definitions"
         ]
       },
       {
@@ -4540,6 +4544,44 @@
         ]
       },
       {
+        "file": "src/flow/engine/connectors/spec/spec-gate-target-connectors.js",
+        "hash": "3825eb72973abbf65aa2799b9a96285c",
+        "lines": 10,
+        "mtime": "2026-09-23T03:44:31.567Z",
+        "className": "spec-gate-target-connectors",
+        "methods": [
+          "SpecGateRepairConnector",
+          "SpecGateApprovalConnector"
+        ],
+        "imports": [
+          "../../step-connector.js"
+        ],
+        "exports": [
+          "SpecGateRepairConnector",
+          "SpecGateApprovalConnector"
+        ],
+        "extends": "StepConnector",
+        "usedBy": [
+          "src/flow/definition.js"
+        ],
+        "id": "f8f41f70",
+        "summary": "Provides connector classes for Spec Gate repair and approval steps.",
+        "detail": "The module imports the shared StepConnector base and exposes SpecGateRepairConnector and SpecGateApprovalConnector as specialized connector types for Spec Gate workflow actions.",
+        "chapter": "project_structure",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-23T03:47:04.759Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "Spec Gate",
+          "connectors",
+          "repair",
+          "approval",
+          "StepConnector"
+        ]
+      },
+      {
         "file": "src/flow/engine/connectors/spec/spec-repair-connector.js",
         "hash": "b4f4189410a7507d75939f914ff07eed",
         "lines": 7,
@@ -4611,13 +4653,14 @@
       },
       {
         "file": "src/flow/engine/connectors/spec/spec-step-binding.js",
-        "hash": "930338830719f9167e6b6b05210dba71",
-        "lines": 51,
-        "mtime": "2026-09-22T14:26:05.125Z",
+        "hash": "69f70d735fa71d7ceaba56fa25d22847",
+        "lines": 64,
+        "mtime": "2026-09-23T03:44:31.568Z",
         "className": "spec-step-binding",
         "methods": [
           "SpecWorkerStepBinding",
-          "SpecReviewStepBinding"
+          "SpecReviewStepBinding",
+          "SpecGateEvaluationBinding"
         ],
         "imports": [
           "../../../lib/flow-artifact-authority.js",
@@ -4627,27 +4670,29 @@
         ],
         "exports": [
           "SpecWorkerStepBinding",
-          "SpecReviewStepBinding"
+          "SpecReviewStepBinding",
+          "SpecGateEvaluationBinding"
         ],
         "extends": "StepBinding",
         "usedBy": [
           "src/flow/engine/connectors/spec/spec-entry-connector.js"
         ],
         "id": "64cd7e0a",
-        "summary": "Binds worker and review execution for Spec stages while enforcing handoff and revision consistency.",
-        "detail": "This module defines SpecWorkerStepBinding and SpecReviewStepBinding on top of StepBinding. The worker binding requires a Spec handoff request, while the review binding requires an active Attempt and rejects stale bindings that do not match the canonical Spec revision. The module uses artifact-authority, worker-handoff, canonical step-state, and Spec revision identity helpers to produce validated step state.",
+        "summary": "Implements step bindings for Spec worker execution, Spec review, and Spec Gate evaluation.",
+        "detail": "SpecWorkerStepBinding validates worker artifact handoff requests and returns canonical state, while SpecReviewStepBinding enforces an active Attempt and current Spec revision. SpecGateEvaluationBinding also requires an active Attempt, coordinating Spec workflow state with artifact and revision authorities.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-22T14:28:34.426Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
         "keywords": [
-          "Spec binding",
-          "worker handoff",
+          "step binding",
+          "Spec worker",
           "Spec review",
-          "canonical revision",
-          "step state",
+          "Spec Gate",
+          "artifact handoff",
+          "revision identity",
           "Attempt"
         ]
       },
@@ -4824,9 +4869,9 @@
       },
       {
         "file": "src/flow/engine/step-result.js",
-        "hash": "e0b1d357372d18fe90990bd30e4481bc",
-        "lines": 270,
-        "mtime": "2026-09-22T14:26:05.125Z",
+        "hash": "0fc03040ed419d118cba81ca15ccaf38",
+        "lines": 331,
+        "mtime": "2026-09-23T03:44:31.568Z",
         "className": "step-result",
         "methods": [
           "StepResult",
@@ -4839,7 +4884,8 @@
           "storedError",
           "rehydrateError",
           "declareResult",
-          "resultClass"
+          "resultClass",
+          "errorResultClass"
         ],
         "imports": [
           "node:crypto",
@@ -4854,9 +4900,25 @@
           "STEP_RESULT_TYPE",
           "DraftCreatedResult",
           "SpecCreatedResult",
+          "SpecPlanGateRepairAppliedResult",
+          "SpecPlanGateRepairNoProgressResult",
           "SpecTriageCompletedResult",
           "SpecRepairChangedResult",
           "SpecRepairUnchangedResult",
+          "SpecGatePassedResult",
+          "SpecGateRepairRequiredResult",
+          "SpecGateRetryRequiredResult",
+          "SpecGateDeferredResult",
+          "SpecGateAwaitingDecisionResult",
+          "SpecGateRecoveredResult",
+          "TaskSpecGatePassedResult",
+          "TaskSpecGateRepairRequiredResult",
+          "TaskSpecGateRetryRequiredResult",
+          "TaskSpecGateDeferredResult",
+          "TaskSpecGateAwaitingDecisionResult",
+          "TaskSpecGateRecoveredResult",
+          "SpecGateBlockedResult",
+          "TaskSpecGateBlockedResult",
           "SpecReviewExecutionRequiredResult",
           "SpecReviewPassedResult",
           "SpecReviewAdvisoryResult",
@@ -4891,12 +4953,12 @@
           "src/flow/registry.js"
         ],
         "id": "886fac8d",
-        "summary": "Defines immutable, typed, persistable step results and their registry and rehydration mechanisms.",
-        "detail": "This module implements the StepResult base class, error serialization and rehydration, SHA-256 result digests, typed result-class declarations, and a registry of supported outcomes across Draft, Spec, and related flow stages. It validates registered step identifiers, fixed result types, persistence services, stored fields, and StepResult compatibility during rehydration. It also exposes error results, the complete registry, and per-step result kinds.",
+        "summary": "Defines, serializes, persists, rehydrates, and validates typed flow step results.",
+        "detail": "This module establishes the StepResult base model, immutable error data, stored-error rehydration, SHA-256 result digests, typed result-class declarations, and a registry of Spec, Draft, and Task Gate outcomes. It validates registered steps and result metadata during persistence and rehydration, and exposes result kinds by step.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-22T14:28:34.426Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
         "keywords": [
@@ -4904,8 +4966,9 @@
           "result registry",
           "rehydration",
           "persistence",
+          "typed outcomes",
           "error serialization",
-          "flow outcomes"
+          "digest"
         ]
       },
       {
@@ -5864,7 +5927,8 @@
           "src/flow/lib/task-review-accounting.js",
           "src/flow/lib/task-review-stage-artifacts.js",
           "src/flow/lib/test-chain-transition-facts.js",
-          "src/flow/registry.js"
+          "src/flow/registry.js",
+          "src/flow/lib/spec-gate-prospective.js"
         ],
         "id": "ee25f72a",
         "summary": "Models canonical command artifacts, publications, and attempt history.",
@@ -5989,9 +6053,9 @@
       },
       {
         "file": "src/flow/lib/canonical-flow-manager-store.js",
-        "hash": "1677568ead35c5106212790cfe0939ff",
-        "lines": 7523,
-        "mtime": "2026-09-22T14:26:05.126Z",
+        "hash": "5c39c2f44d38ca2aaa77b923fefbfbfc",
+        "lines": 7811,
+        "mtime": "2026-09-23T03:44:31.569Z",
         "className": "canonical-flow-manager-store",
         "methods": [
           "CanonicalRawActivityReplayOnlyError",
@@ -6044,6 +6108,7 @@
           "draftCompletionLineageBinding",
           "draftCompletionOutputBinding",
           "gateRetryAttempt",
+          "gateRecoveredAttempt",
           "leafNodes",
           "retryAttempt",
           "exhaustedRecoveryAttempt",
@@ -6112,6 +6177,7 @@
           "./draft-artifact-promotion.js",
           "./draft-completion-connector.js",
           "./draft-gate-prospective.js",
+          "../steps/spec/spec-gate-result.js",
           "./step-outcome.js",
           "./spec-review-artifacts.js",
           "../../spec/lib/render-contract.js",
@@ -6142,31 +6208,32 @@
           "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "041f2538",
-        "summary": "Canonical flow manager store for validating, persisting, and advancing durable flow execution state.",
-        "detail": "Implements the canonical orchestration and persistence boundary for specification, task, review, gate, test-chain, draft, source-handoff, approval, artifact, issue-log, and outbox workflows. It coordinates canonical Version and runtime state through atomic files, typed artifact catalogs, explicit Flow Version resolution, producer ownership checks, active Attempt and snapshot consistency requirements, and typed decision and settlement receipt validation. The store detects stale, conflicting, incomplete, or malformed evidence; records canonical activities, artifacts, metrics, notes, policies, nonblocking activation decisions, step settlements, command Attempt history, and command result publications; archives Task Review retries; publishes drafts; supports retries, recovery, rewinds, deferred findings, and failure handling; and projects persisted runtime state for consumers while enforcing publication and ownership invariants.",
+        "summary": "Canonical Flow Version 1 manager store for validating state transitions, settling attempts, persisting artifacts, and coordinating reviews, execution, publication, and recovery.",
+        "detail": "This module is the persistence and coordination boundary for canonical flow operations. It validates flow creation and task, step, attempt, retry, gate, review, requirement-test, source-handoff, draft-execution, approval, publication, producer, consumer, activation, and continuation transitions. It enforces typed admissions, Definition decisions, artifact-catalog ownership, runtime paths, identity and digest checks, immutable projections, replay protection, conflict detection, and invariants tied to the active attempt and published evidence. The store serializes runtime metadata and command histories, archives retries, settles drafts, reads canonical artifacts, records metrics and notes, resolves active specifications, manages issue logs and outbox operations, and provides recovery routes while rejecting stale, conflicting, malformed, or out-of-catalog state.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-22T14:28:34.426Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "flow",
+        "app": "senti",
         "keywords": [
-          "canonical flow store",
-          "workflow orchestration",
-          "runtime persistence",
-          "artifact ownership",
+          "canonical flow state",
+          "transition validation",
           "attempt settlement",
-          "retry recovery",
-          "draft publication",
-          "state invariants"
+          "artifact persistence",
+          "artifact catalog",
+          "review lifecycle",
+          "recovery handling",
+          "replay protection",
+          "runtime metadata"
         ]
       },
       {
         "file": "src/flow/lib/canonical-flow-runtime.js",
-        "hash": "9a2e2c6aa3c185925923b7c3cb63391a",
-        "lines": 1376,
-        "mtime": "2026-09-20T16:55:26.094Z",
+        "hash": "7341fa5290e6283e241775b0e0d852f1",
+        "lines": 1406,
+        "mtime": "2026-09-23T03:44:31.569Z",
         "className": "canonical-flow-runtime",
         "methods": [
           "CanonicalFlowRuntime",
@@ -6191,22 +6258,23 @@
           "src/flow/lib/issue-log-store.js"
         ],
         "id": "8d606675",
-        "summary": "Runtime facade for canonical Flow Version operations and transitions",
-        "detail": "Provides the CanonicalFlowRuntime API for loading workspace state, accessing stores and catalogs, applying activities, managing Attempt transitions and outbox operations, recording observations, publishing artifacts, and enforcing typed Flow state requirements.",
+        "summary": "Canonical runtime facade for applying Flow Version 1 activities and managing attempts, artifacts, observations, outbox transitions, and publications.",
+        "detail": "Defines CanonicalFlowRuntime as the high-level runtime API over canonical flow stores. It validates specification identifiers, attempts, positive integers, current definitions, typed retry recovery publications, artifact writes, upgrade and plugin publications, dispatch receipts, deferred findings, outbox transitions, metrics, and notes. Runtime methods construct and apply typed activities, enforce current Attempt requirements, manage attempt transitions, expose catalog and snapshot readers, and resolve canonical Version 1 storage through the workspace.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-20T17:00:12.462Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "flow",
+        "app": "senti",
         "keywords": [
           "canonical runtime",
-          "flow transitions",
-          "Attempt lifecycle",
-          "outbox operations",
+          "Flow Version 1",
+          "activity transitions",
           "artifact publication",
-          "state management"
+          "outbox",
+          "attempt management",
+          "flow findings"
         ]
       },
       {
@@ -6280,9 +6348,9 @@
       },
       {
         "file": "src/flow/lib/canonical-gate-observation-cycle.js",
-        "hash": "58ec11982b712b8ded9bcdbf0ba40770",
-        "lines": 864,
-        "mtime": "2026-09-20T02:18:09.323Z",
+        "hash": "c0313be795247ccb7483eb5b3e54f8e8",
+        "lines": 865,
+        "mtime": "2026-09-23T03:44:31.570Z",
         "className": "canonical-gate-observation-cycle",
         "methods": [
           "CanonicalGateObservationCycle",
@@ -6329,19 +6397,21 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "2f1f9399",
-        "summary": "Builds a canonical observation and repair cycle for Gate results and convergence.",
-        "detail": "CanonicalGateObservationCycle validates plan Gate repair records, outcome artifacts, source evidence, attempt histories, publication activities, lineage, and catalog fingerprints. It derives read models, post-repair results, occurrence settlements, terminal repairs, convergence status, and recurrence handoffs while classifying invalid, passed, open, carried, or blocked outcomes.",
+        "summary": "Canonical Gate observation cycle that validates repair evidence, tracks Gate results, and computes convergence and recurrence status.",
+        "detail": "Builds a typed read model for plan-Gate observation and repair cycles. It matches Gate nodes, consumers, source evidence, attempts, activities, catalog descriptors, publication lineage, and result histories; validates repair outcome artifacts and post-repair settlements; identifies blocking observations; and rejects stale, duplicated, malformed, or mismatched records. It exposes transition reads, convergence entries, terminal repair handling, recurrence handoffs, and status classifications such as passed, open, carried-to-spec, blocked-no-progress, and rejected-invalid.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-20T02:20:54.779Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
+        "app": "senti",
         "keywords": [
-          "Gate observation",
+          "Gate observations",
           "plan Gate repair",
-          "lineage validation",
-          "attempt history",
+          "read model",
+          "repair lineage",
+          "attempt settlement",
           "convergence status",
           "recurrence handoff"
         ]
@@ -6820,9 +6890,9 @@
       },
       {
         "file": "src/flow/lib/current-flow-state.js",
-        "hash": "c0063d479ce87ac69370575c952d2778",
-        "lines": 9884,
-        "mtime": "2026-09-22T12:22:09.378Z",
+        "hash": "5cb178f05b04e6e84f68c308109e6e23",
+        "lines": 9944,
+        "mtime": "2026-09-23T03:44:31.572Z",
         "className": "current-flow-state",
         "methods": [
           "CanonicalFlowArtifactWrite",
@@ -7123,6 +7193,7 @@
           "src/flow/lib/run-recover-finalization.js",
           "src/flow/lib/run-review.js",
           "src/flow/lib/source-handoff-persistence.js",
+          "src/flow/lib/spec-gate-prospective.js",
           "src/flow/lib/spec-step-connection.js",
           "src/flow/lib/task-execution-overrun.js",
           "src/flow/lib/task-review-aborted-work-unit.js",
@@ -7136,24 +7207,24 @@
           "src/flow/registry.js"
         ],
         "id": "42607a0e",
-        "summary": "Defines and persists the validated current-flow state machine, including execution transitions, activities, artifacts, recovery, versioning, and migration outputs.",
-        "detail": "Implements immutable flow state and transition logic for node lifecycles, execution frontiers, attempts, tasks, gates, reviews, retries, failures, dynamic task admission, policies, finalization, and recovery. It validates serialized state, flow identity, specifications, canonical revisions, transition payloads, typed identities, resource contracts, histories, and migration semantics, rejecting specification identity mismatches. The module manages canonical and runtime artifacts, observations, catalog references, review and activity evidence, artifact publication and removal, draft execution settlement, and outbox coordination. It maintains an append-only activities.jsonl journal with authority and offset checks, serializes state, and provides locked snapshot persistence through CurrentFlowStateStore. CurrentFlowVersionStore extends this model with atomic version creation, canonical specification and revision validation, artifact catalog access, review publication, task admission, runtime artifact coordination, and Git-backed continuation. It also builds validated FlowVersionMigrationOutputSet results for current-flow version migration.",
+        "summary": "Implements the validated current-flow state machine, durable persistence, recovery, and canonical version storage for flow execution.",
+        "detail": "Models flow identity, lifecycle, policies, artifacts, activities, nodes, tasks, attempts, steps, gates, reviews, requirement tests, failures, retries, recoveries, approvals, worker proposals, and dynamic task admission through immutable state objects and validated transitions. Enforces identity, sequencing, execution-frontier, result, failure-disposition, receipt, evidence-binding, artifact-authority, publication, finalization, historical-continuation, and canonical-persistence invariants. Provides typed artifact writes, removals, baselines, task materialization, draft execution, and recovery for interrupted or failed runs. Serializes durable state and maintains an append-only activities.jsonl journal with byte offsets, contiguous confirmation ordering, file-authority checks, and conflict detection. Stores flow.json under locking, verifies it against the activity journal, supports historical continuation and adoption, rejects stale or inconsistent updates, atomically creates version roots, manages canonical specification revisions and review artifacts, validates typed locations and Spec identity, checks filesystem roots, constructs typed migration outputs, and exposes canonical transition views for runtime consumers.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-22T12:26:30.853Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
         "app": "sennel",
         "keywords": [
           "flow state machine",
           "activity journal",
-          "state validation",
-          "artifact publication",
-          "attempt recovery",
-          "task admission",
-          "version store",
-          "version migration"
+          "execution lifecycle",
+          "invariant validation",
+          "artifact authority",
+          "retry recovery",
+          "canonical persistence",
+          "version store"
         ]
       },
       {
@@ -7204,9 +7275,9 @@
       },
       {
         "file": "src/flow/lib/definition-lifecycle-failure.js",
-        "hash": "3b42e986a7e2afa2af05c602158c3af2",
-        "lines": 195,
-        "mtime": "2026-09-22T08:35:02.352Z",
+        "hash": "f253ba73a77c0297456cc837f5f5ec95",
+        "lines": 197,
+        "mtime": "2026-09-23T03:44:31.572Z",
         "className": "definition-lifecycle-failure",
         "methods": [
           "StepPersistenceFailure",
@@ -7238,21 +7309,22 @@
           "src/flow/registry.js"
         ],
         "id": "604504fc",
-        "summary": "Defines lifecycle failure handling and attempt binding for flow steps.",
-        "detail": "The module models step persistence failures, extracts command and failure facts, checks published task-gate results, and binds definition lifecycle attempts to failure handling through the flow manager.",
+        "summary": "Models definition lifecycle attempt binding and step-result persistence failures.",
+        "detail": "Imports attempt, ownership, artifact-history, task-step, review, and aborted-work-unit types. It defines a persistence failure code and error class, validates persistence failures, extracts command names and failure facts, checks published current-task gate results against attempts, and binds lifecycle failures to the current attempt.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-22T08:41:14.710Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "senti",
+        "app": "flow",
         "keywords": [
-          "lifecycle failure",
-          "step persistence",
+          "definition lifecycle",
           "attempt binding",
+          "step persistence",
           "failure facts",
-          "flow manager"
+          "task gate",
+          "artifact history"
         ]
       },
       {
@@ -7569,24 +7641,21 @@
       },
       {
         "file": "src/flow/lib/draft-gate-prospective.js",
-        "hash": "ec2c8760dc3597665ac1dde2ac91f026",
-        "lines": 133,
-        "mtime": "2026-09-20T02:18:09.326Z",
+        "hash": "ea6030ff64dd424c525c380ac7a39103",
+        "lines": 68,
+        "mtime": "2026-09-23T03:44:31.572Z",
         "className": "draft-gate-prospective",
         "methods": [
           "DraftGateProspectiveFacts",
-          "DraftGateIssuePublication",
-          "DraftGatePublicationIntent",
-          "jsonClone",
-          "stableJson"
+          "DraftGatePublicationIntent"
         ],
         "imports": [
-          "node:crypto"
+          "./gate-issue-publication.js"
         ],
         "exports": [
           "DraftGateProspectiveFacts",
-          "DraftGateIssuePublication",
-          "DraftGatePublicationIntent"
+          "DraftGatePublicationIntent",
+          "DraftGateIssuePublication"
         ],
         "extends": null,
         "usedBy": [
@@ -7594,22 +7663,22 @@
           "src/flow/lib/gate-transition-facts.js"
         ],
         "id": "f59944f5",
-        "summary": "Models prospective Draft Gate facts and publication intent with strict validation.",
-        "detail": "Defines JSON-clonable prospective gate facts, issue publications bound to exact Attempts, and publication intents for passing or failing outcomes. Passing intents reject issue evidence, while failing intents require typed issue evidence and preserve the associated convergence, retry, and failure classification data.",
+        "summary": "Defines prospective Draft Gate facts and publication intent with typed issue evidence rules.",
+        "detail": "Re-exports DraftGateIssuePublication and provides DraftGateProspectiveFacts plus DraftGatePublicationIntent. The extract rejects invalid failure classification, convergence facts, and retry usage, requires typed facts, forbids issue evidence on passing publications, and requires typed issue evidence on failing publications.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-20T02:20:54.779Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "senti",
+        "app": "flow",
         "keywords": [
           "Draft Gate",
           "prospective facts",
           "publication intent",
           "issue evidence",
-          "Attempt binding",
-          "retry classification"
+          "retry usage",
+          "convergence"
         ]
       },
       {
@@ -9231,6 +9300,52 @@
         ]
       },
       {
+        "file": "src/flow/lib/gate-issue-publication.js",
+        "hash": "5688f8c123adfe7e29745eadc7afea23",
+        "lines": 76,
+        "mtime": "2026-09-23T03:44:31.572Z",
+        "className": "gate-issue-publication",
+        "methods": [
+          "GateIssuePublication",
+          "DraftGateIssuePublication",
+          "SpecGateIssuePublication",
+          "jsonClone",
+          "stableJson"
+        ],
+        "imports": [
+          "node:crypto"
+        ],
+        "exports": [
+          "GateIssuePublication",
+          "DraftGateIssuePublication",
+          "SpecGateIssuePublication"
+        ],
+        "extends": "GateIssuePublication",
+        "usedBy": [
+          "src/flow/lib/draft-gate-prospective.js",
+          "src/flow/lib/gate-transition-facts.js",
+          "src/flow/lib/spec-gate-prospective.js"
+        ],
+        "id": "668bf9ae",
+        "summary": "Implements immutable, validated Gate issue publications for Draft and Spec Gates.",
+        "detail": "Clones and validates JSON-compatible values, produces stable JSON representations, and defines GateIssuePublication with exact Attempt binding and valid entries. DraftGateIssuePublication and SpecGateIssuePublication specialize the publication types, while Spec Gate publications additionally validate their phase.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-09-23T03:47:04.759Z",
+          "attempts": 1
+        },
+        "app": "flow",
+        "keywords": [
+          "Gate issue publication",
+          "Attempt binding",
+          "Draft Gate",
+          "Spec Gate",
+          "JSON validation",
+          "stable serialization"
+        ]
+      },
+      {
         "file": "src/flow/lib/gate-observation-convergence.js",
         "hash": "fb5b077017a95d453dc5106d8383d717",
         "lines": 901,
@@ -9299,7 +9414,8 @@
           "src/flow/lib/plan-gate-repair.js",
           "src/flow/lib/worker-artifact-handoff.js",
           "src/flow/definition.js",
-          "src/flow/lib/draft-repair-operations.js"
+          "src/flow/lib/draft-repair-operations.js",
+          "src/flow/lib/spec-step-connection.js"
         ],
         "id": "3267397d",
         "summary": "Models Gate observation identities, repair reports, outcomes, and canonical convergence cycles.",
@@ -9526,12 +9642,14 @@
       },
       {
         "file": "src/flow/lib/gate-transition-facts.js",
-        "hash": "a83e1c8121dd8370dc00621509a5791e",
-        "lines": 763,
-        "mtime": "2026-09-20T02:18:09.326Z",
+        "hash": "067a28487edbf6b092bf2373b0dfb173",
+        "lines": 860,
+        "mtime": "2026-09-23T03:44:31.572Z",
         "className": "gate-transition-facts",
         "methods": [
+          "SpecGateAdmissionRefusal",
           "readProspectiveDraftGateFacts",
+          "readProspectiveSpecGateFacts",
           "readCurrentGateTransitionFacts",
           "gateRetryUsage",
           "required",
@@ -9559,17 +9677,25 @@
           "./task-gate-classification-recovery.js",
           "./canonical-gate-observation-cycle.js",
           "./plan-gate-repair.js",
-          "./draft-gate-prospective.js"
+          "./draft-gate-prospective.js",
+          "./gate-issue-publication.js",
+          "./spec-gate-prospective.js",
+          "./nonblocking-route.js",
+          "node:crypto"
         ],
         "exports": [
+          "SpecGateAdmissionRefusal",
           "readProspectiveDraftGateFacts",
+          "readProspectiveSpecGateFacts",
           "readCurrentGateTransitionFacts",
-          "DraftGateProspectiveFacts"
+          "DraftGateProspectiveFacts",
+          "SpecGateProspectiveFacts"
         ],
-        "extends": null,
+        "extends": "Error",
         "usedBy": [
           "src/flow/lib/canonical-flow-manager-store.js",
           "src/flow/lib/gate-transition-application.js",
+          "src/flow/lib/get-next-action.js",
           "src/flow/lib/nonblocking.js",
           "src/flow/lib/run-claim-next-action.js",
           "src/flow/lib/run-gate.js",
@@ -9578,22 +9704,23 @@
           "src/flow/registry.js"
         ],
         "id": "16206052",
-        "summary": "Reads and validates canonical facts used to transition Task, implementation, and integration Gates.",
-        "detail": "Coordinates gate retry usage, prospective Draft Gate observations, plan-repair evidence, review-finding readiness, task lifecycle identity, canonical artifacts, and Activity history. It materializes transition facts only when gate results, source artifacts, failure classifications, lineage, Attempt bindings, and persisted producer Activities agree with the active flow state.",
+        "summary": "Computes and validates canonical Gate transition facts, retries, failures, lineage, and settlement progress.",
+        "detail": "The extract reads prospective Draft and Spec Gate facts, evaluates retry usage, validates issue publications and evaluator results, and constructs GateTransitionFacts. It also reconciles canonical Gate results with source artifacts, failure classifications, task identities, Attempt history, review readiness, classification recovery, metrics, issue logs, and Activity ordering.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-20T02:20:54.779Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "senti",
+        "app": "flow",
         "keywords": [
-          "gate transitions",
-          "canonical artifacts",
-          "Task Gate",
-          "failure classification",
+          "Gate transitions",
+          "prospective facts",
+          "retry policy",
           "lineage validation",
-          "review readiness"
+          "failure classification",
+          "settlement progress",
+          "issue logs"
         ]
       },
       {
@@ -9917,9 +10044,9 @@
       },
       {
         "file": "src/flow/lib/get-next-action.js",
-        "hash": "d1b8bd5301fbe27baed764762c998419",
-        "lines": 1081,
-        "mtime": "2026-09-21T01:42:38.627Z",
+        "hash": "8a5f5509cac03961c1e8409cb24721a2",
+        "lines": 1131,
+        "mtime": "2026-09-23T03:44:31.573Z",
         "className": "get-next-action",
         "methods": [
           "NextActionPlanError",
@@ -9965,6 +10092,7 @@
           "../../lib/product.js",
           "./next-action-directive.js",
           "./current-flow-state.js",
+          "./gate-transition-facts.js",
           "./user-action-prompt.js",
           "./flow-decision-prompt.js",
           "../../lib/flow-target-guard.js",
@@ -10004,23 +10132,23 @@
           "src/flow/lib/run-dispatch.js"
         ],
         "id": "c68afd69",
-        "summary": "The next-action planner derives guarded, canonical Flow directives from persisted state, schemas, rules, task context, recovery evidence, and Definition-selected transitions.",
-        "detail": "This module loads and validates canonical schemas and persistent skill rules, derives state and task-context projections, captures target bindings, and constructs next actions for completed, aborted, dormant, blocked, approval, acceptance, repair, retry, draft, gate, and final-regression paths. It validates target identity, Definition keys, worker context, artifact contracts, and draft lifecycle data, while attaching guarded commands and serialized bindings to prevent execution against changed Flow state.",
-        "chapter": "internal_design",
+        "summary": "Builds canonical next-action plans and guarded directives for the current Flow state.",
+        "detail": "GetNextActionCommand loads schemas and rules, derives state and task-context projections, captures target bindings, and routes approval, acceptance, Gate, retry, regression, review, and blocked outcomes. It creates executable, repair, await-user, completed, aborted, and dormant directives while validating canonical target identity and persisted artifacts.",
+        "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-21T01:45:29.890Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "sennel",
+        "app": "flow",
         "keywords": [
-          "next-action planning",
-          "guarded commands",
-          "task context",
-          "Definition routing",
-          "recovery planning",
-          "draft lifecycle",
-          "final regression"
+          "next action",
+          "Flow command",
+          "guarded directive",
+          "state projection",
+          "retry recovery",
+          "user decision",
+          "canonical target"
         ]
       },
       {
@@ -10742,7 +10870,8 @@
           "src/flow/lib/run-repair-plan-gate.js",
           "src/flow/lib/run-settle-gate-transition.js",
           "src/flow/registry.js",
-          "src/flow/lib/nonblocking.js"
+          "src/flow/lib/nonblocking.js",
+          "src/flow/lib/get-next-action.js"
         ],
         "id": "9af02c49",
         "summary": "Reads and validates current canonical facts used to authorize non-gate transitions.",
@@ -11007,7 +11136,8 @@
           "src/flow/definition.js",
           "src/flow/lib/nonblocking.js",
           "src/flow/lib/step-outcome.js",
-          "src/flow/registry.js"
+          "src/flow/registry.js",
+          "src/flow/lib/gate-transition-facts.js"
         ],
         "id": "d9cd72f1",
         "summary": "Defines the supported nonblocking Flow routes and maps source steps to their canonical artifacts, route kinds, phases, targets, and skipped steps.",
@@ -11030,9 +11160,9 @@
       },
       {
         "file": "src/flow/lib/nonblocking.js",
-        "hash": "09573bb612841fea41a8475c80cd5c2c",
-        "lines": 731,
-        "mtime": "2026-09-21T01:42:38.627Z",
+        "hash": "5ce581d95ddcd133d572433bf750a93a",
+        "lines": 736,
+        "mtime": "2026-09-23T03:44:31.573Z",
         "className": "nonblocking",
         "methods": [
           "definitionNonblockingEligibilityForActiveFlow",
@@ -11116,22 +11246,22 @@
           "src/flow/lib/set-policy.js"
         ],
         "id": "8db418c0",
-        "summary": "Implements nonblocking evidence collection, eligibility, policy activation, decision recording, recovery state, and advisory projection for active canonical flows.",
-        "detail": "The module reads current transition facts and canonical artifacts, derives stable evidence digests, validates active Flow and Definition context, and models repair, retry, and continue actions across quality, tooling, and unavailable results. It provides activation offers, records eligible Attempts and decisions, detects conflicting or stale identities, enforces continuation and remaining-risk requirements, supports replay-safe outcomes, and projects advisory summaries from the activity ledger.",
+        "summary": "Implements nonblocking eligibility, evidence validation, decision recording, and continuation policy.",
+        "detail": "Defines nonblocking action and result categories, canonical evidence handling, decision identity and context, recovery state, activation offers, and evidence errors. The module reads current Gate, test-chain, review, and regression facts, records eligible attempts and decisions, detects conflicts or duplicate outcomes, and produces advisory summaries.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-21T01:45:29.890Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "sennel",
+        "app": "flow",
         "keywords": [
           "nonblocking policy",
-          "evidence digest",
+          "eligibility",
+          "canonical evidence",
           "decision recording",
           "recovery state",
-          "activity ledger",
-          "replay safety",
+          "activation offer",
           "advisory summary"
         ]
       },
@@ -11235,9 +11365,9 @@
       },
       {
         "file": "src/flow/lib/plan-gate-repair.js",
-        "hash": "872035dfdcfd10776fb16471cbcfacd5",
-        "lines": 906,
-        "mtime": "2026-09-20T02:18:09.326Z",
+        "hash": "226f8627f217c929366eb201c9cb248e",
+        "lines": 912,
+        "mtime": "2026-09-23T03:44:31.573Z",
         "className": "plan-gate-repair",
         "methods": [
           "PlanGateRepairLocation",
@@ -11249,7 +11379,7 @@
           "planGateRepairRouteForGateStep",
           "planGateRepairResultLogicalKey",
           "isPlanGateRepairEligibleFailure",
-          "createProspectiveDraftGateRepairRecord",
+          "createProspectivePlanGateRepairRecord",
           "inspectCanonicalPlanGateRepair",
           "PlanGateRepairRecord",
           "canonicalPlanGateRepairForTarget",
@@ -11283,7 +11413,7 @@
           "planGateRepairRouteForGateStep",
           "planGateRepairResultLogicalKey",
           "isPlanGateRepairEligibleFailure",
-          "createProspectiveDraftGateRepairRecord",
+          "createProspectivePlanGateRepairRecord",
           "inspectCanonicalPlanGateRepair",
           "PlanGateRepairRecord",
           "canonicalPlanGateRepairForTarget"
@@ -11297,29 +11427,29 @@
           "src/flow/lib/gate-transition-facts.js",
           "src/flow/lib/get-next-action.js",
           "src/flow/lib/next-action-directive.js",
-          "src/flow/lib/run-claim-next-action.js",
           "src/flow/lib/run-repair-plan-gate.js",
           "src/flow/lib/step-transition-policy.js",
           "src/flow/lib/task-execution-overrun.js",
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "5791341e",
-        "summary": "Defines canonical routes, observations, records, and recovery evidence for plan Gate repair.",
-        "detail": "Implements typed plan Gate repair locations, observations, connector bindings, phase-specific routes, eligibility checks, issue-log records, and canonical resolution. It enforces blocking observations, unique fingerprints, recurrence-bound requests, exact Attempt and Gate bindings, source evidence integrity, and Activity references for repair outcomes.",
+        "summary": "Defines canonical plan-gate repair routes, observations, records, and evidence resolution.",
+        "detail": "Validates repair locations, digests, timestamps, blocking observations, connector bindings, route consistency, issue-log evidence, and canonical Gate results. It maps phases and target steps to repair routes, creates prospective repair records, resolves canonical issue-log entries, verifies replacement Attempts and Activities, and exposes canonical repair lookup by target.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-20T02:20:54.779Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "senti",
+        "app": "flow",
         "keywords": [
-          "plan Gate repair",
-          "repair route",
+          "plan gate repair",
+          "repair routes",
+          "blocking observations",
           "issue log",
-          "blocking observation",
-          "canonical fingerprint",
-          "recovery evidence"
+          "canonical evidence",
+          "Attempt lineage",
+          "repair records"
         ]
       },
       {
@@ -14333,9 +14463,9 @@
       },
       {
         "file": "src/flow/lib/run-gate.js",
-        "hash": "6a8b2bb9db10c79a62c9838aed522d18",
-        "lines": 4397,
-        "mtime": "2026-09-20T18:40:43.541Z",
+        "hash": "891d94a408906101f8ae00cedeaeac11",
+        "lines": 4404,
+        "mtime": "2026-09-23T03:44:31.574Z",
         "className": "run-gate",
         "methods": [
           "parsePublicGateArguments",
@@ -14585,22 +14715,23 @@
           "src/flow/lib/task-review-prompt-plan.js"
         ],
         "id": "b4aa4dad",
-        "summary": "Runs gate evaluation and records canonical gate outcomes.",
-        "detail": "Implements gate argument parsing, Git diff collection and filtering, phase and level validation, guardrail and requirement prompt construction, structured provider-response validation, retry handling, evidence scoping, and canonical publication. It supports specification, task, implementation, integration, and repair-oriented gate workflows with explicit pass, fail, blocked, and error envelopes.",
-        "chapter": "cli_commands",
+        "summary": "Implements the central gate execution flow for validating specifications, tasks, guardrails, diffs, and canonical Flow state.",
+        "detail": "This module orchestrates gate execution across specification, task, implementation, and integration phases. It collects and filters Git diffs, excludes generated lifecycle artifacts, validates gate inputs and artifacts, builds guarded evaluation prompts, parses and retries provider responses, evaluates requirements and observations, tracks reusable evaluations, manages canonical evidence and transition facts, and publishes pass, fail, or required-evaluation outcomes through the Flow command interface.",
+        "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-20T18:42:48.790Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "sennel",
+        "app": "senti",
         "keywords": [
-          "gate evaluation",
-          "guardrails",
-          "Git diff",
-          "requirement checks",
-          "canonical evidence",
-          "repair plan"
+          "gate execution",
+          "guardrail evaluation",
+          "Git diff analysis",
+          "canonical Flow state",
+          "requirement batching",
+          "evaluation retry",
+          "gate artifacts"
         ]
       },
       {
@@ -14984,9 +15115,9 @@
       },
       {
         "file": "src/flow/lib/run-repair-plan-gate.js",
-        "hash": "2088fb1d670547dd8c4f6a92aa0763c9",
+        "hash": "86d61c909486556db48dcd430743862e",
         "lines": 126,
-        "mtime": "2026-09-20T18:40:43.542Z",
+        "mtime": "2026-09-23T03:44:31.575Z",
         "className": "run-repair-plan-gate",
         "methods": [],
         "imports": [
@@ -15003,21 +15134,22 @@
         "extends": "FlowCommand",
         "usedBy": null,
         "id": "bc7e1869",
-        "summary": "Executes the repair-plan gate command for canonical repair evidence.",
-        "detail": "Resolves the Definition-selected gate transition, reads current gate facts, runs the canonical gate observation cycle, and returns structured failure envelopes for missing evidence or inadmissible repairs. Successful execution publishes the admitted repair-plan gate result through an envelope.",
-        "chapter": "cli_commands",
+        "summary": "Provides the Flow command for executing the repair-plan gate with canonical evidence and observation-cycle validation.",
+        "detail": "RunRepairPlanGateCommand resolves the current gate transition, reads canonical transition facts, executes the canonical gate path, and returns structured Flow envelopes. It reports distinct failures for missing repair evidence, admission rejection, and other execution errors, while emitting a successful repair-plan gate result when the required evidence and state transitions are valid.",
+        "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-20T18:42:48.790Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "sennel",
+        "app": "senti",
         "keywords": [
-          "repair plan gate",
+          "repair-plan gate",
+          "canonical evidence",
           "gate transition",
-          "repair evidence",
           "observation cycle",
-          "admission"
+          "Flow command",
+          "admission validation"
         ]
       },
       {
@@ -16812,6 +16944,52 @@
         ]
       },
       {
+        "file": "src/flow/lib/spec-gate-prospective.js",
+        "hash": "30b42799bf49309815c468aa23f496fc",
+        "lines": 132,
+        "mtime": "2026-09-23T03:44:31.575Z",
+        "className": "spec-gate-prospective",
+        "methods": [
+          "SpecGateProspectiveFacts",
+          "SpecGatePublicationVersion",
+          "SpecGatePublicationIntent"
+        ],
+        "imports": [
+          "node:crypto",
+          "./gate-issue-publication.js",
+          "./current-flow-state.js",
+          "./canonical-command-result.js"
+        ],
+        "exports": [
+          "SpecGateProspectiveFacts",
+          "SpecGatePublicationVersion",
+          "SpecGatePublicationIntent"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/lib/gate-transition-facts.js"
+        ],
+        "id": "6c82b898",
+        "summary": "Defines prospective Spec Gate facts and publication controls that protect canonical result integrity.",
+        "detail": "SpecGateProspectiveFacts represents the validated inputs and result fingerprint for a prospective Spec Gate evaluation. SpecGatePublicationVersion and SpecGatePublicationIntent bind publication to the canonical view, run and specification identity, accepted facts, issue evidence, and selected Result. Hash comparisons and current-flow-state conflict checks prevent publication when inputs or results change between evaluation and settlement.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-23T03:47:04.759Z",
+          "attempts": 1
+        },
+        "app": "senti",
+        "keywords": [
+          "Spec Gate facts",
+          "publication intent",
+          "result fingerprint",
+          "canonical view",
+          "state conflict",
+          "issue evidence",
+          "settlement integrity"
+        ]
+      },
+      {
         "file": "src/flow/lib/spec-gate-readiness.js",
         "hash": "69f36eba69bbbc45ed4af2263c4b2522",
         "lines": 125,
@@ -17083,9 +17261,9 @@
       },
       {
         "file": "src/flow/lib/spec-step-connection.js",
-        "hash": "4a3dee41d464231556d1fa85acd3e38f",
-        "lines": 41,
-        "mtime": "2026-09-22T08:35:02.356Z",
+        "hash": "0e652179eb7b43937f297cf2da7ebcf4",
+        "lines": 47,
+        "mtime": "2026-09-23T03:44:31.575Z",
         "className": "spec-step-connection",
         "methods": [
           "SpecWorkerCompletionFacts",
@@ -17093,7 +17271,8 @@
         ],
         "imports": [
           "./current-flow-state.js",
-          "../engine/connectors/spec/spec-step-binding.js"
+          "../engine/connectors/spec/spec-step-binding.js",
+          "./gate-observation-convergence.js"
         ],
         "exports": [
           "SpecWorkerCompletionFacts",
@@ -17105,21 +17284,22 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "066f8cc5",
-        "summary": "Connects Spec worker bindings with typed completion and review settlement facts.",
-        "detail": "The module defines completion facts and review settlement application objects that require a typed Spec publication, a canonical Spec baseline, and an associated worker-step binding.",
+        "summary": "Connects Spec worker completion facts with canonical Spec review settlement and plan-gate repair outcomes.",
+        "detail": "This module models the typed boundary between Spec worker execution and review settlement. SpecWorkerCompletionFacts requires a typed Spec publication, the canonical Spec baseline, and a typed plan Gate repair outcome, while SpecReviewSettlementApplication validates the binding and completion facts needed to apply the review result consistently.",
         "chapter": "internal_design",
-        "role": "middleware",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-22T08:41:14.710Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
         "app": "senti",
         "keywords": [
           "Spec worker",
-          "step connection",
           "completion facts",
           "review settlement",
-          "canonical baseline"
+          "Spec publication",
+          "canonical baseline",
+          "plan-gate repair"
         ]
       },
       {
@@ -19310,9 +19490,9 @@
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "f416f8c0cb5ba57f3e2caa296b923d38",
-        "lines": 10091,
-        "mtime": "2026-09-22T14:26:05.130Z",
+        "hash": "a990ba4d2e284d64a8d3283bd4a332a3",
+        "lines": 10096,
+        "mtime": "2026-09-23T03:44:31.577Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "WorkerArtifactHandoffError",
@@ -19645,25 +19825,23 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Implements the secure worker artifact handoff lifecycle for Flow execution, source mutation control, publication, recovery, rollback, quarantine, and canonical state synchronization.",
-        "detail": "This module defines versioned worker handoff requests, policies, input snapshots, payload manifests, submissions, retry instructions, typed source and artifact effects, checkpoints, immutable baselines, durable receipts, publication journals, and final sealing. It validates bounded JSON, file payloads, sealed submissions, and repository-relative paths; enforces authority boundaries; captures Git or filesystem mutation baselines; detects unauthorized changes; creates sealed source mutation manifests; supports guarded rollback, checkpoint restoration, recovery validation, quarantine, and cleanup; reconciles replayed results; and persists handoff progress. It coordinates canonical Flow observations, requirement-test artifacts, review and gate-repair inputs, source response contracts, worker context snapshots, upgrade results, draft and spec preparation, test-review repairs, publication outcomes, and settlement invariants, with typed errors classifying invalid, stale, retryable, and authority-violation states.",
+        "summary": "Implements secure Flow worker artifact handoffs with validation, canonical authority checks, publication, rollback, recovery, quarantine, and cleanup.",
+        "detail": "Defines typed handoff protocols for Draft, Spec, test-review, and source-worker steps. Validates bounded JSON and file payloads, normalized repository-relative paths, manifests, worker policies, step-specific inputs, repair and triage effects, Requirement test artifacts, upgrade and review artifacts, receipts, and completion rules. Binds requests and responses to canonical Flow identity, immutable input and repository baselines, payload manifests, checkpoints, event chains, runtime locks, semantic input revisions, and transition observations. Captures source mutation manifests, verifies Git or filesystem authority, detects unauthorized, stale, altered, or replayed artifacts, materializes and seals responses, manages retries and failure classifications, and supports publication, cleanup, quarantine, recovery-required handling, rollback checkpoints, source restoration, and related rollback operations.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-22T14:28:34.426Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
-          "worker artifact handoff",
+          "worker handoff",
           "artifact validation",
-          "source mutation",
-          "rollback recovery",
-          "publication journal",
+          "source mutation tracking",
           "repository authority",
-          "payload manifest",
-          "quarantine cleanup",
-          "canonical state"
+          "artifact publication",
+          "rollback checkpoint",
+          "quarantine",
+          "recovery"
         ]
       },
       {
@@ -19939,9 +20117,9 @@
       },
       {
         "file": "src/flow/registry.js",
-        "hash": "c83553df8ea7091cbb2a69ffae3c45d9",
-        "lines": 2861,
-        "mtime": "2026-09-22T12:22:09.380Z",
+        "hash": "4059703f0e3aa88a8fdaacd81a5bdc7a",
+        "lines": 2935,
+        "mtime": "2026-09-23T03:44:31.578Z",
         "className": "registry",
         "methods": [
           "assertDraftReviewRegistryHookBoundary",
@@ -19950,6 +20128,7 @@
           "fatalDraftStepError",
           "executePublishedDraftReviewStep",
           "executePublishedDraftGateStep",
+          "executeProspectiveSpecGateStep",
           "withTargetGuardOptions",
           "withTargetGuardFlags",
           "switchToMainRepoFlowAuthority",
@@ -20020,22 +20199,21 @@
         "extends": null,
         "usedBy": null,
         "id": "d64f4095",
-        "summary": "Registers flow commands and coordinates lifecycle transitions.",
-        "detail": "Provides flow command definitions, target guards, draft review and gate handling, test-chain transitions, result persistence, plugin hooks, task gate settlement, and finalize lifecycle integration.",
+        "summary": "Implements the Flow command registry and lifecycle orchestration for gates, reviews, tests, and finalization.",
+        "detail": "Registers Flow commands and runtime options, coordinates draft and specification gate execution, applies lifecycle actions, persists review results, manages task and test-chain transitions, and routes failures through canonical Flow state and plugin hooks.",
         "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-22T12:26:30.853Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "flow commands",
-          "command registry",
+          "Flow registry",
+          "CLI commands",
           "lifecycle hooks",
-          "gate transitions",
+          "gate execution",
           "review persistence",
-          "plugin hooks"
+          "test transitions"
         ]
       },
       {
@@ -20129,6 +20307,48 @@
         ]
       },
       {
+        "file": "src/flow/services/spec-gate-service.js",
+        "hash": "258bc2daf856215ff7c26e5a02a91d02",
+        "lines": 90,
+        "mtime": "2026-09-23T03:44:31.578Z",
+        "className": "spec-gate-service",
+        "methods": [
+          "SpecGateService"
+        ],
+        "imports": [
+          "../engine/step-result.js",
+          "../definition.js",
+          "../lib/definition-lifecycle-failure.js",
+          "../lib/spec-gate-prospective.js",
+          "../lib/gate-transition-facts.js",
+          "../lib/gate-issue-publication.js",
+          "../lib/current-flow-state.js",
+          "../steps/spec/spec-gate-result.js"
+        ],
+        "exports": [
+          "SpecGateService"
+        ],
+        "extends": null,
+        "usedBy": null,
+        "id": "08578747",
+        "summary": "Provides the service for executing and persisting prospective Spec Gate decisions.",
+        "detail": "SpecGateService validates its bound prospective observation, typed issue evidence, publication selection, and result. It reads gate facts, persists the selected StepResult, converts persistence failures, and returns the durable settlement receipt.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-09-23T03:47:04.759Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "Spec Gate",
+          "prospective facts",
+          "issue evidence",
+          "StepResult",
+          "persistence",
+          "settlement receipt"
+        ]
+      },
+      {
         "file": "src/flow/services/spec-review-service.js",
         "hash": "c3ae9820275a092f210f700c4f5c09c1",
         "lines": 252,
@@ -20174,9 +20394,9 @@
       },
       {
         "file": "src/flow/services/spec-service.js",
-        "hash": "5081d94772befc5e29cc9c698c76ea89",
-        "lines": 113,
-        "mtime": "2026-09-22T08:35:02.359Z",
+        "hash": "06a30b3250a9688ed328fbee924a70ae",
+        "lines": 127,
+        "mtime": "2026-09-23T03:44:31.578Z",
         "className": "spec-service",
         "methods": [
           "SpecService"
@@ -20195,21 +20415,21 @@
         "extends": null,
         "usedBy": null,
         "id": "a675554c",
-        "summary": "Runs the initial Spec worker flow and persists its typed completion settlement.",
-        "detail": "SpecService binds a prepared Spec handoff, exposes its prepared facts, validates the selected candidate and concrete Step result, applies the typed Spec route connector, and requires a durable worker settlement receipt before completion.",
+        "summary": "Provides the service layer for Spec worker execution, publication, repair, and settlement.",
+        "detail": "SpecService requires a prepared worker handoff, exposes its typed preparation facts, validates selected candidates and concrete Step results, handles plan-gate repair and publication, delegates to a typed route connector, and requires a durable settlement receipt.",
         "chapter": "internal_design",
-        "role": "controller",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-22T08:41:14.710Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
         "keywords": [
-          "SpecService",
           "Spec worker",
           "prepared handoff",
           "candidate publication",
-          "typed settlement",
-          "durable receipt"
+          "gate repair",
+          "route connector",
+          "settlement"
         ]
       },
       {
@@ -20653,6 +20873,85 @@
         ]
       },
       {
+        "file": "src/flow/steps/spec/spec-gate-result.js",
+        "hash": "7c968e5370f74faf355d9da77f142a0d",
+        "lines": 95,
+        "mtime": "2026-09-23T03:44:31.578Z",
+        "className": "spec-gate-result",
+        "methods": [
+          "specGateResult",
+          "SpecGateResultSelection"
+        ],
+        "imports": [
+          "../../engine/step-result.js",
+          "../../definition.js",
+          "../../lib/spec-gate-prospective.js",
+          "../../lib/current-flow-state.js"
+        ],
+        "exports": [
+          "specGateResult",
+          "SpecGateResultSelection"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/steps/spec/spec-gate.js"
+        ],
+        "id": "9775cf07",
+        "summary": "Defines typed result selection and outcome classification for the Spec Gate.",
+        "detail": "The module maps prospective Spec Gate facts into blocked or deferred result classes and validates typed facts and sealed publication selections. SpecGateResultSelection detects divergence between the selected result and the sealed Step selection through a flow-state conflict error.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-09-23T03:47:04.759Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "Spec Gate result",
+          "result selection",
+          "blocked outcome",
+          "deferred outcome",
+          "publication",
+          "state conflict"
+        ]
+      },
+      {
+        "file": "src/flow/steps/spec/spec-gate.js",
+        "hash": "1e0d60fd3d4948f8d1bddb9cdb10ae0a",
+        "lines": 29,
+        "mtime": "2026-09-23T03:44:31.578Z",
+        "className": "spec-gate",
+        "methods": [
+          "SpecGateStep"
+        ],
+        "imports": [
+          "../../engine/step.js",
+          "../../services/spec-gate-service.js",
+          "./spec-gate-result.js"
+        ],
+        "exports": [
+          "SpecGateStep",
+          "specGateResult"
+        ],
+        "extends": "Step",
+        "usedBy": null,
+        "id": "84f436e8",
+        "summary": "Implements the executable Spec Gate step backed by SpecGateService.",
+        "detail": "SpecGateStep obtains the service's typed result selection, returns its selected result, persists the result through the service, and exposes the Spec Gate result factory for callers.",
+        "chapter": "internal_design",
+        "role": "controller",
+        "enrich": {
+          "processedAt": "2026-09-23T03:47:04.759Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "Spec Gate step",
+          "Step execution",
+          "result persistence",
+          "SpecGateService",
+          "result selection"
+        ]
+      },
+      {
         "file": "src/flow/steps/spec/spec-repair.js",
         "hash": "841a22c10f11b4f8b590240f5736f554",
         "lines": 61,
@@ -20782,9 +21081,9 @@
       },
       {
         "file": "src/flow/steps/spec/spec.js",
-        "hash": "a9214a2fbb18b242ceda0912eed500a8",
-        "lines": 35,
-        "mtime": "2026-09-22T08:35:02.360Z",
+        "hash": "8ed39ba5d60934703726ce83e8c9d74a",
+        "lines": 48,
+        "mtime": "2026-09-23T03:44:31.578Z",
         "className": "spec",
         "methods": [
           "specResult",
@@ -20803,20 +21102,21 @@
         "extends": "Step",
         "usedBy": null,
         "id": "5dbb0779",
-        "summary": "Implements the initial Spec step and persists either a created Spec result or an execution error.",
-        "detail": "The step requires typed SpecWorkerCompletionFacts, creates a SpecCreatedResult for successful completion, delegates execution and persistence to SpecService, and uses StepErrorResult for failure handling.",
+        "summary": "Implements the executable Spec step and its typed creation and repair outcomes.",
+        "detail": "The module constructs Spec results from typed completion facts, distinguishes created, plan-gate-repair-applied, and no-progress outcomes, and persists the selected result through SpecService when the step executes.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-22T08:41:14.710Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
         "keywords": [
           "Spec step",
-          "SpecWorkerCompletionFacts",
-          "SpecCreatedResult",
-          "SpecService",
-          "error result"
+          "Spec result",
+          "completion facts",
+          "gate repair",
+          "no progress",
+          "persistence"
         ]
       },
       {
@@ -22746,9 +23046,9 @@
       },
       {
         "file": "src/lib/flow-manager.js",
-        "hash": "f82aa9337dd0baea412cf6eefddaa8f0",
-        "lines": 1599,
-        "mtime": "2026-09-22T08:35:02.360Z",
+        "hash": "9de9904d01f0fd60ac05eda82f903519",
+        "lines": 1605,
+        "mtime": "2026-09-23T03:44:31.580Z",
         "className": "flow-manager",
         "methods": [
           "ResolvedFlowTarget",
@@ -22794,22 +23094,21 @@
           "src/lib/container.js"
         ],
         "id": "3d2ed4c0",
-        "summary": "FlowManager coordinates flow state, target resolution, lifecycle mutations, recovery, and repository-safe synchronization.",
-        "detail": "This module defines the central flow-management layer. It models resolved targets and active-flow identities, validates expectations and lifecycle state, resolves unique active or preparing flows, and raises specialized not-found, ambiguity, authority, mismatch, and recovery errors. FlowManager binds workspace, version, registry, preparation, worktree, and repository-lock services, then exposes a broad API for canonical state access, step transitions, task execution, review and gate decisions, artifact and runtime-log handling, outbox operations, metrics, approvals, recovery, and flow-target registration or removal. Mutating operations use repository operation locks and preserve target identity constraints, while worktree operations enforce canonical managed paths and guarded bindings.",
+        "summary": "Provides FlowManager APIs for resolving targets, managing state, and delegating canonical Flow operations.",
+        "detail": "FlowManager binds workspace and Flow identity, resolves active or preparing targets with guarded expectations, manages worktree bindings and repository locks, and exposes a broad facade for state transitions, worker handoffs, artifact publication, recovery, reviews, tests, metrics, and runtime artifacts.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-22T08:41:14.710Z",
+          "processedAt": "2026-09-23T03:47:04.759Z",
           "attempts": 1
         },
         "keywords": [
-          "flow management",
-          "state transitions",
+          "FlowManager",
           "target resolution",
-          "active flow registry",
+          "Flow state",
           "worktree binding",
-          "recovery",
-          "repository locking"
+          "repository lock",
+          "recovery APIs"
         ]
       },
       {
@@ -27486,10 +27785,10 @@
       }
     ],
     "summary": {
-      "total": 482,
-      "totalMethods": 5052
+      "total": 488,
+      "totalMethods": 5071
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-22T14:28:34.426Z"
+  "enrichedAt": "2026-09-23T03:47:04.759Z"
 }
