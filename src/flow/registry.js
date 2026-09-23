@@ -661,8 +661,8 @@ async function applyTestChainTransition(ctx, result, stepId) {
  */
 function resolvePersistedPlanGateDecision(ctx, result) {
   const phase = result?.artifacts?.phase || ctx.phase;
-  if (phase === "draft") {
-    throw new Error("Draft Gate results are classified by the bound Draft Step");
+  if (phase === "draft" || phase === "spec" || phase === "task-spec") {
+    throw new Error("migrated Gate results are classified by their bound Step");
   }
   const facts = readCurrentGateTransitionFacts({
     flowManager: ctx.flowManager,
@@ -1778,6 +1778,15 @@ export const FLOW_COMMANDS = {
         const attached = attachedCanonicalCommandResultArtifact(result);
         const canonicalResult = attached !== null;
         const specId = ctx.specId ?? ctx.flowState.specId;
+        const specGatePhase = phase === "spec" || phase === "task-spec";
+        const activeSpecGate = ctx.flowManager.canonicalState(specId).current?.at(-1) === "spec-gate";
+        if ((specGatePhase || activeSpecGate)
+          && (!specGatePhase || !activeSpecGate || !canonicalResult || attached.logicalKey !== "spec.gate")) {
+          throw new FatalPostHookError("SPEC_GATE_ADMISSION_REFUSED",
+            "Spec Gate requires its attached canonical result before Step settlement", {
+              data: { failureKind: "spec-gate-admission" },
+            });
+        }
         if (canonicalResult && (phase === "draft" || attached.logicalKey === "draft.gate")) {
           await executePublishedDraftGateStep(ctx, result);
           ctx.flowState = ctx.flowManager.loadReadOnly(specId);
@@ -2538,7 +2547,7 @@ export const FLOW_COMMANDS = {
       explicitTargetResolution: true,
       command: () => import("./lib/run-settle-gate-transition.js"),
       args: { flags: FLOW_TARGET_GUARD_FLAGS, options: [...FLOW_RUN_OPTIONS] },
-      help: "Persist the Definition-selected exhausted Draft or Spec Gate finding and settle its current Attempt.",
+      help: "Persist the Definition-selected exhausted integration or Task Gate finding and settle its current Attempt.",
     },
     "start-task": {
       helpKey: "flow.run.start-task",

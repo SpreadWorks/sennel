@@ -18,6 +18,7 @@ import {
   ArtifactViewResolvedReference,
   ArtifactViewSource,
   ArtifactViewTarget,
+  ArtifactViewReader,
   assertAcceptanceHardBlockerProjection,
   embeddedAcceptanceDecision,
 } from "../../../src/flow/lib/artifact-view-reader.js";
@@ -33,6 +34,8 @@ import {
   stableArtifactViewJson,
 } from "../../../src/flow/lib/artifact-view-fingerprint.js";
 import { ArtifactViewService, ArtifactViewServiceError } from "../../../src/flow/lib/artifact-view-service.js";
+import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
+import { FlowArtifactCatalog, FlowArtifactCatalogStore, FlowArtifactDescriptor } from "../../../src/lib/flow-version.js";
 
 const roots = [];
 
@@ -110,6 +113,26 @@ function attemptHistorySource(logicalKey, relativePath, payload) {
     hash: crypto.createHash("sha256").update(bytes).digest("hex"),
     bytes,
   });
+}
+
+function catalogArtifact(location, logicalKey, relativePath, bytes) {
+  const filePath = location.resolve(relativePath);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, bytes);
+  const contract = FLOW_ARTIFACT_CONTRACTS.require(logicalKey);
+  return FlowArtifactDescriptor.fromFile({
+    location,
+    logicalKey,
+    authoritySlot: contract.authoritySlotForPath(relativePath),
+    relativePath,
+    mediaType: "application/json",
+    retention: contract.retention.toString(),
+  });
+}
+
+function addCatalogArtifacts(location, catalog, descriptors) {
+  const updated = new FlowArtifactCatalog({ artifacts: [...catalog.artifacts, ...descriptors] });
+  fs.writeFileSync(location.catalogFile, `${JSON.stringify(updated.toJSON(), null, 2)}\n`, "utf8");
 }
 
 function acceptanceDocument(location, {
@@ -201,6 +224,99 @@ function acceptanceDocument(location, {
 }
 
 describe("artifact human views", () => {
+  it("resolves same-ID deferred findings by their exact fingerprints through the catalog reader", () => {
+    const { fixture } = activeFixture();
+    const location = fixture.location();
+    const baseCatalog = new FlowArtifactCatalogStore({ location }).require();
+    const sourceArtifact = "steps/impl/review/result.json";
+    const sourceFindingId = "proposal-shared";
+    const fingerprints = ["a", "b", "c", "d"].map((value) => value.repeat(64));
+    const findingIds = ["DF-1", "DF-2", "DF-3", "DF-4"];
+    const originals = fingerprints.map((fingerprint, index) => ({
+      proposalId: sourceFindingId,
+      fingerprint,
+      title: `Original ${index + 1}`,
+      issue: `Issue ${index + 1}`,
+      suggestion: `Suggestion ${index + 1}`,
+      requirementId: "R1",
+    }));
+    const deferredFindings = findingIds.map((findingId, index) => ({
+      findingId,
+      sourceStep: "impl-review",
+      sourceArtifact,
+      sourceFindingId,
+      finalDisposition: "still_open",
+      evidenceRefs: [`${sourceArtifact}#${sourceFindingId}`],
+    }));
+    const acceptanceReview = {
+      version: 2,
+      repairFingerprint: "c".repeat(64),
+      mechanicalBlockers: [],
+      hardBlockers: deferredFindings,
+      requirementJudgments: [{
+        requirementId: "R1",
+        status: "notVerifiable",
+        requestRefs: ["flow.request"],
+        requirementRefs: ["spec.json#R1"],
+        diffRefs: [],
+        repairRefs: ["repair.json"],
+        testRefs: [],
+        missingEvidence: ["The source result needs a decision."],
+      }],
+      deferredFindings,
+      userDecision: null,
+      verdict: "user_decision_required",
+    };
+    const histories = [
+      ["acceptance.review", "steps/acceptance-review/result.json", {
+        attempts: [{ attempt: 1, artifact: { logicalKey: "acceptance.review", payload: acceptanceReview } }],
+      }],
+      ["flow.findings", "steps/flow-findings.json", {
+        version: 2,
+        entries: findingIds.map((findingId, index) => ({
+          findingId,
+          sourceStep: "impl-review",
+          sourceArtifact,
+          sourceFindingId,
+          runId: fixture.state().runId,
+          fingerprint: fingerprints[index],
+          disposition: "deferred",
+          rationale: `Deferred ${findingId}.`,
+          retryExhausted: true,
+          attempts: 1,
+          round: index + 1,
+          completionKind: "deferred",
+          finalDisposition: "still_open",
+        })),
+      }],
+      ["impl.review", sourceArtifact, {
+        attempts: [{ attempt: 1, artifact: { logicalKey: "impl.review", payload: { blockingFindings: originals } } }],
+      }],
+    ];
+    const descriptors = histories.map(([logicalKey, relativePath, value]) => catalogArtifact(
+      location,
+      logicalKey,
+      relativePath,
+      Buffer.from(`${JSON.stringify(value)}\n`, "utf8"),
+    ));
+    addCatalogArtifacts(location, baseCatalog, descriptors);
+
+    const catalogBefore = fs.readFileSync(location.catalogFile);
+    const sourcesBefore = histories.map(([, relativePath]) => fs.readFileSync(location.resolve(relativePath)));
+    const document = new ArtifactViewReader({
+      target: new ArtifactViewTarget({ location, active: true }),
+    }).read("acceptance.review");
+
+    assert.deepEqual(document.references.map((reference) => reference.findingId), findingIds);
+    assert.deepEqual(document.references.map((reference) => reference.fingerprint), fingerprints);
+    assert.deepEqual(document.references.map((reference) => reference.finding.title),
+      originals.map((original) => original.title));
+    assert.deepEqual(document.references.map((reference) => reference.finding.fingerprint), fingerprints);
+    assert.deepEqual(fs.readFileSync(location.catalogFile), catalogBefore, "catalog read leaves canonical catalog bytes unchanged");
+    assert.deepEqual(histories.map(([, relativePath]) => fs.readFileSync(location.resolve(relativePath))), sourcesBefore,
+      "catalog read leaves source artifacts unchanged");
+  });
+
   it("uses one deterministic fingerprint serialization that preserves array order", () => {
     const reorderedKeys = { b: ["first", "second"], a: { y: 2, x: 1 } };
     const canonical = { a: { x: 1, y: 2 }, b: ["first", "second"] };

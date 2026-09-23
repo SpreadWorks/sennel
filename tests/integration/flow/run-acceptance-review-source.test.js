@@ -66,23 +66,28 @@ test("acceptance resolves the exact fingerprint when a historical Attempt repeat
     category: "semantic_rejection",
     reason: "the assertion does not prove the Requirement",
   };
+  const otherFinding = {
+    ...finding,
+    fingerprint: "b".repeat(64),
+    reason: "a different observation reused the producer finding id",
+  };
   const flowFindings = {
     version: 2,
-    entries: [{
-      findingId: "DF-1",
+    entries: [finding, otherFinding].map((sourceFinding, index) => ({
+      findingId: `DF-${index + 1}`,
       sourceStep: "test-review",
       sourceArtifact: "steps/test-review/result.json",
-      sourceFindingId: finding.findingId,
+      sourceFindingId: sourceFinding.findingId,
       runId: "run",
-      fingerprint: finding.fingerprint,
+      fingerprint: sourceFinding.fingerprint,
       disposition: "deferred",
-      rationale: finding.reason,
+      rationale: sourceFinding.reason,
       retryExhausted: true,
       attempts: 10,
       round: 10,
       completionKind: "deferred",
       finalDisposition: null,
-    }],
+    })),
   };
   const reviewHistory = {
     attempts: [
@@ -92,11 +97,7 @@ test("acceptance resolves the exact fingerprint when a historical Attempt repeat
           logicalKey: "test.requirement.review",
           payload: {
             verdict: "REJECTED",
-            blockingFindings: [{
-              ...finding,
-              fingerprint: "b".repeat(64),
-              reason: "a different observation reused the producer finding id",
-            }, finding],
+            blockingFindings: [otherFinding, finding],
           },
         },
       },
@@ -143,14 +144,14 @@ test("acceptance resolves the exact fingerprint when a historical Attempt repeat
   const deferred = store.deferredFindings(blockers);
 
   assert.deepEqual(blockers, []);
-  assert.equal(deferred.evidence.length, 1);
-  assert.equal(deferred.evidence[0].sourceFinding.findingId, finding.findingId);
-  assert.equal(deferred.evidence[0].sourceFinding.fingerprint, finding.fingerprint);
+  assert.deepEqual(deferred.evidence.map((entry) => entry.findingId), ["DF-1", "DF-2"]);
+  assert.deepEqual(deferred.evidence.map((entry) => entry.sourceFinding.fingerprint),
+    [finding.fingerprint, otherFinding.fingerprint]);
 
-  flowFindings.entries[0].fingerprint = "c".repeat(64);
+  flowFindings.entries[1].fingerprint = "c".repeat(64);
   const wrongFingerprintBlockers = [];
   const missing = store.deferredFindings(wrongFingerprintBlockers);
-  assert.equal(missing.evidence.length, 0);
+  assert.deepEqual(missing.evidence.map((entry) => entry.findingId), ["DF-1"]);
   assert.equal(wrongFingerprintBlockers.length, 1);
   assert.equal(wrongFingerprintBlockers[0].kind, "missing_deferred_source");
 });

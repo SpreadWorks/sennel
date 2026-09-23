@@ -34,11 +34,9 @@ export default class RunClaimNextActionCommand extends FlowCommand {
       const next = typed?.nextAction() ?? null;
       const projection = await new GetNextActionCommand().execute(ctx);
       const activeTaskStep = TaskStepIdentity.fromStateNode(ctx.flowState, typed?.current?.at(-1));
-      const gatePhase = typed?.current?.at(-1) === "spec-gate"
-          ? "spec"
-          : typed?.current?.at(-1) === "impl-gate"
-            ? "integration"
-          : activeTaskStep?.definitionId === "task-gate" ? "task-impl" : null;
+      const gatePhase = typed?.current?.at(-1) === "impl-gate"
+        ? "integration"
+        : activeTaskStep?.definitionId === "task-gate" ? "task-impl" : null;
       if (gatePhase !== null && projection?.directive?.actionId === "CLAIM_GATE_RETRY") {
         const facts = readCurrentGateTransitionFacts({ flowManager: ctx.flowManager, flowState: ctx.flowState, phase: gatePhase });
         if (facts === null) throw new Error("current Gate retry observation is unavailable");

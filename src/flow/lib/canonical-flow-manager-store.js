@@ -2178,8 +2178,8 @@ export class CanonicalFlowManagerStore {
     if (!(decision instanceof GateTransitionDecision)) {
       throw new CurrentFlowStateInvariantError("definition-owned Gate operation requires a typed Gate decision");
     }
-    if (decision.facts.phase === "draft") {
-      throw new CurrentFlowStateInvariantError("Draft Gate decisions are persisted only through Draft StepResult settlement");
+    if (decision.facts.phase === "draft" || decision.facts.phase === "spec" || decision.facts.phase === "task-spec") {
+      throw new CurrentFlowStateInvariantError("migrated Gate decisions are persisted only through StepResult settlement");
     }
     const facts = readCurrentGateTransitionFacts({
       flowManager: this, flowState: this.loadReadOnly(state.specId), phase: decision.facts.phase,
@@ -2343,8 +2343,8 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
-    if (state.current?.at(-1) === "draft-gate") {
-      throw new CurrentFlowStateInvariantError("Draft Gate Results must be persisted through settleDraftStepResult");
+    if (state.current?.at(-1) === "draft-gate" || state.current?.at(-1) === "spec-gate") {
+      throw new CurrentFlowStateInvariantError("migrated Gate Results must be persisted through StepResult settlement");
     }
     const current = this.#admitGateDecision(state, decision, "defer");
     const findings = buildDeferredSemanticFindingsPublication({

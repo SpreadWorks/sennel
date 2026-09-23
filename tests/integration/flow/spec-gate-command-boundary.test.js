@@ -184,6 +184,40 @@ test("dispatcher refuses a stale attached Spec Gate payload without any canonica
   assert.equal(state.attempt.failure, null);
 });
 
+test("dispatcher rejects a Spec Gate result attached as another Gate artifact before publication", async () => {
+  const input = setup();
+  const promoted = input.promote("pass");
+  const bad = { result: promoted.result, artifacts: promoted.artifacts };
+  attachCanonicalCommandResultArtifact(bad, new CanonicalCommandResultArtifact({
+    logicalKey: "draft.gate", payload: bad,
+  }));
+  const before = bytesAt(input.fixture.location());
+
+  const response = await dispatchGate(input, bad);
+
+  assert.equal(response.ok, false);
+  assert.equal(response.errors[0].code, "SPEC_GATE_ADMISSION_REFUSED");
+  assert.deepEqual(bytesAt(input.fixture.location()), before);
+  assert.equal(input.manager.readCurrentStepSettlement({ specId: input.specId, stepId: "spec-gate" }), null);
+});
+
+test("dispatcher refuses a non-Spec phase label while the canonical Spec Gate is active", async () => {
+  const input = setup();
+  const promoted = input.promote("pass");
+  const bad = { result: promoted.result, artifacts: { ...promoted.artifacts, phase: "integration" } };
+  attachCanonicalCommandResultArtifact(bad, new CanonicalCommandResultArtifact({
+    logicalKey: "integration.gate", payload: bad,
+  }));
+  const before = bytesAt(input.fixture.location());
+
+  const response = await dispatchGate(input, bad);
+
+  assert.equal(response.ok, false);
+  assert.equal(response.errors[0].code, "SPEC_GATE_ADMISSION_REFUSED");
+  assert.deepEqual(bytesAt(input.fixture.location()), before);
+  assert.equal(input.manager.readCurrentStepSettlement({ specId: input.specId, stepId: "spec-gate" }), null);
+});
+
 test("Spec Gate command bounds protocol retries and refuses tooling output without publication", async () => {
   const input = setup({ validSpec: true });
   const before = bytesAt(input.fixture.location());
