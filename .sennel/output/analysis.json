@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-23T03:45:15.819Z",
+  "analyzedAt": "2026-09-23T13:24:41.686Z",
   "package": {
     "entries": [
       {
@@ -6053,9 +6053,9 @@
       },
       {
         "file": "src/flow/lib/canonical-flow-manager-store.js",
-        "hash": "5c39c2f44d38ca2aaa77b923fefbfbfc",
+        "hash": "2caed0168dc400334253140add6e44ef",
         "lines": 7811,
-        "mtime": "2026-09-23T03:44:31.569Z",
+        "mtime": "2026-09-23T06:09:12.567Z",
         "className": "canonical-flow-manager-store",
         "methods": [
           "CanonicalRawActivityReplayOnlyError",
@@ -6208,25 +6208,25 @@
           "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "041f2538",
-        "summary": "Canonical Flow Version 1 manager store for validating state transitions, settling attempts, persisting artifacts, and coordinating reviews, execution, publication, and recovery.",
-        "detail": "This module is the persistence and coordination boundary for canonical flow operations. It validates flow creation and task, step, attempt, retry, gate, review, requirement-test, source-handoff, draft-execution, approval, publication, producer, consumer, activation, and continuation transitions. It enforces typed admissions, Definition decisions, artifact-catalog ownership, runtime paths, identity and digest checks, immutable projections, replay protection, conflict detection, and invariants tied to the active attempt and published evidence. The store serializes runtime metadata and command histories, archives retries, settles drafts, reads canonical artifacts, records metrics and notes, resolves active specifications, manages issue logs and outbox operations, and provides recovery routes while rejecting stale, conflicting, malformed, or out-of-catalog state.",
+        "summary": "CanonicalFlowManagerStore coordinates durable canonical flow state, validated execution transitions, artifact contracts, reviews, gates, recovery, and outbox settlement.",
+        "detail": "This module is the central controller and persistence boundary for canonical flow execution. It validates flow creation, task and step identities, execution modes, timestamps, metrics, notes, runtime metadata, artifact descriptors, issue-log entries, activity records, transition inputs, source fingerprints, catalog ownership, path safety, JSON serialization, and replay consistency. It projects stored state into runtime views, manages active and failed Attempts, enforces optimistic consistency and invariant checks, and records typed settlement receipts. It handles draft execution and promotion, specification approval, requirement-test lifecycles, Task Review stages, Task Gate decisions and repairs, nonblocking decisions, source-worker handoffs, acceptance and regression recovery, deferred findings, retry recovery, issue-log and file-map updates, policy changes, plugin and upgrade publications, and canonical outbox completion or exact recovery. After validation and artifact binding, runtime operations are delegated through CanonicalFlowRuntime; admission and conflict errors prevent stale decisions, mismatched publications, invalid transitions, replacement of active attempts, and inconsistent artifact access.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-23T03:47:04.759Z",
+          "processedAt": "2026-09-23T13:25:28.247Z",
           "attempts": 1
         },
-        "app": "senti",
+        "app": "sennel",
         "keywords": [
           "canonical flow state",
-          "transition validation",
-          "attempt settlement",
-          "artifact persistence",
-          "artifact catalog",
-          "review lifecycle",
-          "recovery handling",
-          "replay protection",
-          "runtime metadata"
+          "execution attempts",
+          "state transitions",
+          "artifact contracts",
+          "task review",
+          "gate settlement",
+          "recovery workflows",
+          "outbox management",
+          "invariant validation"
         ]
       },
       {
@@ -9003,9 +9003,9 @@
       },
       {
         "file": "src/flow/lib/flow-findings.js",
-        "hash": "6f9ecf5ab9a55b53f0fbff0e238abdad",
-        "lines": 827,
-        "mtime": "2026-09-22T08:35:02.353Z",
+        "hash": "4630f30939f75da9376bc30429192d24",
+        "lines": 841,
+        "mtime": "2026-09-23T13:21:42.793Z",
         "className": "flow-findings",
         "methods": [
           "normalizeSourceArtifactPath",
@@ -9097,21 +9097,23 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "1c664aa8",
-        "summary": "Implements canonical flow findings storage, validation, publication, and resolution.",
-        "detail": "The module defines bounded finding contracts, source identities, artifact snapshots, deferred publications, canonical source-artifact access, retry-exhaustion handling, and final-disposition mirroring for flow findings.",
+        "summary": "Domain model and store for canonical flow findings",
+        "detail": "Defines validated flow-finding identities, source references, fingerprints, dispositions, bounded source-artifact reads, deferred publication, semantic finding construction, retry-exhaustion resolution, and final-disposition mirroring. The module preserves source provenance while preventing copied finding-detail fields and enforces catalog, size, count, and JSON contracts.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-22T08:41:14.710Z",
+          "processedAt": "2026-09-23T13:25:28.247Z",
           "attempts": 1
         },
-        "app": "senti",
+        "app": "sennel",
         "keywords": [
           "flow findings",
-          "canonical artifacts",
+          "finding identity",
+          "source provenance",
           "deferred publication",
-          "finding validation",
-          "retry exhaustion"
+          "disposition",
+          "artifact store",
+          "fingerprint"
         ]
       },
       {
@@ -11505,9 +11507,9 @@
       },
       {
         "file": "src/flow/lib/producer-artifact-readiness.js",
-        "hash": "bc079bd6a98c242d4d19404d9a3bcc7d",
-        "lines": 695,
-        "mtime": "2026-09-20T11:46:58.362Z",
+        "hash": "5747cc0846edc5746d922f6facea9fbb",
+        "lines": 715,
+        "mtime": "2026-09-23T13:21:42.794Z",
         "className": "producer-artifact-readiness",
         "methods": [
           "attemptHistoryTargetForNode",
@@ -11535,6 +11537,8 @@
           "acceptanceDecisionNoOpActivity",
           "passedAcceptanceReview",
           "producerAttemptId",
+          "nonblockingSourceMatches",
+          "acceptedPriorAttemptSettlement",
           "requiredReadinesses"
         ],
         "imports": [
@@ -11567,20 +11571,23 @@
           "src/flow/lib/next-action-directive.js"
         ],
         "id": "d18a197a",
-        "summary": "Defines producer artifact readiness and admission rules for flow handoffs.",
-        "detail": "Models producer-consumer artifact routes, task review stage completion, acceptance decision evidence, publication readiness, step connection, and missing-artifact recovery. Validates typed readiness, Attempt identity, cataloged artifacts, confirmed activities, and producer failure continuity before allowing downstream transitions.",
+        "summary": "Producer artifact readiness and handoff admission rules",
+        "detail": "Calculates producer-to-consumer artifact routes and validates whether confirmed producer Attempts, cataloged artifacts, acceptance decisions, and publication activities satisfy downstream readiness. It provides typed readiness, publication, connection, recovery, and missing-artifact route admissions for revision-scoped reviews, Task Review stages, and other flow transitions.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "middleware",
         "enrich": {
-          "processedAt": "2026-09-20T11:49:25.774Z",
+          "processedAt": "2026-09-23T13:25:28.247Z",
           "attempts": 1
         },
+        "app": "sennel",
         "keywords": [
           "artifact readiness",
-          "producer consumer handoff",
-          "Attempt validation",
-          "acceptance review",
-          "recovery admission"
+          "producer handoff",
+          "consumer admission",
+          "Attempt history",
+          "publication admission",
+          "recovery route",
+          "Task Review"
         ]
       },
       {
@@ -13743,9 +13750,9 @@
       },
       {
         "file": "src/flow/lib/run-claim-next-action.js",
-        "hash": "bcff7806344deb0ccf7fa811f70315be",
-        "lines": 97,
-        "mtime": "2026-09-20T18:40:43.541Z",
+        "hash": "07fd304aa50a3b1c6e227bfb147a04ce",
+        "lines": 95,
+        "mtime": "2026-09-23T06:09:12.568Z",
         "className": "run-claim-next-action",
         "methods": [],
         "imports": [
@@ -13765,21 +13772,22 @@
         "extends": "FlowCommand",
         "usedBy": null,
         "id": "84e7d361",
-        "summary": "Claims the Definition-selected next Flow action through a command handler.",
-        "detail": "The command checks whether the active Flow has a claimable ordinary action or final-regression repair, validates the projected command, and returns an envelope describing the admitted claim. Invalid or non-claimable selections are converted into explicit claim-admission failures.",
+        "summary": "CLI command for claiming the next Definition-selected action",
+        "detail": "Implements the run claim-next-action command by selecting an admitted action for inactive flows, ordinary progression, or final-regression repair. It converts successful claims into flow envelopes and maps admission or selection failures into stable command error responses.",
         "chapter": "cli_commands",
-        "role": "controller",
+        "role": "cli",
         "enrich": {
-          "processedAt": "2026-09-20T18:42:48.790Z",
+          "processedAt": "2026-09-23T13:25:28.247Z",
           "attempts": 1
         },
         "app": "sennel",
         "keywords": [
           "claim next action",
-          "Flow command",
-          "action admission",
+          "flow command",
+          "Definition decision",
           "final regression",
-          "Envelope response"
+          "action admission",
+          "CLI envelope"
         ]
       },
       {
@@ -15115,9 +15123,9 @@
       },
       {
         "file": "src/flow/lib/run-repair-plan-gate.js",
-        "hash": "86d61c909486556db48dcd430743862e",
+        "hash": "6ec1873f8e7cd6d0770cdf35da2aad8b",
         "lines": 126,
-        "mtime": "2026-09-23T03:44:31.575Z",
+        "mtime": "2026-09-23T06:09:12.569Z",
         "className": "run-repair-plan-gate",
         "methods": [],
         "imports": [
@@ -15134,22 +15142,22 @@
         "extends": "FlowCommand",
         "usedBy": null,
         "id": "bc7e1869",
-        "summary": "Provides the Flow command for executing the repair-plan gate with canonical evidence and observation-cycle validation.",
-        "detail": "RunRepairPlanGateCommand resolves the current gate transition, reads canonical transition facts, executes the canonical gate path, and returns structured Flow envelopes. It reports distinct failures for missing repair evidence, admission rejection, and other execution errors, while emitting a successful repair-plan gate result when the required evidence and state transitions are valid.",
-        "chapter": "internal_design",
-        "role": "controller",
+        "summary": "CLI command for executing the repair-plan Gate",
+        "detail": "Implements the repair-plan-gate command using Definition-selected transitions, current Gate facts, and canonical Gate observation cycles. It validates repair evidence and admission, returns structured failure envelopes for missing or rejected evidence, and reports successful Gate settlement through a flow envelope.",
+        "chapter": "cli_commands",
+        "role": "cli",
         "enrich": {
-          "processedAt": "2026-09-23T03:47:04.759Z",
+          "processedAt": "2026-09-23T13:25:28.247Z",
           "attempts": 1
         },
-        "app": "senti",
+        "app": "sennel",
         "keywords": [
-          "repair-plan gate",
-          "canonical evidence",
-          "gate transition",
+          "repair plan gate",
+          "Gate transition",
+          "repair evidence",
           "observation cycle",
-          "Flow command",
-          "admission validation"
+          "admission failure",
+          "CLI envelope"
         ]
       },
       {
@@ -15623,9 +15631,9 @@
       },
       {
         "file": "src/flow/lib/run-settle-gate-transition.js",
-        "hash": "5d95f5755756e6a69a64e8c638358822",
-        "lines": 35,
-        "mtime": "2026-09-20T18:40:43.542Z",
+        "hash": "be5c4655e778477468382a17117f4fff",
+        "lines": 34,
+        "mtime": "2026-09-23T06:09:12.569Z",
         "className": "run-settle-gate-transition",
         "methods": [],
         "imports": [
@@ -15648,21 +15656,22 @@
           "src/flow/lib/nonblocking-evidence.js"
         ],
         "id": "e3c0bc90",
-        "summary": "Settles a Definition-selected Gate defer transition.",
-        "detail": "The command resolves the current gate transition and verifies the active Task Step identity before settling a Gate defer decision. It returns a successful settlement envelope with the phase or reports a typed admission failure when the transition is invalid or cannot be settled.",
+        "summary": "CLI command for settling a deferred Gate transition",
+        "detail": "Implements the settle-gate-transition command by reading current Gate facts, requiring the Definition-selected defer operation, and returning a structured success envelope with the settled phase. Invalid decisions and admission failures are translated into stable command error responses.",
         "chapter": "cli_commands",
-        "role": "controller",
+        "role": "cli",
         "enrich": {
-          "processedAt": "2026-09-20T18:42:48.790Z",
+          "processedAt": "2026-09-23T13:25:28.247Z",
           "attempts": 1
         },
         "app": "sennel",
         "keywords": [
-          "gate settlement",
+          "settle Gate transition",
           "Gate defer",
-          "transition resolution",
-          "Task Step identity",
-          "admission failure"
+          "transition facts",
+          "flow command",
+          "admission error",
+          "phase settlement"
         ]
       },
       {
@@ -20117,9 +20126,9 @@
       },
       {
         "file": "src/flow/registry.js",
-        "hash": "4059703f0e3aa88a8fdaacd81a5bdc7a",
-        "lines": 2935,
-        "mtime": "2026-09-23T03:44:31.578Z",
+        "hash": "f0d80f48f412f4af607dba394153a951",
+        "lines": 2944,
+        "mtime": "2026-09-23T06:09:12.570Z",
         "className": "registry",
         "methods": [
           "assertDraftReviewRegistryHookBoundary",
@@ -20199,21 +20208,23 @@
         "extends": null,
         "usedBy": null,
         "id": "d64f4095",
-        "summary": "Implements the Flow command registry and lifecycle orchestration for gates, reviews, tests, and finalization.",
-        "detail": "Registers Flow commands and runtime options, coordinates draft and specification gate execution, applies lifecycle actions, persists review results, manages task and test-chain transitions, and routes failures through canonical Flow state and plugin hooks.",
-        "chapter": "cli_commands",
+        "summary": "Flow command registry and lifecycle orchestration hub",
+        "detail": "Registers flow CLI commands and coordinates command execution with canonical state, Gate transitions, draft reviews, Task Reviews, test chains, finalization, plugin hooks, artifact publication, issue logging, and lifecycle actions. It enforces target guards, retry routing, Definition-owned decisions, persistence boundaries, active-state requirements, and stable failure handling across command paths.",
+        "chapter": "project_structure",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-23T03:47:04.759Z",
+          "processedAt": "2026-09-23T13:25:28.247Z",
           "attempts": 1
         },
+        "app": "sennel",
         "keywords": [
-          "Flow registry",
-          "CLI commands",
-          "lifecycle hooks",
-          "gate execution",
-          "review persistence",
-          "test transitions"
+          "command registry",
+          "lifecycle orchestration",
+          "flow dispatch",
+          "Gate transitions",
+          "plugin hooks",
+          "draft review",
+          "finalization"
         ]
       },
       {
@@ -22714,9 +22725,9 @@
       },
       {
         "file": "src/lib/flow-artifact-contract.js",
-        "hash": "d49285043abbafa180bb1de5904f2ec2",
+        "hash": "098989a25becfa9b9649e6f0757c4e01",
         "lines": 2110,
-        "mtime": "2026-09-19T11:53:08.527Z",
+        "mtime": "2026-09-23T13:21:42.795Z",
         "className": "flow-artifact-contract",
         "methods": [
           "FlowArtifactUpdater",
@@ -22831,23 +22842,24 @@
           "src/lib/specs-migration.js"
         ],
         "id": "8f224e2b",
-        "summary": "Defines the typed contract system for Flow artifacts, including paths, ownership, authority, content rules, evidence, inventory, and registry validation.",
-        "detail": "This module centralizes Flow artifact semantics. It validates identifiers and relative paths, models retention and mutation policies, resolves canonical and legacy paths, represents artifact ownership and authority slots, enforces typed content publication rules, and manages review or activity evidence. The registry prevents overlapping paths, validates switch targets and inventory declarations, and exports the canonical artifact contracts and related policy tables.",
+        "summary": "Defines the typed contract system for Flow artifacts, including canonical paths, ownership, authority, retention, mutation, evidence, inventory, and registry validation.",
+        "detail": "This module centralizes Flow artifact invariants and publication rules. It validates identifiers, normalized relative paths, retention and mutation policies, placement categories, artifact attempts, immutable content, requirement-test content, activity and review evidence, and legacy switch targets. Typed owners and authority slots associate artifacts with Flow steps, tasks, reviews, historical nodes, or digests. Canonical-path automata detect overlaps and exclusions, while the registry validates contracts, switch targets, known files, inventory entries, and producer or updater authorization. It exports the artifact contract catalog, content handlers, no-artifact classifications, normal-flow inventory, and legacy compatibility metadata.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-19T11:56:50.990Z",
+          "processedAt": "2026-09-23T13:25:28.247Z",
           "attempts": 1
         },
         "app": "senti",
         "keywords": [
-          "artifact contracts",
+          "Flow artifacts",
           "canonical paths",
-          "authority slots",
-          "content validation",
           "artifact registry",
-          "review evidence",
-          "activity evidence"
+          "authority slots",
+          "ownership",
+          "evidence contracts",
+          "mutation policies",
+          "inventory validation"
         ]
       },
       {
@@ -27786,9 +27798,9 @@
     ],
     "summary": {
       "total": 488,
-      "totalMethods": 5071
+      "totalMethods": 5073
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-23T03:47:04.759Z"
+  "enrichedAt": "2026-09-23T13:25:28.247Z"
 }
