@@ -161,6 +161,26 @@ describe("Flow artifact contract registry", () => {
     ]);
   });
 
+  it("authorizes only Spec and Acceptance to consume the Draft Gate result", () => {
+    const ownership = FLOW_ARTIFACT_CONTRACTS.require("draft.gate").ownership;
+    assert.deepEqual(ownership.producers, ["draft-gate"]);
+    assert.deepEqual(ownership.updaters, ["draft-gate"]);
+    assert.deepEqual(ownership.consumers, ["spec", "acceptance-review"]);
+  });
+
+  it("authorizes Acceptance to read each source class that can be carried in flow.findings", () => {
+    const sourceKeys = [
+      "draft.gate",
+      "spec.gate",
+      "test.requirement.failure", "task.review", "task.gate",
+      "impl.review", "impl.gate", "nonblocking.handoffs",
+    ];
+    for (const key of sourceKeys) {
+      assert.equal(FLOW_ARTIFACT_CONTRACTS.require(key).ownership.consumers.includes("acceptance-review"), true, key);
+    }
+    assert.equal(FLOW_ARTIFACT_CONTRACTS.require("spec.review").ownership.consumers.includes("acceptance-review"), false);
+  });
+
   it("records real decision and snapshot ownership instead of classifying writers as artifact-free", () => {
     const noArtifact = new Set(FLOW_ARTIFACT_NO_ARTIFACT_STEPS.map((entry) => entry.stepId));
     assert.equal(noArtifact.has("approval"), false);

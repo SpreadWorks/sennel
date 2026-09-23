@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   buildDeferredSemanticFindingsPublication,
   CanonicalFlowFindingSourceArtifact,
+  CanonicalFlowFindingsStore,
   FlowFindingSourceIdentity,
 } from "../../src/flow/lib/flow-findings.js";
 import { FLOW_ARTIFACT_VIEW_REGISTRY } from "../../src/flow/lib/artifact-view-registry.js";
@@ -44,6 +45,7 @@ function manager(flowFindings = null) {
       const bytes = Buffer.from(`${JSON.stringify(flowFindings)}\n`, "utf8");
       return { bytes, descriptor: { hash: "c".repeat(64), size: bytes.length } };
     },
+    readCatalogArtifact() { throw new Error("source payload is supplied by the producer fixture"); },
     readProducerArtifact() { return null; },
     publishArtifacts() {},
     activityLedger() { return []; },
@@ -51,6 +53,38 @@ function manager(flowFindings = null) {
 }
 
 describe("canonical flow finding source identity", () => {
+  it("keeps the active Task Gate producer read when its source is a catalog path", () => {
+    const sourceArtifact = "steps/impl/T1/gate/result.json";
+    const payload = { artifacts: { evaluations: [{
+      guardrail_id: "TASK-SHARED", fingerprint: FIRST_FINGERPRINT, result: "fail",
+    }] } };
+    const flowManager = {
+      readArtifact() { throw new Error("active producer must not use consumer access"); },
+      readCatalogArtifact() { throw new Error("active producer must not use catalog consumer access"); },
+      readProducerArtifact({ nodeId, logicalKey, parameters }) {
+        assert.equal(nodeId, "T1-gate");
+        assert.equal(logicalKey, "task.gate");
+        assert.deepEqual(parameters, { taskId: "T1" });
+        return {
+          bytes: Buffer.from(JSON.stringify(payload)),
+          relativePath: sourceArtifact,
+          descriptor: { relativePath: sourceArtifact },
+        };
+      },
+      publishArtifacts() {},
+      activityLedger() { return []; },
+    };
+    const source = new CanonicalFlowFindingsStore({
+      flowManager,
+      flowState: { schemaRevision: 3, specId: "001", runId: "run-1", currentTaskId: "T1", currentNodeId: "T1-gate" },
+      nodeId: "T1-gate",
+    }).sourceArtifact(sourceArtifact);
+    assert.equal(source.relativePath, sourceArtifact);
+    assert.equal(source.resolveFinding(new FlowFindingSourceIdentity({
+      sourceArtifact, sourceStep: "task-gate", sourceFindingId: "TASK-SHARED", fingerprint: FIRST_FINGERPRINT,
+    })).guardrail_id, "TASK-SHARED");
+  });
+
   it("publishes observations with one producer id and distinct fingerprints as separate exact identities", () => {
     const publication = buildDeferredSemanticFindingsPublication({
       flowManager: manager(),

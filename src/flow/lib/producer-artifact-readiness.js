@@ -277,6 +277,37 @@ function producerAttemptId(state, activities, producer) {
   return introduction.transition.attempt.id;
 }
 
+function nonblockingSourceMatches(producerNodeId, sourceStep) {
+  return sourceStep === producerNodeId
+    || (sourceStep === "task-review" && taskNode(producerNodeId, "review") !== null)
+    || (sourceStep === "task-gate" && taskNode(producerNodeId, "gate") !== null);
+}
+
+function acceptedPriorAttemptSettlement({ producer, descriptor, activities }) {
+  if (producer.status !== "done") return null;
+  return activities.find((activity) => {
+    const transition = activity.transition;
+    if (activity.nodeId !== producer.id
+      || activity.sequence !== producer.attemptSequence - 1
+      || typeof activity.attemptId !== "string"
+      || transition?.attempt?.nodeId !== producer.id
+      || typeof transition.attempt.id !== "string"
+      || transition.attempt.id === activity.attemptId
+      || transition.attempt.sequence !== producer.attemptSequence
+      || activity.result?.outcome !== "passed") return false;
+    if (transition.operation === "defer_failed_gate" || transition.operation === "defer_failed_review") {
+      return true;
+    }
+    const decision = transition.nonblocking;
+    return transition.operation === "continue_nonblocking"
+      && decision?.kind === "decision"
+      && decision.action === "continue"
+      && nonblockingSourceMatches(producer.id, decision.sourceStep)
+      && decision.sourceAttempt === activity.sequence
+      && decision.evidenceRef === descriptor.relativePath;
+  }) ?? null;
+}
+
 /** Whether an Activity is the durable publication boundary of a Draft execution generation. */
 export function isDraftExecutionPublicationActivity(activity) {
   return activity?.transition?.operation === "record_draft_step_settlement"
@@ -351,18 +382,7 @@ export class ProducerArtifactReadiness {
         consumerNodeId: this.consumerNodeId,
         logicalKey: handoff.logicalKey,
       });
-      const deferredGateSettlement = producer.status === "done"
-        && (activities.find((activity) => (
-          activity.nodeId === producer.id
-          && activity.transition.operation === "defer_failed_gate"
-          && activity.sequence === producer.attemptSequence - 1
-          && typeof activity.attemptId === "string"
-          && activity.transition.attempt?.nodeId === producer.id
-          && typeof activity.transition.attempt?.id === "string"
-          && activity.transition.attempt?.id !== activity.attemptId
-          && activity.transition.attempt?.sequence === producer.attemptSequence
-          && activity.result?.outcome === "passed"
-        )) ?? null);
+      const acceptedPriorAttempt = acceptedPriorAttemptSettlement({ producer, descriptor, activities });
       const confirmation = activities.find((activity) => (
         activity.id === descriptor.activityId
         && activity.nodeId === this.producerNodeId
@@ -390,19 +410,19 @@ export class ProducerArtifactReadiness {
               || activity.transition.operation === "publish_artifacts"
               || isDraftExecutionPublicationActivity(activity)
             ))
-          // Deferral introduces a settlement Attempt that records
-          // flow.findings. Its immutable failed Gate artifact stays on the
-          // immediately preceding producer Attempt, and only that exact
-          // definition-validated settlement may admit a downstream consumer.
+          // A deferral or an explicit nonblocking continuation can settle a
+          // failed producer through a replacement Attempt. The source artifact
+          // remains on the immediately preceding Attempt; only its exact
+          // accepted settlement may admit the downstream consumer.
           || (
-            deferredGateSettlement !== null
+            acceptedPriorAttempt !== null
             && (
               activity.transition.operation === "publish_artifacts"
               || (activity.transition.operation === "fail_attempt"
                 && activity.result?.outcome === "failed")
             )
-            && activity.sequence === deferredGateSettlement.sequence
-            && activity.attemptId === deferredGateSettlement.attemptId
+            && activity.sequence === acceptedPriorAttempt.sequence
+            && activity.attemptId === acceptedPriorAttempt.attemptId
           )
           ))
       )) ?? null;

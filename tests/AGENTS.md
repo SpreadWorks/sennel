@@ -72,6 +72,18 @@ the repository's `.sennel`, Git state, or a shared lock.
   Fake external provider responses and other nondeterministic boundaries, not
   the internal producer or saved evidence whose correctness is being tested.
   A preconstructed final artifact cannot prove that production creates it.
+- **MUST: Keep a production scenario for each Draft and Spec phase.** Run the
+  corresponding phase scenario when changing that phase. When a phase artifact
+  is consumed downstream, its producer-phase scenario must exercise the real
+  persisted artifact across reload, then the downstream Step's actual read and
+  use, including the relevant Acceptance slice, and assert the resulting
+  decision or effect. Cover relevant refusal cases such as missing, stale, or
+  unauthorized evidence. Do not mock the internal consumer or duplicate a full
+  Flow when a phase-scoped scenario proves the contract; retain a broader Flow
+  scenario only for a distinct cross-phase outcome. Current entry points are
+  `node --test tests/integration/flow-cli/draft-artifact-scenario.test.js`
+  and `node --test tests/integration/flow-cli/spec-artifact-scenario.test.js`;
+  update these references if the owning scenarios move.
 - For restart and recovery contracts, discard in-memory managers and reconstruct
   them from persisted state without passing the previous result forward. Check
   relevant interruption boundaries, such as before and after publication or

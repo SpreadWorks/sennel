@@ -116,20 +116,19 @@ test("acceptance resolves the exact fingerprint when a historical Attempt repeat
   };
   const manager = {
     readArtifact({ logicalKey }) {
-      if (logicalKey === "flow.findings") {
-        return { bytes: Buffer.from(JSON.stringify(flowFindings)), descriptor: { hash: "b".repeat(64), size: 1 } };
-      }
-      if (logicalKey === "test.requirement.review") {
-        return {
-          bytes: Buffer.from(JSON.stringify(reviewHistory)),
-          relativePath: "steps/test-review/result.json",
-          descriptor: { relativePath: "steps/test-review/result.json" },
-        };
-      }
-      return null;
+      assert.equal(logicalKey, "flow.findings");
+      return { bytes: Buffer.from(JSON.stringify(flowFindings)), descriptor: { hash: "b".repeat(64), size: 1 } };
+    },
+    readCatalogArtifact({ relativePath, consumerNodeId }) {
+      assert.equal(relativePath, "steps/test-review/result.json");
+      assert.equal(consumerNodeId, "acceptance-review");
+      return {
+        bytes: Buffer.from(JSON.stringify(reviewHistory)),
+        relativePath,
+        descriptor: { relativePath },
+      };
     },
     readProducerArtifact() { return null; },
-    readCatalogArtifact() { throw new Error("deferred finding lookup uses logical catalog reads"); },
     publishArtifacts() {},
     activityLedger() { return []; },
     artifactCatalog() { return { artifacts: [] }; },
@@ -154,6 +153,62 @@ test("acceptance resolves the exact fingerprint when a historical Attempt repeat
   assert.deepEqual(missing.evidence.map((entry) => entry.findingId), ["DF-1"]);
   assert.equal(wrongFingerprintBlockers.length, 1);
   assert.equal(wrongFingerprintBlockers[0].kind, "missing_deferred_source");
+});
+
+test("acceptance reads a deferred Task Gate source by its recorded catalog path after Task context ends", () => {
+  const sourceArtifact = "steps/impl/T1/gate/result.json";
+  const sourceFinding = {
+    guardrail_id: "TASK-SHARED",
+    fingerprint: "a".repeat(64),
+    result: "fail",
+    observed: "The Task Gate observation remains open.",
+  };
+  const flowFindings = {
+    version: 2,
+    entries: [{
+      findingId: "DF-1",
+      sourceStep: "task-gate",
+      sourceArtifact,
+      sourceFindingId: sourceFinding.guardrail_id,
+      runId: "run",
+      fingerprint: sourceFinding.fingerprint,
+      disposition: "deferred",
+      rationale: sourceFinding.observed,
+      retryExhausted: true,
+      attempts: 3,
+      round: 3,
+      completionKind: "deferred",
+      finalDisposition: null,
+    }],
+  };
+  const manager = {
+    readArtifact({ logicalKey }) {
+      assert.equal(logicalKey, "flow.findings", "source lookup must use the recorded catalog path");
+      return { bytes: Buffer.from(JSON.stringify(flowFindings)), descriptor: { hash: "b".repeat(64), size: 1 } };
+    },
+    readCatalogArtifact({ relativePath, consumerNodeId }) {
+      assert.equal(relativePath, sourceArtifact);
+      assert.equal(consumerNodeId, "acceptance-review");
+      return {
+        bytes: Buffer.from(JSON.stringify({ artifacts: { evaluations: [sourceFinding] } })),
+        relativePath: sourceArtifact,
+        descriptor: { relativePath: sourceArtifact },
+      };
+    },
+    readProducerArtifact() { throw new Error("acceptance is not the Task Gate producer"); },
+    publishArtifacts() {},
+    activityLedger() { return []; },
+    artifactCatalog() { return { artifacts: [] }; },
+    specLocation() { return { specRoot: "specs", specId: "001", relativeDirectory: "specs/001" }; },
+  };
+  const store = new CanonicalAcceptanceArtifactStore({
+    state: { schemaRevision: 3, specId: "001", runId: "run", flowId: "flow", flowVersionId: "v1", request: "x", currentTaskId: null },
+    flowManager: manager,
+  });
+  const blockers = [];
+  const deferred = store.deferredFindings(blockers);
+  assert.deepEqual(blockers, []);
+  assert.deepEqual(deferred.evidence.map((entry) => entry.sourceFinding.observed), [sourceFinding.observed]);
 });
 
 test("rejects a retired root-artifact acceptance fixture", async () => {

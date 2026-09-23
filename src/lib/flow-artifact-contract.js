@@ -1765,9 +1765,9 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("draft.coverage.triage", "steps/draft-coverage-triage/result.json", "draft-coverage-triage", "canonical-flow-artifacts", "system", own("draft-coverage-triage", ["system", "draft-coverage-triage"], ["draft-coverage-repair", "draft-gate"])),
   contract("draft.coverage.repair", "steps/draft-coverage-repair/result.json", "draft-coverage-repair", "canonical-flow-artifacts", "system", own("draft-coverage-repair", ["system", "draft-coverage-repair"], ["draft-gate", "acceptance-review"])),
   contract("draft.gate.source", "steps/draft-gate/source.json", "draft-gate-source", "canonical-flow-artifacts", "draft-gate", own("draft-gate", ["draft-gate"], ["draft-gate", "spec"])),
-  contract("draft.gate", "steps/draft-gate/result.json", "draft-gate", "canonical-flow-artifacts", "draft-gate", own("draft-gate", ["draft-gate"], ["spec"])),
+  contract("draft.gate", "steps/draft-gate/result.json", "draft-gate", "canonical-flow-artifacts", "draft-gate", own("draft-gate", ["draft-gate"], ["spec", "acceptance-review"])),
   contract("spec.gate.source", "steps/spec-gate/source.json", "spec-gate-source", "canonical-flow-artifacts", "spec-gate", own("spec-gate", ["spec-gate"], ["spec-gate", "approval"])),
-  contract("spec.gate", "steps/spec-gate/result.json", "spec-gate", "canonical-flow-artifacts", "spec-gate", own("spec-gate", ["spec-gate"], ["approval"])),
+  contract("spec.gate", "steps/spec-gate/result.json", "spec-gate", "canonical-flow-artifacts", "spec-gate", own("spec-gate", ["spec-gate"], ["approval", "acceptance-review"])),
   contract("test.requirement.plan", "steps/test-generate/plan.json", "test-requirement-plan", "canonical-flow-artifacts", "approval", own(
     "approval",
     ["approval", "test-generate", "test-review", "test-repair", "test-gate"],
@@ -1864,7 +1864,7 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("task.repair", "steps/impl/:{taskId}/repair/result.json", "task-repair", "execution-checkout", "task-repair", own("task-repair", ["task-repair"], ["system", "task-review", "task-triage", "task-repair", "task-gate", "acceptance-review"]), "permanent", "collection"),
   contract("task.review", "steps/impl/:{taskId}/review/result.json", "task-review", "canonical-flow-artifacts", "task-review", own("task-review", ["task-review"], ["system", "task-triage", "task-repair", "task-gate", "acceptance-review"]), "permanent", "collection"),
   contract("task.gate.source", "steps/impl/:{taskId}/gate/source.json", "task-gate-source", "canonical-flow-artifacts", "task-gate", own("task-gate", ["task-gate"], ["task-gate"]), "permanent", "collection"),
-  contract("task.gate", "steps/impl/:{taskId}/gate/result.json", "task-gate", "canonical-flow-artifacts", "task-gate", own("task-gate", ["task-gate"], ["task-impl", "implement"]), "permanent", "collection"),
+  contract("task.gate", "steps/impl/:{taskId}/gate/result.json", "task-gate", "canonical-flow-artifacts", "task-gate", own("task-gate", ["task-gate"], ["task-impl", "implement", "acceptance-review"]), "permanent", "collection"),
   contract("task.mutation.lineage", "steps/impl/:{taskId}/impl/mutation-lineage/:{attemptId}.json", "task-mutation-lineage", "canonical-flow-artifacts", "task-impl", own(["task-impl", "task-repair"], ["task-impl", "task-repair"], ["task-review", "task-triage", "task-repair", "task-gate"]), "permanent", "collection"),
   contract("review.evidence", "steps/:{ownerPath}/evidence/:{digest}.json", "review-evidence", "canonical-flow-artifacts", "impl-review", own(
     ["draft-questions-review", "draft-coverage-review", "spec-review", "test-review", "impl-review", "task-review"],

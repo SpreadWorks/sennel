@@ -323,6 +323,76 @@ describe("ProducerArtifactReadiness", () => {
     );
   });
 
+  it("admits a prior failed result only when its exact nonblocking continuation accepted it", () => {
+    for (const [producerNodeId, consumerNodeId, sourceStep] of [
+      ["spec-gate", "approval", "spec-gate"],
+      ["impl-review", "impl-triage", "impl-review"],
+      ["task-17-gate", "task-17-impl", "task-gate"],
+    ]) {
+      const readiness = producerArtifactReadiness({ producerNodeId, consumerNodeId });
+      assert.ok(readiness instanceof ProducerArtifactReadiness);
+      const handoff = readiness.handoffs[0];
+      const priorAttempt = `${producerNodeId}-attempt-1`;
+      const settledAttempt = `${producerNodeId}-settlement-2`;
+      const publication = {
+        id: `${producerNodeId}-failed-1`, nodeId: producerNodeId,
+        attemptId: priorAttempt, sequence: 1,
+        transition: { operation: "fail_attempt" },
+        result: { outcome: "failed" },
+      };
+      const continuation = {
+        id: `${producerNodeId}-continued-2`, nodeId: producerNodeId,
+        attemptId: priorAttempt, sequence: 1,
+        transition: {
+          operation: "continue_nonblocking",
+          attempt: { id: settledAttempt, nodeId: producerNodeId, sequence: 2 },
+          nonblocking: {
+            kind: "decision", action: "continue", sourceStep,
+            sourceAttempt: 1, evidenceRef: handoff.relativePath,
+          },
+        },
+        result: { outcome: "passed" },
+      };
+      const snapshot = {
+        state: {
+          current: null, attempt: null,
+          tasks: [{ id: "task-17", steps: [
+            { id: "task-17-impl" }, { id: "task-17-review" }, { id: "task-17-gate" },
+          ] }],
+          findNode: (nodeId) => nodeId === producerNodeId
+            ? { id: nodeId, status: "done", attemptSequence: 2 }
+            : null,
+        },
+        catalog: { artifacts: [{
+          logicalKey: handoff.logicalKey,
+          relativePath: handoff.relativePath,
+          activityId: publication.id,
+        }] },
+        activities: [publication, continuation],
+      };
+      readiness.assert(snapshot);
+      for (const nonblocking of [
+        { ...continuation.transition.nonblocking, evidenceRef: "steps/other/result.json" },
+        { ...continuation.transition.nonblocking, sourceAttempt: 0 },
+        { ...continuation.transition.nonblocking, sourceStep: "foreign-gate" },
+        { ...continuation.transition.nonblocking, action: "repair" },
+      ]) {
+        assert.throws(() => readiness.assert({
+          ...snapshot,
+          activities: [publication, {
+            ...continuation,
+            transition: { ...continuation.transition, nonblocking },
+          }],
+        }), (error) => error?.code === "CANONICAL_PRODUCER_ARTIFACT_NOT_READY");
+      }
+      assert.throws(() => readiness.assert({
+        ...snapshot,
+        catalog: { artifacts: [{ ...snapshot.catalog.artifacts[0], activityId: "older-producer-result" }] },
+        activities: [{ ...publication, id: "older-producer-result", sequence: 0 }, publication, continuation],
+      }), (error) => error?.code === "CANONICAL_PRODUCER_ARTIFACT_NOT_READY");
+    }
+  });
+
   it("rejects a retained prior-attempt result when the current producer Attempt is artifactless", () => {
     const readiness = producerArtifactReadiness({ producerNodeId: "spec-review", consumerNodeId: "spec-triage" });
     assert.throws(

@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
 
-import { Container } from "../../../src/lib/container.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowHandoffAuthorityLease } from "../../../src/lib/flow-handoff-authority-lease.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
@@ -22,35 +21,15 @@ import {
   CanonicalFlowFixture,
   canonicalDraftDocument,
 } from "../../support/infrastructure/flow-setup.js";
-import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { DraftGateRepairScenario } from "../../support/infrastructure/draft-gate-repair-scenario.js";
-
-function dispatchContainer({ root, flowManager, agent }) {
-  const container = new Container();
-  container.register("paths", { root, agentWorkDir: path.join(root, ".tmp") });
-  container.register("mainRoot", root);
-  container.register("config", {});
-  container.register("inWorktree", false);
-  container.register("flowManager", flowManager);
-  container.register("agent", agent);
-  return container;
-}
-
-function fixtureRepository(prefix) {
-  const root = createTmpDir(prefix);
-  try {
-    fs.mkdirSync(path.join(root, ".tmp"), { recursive: true });
-    initGitRepo(root);
-    fs.writeFileSync(path.join(root, "README.md"), "draft dispatcher fixture\n");
-    commitAll(root, "draft dispatcher fixture");
-    return root;
-  } catch (error) {
-    removeTmpDir(root);
-    throw error;
-  }
-}
+import {
+  dispatchContainer,
+  fixtureRepository,
+  requestInput,
+  requestPayloadPath,
+} from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 function startDraftFlow(root, suffix) {
   const specId = `801-draft-dispatch-${suffix}`;
@@ -64,18 +43,6 @@ function startDraftFlow(root, suffix) {
     execution: { mode: "direct", baseBranch: "main", featureBranch: null },
   }).create().registerActive().activate("draft");
   return { flowManager, specId, runId, fixture };
-}
-
-function requestInput(request, name) {
-  const input = request.inputs.find((entry) => entry.name === name);
-  assert.notEqual(input, undefined, `${request.stepId} request must contain ${name}`);
-  return input;
-}
-
-function requestPayloadPath(request, logicalName) {
-  const payload = request.payloads.find((entry) => entry.logicalName === logicalName);
-  assert.notEqual(payload, undefined, `${request.stepId} request must contain ${logicalName}`);
-  return payload.payloadPath;
 }
 
 function writeDraftGateRepair(request, replacement) {

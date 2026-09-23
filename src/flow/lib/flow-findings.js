@@ -366,7 +366,7 @@ export class CanonicalFlowFindingSourceArtifact {
  */
 export class CanonicalFlowFindingsStore {
   constructor({ flowManager, flowState, nodeId } = {}) {
-    if (!flowManager || typeof flowManager.readArtifact !== "function" || typeof flowManager.readProducerArtifact !== "function" || typeof flowManager.publishArtifacts !== "function" || typeof flowManager.activityLedger !== "function") {
+    if (!flowManager || typeof flowManager.readArtifact !== "function" || typeof flowManager.readCatalogArtifact !== "function" || typeof flowManager.readProducerArtifact !== "function" || typeof flowManager.publishArtifacts !== "function" || typeof flowManager.activityLedger !== "function") {
       throw new Error("canonical flow findings require FlowManager catalog APIs");
     }
     const state = canonicalFlowState(flowState);
@@ -427,6 +427,28 @@ export class CanonicalFlowFindingsStore {
 
   sourceArtifact(sourceArtifact) {
     const logicalKey = sourceLogicalKey(sourceArtifact);
+    const contract = FLOW_ARTIFACT_CONTRACTS.require(logicalKey);
+    const taskRole = logicalKey === "task.review" ? "review" : logicalKey === "task.gate" ? "gate" : null;
+    const ownsTaskProducer = taskRole !== null
+      && this.nodeId === `${this.flowState.currentTaskId}-${taskRole}`
+      && contract.ownership.producers.includes(`task-${taskRole}`);
+    const activeNodeId = this.flowState.currentNodeId ?? this.flowState.current?.at(-1) ?? null;
+    const ownsFlowProducer = activeNodeId === this.nodeId
+      && contract.ownership.producers.includes(this.nodeId);
+    if (sourceArtifact !== logicalKey && !ownsFlowProducer && !ownsTaskProducer) {
+      const resolved = this.flowManager.readCatalogArtifact({
+        specId: this.flowState.specId,
+        relativePath: sourceArtifact,
+        consumerNodeId: this.nodeId,
+        optional: true,
+      });
+      return resolved === null ? null : CanonicalFlowFindingSourceArtifact.fromBytes({
+        logicalKey,
+        relativePath: resolved.relativePath,
+        descriptor: resolved.descriptor,
+        bytes: Buffer.from(resolved.bytes),
+      });
+    }
     if (logicalKey === "spec.review") {
       const current = this.flowManager.readCurrentSpecReview({
         specId: this.flowState.specId,
@@ -440,20 +462,12 @@ export class CanonicalFlowFindingsStore {
         bytes,
       });
     }
-    const contract = FLOW_ARTIFACT_CONTRACTS.require(logicalKey);
     const taskArtifact = new Set(["task.review", "task.gate"]).has(logicalKey);
     const parameters = taskArtifact
       ? { taskId: this.flowState.currentTaskId }
       : logicalKey === "test.requirement.failure"
         ? RequirementTestFailureArtifact.fromRelativePath(sourceArtifact).parameters
         : {};
-    const taskRole = logicalKey === "task.review" ? "review" : logicalKey === "task.gate" ? "gate" : null;
-    const ownsTaskProducer = taskRole !== null
-      && this.nodeId === `${this.flowState.currentTaskId}-${taskRole}`
-      && contract.ownership.producers.includes(`task-${taskRole}`);
-    const activeNodeId = this.flowState.currentNodeId ?? this.flowState.current?.at(-1) ?? null;
-    const ownsFlowProducer = activeNodeId === this.nodeId
-      && contract.ownership.producers.includes(this.nodeId);
     const resolved = (ownsFlowProducer || ownsTaskProducer)
       ? this.flowManager.readProducerArtifact({
         specId: this.flowState.specId,
