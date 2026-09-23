@@ -43,6 +43,11 @@ import { DraftEntryConnector } from "../../../src/flow/engine/connectors/draft/d
 import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
 import { SpecReviewConnector } from "../../../src/flow/engine/connectors/spec/spec-review-connector.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
+import { SpecGateEvaluationBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
+import { SpecGateService } from "../../../src/flow/services/spec-gate-service.js";
+import { SpecGateIssuePublication } from "../../../src/flow/lib/gate-issue-publication.js";
+import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
+import { SpecGateStep } from "../../../src/flow/steps/spec/spec-gate.js";
 import {
   DraftWorkerExecutionStepBinding,
   DraftWorkerStepBinding,
@@ -63,6 +68,8 @@ import {
   DraftRefineAwaitingAnswerResult,
   DraftRefineWorkerRequiredResult,
   SpecCreatedResult,
+  SpecPlanGateRepairAppliedResult,
+  SpecPlanGateRepairNoProgressResult,
   SpecTriageCompletedResult,
   SpecRepairUnchangedResult,
   STEP_RESULT_TYPE,
@@ -831,6 +838,186 @@ function specRepairSnapshot(value) {
 }
 
 describe("worker artifact handoff", () => {
+  async function selectedSpecGateRepair() {
+    const value = fixture("spec-gate", {
+      beforeActivate(candidate) {
+        publishDraftBeforeTarget(candidate, draftDocument("Repair the specification after Gate feedback."));
+      },
+    });
+    try {
+    const binding = new SpecGateEvaluationBinding({
+      flowManager: value.flowManager, specId: value.specId,
+    });
+    const observations = [{
+      kind: "violation", failureMode: "guardrail-violation", requirementRef: "R-1",
+      where: { file: "spec.json", locator: "goal" },
+      observed: "The specification goal needs a precise outcome.",
+      severity: "blocking", refs: ["R-1"],
+    }];
+    const commandResult = new CanonicalGatePromotion({
+      state: value.flowManager.canonicalState(value.specId),
+      phase: "spec", nodeId: "spec-gate",
+    }).promote({
+      result: "fail",
+      artifacts: {
+        phase: "spec", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
+        nextAction: { diagnosis: { observations } },
+      },
+    });
+    const issuePublication = new SpecGateIssuePublication({
+      binding,
+      entry: {
+        step: "spec-gate", phase: "spec", observations,
+        reason: "The specification requires a bounded correction.",
+        trigger: "gate post hook (auto)", timestamp: binding.assertCurrent().attempt.startedAt,
+      },
+    });
+    const service = new SpecGateService({
+      flowManager: value.flowManager, binding, commandResult, issuePublication,
+    });
+    const gateResult = await new SpecGateStep(service).execute();
+    assert.equal(gateResult.kind, "spec-gate-repair-required");
+    assert.equal(value.flowManager.canonicalState(value.specId).current.at(-1), "spec");
+    return value;
+    } catch (error) {
+      removeTmpDir(value.mainRoot);
+      throw error;
+    }
+  }
+
+  async function settleSpecGateRepair(value, { changed }) {
+    const request = value.coordinator.createRequest({
+      ctx: value.ctx,
+      state: value.flowManager.load(value.specId),
+      invocation: { ...value.invocation, action: {
+        ...value.invocation.action, nextAction: { step: "spec" },
+      } },
+    });
+    const spec = request.inputs.find((entry) => entry.name === "spec.json").document;
+    fs.writeFileSync(request.payloadPath("spec.json"), json(changed
+      ? { ...spec, goal: `${spec.goal} Corrected.` }
+      : spec));
+    const recurrence = request.inputs.find((entry) => entry.name === "gate-observation-recurrence.json").document;
+    fs.writeFileSync(request.payloadPath("gate-repair-report.json"), json({
+      version: 1, summary: "Address the selected Gate observation.",
+      results: recurrence.entries.map((entry) => ({
+        fingerprint: entry.fingerprint,
+        strategy: "Clarify the specification goal",
+        summary: "Checked the goal against the blocking observation.",
+        priorRepairInsufficiency: entry.recurrenceCount > 0
+          ? "The prior change did not address this observation." : null,
+      })),
+    }));
+    seal(request);
+    const service = await SpecService.prepare({
+      ctx: value.ctx, request, Connector: SpecEntryConnector,
+      handoffCoordinator: value.coordinator,
+    });
+    let settlementInput;
+    const settle = value.flowManager.settleSpecStepResult.bind(value.flowManager);
+    value.flowManager.settleSpecStepResult = (input) => {
+      settlementInput = input;
+      return settle(input);
+    };
+    const result = await new StepFactory().provide(SpecService, service).create(SpecStep).execute();
+    return { request, service, result, settlementInput, settle };
+  }
+
+  for (const changed of [true, false]) {
+    it(`settles a bound Spec Gate repair ${changed ? "change" : "no-progress"} through the Spec Result`, async () => {
+      const value = await selectedSpecGateRepair();
+      try {
+        const { request, service, result, settlementInput, settle } = await settleSpecGateRepair(value, { changed });
+        assert.ok(result instanceof (changed
+          ? SpecPlanGateRepairAppliedResult : SpecPlanGateRepairNoProgressResult));
+        const state = value.flowManager.canonicalState(value.specId);
+        const activity = value.flowManager.activityLedger(value.specId).at(-1);
+        assert.equal(changed
+          ? state.findNode("spec").result.stepResult.kind
+          : activity.result.stepResult.kind, result.kind);
+        assert.equal(changed ? state.nextAction().nodeId : state.attempt.failure.code,
+          changed ? "spec-review" : "FLOW_PLAN_GATE_REPAIR_NO_PROGRESS");
+        const repair = service.preparation.facts.planGateRepairOutcome.repair;
+        assert.strictEqual(settlementInput.planGateRepairOutcome,
+          service.preparation.facts.planGateRepairOutcome);
+        const outcome = value.flowManager.readArtifact({
+          specId: value.specId,
+          logicalKey: "plan.gate.repair.outcome",
+          parameters: { repairId: repair.repairId }, consumerNodeId: "system",
+        });
+        assert.equal(JSON.parse(outcome.bytes).disposition,
+          changed ? "applied" : "rejected-no-progress");
+        if (!changed) {
+          const reloaded = new FlowManager({
+            root: value.mainRoot, mainRoot: value.mainRoot, inWorktree: false,
+          });
+          assert.equal(reloaded.canonicalState(value.specId).attempt.failure.code,
+            "FLOW_PLAN_GATE_REPAIR_NO_PROGRESS");
+          assert.equal(JSON.parse(reloaded.readArtifact({
+            specId: value.specId,
+            logicalKey: "plan.gate.repair.outcome",
+            parameters: { repairId: repair.repairId }, consumerNodeId: "system",
+          }).bytes).disposition, "rejected-no-progress");
+        }
+        const receipt = changed
+          ? state.findNode("spec").result.draftSettlementReceipt
+          : activity.result.draftSettlementReceipt;
+        assert.equal(service.workerOutcome.receipt.id, receipt.id);
+        const replay = settle(settlementInput);
+        assert.equal(replay.receipt.id, receipt.id);
+        assert.equal(value.flowManager.activityLedger(value.specId).filter((activity) => (
+          activity.nodeId === "spec" && activity.result?.stepResult?.kind === result.kind
+        )).length, 1);
+        const committed = value.flowManager.canonicalState(value.specId).toJSON();
+        await assert.rejects(
+          () => new StepFactory().provide(SpecService, service).create(SpecStep).execute(),
+          /stale/,
+        );
+        assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), committed);
+        assert.equal(request.stepId, "spec");
+      } finally {
+        removeTmpDir(value.mainRoot);
+      }
+    });
+  }
+
+  it("refuses an invalid bound Spec Gate repair report before canonical mutation", async () => {
+    const value = await selectedSpecGateRepair();
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(value.specId),
+        invocation: { ...value.invocation, action: {
+          ...value.invocation.action, nextAction: { step: "spec" },
+        } },
+      });
+      const spec = request.inputs.find((entry) => entry.name === "spec.json").document;
+      fs.writeFileSync(request.payloadPath("spec.json"), json({
+        ...spec, goal: `${spec.goal} Changed without a valid repair report.`,
+      }));
+      fs.writeFileSync(request.payloadPath("gate-repair-report.json"), json({
+        version: 1, summary: "No observation results", results: [],
+      }));
+      seal(request);
+      const before = {
+        state: value.flowManager.canonicalState(value.specId).toJSON(),
+        catalog: value.flowManager.artifactCatalog(value.specId).toJSON(),
+        activities: value.flowManager.activityLedger(value.specId),
+      };
+      await assert.rejects(
+        () => SpecService.prepare({
+          ctx: value.ctx, request, Connector: SpecEntryConnector,
+          handoffCoordinator: value.coordinator,
+        }),
+        (error) => error.code === "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID",
+      );
+      assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), before.state);
+      assert.deepEqual(value.flowManager.artifactCatalog(value.specId).toJSON(), before.catalog);
+      assert.deepEqual(value.flowManager.activityLedger(value.specId), before.activities);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
   it("keeps request-bound worker guidance stable when a stored request is reconstructed", () => {
     const initial = new WorkerArtifactWorkerInstructions({ schemaGuidance: "payload schema" });
     const guided = initial.appendSchemaGuidance("exact canonical identities");

@@ -7007,7 +7007,12 @@ function prepareSpecWorkerCanonical({ request, state, submission }) {
   const baseline = publications.artifactBaselines.find((entry) => (
     entry.artifact.logicalKey === "spec.record"
   )) ?? null;
-  const facts = new SpecWorkerCompletionFacts({ publication: publications.specRecord, baseline });
+  const planGateRepairOutcome = request.stepId === "spec"
+    ? planGateRepairArtifactOutcomeDraft(request, submission, state, "spec.json")
+    : null;
+  const facts = new SpecWorkerCompletionFacts({
+    publication: publications.specRecord, baseline, planGateRepairOutcome,
+  });
   return new SpecWorkerPreparation({ request, state, submission, publications, facts });
 }
 

@@ -58,6 +58,8 @@ import {
   DraftReviewExecutionClaim,
   DraftWorkerExecutionClaim,
   SpecNextRoute,
+  settleSpecStepResult,
+  specGateNonblockingEligibilityForResult,
   STEP_RESULT_ERROR_CATEGORY,
 } from "../definition.js";
 import {
@@ -69,9 +71,23 @@ import {
   DraftGateRepairCarryForwardResult,
   DraftGateRepairRequiredResult,
   SpecCreatedResult,
+  SpecPlanGateRepairAppliedResult,
+  SpecPlanGateRepairNoProgressResult,
   SpecTriageCompletedResult,
   SpecRepairChangedResult,
   SpecRepairUnchangedResult,
+  SpecGatePassedResult,
+  SpecGateRepairRequiredResult,
+  SpecGateRetryRequiredResult,
+  SpecGateDeferredResult,
+  SpecGateAwaitingDecisionResult,
+  SpecGateRecoveredResult,
+  TaskSpecGatePassedResult,
+  TaskSpecGateRepairRequiredResult,
+  TaskSpecGateRetryRequiredResult,
+  TaskSpecGateDeferredResult,
+  TaskSpecGateAwaitingDecisionResult,
+  TaskSpecGateRecoveredResult,
   STEP_RESULT_TYPE,
   StepResult,
   stepResultDigest,
@@ -128,7 +144,7 @@ import {
 import { attachedTaskReviewPublicationBinding } from "./canonical-review-artifacts.js";
 import {
   canonicalPlanGateRepairForTarget,
-  createProspectiveDraftGateRepairRecord,
+  createProspectivePlanGateRepairRecord,
   PlanGateRepairRecord,
 } from "./plan-gate-repair.js";
 import { CanonicalGateObservationCycle } from "./canonical-gate-observation-cycle.js";
@@ -193,6 +209,7 @@ import {
   readProspectiveCoveragePassDraftCompletionFacts,
 } from "./draft-completion-connector.js";
 import { DraftGateIssuePublication, DraftGatePublicationIntent } from "./draft-gate-prospective.js";
+import { SpecGateResultSelection } from "../steps/spec/spec-gate-result.js";
 import { ExternalBlockedOutcome, StepAttempt } from "./step-outcome.js";
 import { CanonicalSpecReview } from "./spec-review-artifacts.js";
 import { TaskCollection } from "../../spec/lib/render-contract.js";
@@ -1441,6 +1458,11 @@ function gateRetryAttempt(state) {
   }).toJSON();
 }
 
+function gateRecoveredAttempt(state) {
+  const retry = gateRetryAttempt(state);
+  return { ...retry, consumption: state.attempt.consumption.toJSON() };
+}
+
 function leafNodes(node, values = []) {
   if (node.steps.length === 0) {
     values.push(node);
@@ -2393,8 +2415,8 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const repair = PlanGateRepairRecord.from(record);
-    if (repair.phase === "draft") {
-      throw new CurrentFlowStateInvariantError("Draft Gate repair is persisted only through Draft StepResult settlement");
+    if (repair.phase === "draft" || repair.phase === "spec") {
+      throw new CurrentFlowStateInvariantError(`${repair.phase} Gate repair is persisted only through StepResult settlement`);
     }
     const state = this.runtime.load(resolved);
     const gateDecision = this.#admitGateDecision(state, decision, "repair");
@@ -3609,6 +3631,11 @@ export class CanonicalFlowManagerStore {
     )) {
       throw new CurrentFlowStateInvariantError("draft Gate repair Result requires its exact typed outcome");
     }
+    if (nodeId === "spec" && (stepResult instanceof SpecPlanGateRepairAppliedResult)
+      && (!(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
+        || planGateRepairOutcome.disposition !== "applied")) {
+      throw new CurrentFlowStateInvariantError("Spec plan Gate repair Result requires its applied outcome");
+    }
     if (planGateRepairOutcome !== null) {
       if (!(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
         || status !== "done"
@@ -3616,14 +3643,14 @@ export class CanonicalFlowManagerStore {
         throw new CurrentFlowStateInvariantError("plan-Gate repair confirmation requires its matching typed outcome");
       }
       const outcome = planGateRepairOutcome.seal(confirmationActivityId);
-      if (nodeId === "draft-gate-repair") {
+      if (nodeId === "draft-gate-repair" || nodeId === "spec") {
         const repair = canonicalPlanGateRepairForTarget({
           flowManager: this,
           state,
           targetStepId: nodeId,
         });
         if (!(repair instanceof PlanGateRepairRecord)) {
-          throw new CurrentFlowStateInvariantError("draft Gate repair outcome has no canonical repair binding");
+          throw new CurrentFlowStateInvariantError("plan Gate repair outcome has no canonical repair binding");
         }
         try {
           outcome.assertRepair(repair.observationRepair({
@@ -3633,7 +3660,7 @@ export class CanonicalFlowManagerStore {
           }));
         } catch (cause) {
           throw new CurrentFlowStateInvariantError(
-            `draft Gate repair outcome does not match its canonical repair binding: ${cause.message}`,
+            `plan Gate repair outcome does not match its canonical repair binding: ${cause.message}`,
           );
         }
       }
@@ -3814,6 +3841,12 @@ export class CanonicalFlowManagerStore {
   }
 
   #settlementExecutionLifecycle({ resolved, binding, settlement, executionLifecycle }) {
+    if (binding?.stepId === "spec-gate") {
+      if (executionLifecycle !== undefined && executionLifecycle !== null) {
+        throw new CurrentFlowStateInvariantError("Spec Gate does not use Draft execution lifecycle");
+      }
+      return null;
+    }
     if (executionLifecycle !== undefined && executionLifecycle !== null) {
       if (!(executionLifecycle instanceof DraftStepExecutionLifecycle)) {
         throw new CurrentFlowStateInvariantError("Draft settlement execution lifecycle must be typed");
@@ -3867,6 +3900,20 @@ export class CanonicalFlowManagerStore {
     return null;
   }
 
+  #specGateIssueWrite({ resolved, binding, issue }) {
+    if (issue === null || issue === undefined) return null;
+    const existing = this.readArtifact({
+      specId: resolved, logicalKey: "issue.log", consumerNodeId: binding.stepId, optional: true,
+    });
+    const document = new IssueLogDocument(existing === null
+      ? { entries: [] } : JSON.parse(existing.bytes.toString("utf8")));
+    document.append(issue.entry, issue.entry.issueLogId);
+    return {
+      logicalKey: "issue.log", mediaType: "application/json",
+      bytes: Buffer.from(`${JSON.stringify(document.toJSON(), null, 2)}\n`, "utf8"),
+    };
+  }
+
   #settleStepErrorResult({
     resolved,
     binding,
@@ -3875,6 +3922,8 @@ export class CanonicalFlowManagerStore {
     receipt,
     lifecycleResult = null,
     commandResult = undefined,
+    planGateRepairOutcome = null,
+    gatePublication = null,
   }) {
     const base = lifecycleResult ?? {
       outcome: "failed",
@@ -3883,11 +3932,45 @@ export class CanonicalFlowManagerStore {
       artifactRefs: [],
     };
     const result = resultWithDraftStepResult(base, binding.stepId, stepResult, receipt);
+    const failureActivityId = activityId("attempt-failed");
+    const issueWrite = this.#specGateIssueWrite({ resolved, binding, issue: gatePublication?.issue });
+    const repairOutcomeWrite = planGateRepairOutcome === null ? [] : (() => {
+      if (!(stepResult instanceof SpecPlanGateRepairNoProgressResult)
+        || !(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
+        || planGateRepairOutcome.disposition !== "rejected-no-progress") {
+        throw new CurrentFlowStateInvariantError("Spec plan Gate no-progress failure requires its exact outcome");
+      }
+      const state = this.runtime.load(resolved);
+      const repair = canonicalPlanGateRepairForTarget({
+        flowManager: this, state, targetStepId: binding.stepId,
+      });
+      if (!(repair instanceof PlanGateRepairRecord)) {
+        throw new CurrentFlowStateInvariantError("Spec plan Gate no-progress outcome has no canonical repair binding");
+      }
+      const outcome = planGateRepairOutcome.seal(failureActivityId);
+      try {
+        outcome.assertRepair(repair.observationRepair({
+          state,
+          activities: this.activityLedger(resolved),
+          handoffRevision: planGateRepairOutcome.repair.handoffRevision,
+        }));
+      } catch (cause) {
+        throw new CurrentFlowStateInvariantError(
+          `Spec plan Gate no-progress outcome does not match its repair binding: ${cause.message}`,
+        );
+      }
+      return [{
+        logicalKey: "plan.gate.repair.outcome",
+        parameters: { repairId: outcome.repairId },
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(outcome.toJSON(), null, 2)}\n`, "utf8"),
+      }];
+    })();
     const next = this.failCurrentAttempt({
       specId: resolved,
       failure: {
-        category: STEP_RESULT_ERROR_CATEGORY,
-        code: stepResult.error?.code || "STEP_RESULT_ERROR",
+        category: gatePublication?.facts.failureCategory ?? STEP_RESULT_ERROR_CATEGORY,
+        code: gatePublication?.facts.failureCode ?? stepResult.error?.code ?? "STEP_RESULT_ERROR",
         message: stepResult.error.message,
         retryable: false,
         retryKind: null,
@@ -3896,8 +3979,30 @@ export class CanonicalFlowManagerStore {
       stepResult,
       settlementReceipt: receipt,
       commandResult,
+      artifactWrites: [...repairOutcomeWrite, ...(issueWrite === null ? [] : [issueWrite])],
+      failureActivityId,
+      admission: gatePublication ?? undefined,
+      nonblocking: gatePublication === null ? null : this.#specGateNonblockingObservation({
+        state: this.runtime.load(resolved), binding, stepResult, commandResult,
+      }),
     });
     return Object.freeze({ state: next, receipt });
+  }
+
+  #specGateNonblockingObservation({ state, binding, stepResult, commandResult }) {
+    const eligibility = specGateNonblockingEligibilityForResult(stepResult);
+    if (eligibility === null || state.policy?.nonblocking?.enabled !== true) return null;
+    const payload = attachedCanonicalCommandResultArtifact(commandResult).payload;
+    const source = `${JSON.stringify(payload, null, 2)}\n`;
+    return new ActivityNonBlockingRecord({
+      kind: "observation", sourceStep: binding.stepId,
+      sourceAttempt: binding.attempt.sequence,
+      evidenceRef: FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate").relativePath,
+      evidenceDigest: crypto.createHash("sha256").update(source).digest("hex"),
+      definitionDigest: eligibility.definitionDigest,
+      resultKind: eligibility.resultKind,
+      action: null, rationale: null, remainingRisk: null,
+    });
   }
 
   #recordDraftExecutionLifecycle({ resolved, binding, stepResult, settlement, executionLifecycle }) {
@@ -4030,6 +4135,55 @@ export class CanonicalFlowManagerStore {
     return this.activityLedger(resolved).find((entry) => (
       entry.result?.draftSettlementReceipt?.id === receipt.id
     ))?.result.draftSettlementReceipt ?? null;
+  }
+
+  /** Read the exact Result and Settlement receipt on the current Attempt. */
+  readCurrentStepSettlement({ specId = null, stepId } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const state = this.runtime.load(resolved);
+    if (state.current?.at(-1) !== stepId || state.attempt?.nodeId !== stepId) return null;
+    const activities = this.activityLedger(resolved).filter((entry) => (
+      entry.nodeId === stepId
+      && entry.attemptId === state.attempt.id
+      && entry.sequence === state.attempt.sequence
+      && entry.result?.draftSettlementReceipt != null
+    ));
+    const activity = activities.at(-1) ?? null;
+    if (activity === null) return null;
+    const result = StepResult.fromStored(stepId, activity.result.stepResult);
+    const receipt = activity.result.draftSettlementReceipt;
+    if (receipt.binding?.runId !== state.runId
+      || receipt.binding?.specId !== state.specId
+      || receipt.binding?.stepId !== stepId
+      || receipt.binding?.attemptId !== state.attempt.id
+      || receipt.binding?.attemptSequence !== state.attempt.sequence
+      || receipt.resultKind !== result.kind
+      || receipt.resultType !== result.type
+      || receipt.resultDigest !== stepResultDigest(result)) {
+      throw new CurrentFlowStateInvariantError("current Step settlement receipt is invalid");
+    }
+    const settlement = stepId === "spec-gate" ? settleSpecStepResult(stepId, result) : null;
+    if (settlement !== null && (receipt.settlementKind !== settlement.kind
+      || receipt.targetStepId !== (settlement instanceof StepRoute ? settlement.targetStepId : null)
+      || JSON.stringify(receipt.effects?.toJSON() ?? null)
+        !== JSON.stringify(settlement instanceof StepRoute ? settlement.effects.toJSON() : null)
+      || receipt.connector?.name !== (settlement instanceof StepRoute ? settlement.connector.name : undefined))) {
+      throw new CurrentFlowStateInvariantError("current Step settlement does not match its selected Result");
+    }
+    if (stepId === "spec-gate") {
+      const publication = this.readProducerArtifact({
+        specId: resolved, nodeId: stepId, logicalKey: "spec.gate", optional: true,
+      });
+      const current = publication === null ? null : CanonicalCommandAttemptArtifactHistory.fromBytes({
+        logicalKey: "spec.gate", bytes: publication.bytes,
+      }).current;
+      if (publication?.descriptor.activityId !== activity.id
+        || current?.attempt !== state.attempt.sequence) {
+        throw new CurrentFlowStateInvariantError("current Spec Gate Result lacks its matching publication");
+      }
+    }
+    return Object.freeze({ result, settlement, receipt, activityId: activity.id });
   }
 
   /** Read the latest exact Await receipt without reconstructing its publication. */
@@ -4211,6 +4365,12 @@ export class CanonicalFlowManagerStore {
     if (!(stepResult instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       throw new CurrentFlowStateInvariantError("Draft settlement requires typed Result and Settlement");
     }
+    if (binding.stepId === "spec-gate") {
+      if (!(gatePublication instanceof SpecGateResultSelection)) {
+        throw new CurrentFlowStateInvariantError("Spec Gate settlement requires its sealed Step Result selection");
+      }
+      gatePublication.assertPublication({ binding, commandResult, stepResult });
+    }
     this.#assertDraftCompletionApplication({ settlement, application: draftCompletionApplication });
     const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
       resolved, binding, settlement, executionLifecycle,
@@ -4244,6 +4404,7 @@ export class CanonicalFlowManagerStore {
     if (settlement instanceof StepErrorDecision) {
       return this.#settleStepErrorResult({
         resolved, binding, stepResult, settlement, receipt, lifecycleResult, commandResult,
+        gatePublication,
       });
     }
     const baseResult = resultWithDraftStepResult(
@@ -4259,6 +4420,109 @@ export class CanonicalFlowManagerStore {
         ...this.#commandPublicationWrites(commandResult),
       ]),
     ];
+    if (binding.stepId === "spec-gate") {
+      const issueWrite = this.#specGateIssueWrite({ resolved, binding, issue: gatePublication.issue });
+      if (stepResult instanceof SpecGatePassedResult || stepResult instanceof TaskSpecGatePassedResult) {
+        const next = this.confirmCurrentAttempt({
+          specId: resolved, stepResult, settlementReceipt: receipt, commandResult,
+          admission: gatePublication,
+        });
+        return Object.freeze({ state: next, receipt });
+      }
+      if (stepResult instanceof SpecGateRetryRequiredResult || stepResult instanceof TaskSpecGateRetryRequiredResult
+        || stepResult instanceof TaskSpecGateRepairRequiredResult) {
+        const failedResult = resultWithDraftStepResult({
+          outcome: "failed", summary: "Spec Gate rejected the current Attempt",
+          confirmedAt: new Date().toISOString(), artifactRefs: [],
+        }, binding.stepId, stepResult, receipt);
+        const next = this.runtime.settleSpecGateRetry({
+          specId: resolved, activityId: activityId("spec-gate-retry"),
+          attempt: gateRetryAttempt(state),
+          failure: {
+            category: "semantic", code: "GATE_REJECTED", message: "Spec Gate rejected the current Attempt",
+            retryable: true, retryKind: "semantic",
+          },
+          result: failedResult,
+          artifactWrites: [...writes, ...(issueWrite === null ? [] : [issueWrite])],
+          metric: canonicalMetric({
+            phase: gatePublication.facts.phase, counter: "gateRetry", delta: 1,
+          }),
+          admission: gatePublication,
+        });
+        return Object.freeze({ state: next, receipt });
+      }
+      if (stepResult instanceof SpecGateRepairRequiredResult) {
+        if (issueWrite === null) throw new CurrentFlowStateInvariantError("Spec Gate repair requires issue evidence");
+        const issueLog = new IssueLogDocument(JSON.parse(issueWrite.bytes.toString("utf8"))).toJSON();
+        const resultWrite = writes.find((entry) => entry.logicalKey === "spec.gate");
+        const sourceWrite = writes.find((entry) => entry.logicalKey === "spec.gate.source");
+        const settlementActivityId = activityId("plan-gate-repaired");
+        const repair = createProspectivePlanGateRepairRecord({
+          state, issueLog, gateResultPayload: attachedCanonicalCommandResultArtifact(commandResult).payload,
+          resultArtifactWrite: resultWrite, sourceArtifactWrite: sourceWrite,
+          publicationActivityId: settlementActivityId,
+          cycleReadModel: new CanonicalGateObservationCycle({ flowManager: this, state }).readHistorical(),
+          phase: "spec",
+        });
+        const nextIssueLog = repair.appendToIssueLog(issueLog);
+        const next = this.runtime.planGateRepair({
+          specId: resolved, activityId: settlementActivityId,
+          nodeId: binding.stepId,
+          attempt: commandContextAttempt(state, repair.targetStepId),
+          result: baseResult,
+          references: { evaluations: [], findings: [], repairs: [repair.activityReference()], artifacts: [] },
+          artifactWrites: [...writes, {
+            logicalKey: "issue.log", mediaType: "application/json",
+            bytes: Buffer.from(`${JSON.stringify(nextIssueLog, null, 2)}\n`, "utf8"),
+          }],
+          admission: new CombinedAdmission(gatePublication, this.#producerCompletionAdmission(binding.stepId, writes)),
+        });
+        return Object.freeze({ state: next, receipt });
+      }
+      if (stepResult instanceof SpecGateDeferredResult || stepResult instanceof TaskSpecGateDeferredResult) {
+        const resultArtifact = FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate");
+        const findings = buildDeferredSemanticFindingsPublication({
+          flowManager: this, flowState: this.loadReadOnly(resolved), nodeId: binding.stepId,
+          sourceStep: binding.stepId, sourceArtifact: resultArtifact.relativePath,
+          sourcePayload: attachedCanonicalCommandResultArtifact(commandResult).payload,
+          sourceRelativePath: resultArtifact.relativePath,
+          attempts: gatePublication.facts.retryUsed + 1,
+          round: gatePublication.facts.retryUsed + 1,
+        });
+        const publication = findings.settlementArtifacts();
+        const next = this.confirmCurrentAttempt({
+          specId: resolved, stepResult, settlementReceipt: receipt, commandResult,
+          artifactWrites: [...publication.artifactWrites, ...(issueWrite === null ? [] : [issueWrite])],
+          artifactBaselines: publication.artifactBaselines,
+          admission: gatePublication,
+        });
+        return Object.freeze({ state: next, receipt });
+      }
+      if (stepResult instanceof SpecGateAwaitingDecisionResult
+        || stepResult instanceof TaskSpecGateAwaitingDecisionResult
+      ) {
+        const observation = this.#specGateNonblockingObservation({
+          state, binding, stepResult, commandResult,
+        });
+        const next = this.runtime.recordDraftStepSettlement({
+          specId: resolved, activityId: activityId("spec-gate-settled"), result: baseResult,
+          artifactWrites: [...writes, ...(issueWrite === null ? [] : [issueWrite])],
+          nonblocking: observation?.toJSON() ?? null,
+          admission: gatePublication,
+        });
+        return Object.freeze({ state: next, receipt });
+      }
+      if (stepResult instanceof SpecGateRecoveredResult || stepResult instanceof TaskSpecGateRecoveredResult) {
+        const next = this.runtime.settleSpecGateRecovered({
+          specId: resolved, activityId: activityId("spec-gate-recovered"),
+          attempt: gateRecoveredAttempt(state), result: baseResult,
+          artifactWrites: writes,
+          admission: gatePublication,
+        });
+        return Object.freeze({ state: next, receipt });
+      }
+      throw new CurrentFlowStateInvariantError("Spec Gate settlement Result is unsupported");
+    }
     if (!(settlement instanceof StepRoute)) {
       const next = this.runtime.recordDraftStepSettlement({
         specId: resolved,
@@ -4346,7 +4610,7 @@ export class CanonicalFlowManagerStore {
         const resultWrite = writes.find((entry) => entry.logicalKey === "draft.gate");
         const sourceWrite = writes.find((entry) => entry.logicalKey === "draft.gate.source");
         const settlementActivityId = activityId("plan-gate-repaired");
-        const repair = createProspectiveDraftGateRepairRecord({
+        const repair = createProspectivePlanGateRepairRecord({
           state,
           issueLog: sourceIssue.document,
           gateResultPayload: attached.payload,
@@ -4458,7 +4722,15 @@ export class CanonicalFlowManagerStore {
     artifactRemovals = undefined,
     artifactBaselines = [],
     commandResult = undefined,
+    planGateRepairOutcome = null,
+    gatePublication = null,
   } = {}) {
+    if (binding?.stepId === "spec-gate") {
+      return this.settleDraftStepResult({
+        specId, binding, stepResult, settlement, commandResult, gatePublication,
+        lifecycleResult, references, artifactWrites, artifactRemovals, artifactBaselines,
+      });
+    }
     if (binding?.stepId === "spec-review") {
       if (!(stepResult instanceof StepResult)
         || !(settlement instanceof StepSettlement)
@@ -4474,7 +4746,8 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const errorSettlement = settlement instanceof StepErrorDecision;
-    const initialRoute = stepResult instanceof SpecCreatedResult
+    const initialRoute = (stepResult instanceof SpecCreatedResult
+      || stepResult instanceof SpecPlanGateRepairAppliedResult)
       && settlement instanceof SpecNextRoute
       && application instanceof SpecReviewSettlementApplication
       && application.sourceStepId === "spec"
@@ -4497,6 +4770,14 @@ export class CanonicalFlowManagerStore {
       && artifactBaselines.length === 1
       && CanonicalFlowArtifactBaseline.from(artifactBaselines[0]).artifact.logicalKey === "spec.review";
     const routedSettlement = initialRoute || reviewWorkerRoute;
+    if ((stepResult instanceof SpecPlanGateRepairAppliedResult)
+      !== (planGateRepairOutcome?.disposition === "applied")) {
+      throw new CurrentFlowStateInvariantError("Spec plan Gate repair Result requires its applied outcome");
+    }
+    if ((stepResult instanceof SpecPlanGateRepairNoProgressResult)
+      !== (planGateRepairOutcome?.disposition === "rejected-no-progress")) {
+      throw new CurrentFlowStateInvariantError("Spec plan Gate no-progress Result requires its rejected outcome");
+    }
     if (!(stepResult instanceof StepResult)
       || !["spec", "spec-triage", "spec-repair"].includes(binding?.stepId)
       || settlement?.sourceStepId !== binding.stepId
@@ -4528,6 +4809,7 @@ export class CanonicalFlowManagerStore {
       artifactWrites,
       artifactRemovals,
       artifactBaselines,
+      planGateRepairOutcome,
     });
     const state = this.runtime.load(resolved);
     const replay = this.#admitStepSettlement({
@@ -4540,6 +4822,7 @@ export class CanonicalFlowManagerStore {
     if (errorSettlement) {
       return this.#settleStepErrorResult({
         resolved, binding, stepResult, settlement, receipt, lifecycleResult,
+        planGateRepairOutcome,
       });
     }
     const next = this.confirmCurrentAttempt({
@@ -4553,6 +4836,7 @@ export class CanonicalFlowManagerStore {
       artifactWrites,
       artifactRemovals,
       artifactBaselines,
+      planGateRepairOutcome,
     });
     return Object.freeze({ state: next, receipt });
   }
@@ -5759,7 +6043,7 @@ export class CanonicalFlowManagerStore {
    * error counterpart to `confirmCurrentAttempt`; callers never mutate a
    * status blob or write a retry artifact beside flow.json.
    */
-  failCurrentAttempt({ specId = null, failure, result, stepResult = null, settlementReceipt = null, commandResult = undefined, taskReviewUnsealedCheckpoint = null, taskReviewAbortedWorkUnit = null, admission = undefined } = {}) {
+  failCurrentAttempt({ specId = null, failure, result, stepResult = null, settlementReceipt = null, commandResult = undefined, artifactWrites: extraArtifactWrites = [], failureActivityId = null, taskReviewUnsealedCheckpoint = null, taskReviewAbortedWorkUnit = null, admission = undefined, nonblocking = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
@@ -5786,7 +6070,8 @@ export class CanonicalFlowManagerStore {
           || settlementReceipt.settlementKind !== "failure") {
           throw new CurrentFlowStateInvariantError("Draft Error Result requires its Failure settlement receipt");
         }
-        if (failure.category !== STEP_RESULT_ERROR_CATEGORY) {
+        if (failure.category !== STEP_RESULT_ERROR_CATEGORY
+          && !(nodeId === "spec-gate" && ["semantic", "local"].includes(failure.category))) {
           throw new CurrentFlowStateInvariantError(
             "Error StepResult requires step-result-error failure facts",
           );
@@ -5804,9 +6089,9 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("Task Review aborted worker archive must be typed");
     }
     if (taskReviewAbortedWorkUnit !== null) taskReviewAbortedWorkUnit.assertActiveState(state);
-    const artifactWrites = commandResult === undefined
-      ? []
-      : [
+    const artifactWrites = [
+      ...extraArtifactWrites,
+      ...(commandResult === undefined ? [] : [
           ...this.#attemptHistoryWrites({
             specId: resolved,
             state,
@@ -5814,16 +6099,18 @@ export class CanonicalFlowManagerStore {
             commandResult,
           }),
           ...this.#commandPublicationWrites(commandResult),
-        ];
+        ]),
+    ];
     if (taskReviewUnsealedCheckpoint !== null) artifactWrites.push(taskReviewCheckpointArtifact(taskReviewUnsealedCheckpoint));
     if (taskReviewAbortedWorkUnit !== null) artifactWrites.push(taskReviewAbortedWorkUnit.artifactWrite);
     return this.runtime.failAttempt({
       specId: resolved,
-      activityId: activityId("attempt-failed"),
+      activityId: failureActivityId ?? activityId("attempt-failed"),
       failure,
       result: failureResult,
       artifactWrites,
       admission,
+      nonblocking: nonblocking?.toJSON?.() ?? nonblocking,
     });
   }
 
@@ -7433,7 +7720,7 @@ export class CanonicalFlowManagerStore {
         ? [] : (artifactBaselines ?? []).map(baselineIdentity),
       testSourceBaseline: settlement instanceof StepErrorDecision ? null : testSource,
       command: commandIdentity,
-      gatePublication: settlement instanceof StepErrorDecision
+      gatePublication: settlement instanceof StepErrorDecision && binding.stepId !== "spec-gate"
         ? null : jsonIdentity(gatePublication, "Gate publication"),
       draftCompletionApplication: draftCompletionApplication instanceof DraftCompletionSettlementApplication
         ? jsonIdentity(draftCompletionApplication, "Draft completion application")
@@ -7441,7 +7728,8 @@ export class CanonicalFlowManagerStore {
       lifecycleResult: jsonIdentity(lifecycleResult, "lifecycle result"),
       references: settlement instanceof StepErrorDecision ? null : jsonIdentity(references, "references"),
       specRecord: settlement instanceof StepErrorDecision ? null : jsonIdentity(specRecord, "Spec record"),
-      planGateRepairOutcome: settlement instanceof StepErrorDecision ? null : planGateRepair,
+      planGateRepairOutcome: settlement instanceof StepErrorDecision
+        && !(settlement.resultKind === "spec-plan-gate-repair-no-progress") ? null : planGateRepair,
     });
   }
 

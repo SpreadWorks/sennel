@@ -167,7 +167,7 @@ test("dispatcher recognizes Definition-owned Gate retry, repair, and settlement 
   ]);
 });
 
-test("dispatcher reconciles a published Gate result through the normal registry without a worker", async () => {
+test("next-action refuses a Spec Gate publication without its atomic Result", async () => {
   const root = createTmpDir("dispatcher-gate-publication-recovery-");
   try {
     const specId = "504-gate-publication-recovery";
@@ -183,53 +183,27 @@ test("dispatcher reconciles a published Gate result through the normal registry 
       state: manager.canonicalState(specId), phase: "spec", nodeId: "spec-gate",
     }).promote({ result: "pass", artifacts: {} });
     manager.publishCurrentAttemptResult({ specId, commandResult: result });
-    let workerCalls = 0;
-    const dispatcher = new RunDispatchCommand({
-      nextAction: {
-        async run(container, input) {
-          if (flow.state().currentNodeId !== "spec-gate") return completedAction();
-          const next = await new GetNextActionCommand().run(container, input);
-          assert.equal(next.directive.actionId, "RECONCILE_GATE_PUBLICATION");
-          return next;
-        },
-      },
-      agent: { async call() { workerCalls += 1; } },
-      repositoryFingerprint: () => "dispatcher-gate-publication-recovery-fingerprint",
-      leaseFactory: () => ({ acquire() {}, release() {} }),
-      handoffCoordinator: { recoverPending() {} },
-    });
-    dispatcher.container = commandContainer({ root, manager });
-
-    const outcome = await dispatcher.execute({
-      root,
-      mainRoot: root,
-      executionRoot: root,
-      specId,
-      flowManager: manager,
-      flowState: manager.load(specId),
-      expectRunId: runId,
-      _envelopeType: "run",
-      _envelopeKey: "dispatch",
-    });
-
-    assert.equal(outcome.dispatch?.boundary, "completed", JSON.stringify(outcome));
-    assert.equal(outcome.dispatch?.dispatchCount, 1);
-    assert.equal(workerCalls, 0);
-    assert.equal(manager.canonicalState(specId).findNode("spec-gate").status, "done");
-    const publications = manager.activityLedger(specId).filter((activity) => (
-      activity.nodeId === "spec-gate" && activity.transition.operation === "publish_artifacts"
-    ));
-    assert.equal(publications.length, 1);
-    const history = JSON.parse(manager.readArtifact({
-      specId, logicalKey: "spec.gate", consumerNodeId: "approval",
-    }).bytes.toString("utf8"));
-    assert.deepEqual(history.attempts.map((entry) => entry.attempt), [1]);
+    const before = {
+      state: manager.canonicalState(specId).toJSON(),
+      activities: manager.activityLedger(specId),
+      catalog: manager.artifactCatalog(specId).toJSON(),
+    };
+    await assert.rejects(
+      new GetNextActionCommand().execute({
+        root, mainRoot: root, executionRoot: root, specId,
+        flowManager: manager, flowState: manager.load(specId),
+      }),
+      /Spec Gate publication lacks its atomic Step Result and Settlement/,
+    );
+    assert.deepEqual(manager.canonicalState(specId).toJSON(), before.state);
+    assert.deepEqual(manager.activityLedger(specId), before.activities);
+    assert.deepEqual(manager.artifactCatalog(specId).toJSON(), before.catalog);
   } finally {
     removeTmpDir(root);
   }
 });
 
-test("published Gate failure is classified once and cannot be reconciled after reload", async () => {
+test("published Spec Gate failure without Result stays refused after reload", async () => {
   const root = createTmpDir("gate-publication-failure-recovery-");
   try {
     const specId = "505-gate-publication-failure";
@@ -266,22 +240,13 @@ test("published Gate failure is classified once and cannot be reconciled after r
       flowManager: manager,
       flowState: manager.load(specId),
     };
-    const initial = await new GetNextActionCommand().execute(ctx);
-    assert.equal(initial.directive.actionId, "RECONCILE_GATE_PUBLICATION");
-
-    const result = await new RunGateCommand().execute(ctx);
-    await FLOW_COMMANDS.run.gate.post(ctx, result);
-    const failed = manager.canonicalState(specId);
-    assert.equal(failed.current.at(-1), "spec-gate");
-    assert.equal(failed.attempt.failure.code, "SPEC_GATE_REJECTED");
-    assert.equal(manager.artifactCatalog(specId).artifacts.find((artifact) => (
-      artifact.logicalKey === "spec.gate"
-    )).activityId, publishedResultActivityId);
+    await assert.rejects(new GetNextActionCommand().execute(ctx),
+      /Spec Gate publication lacks its atomic Step Result and Settlement/);
 
     const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
-    const next = await new GetNextActionCommand().execute({ ...ctx, flowManager: reloaded, flowState: reloaded.load(specId) });
-    assert.notEqual(next.directive.actionId, "RECONCILE_GATE_PUBLICATION");
-    assert.equal(next.directive.actionId, "CLAIM_GATE_RETRY");
+    await assert.rejects(new GetNextActionCommand().execute({
+      ...ctx, flowManager: reloaded, flowState: reloaded.load(specId),
+    }), /Spec Gate publication lacks its atomic Step Result and Settlement/);
     const before = {
       state: reloaded.canonicalState(specId).toJSON(),
       activities: reloaded.activityLedger(specId),
@@ -289,8 +254,11 @@ test("published Gate failure is classified once and cannot be reconciled after r
     };
     await assert.rejects(
       new RunGateCommand().execute({ ...ctx, flowManager: reloaded, flowState: reloaded.load(specId) }),
-      /canonical gate admission rejected evaluation; definition selected retry/,
+      /Spec Gate result is already settled for the active Attempt/,
     );
+    assert.equal(reloaded.artifactCatalog(specId).artifacts.find((artifact) => (
+      artifact.logicalKey === "spec.gate"
+    )).activityId, publishedResultActivityId);
     assert.deepEqual(reloaded.canonicalState(specId).toJSON(), before.state);
     assert.deepEqual(reloaded.activityLedger(specId), before.activities);
     assert.deepEqual(reloaded.artifactCatalog(specId).toJSON(), before.catalog);

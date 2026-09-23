@@ -137,11 +137,28 @@ function resultClass(className, definition) {
   return ResultClass;
 }
 
+function errorResultClass(className, definition) {
+  const ResultClass = { [className]: class extends StepResult {
+    constructor(error) {
+      if (!(error instanceof Error)) throw new TypeError(`${className} requires an Error`);
+      super(DEFINITION_TOKEN, { ...definition, error });
+    }
+  } }[className];
+  declareResult(ResultClass, definition);
+  return ResultClass;
+}
+
 export const DraftCreatedResult = resultClass("DraftCreatedResult", {
   stepId: "draft", kind: "draft-created", type: STEP_RESULT_TYPE.COMPLETED,
 });
 export const SpecCreatedResult = resultClass("SpecCreatedResult", {
   stepId: "spec", kind: "spec-created", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const SpecPlanGateRepairAppliedResult = resultClass("SpecPlanGateRepairAppliedResult", {
+  stepId: "spec", kind: "spec-plan-gate-repair-applied", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const SpecPlanGateRepairNoProgressResult = errorResultClass("SpecPlanGateRepairNoProgressResult", {
+  stepId: "spec", kind: "spec-plan-gate-repair-no-progress", type: STEP_RESULT_TYPE.ERROR,
 });
 export const SpecTriageCompletedResult = resultClass("SpecTriageCompletedResult", {
   stepId: "spec-triage", kind: "spec-triage-completed", type: STEP_RESULT_TYPE.COMPLETED,
@@ -151,6 +168,48 @@ export const SpecRepairChangedResult = resultClass("SpecRepairChangedResult", {
 });
 export const SpecRepairUnchangedResult = resultClass("SpecRepairUnchangedResult", {
   stepId: "spec-repair", kind: "spec-repair-unchanged", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const SpecGatePassedResult = resultClass("SpecGatePassedResult", {
+  stepId: "spec-gate", kind: "spec-gate-passed", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const SpecGateRepairRequiredResult = resultClass("SpecGateRepairRequiredResult", {
+  stepId: "spec-gate", kind: "spec-gate-repair-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
+});
+export const SpecGateRetryRequiredResult = resultClass("SpecGateRetryRequiredResult", {
+  stepId: "spec-gate", kind: "spec-gate-retry-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
+});
+export const SpecGateDeferredResult = resultClass("SpecGateDeferredResult", {
+  stepId: "spec-gate", kind: "spec-gate-deferred", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const SpecGateAwaitingDecisionResult = resultClass("SpecGateAwaitingDecisionResult", {
+  stepId: "spec-gate", kind: "spec-gate-awaiting-decision", type: STEP_RESULT_TYPE.USER_INPUT_REQUIRED,
+});
+export const SpecGateRecoveredResult = resultClass("SpecGateRecoveredResult", {
+  stepId: "spec-gate", kind: "spec-gate-recovered", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
+});
+export const TaskSpecGatePassedResult = resultClass("TaskSpecGatePassedResult", {
+  stepId: "spec-gate", kind: "task-spec-gate-passed", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const TaskSpecGateRepairRequiredResult = resultClass("TaskSpecGateRepairRequiredResult", {
+  stepId: "spec-gate", kind: "task-spec-gate-repair-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
+});
+export const TaskSpecGateRetryRequiredResult = resultClass("TaskSpecGateRetryRequiredResult", {
+  stepId: "spec-gate", kind: "task-spec-gate-retry-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
+});
+export const TaskSpecGateDeferredResult = resultClass("TaskSpecGateDeferredResult", {
+  stepId: "spec-gate", kind: "task-spec-gate-deferred", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const TaskSpecGateAwaitingDecisionResult = resultClass("TaskSpecGateAwaitingDecisionResult", {
+  stepId: "spec-gate", kind: "task-spec-gate-awaiting-decision", type: STEP_RESULT_TYPE.USER_INPUT_REQUIRED,
+});
+export const TaskSpecGateRecoveredResult = resultClass("TaskSpecGateRecoveredResult", {
+  stepId: "spec-gate", kind: "task-spec-gate-recovered", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
+});
+export const SpecGateBlockedResult = errorResultClass("SpecGateBlockedResult", {
+  stepId: "spec-gate", kind: "spec-gate-blocked", type: STEP_RESULT_TYPE.ERROR,
+});
+export const TaskSpecGateBlockedResult = errorResultClass("TaskSpecGateBlockedResult", {
+  stepId: "spec-gate", kind: "task-spec-gate-blocked", type: STEP_RESULT_TYPE.ERROR,
 });
 export const SpecReviewExecutionRequiredResult = resultClass("SpecReviewExecutionRequiredResult", {
   stepId: "spec-review", kind: "spec-review-execution-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
@@ -259,7 +318,9 @@ export function rehydrateStepResult(stepId, value) {
     throw new TypeError("stored StepResult fields are invalid");
   }
   return entry.type === STEP_RESULT_TYPE.ERROR
-    ? new StepErrorResult(stepId, rehydrateError(value.error))
+    ? entry.ResultClass === StepErrorResult
+      ? new StepErrorResult(stepId, rehydrateError(value.error))
+      : new entry.ResultClass(rehydrateError(value.error))
     : new entry.ResultClass();
 }
 

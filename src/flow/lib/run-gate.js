@@ -3702,6 +3702,13 @@ export class RunGateCommand extends FlowCommand {
         error.code = "FLOW_DRAFT_GATE_RESULT_ALREADY_PUBLISHED";
         throw error;
       }
+      if (phase === "spec" || phase === "task-spec") {
+        const error = new Error(
+          "canonical gate admission rejected evaluation; Spec Gate result is already settled for the active Attempt",
+        );
+        error.code = "FLOW_SPEC_GATE_RESULT_ALREADY_SETTLED";
+        throw error;
+      }
       // Task settlement is considered before the generic publication
       // recovery so a saved Task Gate result is reconciled without invoking
       // its worker again.

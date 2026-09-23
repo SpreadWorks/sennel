@@ -92,12 +92,13 @@ function activityAttemptKey(nodeId, attempt) {
 }
 
 function repairActivityFor(record, activities) {
+  const prospectiveKind = `${record.route.phase}-gate-repair-required`;
   const matches = activities.filter((activity) => {
     const references = activity?.references?.repairs;
     return activity?.transition?.operation === "plan_gate_repair"
       && (activity.nodeId === record.targetStepId
         || (activity.nodeId === record.route.gateStepId
-          && activity.result?.stepResult?.kind === "draft-gate-repair-required"))
+          && activity.result?.stepResult?.kind === prospectiveKind))
       && Array.isArray(references)
       && references.length === 1
       && references[0]?.id === record.idempotencyKey
@@ -108,10 +109,10 @@ function repairActivityFor(record, activities) {
   }
   const activity = matches[0];
   const targetAttempt = activity.transition?.attempt;
-  const prospectiveDraftSettlement = activity.nodeId === record.route.gateStepId
-    && activity.result?.stepResult?.kind === "draft-gate-repair-required";
+  const prospectiveGateSettlement = activity.nodeId === record.route.gateStepId
+    && activity.result?.stepResult?.kind === prospectiveKind;
   if (targetAttempt?.nodeId !== record.targetStepId
-    || (!prospectiveDraftSettlement
+    || (!prospectiveGateSettlement
       && (activity.attemptId !== targetAttempt.id || activity.sequence !== targetAttempt.sequence))) {
     throw new Error("canonical plan Gate repair Activity has a mismatched target Attempt");
   }
@@ -523,13 +524,13 @@ export class CanonicalGateObservationCycle {
     if (sourcePublications.length !== 1) {
       throw new Error("canonical Gate repair source has no exact publication Activity");
     }
-    const atomicDraftSettlement = sourcePublications[0].id === repairActivity.id
-      && repairActivity.result?.stepResult?.kind === "draft-gate-repair-required";
+    const atomicGateSettlement = sourcePublications[0].id === repairActivity.id
+      && repairActivity.result?.stepResult?.kind === `${record.route.phase}-gate-repair-required`;
     if (!Number.isSafeInteger(sourcePublications[0].confirmationOrder)
       || !Number.isSafeInteger(repairActivity.confirmationOrder)
       || sourcePublications[0].confirmationOrder > repairActivity.confirmationOrder
       || (sourcePublications[0].confirmationOrder === repairActivity.confirmationOrder
-        && !atomicDraftSettlement)) {
+        && !atomicGateSettlement)) {
       throw new Error("canonical Gate repair source publication is not prior to its repair Activity");
     }
     return resultHistory;

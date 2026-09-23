@@ -39,6 +39,7 @@ import {
   NextActionDirectiveResolver,
 } from "./next-action-directive.js";
 import { TaskNode } from "./current-flow-state.js";
+import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
 import {
   UserActionChoice,
   UserActionImpact,
@@ -266,6 +267,25 @@ function finalRegressionNextAction(ctx, state, typedState, binding) {
   return null;
 }
 
+class SavedSpecGateSelection {
+  constructor(saved) {
+    if (saved?.result?.stepId !== "spec-gate" || saved?.settlement?.sourceStepId !== "spec-gate"
+      || saved?.receipt?.binding?.stepId !== "spec-gate") {
+      throw new Error("saved Spec Gate selection requires one bound Result and Settlement");
+    }
+    this.result = saved.result;
+    this.settlement = saved.settlement;
+    this.receipt = saved.receipt;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      result: this.result.toJSON(), settlement: this.settlement.toJSON(), receiptId: this.receipt.id,
+    };
+  }
+}
+
 /** Definition-owned Gate routing is projected only from its canonical typed facts. */
 function definitionOwnedGateSelection(ctx, state, target) {
   const phase = target.stepId === "spec-gate"
@@ -276,6 +296,18 @@ function definitionOwnedGateSelection(ctx, state, target) {
         ? "integration"
       : null;
   if (phase === null) return null;
+  if (phase === "spec") {
+    const saved = ctx.flowManager.readCurrentStepSettlement({
+      specId: state.specId, stepId: "spec-gate",
+    });
+    if (saved !== null) return new SavedSpecGateSelection(saved);
+    const facts = readCurrentGateTransitionFacts({
+      flowManager: ctx.flowManager, flowState: state, phase,
+    });
+    if (facts !== null) {
+      throw new Error("Spec Gate publication lacks its atomic Step Result and Settlement");
+    }
+  }
   return resolveGateNextAction({
     flowManager: ctx.flowManager,
     flowState: state,
@@ -285,6 +317,23 @@ function definitionOwnedGateSelection(ctx, state, target) {
 
 function definitionOwnedGateDirective(selection, { state, binding }) {
   if (selection === null) return null;
+  if (selection instanceof SavedSpecGateSelection) {
+    const { result, settlement, receipt } = selection;
+    if (settlement?.kind === "failure") return new BlockedDirective({
+      code: result.error?.code || "SPEC_GATE_BLOCKED",
+      reason: result.error?.message || "Spec Gate is blocked by its saved Result.",
+      resumeInstruction: "Supply changed evidence before another Spec Gate evaluation.",
+    });
+    if (settlement?.kind === "await") return new BlockedDirective({
+      code: "SPEC_GATE_DECISION_REQUIRED",
+      reason: `Spec Gate is awaiting the decision bound to Settlement ${receipt.id}.`,
+      resumeInstruction: "Record the evidence-bound Gate decision before continuing.",
+    });
+    if (settlement?.kind === "execution") {
+      throw new Error("saved Spec Gate execution Result has no replacement Attempt");
+    }
+    return null;
+  }
   const action = selection.action;
   if (!(action instanceof GateTransitionActionProjection)) {
     throw new Error("Gate next-action requires a Definition Action projection");
@@ -965,7 +1014,8 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
       },
     }),
     ...(gateSelection && {
-      definitionTransition: gateSelection.action.toJSON(),
+      definitionTransition: gateSelection instanceof SavedSpecGateSelection
+        ? gateSelection.toJSON() : gateSelection.action.toJSON(),
     }),
   };
   if (target.stepId === "acceptance-review" && derived.failurePolicy) {

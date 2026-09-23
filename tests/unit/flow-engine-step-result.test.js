@@ -19,9 +19,25 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
   const expected = [
     ["DraftCreatedResult", "draft", "draft-created", "completed"],
     ["SpecCreatedResult", "spec", "spec-created", "completed"],
+    ["SpecPlanGateRepairAppliedResult", "spec", "spec-plan-gate-repair-applied", "completed"],
+    ["SpecPlanGateRepairNoProgressResult", "spec", "spec-plan-gate-repair-no-progress", "error"],
     ["SpecTriageCompletedResult", "spec-triage", "spec-triage-completed", "completed"],
     ["SpecRepairChangedResult", "spec-repair", "spec-repair-changed", "completed"],
     ["SpecRepairUnchangedResult", "spec-repair", "spec-repair-unchanged", "completed"],
+    ["SpecGatePassedResult", "spec-gate", "spec-gate-passed", "completed"],
+    ["SpecGateRepairRequiredResult", "spec-gate", "spec-gate-repair-required", "loop-required"],
+    ["SpecGateRetryRequiredResult", "spec-gate", "spec-gate-retry-required", "loop-required"],
+    ["SpecGateDeferredResult", "spec-gate", "spec-gate-deferred", "completed"],
+    ["SpecGateAwaitingDecisionResult", "spec-gate", "spec-gate-awaiting-decision", "user-input-required"],
+    ["SpecGateRecoveredResult", "spec-gate", "spec-gate-recovered", "loop-required"],
+    ["TaskSpecGatePassedResult", "spec-gate", "task-spec-gate-passed", "completed"],
+    ["TaskSpecGateRepairRequiredResult", "spec-gate", "task-spec-gate-repair-required", "loop-required"],
+    ["TaskSpecGateRetryRequiredResult", "spec-gate", "task-spec-gate-retry-required", "loop-required"],
+    ["TaskSpecGateDeferredResult", "spec-gate", "task-spec-gate-deferred", "completed"],
+    ["TaskSpecGateAwaitingDecisionResult", "spec-gate", "task-spec-gate-awaiting-decision", "user-input-required"],
+    ["TaskSpecGateRecoveredResult", "spec-gate", "task-spec-gate-recovered", "loop-required"],
+    ["SpecGateBlockedResult", "spec-gate", "spec-gate-blocked", "error"],
+    ["TaskSpecGateBlockedResult", "spec-gate", "task-spec-gate-blocked", "error"],
     ["SpecReviewExecutionRequiredResult", "spec-review", "spec-review-execution-required", "loop-required"],
     ["SpecReviewPassedResult", "spec-review", "spec-review-passed", "completed"],
     ["SpecReviewAdvisoryResult", "spec-review", "spec-review-advisory", "completed"],
@@ -48,7 +64,7 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     ["DraftGateRepairAppliedResult", "draft-gate-repair", "draft-gate-repair-applied", "completed"],
     ["DraftGateRepairCarryForwardResult", "draft-gate-repair", "draft-gate-repair-carry-forward", "completed"],
     ...[
-      "draft", "spec", "spec-triage", "spec-repair", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
+      "draft", "spec", "spec-triage", "spec-repair", "spec-gate", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
       "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "draft-gate-repair",
     ].map((stepId) => ["StepErrorResult", stepId, `${stepId}-error`, "error"]),
   ];
@@ -59,7 +75,7 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
   assert.equal(new Set(STEP_RESULT_REGISTRY.map(({ kind }) => kind)).size, STEP_RESULT_REGISTRY.length);
   for (const { ResultClass, stepId, kind, type } of STEP_RESULT_REGISTRY) {
     if (ResultClass === StepErrorResult) continue;
-    const result = new ResultClass();
+    const result = type === "error" ? new ResultClass(new Error("test")) : new ResultClass();
     assert.equal(result.stepId, stepId);
     assert.equal(result.kind, kind);
     assert.equal(result.type, type);

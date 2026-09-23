@@ -40,7 +40,7 @@ import {
   RequirementTestStepObservation,
   resolveRequirementTestLifecycle,
 } from "./definition.js";
-import { readCurrentGateTransitionFacts } from "./lib/gate-transition-facts.js";
+import { readCurrentGateTransitionFacts, SpecGateAdmissionRefusal } from "./lib/gate-transition-facts.js";
 import { applyGatePublicOutcomeProjection } from "./lib/gate-transition-application.js";
 import { findStepById, flattenSteps } from "./lib/step-tree.js";
 import { DRAFT_REVIEW_ROUTES, draftReviewRouteForRetryPhase } from "./lib/draft-review-routes.js";
@@ -222,6 +222,49 @@ async function executePublishedDraftGateStep(ctx, result) {
     throw fatalDraftStepError(output.error, "DRAFT_GATE_RESULT_ERROR");
   }
   return output;
+}
+
+async function executeProspectiveSpecGateStep(ctx, result) {
+  const [
+    { SpecGateEvaluationBinding },
+    { SpecGateService },
+    { SpecGateStep },
+    { GateIssueLogEntry },
+    { SpecGateIssuePublication },
+  ] = await Promise.all([
+    import("./engine/connectors/spec/spec-step-binding.js"),
+    import("./services/spec-gate-service.js"),
+    import("./steps/spec/spec-gate.js"),
+    import("./lib/run-gate.js"),
+    import("./lib/gate-issue-publication.js"),
+  ]);
+  const binding = new SpecGateEvaluationBinding({
+    flowManager: ctx.flowManager,
+    specId: ctx.specId ?? ctx.flowState.specId,
+  });
+  let state;
+  try { state = binding.assertCurrent(); }
+  catch (cause) { throw new SpecGateAdmissionRefusal("Spec Gate binding is stale", cause); }
+  const attached = attachedCanonicalCommandResultArtifact(result);
+  let issuePublication = null;
+  if (attached?.payload?.result === "fail") {
+    try {
+      issuePublication = new SpecGateIssuePublication({
+        binding,
+        entry: new GateIssueLogEntry({
+          ctx, result, timestamp: state.attempt.startedAt,
+        }).toJSON(),
+      });
+    } catch (cause) {
+      throw new SpecGateAdmissionRefusal("Spec Gate issue evidence is invalid", cause);
+    }
+  }
+  const step = new StepFactory()
+    .provideArguments(SpecGateService, {
+      flowManager: ctx.flowManager, binding, commandResult: result, issuePublication,
+    })
+    .create(SpecGateStep);
+  return step.execute();
 }
 
 /**
@@ -1740,6 +1783,36 @@ export const FLOW_COMMANDS = {
           ctx.flowState = ctx.flowManager.loadReadOnly(specId);
           return;
         }
+        if (canonicalResult && (phase === "spec" || phase === "task-spec")
+          && attached.logicalKey === "spec.gate") {
+          ctx.specGateSettlementAdmissionStarted = true;
+          let stepResult;
+          try {
+            stepResult = await executeProspectiveSpecGateStep(ctx, result);
+          } catch (error) {
+            if (isStepPersistenceFailure(error)) {
+              throw fatalDraftPersistenceFailure(error, "SPEC_GATE_PERSISTENCE_FAILED");
+            }
+            if (error?.code === "GATE_OUTPUT_TOOLING_FAILURE") {
+              throw new FatalPostHookError(error.code, error.message, { cause: error });
+            }
+            if (error instanceof SpecGateAdmissionRefusal) {
+              throw new FatalPostHookError("SPEC_GATE_ADMISSION_REFUSED", error.message, {
+                cause: error,
+                data: { failureKind: "spec-gate-admission" },
+              });
+            }
+            throw new FatalPostHookError("SPEC_GATE_POST_FAILED", error.message || String(error), {
+              cause: error instanceof Error ? error : null,
+            });
+          }
+          ctx.flowState = ctx.flowManager.loadReadOnly(specId);
+          if (stepResult.type === STEP_RESULT_TYPE.ERROR) {
+            return Envelope.fail("run", "gate", stepResult.error.code || "SPEC_GATE_BLOCKED",
+              stepResult.error.message, { ...result });
+          }
+          return;
+        }
         let recoveryEffect = null;
         if (canonicalResult) {
           // Publication precedes classification.  Definition therefore sees
@@ -1809,6 +1882,7 @@ export const FLOW_COMMANDS = {
           || resolveGatePhaseFromState(ctx.flowState)?.phase;
         const errorCtx = { ...ctx, phase };
         if (ctx.terminalGateRevalidation === true) return;
+        if (phase === "spec" || phase === "task-spec") return;
         if (phase === "draft") {
           if (isStepPersistenceFailure(err)) return;
           tryAppendIssueLog(() => appendIssueLogFromGateError(errorCtx, err));

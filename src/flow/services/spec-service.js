@@ -1,4 +1,9 @@
-import { SpecCreatedResult, StepResult } from "../engine/step-result.js";
+import {
+  SpecCreatedResult,
+  SpecPlanGateRepairAppliedResult,
+  SpecPlanGateRepairNoProgressResult,
+  StepResult,
+} from "../engine/step-result.js";
 import { SpecWorkerStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
 import { settleSpecStepResult, StepErrorDecision, StepRoute } from "../definition.js";
 import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
@@ -8,7 +13,7 @@ import {
   SpecWorkerCompletionFacts,
 } from "../lib/spec-step-connection.js";
 
-/** Owns initial Spec candidate access, adoption, and canonical persistence. */
+/** Owns Spec candidate access, adoption, and canonical persistence. */
 export class SpecService {
   #outcome = null;
   #adoption = null;
@@ -45,7 +50,11 @@ export class SpecService {
   adoptWorkerCandidate(facts, result) {
     if (!(facts instanceof SpecWorkerCompletionFacts)
       || facts !== this.preparation.facts
-      || !(result instanceof SpecCreatedResult)) {
+      || (facts.planGateRepairOutcome === null
+        ? !(result instanceof SpecCreatedResult)
+        : facts.planGateRepairOutcome.disposition === "applied"
+          ? !(result instanceof SpecPlanGateRepairAppliedResult)
+          : !(result instanceof SpecPlanGateRepairNoProgressResult))) {
       throw new TypeError("SpecService requires the selected prepared Spec candidate and Result");
     }
     this.binding.assertCurrent();
@@ -58,8 +67,12 @@ export class SpecService {
     }
     const settlement = settleSpecStepResult(this.binding.stepId, stepResult);
     const errorSettlement = settlement instanceof StepErrorDecision;
+    const planGateRepairOutcome = this.preparation.facts.planGateRepairOutcome;
+    if (planGateRepairOutcome !== null && this.#adoption?.result !== stepResult) {
+      throw new TypeError("Spec plan Gate repair requires the Step-adopted Result");
+    }
     if (!errorSettlement && (!(settlement instanceof StepRoute) || this.#adoption?.result !== stepResult)) {
-      throw new TypeError("initial Spec publication requires the Step-adopted candidate and Result");
+      throw new TypeError("Spec publication requires the Step-adopted candidate and Result");
     }
     const application = errorSettlement ? null : (this.#application ?? await new settlement.connector({
       binding: this.binding, facts: this.#adoption.facts,
@@ -74,6 +87,7 @@ export class SpecService {
       stepResult,
       settlement,
       application,
+      planGateRepairOutcome,
       ...this.#publication,
       lifecycleResult: errorSettlement ? null : this.#publication.lifecycleResult,
     };

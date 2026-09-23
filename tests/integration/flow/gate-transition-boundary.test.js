@@ -247,11 +247,16 @@ describe("definition-owned Gate transition boundary", () => {
     assert.equal(resolveGateTransition(overLimit).disposition.reason, "Spec Gate cycle 5 reached maximum 4.");
   });
 
-  it("projects one stable reconciliation action for unclassified or unfinished Task Gate publication", () => {
+  it("projects reconciliation for the remaining publication-first Gate phases", () => {
     for (const phase of phases) {
       const original = facts({ phase, postPublication: { status: "unclassified" } });
       const recovery = resolveGatePublicationRecovery(original);
       const reloaded = resolveGatePublicationRecovery(reload(JSON.parse(JSON.stringify(original.toJSON()))));
+      if (phase === "spec" || phase === "task-spec") {
+        assert.equal(recovery, null);
+        assert.equal(reloaded, null);
+        continue;
+      }
       assert.equal(recovery.disposition.operation, "reconcile");
       assert.equal(recovery.plan.updates.length, 0);
       assert.equal(recovery.plan.action.identity.matches(reloaded.plan.action.identity), true);

@@ -72,6 +72,8 @@ import {
   DraftRefineCompletedResult,
   DraftRefineWorkerRequiredResult,
   SpecCreatedResult,
+  SpecPlanGateRepairAppliedResult,
+  SpecPlanGateRepairNoProgressResult,
   SpecTriageCompletedResult,
   SpecRepairChangedResult,
   SpecRepairUnchangedResult,
@@ -79,11 +81,27 @@ import {
   SpecReviewAdvisoryResult,
   SpecReviewRejectedResult,
   SpecReviewExecutionRequiredResult,
+  SpecGatePassedResult,
+  SpecGateRepairRequiredResult,
+  SpecGateRetryRequiredResult,
+  SpecGateDeferredResult,
+  SpecGateAwaitingDecisionResult,
+  SpecGateRecoveredResult,
+  SpecGateBlockedResult,
+  TaskSpecGatePassedResult,
+  TaskSpecGateRepairRequiredResult,
+  TaskSpecGateRetryRequiredResult,
+  TaskSpecGateDeferredResult,
+  TaskSpecGateAwaitingDecisionResult,
+  TaskSpecGateRecoveredResult,
+  TaskSpecGateBlockedResult,
   StepErrorResult,
   StepResult,
+  STEP_RESULT_TYPE,
   stepResultDigest,
 } from "./engine/step-result.js";
 import { DraftReviewConnector } from "./engine/connectors/draft/draft-review-connector.js";
+import { SpecGateRepairConnector, SpecGateApprovalConnector } from "./engine/connectors/spec/spec-gate-target-connectors.js";
 import { DraftTriageConnector } from "./engine/connectors/draft/draft-triage-connector.js";
 import { DraftRepairConnector } from "./engine/connectors/draft/draft-repair-connector.js";
 import { DraftRefineConnector } from "./engine/connectors/draft/draft-refine-connector.js";
@@ -1444,6 +1462,22 @@ export class DefinitionNonblockingEligibility {
   }
 }
 
+/** Project advisory eligibility from the already-settled Spec Gate Result. */
+export function specGateNonblockingEligibilityForResult(result) {
+  if (!(result instanceof SpecGateAwaitingDecisionResult)
+    && !(result instanceof TaskSpecGateAwaitingDecisionResult)
+    && !(result instanceof SpecGateBlockedResult)
+    && !(result instanceof TaskSpecGateBlockedResult)) return null;
+  if (["integrity", "same-evidence"].includes(result.error?.data?.reason)) return null;
+  const local = result.error?.data?.reason === "local";
+  return new DefinitionNonblockingEligibility(NONBLOCKING_ELIGIBILITY_TOKEN, {
+    sourceStep: "spec-gate",
+    resultKind: local ? "unavailable" : "quality",
+    blocker: "The accepted Spec Gate evidence requires an explicit disposition.",
+    selection: result.toJSON(),
+  });
+}
+
 export function reviewNonblockingEligibilityForDisposition({ stepId, disposition } = {}) {
   if (!(disposition instanceof DefinitionReviewDisposition)
     || !["external-blocked", "defer"].includes(disposition.operation)) return null;
@@ -2088,6 +2122,7 @@ export function resolveGatePublicationRecovery(facts) {
     throw new Error("resolveGatePublicationRecovery requires GateTransitionFacts");
   }
   if (facts.integrityFailure !== null) return null;
+  if (facts.phase === "spec" || facts.phase === "task-spec") return null;
   // Non-Task Gates retain their original publication-only recovery path:
   // no classification is needed until the normal transition reducer runs.
   if (facts.scope !== "task") {
@@ -4324,6 +4359,19 @@ export class DraftExecutionSettlement extends StepSettlement {
   toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
 }
 
+export class SpecGateAwaitDecision extends StepSettlement {
+  constructor(token, result) {
+    if (!(result instanceof SpecGateAwaitingDecisionResult)
+      && !(result instanceof TaskSpecGateAwaitingDecisionResult)) {
+      throw new TypeError("Spec Gate await requires its phase-specific Result");
+    }
+    super(token, result, "await");
+    Object.freeze(this);
+  }
+
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
+}
+
 export class DraftAwaitUserDecision extends StepSettlement {
   constructor(token, result) {
     if (!(result instanceof DraftRefineAwaitingAnswerResult)) {
@@ -4342,7 +4390,7 @@ export const STEP_RESULT_ERROR_CATEGORY = "step-result-error";
 
 export class StepErrorDecision extends StepSettlement {
   constructor(token, result) {
-    if (!(result instanceof StepErrorResult)) {
+    if (!(result instanceof StepResult) || result.type !== STEP_RESULT_TYPE.ERROR) {
       throw new TypeError("error decision requires an Error Result");
     }
     super(token, result, "failure");
@@ -4790,8 +4838,9 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       throw new TypeError("Draft Await settlement receipt requires its exact question identity");
     }
     const executionPhase = executionLifecycle?.phase ?? null;
+    const specGateExecution = binding.stepId === "spec-gate" && executionSettlement;
     if ((["checkpoint", "claimed"].includes(executionPhase) && !executionSettlement)
-      || (executionSettlement && !["checkpoint", "claimed", "publication"].includes(executionPhase))
+      || (executionSettlement && !specGateExecution && !["checkpoint", "claimed", "publication"].includes(executionPhase))
       || (executionPhase === "publication" && !(executionSettlement || awaitSettlement))
       || (executionPhase === "terminal" && (executionSettlement || awaitSettlement))) {
       throw new TypeError("Draft settlement receipt execution phase does not match its Settlement");
@@ -5053,7 +5102,7 @@ export function settleDraftStepResult(stepId, result) {
   if (!(result instanceof StepResult) || result.stepId !== stepId) {
     throw new TypeError("draft settlement requires the Step's concrete Result");
   }
-  if (result instanceof StepErrorResult) {
+  if (result.type === STEP_RESULT_TYPE.ERROR) {
     return new StepErrorDecision(STEP_SETTLEMENT_TOKEN, result);
   }
   const route = (Route, targetStepId, connector) => {
@@ -5126,10 +5175,34 @@ export function settleSpecStepResult(stepId, result) {
   if (!(result instanceof StepResult) || result.stepId !== stepId) {
     throw new TypeError("spec settlement requires the Step's concrete Result");
   }
-  if (result instanceof StepErrorResult) {
+  if (result.type === STEP_RESULT_TYPE.ERROR) {
     return new StepErrorDecision(STEP_SETTLEMENT_TOKEN, result);
   }
-  if (result instanceof SpecCreatedResult) {
+  if (result instanceof SpecGatePassedResult || result instanceof TaskSpecGatePassedResult
+    || result instanceof SpecGateDeferredResult || result instanceof TaskSpecGateDeferredResult) {
+    return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
+      result, targetStepId: "approval", connector: SpecGateApprovalConnector,
+      effects: new StepRouteEffects(contiguousLeafRouteEffects(
+        collectFlowLeafIds(), stepId, "approval",
+      )),
+    });
+  }
+  if (result instanceof SpecGateRepairRequiredResult) {
+    const leaves = collectFlowLeafIds();
+    return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
+      result, targetStepId: "spec", connector: SpecGateRepairConnector,
+      effects: new StepRouteEffects({ resetStepIds: leaves.slice(leaves.indexOf("spec")) }),
+    });
+  }
+  if (result instanceof SpecGateRetryRequiredResult || result instanceof TaskSpecGateRetryRequiredResult
+    || result instanceof TaskSpecGateRepairRequiredResult
+    || result instanceof SpecGateRecoveredResult || result instanceof TaskSpecGateRecoveredResult) {
+    return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof SpecGateAwaitingDecisionResult || result instanceof TaskSpecGateAwaitingDecisionResult) {
+    return new SpecGateAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof SpecCreatedResult || result instanceof SpecPlanGateRepairAppliedResult) {
     return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
       result,
       targetStepId: "spec-review",

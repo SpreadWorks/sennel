@@ -142,7 +142,9 @@ export class DefinitionLifecycleAttemptBinding {
   }
 
   toolingFailure(error, fallbackCode, commandResult = null) {
-    if (isStepPersistenceFailure(error)) return false;
+    if (isStepPersistenceFailure(error)
+      || (this.commandName === "gate" && this.attempt.nodeId === "spec-gate"
+        && error?.data?.failureKind === "spec-gate-admission")) return false;
     const facts = failureFacts(error, fallbackCode);
     const state = this.flowManager.canonicalState(this.specId);
     if (state === null || state.runId !== this.runId || !this.attempt.matches(state)) return false;

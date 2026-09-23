@@ -502,6 +502,11 @@ describe("deterministic full Flow worker handoff", () => {
           advance(route[position]);
           return result;
         }
+        completeSpecWorkerHandoff(input) {
+          const result = super.completeSpecWorkerHandoff(input);
+          advance(route[position]);
+          return result;
+        }
       }
       const coordinator = new FullFlowHandoffCoordinator();
       const commandPublishedPrimaryArtifact = new Set([

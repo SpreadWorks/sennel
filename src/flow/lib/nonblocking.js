@@ -29,6 +29,7 @@ import { ActivityNonBlockingRecord } from "./current-flow-state.js";
 import {
   DefinitionNonblockingEligibility,
   resolveActiveNonblockingEligibility,
+  specGateNonblockingEligibilityForResult,
 } from "../definition.js";
 import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
 import { readCurrentTestChainTransitionFacts } from "./test-chain-transition-facts.js";
@@ -187,6 +188,10 @@ export function definitionNonblockingEligibilityForActiveFlow(root, state, flowM
   assertCanonical(state, flowManager);
   const step = activeStep(state);
   if (step === null || nonblockingRouteFor(step) === null) return null;
+  if (step === "spec-gate") {
+    const saved = flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: step });
+    if (saved !== null) return specGateNonblockingEligibilityForResult(saved.result);
+  }
   let evidence;
   try {
     evidence = evidenceFor({ root, flowManager }, state, step);

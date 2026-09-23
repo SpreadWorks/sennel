@@ -31,8 +31,13 @@ import {
   DraftWorkerExecutionStepBinding,
   DraftWorkerStepBinding,
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
-import { SpecReviewStepBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
+import { SpecGateEvaluationBinding, SpecReviewStepBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
+import { SpecGateService } from "../../../src/flow/services/spec-gate-service.js";
+import { SpecService } from "../../../src/flow/services/spec-service.js";
+import { SpecGateStep } from "../../../src/flow/steps/spec/spec-gate.js";
+import { SpecStep } from "../../../src/flow/steps/spec/spec.js";
+import { SpecGateIssuePublication } from "../../../src/flow/lib/gate-issue-publication.js";
 import { specReviewResult } from "../../../src/flow/steps/spec/spec-review.js";
 import { SpecTriageStep } from "../../../src/flow/steps/spec/spec-triage.js";
 import { SpecRepairStep } from "../../../src/flow/steps/spec/spec-repair.js";
@@ -1485,82 +1490,121 @@ describe("FlowManager canonical Version-1 runtime", () => {
       flowManager: manager,
       flowState: manager.load(created.specId),
     });
-    const failCurrentCycle = (cycle, { recordRepairEvidence = true, observation = `spec-cycle-${cycle}` } = {}) => {
-      const result = new CanonicalGatePromotion({
+    const runCurrentCycle = async (cycle, { observation = `spec-cycle-${cycle}`, blocking = true } = {}) => {
+      const observations = blocking ? [{
+        kind: "violation",
+        failureMode: observation,
+        requirementRef: "R-1",
+        where: { file: "spec.json", locator: `requirements[${cycle - 1}]` },
+        observed: `Spec cycle ${cycle} requires a distinct correction.`,
+        severity: "blocking",
+        refs: ["R-1"],
+      }] : [];
+      const binding = new SpecGateEvaluationBinding({ flowManager: manager, specId: created.specId });
+      const commandResult = new CanonicalGatePromotion({
         state: manager.canonicalState(created.specId), phase: "spec", nodeId: "spec-gate",
       }).promote({
         result: "fail",
         artifacts: {
+          phase: "spec",
           failureKind: "ai_semantic_fail",
           failureCode: "SPEC_GATE_REJECTED",
-          nextAction: { diagnosis: { observations: [{
-            kind: "violation",
-            failureMode: observation,
-            requirementRef: "R-1",
-            where: { file: "spec.json", locator: `requirements[${cycle - 1}]` },
-            observed: `Spec cycle ${cycle} requires a distinct correction.`,
-            severity: "blocking",
-            refs: ["R-1"],
-          }] } },
+          nextAction: { diagnosis: { observations } },
         },
       });
-      manager.failCurrentAttempt({
-        specId: created.specId,
-        failure: {
-          category: "semantic", code: "SPEC_GATE_REJECTED",
-          message: `Spec cycle ${cycle} failed.`, retryable: true, retryKind: "semantic",
+      const issuePublication = new SpecGateIssuePublication({
+        binding,
+        entry: {
+          step: "spec-gate", phase: "spec", observations,
+          reason: `Spec cycle ${cycle} requires evaluation.`,
+          trigger: "gate post hook (auto)", timestamp: binding.assertCurrent().attempt.startedAt,
         },
-        commandResult: result,
       });
-      let decision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager: manager, flowState: manager.load(created.specId), phase: "spec",
-      }));
-      if (!recordRepairEvidence) return decision;
-      appendIssueLogFromGateResult({
-        ...context(), gateTransitionDecision: decision,
-      }, result);
-      decision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager: manager, flowState: manager.load(created.specId), phase: "spec",
-      }));
-      return decision;
+      const service = new SpecGateService({
+        flowManager: manager, binding, commandResult, issuePublication,
+      });
+      const facts = service.inspectGateFacts();
+      const stepResult = await new SpecGateStep(service).execute();
+      return { facts, stepResult };
     };
 
-    const retry = failCurrentCycle(1, {
-      recordRepairEvidence: false,
+    const retry = await runCurrentCycle(1, {
+      blocking: false,
       observation: "spec-cycle-1-retry-probe",
     });
-    assert.equal(retry.disposition.operation, "retry");
-    assert.equal(retry.facts.specCycle.cycle, 1);
-    manager.retryGateTransition({ specId: created.specId, decision: retry });
-    assert.equal(manager.activityLedger(created.specId).at(-1).transition.operation, "retry_gate_attempt");
+    assert.equal(retry.stepResult.kind, "spec-gate-retry-required");
+    assert.equal(retry.facts.cycle, 1);
+    assert.equal(manager.activityLedger(created.specId).at(-1).transition.operation, "settle_spec_gate_retry");
     assert.equal(manager.activityLedger(created.specId).filter((activity) => (
       activity.nodeId === "spec" && activity.transition.operation === "plan_gate_repair"
     )).length, 0);
 
     for (let cycle = 1; cycle <= 3; cycle += 1) {
-      const decision = failCurrentCycle(cycle);
-      assert.equal(decision.facts.specCycle.cycle, cycle);
-      assert.equal(decision.disposition.operation, "repair");
-      const repaired = new RunRepairPlanGateCommand().execute(context());
-      assert.equal(repaired.ok, true, JSON.stringify(repaired));
+      const gate = await runCurrentCycle(cycle);
+      assert.equal(gate.facts.cycle, cycle);
+      assert.equal(gate.stepResult.kind, "spec-gate-repair-required");
       assert.equal(manager.canonicalState(created.specId).current.at(-1), "spec");
+      const coordinator = new WorkerArtifactHandoffCoordinator();
+      const request = coordinator.createRequest({
+        ctx: context(), state: manager.load(created.specId),
+        invocation: {
+          id: `spec-cycle-repair-${cycle}`,
+          target: { digest: "b".repeat(64) },
+          action: { digest: "a".repeat(64), nextAction: { step: "spec" } },
+        },
+      });
+      const currentSpec = request.inputs.find((entry) => entry.name === "spec.json").document;
+      fs.writeFileSync(request.payloadPath("spec.json"), `${JSON.stringify({
+        ...currentSpec, goal: `${currentSpec.goal} Correction ${cycle}.`,
+      }, null, 2)}\n`);
+      const recurrence = request.inputs.find((entry) => entry.name === "gate-observation-recurrence.json").document;
+      fs.writeFileSync(request.payloadPath("gate-repair-report.json"), `${JSON.stringify({
+        version: 1, summary: `Applied correction ${cycle}.`,
+        results: recurrence.entries.map((entry) => ({
+          fingerprint: entry.fingerprint, strategy: `Clarify cycle ${cycle}`,
+          summary: `Corrected the cycle ${cycle} observation.`,
+          priorRepairInsufficiency: entry.recurrenceCount > 0
+            ? "The previous correction did not resolve this observation." : null,
+        })),
+      }, null, 2)}\n`);
+      sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
+      const service = await SpecService.prepare({
+        ctx: context(), request, Connector: SpecEntryConnector,
+        handoffCoordinator: coordinator,
+      });
+      const repairResult = await new SpecStep(service).execute();
+      assert.equal(repairResult.kind, "spec-plan-gate-repair-applied");
+      assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "spec-review");
+      const repair = service.preparation.facts.planGateRepairOutcome.repair;
+      const outcome = manager.readArtifact({
+        specId: created.specId, logicalKey: "plan.gate.repair.outcome",
+        parameters: { repairId: repair.repairId }, consumerNodeId: "system",
+      });
+      assert.equal(JSON.parse(outcome.bytes).disposition, "applied");
+      assert.equal(manager.activityLedger(created.specId).filter((activity) => (
+        activity.nodeId === "spec" && activity.result?.stepResult?.kind === "spec-plan-gate-repair-applied"
+      )).length, cycle);
       advanceTo(manager, created.specId, "spec-gate");
     }
 
     manager.setAutoApprove(true, { specId: created.specId });
     assert.equal(manager.canonicalState(created.specId).policy.autoApprove, true);
-    const blocked = failCurrentCycle(4);
-    assert.deepEqual(blocked.facts.specCycle.toJSON(), { cycle: 4, completedRepairs: 3 });
-    assert.equal(blocked.disposition.operation, "blocked");
-    assert.equal(blocked.disposition.reason, "Spec Gate cycle 4 reached maximum 4.");
+    const blocked = await runCurrentCycle(4);
+    assert.equal(blocked.facts.cycle, 4);
+    assert.equal(blocked.stepResult.kind, "spec-gate-blocked");
+    assert.equal(blocked.stepResult.error.data.reason, "cycle-limit");
     const next = await new GetNextActionCommand().execute(context());
     assert.equal(next.directive.kind, "await_user_decision");
-    assert.equal(next.directive.reason, "Spec Gate cycle 4 reached maximum 4.");
+    assert.equal(next.directive.reason, "The accepted Spec Gate evidence requires an explicit disposition.");
     const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const reloadedDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-      flowManager: reloaded, flowState: reloaded.load(created.specId), phase: "spec",
-    }));
-    assert.deepEqual(reloadedDecision.toJSON(), blocked.toJSON());
+    const reloadedFailure = reloaded.canonicalState(created.specId).attempt.failure;
+    assert.equal(reloadedFailure.category, "semantic");
+    assert.equal(reloaded.activityLedger(created.specId).at(-1).result.stepResult.kind,
+      blocked.stepResult.kind);
+    const reloadedNext = await new GetNextActionCommand().execute({
+      ...context(), flowManager: reloaded, flowState: reloaded.load(created.specId),
+    });
+    assert.deepEqual(reloadedNext.directive, next.directive);
     const before = {
       state: manager.canonicalState(created.specId).toJSON(),
       activities: manager.activityLedger(created.specId),
@@ -1568,7 +1612,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     };
     const rejected = new RunRepairPlanGateCommand().execute(context());
     assert.equal(rejected.ok, false);
-    assert.equal(rejected.errors[0].code, "PLAN_GATE_REPAIR_NOT_ADMITTED");
+    assert.equal(rejected.errors[0].code, "PLAN_GATE_REPAIR_STAGE_UNSUPPORTED");
     assert.deepEqual(manager.canonicalState(created.specId).toJSON(), before.state);
     assert.deepEqual(manager.activityLedger(created.specId), before.activities);
     assert.deepEqual(manager.artifactCatalog(created.specId).toJSON(), before.catalog);
@@ -1593,7 +1637,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(continued.findNode("approval").status, "invalidated");
     assert.equal(continued.findNode("spec").attemptSequence, 4);
     assert.equal(manager.activityLedger(created.specId).filter((activity) => (
-      activity.nodeId === "spec" && activity.transition.operation === "plan_gate_repair"
+      activity.nodeId === "spec" && activity.result?.stepResult?.kind === "spec-plan-gate-repair-applied"
     )).length, 3);
   });
 

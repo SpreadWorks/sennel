@@ -48,3 +48,16 @@ export class SpecReviewStepBinding extends StepBinding {
     return state;
   }
 }
+
+/** Binds a prospective Spec Gate result to the active producer Attempt. */
+export class SpecGateEvaluationBinding extends StepBinding {
+  constructor({ flowManager, specId } = {}) {
+    const state = canonicalStepState(flowManager, specId);
+    if (state.current?.at(-1) !== "spec-gate" || state.attempt?.nodeId !== "spec-gate"
+      || state.attempt.failure !== null) {
+      throw new Error("Spec Gate evaluation requires its active Attempt");
+    }
+    super({ flowManager, state, stepId: "spec-gate", attempt: state.attempt });
+    Object.freeze(this);
+  }
+}

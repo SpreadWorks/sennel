@@ -3,10 +3,11 @@ import {
   CanonicalWorkerSpecPublication,
 } from "./current-flow-state.js";
 import { SpecWorkerStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
+import { PlanGateRepairOutcomeDraft } from "./gate-observation-convergence.js";
 
-/** Validated, side-effect-free output facts produced by the initial Spec worker. */
+/** Validated, side-effect-free output facts produced by the Spec worker. */
 export class SpecWorkerCompletionFacts {
-  constructor({ publication, baseline } = {}) {
+  constructor({ publication, baseline, planGateRepairOutcome = null } = {}) {
     if (!(publication instanceof CanonicalWorkerSpecPublication)) {
       throw new TypeError("Spec worker facts require a typed Spec publication");
     }
@@ -14,8 +15,13 @@ export class SpecWorkerCompletionFacts {
       || baseline.artifact.logicalKey !== "spec.record") {
       throw new TypeError("Spec worker facts require the canonical Spec baseline");
     }
+    if (planGateRepairOutcome !== null
+      && !(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)) {
+      throw new TypeError("Spec worker facts require a typed plan Gate repair outcome");
+    }
     this.publication = publication;
     this.baseline = baseline;
+    this.planGateRepairOutcome = planGateRepairOutcome;
     Object.freeze(this);
   }
 }

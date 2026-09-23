@@ -482,6 +482,12 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  readCurrentStepSettlement(input = {}) {
+    return this._store.readCurrentStepSettlement({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   checkpointDraftStepExecution(input = {}) {
     return this._store.checkpointDraftStepExecution({
       ...input,

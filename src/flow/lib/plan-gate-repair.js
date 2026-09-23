@@ -391,7 +391,7 @@ function matchingGateIssueLogEntry(entry, route, gateResult) {
  * exact bytes the Version Store will catalog, so the resulting evidence
  * identity is identical to one reconstructed after commit.
  */
-export function createProspectiveDraftGateRepairRecord({
+export function createProspectivePlanGateRepairRecord({
   state,
   issueLog,
   gateResultPayload,
@@ -399,28 +399,34 @@ export function createProspectiveDraftGateRepairRecord({
   sourceArtifactWrite,
   publicationActivityId,
   cycleReadModel,
+  phase = "draft",
 } = {}) {
-  const route = planGateRepairRouteForGateStep("draft-gate");
+  if (!["draft", "spec"].includes(phase)) {
+    throw new Error("prospective plan Gate repair phase is invalid");
+  }
+  const route = planGateRepairRouteForGateStep(`${phase}-gate`);
+  const resultLogicalKey = `${phase}.gate`;
+  const sourceLogicalKey = `${phase}.gate.source`;
   issueLogDocument(issueLog);
   if (state?.current?.at(-1) !== route.gateStepId || state?.attempt == null) {
-    throw new Error("prospective Draft Gate repair requires its active source Attempt");
+    throw new Error("prospective plan Gate repair requires its active source Attempt");
   }
   if (gateResultPayload?.result !== "fail"
     || gateResultPayload?.artifacts?.gateTransitionAttemptId !== state.attempt.id
     || gateResultPayload?.artifacts?.gateTransitionAttemptSequence !== state.attempt.sequence) {
-    throw new Error("prospective Draft Gate repair result has a stale Attempt binding");
+    throw new Error("prospective plan Gate repair result has a stale Attempt binding");
   }
-  if (resultArtifactWrite?.logicalKey !== "draft.gate"
-    || sourceArtifactWrite?.logicalKey !== "draft.gate.source"
+  if (resultArtifactWrite?.logicalKey !== resultLogicalKey
+    || sourceArtifactWrite?.logicalKey !== sourceLogicalKey
     || !Buffer.isBuffer(resultArtifactWrite.bytes)
     || !Buffer.isBuffer(sourceArtifactWrite.bytes)) {
-    throw new Error("prospective Draft Gate repair requires its exact result and source writes");
+    throw new Error("prospective plan Gate repair requires its exact result and source writes");
   }
   const source = [...issueLog.entries].reverse().find((entry) => (
     matchingGateIssueLogEntry(entry, route, { payload: gateResultPayload, descriptor: null })
   )) ?? null;
   if (source === null) {
-    throw new Error("prospective Draft Gate repair requires its canonical issue-log evidence");
+    throw new Error("prospective plan Gate repair requires its canonical issue-log evidence");
   }
   const attempt = { id: state.attempt.id, sequence: state.attempt.sequence };
   const catalogFingerprint = crypto.createHash("sha256").update(resultArtifactWrite.bytes).digest("hex");
@@ -438,8 +444,8 @@ export function createProspectiveDraftGateRepairRecord({
     phase: route.phase,
     sourceGateStepId: route.gateStepId,
     sourceAttempt: attempt,
-    resultLogicalKey: "draft.gate",
-    resultArtifactId: FLOW_ARTIFACT_CONTRACTS.resolve("draft.gate").relativePath,
+    resultLogicalKey,
+    resultArtifactId: FLOW_ARTIFACT_CONTRACTS.resolve(resultLogicalKey).relativePath,
     catalogFingerprint,
     targetStepId: route.targetStepId,
     resetStepIds: [...route.resetStepIds],

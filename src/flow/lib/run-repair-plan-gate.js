@@ -45,12 +45,12 @@ export default class RunRepairPlanGateCommand extends FlowCommand {
         "the current step is not a supported plan Gate repair source",
       );
     }
-    if (route.phase === "draft") {
+    if (route.phase === "draft" || route.phase === "spec") {
       return Envelope.fail(
         "run",
         "repair-plan-gate",
         "PLAN_GATE_REPAIR_STAGE_UNSUPPORTED",
-        "Draft Gate repair is selected and persisted by the Draft StepResult settlement",
+        `${route.phase} Gate repair is selected and persisted by its StepResult settlement`,
       );
     }
     let evidence;

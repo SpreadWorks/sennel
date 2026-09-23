@@ -35,9 +35,22 @@ import {
 import { CanonicalGateObservationCycle } from "./canonical-gate-observation-cycle.js";
 import { PlanGateRepairObservation } from "./plan-gate-repair.js";
 import { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
+import { SpecGateIssuePublication } from "./gate-issue-publication.js";
+import { SpecGateProspectiveFacts } from "./spec-gate-prospective.js";
+import { nonblockingRouteFor } from "./nonblocking-route.js";
+import { createHash } from "node:crypto";
 export { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
+export { SpecGateProspectiveFacts } from "./spec-gate-prospective.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
+
+export class SpecGateAdmissionRefusal extends Error {
+  constructor(message, cause = null) {
+    super(message, cause === null ? undefined : { cause });
+    this.name = "SpecGateAdmissionRefusal";
+    this.code = "SPEC_GATE_ADMISSION_REFUSED";
+  }
+}
 
 function gateRetryUsage({ state, activities, nodeId, attempt, phase, failureCategory }) {
   const contract = state.definition.contractForNode(state.findNode(nodeId));
@@ -96,6 +109,88 @@ export function readProspectiveDraftGateFacts({ flowManager, binding, commandRes
     retryExhausted: retry.exhausted,
     retryUsed: retry.used,
     retryMaximum: retry.maximum,
+  });
+}
+
+/** Read the active Spec Gate's accepted prospective evidence before any publication. */
+export function readProspectiveSpecGateFacts({ flowManager, binding, commandResult, issuePublication = null } = {}) {
+  let state;
+  try { state = binding.assertCurrent(); }
+  catch (cause) { throw new SpecGateAdmissionRefusal("prospective Spec Gate binding is stale", cause); }
+  if (binding.stepId !== "spec-gate") throw new SpecGateAdmissionRefusal("prospective Spec Gate requires spec-gate");
+  const artifact = attachedCanonicalCommandResultArtifact(commandResult);
+  if (artifact?.logicalKey !== "spec.gate") throw new SpecGateAdmissionRefusal("prospective Spec Gate requires spec.gate");
+  const payload = artifact.payload;
+  const phase = payload?.artifacts?.phase;
+  if (!["spec", "task-spec"].includes(phase)
+    || payload?.artifacts?.gateTransitionAttemptId !== binding.attempt.id
+    || payload?.artifacts?.gateTransitionAttemptSequence !== binding.attempt.sequence
+    || payload?.artifacts?.gateTransitionLineage !== canonicalGateRevision(state, "spec-gate")) {
+    throw new SpecGateAdmissionRefusal("prospective Spec Gate observation has a stale phase, Attempt, or lineage");
+  }
+  if (!["pass", "fail", "recovered"].includes(payload.result)) {
+    throw new SpecGateAdmissionRefusal("prospective Spec Gate evaluator result is invalid");
+  }
+  const resultFingerprint = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+  if (payload.result !== "fail") {
+    const contradictoryFailure = payload.artifacts.gateTransitionFailureCategory !== undefined;
+    return new SpecGateProspectiveFacts({
+      phase, result: payload.result, resultFingerprint,
+      integrityFailure: contradictoryFailure ? "contradictory_gate_failure_classification" : null,
+    });
+  }
+  let failure;
+  try { failure = GateFailureCategory.fromObservedGateResult(payload); }
+  catch (cause) { throw new SpecGateAdmissionRefusal("prospective Spec Gate failure facts are invalid", cause); }
+  if (failure.category === "tooling") {
+    const error = new Error("Spec Gate evaluator did not return accepted semantic facts");
+    error.code = "GATE_OUTPUT_TOOLING_FAILURE";
+    error.data = { failureCode: failure.code };
+    throw error;
+  }
+  const activities = flowManager.activityLedger(state.specId);
+  const retry = gateRetryUsage({
+    state, activities, nodeId: "spec-gate", attempt: state.attempt,
+    phase, failureCategory: failure.category,
+  });
+  const observations = payload?.artifacts?.nextAction?.diagnosis?.observations ?? [];
+  if (!Array.isArray(observations)) throw new SpecGateAdmissionRefusal("prospective Spec Gate observations must be an array");
+  if (!(issuePublication instanceof SpecGateIssuePublication)
+    || !issuePublication.matches(binding)
+    || issuePublication.entry.phase !== phase
+    || JSON.stringify(issuePublication.entry.observations ?? []) !== JSON.stringify(observations)) {
+    throw new SpecGateAdmissionRefusal("prospective Spec Gate issue evidence does not match its evaluator result");
+  }
+  let fingerprints;
+  try {
+    fingerprints = new Set(observations.filter((entry) => entry?.severity === "blocking")
+      .map((entry) => new PlanGateRepairObservation({
+        ...entry, phase, scope: "flow", taskId: null,
+      }).fingerprint.toString()));
+  } catch (cause) {
+    throw new SpecGateAdmissionRefusal("prospective Spec Gate observations are invalid", cause);
+  }
+  const sameEvidence = new CanonicalGateObservationCycle({ flowManager, state })
+    .prospectiveStatus().sameEvidenceFor({ phase, fingerprints });
+  const repairOutcomes = flowManager.artifactCatalog(state.specId).artifacts.filter((entry) => (
+    entry.logicalKey === "plan.gate.repair.outcome"
+  ));
+  const completedRepairs = activities.filter((activity) => (
+    activity.nodeId === "spec"
+    && activity.transition?.operation === "confirm_attempt"
+    && activity.result?.stepResult?.kind === "spec-plan-gate-repair-applied"
+    && activity.result?.draftSettlementReceipt?.resultKind === "spec-plan-gate-repair-applied"
+    && repairOutcomes.some((entry) => entry.activityId === activity.id)
+  )).length;
+  const nonblockingEnabled = state.policy?.nonblocking?.enabled === true;
+  const acceptanceBacked = nonblockingRouteFor("spec-gate")?.kind === "gate";
+  return new SpecGateProspectiveFacts({
+    phase, result: "fail", failureCategory: failure.category,
+    failureCode: failure.code, retryExhausted: retry.exhausted,
+    sameEvidence, repairAvailable: failure.category === "semantic" && fingerprints.size > 0,
+    cycle: phase === "spec" ? completedRepairs + 1 : 1,
+    nonblockingEnabled, acceptanceBacked, resultFingerprint,
+    retryUsed: retry.used, retryMaximum: retry.maximum,
   });
 }
 
@@ -603,6 +698,8 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
   if (publication === null) throw new Error("gate catalog publication is not owned by the current Attempt");
   if (publication.transition?.operation !== "publish_artifacts"
     && publication.transition?.operation !== "fail_attempt"
+    && !(publication.transition?.operation === "record_draft_step_settlement"
+      && nodeId === "spec-gate" && publication.result?.draftSettlementReceipt !== undefined)
     && publication.transition?.operation !== "confirm_attempt") {
     throw new Error("gate catalog publication has an invalid producer Activity");
   }
