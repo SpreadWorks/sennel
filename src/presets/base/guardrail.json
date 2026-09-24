@@ -50,8 +50,8 @@
     },
     {
       "id": "req-diff-verifiability",
-      "title": "REQ Diff-Verifiability",
-      "body": "Each requirement shall be verifiable using a standard unified diff and a test execution summary alone. Requirements that depend on future behavior guarantees, extensibility contracts (e.g. \"X can be done without code changes\"), or out-of-diff process invariants shall be rewritten into a form whose PASS/FAIL is decidable from diff + tests.",
+      "title": "Requirement Verification Criteria",
+      "body": "At the Spec stage, each requirement shall state what will be checked, how it will be checked, and the observable expected result that determines whether the requirement is satisfied. For testable behavior, define the relevant input or conditions and expected outcome; for requirements not verifiable by automated tests, define a concrete inspection method and acceptance condition. Rewrite vague goals, unsupported future guarantees, and unspecified verification methods into checkable conditions. Evaluate the specification's verification plan and acceptance conditions, not whether implementation or test execution has already occurred. Implementation diffs, test code, and test execution results belong to later stages; their absence at the Spec stage is not a violation of this rule.",
       "meta": {
         "phase": [
           "spec"
