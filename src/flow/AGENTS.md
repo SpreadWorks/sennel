@@ -5,6 +5,7 @@
 ## 状態遷移方針の所有者
 
 - **MUST:** definition layer は、永続化された現在状態からFlow全体の実行方針を決める責務を所有する。StepはServiceから受け取ったtyped factsを具体的な`StepResult`へ確定し、Definitionは`stepId + StepResult`だけからSettlementと次の遷移先を選ぶ。Definitionがfactsを別途受け取り、StepResultの意味を再判定してはならない。意味のあるfacts、disposition、transition planは専用クラスで表現する。
+- Definitionに工程固有の入力解釈、修復候補の計算・採用、成果物の読み書きを置かない。工程の意味判断はStep、構造化入力の取得とIOはServiceが担い、Definitionは確定済みResultから遷移を選ぶ。
 - **MUST:** retry、retry exhaustion、repair、defer、block、external block、Step status、次の route の選択を、実行コマンド、registry、状態読取り、`get-next-action` に重複実装しない。
 - command の返却値に含まれる `next` や成果物内の `nextAction` は、必要であれば互換用の投影値として保持できるが、遷移判断の権限として使用してはならない。
 
@@ -14,9 +15,12 @@
 - transport、protocol、tooling failure の限定的な再試行は実行責務に含めてよい。ただし semantic retry budget と Flow の遷移方針は definition layer が所有する。
 - registry、hook、永続化層は、definition layer が選んだ transition plan の原子的な適用と監査記録を担う。未選択の fallback route を決めてはならない。
 - Step の境界は `facts -> concrete StepResult`、Definition の境界は `stepId + StepResult -> concrete Settlement` とする。Service は Definition を一度だけ呼び、Store は選択済み Settlement を再解決せずに適用する。
+- Stepは工程固有の入力の意味を判断し、修復候補が必要なら計算・採用してResultを確定する。同じ候補やResultを後続層で再計算しない。工程固有の処理は可能な限り該当Step配下で保守し、JSONの選択、パスの決定、保存手順はServiceに委ねる。StepはServiceを利用し、dispatcherから保存処理や業務判断のcallbackを受け取らない。
+- ServiceはStepに渡す構造化入力の取得、成果物の読み書き、共通処理、保存手順の調整を担う。Storeへ渡す採用候補・Result・bindingの対応を保ち、Storeは保存する候補とResultの整合性を検証する。判断を一元化してもこの検証を省略しない。
 - Step と Step の間をつなぐ副作用は Definition-owned `StepConnector` として表現し、独立した Flow Step にしない。Draftでは、Definitionが`stepId + StepResult`からSettlementとConnector種別を選択し、Serviceが選択済みSettlementに必要なConnectorをcanonical factsから組み立てる。Storeは選択済みConnectorをsource Attemptの確認・成果物publication・次Stepへのpromotionと同一transactionで適用し、遷移先を再判断しない。
 - Result、Result 固有の Activity／artifact、Settlement effect、exact binding を含む durable receipt、target activation／Await／Failure は同一 Store transaction で保存する。target connection だけが durable connector receipt を持ち、完全一致 replay 以外は binding、Result kind、Settlement kind、target、publication の差を conflict とする。
 - 直接 CLI 実行にも admission check を設け、最新の永続状態で definition layer が別の Action を選んでいる場合は worker 起動と状態変更の前に拒否する。
+- staleな入力や権限不足による実行前提の拒否、工程ロジック上のError Result、永続化失敗を別経路で扱う。入力確認や保存処理を広いcatchで工程上の失敗へ変換しない。拒否・停止時はcanonical状態とsemantic retry budgetに不要な変更を加えない。
 
 ## 状態と証拠の同一性
 
@@ -25,6 +29,7 @@
 - 判断に使う成果物は current Attempt の ID と sequence、および catalog publication と一致しなければならない。source artifact、canonical artifact、repair evidence、finding は lineage または fingerprint で同じ revision に結び付ける。
 - Action identity と fingerprint には永続化済みの安定値だけを使う。`now()` のように読取りごとに変わる fallback を含めてはならない。必要な値がない場合は、安定した unavailable 状態として扱うか、安全側で拒否する。
 - transition plan の適用層は、definition layer が選んだ方針だけを適用する。適用時に別の遷移を再判断してはならない。
+- 再実行では保存済みResult、成果物、Attempt、settlement receiptの対応を検証して利用する。完了済みの意味判断やpublicationを繰り返さず、完全一致のreplayだけを許す。
 - Flow finding の canonical identity は `sourceArtifact + sourceStep + sourceFindingId + fingerprint` の4項目とする。Storeと全consumerはこの完全なidentityで解決し、`sourceFindingId`または`fingerprint`だけで代替検索してはならない。同じsource上で同じ`sourceFindingId`を持ちfingerprintが異なるfindingは別identityとして保持する。
 
 ## Spec Step Result 契約

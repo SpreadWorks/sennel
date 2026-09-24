@@ -6,7 +6,6 @@ import {
   StepErrorResult,
 } from "../../engine/step-result.js";
 import { DraftService } from "../../services/draft-service.js";
-import { isStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
 import { DraftTransitionFacts } from "../../lib/draft-transition-facts.js";
 
 /** The sole draft-refine facts-to-Result decision. */
@@ -44,16 +43,14 @@ export class DraftRefineStep extends Step {
   }
 
   async _execute() {
+    const input = this.#draftService.inspectDraftTransition();
+    let result;
     try {
-      const input = this.#draftService.inspectDraftTransition();
-      const result = createDraftRefineResult(input);
-      await result.persist(this.#draftService);
-      return result;
+      result = createDraftRefineResult(input);
     } catch (error) {
-      if (isStepPersistenceFailure(error)) throw error;
-      const result = new StepErrorResult("draft-refine", error);
-      await result.persist(this.#draftService);
-      return result;
+      result = new StepErrorResult("draft-refine", error);
     }
+    await result.persist(this.#draftService);
+    return result;
   }
 }

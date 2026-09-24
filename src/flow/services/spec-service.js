@@ -1,17 +1,13 @@
-import {
-  SpecCreatedResult,
-  SpecPlanGateRepairAppliedResult,
-  SpecPlanGateRepairNoProgressResult,
-  StepResult,
-} from "../engine/step-result.js";
+import { StepResult } from "../engine/step-result.js";
 import { SpecWorkerStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
 import { settleSpecStepResult, StepErrorDecision, StepRoute } from "../definition.js";
-import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
+import { StepPersistenceFailure, recoverStepSettlementReceipt } from "../lib/definition-lifecycle-failure.js";
 import { CurrentFlowStateConflictError } from "../lib/current-flow-state.js";
 import {
   SpecReviewSettlementApplication,
   SpecWorkerCompletionFacts,
 } from "../lib/spec-step-connection.js";
+import { SpecWorkerResultSelection } from "../steps/spec/spec-result.js";
 
 /** Owns Spec candidate access, adoption, and canonical persistence. */
 export class SpecService {
@@ -47,18 +43,13 @@ export class SpecService {
     return this.preparation.facts;
   }
 
-  adoptWorkerCandidate(facts, result) {
-    if (!(facts instanceof SpecWorkerCompletionFacts)
-      || facts !== this.preparation.facts
-      || (facts.planGateRepairOutcome === null
-        ? !(result instanceof SpecCreatedResult)
-        : facts.planGateRepairOutcome.disposition === "applied"
-          ? !(result instanceof SpecPlanGateRepairAppliedResult)
-          : !(result instanceof SpecPlanGateRepairNoProgressResult))) {
-      throw new TypeError("SpecService requires the selected prepared Spec candidate and Result");
+  adoptWorkerCandidate(selection) {
+    if (!(selection instanceof SpecWorkerResultSelection)
+      || selection.facts !== this.preparation.facts) {
+      throw new TypeError("SpecService requires the Step selection for its prepared Spec candidate");
     }
     this.binding.assertCurrent();
-    this.#adoption = { facts, result };
+    this.#adoption = selection;
   }
 
   async persistStepResult(stepResult) {
@@ -67,11 +58,12 @@ export class SpecService {
     }
     const settlement = settleSpecStepResult(this.binding.stepId, stepResult);
     const errorSettlement = settlement instanceof StepErrorDecision;
-    const planGateRepairOutcome = this.preparation.facts.planGateRepairOutcome;
-    if (planGateRepairOutcome !== null && this.#adoption?.result !== stepResult) {
+    const planGateRepairOutcome = this.#adoption?.facts.planGateRepairOutcome ?? null;
+    if (this.#adoption !== null) this.#adoption.assertResult(stepResult);
+    if (this.preparation.facts.planGateRepairOutcome !== null && this.#adoption === null) {
       throw new TypeError("Spec plan Gate repair requires the Step-adopted Result");
     }
-    if (!errorSettlement && (!(settlement instanceof StepRoute) || this.#adoption?.result !== stepResult)) {
+    if (!errorSettlement && (!(settlement instanceof StepRoute) || this.#adoption === null)) {
       throw new TypeError("Spec publication requires the Step-adopted candidate and Result");
     }
     const application = errorSettlement ? null : (this.#application ?? await new settlement.connector({
@@ -86,6 +78,7 @@ export class SpecService {
       binding: this.binding,
       stepResult,
       settlement,
+      specSelection: this.#adoption,
       application,
       planGateRepairOutcome,
       ...this.#publication,
@@ -102,11 +95,10 @@ export class SpecService {
       committed = this.ctx.flowManager.settleSpecStepResult(input);
     } catch (cause) {
       if (cause instanceof CurrentFlowStateConflictError) throw cause;
-      const receipt = this.ctx.flowManager.findStepSettlementReceipt({
+      const receipt = recoverStepSettlementReceipt(this.ctx.flowManager, {
         ...input,
         specRecord: application?.publication,
-      });
-      if (receipt === null) throw new StepPersistenceFailure(cause);
+      }, cause);
       committed = { receipt };
     }
     this.#outcome = this.handoffCoordinator.completeSpecWorkerHandoff({

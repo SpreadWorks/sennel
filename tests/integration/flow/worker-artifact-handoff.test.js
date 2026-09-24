@@ -53,9 +53,12 @@ import {
   DraftWorkerStepBinding,
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { DraftRepairCandidate } from "../../../src/flow/steps/draft/draft-repair-candidate.js";
 import { SpecService } from "../../../src/flow/services/spec-service.js";
+import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
 import { SpecReviewWorkerService } from "../../../src/flow/services/spec-worker-review-service.js";
 import { SpecStep } from "../../../src/flow/steps/spec/spec.js";
+import { SpecWorkerResultSelection } from "../../../src/flow/steps/spec/spec-result.js";
 import { SpecTriageStep } from "../../../src/flow/steps/spec/spec-triage.js";
 import { SpecRepairStep } from "../../../src/flow/steps/spec/spec-repair.js";
 import { DraftStep } from "../../../src/flow/steps/draft/draft.js";
@@ -150,6 +153,9 @@ const ACTION_DIGEST = "a".repeat(64);
 const SOURCE_REQUEST_LIFECYCLES = new WeakMap();
 
 function commitDraftResult(coordinator, { ctx, request, preparation, stepResult }) {
+  if (preparation.facts.repairInput !== null) {
+    preparation = preparation.adoptRepairCandidate(new DraftRepairCandidate(preparation.facts.repairInput));
+  }
   const binding = new DraftWorkerStepBinding({ request });
   return coordinator.commitDraftWorker({
     ctx,
@@ -5208,21 +5214,10 @@ describe("worker artifact handoff", () => {
         inputDigest: request.inputDigest,
         inputRevision: request.inputRevision,
       });
-      let admittedResult = null;
-      let admittedSettlement = null;
       const service = new DraftService({
         flowManager: value.flowManager,
         binding,
-        executionCheckpointer(stepResult, settlement, selectedBinding) {
-          admittedResult = stepResult;
-          admittedSettlement = settlement;
-          return value.flowManager.checkpointDraftStepExecution({
-            binding: selectedBinding,
-            stepResult,
-            settlement,
-            executionBinding,
-          });
-        },
+        executionBinding,
       });
       const selected = await new StepFactory()
         .provide(DraftService, service)
@@ -5233,8 +5228,8 @@ describe("worker artifact handoff", () => {
       value.coordinator.admitConditionalDraftRequest({ ctx: value.ctx, state, request });
       value.flowManager.claimDraftStepExecution({
         binding,
-        stepResult: admittedResult,
-        settlement: admittedSettlement,
+        stepResult: selected,
+        settlement: service.executionSelection,
         executionBinding,
         executionClaim: new DraftWorkerExecutionClaim({
           dispatchInvocationId: request.dispatchInvocationId,
@@ -5638,13 +5633,7 @@ describe("worker artifact handoff", () => {
         const service = new DraftService({
           flowManager: value.flowManager,
           binding,
-          workerFacts: preparation.facts,
-          workerExecutor: (stepResult, settlement, selectedBinding) => ({
-            error: null,
-            ...value.coordinator.commitDraftWorker({
-              ctx: value.ctx, request, preparation, stepResult, settlement, binding: selectedBinding,
-            }),
-          }),
+          ctx: value.ctx, request, preparation, handoffCoordinator: value.coordinator,
         });
         const result = await new DraftRefineStep(service).execute();
         return { result, receipt: service.workerOutcome.receipt };
@@ -7418,6 +7407,62 @@ describe("worker artifact handoff", () => {
     }
   });
 
+  it("preserves the Spec settlement write failure when exact receipt readback also fails", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) {
+        publishDraftBeforeTarget(candidate, draftDocument("Preserve a Spec settlement write failure."));
+      },
+    });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: value.invocation,
+      });
+      fs.writeFileSync(request.payloadPath("spec.json"), json(validWorkerHandoffTaskSpec()));
+      seal(request);
+      const service = await SpecService.prepare({
+        ctx: value.ctx, request, Connector: SpecEntryConnector,
+        handoffCoordinator: value.coordinator,
+      });
+      const before = {
+        state: value.flowManager.canonicalState(value.specId).toJSON(),
+        activities: value.flowManager.activityLedger(value.specId),
+        catalog: value.flowManager.artifactCatalog(value.specId).toJSON(),
+      };
+      const writeFailure = new Error("Spec settlement write failed");
+      const readFailure = new Error("Spec receipt readback failed");
+      let writes = 0;
+      let reads = 0;
+      value.flowManager.settleSpecStepResult = () => {
+        writes += 1;
+        throw writeFailure;
+      };
+      value.flowManager.findStepSettlementReceipt = () => {
+        reads += 1;
+        throw readFailure;
+      };
+      await assert.rejects(new SpecStep(service).execute(), (error) => {
+        assert.equal(error instanceof StepPersistenceFailure, true);
+        assert.equal(error.cause, writeFailure);
+        return true;
+      });
+      assert.equal(writes, 1);
+      assert.equal(reads, 1);
+      const reloaded = new FlowManager({
+        root: value.executionRoot,
+        mainRoot: value.mainRoot,
+        inWorktree: true,
+        specId: value.specId,
+      });
+      assert.deepEqual(reloaded.canonicalState(value.specId).toJSON(), before.state);
+      assert.deepEqual(reloaded.activityLedger(value.specId), before.activities);
+      assert.deepEqual(reloaded.artifactCatalog(value.specId).toJSON(), before.catalog);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
   it("rejects a re-sealed initial Spec publication after an exact settlement committed", async () => {
     const value = fixture("spec", {
       beforeActivate(candidate) {
@@ -7458,10 +7503,28 @@ describe("worker artifact handoff", () => {
         binding,
         facts: changed.facts,
       }).connect();
+      assert.equal(changedApplication.baseline.digest, original.facts.baseline.digest);
+      assert.equal(changedApplication.baseline.byteLength, original.facts.baseline.byteLength);
+      assert.equal(changedApplication.baseline.artifact.relativePath,
+        original.facts.baseline.artifact.relativePath);
       let settlementInput = null;
       const settleSpec = value.flowManager.settleSpecStepResult.bind(value.flowManager);
       value.flowManager.settleSpecStepResult = (input) => {
         settlementInput = input;
+        const before = {
+          state: value.flowManager.canonicalState(value.specId).toJSON(),
+          catalog: value.flowManager.artifactCatalog(value.specId).toJSON(),
+          activities: value.flowManager.activityLedger(value.specId).length,
+        };
+        assert.throws(() => settleSpec({
+          ...input,
+          application: changedApplication,
+        }), CurrentFlowStateConflictError);
+        assert.deepEqual({
+          state: value.flowManager.canonicalState(value.specId).toJSON(),
+          catalog: value.flowManager.artifactCatalog(value.specId).toJSON(),
+          activities: value.flowManager.activityLedger(value.specId).length,
+        }, before);
         return settleSpec(input);
       };
       const stepResult = await new StepFactory().provide(SpecService, service).create(SpecStep).execute();
@@ -7599,6 +7662,21 @@ describe("worker artifact handoff", () => {
       }).revision;
       const before = value.flowManager.canonicalState(value.specId).toJSON();
       await assert.rejects(() => new SpecCreatedResult().persist(service), TypeError);
+      assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), before);
+      const selection = new SpecWorkerResultSelection(service.inspectWorkerCompletion());
+      const settlementReceipt = new DraftStepSettlementReceipt({
+        binding: service.binding,
+        result: selection.result,
+        settlement: settleSpecStepResult("spec", selection.result),
+        publication: new DraftStepSettlementPublication({}),
+      });
+      assert.throws(() => value.flowManager.confirmCurrentAttempt({
+        specId: value.specId,
+        stepResult: selection.result,
+        settlementReceipt,
+        specSelection: selection,
+        specRecord: new CanonicalWorkerSpecPublication({ ...candidate, goal: "Different specification" }),
+      }), CurrentFlowStateConflictError);
       assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), before);
 
       const result = await new StepFactory().provide(SpecService, service).create(SpecStep).execute();

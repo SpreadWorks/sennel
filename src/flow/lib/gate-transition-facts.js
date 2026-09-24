@@ -39,14 +39,15 @@ import { SpecGateIssuePublication } from "./gate-issue-publication.js";
 import { SpecGateProspectiveFacts } from "./spec-gate-prospective.js";
 import { nonblockingRouteFor } from "./nonblocking-route.js";
 import { createHash } from "node:crypto";
+import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 export { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
 export { SpecGateProspectiveFacts } from "./spec-gate-prospective.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 
-export class SpecGateAdmissionRefusal extends Error {
+export class SpecGateAdmissionRefusal extends StepAdmissionRefusal {
   constructor(message, cause = null) {
-    super(message, cause === null ? undefined : { cause });
+    super(message, cause);
     this.name = "SpecGateAdmissionRefusal";
     this.code = "SPEC_GATE_ADMISSION_REFUSED";
   }

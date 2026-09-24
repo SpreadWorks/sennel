@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { DraftReviewArtifactDocument } from "../../src/flow/lib/draft-review-artifacts.js";
-import { DraftRepairResultFacts } from "../../src/flow/lib/worker-artifact-handoff.js";
+import { DraftRepairResultFacts } from "../../src/flow/steps/draft/draft-repair-result.js";
 import { DraftWorkerCompletionFacts } from "../../src/flow/services/draft-service.js";
 import { draftResult } from "../../src/flow/steps/draft/draft.js";
 import { draftQuestionsTriageResult } from "../../src/flow/steps/draft/draft-questions-triage.js";
@@ -10,9 +10,9 @@ import { draftCoverageTriageResult } from "../../src/flow/steps/draft/draft-cove
 import { draftGateResult } from "../../src/flow/steps/draft/draft-gate.js";
 import { draftQuestionsReviewResult } from "../../src/flow/steps/draft/draft-questions-review.js";
 import { draftCoverageReviewResult } from "../../src/flow/steps/draft/draft-coverage-review.js";
-import { draftQuestionsRepairResult } from "../../src/flow/steps/draft/draft-questions-repair.js";
-import { draftCoverageRepairResult } from "../../src/flow/steps/draft/draft-coverage-repair.js";
-import { draftGateRepairResult } from "../../src/flow/steps/draft/draft-gate-repair.js";
+import { draftQuestionsRepairResult } from "../../src/flow/steps/draft/draft-repair-result.js";
+import { draftCoverageRepairResult } from "../../src/flow/steps/draft/draft-repair-result.js";
+import { draftGateRepairResult } from "../../src/flow/steps/draft/draft-repair-result.js";
 import { PlanGateRepairObservation, PlanGateRepairRecord } from "../../src/flow/lib/plan-gate-repair.js";
 import {
   ArtifactGateRepairLineage,

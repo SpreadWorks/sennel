@@ -12,6 +12,8 @@ import GetNextActionCommand from "../../src/flow/lib/get-next-action.js";
 import RunFilterTaskReviewCommand from "../../src/flow/lib/run-filter-task-review.js";
 import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
 import RunReviewCommand from "../../src/flow/lib/run-review.js";
+import RunClaimNextActionCommand from "../../src/flow/lib/run-claim-next-action.js";
+import { ReviewWorkUnit } from "../../src/flow/lib/review-work-unit.js";
 import { sourceWorkerEffectJsonSchema } from "../../src/flow/lib/source-worker-effect-schema.js";
 import { TaskStageArtifact } from "../../src/flow/lib/task-review-stage-artifacts.js";
 import { findStepById } from "../../src/flow/lib/step-tree.js";
@@ -57,6 +59,92 @@ const TEST_REVIEW_BATCH_BENCHMARK = Object.freeze({
     durationMs: 6_721_893,
   }),
 });
+
+function agentDiagnostic(tracePath, event, details) {
+  if (tracePath === null) return;
+  try {
+    fs.appendFileSync(tracePath, `${JSON.stringify({ at: new Date().toISOString(), event, details })}\n`);
+  } catch {
+    // Diagnostics must not alter the provider or Flow scenario.
+  }
+}
+
+function recordAgentDiagnostics(agent, tracePath, label, captureExtra = () => null) {
+  if (tracePath === null) return agent;
+  const originalCall = agent.call.bind(agent);
+  agent.call = async (prompt, options = {}) => {
+    const requestPath = options.executionEnvironment?.SENNEL_FLOW_HANDOFF_REQUEST ?? null;
+    let request = null;
+    try {
+      if (requestPath !== null) request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+    } catch (error) {
+      agentDiagnostic(tracePath, "request-read-error", { label, requestPath, message: error.message });
+    }
+    agentDiagnostic(tracePath, "provider-call", {
+      label,
+      requestPath,
+      request: request === null ? null : {
+        stepId: request.stepId,
+        actionDigest: request.actionDigest,
+        inputRevision: request.inputRevision,
+        attempt: request.sourceMutationBaseline?.attempt ?? null,
+        payloads: request.payloads?.map(({ logicalName, payloadPath }) => ({ logicalName, payloadPath })) ?? [],
+      },
+      prompt: String(prompt),
+    });
+    const captureArtifacts = () => {
+      const payloads = request === null ? [] : (request.payloads ?? []).map(({ logicalName, payloadPath }) => ({
+        logicalName,
+        payloadPath,
+        exists: fs.existsSync(payloadPath),
+        bytes: fs.existsSync(payloadPath) ? fs.readFileSync(payloadPath, "utf8") : null,
+      }));
+      const sourceManifestPath = request?.sourceMutationManifestPath ?? null;
+      let extra = null;
+      try { extra = captureExtra(); } catch (error) { extra = { error: error.message }; }
+      return {
+        payloads,
+        submission: request?.submissionPath && fs.existsSync(request.submissionPath)
+          ? fs.readFileSync(request.submissionPath, "utf8") : null,
+        sourceMutationManifest: sourceManifestPath && fs.existsSync(sourceManifestPath)
+          ? fs.readFileSync(sourceManifestPath, "utf8") : null,
+        extra,
+      };
+    };
+    try {
+      const response = await originalCall(prompt, options);
+      agentDiagnostic(tracePath, "provider-return", {
+        label,
+        response: typeof response === "string" ? response : JSON.stringify(response),
+        artifacts: captureArtifacts(),
+      });
+      return response;
+    } catch (error) {
+      agentDiagnostic(tracePath, "provider-throw", {
+        label,
+        message: error.message,
+        code: error.code ?? null,
+        stack: error.stack,
+        artifacts: captureArtifacts(),
+      });
+      throw error;
+    }
+  };
+  return agent;
+}
+
+function diagnosticAttempt(flowManager, specId) {
+  try {
+    const state = flowManager.canonicalState(specId);
+    return {
+      attempt: state.attempt?.toJSON?.() ?? state.attempt ?? null,
+      current: state.current,
+      steps: flowManager.loadReadOnly(specId).steps.map((step) => ({ id: step.id, status: step.status })),
+    };
+  } catch (error) {
+    return { error: error.message };
+  }
+}
 
 function fixedTestReviewBatchSource() {
   const header = [
@@ -161,12 +249,12 @@ function configuredRealAgent({ executionRoot, flowManager, config }) {
   });
 }
 
-function flowCommandContainer({ root, flowManager, config, agent }) {
+function flowCommandContainer({ root, mainRoot = root, inWorktree = false, flowManager, config, agent }) {
   const value = new Container();
   value.register("paths", { root, agentWorkDir: path.join(root, ".tmp") });
-  value.register("mainRoot", root);
+  value.register("mainRoot", mainRoot);
   value.register("config", config);
-  value.register("inWorktree", false);
+  value.register("inWorktree", inWorktree);
   value.register("flowManager", flowManager);
   value.register("agent", agent);
   return value;
@@ -320,7 +408,7 @@ function action(stepId) {
     : [
         "Use only the immutable handoff input snapshots and write the declared payload.",
         "Write the declared draft-questions-repair.json payload with exactly this JSON shape:",
-        '"version":1,"baseRevision":"sha256:<exact inputRevision>","operations":[{"title":"Publish through the parent",',
+        '{"version":1,"baseRevision":"sha256:<exact inputRevision>","operations":[{"title":"Publish through the parent",',
         '"target":"goal","kind":"replace-value","path":"goal",',
         '"expectedDigest":"634747b65b9a50fcc3d49a71b10763c810dd2a8f88b9446acdd99f4e1012cea9","replacement":"Parent publication is canonical.",',
         '"reason":"The parent publishes the derived canonical draft."}]}',
@@ -451,6 +539,12 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
 
   it("has a real Codex CLI worker hand off triage and repair to a downstream command", async () => {
     const mainRoot = createTmpDir("worker-handoff-agent-main-");
+    const diagnosticPath = process.env.SENNEL_AGENT_DIAGNOSTIC_DIR
+      ? path.join(process.env.SENNEL_AGENT_DIAGNOSTIC_DIR, "worker-handoff-triage-repair.jsonl") : null;
+    if (diagnosticPath !== null) {
+      fs.mkdirSync(path.dirname(diagnosticPath), { recursive: true });
+      fs.writeFileSync(diagnosticPath, "");
+    }
     const originalPath = process.env.PATH;
     try {
       const executionRoot = path.join(mainRoot, "execution");
@@ -474,7 +568,7 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
           featureBranch: "feature/worker-handoff-agent",
         },
         specRecord: { goal: "Exercise the worker handoff", requirements: [] },
-      }).create();
+      }).create().registerActive();
       const canonicalSpecDir = flowManager.specLocation(specId).directory;
       const draftBytes = Buffer.from(`${JSON.stringify(draftHandoffPayload("Repair the worker handoff."), null, 2)}\n`);
       fixture.activate("draft");
@@ -513,51 +607,73 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       });
       fixture.settle("draft-questions-review").activate("draft-questions-triage");
       const state = flowManager.load();
-      const agent = realCodexAgent({ mainRoot, executionRoot, flowManager });
+      const agent = recordAgentDiagnostics(
+        realCodexAgent({ mainRoot, executionRoot, flowManager }),
+        diagnosticPath,
+        "draft-questions-triage-repair",
+      );
+      const context = () => ({
+        root: executionRoot, executionRoot, mainRoot, specId, flowManager,
+        flowState: flowManager.loadReadOnly(specId), config: {},
+      });
       const dispatcher = new RunDispatchCommand({
         nextAction: {
           async run() {
-            const current = flowManager.load();
-            if (findStepById(current.steps, "draft-questions-triage").status !== "done") {
-              return action("draft-questions-triage");
-            }
-            const repair = findStepById(current.steps, "draft-questions-repair");
-            if (repair.status === "pending") {
-              flowManager.updateStepStatus({
-                stepId: "draft-questions-repair",
-                requestedStatus: "in_progress",
-              });
-            }
-            if (repair.status !== "done") {
-              return action("draft-questions-repair");
-            }
-            return action(null);
+            if (diagnosticPath !== null) agentDiagnostic(diagnosticPath, "next-action-before", diagnosticAttempt(flowManager, specId));
+            const next = await new GetNextActionCommand().execute(context());
+            agentDiagnostic(diagnosticPath, "next-action-selected", { stepId: next.step });
+            if (next.step === "draft-questions-review") return action(null);
+            assert.ok(["draft-questions-triage", "draft-questions-repair"].includes(next.step));
+            // Preserve the bounded real-worker payload while using the canonical route.
+            return { ...next, instructions: action(next.step).instructions };
           },
         },
         agent,
         repositoryFingerprint: () => "real-agent-handoff",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
-      dispatcher.container = {};
-
-      const result = await dispatcher.execute({
-        root: executionRoot,
-        executionRoot,
-        mainRoot,
-        specId,
-        flowManager,
-        flowState: flowManager.load(),
-        expectRunId: state.runId,
-        expectSpec: specId,
-        _envelopeType: "run",
-        _envelopeKey: "dispatch",
+      const container = flowCommandContainer({
+        root: executionRoot, mainRoot, inWorktree: true, flowManager, config: {}, agent,
       });
+      dispatcher.container = container;
+
+      let result;
+      try {
+        result = await dispatcher.execute({
+          root: executionRoot,
+          executionRoot,
+          mainRoot,
+          specId,
+          flowManager,
+          flowState: flowManager.load(),
+          expectRunId: state.runId,
+          expectSpec: specId,
+          _envelopeType: "run",
+          _envelopeKey: "dispatch",
+        });
+      } catch (error) {
+        if (diagnosticPath !== null) agentDiagnostic(diagnosticPath, "dispatcher-throw", {
+          message: error.message,
+          code: error.code ?? null,
+          stack: error.stack,
+          state: diagnosticAttempt(flowManager, specId),
+        });
+        throw error;
+      }
 
       assert.equal(result.dispatch?.boundary, "completed", JSON.stringify(result, null, 2));
-      assert.equal(result.dispatch.dispatchCount, 2);
+      // Two worker actions and the canonical claim of the Repair Attempt.
+      assert.equal(result.dispatch.dispatchCount, 3);
       const completed = flowManager.load();
-      assert.equal(findStepById(completed.steps, "draft-questions-triage").status, "done");
-      assert.equal(findStepById(completed.steps, "draft-questions-repair").status, "done");
+      for (const stepId of ["draft-questions-review", "draft-questions-triage", "draft-questions-repair"]) {
+        assert.equal(findStepById(completed.steps, stepId).status, "invalidated");
+      }
+      const repairTerminal = flowManager.activityLedger(specId).findLast((entry) => (
+        entry.nodeId === "draft-questions-repair" && entry.result?.stepResult?.kind === "draft-questions-repair-changed"
+      ));
+      assert.equal(repairTerminal.result.draftSettlementReceipt.targetStepId, "draft-questions-review");
+      assert.equal(repairTerminal.result.draftSettlementReceipt.resultKind, "draft-questions-repair-changed");
+      assert.equal(flowManager.canonicalState(specId).current, null);
       assert.equal(fs.existsSync(path.join(canonicalSpecDir, "draft-questions-triage.json")), false);
       assert.equal(fs.existsSync(path.join(canonicalSpecDir, "draft-questions-repair.json")), false);
       assert.equal(
@@ -568,16 +684,43 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         flowManager.artifactCatalog(specId).artifacts.some((entry) => entry.logicalKey === "draft.questions.repair"),
         true,
       );
-      const downstream = await new GetNextActionCommand().execute({
-        root: executionRoot,
-        executionRoot,
-        mainRoot,
-        specId,
-        flowManager,
-        flowState: completed,
+      const repeatedReview = await new GetNextActionCommand().execute(context());
+      assert.equal(repeatedReview.step, "draft-questions-review");
+      const repairedSource = new CanonicalDraftReviewSource({ flowManager, state: completed, phase: "draft-questions" });
+      assert.equal(repairedSource.sourceNodeId, "draft-questions-repair");
+      assert.deepEqual(JSON.parse(repairedSource.bytes), draftHandoffPayload("Parent publication is canonical."));
+      const reviewClaim = await new RunClaimNextActionCommand().execute(context());
+      assert.equal(reviewClaim.ok, true, JSON.stringify(reviewClaim));
+      let reviewCalls = 0;
+      const reviewCommand = new RunReviewCommand({
+        runCommand(_command, _args, options) {
+          reviewCalls += 1;
+          const work = ReviewWorkUnit.fromEnvironment(options.env);
+          const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+          assert.equal(source.revision.digest, repairedSource.revision().digest);
+          fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), workerArtifactJson({
+            version: 2, phase: "draft-questions", sourceDraft: "draft.json", sourceDraftRevision: source.revision,
+            generatedAt: "2026-09-23T00:00:00.000Z", verdict: "PASS", summary: "The bounded parent publication repair is complete.",
+            blockingFindings: [], advisoryFindings: [], repairTargets: [],
+          }));
+          work.seal();
+          return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+        },
       });
+      const reviewContext = { ...context(), phase: "draft" };
+      const reviewResult = await reviewCommand.execute(reviewContext);
+      assert.notEqual(reviewResult.ok, false, JSON.stringify(reviewResult));
+      await FLOW_COMMANDS.run.review.post(reviewContext, reviewResult);
+      assert.equal(reviewCalls, 1);
+      const reviewed = flowManager.loadReadOnly(specId);
+      assert.equal(findStepById(reviewed.steps, "draft-questions-review").result.stepResult.kind, "draft-questions-review-passed");
+      for (const stepId of ["draft-questions-triage", "draft-questions-repair"]) {
+        assert.equal(findStepById(reviewed.steps, stepId).status, "skipped");
+      }
+      const downstream = await new GetNextActionCommand().execute(context());
       assert.equal(downstream.step, "draft-refine");
-      assert.equal(downstream.directive.kind, "execute_step");
+      assert.equal(downstream.directive.kind, "execute_command");
+      assert.equal(downstream.directive.actionId, "CLAIM_NEXT_ACTION");
       let downstreamAgentCalls = 0;
       class UnexpectedWorkerAgent extends Agent {
         constructor() { super({}); }
@@ -589,16 +732,15 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       const downstreamDispatcher = new RunDispatchCommand({
         nextAction: {
           async run() {
-            return findStepById(flowManager.load().steps, "draft-refine").status === "done"
-              ? action(null)
-              : action("draft-refine");
+            const next = await new GetNextActionCommand().execute(context());
+            return next.step === "draft-coverage-review" ? action(null) : next;
           },
         },
         agent: new UnexpectedWorkerAgent(),
         repositoryFingerprint: () => "real-agent-handoff",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
-      downstreamDispatcher.container = {};
+      downstreamDispatcher.container = container;
       const resumed = await downstreamDispatcher.execute({
         root: executionRoot, executionRoot, mainRoot, specId, flowManager,
         flowState: flowManager.loadReadOnly(specId),
@@ -608,7 +750,8 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         _envelopeKey: "dispatch",
       });
       assert.equal(resumed.dispatch?.boundary, "completed", JSON.stringify(resumed));
-      assert.equal(resumed.dispatch.dispatchCount, 1);
+      // The canonical claim and the passive Refine completion are separate actions.
+      assert.equal(resumed.dispatch.dispatchCount, 2);
       assert.equal(downstreamAgentCalls, 0);
       const refined = flowManager.loadReadOnly(specId);
       assert.equal(refined.currentNodeId, null);
@@ -624,6 +767,12 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
 
   it("keeps Task review and host filtering read-only before a real repair and re-review", async () => {
     const root = createTmpDir("task-review-triage-repair-agent-");
+    const diagnosticPath = process.env.SENNEL_AGENT_DIAGNOSTIC_DIR
+      ? path.join(process.env.SENNEL_AGENT_DIAGNOSTIC_DIR, "task-review-repair.jsonl") : null;
+    if (diagnosticPath !== null) {
+      fs.mkdirSync(path.dirname(diagnosticPath), { recursive: true });
+      fs.writeFileSync(diagnosticPath, "");
+    }
     const originalPath = process.env.PATH;
     try {
       const config = realAgentTestConfig();
@@ -689,7 +838,12 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       });
       flowManager.updateStepStatus({ stepId: `${taskId}-review`, requestedStatus: "in_progress" }, { specId });
 
-      const agent = configuredRealAgent({ executionRoot: root, flowManager, config });
+      const agent = recordAgentDiagnostics(
+        configuredRealAgent({ executionRoot: root, flowManager, config }),
+        diagnosticPath,
+        "task-review-triage-repair",
+        () => ({ source: fs.readFileSync(sourcePath, "utf8") }),
+      );
       const container = flowCommandContainer({ root, flowManager, config, agent });
       const context = () => ({
         root,
@@ -785,6 +939,26 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         _envelopeKey: "dispatch",
         flowCommandBoundary: true,
       });
+      if (diagnosticPath !== null) {
+        let repairArtifactDiagnostic = null;
+        try {
+          repairArtifactDiagnostic = new TaskStageArtifact({
+            flowManager,
+            state: flowManager.loadReadOnly(specId),
+            taskId,
+            role: "repair",
+          }).document;
+        } catch (error) {
+          repairArtifactDiagnostic = { error: error.message, stack: error.stack };
+        }
+        agentDiagnostic(diagnosticPath, "task-repair-canonical-result", {
+          boundary: repairResult.dispatch?.boundary ?? null,
+          sourceBefore: incompleteSource,
+          sourceAfter: fs.readFileSync(sourcePath, "utf8"),
+          state: diagnosticAttempt(flowManager, specId),
+          repairArtifact: repairArtifactDiagnostic,
+        });
+      }
       assert.equal(repairResult.dispatch?.boundary, "completed", JSON.stringify(repairResult, null, 2));
       assert.equal(repairResult.dispatch.dispatchCount, 1);
       const repairedSource = fs.readFileSync(sourcePath, "utf8");

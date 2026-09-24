@@ -63,7 +63,7 @@ import {
   attachedCanonicalCommandResultArtifact,
   attachedCanonicalCommandResultPublications,
 } from "./lib/canonical-command-result.js";
-import { CanonicalFlowArtifactWrite } from "./lib/current-flow-state.js";
+import { CanonicalFlowArtifactWrite, CurrentFlowStateConflictError } from "./lib/current-flow-state.js";
 import { TaskStepIdentity } from "./lib/task-step-identity.js";
 import { DefinitionFailureOwnership } from "./lib/definition-failure-ownership.js";
 import { RepositoryFlowOperationLock } from "../lib/repository-maintenance-lock.js";
@@ -78,6 +78,7 @@ import {
 } from "./engine/step-result.js";
 import { StepFactory } from "./engine/step-factory.js";
 import { isStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
+import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./lib/step-admission-refusal.js";
 
 function fatalDraftPersistenceFailure(error, fallbackCode) {
   const failure = new FatalPostHookError(fallbackCode, error?.message || String(error), {
@@ -91,6 +92,19 @@ function fatalDraftStepError(error, code) {
   return new FatalPostHookError(code, error?.message || String(error), {
     cause: error instanceof Error ? error : null,
   });
+}
+
+function fatalDraftReviewFailure(error) {
+  if (isStepPersistenceFailure(error)) {
+    return fatalDraftPersistenceFailure(error, "DRAFT_REVIEW_STEP_RESULT_PERSISTENCE_FAILED");
+  }
+  if (isStepAdmissionRefusal(error)) {
+    return new FatalPostHookError("DRAFT_REVIEW_ADMISSION_REFUSED", error.message, {
+      cause: error,
+      data: { failureKind: "step-admission" },
+    });
+  }
+  return error;
 }
 
 async function executePublishedDraftReviewStep(ctx, result) {
@@ -116,7 +130,13 @@ async function executePublishedDraftReviewStep(ctx, result) {
     state: ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId),
     phase: route.retryPhase,
   });
-  const binding = await new DraftReviewConnector(source).connect();
+  let binding;
+  try {
+    binding = await new DraftReviewConnector(source).connect();
+  } catch (error) {
+    throw fatalDraftReviewFailure(error instanceof CurrentFlowStateConflictError
+      ? new StepAdmissionRefusal(error.message, error) : error);
+  }
   const publicationResult = route.key === "questions"
     ? new DraftQuestionsReviewExecutionRequiredResult()
     : new DraftCoverageReviewExecutionRequiredResult();
@@ -124,25 +144,14 @@ async function executePublishedDraftReviewStep(ctx, result) {
     .provideArguments(ReviewService, {
       flowManager: ctx.flowManager,
       binding,
-      commandResult: result,
-      executionCheckpointer: (stepResult, settlement, selectedBinding) => (
-        ctx.flowManager.settleDraftStepResult({
-          binding: selectedBinding,
-          stepResult,
-          settlement,
-          commandResult: result,
-        })
-      ),
+      publicationResult: result,
     })
     .create(route.key === "questions" ? steps.DraftQuestionsReviewStep : steps.DraftCoverageReviewStep);
   let published;
   try {
     published = await publicationStep.execute();
   } catch (error) {
-    if (isStepPersistenceFailure(error)) {
-      throw fatalDraftPersistenceFailure(error, "DRAFT_REVIEW_STEP_RESULT_PERSISTENCE_FAILED");
-    }
-    throw error;
+    throw fatalDraftReviewFailure(error);
   }
   if (published.kind !== publicationResult.kind) {
     throw new Error("Draft review publication Step selected an invalid Result");
@@ -158,10 +167,7 @@ async function executePublishedDraftReviewStep(ctx, result) {
   try {
     output = await step.execute();
   } catch (error) {
-    if (isStepPersistenceFailure(error)) {
-      throw fatalDraftPersistenceFailure(error, "DRAFT_REVIEW_STEP_RESULT_PERSISTENCE_FAILED");
-    }
-    throw error;
+    throw fatalDraftReviewFailure(error);
   }
   if (output.type === STEP_RESULT_TYPE.ERROR) {
     throw fatalDraftStepError(output.error, "DRAFT_REVIEW_RESULT_ERROR");
@@ -1784,7 +1790,7 @@ export const FLOW_COMMANDS = {
           && (!specGatePhase || !activeSpecGate || !canonicalResult || attached.logicalKey !== "spec.gate")) {
           throw new FatalPostHookError("SPEC_GATE_ADMISSION_REFUSED",
             "Spec Gate requires its attached canonical result before Step settlement", {
-              data: { failureKind: "spec-gate-admission" },
+              data: { failureKind: "step-admission" },
             });
         }
         if (canonicalResult && (phase === "draft" || attached.logicalKey === "draft.gate")) {
@@ -1805,10 +1811,10 @@ export const FLOW_COMMANDS = {
             if (error?.code === "GATE_OUTPUT_TOOLING_FAILURE") {
               throw new FatalPostHookError(error.code, error.message, { cause: error });
             }
-            if (error instanceof SpecGateAdmissionRefusal) {
+            if (isStepAdmissionRefusal(error)) {
               throw new FatalPostHookError("SPEC_GATE_ADMISSION_REFUSED", error.message, {
                 cause: error,
-                data: { failureKind: "spec-gate-admission" },
+                data: { failureKind: "step-admission" },
               });
             }
             throw new FatalPostHookError("SPEC_GATE_POST_FAILED", error.message || String(error), {

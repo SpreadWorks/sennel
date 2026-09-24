@@ -2,7 +2,7 @@ import { attachedCanonicalCommandResultArtifact } from "../lib/canonical-command
 import { DraftReviewArtifactDocument, DraftReviewEvidenceSet } from "../lib/draft-review-artifacts.js";
 import { draftReviewRouteForStepId } from "../lib/draft-review-routes.js";
 import { readProspectiveDraftGateFacts } from "../lib/gate-transition-facts.js";
-import { DraftCompletionConnector, DraftExecutionSettlement, settleDraftStepResult } from "../definition.js";
+import { DraftCompletionConnector, DraftExecutionSettlement, DraftReviewExecutionBinding, DraftStepExecutionLifecycle, settleDraftStepResult } from "../definition.js";
 import {
   StepResult,
 } from "../engine/step-result.js";
@@ -10,7 +10,13 @@ import {
   DraftGateEvaluationBinding,
   DraftReviewStepBinding,
 } from "../engine/connectors/draft/draft-step-binding.js";
-import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
+import {
+  StepPersistenceFailure,
+  findCommittedStepSettlementReceipt,
+  recoverStepSettlementReceipt,
+} from "../lib/definition-lifecycle-failure.js";
+import { StepAdmissionRefusal } from "../lib/step-admission-refusal.js";
+import { CurrentFlowStateConflictError } from "../lib/current-flow-state.js";
 import {
   DraftGateIssuePublication,
   DraftGatePublicationIntent,
@@ -19,23 +25,47 @@ import {
   createDraftCompletionSettlementApplication,
 } from "../lib/draft-completion-connector.js";
 
-function committedReceipt(flowManager, input) {
-  try {
-    return flowManager.findStepSettlementReceipt(input);
-  } catch {
-    return null;
-  }
-}
-
 /** Validate a Draft Review observation and settle it in one canonical transaction. */
 export class ReviewService {
   #reviewDocument = null;
+
+  #rethrowAdmissionRead(error) {
+    if (error instanceof CurrentFlowStateConflictError) {
+      throw new StepAdmissionRefusal(error.message, error);
+    }
+    throw error;
+  }
+
+  /** Claim one exact Review provider request, recovering only its durable receipt. */
+  static claimExecution({ flowManager, binding, stepResult, settlement, executionBinding, executionClaim }) {
+    const input = {
+      binding, stepResult, settlement,
+      executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding).claimed(executionClaim),
+    };
+    try {
+      return flowManager.claimDraftStepExecution({
+        binding, stepResult, settlement, executionBinding, executionClaim,
+      });
+    } catch (error) {
+      const receipt = recoverStepSettlementReceipt(flowManager, input, error);
+      return { state: flowManager.canonicalState(binding.specId), receipt };
+    }
+  }
+
+  #assertCurrent() {
+    try {
+      return this.binding.assertCurrent();
+    } catch (error) {
+      this.#rethrowAdmissionRead(error);
+    }
+  }
 
   constructor({
     flowManager,
     binding,
     commandResult = null,
-    executionCheckpointer = null,
+    executionBinding = null,
+    publicationResult = null,
   }) {
     if (!flowManager || typeof flowManager.settleDraftStepResult !== "function"
       || typeof flowManager.findStepSettlementReceipt !== "function") {
@@ -47,39 +77,52 @@ export class ReviewService {
     if (binding.flowManager !== flowManager) throw new Error("ReviewService binding belongs to a different FlowManager");
     const route = draftReviewRouteForStepId(binding.stepId);
     if (route === null) throw new Error(`ReviewService has no draft review route for ${binding.stepId}`);
+    if (executionBinding !== null && !(executionBinding instanceof DraftReviewExecutionBinding)) {
+      throw new TypeError("ReviewService execution requires a typed Draft review binding");
+    }
+    if ([commandResult, executionBinding, publicationResult].filter((value) => value !== null).length !== 1) {
+      throw new TypeError("ReviewService requires exactly one terminal, checkpoint, or publication input");
+    }
+    if (publicationResult !== null
+      && attachedCanonicalCommandResultArtifact(publicationResult)?.logicalKey !== route.reviewLogicalKey) {
+      throw new TypeError("ReviewService publication requires its canonical review result");
+    }
     this.flowManager = flowManager;
     this.binding = binding;
     this.route = route;
     this.commandResult = commandResult;
-    if (executionCheckpointer !== null && typeof executionCheckpointer !== "function") {
-      throw new TypeError("ReviewService execution checkpointer must be a function");
-    }
-    this.executionCheckpointer = executionCheckpointer;
+    this.executionBinding = executionBinding;
+    this.publicationResult = publicationResult;
     Object.freeze(this);
   }
 
   requiresReviewExecution() {
-    this.binding.assertCurrent();
-    return this.executionCheckpointer !== null;
+    this.#assertCurrent();
+    return this.executionBinding !== null || this.publicationResult !== null;
   }
 
   inspectReviewResult(result = this.commandResult) {
     if (result === this.commandResult && this.#reviewDocument !== null) return this.#reviewDocument;
-    const state = this.binding.assertCurrent();
+    const state = this.#assertCurrent();
     const artifact = attachedCanonicalCommandResultArtifact(result);
     if (artifact?.logicalKey !== this.route.reviewLogicalKey) {
-      throw new Error("draft review command result does not match the bound review route");
+      throw new StepAdmissionRefusal("draft review command result does not match the bound review route");
     }
-    const document = DraftReviewArtifactDocument.fromStored(artifact.payload);
+    let document;
+    try {
+      document = DraftReviewArtifactDocument.fromStored(artifact.payload);
+    } catch (error) {
+      throw new StepAdmissionRefusal(error.message || String(error), error);
+    }
     if (JSON.stringify(document.sourceDraftRevision) !== JSON.stringify(this.binding.revision)) {
-      throw new Error("draft review command result does not match the bound canonical Draft revision");
+      throw new StepAdmissionRefusal("draft review command result does not match the bound canonical Draft revision");
     }
     const issues = new DraftReviewEvidenceSet({
       route: this.route,
       state,
       reviewFile: { document: document.toJSON() },
     }).validateReview({ validateBinding: false });
-    if (issues.length > 0) throw new Error(issues.join("; "));
+    if (issues.length > 0) throw new StepAdmissionRefusal(issues.join("; "));
     if (result === this.commandResult) this.#reviewDocument = document;
     return document;
   }
@@ -91,13 +134,18 @@ export class ReviewService {
     const settlement = settleDraftStepResult(this.binding.stepId, stepResult);
     let draftCompletionApplication = null;
     if (settlement.connector === DraftCompletionConnector) {
-      const facts = this.flowManager.readProspectiveDraftCoveragePassFacts({
-        binding: this.binding,
-        commandResult: this.commandResult,
-      });
+      let facts;
+      try {
+        facts = this.flowManager.readProspectiveDraftCoveragePassFacts({
+          binding: this.binding,
+          commandResult: this.commandResult,
+        });
+      } catch (error) {
+        this.#rethrowAdmissionRead(error);
+      }
       draftCompletionApplication = createDraftCompletionSettlementApplication(facts);
     }
-    if (this.executionCheckpointer !== null) {
+    if (this.executionBinding !== null || this.publicationResult !== null) {
       if (!(settlement instanceof DraftExecutionSettlement)) {
         throw new StepPersistenceFailure(new Error("Draft review pre-execution Step must select an Execution settlement"));
       }
@@ -105,15 +153,20 @@ export class ReviewService {
         binding: this.binding,
         stepResult,
         settlement,
-        commandResult: this.commandResult,
+        commandResult: this.publicationResult ?? undefined,
+        ...(this.executionBinding === null ? {} : {
+          executionLifecycle: DraftStepExecutionLifecycle.checkpoint(this.executionBinding),
+        }),
       };
       try {
-        const committed = await this.executionCheckpointer(stepResult, settlement, this.binding);
+        const committed = this.executionBinding === null
+          ? this.flowManager.settleDraftStepResult(input)
+          : this.flowManager.checkpointDraftStepExecution({
+              binding: this.binding, stepResult, settlement, executionBinding: this.executionBinding,
+            });
         return committed.receipt;
       } catch (error) {
-        const replay = committedReceipt(this.flowManager, input);
-        if (replay !== null) return replay;
-        throw error instanceof StepPersistenceFailure ? error : new StepPersistenceFailure(error);
+        return recoverStepSettlementReceipt(this.flowManager, input, error);
       }
     }
     if (stepResult.error === null && this.#reviewDocument === null) this.inspectReviewResult();
@@ -130,9 +183,7 @@ export class ReviewService {
       const committed = await this.flowManager.settleDraftStepResult(input);
       return committed.receipt;
     } catch (error) {
-      const replay = committedReceipt(this.flowManager, input);
-      if (replay !== null) return replay;
-      throw new StepPersistenceFailure(error);
+      return recoverStepSettlementReceipt(this.flowManager, input, error);
     }
   }
 }
@@ -206,7 +257,7 @@ export class GateService {
       const committed = await this.flowManager.settleDraftStepResult(input);
       return committed.receipt;
     } catch (error) {
-      const replay = committedReceipt(this.flowManager, input);
+      const replay = findCommittedStepSettlementReceipt(this.flowManager, input);
       if (replay !== null) return replay;
       throw new StepPersistenceFailure(error);
     }

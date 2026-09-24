@@ -33,7 +33,7 @@ import {
   GateRepairReport,
   PlanGateRepairOutcomeDraft,
 } from "../../src/flow/lib/gate-observation-convergence.js";
-import { specResult } from "../../src/flow/steps/spec/spec.js";
+import { specResult } from "../../src/flow/steps/spec/spec-result.js";
 
 function repairOutcome(disposition) {
   const fingerprint = "a".repeat(64);

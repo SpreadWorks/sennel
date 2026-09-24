@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+import { DraftGateRepairSelection } from "../steps/draft/draft-gate-repair-selection.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { FlowHandoffAuthorityLease } from "../../lib/flow-handoff-authority-lease.js";
 import { PRODUCT } from "../../lib/product.js";
@@ -68,11 +69,8 @@ import {
 import {
   SpecRepairOperationsError,
 } from "./spec-repair-operations.js";
-import {
-  applyDraftRepairOperations,
-  DraftGateRepairAuthority,
-  DraftRepairOperationsError,
-} from "./draft-repair-operations.js";
+import { DraftRepairInput, DraftRepairCandidate } from "../steps/draft/draft-repair-candidate.js";
+import { DraftGateRepairAuthority } from "./draft-repair-operations.js";
 import {
   flowArtifactAuthorityForStep,
   requiresWorkerArtifactHandoff,
@@ -404,6 +402,10 @@ export class WorkerArtifactHandoffError extends Error {
     this.recoveryPossible = recoveryPossible;
     this.retryable = retryable;
     this.data = Object.freeze({ ...data });
+  }
+
+  get isAdmissionRejection() {
+    return ["invalid", "stale", "conflict"].includes(this.classification);
   }
 }
 
@@ -6714,7 +6716,7 @@ function draftRepairRouteForRequest(request) {
   return route?.repairStepId === request.stepId ? route : null;
 }
 
-function draftRepairResult(request, submission) {
+function draftRepairInput(request, submission) {
   const route = draftRepairRouteForRequest(request);
   if (route === null) return null;
   const draftInput = request.inputs.find((input) => input.name === "draft.json");
@@ -6722,16 +6724,16 @@ function draftRepairResult(request, submission) {
   if (!draftInput || !triageInput) {
     throw new Error(`draft repair handoff is missing immutable inputs for ${request.stepId}`);
   }
-  return applyDraftRepairOperations({
+  return new DraftRepairInput({
+    stepId: request.stepId,
     draft: draftInput.document,
     triage: triageInput.document,
     repair: payloadDocument(request, submission, route.repairArtifact),
     inputRevision: request.inputRevision,
-    phase: request.stepId,
   });
 }
 
-class DraftGateRepairResult {
+class DraftGateRepairInput extends DraftRepairInput {
   constructor({ request, submission, state } = {}) {
     if (request?.stepId !== "draft-gate-repair") {
       throw new Error("draft Gate repair result requires the dedicated worker step");
@@ -6757,13 +6759,6 @@ class DraftGateRepairResult {
       );
     }
     const payload = payloadDocument(request, submission, "draft-gate-repair.json");
-    const applied = applyDraftRepairOperations({
-      draft: draftInput.document,
-      repair: payload,
-      inputRevision: request.inputRevision,
-      phase: request.stepId,
-      authority: new DraftGateRepairAuthority(selected.repair),
-    });
     let workerReport;
     try {
       workerReport = GateRepairWorkerReport.fromDocument(payload.report);
@@ -6775,74 +6770,33 @@ class DraftGateRepairResult {
         { cause, retryable: false, data: { stepId: request.stepId } },
       );
     }
-    this.draft = applied.draft;
-    this.draftBytes = Buffer.from(`${JSON.stringify(this.draft, null, 2)}\n`, "utf8");
-    this.beforeDigest = draftInput.digest;
-    this.changed = stableStringify(this.draft) !== stableStringify(draftInput.document);
-    this.outputDigest = this.changed ? digest(this.draftBytes) : this.beforeDigest;
-    this.report = workerReport.bindArtifact({
-      repair: selected.repair,
-      beforeEvidenceDigest: this.beforeDigest,
-      outputEvidenceDigest: this.outputDigest,
-      deltaIds: this.changed ? [this.outputDigest] : [],
+    super({
+      stepId: request.stepId,
+      draft: draftInput.document,
+      repair: payload,
+      inputRevision: request.inputRevision,
+      gate: Object.freeze({ ...selected, workerReport, beforeDigest: draftInput.digest }),
     });
-    this.outcome = new PlanGateRepairOutcomeDraft({
-      repair: selected.repair,
-      disposition: this.changed ? "applied" : "rejected-no-progress",
-      report: this.report,
-    });
-    this.outcome.seal("plan-gate-repair-outcome-validation");
-    this.audit = Object.freeze({
-      ...applied.audit,
-      sourceIssueLogId: selected.record.sourceIssueLogId,
-      sourceEntryDigest: selected.record.sourceEntryDigest,
-      resultLogicalKey: selected.record.connector.resultLogicalKey,
-      catalogFingerprint: selected.record.connector.catalogFingerprint,
-      report: this.report.toJSON(),
-    });
-    Object.freeze(this);
   }
 }
 
-function draftGateRepairResult(request, submission, state) {
+function draftGateRepairInput(request, submission, state) {
   return request.stepId === "draft-gate-repair"
-    ? new DraftGateRepairResult({ request, submission, state })
+    ? new DraftGateRepairInput({ request, submission, state })
     : null;
-}
-
-/** Typed, I/O-free facts used only to classify a Draft Repair Result. */
-export class DraftRepairResultFacts {
-  constructor({ stepId, draftChanged } = {}) {
-    if (!["draft-questions-repair", "draft-coverage-repair"].includes(stepId)) {
-      throw new TypeError("Draft Repair Result facts require a Repair Step");
-    }
-    if (typeof draftChanged !== "boolean") {
-      throw new TypeError("Draft Repair Result facts require a changed decision");
-    }
-    this.stepId = stepId;
-    this.draftChanged = draftChanged;
-    Object.freeze(this);
-  }
 }
 
 /** Sealed facts a Draft Step needs to choose its own output before commit. */
 class DraftWorkerHandoffFacts {
-  constructor({ request, submission, publications, state, planGateRepairOutcome = null } = {}) {
+  constructor({ request, submission, publications, state, repairSelection = null } = {}) {
     if (!(request instanceof WorkerArtifactHandoffRequest)) {
       throw new TypeError("Draft worker facts require a sealed worker request");
     }
     this.stepId = request.stepId;
-    this.draftCompletionFacts = publications.draftCoverageRepairFacts;
-    this.repairResult = ["draft-questions-repair", "draft-coverage-repair"].includes(request.stepId)
-      ? new DraftRepairResultFacts({
-          stepId: request.stepId,
-          draftChanged: publications.draftRepairChanged === true,
-        })
-      : null;
-    if ((request.stepId === "draft-gate-repair") !== (planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)) {
-      throw new TypeError("Draft worker facts require the selected plan Gate repair outcome");
-    }
-    this.planGateRepairOutcome = planGateRepairOutcome;
+    this.draftCompletionFacts = publications?.draftCoverageRepairFacts ?? null;
+    this.repairSelection = repairSelection;
+    this.repairInput = repairSelection !== null ? null : draftRepairInput(request, submission)
+      ?? draftGateRepairInput(request, submission, state);
     this.autoApprove = state.autoApprove === true;
     this.draftTransitionFacts = null;
     if (request.stepId === "draft-refine") {
@@ -6923,7 +6877,7 @@ function requireCanonicalDraftExecutionClaimForStored({ flowManager, state, stor
 
 /** Private in-memory boundary between Draft handoff preparation and commit. */
 class DraftWorkerPreparation {
-  constructor({ request, state, submission, publications, repairCheckpoint, planGateRepairOutcome, facts } = {}) {
+  constructor({ request, state, submission, publications, repairCheckpoint, planGateRepairOutcome, facts, repairCandidate = null } = {}) {
     if (!(request instanceof WorkerArtifactHandoffRequest) || !isDraftWorkerStep(request.stepId)) {
       throw new TypeError("Draft worker preparation requires a Draft worker request");
     }
@@ -6934,7 +6888,37 @@ class DraftWorkerPreparation {
     this.repairCheckpoint = repairCheckpoint;
     this.planGateRepairOutcome = planGateRepairOutcome;
     this.facts = facts;
+    this.repairCandidate = repairCandidate;
     Object.freeze(this);
+  }
+
+  assertRepairResult(result) {
+    if (this.facts.repairSelection !== null) return this.facts.repairSelection.assertResult(result);
+    if (this.facts.repairInput === null) return;
+    if (this.repairCandidate === null) throw new TypeError("Draft repair publication requires its selected candidate");
+    this.repairCandidate.assertResult(result);
+  }
+
+  adoptRepairCandidate(candidate) {
+    if (!(candidate instanceof DraftRepairCandidate) || candidate.input !== this.facts.repairInput) {
+      throw new TypeError("Draft publication requires the Step's candidate for its prepared input");
+    }
+    candidate.assertResult(candidate.result);
+    const route = draftRepairRouteForRequest(this.request);
+    if (route !== null) {
+      const evidence = canonicalDraftReviewEvidence(this.request, this.submission, this.state, route, {
+        repair: new CanonicalDraftReviewHandoffArtifact({
+          name: route.repairArtifact, digest: digest(stableStringify(candidate.audit)), document: candidate.audit,
+        }),
+      });
+      const validation = evidence.validateThrough(this.request.stepId);
+      if (validation.issues.length > 0) throw new Error(validation.issues.join("; "));
+    }
+    return new DraftWorkerPreparation({
+      request: this.request, state: this.state, submission: this.submission,
+      publications: canonicalHandoffPublications(this.request, this.submission, candidate),
+      repairCheckpoint: null, planGateRepairOutcome: candidate.outcome, facts: this.facts, repairCandidate: candidate,
+    });
   }
 }
 
@@ -7032,7 +7016,8 @@ function prepareDraftWorkerCanonical({ request, state, submission }) {
   }
   let publications;
   try {
-    publications = canonicalHandoffPublications(request, submission);
+    publications = draftRepairRouteForRequest(request) !== null || request.stepId === "draft-gate-repair"
+      ? null : canonicalHandoffPublications(request, submission);
   } catch (cause) {
     throw cause instanceof WorkerArtifactHandoffError
       ? cause
@@ -7053,11 +7038,9 @@ function prepareDraftWorkerCanonical({ request, state, submission }) {
       `test-review repair progress could not be prepared: ${cause.message}`, { cause },
     );
   }
-  const planGateRepairOutcome = request.stepId === "draft-gate-repair"
-    ? draftGateRepairResult(request, submission, state).outcome
-    : null;
+  const planGateRepairOutcome = null;
   const facts = new DraftWorkerHandoffFacts({
-    request, submission, publications, state, planGateRepairOutcome,
+    request, submission, publications, state,
   });
   return new DraftWorkerPreparation({
     request, state, submission, publications, repairCheckpoint, planGateRepairOutcome, facts,
@@ -7152,7 +7135,7 @@ function draftCoverageRepairCompletionFacts(request, route, repair) {
   // A changed Draft must be reviewed again before the completion connector
   // can select the Gate. The unchanged case retains that connector's existing
   // atomic publication and carry-forward validation.
-  if (stableStringify(repair.draft) !== stableStringify(draft.document)) return null;
+  if (repair.changed) return null;
   const review = request.inputs.find((input) => input.name === route.reviewArtifact);
   const triage = request.inputs.find((input) => input.name === route.triageArtifact);
   if (!draft || !review || !triage) {
@@ -7189,20 +7172,13 @@ function draftCoverageRepairCompletionFacts(request, route, repair) {
 
 function validateDraftPayload(request, submission, state) {
   if (request.stepId === "draft-gate-repair") {
-    draftGateRepairResult(request, submission, state);
+    draftGateRepairInput(request, submission, state);
     return;
   }
   const route = draftRepairRouteForRequest(request);
   if (route !== null) {
-    const repair = draftRepairResult(request, submission).audit;
-    const evidence = canonicalDraftReviewEvidence(request, submission, state, route, {
-      repair: new CanonicalDraftReviewHandoffArtifact({
-        name: route.repairArtifact,
-        digest: digest(stableStringify(repair)),
-        document: repair,
-      }),
-    });
-    const validation = evidence.validateThrough(request.stepId);
+    const evidence = canonicalDraftReviewEvidence(request, submission, state, route);
+    const validation = evidence.validateThrough(route.triageStepId);
     if (validation.issues.length > 0) throw new Error(validation.issues.join("; "));
     return;
   }
@@ -7551,18 +7527,6 @@ function validatePayload(request, submission, state) {
         },
       );
     }
-    if (cause instanceof DraftRepairOperationsError) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        cause.code,
-        `worker artifact payload failed ${request.stepId} validation: ${cause.message}`,
-        {
-          cause,
-          retryable: false,
-          data: { stepId: request.stepId, draftRepairAudit: cause.audit },
-        },
-      );
-    }
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_ARTIFACT_HANDOFF_INVALID",
@@ -7832,7 +7796,7 @@ function canonicalTestTreeBaselineForPublication(request) {
   return baseline;
 }
 
-function canonicalHandoffPublications(request, submission) {
+function canonicalHandoffPublications(request, submission, draftCandidate = null) {
   const artifactWrites = [];
   const artifactRemovals = [];
   const artifactBaselines = new Map();
@@ -7840,12 +7804,13 @@ function canonicalHandoffPublications(request, submission) {
   let testSourceBaseline;
   let requirementTestCandidate;
   const testEntries = [];
-  const draftGateRepairResultValue = draftGateRepairResult(request, submission, request.state);
+  const draftGateRepairResultValue = request.stepId === "draft-gate-repair" ? draftCandidate : null;
   const repairRoute = draftRepairRouteForRequest(request);
-  const draftRepairResultValue = repairRoute === null ? null : draftRepairResult(request, submission);
-  const draftRepairChanged = draftRepairResultValue === null ? null
-    : stableStringify(draftRepairResultValue.draft)
-      !== stableStringify(request.inputs.find((input) => input.name === "draft.json").document);
+  const draftRepairResultValue = repairRoute === null ? null : draftCandidate;
+  if ((repairRoute !== null || request.stepId === "draft-gate-repair")
+    && !(draftCandidate instanceof DraftRepairCandidate)) {
+    throw new TypeError("Draft repair publication requires the Step-adopted candidate");
+  }
   const draftCoverageRepairFacts = draftCoverageRepairCompletionFacts(
     request,
     repairRoute,
@@ -7948,7 +7913,7 @@ function canonicalHandoffPublications(request, submission) {
   }
   if (draftGateRepairResultValue?.changed) {
     artifactWrites.push(new CanonicalWorkerArtifactAddress("draft.json").publication(
-      draftGateRepairResultValue.draftBytes,
+      Buffer.from(`${JSON.stringify(draftGateRepairResultValue.draft, null, 2)}\n`, "utf8"),
       "application/json",
     ));
   }
@@ -8103,7 +8068,6 @@ function canonicalHandoffPublications(request, submission) {
         .map((entry) => ({ testPath: entry.parameters.testPath, bytes: Buffer.from(entry.bytes) })),
     ),
     draftCoverageRepairFacts,
-    draftRepairChanged,
   });
 }
 
@@ -9329,6 +9293,30 @@ export class WorkerArtifactHandoffCoordinator {
       if (recoverableValidation instanceof RequirementTestStructuralHandoffResult) {
         throw new RequirementTestStructuralHandoffError(recoverableValidation);
       }
+      if (request.stepId === "draft-gate-repair" && executionLifecycle?.phase === "publication") {
+        const canonical = ctx.flowManager.canonicalState(request.specId);
+        const binding = { runId: canonical.runId, specId: canonical.specId, stepId: request.stepId, attempt: canonical.attempt };
+        const execution = ctx.flowManager.draftStepExecutionState({ binding });
+        const activities = ctx.flowManager.activityLedger(request.specId);
+        const publicationIndex = activities.findIndex((entry) => entry.result?.draftSettlementReceipt?.id === execution.receiptId);
+        const activity = activities[publicationIndex];
+        const selection = DraftGateRepairSelection.fromJSON(activity.result.draftSettlementReceipt.draftGateRepairSelection);
+        const draft = ctx.flowManager.readArtifact({ specId: request.specId, logicalKey: "draft", consumerNodeId: request.stepId });
+        const audit = selection.outcome.disposition === "applied"
+          ? ctx.flowManager.readProducerArtifact({ specId: request.specId, logicalKey: "draft.gate.repair", nodeId: request.stepId }) : null;
+        selection.assertPublication({ draftDigest: digest(draft.bytes), auditReport: audit === null ? null : JSON.parse(audit.bytes.toString("utf8")).report });
+        const retainedPublication = audit === null
+          && activities.slice(0, publicationIndex).some((entry) => entry.id === draft.descriptor.activityId);
+        if (audit === null ? !retainedPublication
+          : draft.descriptor.activityId !== activity.id || audit.descriptor.activityId !== activity.id) {
+          throw new Error("Draft Gate repair publication ownership differs from its selection");
+        }
+        return new DraftWorkerPreparation({
+          request, state, submission, publications: null, repairCheckpoint: null,
+          planGateRepairOutcome: selection.outcome,
+          facts: new DraftWorkerHandoffFacts({ request, submission, state, publications: null, repairSelection: selection }),
+        });
+      }
       return prepareDraftWorkerCanonical({
         request,
         state: publicationRecovery || executionLifecycle?.phase === "publication" ? request.state : state,
@@ -9356,6 +9344,7 @@ export class WorkerArtifactHandoffCoordinator {
     if (!(preparation instanceof DraftWorkerPreparation) || preparation.request !== request) {
       throw new TypeError("Draft worker commit requires its prepared handoff");
     }
+    preparation.assertRepairResult(stepResult);
     if (hasCommittedStepResult({ ctx, request, stepResult, requireReceipt: true })) {
       const state = ctx.flowManager.canonicalState(request.specId);
       const handoffReceipt = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
@@ -9417,8 +9406,7 @@ export class WorkerArtifactHandoffCoordinator {
         draftCompletionApplication,
       });
     } catch (cause) {
-      if (cause instanceof WorkerArtifactHandoffError
-        && ["invalid", "stale", "conflict"].includes(cause.classification)) throw cause;
+      if (cause instanceof WorkerArtifactHandoffError && cause.isAdmissionRejection) throw cause;
       if (!hasCommittedStepResult({ ctx, request, stepResult, requireReceipt: true })) throw cause;
       const state = ctx.flowManager.canonicalState(request.specId);
       const handoffReceipt = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
@@ -9488,6 +9476,7 @@ export class WorkerArtifactHandoffCoordinator {
       || !(stepResult instanceof StepResult)) {
       throw new TypeError("Published Draft worker completion requires its Step Result");
     }
+    if (stepResult.type !== STEP_RESULT_TYPE.ERROR) preparation.assertRepairResult(stepResult);
     const state = ctx.flowManager.load(request.specId);
     requireCanonicalDraftExecutionClaimForStored({
       flowManager: ctx.flowManager,
@@ -9850,12 +9839,17 @@ export class WorkerArtifactHandoffCoordinator {
     try {
       this.faultInjector({ phase: "before-worker-handoff-publication", stepId: request.stepId });
       {
+        // The already selected no-progress outcome retains the original publication.
+        // This records the execution checkpoint; the Step's terminal Result is
+        // bound to that outcome by DraftWorkerPreparation.assertRepairResult.
         if (publicationOnly && planGateRepairOutcome?.disposition === "rejected-no-progress") {
           const committed = ctx.flowManager.settleDraftStepResult({
             binding: draftWorkerBinding,
             stepResult: selectedDraftStepResult,
             settlement: draftWorkerSettlement,
             draftCompletionApplication,
+            artifactBaselines: publications.artifactBaselines,
+            draftGateRepairSelection: preparedDraft.repairCandidate.selection,
             lifecycleResult: canonicalHandoffResult(request, submission, this.now),
             references: {
               evaluations: [], findings: [], repairs: [],
@@ -9932,6 +9926,7 @@ export class WorkerArtifactHandoffCoordinator {
               artifactBaselines: confirmation.artifactBaselines,
               testSourceBaseline: confirmation.testSourceBaseline,
               planGateRepairOutcome,
+              draftGateRepairSelection: publicationOnly ? preparedDraft?.repairCandidate?.selection ?? null : null,
             });
             persistedSettlementReceipt = committed.receipt;
           } else {

@@ -1,5 +1,5 @@
 import { CanonicalDraftReviewSource } from "../../../lib/canonical-review-artifacts.js";
-import { CurrentAttemptIdentity } from "../../../lib/current-flow-state.js";
+import { CurrentAttemptIdentity, CurrentFlowStateConflictError } from "../../../lib/current-flow-state.js";
 import { StepBinding, canonicalStepState } from "../../step-binding.js";
 import { GateTransitionFacts } from "../../../lib/gate-transition.js";
 import { readCurrentGateTransitionFacts } from "../../../lib/gate-transition-facts.js";
@@ -75,7 +75,7 @@ export class DraftReviewStepBinding extends DraftStepBinding {
     const state = canonicalStepState(source.flowManager, source.state.specId);
     const route = draftReviewRouteForRetryPhase(source.phase);
     if (route === null || state.attempt?.nodeId !== route.reviewStepId) {
-      throw new Error("Draft review binding requires its routed active review Attempt");
+      throw new CurrentFlowStateConflictError("Draft review binding requires its routed active review Attempt");
     }
     super({ flowManager: source.flowManager, state, stepId: route.reviewStepId, attempt: state.attempt });
     this.source = source;
@@ -92,7 +92,7 @@ export class DraftReviewStepBinding extends DraftStepBinding {
       phase: this.phase,
     });
     if (!sameRevision(this.revision, source.revision())) {
-      throw new Error("Draft review binding is stale for the canonical Draft revision");
+      throw new CurrentFlowStateConflictError("Draft review binding is stale for the canonical Draft revision");
     }
     return state;
   }

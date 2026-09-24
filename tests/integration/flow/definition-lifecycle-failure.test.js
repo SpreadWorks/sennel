@@ -32,6 +32,7 @@ import {
   StepResult,
 } from "../../../src/flow/engine/step-result.js";
 import { GateService, ReviewService } from "../../../src/flow/services/review-service.js";
+import { DraftReviewConnector } from "../../../src/flow/engine/connectors/draft/draft-review-connector.js";
 import { CanonicalFlowFixture, TaskLifecycleFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
@@ -548,9 +549,8 @@ test("Draft Review command failure persists tooling failure without creating a S
   }
 });
 
-test("Draft Review Step Error is persisted without a dispatcher fallback", async () => {
+test("Draft Review admission refusal stops without a Step Error or dispatcher fallback", async () => {
   const root = createTmpDir("definition-lifecycle-draft-review-step-result-");
-  const originalInspect = ReviewService.prototype.inspectReviewResult;
   try {
     const specId = "904-draft-review-step-result";
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
@@ -582,27 +582,140 @@ test("Draft Review Step Error is persisted without a dispatcher fallback", async
       static outputMode = "envelope";
       execute() { return result; }
     }
-    ReviewService.prototype.inspectReviewResult = () => {
-      throw new Error("Draft Review Step rejected its result.");
-    };
     const envelope = await dispatchRegistryCommand({
       root, manager, specId, commandName: "review", CommandClass: PublishedDraftReviewCommand,
     });
     const state = manager.canonicalState(specId);
     const failures = manager.activityLedger(specId).filter((activity) => activity.type === "attempt_failed");
     assert.equal(envelope.ok, false);
-    assert.equal(envelope.errors.some((error) => error.code === "DRAFT_REVIEW_RESULT_ERROR"), true);
+    assert.equal(envelope.errors.some((error) => error.code === "DRAFT_REVIEW_ADMISSION_REFUSED"), true);
     assert.equal(state.current.at(-1), "draft-questions-review");
-    assert.equal(state.attempt.failure.category, STEP_RESULT_ERROR_CATEGORY);
-    assert.equal(state.nextAction().operation, "blocked");
-    assert.equal(failures.length, 1);
-    assert.deepEqual(failures[0].result.stepResult, {
-      kind: "draft-questions-review-error",
-      type: "error",
-      error: { kind: "generic", message: "Draft Review Step rejected its result." },
-    });
+    assert.equal(state.attempt.failure, null);
+    assert.equal(failures.length, 0);
+    assert.equal(manager.activityLedger(specId).filter((activity) => (
+      activity.nodeId === "draft-questions-review"
+      && activity.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication"
+    )).length, 1);
   } finally {
-    ReviewService.prototype.inspectReviewResult = originalInspect;
+    removeTmpDir(root);
+  }
+});
+
+test("Draft Review rejects a binding made stale during connection without another Attempt effect", async () => {
+  for (const when of ["before", "after"]) {
+    const root = createTmpDir(`definition-lifecycle-draft-review-stale-${when}-`);
+    const originalConnect = DraftReviewConnector.prototype.connect;
+    try {
+      const specId = `904-draft-review-stale-${when}`;
+      const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      const flow = new CanonicalFlowFixture({
+        flowManager: manager,
+        specId,
+        runId: `run-draft-review-stale-${when}`,
+        execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+      }).create().registerActive();
+      flow.activate("draft");
+      manager.confirmCurrentAttempt({
+        specId,
+        artifactWrites: [{
+          logicalKey: "draft", mediaType: "application/json",
+          bytes: Buffer.from(`${JSON.stringify(canonicalDraftDocument(), null, 2)}\n`, "utf8"),
+        }],
+      });
+      flow.activate("draft-questions-review");
+      claimDraftQuestionsReviewExecution(manager, specId);
+      const result = attachCanonicalCommandResultArtifact({
+        result: "ok", artifacts: { phase: "draft-questions", verdict: "PASS" },
+      }, { logicalKey: "draft.questions.review", payload: {} });
+      class PublishedDraftReviewCommand extends Command {
+        static outputMode = "envelope";
+        execute() { return result; }
+      }
+      let concurrentState = null;
+      let concurrentActivities = null;
+      DraftReviewConnector.prototype.connect = async function () {
+        const changeAttempt = () => {
+          manager.failCurrentAttempt({
+            specId,
+            failure: {
+              category: "tooling", code: "CONCURRENT_REVIEW_FAILURE",
+              message: "another execution stopped the review", retryable: false, retryKind: null,
+            },
+            result: {
+              outcome: "failed", summary: "another execution stopped the review",
+              confirmedAt: new Date().toISOString(), artifactRefs: [],
+            },
+          });
+          concurrentState = manager.canonicalState(specId).toJSON();
+          concurrentActivities = manager.activityLedger(specId).length;
+        };
+        if (when === "before") changeAttempt();
+        const binding = await originalConnect.call(this);
+        if (when === "after") changeAttempt();
+        return binding;
+      };
+      const envelope = await dispatchRegistryCommand({
+        root, manager, specId, commandName: "review", CommandClass: PublishedDraftReviewCommand,
+      });
+      assert.equal(envelope.ok, false, when);
+      assert.equal(envelope.errors.some((error) => error.code === "DRAFT_REVIEW_ADMISSION_REFUSED"), true, when);
+      assert.deepEqual(manager.canonicalState(specId).toJSON(), concurrentState, when);
+      assert.equal(manager.activityLedger(specId).length, concurrentActivities, when);
+      assert.equal(manager.activityLedger(specId).filter((entry) => (
+        entry.nodeId === "draft-questions-review"
+        && entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication"
+      )).length, 0, when);
+    } finally {
+      DraftReviewConnector.prototype.connect = originalConnect;
+      removeTmpDir(root);
+    }
+  }
+});
+
+test("Draft Review execution admission refuses a changed work unit without dispatcher tooling fallback", async () => {
+  const root = createTmpDir("definition-lifecycle-draft-review-claim-mismatch-");
+  try {
+    const specId = "904-draft-review-claim-mismatch";
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const flow = new CanonicalFlowFixture({
+      flowManager: manager,
+      specId,
+      runId: "run-draft-review-claim-mismatch",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive();
+    flow.activate("draft");
+    manager.confirmCurrentAttempt({
+      specId,
+      artifactWrites: [{
+        logicalKey: "draft", mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(canonicalDraftDocument(), null, 2)}\n`, "utf8"),
+      }],
+    });
+    flow.activate("draft-questions-review");
+    claimDraftQuestionsReviewExecution(manager, specId);
+    const before = manager.canonicalState(specId).toJSON();
+    const activities = manager.activityLedger(specId).length;
+    let providerCalls = 0;
+    class ReviewExecutionCommand extends RunReviewCommand {
+      constructor() {
+        super({
+          resolveTreeSha: () => "a".repeat(40),
+          resolveTargetStateDigest: () => "b".repeat(64),
+          runCommand() { providerCalls += 1; },
+        });
+      }
+      execute(ctx) { return super.execute({ ...ctx, phase: "draft" }); }
+    }
+    const envelope = await dispatchRegistryCommand({
+      root, manager, specId, commandName: "review", CommandClass: ReviewExecutionCommand,
+    });
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.errors[0].code, "DRAFT_REVIEW_EXECUTION_BINDING_MISMATCH", JSON.stringify(envelope.errors));
+    assert.equal(envelope.data.failureKind, "step-admission");
+    assert.equal(providerCalls, 0);
+    assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
+    assert.equal(manager.activityLedger(specId).length, activities);
+  } finally {
     removeTmpDir(root);
   }
 });

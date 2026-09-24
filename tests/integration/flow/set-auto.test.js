@@ -172,14 +172,7 @@ describe("flow set auto", () => {
     const selected = await new DraftRefineStep(new DraftService({
       flowManager: reloaded,
       binding,
-      executionCheckpointer: (stepResult, settlement, selectedBinding) => (
-        reloaded.checkpointDraftStepExecution({
-          binding: selectedBinding,
-          stepResult,
-          settlement,
-          executionBinding,
-        })
-      ),
+      executionBinding,
     })).execute();
 
     assert.equal(selected.kind, "draft-refine-worker-required");

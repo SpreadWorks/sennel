@@ -43,6 +43,7 @@ import {
 import { FLOW_COMMANDS } from "../../../../src/flow/registry.js";
 import { ReviewService } from "../../../../src/flow/services/review-service.js";
 import { CanonicalDraftReviewSource } from "../../../../src/flow/lib/canonical-review-artifacts.js";
+import { DraftReviewConnector } from "../../../../src/flow/engine/connectors/draft/draft-review-connector.js";
 import {
   DraftCoverageReviewExecutionRequiredResult,
   StepErrorResult,
@@ -1049,7 +1050,7 @@ it("keeps a failed Draft review on the same Attempt and checkpoints its next gen
   }
 });
 
-it("replays an exact Draft review checkpoint by claiming its reserved generation once", async () => {
+it("recovers a committed Draft review checkpoint after a lost response, then claims its generation once", async () => {
   const root = createTmpDir("draft-review-checkpoint-replay-");
   const specId = "524-draft-review-checkpoint-replay";
   try {
@@ -1063,12 +1064,23 @@ it("replays an exact Draft review checkpoint by claiming its reserved generation
       inputDigest: value.manifest.inputDigest,
       target: new DraftReviewExecutionTargetIdentity(value.manifest.target.toJSON()),
     });
-    value.manager.checkpointDraftStepExecution({
-      binding: value.binding,
-      stepResult: executionResult,
-      settlement: settleDraftStepResult(executionResult.stepId, executionResult),
-      executionBinding,
+    const source = new CanonicalDraftReviewSource({
+      flowManager: value.manager, state: value.state, phase: "draft-questions",
     });
+    const stepBinding = await new DraftReviewConnector(source).connect();
+    const checkpoint = value.manager.checkpointDraftStepExecution.bind(value.manager);
+    value.manager.checkpointDraftStepExecution = (input) => {
+      checkpoint(input);
+      throw new Error("checkpoint response was lost after durable write");
+    };
+    const receipt = await new ReviewService({
+      flowManager: value.manager, binding: stepBinding, executionBinding,
+    }).persistStepResult(executionResult);
+    assert.equal(receipt.executionLifecycle.phase, "checkpoint");
+    assert.equal(value.manager.activityLedger(specId).filter((entry) => (
+      entry.nodeId === "draft-questions-review"
+      && entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "checkpoint"
+    )).length, 1);
     const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     const before = reloaded.canonicalState(specId).attempt;
     const beforeActivities = reloaded.activityLedger(specId).length;
@@ -1284,6 +1296,131 @@ it("retains a sealed claimed Draft review work unit when rebuilt identity mismat
     for (const [file, bytes] of retained) assert.deepEqual(fs.readFileSync(file), bytes);
     assert.deepEqual(reloaded.canonicalState(specId).toJSON(), beforeState);
     assert.deepEqual(reloaded.activityLedger(specId), beforeActivities);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("refuses a Draft review whose Attempt changes during direct execution admission", async () => {
+  const root = createTmpDir("draft-review-direct-stale-attempt-");
+  const specId = "524-draft-review-direct-stale-attempt";
+  const originalConnect = DraftReviewConnector.prototype.connect;
+  try {
+    const { manager } = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-direct-stale-attempt", phase: "draft-questions",
+    });
+    let concurrentState;
+    let concurrentActivities;
+    DraftReviewConnector.prototype.connect = async function () {
+      const binding = await originalConnect.call(this);
+      manager.failCurrentAttempt({
+        specId,
+        failure: {
+          category: "tooling", code: "CONCURRENT_REVIEW_FAILURE",
+          message: "another execution stopped the review", retryable: false, retryKind: null,
+        },
+        result: {
+          outcome: "failed", summary: "another execution stopped the review",
+          confirmedAt: new Date().toISOString(), artifactRefs: [],
+        },
+      });
+      concurrentState = manager.canonicalState(specId).toJSON();
+      concurrentActivities = manager.activityLedger(specId).length;
+      binding.assertCurrent();
+      return binding;
+    };
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() { providerCalls += 1; },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId), config: {},
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.errors[0].code, "DRAFT_REVIEW_EXECUTION_ADMISSION_REJECTED", JSON.stringify(result.errors));
+    assert.equal(result.data.failureKind, "step-admission");
+    assert.equal(providerCalls, 0);
+    assert.deepEqual(manager.canonicalState(specId).toJSON(), concurrentState);
+    assert.equal(manager.activityLedger(specId).length, concurrentActivities);
+    assert.equal(manager.canonicalState(specId).attempt.failure.code, "CONCURRENT_REVIEW_FAILURE");
+  } finally {
+    DraftReviewConnector.prototype.connect = originalConnect;
+    removeTmpDir(root);
+  }
+});
+
+it("preserves a Draft review Attempt when its direct execution checkpoint cannot persist", async () => {
+  const root = createTmpDir("draft-review-direct-checkpoint-failure-");
+  const specId = "524-draft-review-direct-checkpoint-failure";
+  try {
+    const { manager } = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-direct-checkpoint-failure", phase: "draft-questions",
+    });
+    const before = manager.canonicalState(specId).toJSON();
+    const activities = manager.activityLedger(specId).length;
+    manager.checkpointDraftStepExecution = () => { throw new Error("checkpoint write failed"); };
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() { providerCalls += 1; },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId), config: {},
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.errors[0].code, "STEP_RESULT_ERROR_PERSISTENCE_FAILED");
+    assert.equal(result.data.failureKind, "step-persistence");
+    assert.equal(providerCalls, 0);
+    assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
+    assert.equal(manager.activityLedger(specId).length, activities);
+  } finally {
+    removeTmpDir(root);
+  }
+});
+
+it("refuses a Draft review checkpoint made stale by a concurrent canonical Attempt change", async () => {
+  const root = createTmpDir("draft-review-checkpoint-late-conflict-");
+  const specId = "524-draft-review-checkpoint-late-conflict";
+  try {
+    const { manager } = setupDraftReviewExecutionReentry({
+      root, specId, runId: "run-draft-review-checkpoint-late-conflict", phase: "draft-questions",
+    });
+    const checkpoint = manager.checkpointDraftStepExecution.bind(manager);
+    let concurrentState;
+    let concurrentActivities;
+    manager.checkpointDraftStepExecution = (input) => {
+      manager.failCurrentAttempt({
+        specId,
+        failure: {
+          category: "tooling", code: "CONCURRENT_REVIEW_FAILURE",
+          message: "another execution stopped the review", retryable: false, retryKind: null,
+        },
+        result: {
+          outcome: "failed", summary: "another execution stopped the review",
+          confirmedAt: new Date().toISOString(), artifactRefs: [],
+        },
+      });
+      concurrentState = manager.canonicalState(specId).toJSON();
+      concurrentActivities = manager.activityLedger(specId).length;
+      return checkpoint(input);
+    };
+    let providerCalls = 0;
+    const result = await new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand() { providerCalls += 1; },
+    }).execute({
+      root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId), config: {},
+    });
+    assert.equal(result.errors[0].code, "DRAFT_REVIEW_EXECUTION_ADMISSION_REJECTED");
+    assert.equal(result.data.failureKind, "step-admission");
+    assert.equal(providerCalls, 0);
+    assert.deepEqual(manager.canonicalState(specId).toJSON(), concurrentState);
+    assert.equal(manager.activityLedger(specId).length, concurrentActivities);
   } finally {
     removeTmpDir(root);
   }

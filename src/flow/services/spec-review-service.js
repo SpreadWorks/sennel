@@ -3,6 +3,7 @@ import {
   DraftReviewExecutionBinding,
   DraftReviewExecutionClaim,
   DraftReviewExecutionTargetIdentity,
+  DraftStepExecutionLifecycle,
   ReviewProviderRequestIdentity,
   settleSpecStepResult,
 } from "../definition.js";
@@ -13,13 +14,17 @@ import {
   SpecReviewRejectedResult,
   StepResult,
 } from "../engine/step-result.js";
-import { stepResultDigest } from "../engine/step-result.js";
 import { SpecReviewStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
-import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
+import { recoverStepSettlementReceipt } from "../lib/definition-lifecycle-failure.js";
+import { StepAdmissionRefusal } from "../lib/step-admission-refusal.js";
+import { ReviewService } from "./review-service.js";
 import { ReviewWorkUnitManifest } from "../lib/review-work-unit.js";
 import {
   CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
+  ActivityReviewPublication,
+  NodeResult,
+  assertDraftSettlementReceiptTransition,
 } from "../lib/current-flow-state.js";
 
 export class SpecReviewExecutionAdmission {
@@ -39,7 +44,7 @@ export class SpecReviewService {
     if (!(manifest instanceof ReviewWorkUnitManifest)
       || manifest.runId !== state.runId || manifest.specId !== state.specId
       || manifest.attemptId !== state.attempt?.id) {
-      throw new TypeError("Spec Review execution requires its exact work unit manifest");
+      throw new StepAdmissionRefusal("Spec Review execution requires its exact work unit manifest");
     }
     const binding = new SpecReviewStepBinding({ flowManager, specId: state.specId });
     const executionState = flowManager.draftStepExecutionState({ binding });
@@ -54,14 +59,14 @@ export class SpecReviewService {
           manifestDigest: manifest.digest, inputDigest: manifest.inputDigest, target,
         });
     if (current !== null && !current.binding.equals(executionBinding)) {
-      throw new Error("the rebuilt Spec Review work unit differs from its durable execution binding");
+      throw new StepAdmissionRefusal("the rebuilt Spec Review work unit differs from its durable execution binding");
     }
     if (current !== null && !["checkpoint", "claimed"].includes(current.phase)) {
-      throw new Error("the Spec Review execution already has a durable publication");
+      throw new StepAdmissionRefusal("the Spec Review execution already has a durable publication");
     }
     const request = new ReviewProviderRequestIdentity({ skipConfirm });
     if (current?.phase === "claimed" && !current.claim.request?.equals(request)) {
-      throw new Error("the Spec Review provider request differs from its durable claim");
+      throw new StepAdmissionRefusal("the Spec Review provider request differs from its durable claim");
     }
     let identity = executionState.executionIdentity();
     if (current === null) {
@@ -75,7 +80,8 @@ export class SpecReviewService {
       }
       identity = flowManager.draftStepExecutionState({ binding }).executionIdentity();
     }
-    flowManager.claimDraftStepExecution({
+    ReviewService.claimExecution({
+      flowManager,
       binding,
       stepResult: identity.stepResult,
       settlement: identity.settlement,
@@ -101,11 +107,10 @@ export class SpecReviewService {
     try {
       return flowManager.settleSpecStepResult(input);
     } catch (error) {
-      const receipt = flowManager.findStepSettlementReceipt(input);
-      if (receipt !== null) return { state: flowManager.canonicalState(specId), receipt };
       if (error instanceof CurrentFlowStateConflictError
         || error instanceof CurrentFlowStateInvariantError) throw error;
-      throw new StepPersistenceFailure(error);
+      const receipt = recoverStepSettlementReceipt(flowManager, input, error);
+      return { state: flowManager.canonicalState(specId), receipt };
     }
   }
 
@@ -160,27 +165,61 @@ export class SpecReviewService {
     if (state?.current?.at(-1) !== "spec-triage"
       && !(state?.current === null && state.nextAction()?.nodeId === "spec-triage")) return null;
     const activities = flowManager.activityLedger(state.specId);
-    const terminal = activities.findLast((entry) => (
+    const terminalActivity = activities.findLast((entry) => (
       entry.nodeId === "spec-review"
       && entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "terminal"
-    ))?.result?.draftSettlementReceipt ?? null;
-    if (terminal === null || terminal.binding.runId !== state.runId
-      || terminal.targetStepId !== "spec-triage") return null;
+    )) ?? null;
+    const terminalResult = terminalActivity === null ? null : new NodeResult(terminalActivity.result);
+    const terminal = terminalResult?.draftSettlementReceipt ?? null;
+    if (terminal === null) return null;
+    if (terminal.binding.runId !== state.runId
+      || terminal.binding.specId !== state.specId
+      || terminal.binding.stepId !== "spec-review"
+      || terminal.binding.attemptId !== terminalActivity.attemptId
+      || terminal.binding.attemptSequence !== terminalActivity.sequence
+      || state.findNode("spec-review")?.result?.draftSettlementReceipt?.id !== terminal.id
+      || terminal.targetStepId !== "spec-triage") {
+      throw new Error("Spec Review terminal replay has no exact terminal settlement");
+    }
     const publication = activities.findLast((entry) => {
       const receipt = entry.result?.draftSettlementReceipt;
-      return receipt?.executionLifecycle?.phase === "publication"
+      return entry.nodeId === "spec-review"
+        && receipt?.executionLifecycle?.phase === "publication"
+        && receipt.binding.runId === terminal.binding.runId
+        && receipt.binding.specId === terminal.binding.specId
+        && receipt.binding.stepId === terminal.binding.stepId
         && receipt.binding.attemptId === terminal.binding.attemptId
         && receipt.binding.attemptSequence === terminal.binding.attemptSequence;
     });
+    if (publication !== undefined) {
+      const publishedResult = new NodeResult(publication.result);
+      const publishedReceipt = publishedResult.draftSettlementReceipt;
+      if (publication.attemptId !== terminal.binding.attemptId
+        || publication.sequence !== terminal.binding.attemptSequence
+        || publishedReceipt.executionLifecycle?.phase !== "publication") {
+        throw new CurrentFlowStateConflictError("Spec Review publication does not match its terminal Attempt");
+      }
+      assertDraftSettlementReceiptTransition([publishedReceipt], terminal);
+    }
     const read = flowManager.readCurrentSpecReview({
       specId: state.specId, consumerNodeId: "spec-triage",
     });
-    if (read === null || publication?.id !== read.descriptor?.activityId) {
+    if (read === null || publication?.id !== read.descriptor?.activityId
+      || read.descriptor.hash !== read.review.digest
+      || publication.reviewPublication?.stage !== "spec-review") {
       throw new Error("Spec Review terminal replay has no exact canonical publication");
     }
-    const { specReviewResult } = await import("../steps/spec/spec-review.js");
-    const selected = specReviewResult(read.review);
-    if (selected.kind !== terminal.resultKind || stepResultDigest(selected) !== terminal.resultDigest) {
+    new ActivityReviewPublication(publication.reviewPublication).assertReview(read.review, {
+      specId: state.specId,
+      revision: read.review.identity.revision.value,
+      bytes: read.bytes,
+    });
+    const selected = terminalResult.stepResult;
+    const settlement = settleSpecStepResult("spec-review", selected);
+    if (settlement.kind !== terminal.settlementKind
+      || settlement.targetStepId !== terminal.targetStepId
+      || settlement.connector.name !== terminal.connector?.name
+      || JSON.stringify(settlement.effects.toJSON()) !== JSON.stringify(terminal.effects?.toJSON())) {
       throw new Error("Spec Review terminal replay conflicts with its canonical Result");
     }
     return this.resultFromStepResult(selected, read.review.digest);
@@ -221,31 +260,29 @@ export class SpecReviewService {
       throw new TypeError("SpecReviewService requires its Step Result");
     }
     const settlement = settleSpecStepResult(this.binding.stepId, stepResult);
+    if (this.executionBinding !== null && !(settlement instanceof DraftExecutionSettlement)) {
+      throw new TypeError("Spec Review execution requires its Execution settlement");
+    }
+    const input = {
+      binding: this.binding,
+      stepResult,
+      settlement,
+      ...(this.executionBinding === null ? {} : {
+        executionLifecycle: DraftStepExecutionLifecycle.checkpoint(this.executionBinding),
+      }),
+    };
     try {
       const committed = this.executionBinding === null
-        ? this.flowManager.settleSpecStepResult({
-          binding: this.binding,
-          stepResult,
-          settlement,
-        })
+        ? this.flowManager.settleSpecStepResult(input)
         : this.flowManager.checkpointDraftStepExecution({
           binding: this.binding,
           stepResult,
           settlement,
           executionBinding: this.executionBinding,
         });
-      if (this.executionBinding !== null && !(settlement instanceof DraftExecutionSettlement)) {
-        throw new TypeError("Spec Review execution requires its Execution settlement");
-      }
       return committed.receipt;
     } catch (error) {
-      const receipt = this.flowManager.findStepSettlementReceipt({
-        binding: this.binding,
-        stepResult,
-        settlement,
-      });
-      if (receipt !== null) return receipt;
-      throw new StepPersistenceFailure(error);
+      return recoverStepSettlementReceipt(this.flowManager, input, error);
     }
   }
 }

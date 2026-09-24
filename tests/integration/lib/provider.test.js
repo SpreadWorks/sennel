@@ -238,14 +238,14 @@ describe("ProviderRegistry", () => {
 });
 
 describe("built-in agent routing", () => {
-  it("routes Codex work by GPT-5.6 tier and explicit effort", () => {
+  it("routes Codex work by GPT-6 tier and explicit effort", () => {
     const profiles = defaultAgentProfiles();
     const codexOnly = profiles["codex-only"];
 
-    assert.equal(codexOnly["docs.readme"], "codex/gpt-5.6-luna-low");
-    assert.equal(codexOnly["docs.text"], "codex/gpt-5.6-terra-low");
-    assert.equal(codexOnly["flow.spec.gate"], "codex/gpt-5.6-terra-medium");
-    assert.equal(codexOnly["flow.impl.review.final"], "codex/gpt-5.6-sol-medium");
+    assert.equal(codexOnly["docs.readme"], "codex/gpt-6-luna-low");
+    assert.equal(codexOnly["docs.text"], "codex/gpt-6-sol-low");
+    assert.equal(codexOnly["flow.spec.gate"], "codex/gpt-6-sol-medium");
+    assert.equal(codexOnly["flow.impl.review.final"], "codex/gpt-6-astra-medium");
 
     for (const profile of Object.values(profiles)) {
       for (const providerKey of Object.values(profile)) {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { DraftRepairCandidate } from "../../../src/flow/steps/draft/draft-repair-candidate.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 
@@ -153,10 +154,11 @@ export class DraftGateRepairScenario {
   apply(payload) {
     fs.writeFileSync(this.request.payloadPath("draft-gate-repair.json"), `${JSON.stringify(payload, null, 2)}\n`);
     sealWorkerArtifactHandoff({ requestPath: this.request.requestPath, invocationId: this.request.dispatchInvocationId });
-    const preparation = this.coordinator.prepareDraftWorker({
+    let preparation = this.coordinator.prepareDraftWorker({
       ctx: this.ctx,
       request: this.request,
     });
+    preparation = preparation.adoptRepairCandidate(new DraftRepairCandidate(preparation.facts.repairInput));
     const binding = new DraftWorkerStepBinding({ request: this.request });
     const stepResult = preparation.planGateRepairOutcome.disposition === "rejected-no-progress"
       ? new DraftGateRepairCarryForwardResult()

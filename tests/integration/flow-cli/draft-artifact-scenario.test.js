@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
@@ -16,6 +17,11 @@ import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infr
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { dispatchContainer, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+
+function assertArtifactIntegrity(artifact) {
+  assert.equal(crypto.createHash("sha256").update(artifact.bytes).digest("hex"), artifact.descriptor.hash);
+  assert.equal(artifact.bytes.length, artifact.descriptor.size);
+}
 
 it("produces Draft through registered Review/Gate commands and reloads its exact findings for Spec and Acceptance", async () => {
   const root = fixtureRepository("draft-artifact-scenario-");
@@ -44,12 +50,18 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
       observed: `Required Draft behavior ${index + 1} remains unresolved.`,
     }));
     const requests = [];
-    let specBeforeRefusal = null;
+    const specRefusalSnapshots = [];
+    let activeFlowManager = flowManager;
+    let gateCalls = 0;
+    const gateAttemptIds = [];
     const gateAttempts = new Set();
     const reviewSteps = [];
+    const reviewAttempts = [];
     gateAgentLookup = installGateProviderFake((_prompt, options) => {
-      const state = flowManager.canonicalState(specId);
+      gateCalls += 1;
+      const state = activeFlowManager.canonicalState(specId);
       assert.equal(state.current.at(-1), "draft-gate");
+      gateAttemptIds.push(state.attempt.id);
       gateAttempts.add(state.attempt.id);
       const knownIds = options.jsonSchema?.properties?.observations?.items?.properties?.requirementRef?.enum ?? [];
       return JSON.stringify({ observations: knownIds.includes(sharedGuardrail) ? observations : [] });
@@ -59,9 +71,11 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
       if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) {
         return originalSpawnSync(command, args, options);
       }
-      const step = flowManager.canonicalState(specId).current.at(-1);
+      const state = flowManager.canonicalState(specId);
+      const step = state.current.at(-1);
       assert.ok(["draft-questions-review", "draft-coverage-review"].includes(step));
       reviewSteps.push(step);
+      reviewAttempts.push({ step, attemptId: state.attempt.id });
       const work = ReviewWorkUnit.fromEnvironment(options.env);
       const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
       fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), workerArtifactJson({
@@ -83,7 +97,8 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
         if (request.stepId === "draft") {
           fs.writeFileSync(requestPayloadPath(request, "draft.json"), workerArtifactJson(draftDocument));
         } else if (request.stepId === "spec") {
-          specBeforeRefusal = flowManager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec" });
+          const spec = activeFlowManager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec" });
+          specRefusalSnapshots.push({ descriptor: structuredClone(spec.descriptor), bytes: Buffer.from(spec.bytes) });
           // An unavailable external provider is a real refusal boundary. Draft
           // is complete; the production dispatcher must leave Spec unpublished.
           throw new AgentAuthenticationFailure({ message: "Spec provider authentication is unavailable." });
@@ -110,17 +125,24 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
         return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
       },
     };
-    const dispatcher = new RunDispatchCommand({ agent });
-    dispatcher.container = dispatchContainer({ root, flowManager, agent });
-    const ctx = {
-      root, mainRoot: root, executionRoot: root, specId, flowManager,
-      flowState: flowManager.loadReadOnly(specId),
-      expectBinding: FlowTargetBinding.capture({
-        flowState: flowManager.loadReadOnly(specId), mainRoot: root, authorityRoot: root,
-      }).serialize(),
-      _envelopeType: "run", _envelopeKey: "dispatch",
+    const makeDispatcher = (manager) => {
+      const dispatcher = new RunDispatchCommand({ agent });
+      dispatcher.container = dispatchContainer({ root, flowManager: manager, agent });
+      const flowState = manager.loadReadOnly(specId);
+      return {
+        dispatcher,
+        ctx: {
+          root, mainRoot: root, executionRoot: root, specId, flowManager: manager,
+          flowState,
+          expectBinding: FlowTargetBinding.capture({
+            flowState, mainRoot: root, authorityRoot: root,
+          }).serialize(),
+          _envelopeType: "run", _envelopeKey: "dispatch",
+        },
+      };
     };
-    const result = await dispatcher.execute(ctx);
+    const firstDispatch = makeDispatcher(flowManager);
+    const result = await firstDispatch.dispatcher.execute(firstDispatch.ctx);
     assert.equal(result.ok, false);
     assert.deepEqual(result.errors.map((entry) => entry.code), ["FLOW_ARTIFACT_HANDOFF_MISSING"]);
     assert.equal(result.data.agentFailure.code, "AGENT_AUTHENTICATION_FAILED");
@@ -130,8 +152,46 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     assert.equal(gateAttempts.size, 2);
 
     const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    activeFlowManager = reloaded;
     const draft = reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "spec" });
+    assertArtifactIntegrity(draft);
     assert.deepEqual(JSON.parse(draft.bytes.toString("utf8")), draftDocument);
+    const questionsReview = reloaded.readArtifact({
+      specId, logicalKey: "draft.questions.review", consumerNodeId: "draft-questions-triage",
+    });
+    const coverageReview = reloaded.readArtifact({
+      specId, logicalKey: "draft.coverage.review", consumerNodeId: "draft-coverage-triage",
+    });
+    const gateArtifact = reloaded.readArtifact({ specId, logicalKey: "draft.gate", consumerNodeId: "spec" });
+    for (const artifact of [questionsReview, coverageReview, gateArtifact]) assertArtifactIntegrity(artifact);
+    const questionsHistory = JSON.parse(questionsReview.bytes.toString("utf8"));
+    const coverageHistory = JSON.parse(coverageReview.bytes.toString("utf8"));
+    const gateHistory = JSON.parse(gateArtifact.bytes.toString("utf8"));
+    assert.deepEqual(questionsHistory.attempts.map((entry) => entry.attempt), [1]);
+    assert.deepEqual(coverageHistory.attempts.map((entry) => entry.attempt), [1, 2]);
+    assert.deepEqual(questionsHistory.attempts.map((entry) => entry.artifact.payload.sourceDraftRevision.digest), [draft.descriptor.hash]);
+    assert.deepEqual(coverageHistory.attempts.map((entry) => entry.artifact.payload.sourceDraftRevision.digest), [draft.descriptor.hash, draft.descriptor.hash]);
+    assert.equal(gateHistory.attempts.length, 2);
+    const finalGate = gateHistory.attempts.at(-1).artifact.payload;
+    const gateObservations = finalGate.artifacts.nextAction.diagnosis.observations;
+    assert.deepEqual(gateObservations.map((entry) => [entry.requirementRef, entry.where.locator, entry.observed]),
+      observations.map((entry) => [entry.requirementRef, entry.where.locator, entry.observed]));
+    const canonical = reloaded.canonicalState(specId);
+    for (const [stepId, expectedKind, expectedTarget, attempt] of [
+      ["draft-questions-review", "draft-questions-review-passed", "draft-refine", 1],
+      ["draft-coverage-review", "draft-coverage-review-passed", "draft-gate", 2],
+      ["draft-gate", "draft-gate-carry-forward", "spec", 2],
+    ]) {
+      const stepResult = canonical.findNode(stepId).result;
+      assert.equal(stepResult.stepResult.kind, expectedKind);
+      assert.equal(stepResult.draftSettlementReceipt.targetStepId, expectedTarget);
+      assert.equal(stepResult.draftSettlementReceipt.binding.stepId, stepId);
+      assert.equal(stepResult.draftSettlementReceipt.binding.attemptSequence, attempt);
+      const expectedAttemptId = stepId === "draft-gate"
+        ? gateAttemptIds.at(-1)
+        : reviewAttempts.filter((entry) => entry.step === stepId).at(-1).attemptId;
+      assert.equal(stepResult.draftSettlementReceipt.binding.attemptId, expectedAttemptId);
+    }
     const persisted = JSON.parse(reloaded.readArtifact({
       specId, logicalKey: "flow.findings", consumerNodeId: "system",
     }).bytes.toString("utf8")).entries;
@@ -139,6 +199,7 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     assert.deepEqual(persisted.map((entry) => entry.sourceFindingId), [sharedGuardrail, sharedGuardrail]);
     assert.equal(new Set(persisted.map((entry) => entry.fingerprint)).size, 2);
     const gate = reloaded.artifactCatalog(specId).artifacts.find((entry) => entry.logicalKey === "draft.gate");
+    assert.equal(gate.relativePath, gateArtifact.descriptor.relativePath);
     assert.deepEqual(persisted.map((entry) => [entry.sourceStep, entry.sourceArtifact, entry.finalDisposition]),
       Array.from({ length: 2 }, () => ["draft-gate", gate.relativePath, "still_open"]));
     const activities = reloaded.activityLedger(specId);
@@ -154,17 +215,124 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     assert.deepEqual(acceptance.evidence.map((entry) => entry.sourceFinding.observations[0].observed),
       observations.map((entry) => entry.observed));
 
+    const findingsArtifact = reloaded.readArtifact({ specId, logicalKey: "flow.findings", consumerNodeId: "spec" });
+    assertArtifactIntegrity(findingsArtifact);
+    const requestCountBeforeRetry = requests.length;
+    const reviewCountBeforeRetry = reviewSteps.length;
+    const gateCallsBeforeRetry = gateCalls;
+    const gateAttemptCountBeforeRetry = gateAttempts.size;
+    const activitiesBeforeRetry = reloaded.activityLedger(specId);
+    const catalogBeforeRetry = reloaded.artifactCatalog(specId).artifacts
+      .map((entry) => structuredClone(entry.toJSON?.() ?? entry));
+    const issueLogReadBeforeRetry = reloaded.readArtifact({ specId, logicalKey: "issue.log", consumerNodeId: "spec", optional: true });
+    const issueLogBeforeRetry = issueLogReadBeforeRetry === null ? null : {
+      descriptor: structuredClone(issueLogReadBeforeRetry.descriptor),
+      bytes: Buffer.from(issueLogReadBeforeRetry.bytes),
+    };
+    const flowStateBeforeRetry = reloaded.readArtifact({ specId, logicalKey: "flow.state", consumerNodeId: "spec" });
+    const flowActivitiesBeforeRetry = reloaded.readArtifact({ specId, logicalKey: "flow.activities", consumerNodeId: "spec" });
+    const canonicalBeforeRetry = canonical.toJSON();
+    assertArtifactIntegrity(flowStateBeforeRetry);
+    assertArtifactIntegrity(flowActivitiesBeforeRetry);
+    assert.deepEqual(JSON.parse(flowStateBeforeRetry.bytes.toString("utf8")), canonicalBeforeRetry);
+    const activityLinesBeforeRetry = flowActivitiesBeforeRetry.bytes.toString("utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+    assert.deepEqual(activityLinesBeforeRetry, activitiesBeforeRetry);
+    const draftBeforeRetry = draft.descriptor;
+    const findingsBeforeRetry = findingsArtifact.descriptor;
+    const gateBeforeRetry = gateArtifact.descriptor;
+    const specBeforeRetry = reloaded.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec" });
+    const retryDispatch = makeDispatcher(reloaded);
+    const retryResult = await retryDispatch.dispatcher.execute(retryDispatch.ctx);
+    const retryActivities = reloaded.activityLedger(specId);
+    const retryActivityDelta = retryActivities.slice(activitiesBeforeRetry.length);
+    const catalogAfterRetry = reloaded.artifactCatalog(specId).artifacts
+      .map((entry) => structuredClone(entry.toJSON?.() ?? entry));
+    const issueLogAfterRetry = reloaded.readArtifact({ specId, logicalKey: "issue.log", consumerNodeId: "spec", optional: true });
+    const flowStateAfterRetry = reloaded.readArtifact({ specId, logicalKey: "flow.state", consumerNodeId: "spec" });
+    const flowActivitiesAfterRetry = reloaded.readArtifact({ specId, logicalKey: "flow.activities", consumerNodeId: "spec" });
+    assert.equal(retryResult.ok, false);
+    assert.deepEqual(retryResult.errors.map((entry) => entry.code), ["FLOW_ARTIFACT_HANDOFF_MISSING"]);
+    assert.equal(retryResult.data.agentFailure.code, "AGENT_AUTHENTICATION_FAILED");
+    assert.equal(retryResult.data.retryBudgetConsumed, false);
+    assert.deepEqual(requests.slice(requestCountBeforeRetry).map((request) => request.stepId), ["spec"]);
+    assert.equal(reviewSteps.length, reviewCountBeforeRetry);
+    assert.equal(gateCalls, gateCallsBeforeRetry);
+    assert.equal(gateAttempts.size, gateAttemptCountBeforeRetry);
+    assert.equal(retryActivityDelta.length, 2);
+    // A real failed Spec provider call records its invocation metric and one issue.log diagnostic.
+    assert.deepEqual(retryActivityDelta.map((entry) => [entry.nodeId, entry.type, entry.transition.operation]), [
+      ["flow", "metric_recorded", "record_metric"],
+      ["spec", "artifacts_published", "publish_artifacts"],
+    ]);
+    const [retryMetric, retryIssueLogPublication] = retryActivityDelta;
+    assert.equal(retryMetric.metric.phase, "spec");
+    assert.equal(retryMetric.metric.kind, "agent");
+    assert.equal(retryMetric.metric.callCount, 1);
+    assert.equal(retryMetric.metric.responseChars, 0);
+    assert.equal(retryIssueLogPublication.attemptId, canonicalBeforeRetry.attempt.id);
+    assert.equal(retryIssueLogPublication.sequence, canonicalBeforeRetry.attempt.sequence);
+    assert.deepEqual(retryIssueLogPublication.references.artifacts, []);
+    assert.ok(issueLogBeforeRetry);
+    assert.ok(issueLogAfterRetry);
+    assertArtifactIntegrity(flowStateAfterRetry);
+    assertArtifactIntegrity(flowActivitiesAfterRetry);
+    assert.equal(flowStateAfterRetry.descriptor.activityId, retryIssueLogPublication.id);
+    assert.equal(flowActivitiesAfterRetry.descriptor.activityId, retryIssueLogPublication.id);
+    assert.equal(issueLogAfterRetry.descriptor.activityId, retryIssueLogPublication.id);
+    const expectedCanonicalAfterRetry = structuredClone(canonicalBeforeRetry);
+    expectedCanonicalAfterRetry.confirmationOrder += 2;
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), expectedCanonicalAfterRetry);
+    assert.deepEqual(retryActivities.slice(0, activitiesBeforeRetry.length), activitiesBeforeRetry);
+    assert.equal(retryActivities.length, activitiesBeforeRetry.length + 2);
+    assert.deepEqual(JSON.parse(flowStateAfterRetry.bytes.toString("utf8")), expectedCanonicalAfterRetry);
+    const activityLinesAfterRetry = flowActivitiesAfterRetry.bytes.toString("utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+    assert.deepEqual(activityLinesAfterRetry, retryActivities);
+    assert.deepEqual(activityLinesAfterRetry.slice(0, activitiesBeforeRetry.length), activitiesBeforeRetry);
+    const catalogChangedLogicalKeys = catalogAfterRetry.filter((after) => {
+      const before = catalogBeforeRetry.find((entry) => entry.relativePath === after.relativePath);
+      return before === undefined || JSON.stringify(after) !== JSON.stringify(before);
+    }).map((entry) => entry.logicalKey).sort();
+    assert.deepEqual(catalogChangedLogicalKeys, ["flow.activities", "flow.state", "issue.log"]);
+    assert.equal(catalogAfterRetry.length, catalogBeforeRetry.length);
+    assert.deepEqual(catalogAfterRetry.filter((entry) => !["flow.activities", "flow.state", "issue.log"].includes(entry.logicalKey)),
+      catalogBeforeRetry.filter((entry) => !["flow.activities", "flow.state", "issue.log"].includes(entry.logicalKey)));
+    assertArtifactIntegrity(issueLogAfterRetry);
+    assert.notEqual(issueLogAfterRetry.descriptor.hash, issueLogBeforeRetry.descriptor.hash);
+    const priorIssueEntries = JSON.parse(issueLogBeforeRetry.bytes.toString("utf8")).entries;
+    const retryIssueEntries = JSON.parse(issueLogAfterRetry.bytes.toString("utf8")).entries;
+    assert.deepEqual(retryIssueEntries.slice(0, priorIssueEntries.length), priorIssueEntries);
+    assert.equal(retryIssueEntries.length, priorIssueEntries.length + 1);
+    assert.equal(retryIssueEntries.at(-1).step, "spec");
+    assert.equal(retryIssueEntries.at(-1).issueLogId,
+      `worker-handoff-${requests.at(-1).actionDigest}-missing`);
+    assert.match(retryIssueEntries.at(-1).reason, /^Worker artifact handoff missing:/);
+    assert.deepEqual(reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "spec" }).descriptor, draftBeforeRetry);
+    assert.deepEqual(reloaded.readArtifact({ specId, logicalKey: "flow.findings", consumerNodeId: "spec" }).descriptor, findingsBeforeRetry);
+    assert.deepEqual(reloaded.readArtifact({ specId, logicalKey: "draft.gate", consumerNodeId: "spec" }).descriptor, gateBeforeRetry);
+    const specAfterRetry = reloaded.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec" });
+    assert.equal(specAfterRetry.descriptor.hash, specBeforeRetry.descriptor.hash);
+    assert.deepEqual(specAfterRetry.bytes, specBeforeRetry.bytes);
+    assert.equal(specRefusalSnapshots.length, 2);
+    for (const snapshot of specRefusalSnapshots) {
+      assert.deepEqual(specAfterRetry.descriptor, snapshot.descriptor);
+      assert.deepEqual(specAfterRetry.bytes, snapshot.bytes);
+    }
+
     const request = requests.at(-1);
-    assert.deepEqual(requestInput(request, "draft.json").document, draftDocument);
-    assert.equal(requestInput(request, "draft.json").digest, draft.descriptor.hash);
-    const entries = requestInput(request, "flow-findings.json").document.entries;
+    const requestDraft = requestInput(request, "draft.json");
+    assert.deepEqual(requestDraft.document, draftDocument);
+    assert.equal(requestDraft.digest, draft.descriptor.hash);
+    const findingsInput = requestInput(request, "flow-findings.json");
+    assert.match(findingsInput.digest, /^[a-f0-9]{64}$/);
+    assert.ok(Number.isSafeInteger(findingsInput.byteLength) && findingsInput.byteLength > 0);
+    const entries = findingsInput.document.entries;
     assert.deepEqual(entries.map(({ sourceObservation, ...entry }) => entry), persisted);
     assert.deepEqual(entries.map((entry) => entry.sourceObservation.observations[0].observed),
       observations.map((entry) => entry.observed));
     assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "spec");
     const specAfterRefusal = reloaded.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec" });
-    assert.equal(specAfterRefusal.descriptor.hash, specBeforeRefusal.descriptor.hash);
-    assert.deepEqual(specAfterRefusal.bytes, specBeforeRefusal.bytes);
+    assert.deepEqual(specAfterRefusal.descriptor, specRefusalSnapshots[0].descriptor);
+    assert.deepEqual(specAfterRefusal.bytes, specRefusalSnapshots[0].bytes);
     assert.equal(reloaded.activityLedger(specId).some((entry) => entry.result?.stepResult?.kind === "spec-created"), false);
 
   } finally {

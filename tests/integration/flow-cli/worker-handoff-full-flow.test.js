@@ -1122,24 +1122,16 @@ describe("deterministic full Flow worker handoff", () => {
         requestPath: unchangedHandoff.requestPath,
         invocationId: unchangedHandoff.dispatchInvocationId,
       });
-      let sealedFacts = null;
+      let selectedFacts = null;
       let handoffApplication = null;
       let storeApplication = null;
-      const prepareDraftWorker = coordinator.prepareDraftWorker.bind(coordinator);
-      coordinator.prepareDraftWorker = (input) => {
-        const preparation = prepareDraftWorker(input);
-        if (input.request === unchangedHandoff) {
-          sealedFacts = preparation.facts.draftCompletionFacts;
-          assert.ok(sealedFacts instanceof DraftCompletionFacts);
-        }
-        return preparation;
-      };
       const commitDraftWorker = coordinator.commitDraftWorker.bind(coordinator);
       coordinator.commitDraftWorker = (input) => {
         if (input.request === unchangedHandoff) {
           handoffApplication = input.draftCompletionApplication;
           assert.ok(handoffApplication instanceof DraftCompletionSettlementApplication);
-          assert.equal(handoffApplication.facts, sealedFacts);
+          selectedFacts = handoffApplication.facts;
+          assert.ok(selectedFacts instanceof DraftCompletionFacts);
         }
         return commitDraftWorker(input);
       };
@@ -1156,6 +1148,7 @@ describe("deterministic full Flow worker handoff", () => {
       assert.equal(unchanged.stepResult.kind, "draft-coverage-repair-unchanged");
       assert.equal(storeApplication, handoffApplication);
       assert.ok(storeApplication instanceof DraftCompletionSettlementApplication);
+      assert.equal(storeApplication.facts, selectedFacts);
       assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "draft-gate");
       reloaded.beginNextAction(specId);
       const gateResult = new CanonicalGatePromotion({

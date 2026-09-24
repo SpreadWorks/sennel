@@ -11,6 +11,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { DraftGateRepairSelection } from "../steps/draft/draft-gate-repair-selection.js";
 import {
   AgentFailurePersistenceContract,
   AgentProcessStopEvidence,
@@ -2108,6 +2109,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
     requireExactFields(value, new Set([
       "id", "binding", "resultKind", "resultType", "resultDigest", "settlementKind",
       "targetStepId", "effects", "connector", "publicationDigest", "executionLifecycle", "awaitQuestion",
+      ...(value.binding?.stepId === "draft-gate-repair" && value.executionLifecycle?.phase === "publication" ? ["draftGateRepairSelection"] : []),
     ]), "result.draftSettlementReceipt");
     if (!/^[a-f0-9]{64}$/.test(value.id)) {
       throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt.id is invalid");
@@ -2202,6 +2204,9 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       || (phase === "terminal" && ["execution", "await"].includes(this.settlementKind))) {
       throw new CurrentFlowStateInvariantError("Draft execution lifecycle phase does not match its Settlement");
     }
+    this.draftGateRepairSelection = value.draftGateRepairSelection === undefined
+      ? null : DraftGateRepairSelection.fromJSON(value.draftGateRepairSelection);
+    this.draftGateRepairSelection?.assertBinding(this.binding, this.executionLifecycle);
     const identity = {
       binding: this.binding,
       resultKind: this.resultKind,
@@ -2214,6 +2219,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       publicationDigest: this.publicationDigest,
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
       awaitQuestion: this.awaitQuestion,
+      ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
     };
     const expectedId = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     if (this.id !== expectedId) {
@@ -2236,6 +2242,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       publicationDigest: this.publicationDigest,
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
       awaitQuestion: this.awaitQuestion,
+      ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
     };
   }
 }

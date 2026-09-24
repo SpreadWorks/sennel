@@ -224,7 +224,7 @@ Flow runtime command logs are separate human-readable files. Use `sennel flow ru
 
 Built-in `agent.profiles` and `agent.providers` are resolved from the package at runtime. They do not need to be copied into `.sennel/config.json`. Define the same key locally only when you want to override the package default.
 
-The built-in Codex tiers are `codex/gpt-5.6-luna-low` for lightweight work, `codex/gpt-5.6-terra-low` and `codex/gpt-5.6-terra-medium` for routine generation and validation, and `codex/gpt-5.6-sol-medium` for quality-sensitive reviews.
+The `codex-only` profile uses `codex/gpt-6-luna-low` for lightweight work, `codex/gpt-6-sol-low` for routine generation, `codex/gpt-6-sol-medium` for Flow checks and test execution, and `codex/gpt-6-astra-medium` for quality-sensitive reviews. The `claude-main` and `codex-main` profiles retain their existing GPT-5.6 routing.
 
 ```json
 {

@@ -1,33 +1,7 @@
 import { Step } from "../../engine/step.js";
 import { DraftService } from "../../services/draft-service.js";
-import {
-  DraftGateRepairAppliedResult,
-  DraftGateRepairCarryForwardResult,
-  DraftGateRepairWorkerRequiredResult,
-  StepErrorResult,
-} from "../../engine/step-result.js";
-import { PlanGateRepairOutcomeDraft } from "../../lib/gate-observation-convergence.js";
-import { PlanGateRepairRecord } from "../../lib/plan-gate-repair.js";
-
-/** Pure mapping from a canonical repair binding or sealed outcome to this Step's Result. */
-export function draftGateRepairResult(facts) {
-  if (facts instanceof Error) return new StepErrorResult("draft-gate-repair", facts);
-  if (facts instanceof PlanGateRepairRecord) {
-    if (facts.phase !== "draft" || facts.targetStepId !== "draft-gate-repair") {
-      throw new TypeError("draft Gate Repair binding does not target its Step");
-    }
-    return new DraftGateRepairWorkerRequiredResult();
-  }
-  if (!(facts instanceof PlanGateRepairOutcomeDraft)) {
-    throw new TypeError("draft Gate Repair Result requires typed repair facts");
-  }
-  if (facts.repair.sourceEvidence.resultLogicalKey !== "draft.gate") {
-    throw new TypeError("draft Gate Repair outcome does not belong to the Draft Gate");
-  }
-  return facts.disposition === "applied"
-    ? new DraftGateRepairAppliedResult()
-    : new DraftGateRepairCarryForwardResult();
-}
+import { DraftRepairCandidate } from "./draft-repair-candidate.js";
+import { draftGateRepairResult } from "./draft-repair-result.js";
 
 /**
  * Apply the selected Gate repair request to the bound Draft.
@@ -46,15 +20,24 @@ export class DraftGateRepairStep extends Step {
 
   async _execute() {
     const requiresWorker = this.#draftService.requiresWorkerExecution();
+    const recovered = requiresWorker ? null : this.#draftService.inspectWorkerFacts().repairSelection;
+    if (recovered != null) {
+      await recovered.result.persist(this.#draftService);
+      return recovered.result;
+    }
     const facts = requiresWorker
       ? this.#draftService.inspectPlanGateRepair()
-      : this.#draftService.inspectWorkerFacts().planGateRepairOutcome;
+      : this.#draftService.inspectWorkerFacts().repairInput;
     let result;
+    let candidate;
     try {
-      result = draftGateRepairResult(facts);
+      candidate = requiresWorker ? null : new DraftRepairCandidate(facts);
+      result = requiresWorker ? draftGateRepairResult(facts) : candidate.result;
     } catch (error) {
+      this.#draftService.rejectInvalidRepair(error);
       result = draftGateRepairResult(error);
     }
+    if (candidate != null) this.#draftService.adoptRepairCandidate(candidate);
     await result.persist(this.#draftService);
     return result;
   }

@@ -1632,16 +1632,7 @@ export default class RunDispatchCommand extends FlowCommand {
       const draftService = new DraftService({
         flowManager: ctx.flowManager,
         binding: stepBinding,
-        executionCheckpointer: (stepResult, settlement, binding) => {
-          selectedStepResult = stepResult;
-          selectedSettlement = settlement;
-          return ctx.flowManager.checkpointDraftStepExecution({
-            binding,
-            stepResult,
-            settlement,
-            executionBinding,
-          });
-        },
+        executionBinding,
       });
       const result = await new StepFactory()
         .provide(DraftService, draftService)
@@ -1658,6 +1649,8 @@ export default class RunDispatchCommand extends FlowCommand {
           stepResult: result,
         };
       }
+      selectedStepResult = result;
+      selectedSettlement = draftService.executionSelection;
       this.handoffCoordinator.admitConditionalDraftRequest({ ctx, state, request });
     }
     if (selectedStepResult === null || selectedSettlement === null) {
@@ -2061,59 +2054,9 @@ export default class RunDispatchCommand extends FlowCommand {
     if (prepared?.facts === null || prepared?.facts === undefined) {
       throw new Error("Draft Step requires prepared worker facts");
     }
-    const conditionalExecution = isConditionalDraftWorkerStep(request.stepId);
-    let binding;
-    if (conditionalExecution) {
-      const attemptBinding = new DraftWorkerExecutionStepBinding({
-        flowManager: ctx.flowManager,
-        specId: request.specId,
-        stepId: request.stepId,
-      });
-      const execution = ctx.flowManager.draftStepExecutionState({ binding: attemptBinding });
-      const executionIdentity = execution.executionIdentity();
-      if (executionIdentity === null) {
-        throw new Error("Draft worker publication has no persisted execution selection");
-      }
-      this.handoffCoordinator.publishDraftWorker({
-        ctx,
-        request,
-        preparation: prepared,
-        stepResult: executionIdentity.stepResult,
-        settlement: executionIdentity.settlement,
-        binding: attemptBinding,
-      });
-      binding = attemptBinding;
-    } else {
-      binding = await new definition.Connector(request).connect();
-    }
-    const draftService = new DraftService({
-      flowManager: ctx.flowManager,
-      binding,
-      workerFacts: prepared.facts,
-      workerExecutor: (stepResult, settlement, binding, _awaitQuestion, draftCompletionApplication) => {
-        return {
-          error: null,
-          ...(conditionalExecution
-            ? this.handoffCoordinator.completePublishedDraftWorker({
-                ctx, request, preparation: prepared, stepResult, settlement, binding,
-                draftCompletionApplication,
-              })
-            : this.handoffCoordinator.commitDraftWorker({
-                ctx, request, preparation: prepared, stepResult, settlement, binding,
-                draftCompletionApplication,
-              })),
-        };
-      },
-      workerErrorCommitter: (stepResult, settlement, binding) => ({
-        error: null,
-        ...(conditionalExecution
-          ? this.handoffCoordinator.completePublishedDraftWorker({
-              ctx, request, preparation: prepared, stepResult, settlement, binding,
-            })
-          : this.handoffCoordinator.commitDraftWorkerError({
-              ctx, request, stepResult, settlement, binding,
-            })),
-      }),
+    const draftService = await DraftService.prepare({
+      ctx, request, Connector: definition.Connector,
+      preparation: prepared, handoffCoordinator: this.handoffCoordinator,
     });
     const step = new StepFactory()
       .provide(DraftService, draftService)

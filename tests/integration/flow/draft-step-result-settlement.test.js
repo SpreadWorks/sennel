@@ -3,6 +3,9 @@ import fs from "node:fs";
 import { afterEach, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { DraftWorkerExecutionStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { createDraftRefineResult, DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
 import {
   DraftQuestionsReviewExecutionRequiredResult,
   DraftQuestionsRepairChangedResult,
@@ -17,8 +20,10 @@ import {
   DraftWorkerExecutionClaim,
   settleDraftStepResult,
 } from "../../../src/flow/definition.js";
+import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
+import { AwaitingUserAnswer, CandidateQuestion } from "../../../src/flow/lib/draft-question-ledger.js";
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state.js";
-import { FlowAtStepFixture } from "../../support/infrastructure/flow-setup.js";
+import { CanonicalFlowFixture, canonicalDraftDocument, FlowAtStepFixture } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 const roots = [];
@@ -53,6 +58,115 @@ afterEach(() => {
 });
 
 describe("Draft Step Result settlement", () => {
+  it("rejects stale Draft refine admission without persisting a semantic Error or consuming retry budget", async () => {
+    const root = createRoot();
+    const specId = "001-stale-draft-refine";
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
+    new FlowAtStepFixture({
+      flowManager: manager, specId, runId: "run-stale-draft-refine",
+      request: "Preserve admission refusal independently from semantic failure.", targetStep: "draft-refine",
+    }).create();
+    const binding = new DraftWorkerExecutionStepBinding({ flowManager: manager, specId, stepId: "draft-refine" });
+    const service = new DraftService({ flowManager: manager, binding });
+    manager.confirmCurrentAttempt({ specId });
+    manager.rewindTo("draft-refine", { specId });
+    const before = {
+      state: manager.canonicalState(specId).toJSON(),
+      activities: manager.activityLedger(specId),
+      catalog: manager.artifactCatalog(specId).toJSON(),
+    };
+    await assert.rejects(new DraftRefineStep(service).execute(), (error) => {
+      assert.match(error.message, /stale|Attempt/i);
+      assert.notEqual(error.name, "StepPersistenceFailure");
+      return true;
+    });
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false });
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), before.state);
+    assert.deepEqual(reloaded.activityLedger(specId), before.activities);
+    assert.deepEqual(reloaded.artifactCatalog(specId).toJSON(), before.catalog);
+  });
+
+  for (const boundary of ["checkpoint", "Await"]) {
+    it(`preserves late ${boundary} admission refusal after Draft Result selection`, async () => {
+      const root = createRoot();
+      const specId = `001-late-draft-${boundary.toLowerCase()}`;
+      const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      const fixture = new CanonicalFlowFixture({
+        flowManager: manager, specId, runId: `run-${specId}`,
+        request: "Keep stale admission separate from persistence failure.",
+        execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+      }).create().activate("draft");
+      const Question = boundary === "checkpoint" ? CandidateQuestion : AwaitingUserAnswer;
+      const draft = canonicalDraftDocument({ questions: [new Question({
+        id: "q1", question: "Choose the visible behavior?", revision: 0,
+        category: "user-visible-behavior", provenance: { producer: "fixture" }, evidenceDigest: "a".repeat(64),
+      }).toJSON()] });
+      manager.publishArtifacts({ specId, nodeId: "draft", artifactWrites: [{
+        logicalKey: "draft", mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(draft, null, 2)}\n`),
+      }] });
+      fixture.settle("draft").activate("draft-refine");
+      const binding = new DraftWorkerExecutionStepBinding({ flowManager: manager, specId, stepId: "draft-refine" });
+      const executionBinding = boundary === "checkpoint" ? manager.draftStepExecutionState({ binding }).workerBinding({
+        inputDigest: "a".repeat(64), inputRevision: "b".repeat(64),
+      }) : null;
+      const service = new DraftService({ flowManager: manager, binding, executionBinding });
+      const result = createDraftRefineResult(service.inspectDraftTransition());
+      assert.equal(result.kind, boundary === "checkpoint" ? "draft-refine-worker-required" : "draft-refine-awaiting-answer");
+      // A second canonical caller replaces the Attempt after this caller selected its Result.
+      manager.confirmCurrentAttempt({ specId });
+      manager.rewindTo("draft-refine", { specId });
+      const before = {
+        state: manager.canonicalState(specId).toJSON(),
+        activities: manager.activityLedger(specId),
+        catalog: manager.artifactCatalog(specId).toJSON(),
+      };
+      await assert.rejects(result.persist(service), (error) => {
+        assert.ok(error instanceof StepAdmissionRefusal);
+        assert.ok(error.cause instanceof CurrentFlowStateConflictError);
+        assert.equal(error.cause.code, "CURRENT_FLOW_STATE_CONFLICT");
+        return true;
+      });
+      const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      assert.deepEqual(reloaded.canonicalState(specId).toJSON(), before.state);
+      assert.deepEqual(reloaded.activityLedger(specId), before.activities);
+      assert.deepEqual(reloaded.artifactCatalog(specId).toJSON(), before.catalog);
+      assert.deepEqual(reloaded.canonicalState(specId).attempt.consumption.toJSON(), { semantic: 0, tooling: 0 });
+      assert.equal(reloaded.canonicalState(specId).attempt.failure, null);
+    });
+  }
+
+  it("recovers the exact Draft execution checkpoint receipt after an uncertain response", async (t) => {
+    const root = createRoot();
+    const specId = "001-draft-checkpoint-response";
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    new FlowAtStepFixture({
+      flowManager: manager, specId, runId: `run-${specId}`,
+      request: "Read back the committed checkpoint before reporting a persistence failure.", targetStep: "draft-refine",
+    }).create();
+    const binding = new DraftWorkerExecutionStepBinding({ flowManager: manager, specId, stepId: "draft-refine" });
+    const executionBinding = manager.draftStepExecutionState({ binding }).workerBinding({
+      inputDigest: "a".repeat(64), inputRevision: "b".repeat(64),
+    });
+    const service = new DraftService({ flowManager: manager, binding, executionBinding });
+    const persist = manager.checkpointDraftStepExecution.bind(manager);
+    let committed;
+    t.mock.method(manager, "checkpointDraftStepExecution", (input) => {
+      committed = persist(input);
+      throw new Error("checkpoint response interrupted after durable commit");
+    });
+    const receipt = await new DraftRefineWorkerRequiredResult().persist(service);
+    assert.equal(receipt.id, committed.receipt.id);
+    assert.equal(service.executionSelection.kind, "execution");
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const execution = reloaded.draftStepExecutionState({ binding });
+    assert.equal(execution.receiptId, receipt.id);
+    assert.equal(execution.lifecycle.phase, "checkpoint");
+    assert.deepEqual(execution.lifecycle.binding.toJSON(), executionBinding.toJSON());
+    assert.equal(reloaded.activityLedger(specId).filter((entry) => entry.result?.draftSettlementReceipt?.id === receipt.id).length, 1);
+    assert.deepEqual(reloaded.canonicalState(specId).attempt.consumption.toJSON(), { semantic: 0, tooling: 0 });
+    assert.equal(reloaded.canonicalState(specId).attempt.failure, null);
+  });
+
   it("checkpoints, claims, publishes, and terminates one execution generation without consuming the Attempt", () => {
     const root = createRoot();
     const specId = "001-draft-execution-generation";
@@ -193,7 +307,7 @@ describe("Draft Step Result settlement", () => {
     assert.equal(reloaded.activityLedger(specId).length, terminalActivities);
   });
 
-  it("advances a published generation and rejects an old changed checkpoint", () => {
+  it("advances a published generation and rejects an old changed checkpoint", async () => {
     const root = createRoot();
     const specId = "001-draft-execution-next-generation";
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
@@ -209,6 +323,11 @@ describe("Draft Step Result settlement", () => {
     const settlement = settleDraftStepResult(required.stepId, required);
     const generation0 = manager.draftStepExecutionState({ binding }).workerBinding({
       inputDigest: "1".repeat(64), inputRevision: "2".repeat(64),
+    });
+    const service = new DraftService({
+      flowManager: manager,
+      binding: new DraftWorkerExecutionStepBinding({ flowManager: manager, specId, stepId: "draft-refine" }),
+      executionBinding: generation0,
     });
     manager.checkpointDraftStepExecution({ binding, stepResult: required, settlement, executionBinding: generation0 });
     const generation0Claim = new DraftWorkerExecutionClaim({
@@ -270,6 +389,26 @@ describe("Draft Step Result settlement", () => {
     }), /generation is not monotonic/);
     assert.deepEqual(restart.canonicalState(specId).toJSON(), stateBeforeOld);
     assert.equal(restart.activityLedger(specId).length, activitiesBeforeOld);
+
+    const beforeServiceReplay = {
+      state: restart.canonicalState(specId).toJSON(),
+      activities: restart.activityLedger(specId),
+      catalog: restart.artifactCatalog(specId).toJSON(),
+    };
+    await assert.rejects(required.persist(service), (error) => {
+      assert.ok(error instanceof StepAdmissionRefusal);
+      assert.ok(error.cause instanceof CurrentFlowStateConflictError);
+      assert.equal(error.cause.code, "CURRENT_FLOW_STATE_CONFLICT");
+      return true;
+    });
+    assert.equal(service.executionSelection, null);
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false });
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), beforeServiceReplay.state);
+    assert.deepEqual(reloaded.activityLedger(specId), beforeServiceReplay.activities);
+    assert.deepEqual(reloaded.artifactCatalog(specId).toJSON(), beforeServiceReplay.catalog);
+    assert.equal(reloaded.draftStepExecutionState({ binding }).lifecycle.executionGeneration, 1);
+    assert.deepEqual(reloaded.canonicalState(specId).attempt.consumption.toJSON(), { semantic: 0, tooling: 0 });
+    assert.equal(reloaded.canonicalState(specId).attempt.failure, null);
   });
 
   it("rejects a Step-mismatched execution binding and cannot restart a failed Attempt", () => {

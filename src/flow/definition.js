@@ -12,6 +12,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { DraftGateRepairSelection } from "./steps/draft/draft-gate-repair-selection.js";
 import { isConditionalDraftWorkerStep } from "./lib/draft-conditional-worker.js";
 import { SourceHandoffFailureFacts } from "./lib/source-handoff-failure.js";
 import { NonblockingFailureClassification } from "./lib/nonblocking-evidence.js";
@@ -4801,7 +4802,7 @@ export class DraftStepExecutionState {
 
 /** Durable identity of one Result and its already-selected settlement. */
 export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue {
-  constructor({ binding, result, settlement, publication, executionLifecycle = null, awaitQuestion = null } = {}) {
+  constructor({ binding, result, settlement, publication, executionLifecycle = null, awaitQuestion = null, draftGateRepairSelection = null } = {}) {
     super();
     if (!(result instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       throw new TypeError("Step settlement receipt requires a Result and Settlement");
@@ -4864,6 +4865,12 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
     this.publicationDigest = publication.digest;
     this.executionLifecycle = executionLifecycle;
     this.awaitQuestion = awaitQuestion;
+    const gatePublication = binding.stepId === "draft-gate-repair" && executionLifecycle?.phase === "publication";
+    if (gatePublication ? !(draftGateRepairSelection instanceof DraftGateRepairSelection) : draftGateRepairSelection !== null) {
+      throw new TypeError("Draft Gate publication requires its terminal selection");
+    }
+    if (gatePublication) draftGateRepairSelection.assertBinding(this.binding, executionLifecycle);
+    this.draftGateRepairSelection = draftGateRepairSelection;
     const identity = {
       binding: this.binding,
       resultKind: this.resultKind,
@@ -4876,6 +4883,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       publicationDigest: this.publicationDigest,
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
       awaitQuestion: this.awaitQuestion?.toJSON() ?? null,
+      ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
     };
     this.id = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     Object.freeze(this);
@@ -4895,6 +4903,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       publicationDigest: this.publicationDigest,
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
       awaitQuestion: this.awaitQuestion?.toJSON() ?? null,
+      ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
     };
   }
 }

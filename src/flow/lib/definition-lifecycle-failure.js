@@ -9,12 +9,17 @@
  * transition.
  */
 
-import { CurrentAttemptIdentity } from "./current-flow-state.js";
+import {
+  CurrentAttemptIdentity,
+  CurrentFlowStateConflictError,
+  CurrentFlowStateInvariantError,
+} from "./current-flow-state.js";
 import { DefinitionFailureOwnership } from "./definition-failure-ownership.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { attachedCanonicalReviewWorkUnit } from "./canonical-review-artifacts.js";
 import { TaskReviewAbortedWorkUnit } from "./task-review-aborted-work-unit.js";
+import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./step-admission-refusal.js";
 
 export const STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE = "STEP_RESULT_ERROR_PERSISTENCE_FAILED";
 
@@ -36,6 +41,41 @@ export function isStepPersistenceFailure(error) {
   return error instanceof StepPersistenceFailure
     || error?.code === STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE
     || error?.data?.failureKind === "step-persistence";
+}
+
+/** Read one exact committed settlement after an uncertain Store response. */
+export function findCommittedStepSettlementReceipt(flowManager, input) {
+  try {
+    return flowManager.findStepSettlementReceipt(input);
+  } catch {
+    return null;
+  }
+}
+
+function definitiveStepSettlementFailure(error) {
+  if (isStepAdmissionRefusal(error)) return error;
+  if (error instanceof CurrentFlowStateConflictError) {
+    return new StepAdmissionRefusal(error.message, error);
+  }
+  if (error instanceof CurrentFlowStateInvariantError) return error;
+  return null;
+}
+
+/** Preserve admission and invariant failures; classify an uncommitted write failure. */
+export function rethrowStepSettlementFailure(error) {
+  const definitive = definitiveStepSettlementFailure(error);
+  if (definitive !== null) throw definitive;
+  throw error instanceof StepPersistenceFailure ? error : new StepPersistenceFailure(error);
+}
+
+/** Recover only the exact receipt, otherwise preserve the original write failure. */
+export function recoverStepSettlementReceipt(flowManager, input, error) {
+  // An older exact receipt cannot overturn a Store rejection of a stale generation.
+  const definitive = definitiveStepSettlementFailure(error);
+  if (definitive !== null) throw definitive;
+  const receipt = findCommittedStepSettlementReceipt(flowManager, input);
+  if (receipt !== null) return receipt;
+  rethrowStepSettlementFailure(error);
 }
 
 function nonEmptyText(value, field) {
@@ -142,9 +182,7 @@ export class DefinitionLifecycleAttemptBinding {
   }
 
   toolingFailure(error, fallbackCode, commandResult = null) {
-    if (isStepPersistenceFailure(error)
-      || (this.commandName === "gate" && this.attempt.nodeId === "spec-gate"
-        && error?.data?.failureKind === "spec-gate-admission")) return false;
+    if (isStepPersistenceFailure(error) || isStepAdmissionRefusal(error)) return false;
     const facts = failureFacts(error, fallbackCode);
     const state = this.flowManager.canonicalState(this.specId);
     if (state === null || state.runId !== this.runId || !this.attempt.matches(state)) return false;

@@ -14,6 +14,7 @@ import { DraftWorkerExecutionStepBinding } from "../engine/connectors/draft/draf
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DraftGateRepairSelection } from "../steps/draft/draft-gate-repair-selection.js";
 import {
   buildCurrentFlowDefinition,
   ConditionalWorkerSettlementPlan,
@@ -67,8 +68,6 @@ import {
   DraftRefineAwaitingAnswerResult,
   DraftGateCarryForwardResult,
   DraftGatePassedResult,
-  DraftGateRepairAppliedResult,
-  DraftGateRepairCarryForwardResult,
   DraftGateRepairRequiredResult,
   SpecCreatedResult,
   SpecPlanGateRepairAppliedResult,
@@ -210,6 +209,7 @@ import {
 } from "./draft-completion-connector.js";
 import { DraftGateIssuePublication, DraftGatePublicationIntent } from "./draft-gate-prospective.js";
 import { SpecGateResultSelection } from "../steps/spec/spec-gate-result.js";
+import { SpecWorkerResultSelection } from "../steps/spec/spec-result.js";
 import { ExternalBlockedOutcome, StepAttempt } from "./step-outcome.js";
 import { CanonicalSpecReview } from "./spec-review-artifacts.js";
 import { TaskCollection } from "../../spec/lib/render-contract.js";
@@ -3591,18 +3591,47 @@ export class CanonicalFlowManagerStore {
     });
   }
 
+  #assertPlanGateRepairOutcome({ resolved, state, nodeId, outcome, handoffRevision }) {
+    const repair = canonicalPlanGateRepairForTarget({
+      flowManager: this,
+      state,
+      targetStepId: nodeId,
+    });
+    if (!(repair instanceof PlanGateRepairRecord)) {
+      throw new CurrentFlowStateInvariantError("plan Gate repair outcome has no canonical repair binding");
+    }
+    try {
+      outcome.assertRepair(repair.observationRepair({
+        state,
+        activities: this.activityLedger(resolved),
+        handoffRevision,
+      }));
+    } catch (cause) {
+      throw new CurrentFlowStateInvariantError(
+        `plan Gate repair outcome does not match its canonical repair binding: ${cause.message}`,
+      );
+    }
+  }
+
   /**
    * The normal worker completion boundary.  One Store operation appends the
    * confirmation Activity, advances flow.json, writes producer-owned bytes,
    * and replaces the catalog descriptors.  It deliberately accepts no
    * mutable flow-state callback.
    */
-  confirmCurrentAttempt({ specId = null, status = "done", result = null, stepResult = null, settlementReceipt = null, commandResult = undefined, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null, admission = undefined, specWorkerSettlement = null } = {}) {
+  confirmCurrentAttempt({ specId = null, status = "done", result = null, stepResult = null, settlementReceipt = null, commandResult = undefined, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null, admission = undefined, specWorkerSettlement = null, specSelection = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
     if (state.current === null) throw new CurrentFlowStateInvariantError("canonical completion requires an active Attempt");
     const nodeId = state.current.at(-1);
+    if (nodeId === "spec" && stepResult !== null) {
+      if (!(specSelection instanceof SpecWorkerResultSelection)) {
+        throw new CurrentFlowStateInvariantError("Spec completion requires its selected worker candidate");
+      }
+      specSelection.assertCandidate({ result: stepResult, application: null, planGateRepairOutcome });
+      specSelection.assertPublication(specRecord);
+    }
     if (["spec-triage", "spec-repair"].includes(nodeId)
       && (specWorkerSettlement !== SPEC_REVIEW_WORKER_SETTLEMENT
         || !(stepResult instanceof SpecTriageCompletedResult
@@ -3620,21 +3649,9 @@ export class CanonicalFlowManagerStore {
         ...this.#commandPublicationWrites(commandResult),
       ]),
     ];
-    const draftGateRepairResult = stepResult instanceof DraftGateRepairAppliedResult
-      ? "applied"
-      : stepResult instanceof DraftGateRepairCarryForwardResult
-        ? "rejected-no-progress"
-        : null;
-    if (nodeId === "draft-gate-repair" && (
-      !(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
-      || planGateRepairOutcome.disposition !== draftGateRepairResult
-    )) {
-      throw new CurrentFlowStateInvariantError("draft Gate repair Result requires its exact typed outcome");
-    }
-    if (nodeId === "spec" && (stepResult instanceof SpecPlanGateRepairAppliedResult)
-      && (!(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
-        || planGateRepairOutcome.disposition !== "applied")) {
-      throw new CurrentFlowStateInvariantError("Spec plan Gate repair Result requires its applied outcome");
+    if (nodeId === "draft-gate-repair") {
+      try { new DraftGateRepairSelection({ result: stepResult, outcome: planGateRepairOutcome }); }
+      catch (cause) { throw new CurrentFlowStateInvariantError(`draft Gate repair Result requires its exact typed outcome: ${cause.message}`); }
     }
     if (planGateRepairOutcome !== null) {
       if (!(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
@@ -3644,25 +3661,7 @@ export class CanonicalFlowManagerStore {
       }
       const outcome = planGateRepairOutcome.seal(confirmationActivityId);
       if (nodeId === "draft-gate-repair" || nodeId === "spec") {
-        const repair = canonicalPlanGateRepairForTarget({
-          flowManager: this,
-          state,
-          targetStepId: nodeId,
-        });
-        if (!(repair instanceof PlanGateRepairRecord)) {
-          throw new CurrentFlowStateInvariantError("plan Gate repair outcome has no canonical repair binding");
-        }
-        try {
-          outcome.assertRepair(repair.observationRepair({
-            state,
-            activities: this.activityLedger(resolved),
-            handoffRevision: planGateRepairOutcome.repair.handoffRevision,
-          }));
-        } catch (cause) {
-          throw new CurrentFlowStateInvariantError(
-            `plan Gate repair outcome does not match its canonical repair binding: ${cause.message}`,
-          );
-        }
+        this.#assertPlanGateRepairOutcome({ resolved, state, nodeId, outcome, handoffRevision: planGateRepairOutcome.repair.handoffRevision });
       }
       if (outcome.targetAttempt.id !== state.attempt.id
         || outcome.targetAttempt.sequence !== state.attempt.sequence) {
@@ -3759,6 +3758,7 @@ export class CanonicalFlowManagerStore {
     planGateRepairOutcome = null,
     executionLifecycle = null,
     awaitQuestion = null,
+    draftGateRepairSelection = null,
   } = {}) {
     return new DraftStepSettlementReceipt({
       binding,
@@ -3781,6 +3781,7 @@ export class CanonicalFlowManagerStore {
       }),
       executionLifecycle,
       awaitQuestion,
+      draftGateRepairSelection,
     });
   }
 
@@ -3924,6 +3925,7 @@ export class CanonicalFlowManagerStore {
     commandResult = undefined,
     planGateRepairOutcome = null,
     gatePublication = null,
+    specSelection = null,
   }) {
     const base = lifecycleResult ?? {
       outcome: "failed",
@@ -3935,11 +3937,10 @@ export class CanonicalFlowManagerStore {
     const failureActivityId = activityId("attempt-failed");
     const issueWrite = this.#specGateIssueWrite({ resolved, binding, issue: gatePublication?.issue });
     const repairOutcomeWrite = planGateRepairOutcome === null ? [] : (() => {
-      if (!(stepResult instanceof SpecPlanGateRepairNoProgressResult)
-        || !(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
-        || planGateRepairOutcome.disposition !== "rejected-no-progress") {
+      if (!(specSelection instanceof SpecWorkerResultSelection)) {
         throw new CurrentFlowStateInvariantError("Spec plan Gate no-progress failure requires its exact outcome");
       }
+      specSelection.assertCandidate({ result: stepResult, application: null, planGateRepairOutcome });
       const state = this.runtime.load(resolved);
       const repair = canonicalPlanGateRepairForTarget({
         flowManager: this, state, targetStepId: binding.stepId,
@@ -4105,6 +4106,7 @@ export class CanonicalFlowManagerStore {
     planGateRepairOutcome = null,
     executionLifecycle = undefined,
     awaitQuestion = null,
+    draftGateRepairSelection = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null || !(stepResult instanceof StepResult) || !(settlement instanceof StepSettlement)) {
@@ -4131,6 +4133,7 @@ export class CanonicalFlowManagerStore {
       planGateRepairOutcome,
       executionLifecycle: selectedExecutionLifecycle,
       awaitQuestion,
+      draftGateRepairSelection,
     });
     return this.activityLedger(resolved).find((entry) => (
       entry.result?.draftSettlementReceipt?.id === receipt.id
@@ -4359,6 +4362,7 @@ export class CanonicalFlowManagerStore {
     planGateRepairOutcome = null,
     executionLifecycle = undefined,
     awaitQuestion = null,
+    draftGateRepairSelection = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
@@ -4375,6 +4379,28 @@ export class CanonicalFlowManagerStore {
     const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
       resolved, binding, settlement, executionLifecycle,
     });
+    if (draftGateRepairSelection !== null) {
+      if (!(draftGateRepairSelection instanceof DraftGateRepairSelection)) {
+        throw new CurrentFlowStateInvariantError("Draft Gate publication selection must be typed");
+      }
+      this.#assertPlanGateRepairOutcome({
+        resolved, state: this.runtime.load(resolved), nodeId: binding.stepId,
+        outcome: draftGateRepairSelection.outcome.seal("draft-gate-repair-publication-validation"),
+        handoffRevision: draftGateRepairSelection.outcome.repair.handoffRevision,
+      });
+      const writes = artifactWrites.map((write) => CanonicalFlowArtifactWrite.from(write));
+      const draft = writes.find((write) => write.artifact.logicalKey === "draft");
+      const audit = writes.find((write) => write.artifact.logicalKey === "draft.gate.repair");
+      if (draftGateRepairSelection.outcome.disposition === "applied" && draft === undefined
+        || draftGateRepairSelection.outcome.disposition === "rejected-no-progress" && (writes.length !== 0 || (artifactRemovals?.length ?? 0) !== 0)) {
+        throw new CurrentFlowStateInvariantError("Draft Gate selection requires its exact publication writes");
+      }
+      draftGateRepairSelection.assertPublication({
+        draftDigest: crypto.createHash("sha256").update(draft?.bytes
+          ?? this.readArtifact({ specId: resolved, logicalKey: "draft", consumerNodeId: binding.stepId }).bytes).digest("hex"),
+        auditReport: audit === undefined ? null : JSON.parse(audit.bytes.toString("utf8")).report,
+      });
+    }
     const receipt = this.#stepSettlementReceipt({
       binding,
       stepResult,
@@ -4392,12 +4418,25 @@ export class CanonicalFlowManagerStore {
       planGateRepairOutcome,
       executionLifecycle: selectedExecutionLifecycle,
       awaitQuestion,
+      draftGateRepairSelection,
     });
     const state = this.runtime.load(resolved);
     const replay = this.#admitStepSettlement({
       resolved, state, binding, stepResult, settlement, receipt,
     });
     if (replay !== null) return Object.freeze({ state, receipt: replay });
+    if (binding.stepId === "draft-gate-repair" && selectedExecutionLifecycle?.phase === "terminal"
+      && !(settlement instanceof StepErrorDecision)) {
+      const execution = this.draftStepExecutionState({ binding });
+      const publishedValue = this.activityLedger(resolved).find((activity) => activity.result?.draftSettlementReceipt?.id === execution.receiptId)
+        ?.result.draftSettlementReceipt.draftGateRepairSelection;
+      if (publishedValue === undefined) throw new CurrentFlowStateInvariantError("Draft Gate terminal settlement requires its publication selection");
+      const published = DraftGateRepairSelection.fromJSON(publishedValue);
+      published.assertResult(stepResult);
+      if (JSON.stringify(published.outcome.seal("selection").toJSON()) !== JSON.stringify(planGateRepairOutcome?.seal("selection").toJSON())) {
+        throw new CurrentFlowStateInvariantError("Draft Gate terminal outcome differs from its publication selection");
+      }
+    }
     if (state.attempt?.failure !== null && state.attempt?.failure !== undefined) {
       throw new CurrentFlowStateConflictError("Draft settlement cannot overwrite a failed Attempt");
     }
@@ -4724,6 +4763,7 @@ export class CanonicalFlowManagerStore {
     commandResult = undefined,
     planGateRepairOutcome = null,
     gatePublication = null,
+    specSelection = null,
   } = {}) {
     if (binding?.stepId === "spec-gate") {
       return this.settleDraftStepResult({
@@ -4746,6 +4786,15 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const errorSettlement = settlement instanceof StepErrorDecision;
+    if (binding?.stepId === "spec") {
+      const selectedCandidate = stepResult instanceof SpecCreatedResult
+        || stepResult instanceof SpecPlanGateRepairAppliedResult
+        || stepResult instanceof SpecPlanGateRepairNoProgressResult;
+      if (selectedCandidate !== (specSelection instanceof SpecWorkerResultSelection)) {
+        throw new CurrentFlowStateConflictError("Spec candidate settlement differs from its Step Result selection");
+      }
+      specSelection?.assertCandidate({ result: stepResult, application, planGateRepairOutcome });
+    }
     const initialRoute = (stepResult instanceof SpecCreatedResult
       || stepResult instanceof SpecPlanGateRepairAppliedResult)
       && settlement instanceof SpecNextRoute
@@ -4770,14 +4819,6 @@ export class CanonicalFlowManagerStore {
       && artifactBaselines.length === 1
       && CanonicalFlowArtifactBaseline.from(artifactBaselines[0]).artifact.logicalKey === "spec.review";
     const routedSettlement = initialRoute || reviewWorkerRoute;
-    if ((stepResult instanceof SpecPlanGateRepairAppliedResult)
-      !== (planGateRepairOutcome?.disposition === "applied")) {
-      throw new CurrentFlowStateInvariantError("Spec plan Gate repair Result requires its applied outcome");
-    }
-    if ((stepResult instanceof SpecPlanGateRepairNoProgressResult)
-      !== (planGateRepairOutcome?.disposition === "rejected-no-progress")) {
-      throw new CurrentFlowStateInvariantError("Spec plan Gate no-progress Result requires its rejected outcome");
-    }
     if (!(stepResult instanceof StepResult)
       || !["spec", "spec-triage", "spec-repair"].includes(binding?.stepId)
       || settlement?.sourceStepId !== binding.stepId
@@ -4822,7 +4863,7 @@ export class CanonicalFlowManagerStore {
     if (errorSettlement) {
       return this.#settleStepErrorResult({
         resolved, binding, stepResult, settlement, receipt, lifecycleResult,
-        planGateRepairOutcome,
+        planGateRepairOutcome, specSelection,
       });
     }
     const next = this.confirmCurrentAttempt({
@@ -4837,6 +4878,7 @@ export class CanonicalFlowManagerStore {
       artifactRemovals,
       artifactBaselines,
       planGateRepairOutcome,
+      specSelection,
     });
     return Object.freeze({ state: next, receipt });
   }

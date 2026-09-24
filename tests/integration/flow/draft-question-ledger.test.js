@@ -130,7 +130,7 @@ test("DraftRefineStep alone selects wait, execution, or completion from typed fa
   assert.equal(decision([new AwaitingUserAnswer({ id: "q1", question: "Awaiting?", revision: 0, ...base })], true), "draft-refine-worker-required");
 });
 
-test("DraftRefineStep commits a fact-read failure without re-reading transition facts", async () => {
+test("DraftRefineStep rejects a fact-read failure without selecting or persisting a Result", async () => {
   const root = createTmpDir("draft-refine-error-result-");
   try {
     const specId = "001-draft-refine-error-result";
@@ -154,24 +154,28 @@ test("DraftRefineStep commits a fact-read failure without re-reading transition 
     });
     flow.settle("draft").activate("draft-refine");
     const binding = await new DraftRefineConnector({ flowManager: manager, specId }).connect();
+    const before = {
+      state: manager.canonicalState(specId).toJSON(),
+      activities: manager.activityLedger(specId),
+      catalog: manager.artifactCatalog(specId).toJSON(),
+    };
     let readAttempts = 0;
+    const readFailure = new Error("transition facts unavailable");
     manager.readArtifact = () => {
       readAttempts += 1;
-      throw new Error("transition facts unavailable");
+      throw readFailure;
     };
     const service = new DraftService({
       flowManager: manager,
       binding,
     });
 
-    const result = await new DraftRefineStep(service).execute();
-
-    assert.equal(result.kind, "draft-refine-error");
+    await assert.rejects(new DraftRefineStep(service).execute(), (error) => error === readFailure);
     assert.equal(readAttempts, 1);
-    const canonical = manager.canonicalState(specId);
-    assert.equal(canonical.attempt.failure.category, "step-result-error");
-    assert.equal(manager.activityLedger(specId).at(-1).result.stepResult.kind, "draft-refine-error");
-    assert.equal(manager.activityLedger(specId).at(-1).result.draftSettlementReceipt.settlementKind, "failure");
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), before.state);
+    assert.deepEqual(reloaded.activityLedger(specId), before.activities);
+    assert.deepEqual(reloaded.artifactCatalog(specId).toJSON(), before.catalog);
   } finally {
     removeTmpDir(root);
   }

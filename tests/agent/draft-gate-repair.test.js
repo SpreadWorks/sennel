@@ -12,7 +12,6 @@ import { findStepById } from "../../src/flow/lib/step-tree.js";
 import RunClaimNextActionCommand from "../../src/flow/lib/run-claim-next-action.js";
 import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
 import RunGateCommand from "../../src/flow/lib/run-gate.js";
-import RunReviewCommand from "../../src/flow/lib/run-review.js";
 import { FLOW_COMMANDS } from "../../src/flow/registry.js";
 import { DraftRepairConnector } from "../../src/flow/engine/connectors/draft/draft-repair-connector.js";
 import { DraftGateRepairStep } from "../../src/flow/steps/draft/draft-gate-repair.js";
@@ -73,6 +72,7 @@ async function measureWorker(evidence, route, operation) {
     route, startedAt, durationMs: Date.now() - started,
     responseChars: typeof response === "string" ? response.length : null,
     response: typeof response === "string" ? response : null,
+    commandResult: response !== null && typeof response === "object" ? response : null,
   });
   return response;
 }
@@ -80,6 +80,7 @@ async function measureWorker(evidence, route, operation) {
 it("real agent completes a synthetic bounded draft Gate repair through canonical spec publication", { timeout: 720_000 }, async () => {
   const root = createTmpDir("draft-gate-repair-agent-");
   const originalPath = process.env.PATH;
+  let manager = null;
   const retained = RETAINED_SNAPSHOT ? JSON.parse(fs.readFileSync(RETAINED_SNAPSHOT, "utf8")) : null;
   assert.equal(Boolean(RETAINED_SNAPSHOT), Boolean(RETAINED_REPOSITORY), "retained replay needs both snapshot and repository");
   const evidence = {
@@ -98,7 +99,7 @@ it("real agent completes a synthetic bounded draft Gate repair through canonical
     fs.writeFileSync(path.join(root, ".sennel", "config.json"), `${JSON.stringify(config(), null, 2)}\n`);
     process.env.PATH = `${installSennel(root)}${path.delimiter}${originalPath}`;
     const specId = "521-draft-gate-repair-agent";
-    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     const fixture = new CanonicalFlowFixture({
       flowManager: manager, specId, runId: "run-521-draft-gate-repair", issue: 521,
       request: retained?.issue ?? "Preserve Issue #521 while repairing bounded draft Gate evidence.",
@@ -148,13 +149,30 @@ it("real agent completes a synthetic bounded draft Gate repair through canonical
     agentContainer.register("flowManager", manager);
     agentContainer.register("agent", agent);
     const context = () => ({ root, mainRoot: root, executionRoot: root, specId, phase: "draft", config: config(), flowManager: manager, flowState: manager.loadReadOnly(specId), agent });
-    const claim = await new RunClaimNextActionCommand().execute(context());
-    assert.equal(claim.ok, true, JSON.stringify(claim));
-    const coverage = new RunReviewCommand();
-    coverage.container = agentContainer;
-    const coverageResult = await measureWorker(evidence, "draft-coverage-review", () => coverage.execute(context()));
-    assert.notEqual(coverageResult.ok, false, JSON.stringify(coverageResult));
-    await FLOW_COMMANDS.run.review.post(context(), coverageResult);
+    const dispatchUntil = async (targetStep, route) => {
+      const dispatcher = new RunDispatchCommand({
+        nextAction: {
+          async run(container, input) {
+            const action = await new (await import("../../src/flow/lib/get-next-action.js")).default().run(container, input);
+            return action.step === targetStep ? completedAction() : action;
+          },
+        },
+        agent,
+        repositoryFingerprint: () => "draft-gate-repair-agent",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+      });
+      dispatcher.container = agentContainer;
+      return measureWorker(evidence, route, () => dispatcher.execute({
+        ...context(), expectRunId: "run-521-draft-gate-repair", expectSpec: specId,
+        _envelopeType: "run", _envelopeKey: "dispatch",
+      }));
+    };
+    // A real Coverage Review may select Findings. Let the canonical dispatcher
+    // execute its triage/repair/review route before attempting the Gate.
+    const coverageResult = await dispatchUntil("draft-gate", "draft-coverage-pipeline");
+    assert.equal(coverageResult.dispatch?.boundary, "completed", JSON.stringify(coverageResult));
+    const gateAction = await new (await import("../../src/flow/lib/get-next-action.js")).default().execute(context());
+    assert.equal(gateAction.step, "draft-gate");
     const gateClaim = await new RunClaimNextActionCommand().execute(context());
     assert.equal(gateClaim.ok, true, JSON.stringify(gateClaim));
     const gateResult = await new RunGateCommand().execute({ ...context(), skipGuardrail: true });
@@ -176,22 +194,7 @@ it("real agent completes a synthetic bounded draft Gate repair through canonical
       evidence.result = "passed";
       return;
     }
-    const dispatcher = new RunDispatchCommand({
-      nextAction: {
-        async run(container, input) {
-          const action = await new (await import("../../src/flow/lib/get-next-action.js")).default().run(container, input);
-          return action.step === "spec-review" ? completedAction() : action;
-        },
-      },
-      agent,
-      repositoryFingerprint: () => "draft-gate-repair-agent-spec",
-      leaseFactory: () => ({ acquire() {}, release() {} }),
-    });
-    dispatcher.container = agentContainer;
-    const dispatchResult = await measureWorker(evidence, "spec", () => dispatcher.execute({
-      ...context(), expectRunId: "run-521-draft-gate-repair", expectSpec: specId,
-      _envelopeType: "run", _envelopeKey: "dispatch",
-    }));
+    const dispatchResult = await dispatchUntil("spec-review", "spec");
     assert.equal(dispatchResult.dispatch?.boundary, "completed", JSON.stringify(dispatchResult));
     const state = manager.loadReadOnly(specId);
     assert.equal(state.issue, 521);
@@ -204,6 +207,19 @@ it("real agent completes a synthetic bounded draft Gate repair through canonical
   } finally {
     const evidencePath = process.env.SENNEL_DRAFT_GATE_REPAIR_EVIDENCE;
     if (evidencePath) {
+      if (manager !== null) {
+        try {
+          const state = manager.canonicalState();
+          const catalog = manager.artifactCatalog(state.specId).toJSON();
+          const location = manager.specLocation(state.specId);
+          evidence.canonical = { state: state.toJSON(), activities: manager.activityLedger(state.specId), catalog,
+            artifacts: catalog.artifacts.filter((entry) => entry.logicalKey.startsWith("draft")
+              || entry.logicalKey.startsWith("plan.gate.repair") || entry.logicalKey === "spec.record")
+              .map((entry) => ({ logicalKey: entry.logicalKey, relativePath: entry.relativePath,
+                document: JSON.parse(fs.readFileSync(location.resolve(entry.relativePath), "utf8")) })),
+          };
+        } catch (error) { evidence.captureError = error.message; }
+      }
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
       fs.writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
     }

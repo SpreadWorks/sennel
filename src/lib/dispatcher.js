@@ -662,6 +662,7 @@ export async function dispatch({
       failure.code = result.errors.find((item) => item?.level === "fatal")?.code
         || result.errors[0]?.code
         || "COMMAND_ENVELOPE_FAILED";
+      failure.data = result.data;
       if (hookCtx.flowOutboxEntry && entry.onError) {
         try {
           await entry.onError(hookCtx, failure);

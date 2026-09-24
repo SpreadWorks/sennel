@@ -84,6 +84,13 @@ the repository's `.sennel`, Git state, or a shared lock.
   `node --test tests/integration/flow-cli/draft-artifact-scenario.test.js`
   and `node --test tests/integration/flow-cli/spec-artifact-scenario.test.js`;
   update these references if the owning scenarios move.
+- The Draft and Spec production scenarios must generate and save their phase
+  artifacts through the normal dispatcher, registered commands, Definition,
+  Service, and Store path. They are not a sequence of unit-test calls. Fake only
+  nondeterministic external agent/provider responses, clocks, or external
+  processes; do not replace internal consumers or transition decisions. An
+  in-process command invocation is sufficient when process behavior is not the
+  contract under test.
 - For restart and recovery contracts, discard in-memory managers and reconstruct
   them from persisted state without passing the previous result forward. Check
   relevant interruption boundaries, such as before and after publication or
@@ -117,7 +124,8 @@ the repository's `.sennel`, Git state, or a shared lock.
 - Keep unresolved baseline failures separate from newly exposed regressions.
   Report source revisions and relevant uncommitted changes, the frozen test set,
   per-case outcomes, logs, and the fault-to-test mapping. Distinguish measured
-  results, inference, and untested boundaries. Detecting every known historical
+  results, inference, and untested boundaries; record implementation completion
+  separately from verification completion. Detecting every known historical
   fault does not establish completeness against unknown faults or prove the
   fixes themselves correct in all cases.
 - Keep expensive historical comparisons separate from the normal test suite.

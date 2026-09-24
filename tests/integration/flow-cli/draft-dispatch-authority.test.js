@@ -4,6 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
 
+import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { StepPersistenceFailure, STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE } from "../../../src/flow/lib/definition-lifecycle-failure.js";
+import { AgentAuthenticationFailure } from "../../../src/lib/agent-failure.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowHandoffAuthorityLease } from "../../../src/lib/flow-handoff-authority-lease.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
@@ -74,7 +77,7 @@ function writeDraftGateRepair(request, replacement) {
   }));
 }
 
-function createAgent({ flowManager, specId, onRequest = () => {} }) {
+function createAgent({ flowManager, specId, onRequest = () => {}, noProgress = false, afterGateRepair = () => {} }) {
   const initialDraft = canonicalDraftDocument({
     goal: "Release handoff authority between conditional Draft workers.",
   });
@@ -90,7 +93,8 @@ function createAgent({ flowManager, specId, onRequest = () => {} }) {
       if (request.stepId === "draft") {
         fs.writeFileSync(requestPayloadPath(request, "draft.json"), workerArtifactJson(initialDraft));
       } else if (request.stepId === "draft-gate-repair") {
-        writeDraftGateRepair(request, repairedValidation);
+        writeDraftGateRepair(request, noProgress ? requestInput(request, "draft.json").document.analysis.validation : repairedValidation);
+        afterGateRepair(request);
       } else if (request.stepId === "spec") {
         const canonicalDraft = flowManager.readArtifact({
           specId,
@@ -172,7 +176,12 @@ async function runGateCommand(ctx, result) {
   return { ok: true, data: promotion, errors: [] };
 }
 
-function createDispatcherScenario(root, suffix, { maxDispatches, coordinator = new WorkerArtifactHandoffCoordinator(), onRequest } = {}) {
+function createDispatcherScenario(root, suffix, {
+  maxDispatches,
+  coordinator = new WorkerArtifactHandoffCoordinator(),
+  onRequest,
+  afterGateRepair,
+} = {}) {
   const { flowManager, specId, runId } = startDraftFlow(root, suffix);
   const requests = [];
   const executionEvents = [];
@@ -189,6 +198,7 @@ function createDispatcherScenario(root, suffix, { maxDispatches, coordinator = n
   const agent = createAgent({
     flowManager,
     specId,
+    afterGateRepair,
     onRequest(request) {
       requests.push(request);
       recordExecution("worker", request.stepId);
@@ -266,7 +276,7 @@ async function observeAuthorityLeases(run) {
 }
 
 /** Prepare only the production Gate-repair boundary; this is not full-path evidence. */
-function gateRepairBoundary(root, suffix, coordinator = new WorkerArtifactHandoffCoordinator()) {
+function gateRepairBoundary(root, suffix, coordinator = new WorkerArtifactHandoffCoordinator(), noProgress = false) {
   const { flowManager, specId, runId, fixture } = startDraftFlow(root, suffix);
   flowManager.confirmCurrentAttempt({
     specId,
@@ -292,7 +302,7 @@ function gateRepairBoundary(root, suffix, coordinator = new WorkerArtifactHandof
     }],
   });
   const requests = [];
-  const agent = createAgent({ flowManager, specId, onRequest: (request) => requests.push(request) });
+  const agent = createAgent({ flowManager, specId, noProgress, onRequest: (request) => requests.push(request) });
   const dispatcher = new RunDispatchCommand({
     agent,
     handoffCoordinator: coordinator,
@@ -325,6 +335,187 @@ function gateRepairBoundary(root, suffix, coordinator = new WorkerArtifactHandof
 }
 
 describe("Draft dispatcher handoff authority lifecycle", { concurrency: false }, () => {
+
+  it("checkpoints an unauthorized Gate repair handoff without consuming the Attempt budget", async () => {
+    const root = fixtureRepository("draft-dispatch-unauthorized-gate-repair-");
+    let claimedSnapshot = null;
+    try {
+      const scenario = createDispatcherScenario(root, "unauthorized-gate-repair", {
+        maxDispatches: 16,
+        onRequest(request) {
+          if (request.stepId !== "draft-gate-repair") return;
+          const state = scenario.flowManager.canonicalState(scenario.specId);
+          const binding = {
+            runId: state.runId,
+            specId: state.specId,
+            stepId: request.stepId,
+            attempt: state.attempt,
+          };
+          const execution = scenario.flowManager.draftStepExecutionState({ binding });
+          const identity = execution.executionIdentity();
+          assert.equal(execution.lifecycle.phase, "claimed");
+          claimedSnapshot = {
+            lifecycle: execution.lifecycle.toJSON(),
+            stepResult: identity.stepResult.toJSON(),
+            settlement: identity.settlement.toJSON(),
+            canonical: state.toJSON(),
+            activities: scenario.flowManager.activityLedger(scenario.specId),
+            catalog: scenario.flowManager.artifactCatalog(scenario.specId).toJSON().artifacts
+              .map((entry) => structuredClone(entry.toJSON?.() ?? entry)),
+            issueLog: scenario.flowManager.readArtifact({
+              specId: scenario.specId,
+              logicalKey: "issue.log",
+              consumerNodeId: request.stepId,
+              optional: true,
+            }),
+          };
+        },
+        afterGateRepair(request) {
+          const payloadPath = requestPayloadPath(request, "draft-gate-repair.json");
+          const payload = JSON.parse(fs.readFileSync(payloadPath, "utf8"));
+          const draft = requestInput(request, "draft.json").document;
+          // The payload is bounded and otherwise well-formed, but repair workers
+          // have no authority to address the question ledger.
+          payload.operations[0].path = "questionLedger";
+          payload.operations[0].expectedDigest = crypto.createHash("sha256")
+            .update(JSON.stringify(draft.questionLedger)).digest("hex");
+          payload.operations[0].replacement = structuredClone(draft.questionLedger);
+          fs.writeFileSync(payloadPath, workerArtifactJson(payload));
+        },
+      });
+
+      const result = await scenario.dispatcher.execute(scenario.context);
+      assert.ok(claimedSnapshot);
+      assert.equal(result.ok, false);
+      assert.equal(errorCode(result), "FLOW_DRAFT_GATE_REPAIR_INVALID");
+      assert.equal(result.data.classification, "invalid");
+      assert.equal(result.data.retryBudgetConsumed, false);
+      assert.deepEqual(scenario.requests.map((request) => request.stepId), ["draft", "draft-gate-repair"]);
+
+      const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: scenario.specId });
+      const state = reloaded.canonicalState(scenario.specId);
+      const binding = {
+        runId: state.runId,
+        specId: state.specId,
+        stepId: "draft-gate-repair",
+        attempt: state.attempt,
+      };
+      const execution = reloaded.draftStepExecutionState({ binding });
+      const identity = execution.executionIdentity();
+      assert.equal(execution.lifecycle.phase, "checkpoint");
+      assert.equal(execution.lifecycle.executionGeneration, claimedSnapshot.lifecycle.binding.executionGeneration + 1);
+      assert.deepEqual(execution.lifecycle.binding.toJSON(), {
+        ...claimedSnapshot.lifecycle.binding,
+        executionGeneration: claimedSnapshot.lifecycle.binding.executionGeneration + 1,
+      });
+      assert.deepEqual(identity.stepResult.toJSON(), claimedSnapshot.stepResult);
+      assert.deepEqual(identity.settlement.toJSON(), claimedSnapshot.settlement);
+      assert.equal(state.attempt.id, claimedSnapshot.canonical.attempt.id);
+      assert.equal(state.attempt.sequence, claimedSnapshot.canonical.attempt.sequence);
+      assert.deepEqual(state.attempt.consumption.toJSON(), claimedSnapshot.canonical.attempt.consumption);
+      assert.equal(state.findNode("draft-gate-repair").result?.stepResult ?? null, null);
+      assert.equal(state.findNode("draft-gate-repair").status, "in_progress");
+
+      const activities = reloaded.activityLedger(scenario.specId);
+      const activityDelta = activities.slice(claimedSnapshot.activities.length);
+      assert.deepEqual(activityDelta.map((entry) => entry.transition.operation), [
+        "record_metric", "record_draft_step_settlement", "publish_artifacts",
+      ]);
+      assert.equal(activityDelta[0].metric.phase, "draft-gate-repair");
+      assert.equal(activityDelta[0].metric.kind, "agent");
+      assert.equal(activityDelta[0].metric.callCount, 1);
+      assert.equal(activities.length, claimedSnapshot.activities.length + 3);
+      assert.deepEqual(activities.slice(0, claimedSnapshot.activities.length), claimedSnapshot.activities);
+      const issueLog = reloaded.readArtifact({
+        specId: scenario.specId,
+        logicalKey: "issue.log",
+        consumerNodeId: "draft-gate-repair",
+      });
+      const priorEntries = claimedSnapshot.issueLog === null
+        ? [] : JSON.parse(claimedSnapshot.issueLog.bytes.toString("utf8")).entries;
+      const entries = JSON.parse(issueLog.bytes.toString("utf8")).entries;
+      assert.deepEqual(entries.slice(0, priorEntries.length), priorEntries);
+      assert.equal(entries.length, priorEntries.length + 1);
+      assert.equal(entries.at(-1).issueLogId, `worker-handoff-${result.data.actionDigest}-invalid`);
+      assert.equal(entries.at(-1).step, "draft-gate-repair");
+      const issuePublication = activityDelta.find((entry) => entry.id === issueLog.descriptor.activityId);
+      assert.ok(issuePublication);
+      assert.equal(issuePublication.transition.operation, "publish_artifacts");
+
+      const catalogAfter = reloaded.artifactCatalog(scenario.specId).toJSON().artifacts
+        .map((entry) => structuredClone(entry.toJSON?.() ?? entry));
+      const changedKeys = catalogAfter.filter((after) => {
+        const before = claimedSnapshot.catalog.find((entry) => entry.relativePath === after.relativePath);
+        return before === undefined || JSON.stringify(before) !== JSON.stringify(after);
+      }).map((entry) => entry.logicalKey).sort();
+      assert.deepEqual(changedKeys, ["flow.activities", "flow.state", "issue.log"]);
+      assert.deepEqual(catalogAfter.filter((entry) => !["flow.activities", "flow.state", "issue.log"].includes(entry.logicalKey)),
+        claimedSnapshot.catalog.filter((entry) => !["flow.activities", "flow.state", "issue.log"].includes(entry.logicalKey)));
+    } finally {
+      removeTmpDir(root);
+    }
+  });
+
+  it("retains an unpublished Draft Attempt and retry budget after provider refusal across restart", async () => {
+    const root = fixtureRepository("draft-dispatch-provider-refusal-");
+    try {
+      const { flowManager, specId } = startDraftFlow(root, "provider-refusal");
+      const calls = [];
+      const agent = {
+        async call(_prompt, options) {
+          const request = JSON.parse(fs.readFileSync(options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST));
+          calls.push(request);
+          throw new AgentAuthenticationFailure({ message: "Draft provider credentials are unavailable." });
+        },
+      };
+      const initial = flowManager.canonicalState(specId).toJSON();
+      const catalogBefore = flowManager.artifactCatalog(specId).toJSON().artifacts;
+      for (const restarted of [false, true]) {
+        const manager = restarted ? new FlowManager({ root, mainRoot: root, inWorktree: false, specId }) : flowManager;
+        const before = manager.canonicalState(specId).toJSON();
+        const activityCount = manager.activityLedger(specId).length;
+        const dispatcher = new RunDispatchCommand({ agent, repositoryFingerprint: () => "draft-provider-refusal", maxDispatches: 2 });
+        dispatcher.container = dispatchContainer({ root, flowManager: manager, agent });
+        const state = manager.loadReadOnly(specId);
+        const result = await dispatcher.execute({
+          root, mainRoot: root, executionRoot: root, specId, flowManager: manager, flowState: state,
+          expectBinding: FlowTargetBinding.capture({ flowState: state, mainRoot: root, authorityRoot: root }).serialize(),
+          _envelopeType: "run", _envelopeKey: "dispatch",
+        });
+        if (manager !== flowManager) {
+          assert.equal(result.dispatch.boundary, "blocked");
+          assert.equal(result.dispatch.dispatchCount, 0);
+          assert.equal(calls.length, 1);
+          assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
+          assert.equal(manager.activityLedger(specId).length, activityCount);
+          continue;
+        }
+        assert.equal(result.ok, false);
+        assert.equal(errorCode(result), "FLOW_ARTIFACT_HANDOFF_MISSING");
+        assert.equal(result.data.agentFailure.code, "AGENT_AUTHENTICATION_FAILED");
+        assert.equal(result.data.retryBudgetConsumed, false);
+        const after = manager.canonicalState(specId).toJSON();
+        assert.equal(after.attempt.id, initial.attempt.id);
+        assert.equal(after.attempt.sequence, initial.attempt.sequence);
+        assert.deepEqual(after.attempt.consumption, initial.attempt.consumption);
+        assert.equal(after.attempt.failure.category, "tooling");
+        assert.equal(after.attempt.failure.code, "FLOW_ARTIFACT_HANDOFF_MISSING");
+        assert.equal(after.attempt.failure.retryable, false);
+        assert.equal(manager.canonicalState(specId).findNode("draft").result?.stepResult ?? null, null);
+        assert.equal(manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate", optional: true }), null);
+        assert.deepEqual(manager.artifactCatalog(specId).toJSON().artifacts.filter((entry) => !["issue.log", "flow.activities", "flow.state"].includes(entry.logicalKey)),
+          catalogBefore.filter((entry) => !["issue.log", "flow.activities", "flow.state"].includes(entry.logicalKey)));
+        const recorded = manager.activityLedger(specId).slice(activityCount);
+        assert.deepEqual(recorded.map((entry) => entry.transition.operation), ["record_metric", "fail_attempt", "publish_artifacts"]);
+        assert.equal(recorded[0].metric.callCount, 1);
+        assert.equal(recorded[1].attemptId, before.attempt.id);
+      }
+      assert.deepEqual(calls.map((request) => request.stepId), ["draft"]);
+    } finally {
+      removeTmpDir(root);
+    }
+  });
+
   it("connects Draft entry through worker-free refine and Gate repair to the canonical Spec handoff", async () => {
     const root = fixtureRepository("draft-dispatch-full-");
     try {
@@ -422,6 +613,56 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
     }
   });
 
+  for (const noProgress of [false, true]) {
+    it(`restores the published Gate selection across restart without candidate or provider repetition (${noProgress ? "no-progress" : "applied"})`, async (t) => {
+      const root = fixtureRepository("draft-gate-publication-restart-");
+      const adoption = t.mock.method(DraftService.prototype, "adoptRepairCandidate");
+      const coordinator = new class extends WorkerArtifactHandoffCoordinator {
+        publishDraftWorker(input) {
+          super.publishDraftWorker(input);
+          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED", "interrupt after publication", { recoveryPossible: true });
+        }
+      }();
+      try {
+        const scenario = gateRepairBoundary(root, `restart-${noProgress}`, coordinator, noProgress);
+        await assert.rejects(() => scenario.dispatcher.execute(scenario.context), /interrupt after publication/);
+        assert.equal(adoption.mock.callCount(), 1);
+        assert.equal(scenario.requests.length, 1);
+        const publications = scenario.flowManager.activityLedger(scenario.specId).filter((entry) => entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication");
+        assert.equal(publications.length, 1);
+        const published = publications[0].result.draftSettlementReceipt;
+        assert.equal(published.draftGateRepairSelection.outcome.disposition, noProgress ? "rejected-no-progress" : "applied");
+        const beforeDraft = scenario.flowManager.readArtifact({ specId: scenario.specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" });
+        const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: scenario.specId });
+        const agent = { async call() { assert.fail("publication recovery must not call the provider"); } };
+        const cleanupInterrupted = new WorkerArtifactHandoffCoordinator({ faultInjector({ phase }) {
+          if (phase === "before-worker-handoff-cleanup-rename") throw new Error("retain terminal Gate handoff");
+        } });
+        const resumed = new RunDispatchCommand({ agent, handoffCoordinator: cleanupInterrupted, repositoryFingerprint: () => `gate-repair-boundary-restart-${noProgress}`, maxDispatches: 1 });
+        resumed.container = dispatchContainer({ root, flowManager: reloaded, agent });
+        await assert.rejects(() => resumed.execute({ ...scenario.context, flowManager: reloaded, flowState: reloaded.loadReadOnly(scenario.specId) }), /retain terminal Gate handoff/);
+        assert.equal(adoption.mock.callCount(), 1);
+        assert.equal(reloaded.canonicalState(scenario.specId).findNode("draft-gate-repair").status, "done");
+        const afterDraft = reloaded.readArtifact({ specId: scenario.specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" });
+        assert.deepEqual(afterDraft.descriptor, beforeDraft.descriptor);
+        assert.deepEqual(afterDraft.bytes, beforeDraft.bytes);
+        assert.equal(reloaded.activityLedger(scenario.specId).filter((entry) => entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication").length, 1);
+        const terminalLedger = reloaded.activityLedger(scenario.specId);
+        const terminalCatalog = reloaded.artifactCatalog(scenario.specId).toJSON();
+        const third = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: scenario.specId });
+        const cleanup = new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: {
+          ...scenario.context, flowManager: third, flowState: third.loadReadOnly(scenario.specId),
+        } });
+        assert.equal(cleanup.replayed, true);
+        assert.equal(adoption.mock.callCount(), 1);
+        assert.equal(scenario.requests.length, 1);
+        assert.deepEqual(third.activityLedger(scenario.specId), terminalLedger);
+        assert.deepEqual(third.artifactCatalog(scenario.specId).toJSON(), terminalCatalog);
+
+      } finally { removeTmpDir(root); }
+    });
+  }
+
   it("checks fixture-prepared boundary contracts: releases authority once at worker, publication, and terminal exits", async (t) => {
     const cases = [
       {
@@ -449,6 +690,13 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
           return new class extends WorkerArtifactHandoffCoordinator {
             publishDraftWorker(input) {
               super.publishDraftWorker(input);
+              const { flowManager } = input.ctx;
+              const specId = input.request.specId;
+              this.published = {
+                state: flowManager.canonicalState(specId).toJSON(),
+                activities: flowManager.activityLedger(specId),
+                catalog: flowManager.artifactCatalog(specId).toJSON(),
+              };
               throw new WorkerArtifactHandoffError(
                 "recovery-required",
                 "FLOW_DRAFT_PUBLICATION_EXIT_FIXTURE",
@@ -458,8 +706,47 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
             }
           }();
         },
-        assertResult(result) {
-          assert.equal(errorCode(result), "FLOW_DRAFT_PUBLICATION_EXIT_FIXTURE", JSON.stringify(result, null, 2));
+        assertError(error) {
+          assert.ok(error instanceof StepPersistenceFailure);
+          assert.equal(error.code, STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE);
+          assert.ok(error.cause instanceof WorkerArtifactHandoffError);
+          assert.equal(error.cause.code, "FLOW_DRAFT_PUBLICATION_EXIT_FIXTURE");
+          assert.equal(error.cause.recoveryPossible, true);
+          return true;
+        },
+        assertResult(_result, scenario, coordinator) {
+          const { flowManager, specId } = scenario;
+          const state = flowManager.canonicalState(specId);
+          // The dispatcher records the completed provider invocation even when persistence stops.
+          const activities = flowManager.activityLedger(specId);
+          assert.deepEqual(activities.slice(0, coordinator.published.activities.length), coordinator.published.activities);
+          const afterPublication = activities.slice(coordinator.published.activities.length);
+          assert.equal(afterPublication.length, 1);
+          assert.equal(afterPublication[0].transition.operation, "record_metric");
+          assert.equal(afterPublication[0].metric.kind, "agent");
+          assert.equal(afterPublication[0].metric.callCount, 1);
+          assert.deepEqual(state.toJSON(), {
+            ...coordinator.published.state,
+            confirmationOrder: coordinator.published.state.confirmationOrder + 1,
+          });
+          const catalog = flowManager.artifactCatalog(specId).toJSON();
+          const metadataKeys = new Set(["flow.activities", "flow.state"]);
+          assert.deepEqual(catalog.artifacts.filter((artifact) => !metadataKeys.has(artifact.logicalKey)),
+            coordinator.published.catalog.artifacts.filter((artifact) => !metadataKeys.has(artifact.logicalKey)));
+          for (const logicalKey of metadataKeys) {
+            assert.equal(catalog.artifacts.find((artifact) => artifact.logicalKey === logicalKey).activityId, afterPublication[0].id);
+          }
+          assert.equal(state.current.at(-1), "draft-gate-repair");
+          assert.equal(state.attempt.failure, null);
+          assert.deepEqual(state.attempt.consumption.toJSON(), { semantic: 0, tooling: 0 });
+          const receipts = coordinator.published.activities
+            .filter((entry) => entry.nodeId === "draft-gate-repair")
+            .map((entry) => entry.result?.draftSettlementReceipt).filter(Boolean);
+          assert.equal(receipts.filter((receipt) => receipt.executionLifecycle?.phase === "publication").length, 1);
+          assert.equal(receipts.some((receipt) => receipt.executionLifecycle?.phase === "terminal"), false);
+          assert.equal(coordinator.published.catalog.artifacts.some((artifact) => artifact.logicalKey === "draft.gate.repair"), true);
+          assert.equal(coordinator.published.catalog.artifacts.some((artifact) => artifact.logicalKey === "plan.gate.repair.outcome"), false);
+          assert.equal(scenario.requests.length, 1);
         },
       },
       {
@@ -476,11 +763,14 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
       await t.test(boundary.name, async () => {
         const root = fixtureRepository(`draft-dispatch-${boundary.name}-exit-`);
         try {
-          const scenario = gateRepairBoundary(root, `${boundary.name}-exit`, boundary.coordinator());
-          const observed = await observeAuthorityLeases(() => scenario.dispatcher.execute(scenario.context));
+          const coordinator = boundary.coordinator();
+          const scenario = gateRepairBoundary(root, `${boundary.name}-exit`, coordinator);
+          const observed = await observeAuthorityLeases(() => boundary.assertError
+            ? assert.rejects(() => scenario.dispatcher.execute(scenario.context), boundary.assertError)
+            : scenario.dispatcher.execute(scenario.context));
           assert.ok(observed.leases.length >= 1);
           assert.equal(observed.leases.every((counts) => counts.acquires === 1 && counts.releases === 1), true);
-          boundary.assertResult(observed.value, scenario);
+          boundary.assertResult(observed.value, scenario, coordinator);
         } finally {
           removeTmpDir(root);
         }

@@ -80,6 +80,10 @@ import {
   TaskReviewUnsealedWorkUnitSet,
 } from "./review-work-unit.js";
 import { isCanonicalFlowState } from "./canonical-test-artifacts.js";
+import {
+  isStepPersistenceFailure,
+} from "./definition-lifecycle-failure.js";
+import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./step-admission-refusal.js";
 import { ReviewExecutionLease } from "./review-execution-lease.js";
 import { assertReconciledTaskReviewInput, readTaskReviewReconciliations, isReconciledTaskReviewWorkUnit } from "./task-review-reconciliation.js";
 import { resolveCurrentReviewTransition } from "./review-transition-persistence.js";
@@ -108,6 +112,13 @@ import {
 import { readRetryBaseline, readRetryRecoveryReceipt, retryEvidenceRouteForNode } from "./retry-recovery.js";
 
 const IMPL_REVIEW_PHASE = "impl";
+
+function reviewStepFailureKind(error) {
+  if (isStepAdmissionRefusal(error)) return "step-admission";
+  if (isStepPersistenceFailure(error)) return "step-persistence";
+  return null;
+}
+
 const REVIEW_VERDICT_VALUES = Object.freeze(["PASS", "ADVISORY", "REJECTED"]);
 const REVIEW_VERDICT_PATTERN = new RegExp(`verdict=(${REVIEW_VERDICT_VALUES.join("|")})`);
 const REVIEW_TOOLING_OUTCOME_PATTERN = /outcome=TOOLING_ERROR/;
@@ -252,6 +263,7 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
         "DRAFT_REVIEW_EXECUTION_BINDING_MISMATCH",
         "the rebuilt Draft Review work unit does not match its persisted execution checkpoint or claim",
         {
+          failureKind: "step-admission",
           phase,
           lifecyclePhase: current.phase,
           persistedBinding: current.binding.toJSON(),
@@ -270,7 +282,12 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
       "review",
       "DRAFT_REVIEW_EXECUTION_ALREADY_PUBLISHED",
       "the current Draft Review execution generation is already published or terminal and cannot create a new generation without a definition-selected Step",
-      { phase, lifecyclePhase: current.phase, executionBinding: current.binding.toJSON() },
+      {
+        failureKind: "step-admission",
+        phase,
+        lifecyclePhase: current.phase,
+        executionBinding: current.binding.toJSON(),
+      },
     );
   } else {
     executionBinding = executionState.reviewBinding({
@@ -280,38 +297,38 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
     });
   }
   const source = new CanonicalDraftReviewSource({ flowManager, state, phase });
-  const stepBinding = await new DraftReviewConnector(source).connect();
-  const recoveredIdentity = executionState.executionIdentity();
-  let selectedStepResult = recoveredIdentity?.stepResult ?? null;
-  let selectedSettlement = recoveredIdentity?.settlement ?? null;
+  let stepBinding;
+  try {
+    stepBinding = await new DraftReviewConnector(source).connect();
+  } catch (error) {
+    if (error instanceof CurrentFlowStateConflictError) {
+      throw new StepAdmissionRefusal(error.message, error);
+    }
+    throw error;
+  }
   let selected = stepResult;
   if (checkpointRequired) {
     const service = new ReviewService({
       flowManager,
       binding: stepBinding,
-      executionCheckpointer: (selectedResult, settlementSelection, selectedBinding) => {
-        selectedStepResult = selectedResult;
-        selectedSettlement = settlementSelection;
-        return flowManager.checkpointDraftStepExecution({
-          binding: selectedBinding,
-          stepResult: selectedResult,
-          settlement: settlementSelection,
-          executionBinding,
-        });
-      },
+      executionBinding,
     });
     selected = await new StepFactory()
       .provide(ReviewService, service)
       .create(phase === "draft-questions" ? DraftQuestionsReviewStep : DraftCoverageReviewStep)
       .execute();
   }
+  const selection = flowManager.draftStepExecutionState({ binding: stepBinding }).executionIdentity();
+  const selectedStepResult = selection?.stepResult ?? null;
+  const selectedSettlement = selection?.settlement ?? null;
   if (selected.kind !== stepResult.kind) {
     throw new Error("Draft review pre-execution Step selected an invalid Result");
   }
   if (selectedStepResult?.kind !== selected.kind || selectedSettlement === null) {
     throw new Error("Draft review execution lacks its persisted Step selection");
   }
-  flowManager.claimDraftStepExecution({
+  ReviewService.claimExecution({
+    flowManager,
     binding: stepBinding,
     stepResult: selectedStepResult,
     settlement: selectedSettlement,
@@ -1836,7 +1853,10 @@ export class RunReviewCommand extends FlowCommand {
             skipConfirm: ctx.skipConfirm === true,
           });
         } catch (error) {
-          return Envelope.fail("run", "review", "SPEC_REVIEW_EXECUTION_ADMISSION_REJECTED", error.message);
+          if (error instanceof CurrentFlowStateConflictError) {
+            throw new StepAdmissionRefusal(error.message, error);
+          }
+          throw error;
         }
       }
       try {
@@ -2062,7 +2082,9 @@ export class RunReviewCommand extends FlowCommand {
           if (settled === null) throw new Error("Spec Review publication has no terminal Step Result");
           result.artifacts = { ...result.artifacts, ...settled.artifacts };
         } catch (error) {
-          return Envelope.fail("run", "review", "SPEC_REVIEW_SETTLEMENT_INTERRUPTED", error.message);
+          const failureKind = reviewStepFailureKind(error);
+          return Envelope.fail("run", "review", "SPEC_REVIEW_SETTLEMENT_INTERRUPTED", error.message,
+            failureKind === null ? undefined : { failureKind });
         }
       }
       return result;
@@ -2072,7 +2094,12 @@ export class RunReviewCommand extends FlowCommand {
         || error instanceof CurrentFlowStateInvariantError
         || (error?.code === "SPEC_REVIEW_ARTIFACT_INVALID" && /stale/i.test(error.message))
       )) {
-        return Envelope.fail("run", "review", "SPEC_REVIEW_PUBLICATION_CONFLICT", error.message);
+        const refusal = error instanceof CurrentFlowStateConflictError
+          || (error?.code === "SPEC_REVIEW_ARTIFACT_INVALID" && /stale/i.test(error.message))
+          ? new StepAdmissionRefusal(error.message, error) : error;
+        const failureKind = reviewStepFailureKind(refusal);
+        return Envelope.fail("run", "review", "SPEC_REVIEW_PUBLICATION_CONFLICT", error.message,
+          failureKind === null ? undefined : { failureKind });
       }
       const publicationUnavailable = publicationStarted && taskId !== null
         && !(error instanceof CurrentFlowStateConflictError)
@@ -2110,6 +2137,16 @@ export class RunReviewCommand extends FlowCommand {
     taskReviewWorkUnit = null,
     advanceDraftExecution = true,
   } = {}) {
+    const stepFailureKind = reviewStepFailureKind(error);
+    if (stepFailureKind === "step-persistence") {
+      return Envelope.fail("run", "review", error.code || "STEP_RESULT_ERROR_PERSISTENCE_FAILED",
+        error.message, { failureKind: "step-persistence" });
+    }
+    if (stepFailureKind === "step-admission") {
+      return Envelope.fail("run", "review",
+        phase === "spec" ? "SPEC_REVIEW_EXECUTION_ADMISSION_REJECTED" : "DRAFT_REVIEW_EXECUTION_ADMISSION_REJECTED",
+        error.message, { failureKind: "step-admission" });
+    }
     const classified = error?.reviewFailure instanceof ReviewFailure
       ? error.reviewFailure
       : error instanceof AgentFailure

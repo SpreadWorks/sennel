@@ -11,6 +11,8 @@ import { execFileSync } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { flowCommands } from "../../../src/lib/command-registry.js";
+import { dispatch } from "../../../src/lib/dispatcher.js";
 import {
   DraftCreatedResult,
   DraftCoverageReviewFindingsResult,
@@ -24,6 +26,7 @@ import {
   SpecRepairChangedResult,
   SpecRepairUnchangedResult,
   StepErrorResult,
+  StepResult,
   STEP_RESULT_TYPE,
 } from "../../../src/flow/engine/step-result.js";
 import {
@@ -60,6 +63,8 @@ import {
   CurrentFlowSpecRecord,
   CurrentFlowState,
   CurrentFlowStateStore,
+  CurrentFlowStateConflictError,
+  CurrentFlowStateInvariantError,
 } from "../../../src/flow/lib/current-flow-state.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunFilterTaskReviewCommand from "../../../src/flow/lib/run-filter-task-review.js";
@@ -101,6 +106,9 @@ import {
 } from "../../../src/flow/lib/draft-gate-prospective.js";
 import {
   STEP_RESULT_ERROR_CATEGORY,
+  DraftStepExecutionLifecycle,
+  DraftStepSettlementPublication,
+  DraftStepSettlementReceipt,
   resolveGateTransition,
   resolveNonGateTransition,
   settleDraftStepResult,
@@ -3444,6 +3452,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     };
     const interrupted = await review.execute(ctx);
     assert.equal(interrupted.errors[0].code, "SPEC_REVIEW_SETTLEMENT_INTERRUPTED");
+    assert.equal(interrupted.data.failureKind, "step-persistence");
     assert.equal(providerCalls, 1);
     const attemptSequence = manager.canonicalState(created.specId).attempt.sequence;
     const published = manager.activityLedger(created.specId).findLast((activity) => (
@@ -3474,6 +3483,97 @@ describe("FlowManager canonical Version-1 runtime", () => {
       activity.nodeId === "spec-review" && activity.result?.draftSettlementReceipt !== null
       && activity.result?.draftSettlementReceipt !== undefined
     )).length, receipts.length);
+  });
+
+  it("refuses terminal Spec Review replay when durable receipt or publication evidence diverges", async () => {
+    const { repository, manager, created } = activeSpecReviewFixture("001-spec-review-replay-evidence");
+    let providerCalls = 0;
+    const review = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand(_command, _args, options) {
+        providerCalls += 1;
+        writeSpecReviewDeltaOutput(options);
+        ReviewWorkUnit.fromEnvironment(options.env).seal();
+        return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+      },
+    });
+    const ctx = {
+      root: repository, mainRoot: repository, executionRoot: repository,
+      specId: created.specId, phase: "spec", flowManager: manager,
+      flowState: manager.load(created.specId),
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+    };
+    assert.equal((await review.execute(ctx)).artifacts.verdict, "PASS");
+    const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const state = reloaded.canonicalState(created.specId);
+    const activities = reloaded.activityLedger(created.specId);
+    const publicationIndex = activities.findIndex((entry) => entry.nodeId === "spec-review"
+      && entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication");
+    const terminalIndex = activities.findIndex((entry) => entry.nodeId === "spec-review"
+      && entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "terminal");
+    assert.ok(publicationIndex >= 0 && terminalIndex > publicationIndex);
+    const canonicalReplay = await SpecReviewService.terminalReplay({ flowManager: reloaded, state });
+    assert.equal(canonicalReplay.artifacts.verdict, "PASS");
+    const before = activities.length;
+    const publishedResult = StepResult.fromStored("spec-review", activities[publicationIndex].result.stepResult);
+    const publishedReceipt = activities[publicationIndex].result.draftSettlementReceipt;
+    const mismatchedGeneration = new DraftStepSettlementReceipt({
+      binding: {
+        ...publishedReceipt.binding,
+        attempt: { id: publishedReceipt.binding.attemptId, sequence: publishedReceipt.binding.attemptSequence },
+      },
+      result: publishedResult,
+      settlement: settleSpecStepResult("spec-review", publishedResult),
+      publication: new DraftStepSettlementPublication({ corruptedReadback: true }),
+      executionLifecycle: DraftStepExecutionLifecycle.fromJSON({
+        ...publishedReceipt.executionLifecycle,
+        binding: {
+          ...publishedReceipt.executionLifecycle.binding,
+          executionGeneration: publishedReceipt.executionLifecycle.binding.executionGeneration + 1,
+        },
+      }),
+    }).toJSON();
+
+    const corruptions = [
+      ["terminal receipt digest", CurrentFlowStateInvariantError, terminalIndex, (entry) => ({
+        ...entry, result: { ...entry.result, draftSettlementReceipt: {
+          ...entry.result.draftSettlementReceipt, resultDigest: "f".repeat(64),
+        } },
+      })],
+      ["terminal Attempt", /exact terminal settlement/, terminalIndex, (entry) => ({ ...entry, attemptId: "other-attempt" })],
+      ["publication Activity", /exact canonical publication/, publicationIndex, (entry) => ({ ...entry, id: "other-publication" })],
+      ["publication Attempt", CurrentFlowStateConflictError, publicationIndex, (entry) => ({ ...entry, attemptId: "other-attempt" })],
+      ["publication receipt", CurrentFlowStateInvariantError, publicationIndex, (entry) => ({
+        ...entry, result: { ...entry.result, draftSettlementReceipt: {
+          ...entry.result.draftSettlementReceipt, resultDigest: "f".repeat(64),
+        } },
+      })],
+      ["execution generation", CurrentFlowStateConflictError, publicationIndex, (entry) => ({
+        ...entry, result: { ...entry.result, draftSettlementReceipt: mismatchedGeneration },
+      })],
+      ["review digest", CurrentFlowStateInvariantError, publicationIndex, (entry) => ({
+        ...entry, reviewPublication: { ...entry.reviewPublication, reviewDigest: "f".repeat(64) },
+      })],
+      ["review generation", CurrentFlowStateInvariantError, publicationIndex, (entry) => ({
+        ...entry, reviewPublication: { ...entry.reviewPublication, generation: entry.reviewPublication.generation + 1 },
+      })],
+    ];
+    for (const [name, expected, index, alter] of corruptions) {
+      const altered = activities.map((entry, position) => position === index ? alter(entry) : entry);
+      const boundary = {
+        activityLedger: () => altered,
+        readCurrentSpecReview: (input) => reloaded.readCurrentSpecReview(input),
+      };
+      await assert.rejects(
+        SpecReviewService.terminalReplay({ flowManager: boundary, state }),
+        expected,
+        name,
+      );
+    }
+    assert.equal(reloaded.activityLedger(created.specId).length, before);
+    assert.equal(providerCalls, 1);
+    assert.equal(reloaded.canonicalState(created.specId).nextAction().nodeId, "spec-triage");
   });
 
   it("refuses a changed Spec Review target before a second provider call", async () => {
@@ -3536,12 +3636,255 @@ describe("FlowManager canonical Version-1 runtime", () => {
       ...ctx, skipConfirm: true, flowState: manager.load(created.specId),
     });
     assert.equal(changedRequest.errors[0].code, "SPEC_REVIEW_EXECUTION_ADMISSION_REJECTED");
+    assert.equal(changedRequest.data.failureKind, "step-admission");
     assert.equal(providerCalls, 1);
     targetDigest = "c".repeat(64);
     const mismatched = await review.execute({ ...ctx, flowState: manager.load(created.specId) });
     assert.equal(mismatched.errors[0].code, "SPEC_REVIEW_EXECUTION_ADMISSION_REJECTED");
+    assert.equal(mismatched.data.failureKind, "step-admission");
     assert.equal(providerCalls, 1);
     assert.equal(publicationCount(), 0);
+    const beforeDispatch = manager.canonicalState(created.specId).toJSON();
+    const activitiesBeforeDispatch = manager.activityLedger(created.specId).length;
+    const entry = flowCommands.run.review;
+    const originalCommand = entry.command;
+    const out = [];
+    class SpecClaimMismatchReviewCommand extends RunReviewCommand {
+      constructor() {
+        super({
+          resolveTreeSha: () => "a".repeat(40),
+          resolveTargetStateDigest: () => "b".repeat(64),
+          runCommand() { providerCalls += 1; },
+        });
+      }
+      execute(input) { return super.execute({ ...input, phase: "spec", skipConfirm: true }); }
+    }
+    try {
+      entry.command = async () => ({ default: SpecClaimMismatchReviewCommand });
+      await dispatch({
+        container: {
+          get(name) {
+            return {
+              paths: { root: repository }, flowManager: manager, mainRoot: repository,
+              config: null, inWorktree: false,
+            }[name] ?? null;
+          },
+          has(name) { return ["paths", "flowManager", "mainRoot", "config", "inWorktree"].includes(name); },
+        },
+        entry, argv: [], envelopeType: "run", envelopeKey: "review",
+        stdout: (chunk) => out.push(chunk), stderr: () => {}, setExitCode: () => {},
+        buildHookCtx: () => ({
+          ...ctx, flowState: manager.loadReadOnly(created.specId), flowResolutionError: null,
+        }),
+      });
+    } finally {
+      entry.command = originalCommand;
+    }
+    const dispatched = JSON.parse(out.join(""));
+    assert.equal(dispatched.errors[0].code, "SPEC_REVIEW_EXECUTION_ADMISSION_REJECTED");
+    assert.equal(dispatched.data.failureKind, "step-admission");
+    assert.equal(providerCalls, 1);
+    assert.deepEqual(manager.canonicalState(created.specId).toJSON(), beforeDispatch);
+    assert.equal(manager.activityLedger(created.specId).length, activitiesBeforeDispatch);
+  });
+
+  it("distinguishes Spec Review claim persistence failure from a lost committed response", async () => {
+    for (const afterCommit of [false, true]) {
+      const { repository, manager, created } = activeSpecReviewFixture(
+        `001-spec-review-claim-${afterCommit ? "lost-response" : "precommit-failure"}`,
+      );
+      const originalClaim = manager.claimDraftStepExecution.bind(manager);
+      let claimCalls = 0;
+      manager.claimDraftStepExecution = (input) => {
+        claimCalls += 1;
+        if (afterCommit) originalClaim(input);
+        throw new Error(afterCommit ? "claim response lost" : "claim write failed");
+      };
+      let providerCalls = 0;
+      const review = new RunReviewCommand({
+        resolveTreeSha: () => "a".repeat(40),
+        resolveTargetStateDigest: () => "b".repeat(64),
+        runCommand(_command, _args, options) {
+          providerCalls += 1;
+          writeSpecReviewDeltaOutput(options);
+          ReviewWorkUnit.fromEnvironment(options.env).seal();
+          return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+        },
+      });
+      const result = await review.execute({
+        root: repository, mainRoot: repository, executionRoot: repository,
+        specId: created.specId, phase: "spec", flowManager: manager,
+        flowState: manager.load(created.specId),
+        config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+      });
+      const receipts = manager.activityLedger(created.specId).filter((activity) => (
+        activity.nodeId === "spec-review" && activity.result?.draftSettlementReceipt !== null
+        && activity.result?.draftSettlementReceipt !== undefined
+      )).map((activity) => activity.result.draftSettlementReceipt);
+      assert.equal(claimCalls, 1);
+      assert.equal(receipts.filter((receipt) => receipt.executionLifecycle.phase === "claimed").length, afterCommit ? 1 : 0);
+      assert.equal(manager.activityLedger(created.specId).filter((activity) => activity.type === "attempt_failed").length, 0);
+      if (afterCommit) {
+        assert.equal(result.artifacts.verdict, "PASS");
+        assert.equal(providerCalls, 1);
+        assert.deepEqual(receipts.map((receipt) => receipt.executionLifecycle.phase), [
+          "checkpoint", "claimed", "publication", "terminal",
+        ]);
+      } else {
+        assert.equal(result.errors[0].code, "STEP_RESULT_ERROR_PERSISTENCE_FAILED");
+        assert.equal(result.data.failureKind, "step-persistence");
+        assert.equal(providerCalls, 0);
+        assert.equal(manager.canonicalState(created.specId).attempt.failure, null);
+        assert.deepEqual(receipts.map((receipt) => receipt.executionLifecycle.phase), ["checkpoint"]);
+      }
+    }
+  });
+
+  it("distinguishes Spec Review checkpoint persistence failure from a lost committed response", async () => {
+    for (const afterCommit of [false, true]) {
+      const { repository, manager, created } = activeSpecReviewFixture(
+        `001-spec-review-checkpoint-${afterCommit ? "lost-response" : "precommit-failure"}`,
+      );
+      const originalCheckpoint = manager.checkpointDraftStepExecution.bind(manager);
+      let checkpointCalls = 0;
+      manager.checkpointDraftStepExecution = (input) => {
+        checkpointCalls += 1;
+        if (afterCommit) originalCheckpoint(input);
+        throw new Error(afterCommit ? "checkpoint response lost" : "checkpoint write failed");
+      };
+      let providerCalls = 0;
+      const review = new RunReviewCommand({
+        resolveTreeSha: () => "a".repeat(40),
+        resolveTargetStateDigest: () => "b".repeat(64),
+        runCommand(_command, _args, options) {
+          providerCalls += 1;
+          writeSpecReviewDeltaOutput(options);
+          ReviewWorkUnit.fromEnvironment(options.env).seal();
+          return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+        },
+      });
+      const result = await review.execute({
+        root: repository, mainRoot: repository, executionRoot: repository,
+        specId: created.specId, phase: "spec", flowManager: manager,
+        flowState: manager.load(created.specId),
+        config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+      });
+      const receipts = manager.activityLedger(created.specId).filter((activity) => (
+        activity.nodeId === "spec-review" && activity.result?.draftSettlementReceipt !== null
+        && activity.result?.draftSettlementReceipt !== undefined
+      )).map((activity) => activity.result.draftSettlementReceipt);
+      assert.equal(checkpointCalls, 1);
+      assert.equal(receipts.filter((receipt) => receipt.executionLifecycle.phase === "checkpoint").length, afterCommit ? 1 : 0);
+      assert.equal(manager.activityLedger(created.specId).filter((activity) => activity.type === "attempt_failed").length, 0);
+      if (afterCommit) {
+        assert.equal(result.artifacts.verdict, "PASS");
+        assert.equal(providerCalls, 1);
+        assert.deepEqual(receipts.map((receipt) => receipt.executionLifecycle.phase), [
+          "checkpoint", "claimed", "publication", "terminal",
+        ]);
+      } else {
+        assert.equal(result.errors[0].code, "STEP_RESULT_ERROR_PERSISTENCE_FAILED");
+        assert.equal(result.data.failureKind, "step-persistence");
+        assert.equal(providerCalls, 0);
+        assert.equal(manager.canonicalState(created.specId).attempt.failure, null);
+        assert.deepEqual(receipts, []);
+      }
+    }
+  });
+
+  it("classifies a late Spec Review publication conflict without failing its Attempt", async () => {
+    const { repository, manager, created } = activeSpecReviewFixture("001-spec-review-publication-conflict");
+    const publish = SpecReviewService.publish;
+    let providerCalls = 0;
+    try {
+      SpecReviewService.publish = () => {
+        throw new CurrentFlowStateConflictError("the Spec Review publication binding became stale");
+      };
+      const review = new RunReviewCommand({
+        resolveTreeSha: () => "a".repeat(40),
+        resolveTargetStateDigest: () => "b".repeat(64),
+        runCommand(_command, _args, options) {
+          providerCalls += 1;
+          writeSpecReviewDeltaOutput(options);
+          ReviewWorkUnit.fromEnvironment(options.env).seal();
+          return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+        },
+      });
+      const result = await review.execute({
+        root: repository, mainRoot: repository, executionRoot: repository,
+        specId: created.specId, phase: "spec", flowManager: manager,
+        flowState: manager.load(created.specId),
+        config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+      });
+      assert.equal(result.errors[0].code, "SPEC_REVIEW_PUBLICATION_CONFLICT");
+      assert.equal(result.data.failureKind, "step-admission");
+      assert.equal(providerCalls, 1);
+      assert.equal(manager.canonicalState(created.specId).attempt.failure, null);
+      assert.equal(manager.activityLedger(created.specId).some((activity) => (
+        activity.nodeId === "spec-review"
+        && activity.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication"
+      )), false);
+    } finally {
+      SpecReviewService.publish = publish;
+    }
+  });
+
+  it("preserves Spec Review publication persistence failure when receipt readback also fails", async () => {
+    const { repository, manager, created } = activeSpecReviewFixture("001-spec-review-double-read-failure");
+    const writeFailure = new Error("Spec Review publication write failed");
+    const readFailure = new Error("Spec Review receipt readback failed");
+    const originalSettle = manager.settleSpecStepResult.bind(manager);
+    const originalFind = manager.findStepSettlementReceipt.bind(manager);
+    let publicationWrites = 0;
+    let receiptReads = 0;
+    manager.settleSpecStepResult = (input) => {
+      if (input.binding?.stepId !== "spec-review" || input.commandResult === undefined) {
+        return originalSettle(input);
+      }
+      publicationWrites += 1;
+      throw writeFailure;
+    };
+    manager.findStepSettlementReceipt = (input) => {
+      if (input.binding?.stepId !== "spec-review" || input.commandResult === undefined) {
+        return originalFind(input);
+      }
+      receiptReads += 1;
+      throw readFailure;
+    };
+    let providerCalls = 0;
+    const review = new RunReviewCommand({
+      resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64),
+      runCommand(_command, _args, options) {
+        providerCalls += 1;
+        writeSpecReviewDeltaOutput(options);
+        ReviewWorkUnit.fromEnvironment(options.env).seal();
+        return { ok: true, status: 0, stdout: "NO_PROPOSALS\n", stderr: "", signal: null, killed: false };
+      },
+    });
+    const beforeAttempt = manager.canonicalState(created.specId).attempt;
+    const result = await review.execute({
+      root: repository, mainRoot: repository, executionRoot: repository,
+      specId: created.specId, phase: "spec", flowManager: manager,
+      flowState: manager.load(created.specId),
+      config: { agent: { timeout: SYNTHETIC_PROVIDER_TIMEOUT_MS / 1_000 } },
+    });
+    assert.equal(result.errors[0].code, "STEP_RESULT_ERROR_PERSISTENCE_FAILED");
+    assert.deepEqual(result.errors[0].messages, [writeFailure.message]);
+    assert.equal(result.data.failureKind, "step-persistence");
+    assert.equal(publicationWrites, 1);
+    assert.equal(receiptReads, 1);
+    assert.equal(providerCalls, 1);
+    const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const after = reloaded.canonicalState(created.specId);
+    assert.equal(after.attempt.id, beforeAttempt.id);
+    assert.equal(after.attempt.failure, null);
+    assert.deepEqual(after.attempt.consumption.toJSON(), beforeAttempt.consumption.toJSON());
+    assert.equal(reloaded.activityLedger(created.specId).some((entry) => (
+      entry.nodeId === "spec-review"
+      && entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication"
+    )), false);
+    assert.equal(reloaded.activityLedger(created.specId).some((entry) => entry.type === "attempt_failed"), false);
   });
 
   it("refuses a stale canonical Spec revision before provider or receipt mutation", async () => {

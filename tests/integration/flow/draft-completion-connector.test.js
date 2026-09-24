@@ -354,6 +354,71 @@ function confirmAttemptWithoutStorePublication(flowManager, specId, attempt) {
 }
 
 describe("DraftCompletionConnector", () => {
+  it("refuses Coverage PASS when the prospective completion read loses its Review Attempt", async () => {
+    const repository = createTmpDir("draft-coverage-review-late-read-conflict-");
+    const specId = "715f-coverage-review-late-read-conflict";
+    const flowManager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    try {
+      const fixture = new CanonicalFlowFixture({ flowManager, specId, runId: "715f-review-late-read-run" });
+      fixture.create().registerActive().activate("draft");
+      const sourceBytes = Buffer.from(`${JSON.stringify(draft(), null, 2)}\n`, "utf8");
+      flowManager.confirmCurrentAttempt({
+        specId,
+        artifactWrites: [{ logicalKey: "draft", mediaType: "application/json", bytes: sourceBytes }],
+      });
+      fixture.activate("draft-coverage-review");
+      const state = flowManager.canonicalState(specId);
+      const binding = { runId: state.runId, specId, stepId: "draft-coverage-review", attempt: state.attempt };
+      const required = new DraftCoverageReviewExecutionRequiredResult();
+      const settlement = settleDraftStepResult(binding.stepId, required);
+      const executionBinding = new DraftReviewExecutionBinding({
+        executionGeneration: 0, manifestDigest: "c".repeat(64), inputDigest: "d".repeat(64),
+        target: new DraftReviewExecutionTargetIdentity({ treeSha: "a".repeat(40), targetStateDigest: "b".repeat(64) }),
+      });
+      flowManager.checkpointDraftStepExecution({ binding, stepResult: required, settlement, executionBinding });
+      flowManager.claimDraftStepExecution({
+        binding, stepResult: required, settlement, executionBinding,
+        executionClaim: new DraftReviewExecutionClaim(),
+      });
+      const history = JSON.parse(coverageReviewArtifactBytes(flowManager, specId, sourceBytes).toString("utf8"));
+      const result = attachCanonicalCommandResultArtifact({
+        result: "ok", artifacts: { phase: "draft-coverage", retryPhase: "draft-coverage", verdict: "PASS" },
+      }, { logicalKey: "draft.coverage.review", payload: history.attempts.at(-1).artifact.payload });
+      const read = flowManager.readProspectiveDraftCoveragePassFacts.bind(flowManager);
+      let concurrentState;
+      let concurrentActivities;
+      flowManager.readProspectiveDraftCoveragePassFacts = (input) => {
+        flowManager.failCurrentAttempt({
+          specId,
+          failure: {
+            category: "tooling", code: "CONCURRENT_COVERAGE_FAILURE",
+            message: "another execution stopped coverage review", retryable: false, retryKind: null,
+          },
+          result: {
+            outcome: "failed", summary: "another execution stopped coverage review",
+            confirmedAt: new Date().toISOString(), artifactRefs: [],
+          },
+        });
+        concurrentState = flowManager.canonicalState(specId).toJSON();
+        concurrentActivities = flowManager.activityLedger(specId).length;
+        return read(input);
+      };
+      await assert.rejects(FLOW_COMMANDS.run.review.post({
+        root: repository, mainRoot: repository, executionRoot: repository,
+        specId, phase: "draft-coverage", flowManager,
+        flowState: flowManager.loadReadOnly(specId),
+      }, result), (error) => {
+        assert.equal(error.code, "DRAFT_REVIEW_ADMISSION_REFUSED");
+        assert.equal(error.data.failureKind, "step-admission");
+        return true;
+      });
+      assert.deepEqual(flowManager.canonicalState(specId).toJSON(), concurrentState);
+      assert.equal(flowManager.activityLedger(specId).length, concurrentActivities);
+    } finally {
+      removeTmpDir(repository);
+    }
+  });
+
   it("materializes the selected coverage PASS connector through the production Review path", async () => {
     const repository = createTmpDir("draft-coverage-review-production-path-");
     const specId = "715f-coverage-review-production-path";

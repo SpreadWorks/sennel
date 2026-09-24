@@ -2,6 +2,7 @@ import { requiresWorkerArtifactHandoff } from "../../../lib/flow-artifact-author
 import { WorkerArtifactHandoffRequest } from "../../../lib/worker-artifact-handoff.js";
 import { StepBinding, canonicalStepState } from "../../step-binding.js";
 import { SpecRevisionIdentity } from "../../../lib/spec-review-artifacts.js";
+import { CurrentFlowStateConflictError } from "../../../lib/current-flow-state.js";
 
 /** Binds a Spec worker publication to its exact active Attempt. */
 export class SpecWorkerStepBinding extends StepBinding {
@@ -43,7 +44,7 @@ export class SpecReviewStepBinding extends StepBinding {
       specId: this.specId, consumerNodeId: "spec-review",
     });
     if (!this.revision.equals(source.review.identity)) {
-      throw new Error("Spec Review binding is stale for the canonical Spec revision");
+      throw new CurrentFlowStateConflictError("Spec Review binding is stale for the canonical Spec revision");
     }
     return state;
   }

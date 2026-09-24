@@ -1,11 +1,11 @@
-import { CurrentAttemptIdentity } from "../lib/current-flow-state.js";
+import { CurrentAttemptIdentity, CurrentFlowStateConflictError } from "../lib/current-flow-state.js";
 
 export function canonicalStepState(flowManager, specId) {
   if (!flowManager || typeof flowManager.canonicalState !== "function") {
     throw new TypeError("Step binding requires FlowManager canonical state reads");
   }
   const state = flowManager.canonicalState(specId);
-  if (state === null) throw new Error("Step binding has no canonical Flow state");
+  if (state === null) throw new CurrentFlowStateConflictError("Step binding has no canonical Flow state");
   return state;
 }
 
@@ -28,7 +28,7 @@ export class StepBinding {
     this.allowFailed = allowFailed;
     if (this.attempt.nodeId !== this.stepId
       || !(this.attempt.matches(state) || (allowFailed && this.attempt.matchesFailed(state)))) {
-      throw new Error("Step binding requires the exact active Step Attempt");
+      throw new CurrentFlowStateConflictError("Step binding requires the exact active Step Attempt");
     }
   }
 
@@ -36,7 +36,7 @@ export class StepBinding {
     const state = canonicalStepState(this.flowManager, this.specId);
     if (state.runId !== this.runId || state.specId !== this.specId
       || !(this.attempt.matches(state) || (this.allowFailed && this.attempt.matchesFailed(state)))) {
-      throw new Error("Step binding is stale for the canonical Step Attempt");
+      throw new CurrentFlowStateConflictError("Step binding is stale for the canonical Step Attempt");
     }
     return state;
   }

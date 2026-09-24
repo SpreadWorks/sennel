@@ -1,27 +1,11 @@
 import { Step } from "../../engine/step.js";
 import { DraftService } from "../../services/draft-service.js";
-import {
-  DraftQuestionsRepairChangedResult,
-  DraftQuestionsRepairUnchangedResult,
-  StepErrorResult,
-} from "../../engine/step-result.js";
-import { DraftRepairResultFacts } from "../../lib/worker-artifact-handoff.js";
-import { isStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
-
-/** Pure mapping from typed Repair facts to this Step's terminal Result. */
-export function draftQuestionsRepairResult(facts) {
-  if (facts instanceof Error) return new StepErrorResult("draft-questions-repair", facts);
-  if (!(facts instanceof DraftRepairResultFacts) || facts.stepId !== "draft-questions-repair") {
-    throw new TypeError("draft questions Repair Result requires its typed worker facts");
-  }
-  return facts.draftChanged
-    ? new DraftQuestionsRepairChangedResult()
-    : new DraftQuestionsRepairUnchangedResult();
-}
+import { DraftRepairCandidate } from "./draft-repair-candidate.js";
+import { draftQuestionsRepairResult } from "./draft-repair-result.js";
 
 /**
  * Apply question-triage decisions to the Draft and record the repair.
- * The existing worker handoff applies the selected question repair.
+ * The Step selects the repaired candidate and its Result before publication.
  */
 export class DraftQuestionsRepairStep extends Step {
   static dependencies = [DraftService];
@@ -35,13 +19,17 @@ export class DraftQuestionsRepairStep extends Step {
   }
 
   async _execute() {
+    const input = this.#draftService.inspectWorkerFacts().repairInput;
     let result;
+    let candidate;
     try {
-      result = draftQuestionsRepairResult(this.#draftService.inspectWorkerFacts().repairResult);
+      candidate = new DraftRepairCandidate(input);
+      result = candidate.result;
     } catch (error) {
-      if (isStepPersistenceFailure(error)) throw error;
+      this.#draftService.rejectInvalidRepair(error);
       result = draftQuestionsRepairResult(error);
     }
+    if (candidate !== undefined) this.#draftService.adoptRepairCandidate(candidate);
     await result.persist(this.#draftService);
     return result;
   }

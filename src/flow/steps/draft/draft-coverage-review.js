@@ -7,7 +7,6 @@ import {
 } from "../../engine/step-result.js";
 import { ReviewService } from "../../services/review-service.js";
 import { DraftReviewArtifactDocument } from "../../lib/draft-review-artifacts.js";
-import { isStepPersistenceFailure } from "../../lib/definition-lifecycle-failure.js";
 
 /** Pure mapping from typed terminal Review facts to this Step's Result. */
 export function draftCoverageReviewResult(facts) {
@@ -41,11 +40,11 @@ export class DraftCoverageReviewStep extends Step {
       await result.persist(this.#reviewService);
       return result;
     }
+    const facts = this.#reviewService.inspectReviewResult();
     let result;
     try {
-      result = draftCoverageReviewResult(this.#reviewService.inspectReviewResult());
+      result = draftCoverageReviewResult(facts);
     } catch (error) {
-      if (isStepPersistenceFailure(error)) throw error;
       result = draftCoverageReviewResult(error);
     }
     await result.persist(this.#reviewService);
