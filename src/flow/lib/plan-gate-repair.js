@@ -400,6 +400,7 @@ export function createProspectivePlanGateRepairRecord({
   publicationActivityId,
   cycleReadModel,
   phase = "draft",
+  prospective = true,
 } = {}) {
   if (!["draft", "spec"].includes(phase)) {
     throw new Error("prospective plan Gate repair phase is invalid");
@@ -464,7 +465,7 @@ export function createProspectivePlanGateRepairRecord({
     },
     connector,
     cycleReadModel,
-    prospective: true,
+    prospective,
   });
 }
 

@@ -12,6 +12,7 @@ import {
   PlanGateRepairOutcome,
 } from "./gate-observation-convergence.js";
 import { PlanGateRepairObservation, PlanGateRepairRecord } from "./plan-gate-repair.js";
+import { assertGateSettlementPublication } from "./gate-settlement-publication.js";
 
 const OUTCOME_PATH = /^artifacts\/plan-gate-repairs\/([A-Za-z0-9][A-Za-z0-9._-]*)\/outcome\.json$/;
 const REPAIR_ID = /^plan-gate-repair-([a-f0-9]{64})$/;
@@ -130,10 +131,13 @@ function outcomeDescriptors(catalog) {
 }
 
 function attemptHistoryFingerprint(document, throughAttempt) {
-  const bytes = Buffer.from(`${JSON.stringify({
+  return crypto.createHash("sha256").update(attemptHistoryPrefixBytes(document, throughAttempt)).digest("hex");
+}
+
+function attemptHistoryPrefixBytes(document, throughAttempt) {
+  return Buffer.from(`${JSON.stringify({
     attempts: document.attempts.filter((entry) => entry.attempt <= throughAttempt),
   }, null, 2)}\n`, "utf8");
-  return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
 function gateResultPayloadMatchesScope(payload, { phase, route } = {}) {
@@ -254,6 +258,19 @@ export class CanonicalGateObservationCycle {
 
   #attemptActivities(nodeId, attempt) {
     return this.#activitiesByAttempt.get(activityAttemptKey(nodeId, attempt)) ?? [];
+  }
+
+  #matchesPublication(activity, { nodeId, attempt, descriptor, historyEntry, publicationBytes } = {}) {
+    if (!matchingAttemptActivity(activity, { nodeId, attempt })) return false;
+    if (nodeId === "spec-gate" && (activity.result?.draftSettlementReceipt != null
+      || activity.transition?.operation === "record_draft_step_settlement")) {
+      assertGateSettlementPublication({
+        state: this.state, activity, descriptor, historyEntry, attempt, publicationBytes,
+      });
+    }
+    return activity.transition?.operation === "record_draft_step_settlement"
+      ? nodeId === "spec-gate"
+      : ATTEMPT_ARTIFACT_PUBLICATION_OPERATIONS.has(activity.transition?.operation);
   }
 
   #terminalRepairs(records) {
@@ -389,7 +406,7 @@ export class CanonicalGateObservationCycle {
       const keys = canonicalGateLogicalKeys(candidatePhase, taskId);
       const resultHistory = this.#gateResult(keys);
       if (resultHistory === null) continue;
-      const { descriptor, history } = resultHistory;
+      const { resolved, descriptor, history } = resultHistory;
       const payload = history.current.payload;
       const requiresTransitionBinding = taskId !== null || candidatePhase === "integration";
       if (history.current.attempt !== attempt.sequence
@@ -404,10 +421,8 @@ export class CanonicalGateObservationCycle {
         throw new Error("current canonical failed Gate result has stale Attempt or lineage binding");
       }
       const publication = this.activities.filter((activity) => activity.id === descriptor.activityId);
-      if (publication.length !== 1 || !matchingAttemptActivity(publication[0], {
-        nodeId,
-        attempt,
-        operations: ATTEMPT_ARTIFACT_PUBLICATION_OPERATIONS,
+      if (publication.length !== 1 || !this.#matchesPublication(publication[0], {
+        nodeId, attempt, descriptor, historyEntry: history.current, publicationBytes: resolved.bytes,
       })) throw new Error("current canonical failed Gate result has a mismatched publication Activity");
       const failures = this.activities.filter((activity) => matchingAttemptActivity(activity, {
         nodeId,
@@ -442,10 +457,8 @@ export class CanonicalGateObservationCycle {
           throw new Error("current canonical Gate source has stale lineage");
         }
         const sourcePublication = this.activities.filter((activity) => activity.id === sourceDescriptor.activityId);
-        if (sourcePublication.length !== 1 || !matchingAttemptActivity(sourcePublication[0], {
-          nodeId,
-          attempt,
-          operations: ATTEMPT_ARTIFACT_PUBLICATION_OPERATIONS,
+        if (sourcePublication.length !== 1 || !this.#matchesPublication(sourcePublication[0], {
+          nodeId, attempt, descriptor, historyEntry: history.current, publicationBytes: resolved.bytes,
         })) throw new Error("current canonical Gate source has a mismatched publication Activity");
         sourceFingerprint = sourceDescriptor.hash;
         sourceRevisionFingerprint = sourceDocument.lineage;
@@ -519,11 +532,21 @@ export class CanonicalGateObservationCycle {
       throw new Error("canonical Gate repair source history has a mismatched catalog fingerprint");
     }
     const sourcePublications = this.#attemptActivities(record.route.gateStepId, sourceAttempt)
-      .filter((activity) => activity.id === record.evidenceIdentity.publicationActivityId
-        && ATTEMPT_ARTIFACT_PUBLICATION_OPERATIONS.has(activity.transition?.operation));
+      .filter((activity) => activity.id === record.evidenceIdentity.publicationActivityId);
     if (sourcePublications.length !== 1) {
       throw new Error("canonical Gate repair source has no exact publication Activity");
     }
+    if (!this.#matchesPublication(sourcePublications[0], {
+      nodeId: record.route.gateStepId,
+      attempt: sourceAttempt,
+      descriptor: {
+        logicalKey: keys.result,
+        activityId: record.evidenceIdentity.publicationActivityId,
+        hash: record.evidenceIdentity.catalogFingerprint,
+      },
+      historyEntry: source,
+      publicationBytes: attemptHistoryPrefixBytes(document, sourceAttempt.sequence),
+    })) throw new Error("canonical Gate repair source has no exact publication Activity");
     const atomicGateSettlement = sourcePublications[0].id === repairActivity.id
       && repairActivity.result?.stepResult?.kind === `${record.route.phase}-gate-repair-required`;
     if (!Number.isSafeInteger(sourcePublications[0].confirmationOrder)
@@ -538,7 +561,7 @@ export class CanonicalGateObservationCycle {
 
   #postRepairGateResult(recordEntry, resultHistory) {
     const { record, activity: repairActivity } = recordEntry;
-    const { descriptor, history } = resultHistory;
+    const { resolved, descriptor, history } = resultHistory;
     const next = history.current;
     if (next.attempt <= record.evidenceIdentity.sourceAttempt.sequence
       || !gateResultPayloadMatchesScope(next.payload, record)) return null;
@@ -552,10 +575,12 @@ export class CanonicalGateObservationCycle {
     }
     const attemptActivities = this.#attemptActivities(record.route.gateStepId, exactAttempt);
     const publications = this.activities.filter((activity) => activity.id === descriptor.activityId);
-    if (publications.length !== 1 || !matchingAttemptActivity(publications[0], {
+    if (publications.length !== 1 || !this.#matchesPublication(publications[0], {
       nodeId: record.route.gateStepId,
       attempt: exactAttempt,
-      operations: ATTEMPT_ARTIFACT_PUBLICATION_OPERATIONS,
+      descriptor,
+      historyEntry: next,
+      publicationBytes: resolved.bytes,
     })) {
       throw new Error("canonical post-repair Gate result requires one exact publication Activity");
     }

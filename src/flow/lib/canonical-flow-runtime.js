@@ -736,7 +736,7 @@ export class CanonicalFlowRuntime {
   }
 
   /** Atomically record guarded evidence and replace an active gate Attempt. */
-  planGateRepair({ specId, activityId, nodeId, attempt, result = null, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, artifactBaselines = undefined, admission = undefined, gateTaskLifecycle = null } = {}) {
+  planGateRepair({ specId, activityId, nodeId, attempt, result = null, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, artifactBaselines = undefined, admission = undefined, gateTaskLifecycle = null, nonblocking = null } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
@@ -754,6 +754,7 @@ export class CanonicalFlowRuntime {
       artifactBaselines,
       admission,
       gateTaskLifecycle,
+      nonblocking,
     });
   }
 

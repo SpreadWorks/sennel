@@ -60,9 +60,58 @@ connections without replaying the entire Flow.
   reads a recorded catalog path; an active producer retains its
   producer-authorized read.
 
+## Spec Gate advisory outcome coverage (board 7c2e)
+
+The plan Spec Gate stop does not require a decision to retain strict policy.
+Advisory activation is explicit; it neither makes a failed Gate pass nor resets
+the repair budget. Task-spec retains its separate external-input contract.
+
+| Observable outcome | Necessary condition and producer | Storage and readback | Consumer and verification |
+| --- | --- | --- | --- |
+| Strict stop without confirmation or reevaluation | Registered Spec workers and Gate evaluations exhaust the plan repair cycle; the Step saves its blocked Result | Result, receipt, Attempt, Gate history and policy survive a new manager | `spec-artifact-scenario.test.js`: status, next-action and restarted dispatcher must retain the stop and strict policy |
+| Exhausted repair is rejected atomically | Explicit policy activation reads that same saved Result; Definition excludes repair | A stale/direct repair request leaves Attempt, catalog and Activity unchanged | `spec-artifact-scenario.test.js` and `spec-gate-result-settlement.test.js`: rejection before mutation, then explicit continue |
+| Admitted advisory repair changes the Spec before reevaluation | A below-limit semantic Gate Await Result permits repair; the existing plan repair producer binds the blocking observations to the source Gate | Decision and repair record commit together; the normal Spec handoff saves a changed Spec and repair outcome | `spec-artifact-scenario.test.js`: restarted dispatcher consumes the repair record, runs Spec and its downstream chain, then evaluates the new Gate input |
+| Legitimate Await publication remains readable after repair | Earlier plan repair record and outcome precede a new Gate evaluation; normal settlement publishes its Await Result | Exact receipt binding and digest, catalog descriptor, publication Activity and Attempt agree | `spec-artifact-scenario.test.js`, `spec-gate-result-settlement.test.js` and `canonical-gate-observation-cycle.test.js`: status and next-action consume the same persisted proof |
+| Invalid publication is refused | Receipt is absent or changed, Attempt differs, or catalog and Activity disagree | Malformed boundary input is isolated from real Flow state | Focused publication tests own rejection of each independently required identity; the phase scenario owns production and readback |
+| Non-retryable post failure stops with a concrete reason | The post hook fails without a current authenticated settlement authorizing replay | Failure and earlier Gate evidence remain unchanged after manager reconstruction | `spec-gate-post-failure.test.js`: stable blocked with missing conditions, no unsupported repair command or worker execution |
+| Unresolved FAIL reaches Acceptance | An explicit evidence-bound continue follows a strict stop | Gate FAIL remains in history and its exact finding source is published for disposition | `spec-artifact-scenario.test.js`: the real Acceptance artifact store reads retained findings after reload |
+
+The two known faults are compared with identical tests against the unchanged
+pre-fix source in an isolated checkout: unnecessary strict confirmation and
+rejection of a legitimate Spec settlement publication. These comparisons do
+not prove coverage of unknown faults. No running Flow is advanced or modified
+to verify these outcomes.
+
 ## Verification status
 
-### Current implementation verification (2026-09-24)
+### Board 7c2e verification (2026-09-24)
+
+- Source baseline: `b8b3f5955`, plus the board 7c2e working-tree changes.
+  The unchanged baseline fails the same strict-stop test with
+  `await_user_decision` instead of `blocked`, and the same post-repair Await
+  publication test with `canonical post-repair Gate result requires one exact
+  publication Activity`. Both contracts pass with the implementation changes.
+- Focused receipt/publication unit tests passed 14/14, Step Result tests 4/4,
+  persisted Spec settlement tests 11/11, and post-hook failure tests 2/2.
+  Nonblocking policy and next-action regressions passed 69/69.
+- Final Spec production scenarios passed 3/3, including an explicitly enabled
+  advisory repair, durable Await readback, repair-record reload, changed Spec
+  publication, another Gate evaluation, and downstream artifact consumption.
+- The related regression invocation ran 249 tests: 245 passed and four
+  `gate-transition-boundary.test.js` cases failed. Three exposed an undefined
+  variable in the generic Gate eligibility path; one caught unnecessary new
+  serialized fields in the Task Gate contract. These are implementation
+  regressions, not baseline failures; the generic Gate changes were removed.
+  Draft's production scenario and all 125 canonical runtime cases passed in
+  this invocation. After removing the generic Gate additions, the unchanged
+  Gate boundary tests passed 31/31 and Spec Step Result tests passed 4/4.
+  No repeat of the entire related invocation or full `npm test` was performed.
+- The existing Flow's 56 evidence files are unchanged by SHA-256 comparison.
+  Historical comparisons used an isolated detached worktree. No actual Flow
+  was resumed. Temporary test logs are removed after verification; measured
+  results and the fault-to-test mapping are retained here.
+
+### Previous implementation verification (2026-09-24)
 
 - HEAD `66e39a9f9` plus the uncommitted refinement changes. Draft phase 1/1
   and Spec phase 2/2 passed; both also ran in the default integration suite.

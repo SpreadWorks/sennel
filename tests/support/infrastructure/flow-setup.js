@@ -544,6 +544,7 @@ export class CanonicalFlowFixture {
     request = "Fixture request",
     execution = { mode: "direct" },
     autoApprove = false,
+    nonblocking = null,
     issue = null,
     issueSnapshot = null,
     flowId = null,
@@ -560,6 +561,7 @@ export class CanonicalFlowFixture {
     this.request = request;
     this.execution = execution instanceof FlowExecution ? execution : new FlowExecution(execution);
     this.autoApprove = autoApprove === true;
+    this.nonblocking = nonblocking;
     this.issue = issue;
     this.issueSnapshot = issueSnapshot;
     this.flowId = flowId;
@@ -593,7 +595,7 @@ export class CanonicalFlowFixture {
       runId: this.runId,
       request: this.request,
       execution: this.execution.toJSON(),
-      policy: { autoApprove: this.autoApprove, nonblocking: null },
+      policy: { autoApprove: this.autoApprove, nonblocking: this.nonblocking },
       issue: this.issue,
       ...(this.issue === null ? {} : {
         issueSnapshot: this.issueSnapshot ?? `# Issue #${this.issue}\n`,

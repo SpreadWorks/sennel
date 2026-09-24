@@ -38,16 +38,26 @@ export function specGateResult(facts) {
   }
   if (facts.result === "pass") return new classes.pass();
   if (facts.result === "recovered") return new classes.recovered();
-  if (facts.failureCategory === "semantic" && !facts.sameEvidence
-    && facts.nonblockingEnabled && facts.acceptanceBacked) return new classes.await();
   if (facts.failureCategory !== "semantic"
     || (facts.phase === "spec" && facts.cycle >= SPEC_GATE_MAXIMUM_CYCLE)
     || facts.sameEvidence) {
     const error = new Error("Spec Gate cannot continue with the current evidence");
     error.code = facts.failureCode ?? "SPEC_GATE_BLOCKED";
     error.data = { reason: facts.failureCategory !== "semantic"
-      ? facts.failureCategory : facts.sameEvidence ? "same-evidence" : "cycle-limit" };
+      ? facts.failureCategory : facts.sameEvidence ? "same-evidence" : "cycle-limit",
+      ...(facts.phase === "spec" && facts.cycle >= SPEC_GATE_MAXIMUM_CYCLE
+        ? { cycle: facts.cycle, maximum: SPEC_GATE_MAXIMUM_CYCLE } : {}),
+    };
     return new classes.blocked(error);
+  }
+  if (facts.nonblockingEnabled && facts.acceptanceBacked) {
+    if (facts.phase === "spec" && !facts.repairAvailable) {
+      const error = new Error("Spec Gate has no repairable blocking observation in the accepted evidence");
+      error.code = facts.failureCode ?? "SPEC_GATE_BLOCKED";
+      error.data = { reason: "repair-unavailable" };
+      return new classes.blocked(error);
+    }
+    return new classes.await();
   }
   if (facts.repairAvailable) return new classes.repair();
   if (!facts.retryExhausted) return new classes.retry();

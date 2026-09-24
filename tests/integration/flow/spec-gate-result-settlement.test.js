@@ -215,7 +215,9 @@ test("strict Spec Gate stop activates policy from the saved Result and receipt",
     specId: input.flow.specId, flowManager: input.manager,
     flowState: input.manager.load(input.flow.specId),
   });
-  assert.equal(strict.directive.actionPrompt.choices[1].actionId, "ENABLE_NONBLOCKING");
+  assert.equal(strict.directive.kind, "blocked");
+  assert.equal(strict.directive.requiresUserAction, false);
+  assert.match(strict.directive.resumeInstruction, /sennel flow set policy nonblocking/);
   const policy = activateNonBlockingPolicy({
     root: input.root, flowManager: input.manager, reason: "Accept the local Gate defect explicitly.",
   });
@@ -248,6 +250,11 @@ test("pre-enabled Spec Gate advisory observation is atomic with its Await Result
   });
   const output = await settle({ ...input, binding }, {
     result: "fail", failureKind: "ai_semantic_fail",
+    observations: [{
+      kind: "violation", failureMode: "guardrail-violation", requirementRef: "R-1",
+      where: { file: "spec.json", locator: "background" },
+      observed: "The Spec omits the required behavior.", severity: "blocking", refs: ["R-1"],
+    }],
   });
   assert.equal(output.stepResult.kind, "spec-gate-awaiting-decision");
   const activity = input.manager.activityLedger(input.flow.specId)
@@ -262,7 +269,13 @@ test("pre-enabled Spec Gate advisory observation is atomic with its Await Result
     expectEvidenceDigest: context.evidenceDigest,
   });
   assert.equal(decision.action, "repair");
-  assert.equal(input.manager.canonicalState(input.flow.specId).attempt.sequence, context.sourceAttempt + 1);
+  const repaired = input.manager.canonicalState(input.flow.specId);
+  assert.equal(repaired.current.at(-1), "spec");
+  assert.equal(repaired.findNode("spec-gate").status, "invalidated");
+  assert.equal(input.manager.activityLedger(input.flow.specId).filter((entry) => (
+    entry.nodeId === "spec" && entry.transition.operation === "plan_gate_repair"
+      && entry.transition.nonblocking?.action === "repair"
+  )).length, 1);
 });
 
 test("recovered evaluator Result replaces the Attempt without semantic retry consumption", async () => {

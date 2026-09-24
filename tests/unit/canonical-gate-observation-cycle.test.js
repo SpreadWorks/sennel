@@ -19,6 +19,8 @@ import {
   PlanGateRepairOutcome,
 } from "../../src/flow/lib/gate-observation-convergence.js";
 import { PlanGateRepairObservation, PlanGateRepairRecord } from "../../src/flow/lib/plan-gate-repair.js";
+import { DraftStepSettlementPublication, DraftStepSettlementReceipt, settleSpecStepResult } from "../../src/flow/definition.js";
+import { SpecGateAwaitingDecisionResult, SpecGateBlockedResult } from "../../src/flow/engine/step-result.js";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -55,12 +57,60 @@ function sourceObservation() {
   };
 }
 
-function repairFixture() {
+function settledSpecGateFixture({ blocked = false } = {}) {
+  const attempt = {
+    id: "spec-gate-attempt", nodeId: "spec-gate", sequence: 1,
+    failure: blocked ? { category: "semantic", code: "GATE_BLOCKED" } : null,
+  };
+  const state = {
+    schemaRevision: 3, runId: "run-1", specId: "spec-1", issue: null,
+    current: ["spec-gate"], attempt,
+  };
+  const payload = {
+    result: "fail",
+    artifacts: {
+      phase: "spec", gateTransitionAttemptId: attempt.id,
+      gateTransitionAttemptSequence: attempt.sequence,
+      nextAction: { diagnosis: { observations: [sourceObservation()] } },
+    },
+  };
+  const bytes = Buffer.from(`${JSON.stringify({ attempts: [{
+    attempt: 1, artifact: { logicalKey: "spec.gate", payload },
+  }] }, null, 2)}\n`);
+  const result = blocked
+    ? new SpecGateBlockedResult(new Error("Gate remains blocked"))
+    : new SpecGateAwaitingDecisionResult();
+  const receipt = new DraftStepSettlementReceipt({
+    binding: { runId: state.runId, specId: state.specId, stepId: "spec-gate", attempt },
+    result, settlement: settleSpecStepResult("spec-gate", result),
+    publication: new DraftStepSettlementPublication({ gate: "spec" }),
+  }).toJSON();
+  const activity = {
+    id: "settlement-publication", nodeId: "spec-gate", attemptId: attempt.id,
+    sequence: attempt.sequence,
+    transition: { operation: blocked ? "fail_attempt" : "record_draft_step_settlement" },
+    ...(blocked ? { failure: attempt.failure } : {}),
+    result: { stepResult: result.toJSON(), draftSettlementReceipt: receipt },
+  };
+  const resultDescriptor = descriptor({
+    logicalKey: "spec.gate", relativePath: "steps/spec-gate/result.json",
+    hash: crypto.createHash("sha256").update(bytes).digest("hex"), activityId: activity.id,
+  });
+  const reads = new Map([["spec.gate:", {
+    descriptor: resultDescriptor, relativePath: resultDescriptor.relativePath, bytes,
+  }]]);
+  return { state, activity, resultDescriptor, reads, activities: [activity] };
+}
+
+function repairFixture({ phase = "draft" } = {}) {
+  const gateStepId = phase === "spec" ? "spec-gate" : "draft-gate";
+  const targetStepId = phase === "spec" ? "spec" : "draft-gate-repair";
+  const logicalKey = `${phase}.gate`;
   const sourceAttempt = { id: "gate-attempt-1", sequence: 1 };
   const sourceGatePayload = {
     result: "fail",
     artifacts: {
-      phase: "draft",
+      phase,
       gateTransitionAttemptId: sourceAttempt.id,
       gateTransitionAttemptSequence: sourceAttempt.sequence,
       gateTransitionLineage: DIGEST_E,
@@ -68,7 +118,7 @@ function repairFixture() {
   };
   const sourceHistory = { attempts: [{
     attempt: sourceAttempt.sequence,
-    artifact: { logicalKey: "draft.gate", payload: sourceGatePayload },
+    artifact: { logicalKey, payload: sourceGatePayload },
   }] };
   const sourceCatalogFingerprint = crypto.createHash("sha256")
     .update(`${JSON.stringify(sourceHistory, null, 2)}\n`)
@@ -87,14 +137,16 @@ function repairFixture() {
     },
   };
   const connector = {
-    phase: "draft",
-    sourceGateStepId: "draft-gate",
+    phase,
+    sourceGateStepId: gateStepId,
     sourceAttempt,
-    resultLogicalKey: "draft.gate",
-    resultArtifactId: "steps/draft-gate/result.json",
+    resultLogicalKey: logicalKey,
+    resultArtifactId: `steps/${gateStepId}/result.json`,
     catalogFingerprint: sourceCatalogFingerprint,
-    targetStepId: "draft-gate-repair",
-    resetStepIds: ["draft-gate-repair", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate"],
+    targetStepId,
+    resetStepIds: phase === "spec"
+      ? ["spec", "spec-review", "spec-triage", "spec-repair", "spec-gate"]
+      : ["draft-gate-repair", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate"],
     taskLifecycle: null,
   };
   const evidenceIdentity = new GateEvidenceIdentity({
@@ -105,7 +157,7 @@ function repairFixture() {
     transitionLineage: gateFacts.lineage,
   });
   const observation = new PlanGateRepairObservation({
-    ...sourceObservation(), phase: "draft", scope: "flow", taskId: null,
+    ...sourceObservation(), phase, scope: "flow", taskId: null,
   });
   const cycleReadModel = new GateObservationCycleReader({
     occurrences: [new GateObservationOccurrence({
@@ -125,11 +177,11 @@ function repairFixture() {
   const targetAttempt = { id: "repair-attempt-2", sequence: 2 };
   const repairActivity = {
     id: "plan-repair-activity",
-    nodeId: "draft-gate-repair",
+    nodeId: targetStepId,
     attemptId: targetAttempt.id,
     sequence: targetAttempt.sequence,
     confirmationOrder: 3,
-    transition: { operation: "plan_gate_repair", attempt: { ...targetAttempt, nodeId: "draft-gate-repair" } },
+    transition: { operation: "plan_gate_repair", attempt: { ...targetAttempt, nodeId: targetStepId } },
     references: { repairs: [record.activityReference()] },
   };
   const fingerprint = record.observationFingerprints[0];
@@ -158,7 +210,7 @@ function repairFixture() {
     report,
   });
   const issueLog = { entries: [source, { ...record.issueLogEntry(), issueLogId: record.idempotencyKey }] };
-  return { record, targetAttempt, repairActivity, outcome, issueLog, sourceAttempt, sourceGatePayload };
+  return { record, targetAttempt, repairActivity, outcome, issueLog, sourceAttempt, sourceGatePayload, gateStepId, targetStepId, logicalKey, phase };
 }
 
 function noProgressOutcome(fixture) {
@@ -189,8 +241,8 @@ function noProgressOutcome(fixture) {
   });
 }
 
-function statusFixture({ outcome = null, nextResult = null, settlement = null, sourceSettlement = null } = {}) {
-  const fixture = repairFixture();
+function statusFixture({ phase = "draft", outcome = null, nextResult = null, settlement = null, sourceSettlement = null } = {}) {
+  const fixture = repairFixture({ phase });
   const selectedOutcome = outcome === "no-progress" ? noProgressOutcome(fixture) : (outcome === "applied" ? fixture.outcome : null);
   const issue = descriptor({ logicalKey: "issue.log", relativePath: "issue-log.json", hash: DIGEST_B, activityId: "issue-publication" });
   const artifacts = [issue];
@@ -201,7 +253,7 @@ function statusFixture({ outcome = null, nextResult = null, settlement = null, s
   }]]);
   const activities = [{
     id: "gate-publication",
-    nodeId: "draft-gate",
+    nodeId: fixture.gateStepId,
     attemptId: fixture.sourceAttempt.id,
     sequence: fixture.sourceAttempt.sequence,
     confirmationOrder: 1,
@@ -210,7 +262,7 @@ function statusFixture({ outcome = null, nextResult = null, settlement = null, s
   if (sourceSettlement !== null) {
     activities.push({
       id: `source-gate-${sourceSettlement}`,
-      nodeId: "draft-gate",
+      nodeId: fixture.gateStepId,
       attemptId: fixture.record.evidenceIdentity.sourceAttempt.id,
       sequence: fixture.record.evidenceIdentity.sourceAttempt.sequence,
       transition: sourceSettlement === "deferred"
@@ -233,7 +285,7 @@ function statusFixture({ outcome = null, nextResult = null, settlement = null, s
     });
     activities.push({
       id: selectedOutcome.publicationActivityId,
-      nodeId: "draft-gate-repair",
+      nodeId: fixture.targetStepId,
       attemptId: fixture.targetAttempt.id,
       sequence: fixture.targetAttempt.sequence,
       transition: { operation: "confirm_attempt" },
@@ -242,21 +294,21 @@ function statusFixture({ outcome = null, nextResult = null, settlement = null, s
   const nextResults = nextResult === null ? [] : (Array.isArray(nextResult) ? nextResult : [nextResult]);
   const finalAttempt = nextResults.length + 1;
   const resultDescriptor = descriptor({
-    logicalKey: "draft.gate",
-    relativePath: "steps/draft-gate/result.json",
+    logicalKey: fixture.logicalKey,
+    relativePath: `steps/${fixture.gateStepId}/result.json`,
     hash: nextResults.length === 0 ? fixture.record.evidenceIdentity.catalogFingerprint : DIGEST_D,
     activityId: nextResults.length === 0 ? "gate-publication" : `gate-publication-${finalAttempt}`,
   });
   artifacts.push(resultDescriptor);
-  reads.set("draft.gate:", {
+  reads.set(`${fixture.logicalKey}:`, {
     descriptor: resultDescriptor,
     relativePath: resultDescriptor.relativePath,
     bytes: Buffer.from(JSON.stringify({ attempts: [
-      { attempt: 1, artifact: { logicalKey: "draft.gate", payload: fixture.sourceGatePayload } },
+      { attempt: 1, artifact: { logicalKey: fixture.logicalKey, payload: fixture.sourceGatePayload } },
       ...nextResults.map((result, index) => ({
         attempt: index + 2,
-        artifact: { logicalKey: "draft.gate", payload: { result, artifacts: {
-          phase: "draft",
+        artifact: { logicalKey: fixture.logicalKey, payload: { result, artifacts: {
+          phase,
           gateTransitionAttemptId: `gate-attempt-${index + 2}`,
           gateTransitionAttemptSequence: index + 2,
         } } },
@@ -266,7 +318,7 @@ function statusFixture({ outcome = null, nextResult = null, settlement = null, s
   if (nextResults.length > 0) {
     activities.push(...nextResults.map((_result, index) => ({
       id: `gate-publication-${index + 2}`,
-      nodeId: "draft-gate",
+      nodeId: fixture.gateStepId,
       attemptId: `gate-attempt-${index + 2}`,
       sequence: index + 2,
       confirmationOrder: index + 5,
@@ -275,7 +327,7 @@ function statusFixture({ outcome = null, nextResult = null, settlement = null, s
     if (settlement !== null) {
       activities.push({
         id: `gate-${settlement}`,
-        nodeId: "draft-gate",
+        nodeId: fixture.gateStepId,
         attemptId: `gate-attempt-${finalAttempt}`,
         sequence: finalAttempt,
         transition: settlement === "deferred"
@@ -286,7 +338,7 @@ function statusFixture({ outcome = null, nextResult = null, settlement = null, s
   }
   return {
     flowManager: manager({ artifacts, reads, activities }),
-    state: { schemaRevision: 3, specId: "spec-1", runId: "run-1", issue: 1, current: ["draft-gate-repair"], attempt: fixture.targetAttempt },
+    state: { schemaRevision: 3, specId: "spec-1", runId: "run-1", issue: 1, current: [fixture.targetStepId], attempt: fixture.targetAttempt },
     artifacts,
     activities,
     reads,
@@ -647,6 +699,89 @@ describe("canonical Gate observation cycle", () => {
     assert.equal(status.entries[0].occurrenceCount, 1);
     assert.equal(status.entries[0].repairCount, 0);
     assert.equal(status.entries[0].finalDisposition, "open");
+  });
+
+  it("reads current failed Spec Gate occurrences from Await and blocked receipts", () => {
+    for (const blocked of [false, true]) {
+      const fixture = settledSpecGateFixture({ blocked });
+      const flowManager = manager({
+        artifacts: [fixture.resultDescriptor], reads: fixture.reads, activities: fixture.activities,
+      });
+      const status = GateObservationConvergenceStatus.fromCanonical({
+        flowManager, state: fixture.state,
+      }).toJSON();
+      assert.equal(status.entries.length, 1);
+      assert.equal(status.entries[0].phase, "spec");
+      assert.equal(status.entries[0].occurrenceCount, 1);
+      assert.equal(status.entries[0].finalDisposition, "open");
+    }
+  });
+
+  it("rejects forged or mismatched Spec Gate settlement publications", () => {
+    const cases = [
+      ["missing receipt", ({ activity }) => { delete activity.result.draftSettlementReceipt; }],
+      ["receipt identity", ({ activity }) => { activity.result.draftSettlementReceipt.id = DIGEST_B; }],
+      ["receipt binding", ({ activity }) => {
+        const receipt = activity.result.draftSettlementReceipt;
+        receipt.binding.attemptId = "other-attempt";
+        receipt.id = crypto.createHash("sha256")
+          .update(JSON.stringify(DraftStepSettlementReceipt.identity(receipt))).digest("hex");
+      }],
+      ["result digest", ({ activity }) => {
+        const receipt = activity.result.draftSettlementReceipt;
+        receipt.resultDigest = DIGEST_B;
+        receipt.id = crypto.createHash("sha256")
+          .update(JSON.stringify(DraftStepSettlementReceipt.identity(receipt))).digest("hex");
+      }],
+      ["publication digest", ({ activity }) => {
+        const receipt = activity.result.draftSettlementReceipt;
+        receipt.publicationDigest = "invalid";
+        receipt.id = crypto.createHash("sha256")
+          .update(JSON.stringify(DraftStepSettlementReceipt.identity(receipt))).digest("hex");
+      }],
+      ["catalog digest", ({ resultDescriptor }) => { resultDescriptor.hash = DIGEST_B; }],
+      ["catalog Activity", ({ resultDescriptor }) => { resultDescriptor.activityId = "other-publication"; }],
+      ["Activity Attempt", ({ activity }) => { activity.attemptId = "other-attempt"; }],
+      ["history Attempt", ({ resultDescriptor, reads }) => {
+        const publication = reads.get("spec.gate:");
+        const history = JSON.parse(publication.bytes.toString("utf8"));
+        history.attempts[0].artifact.payload.artifacts.gateTransitionAttemptId = "other-attempt";
+        publication.bytes = Buffer.from(`${JSON.stringify(history, null, 2)}\n`);
+        resultDescriptor.hash = crypto.createHash("sha256").update(publication.bytes).digest("hex");
+      }],
+    ];
+    for (const [name, mutate] of cases) {
+      const fixture = settledSpecGateFixture();
+      mutate(fixture);
+      const flowManager = manager({
+        artifacts: [fixture.resultDescriptor], reads: fixture.reads, activities: fixture.activities,
+      });
+      assert.throws(() => GateObservationConvergenceStatus.fromCanonical({
+        flowManager, state: fixture.state,
+      }), undefined, name);
+    }
+  });
+
+  it("reads a post-repair Spec Gate Await from its exact settlement publication", () => {
+    const fixture = statusFixture({ phase: "spec", outcome: "applied", nextResult: "fail" });
+    const publication = fixture.activities.find((activity) => activity.id === "gate-publication-2");
+    const result = new SpecGateAwaitingDecisionResult();
+    const attempt = { id: publication.attemptId, sequence: publication.sequence };
+    const receipt = new DraftStepSettlementReceipt({
+      binding: { runId: fixture.state.runId, specId: fixture.state.specId, stepId: "spec-gate", attempt },
+      result, settlement: settleSpecStepResult("spec-gate", result),
+      publication: new DraftStepSettlementPublication({ gate: "spec", attempt: 2 }),
+    });
+    publication.transition.operation = "record_draft_step_settlement";
+    publication.result = { stepResult: result.toJSON(), draftSettlementReceipt: receipt.toJSON() };
+    const resultArtifact = fixture.reads.get("spec.gate:");
+    resultArtifact.descriptor.hash = crypto.createHash("sha256").update(resultArtifact.bytes).digest("hex");
+
+    const status = GateObservationConvergenceStatus.fromCanonical(fixture).toJSON();
+    assert.equal(status.entries.length, 1);
+    assert.equal(status.entries[0].phase, "spec");
+    assert.equal(status.entries[0].nextGate.result, "fail");
+    assert.equal(status.entries[0].nextGate.publicationActivityId, publication.id);
   });
 
   it("fails closed when a repair record is not bound to its exact plan_gate_repair Activity", () => {

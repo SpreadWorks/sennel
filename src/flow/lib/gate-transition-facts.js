@@ -33,6 +33,7 @@ import {
   TaskGateClassificationRecoveryIdentity,
 } from "./task-gate-classification-recovery.js";
 import { CanonicalGateObservationCycle } from "./canonical-gate-observation-cycle.js";
+import { assertGateSettlementPublication } from "./gate-settlement-publication.js";
 import { PlanGateRepairObservation } from "./plan-gate-repair.js";
 import { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
 import { SpecGateIssuePublication } from "./gate-issue-publication.js";
@@ -697,10 +698,16 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
   const producerActivities = currentGateActivity({ activities, nodeId, attempt });
   const publication = producerActivities.find((activity) => activity.id === resultSource.descriptor.activityId) ?? null;
   if (publication === null) throw new Error("gate catalog publication is not owned by the current Attempt");
+  if (nodeId === "spec-gate" && (publication.result?.draftSettlementReceipt != null
+    || publication.transition?.operation === "record_draft_step_settlement")) {
+    assertGateSettlementPublication({
+      state, activity: publication, descriptor: resultSource.descriptor,
+      historyEntry: history.current, attempt, publicationBytes: resultSource.bytes,
+    });
+  }
   if (publication.transition?.operation !== "publish_artifacts"
     && publication.transition?.operation !== "fail_attempt"
-    && !(publication.transition?.operation === "record_draft_step_settlement"
-      && nodeId === "spec-gate" && publication.result?.draftSettlementReceipt !== undefined)
+    && !(publication.transition?.operation === "record_draft_step_settlement" && nodeId === "spec-gate")
     && publication.transition?.operation !== "confirm_attempt") {
     throw new Error("gate catalog publication has an invalid producer Activity");
   }

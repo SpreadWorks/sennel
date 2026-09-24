@@ -147,6 +147,7 @@ import {
   PlanGateRepairRecord,
 } from "./plan-gate-repair.js";
 import { CanonicalGateObservationCycle } from "./canonical-gate-observation-cycle.js";
+import { assertGateSettlementPublication } from "./gate-settlement-publication.js";
 import { PlanGateRepairOutcomeDraft } from "./gate-observation-convergence.js";
 import { TaskReviewEpisodeBinding, TaskReviewStageInputs, TaskReviewStageResult, TaskReviewSourcePublicationAdmission, TaskReviewUnavailablePublicationAdmission, TaskReviewUnavailableResultPublicationAdmission } from "./task-review-stage-artifacts.js";
 import { TaskReviewHostFilter, TaskReviewHostFilterPublicationAdmission } from "./task-review-host-filter.js";
@@ -4154,26 +4155,9 @@ export class CanonicalFlowManagerStore {
     ));
     const activity = activities.at(-1) ?? null;
     if (activity === null) return null;
-    const result = StepResult.fromStored(stepId, activity.result.stepResult);
-    const receipt = activity.result.draftSettlementReceipt;
-    if (receipt.binding?.runId !== state.runId
-      || receipt.binding?.specId !== state.specId
-      || receipt.binding?.stepId !== stepId
-      || receipt.binding?.attemptId !== state.attempt.id
-      || receipt.binding?.attemptSequence !== state.attempt.sequence
-      || receipt.resultKind !== result.kind
-      || receipt.resultType !== result.type
-      || receipt.resultDigest !== stepResultDigest(result)) {
-      throw new CurrentFlowStateInvariantError("current Step settlement receipt is invalid");
-    }
-    const settlement = stepId === "spec-gate" ? settleSpecStepResult(stepId, result) : null;
-    if (settlement !== null && (receipt.settlementKind !== settlement.kind
-      || receipt.targetStepId !== (settlement instanceof StepRoute ? settlement.targetStepId : null)
-      || JSON.stringify(receipt.effects?.toJSON() ?? null)
-        !== JSON.stringify(settlement instanceof StepRoute ? settlement.effects.toJSON() : null)
-      || receipt.connector?.name !== (settlement instanceof StepRoute ? settlement.connector.name : undefined))) {
-      throw new CurrentFlowStateInvariantError("current Step settlement does not match its selected Result");
-    }
+    let result;
+    let settlement = null;
+    let receipt;
     if (stepId === "spec-gate") {
       const publication = this.readProducerArtifact({
         specId: resolved, nodeId: stepId, logicalKey: "spec.gate", optional: true,
@@ -4181,9 +4165,35 @@ export class CanonicalFlowManagerStore {
       const current = publication === null ? null : CanonicalCommandAttemptArtifactHistory.fromBytes({
         logicalKey: "spec.gate", bytes: publication.bytes,
       }).current;
-      if (publication?.descriptor.activityId !== activity.id
-        || current?.attempt !== state.attempt.sequence) {
+      let verified;
+      try {
+        verified = assertGateSettlementPublication({
+          state, activity, descriptor: publication?.descriptor, historyEntry: current,
+          attempt: state.attempt, publicationBytes: publication?.bytes,
+        });
+      } catch (error) {
+        throw new CurrentFlowStateInvariantError(`current Spec Gate Result lacks its matching publication: ${error.message}`);
+      }
+      ({ result, settlement, receipt } = verified);
+      const descriptor = this.artifactCatalog(resolved).artifacts.filter((entry) => (
+        entry.logicalKey === "spec.gate"
+        && entry.relativePath === publication?.relativePath
+        && entry.hash === publication?.descriptor.hash
+        && entry.activityId === activity.id
+      ));
+      if (descriptor.length !== 1
+        || (settlement.kind === "await" && activity.transition?.operation !== "record_draft_step_settlement")) {
         throw new CurrentFlowStateInvariantError("current Spec Gate Result lacks its matching publication");
+      }
+    } else {
+      result = StepResult.fromStored(stepId, activity.result.stepResult);
+      try {
+        receipt = DraftStepSettlementReceipt.assertStored(activity.result.draftSettlementReceipt, {
+          binding: { runId: state.runId, specId: state.specId, stepId, attempt: state.attempt },
+          result,
+        });
+      } catch (error) {
+        throw new CurrentFlowStateInvariantError(`current Step settlement receipt is invalid: ${error.message}`);
       }
     }
     return Object.freeze({ result, settlement, receipt, activityId: activity.id });
@@ -7266,6 +7276,52 @@ export class CanonicalFlowManagerStore {
       if (continued.nextAction()?.nodeId !== materializedTargetStepId) {
         throw new CurrentFlowStateInvariantError("canonical nonblocking continuation settled outside its Definition target");
       }
+      return fact.toJSON();
+    }
+    if (effect.operation === "repair-spec") {
+      if (target !== "spec-gate" || effect.targetStepId !== "spec" || existing !== null) {
+        throw new CurrentFlowStateInvariantError("Spec Gate advisory repair requires its current uncommitted decision");
+      }
+      const saved = this.readCurrentStepSettlement({ specId: resolved, stepId: target });
+      if (saved?.settlement.kind !== "await" || saved.receipt.binding.attemptId !== state.attempt.id) {
+        throw new CurrentFlowStateInvariantError("Spec Gate advisory repair requires its exact Await settlement");
+      }
+      const result = this.readProducerArtifact({
+        specId: resolved, nodeId: target, logicalKey: "spec.gate",
+      });
+      const source = this.readProducerArtifact({
+        specId: resolved, nodeId: target, logicalKey: "spec.gate.source",
+      });
+      const issue = this.readArtifact({
+        specId: resolved, logicalKey: "issue.log", consumerNodeId: target,
+      });
+      const issueLog = JSON.parse(issue.bytes.toString("utf8"));
+      const history = CanonicalCommandAttemptArtifactHistory.fromBytes({
+        logicalKey: "spec.gate", bytes: result.bytes,
+      });
+      const repair = createProspectivePlanGateRepairRecord({
+        state, issueLog, gateResultPayload: history.current.payload,
+        resultArtifactWrite: { logicalKey: "spec.gate", bytes: result.bytes },
+        sourceArtifactWrite: { logicalKey: "spec.gate.source", bytes: source.bytes },
+        publicationActivityId: saved.activityId,
+        cycleReadModel: new CanonicalGateObservationCycle({ flowManager: this, state }).read(),
+        phase: "spec", prospective: false,
+      });
+      const nextIssueLog = repair.appendToIssueLog(issueLog);
+      this.runtime.planGateRepair({
+        specId: resolved, activityId: stableId, nodeId: "spec",
+        attempt: commandContextAttempt(state, "spec"),
+        references: { evaluations: [], findings: [], repairs: [repair.activityReference()], artifacts: [] },
+        artifactWrites: [{
+          logicalKey: "issue.log", mediaType: "application/json",
+          bytes: Buffer.from(`${JSON.stringify(nextIssueLog, null, 2)}\n`, "utf8"),
+        }],
+        nonblocking: fact.toJSON(),
+        admission: new CombinedAdmission(
+          selectionAdmission,
+          this.#replacementConsumerAdmission(state, { route: "repair-plan-gate", targetNodeId: "spec" }),
+        ),
+      });
       return fact.toJSON();
     }
     if (effect.operation !== "restart-source") {

@@ -10,8 +10,9 @@ import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import SetApprovalCommand from "../../../src/flow/lib/set-approval.js";
-import { activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
+import { NonBlockingPolicy, activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
+import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
 import { CanonicalSpecReview, SpecReviewDelta } from "../../../src/flow/lib/spec-review-artifacts.js";
 import { CanonicalTestArtifactStore } from "../../../src/flow/lib/canonical-test-artifacts.js";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
@@ -33,10 +34,16 @@ import {
 } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 describe("Spec artifact lifecycle and downstream consumption", { concurrency: false }, () => {
-  for (const retainGateFindings of [false, true]) {
-  it(retainGateFindings
-    ? "retains unresolved Spec Gate findings for Acceptance after a durable strict stop"
-    : "publishes and repairs Spec, then reloads it for Approval, Test and Acceptance", async () => {
+  for (const { retainGateFindings, advisoryRepair } of [
+    { retainGateFindings: false, advisoryRepair: false },
+    { retainGateFindings: true, advisoryRepair: false },
+    { retainGateFindings: false, advisoryRepair: true },
+  ]) {
+  it(advisoryRepair
+    ? "saves an advisory Spec repair, runs its worker, then gates the changed Spec"
+    : retainGateFindings
+      ? "retains unresolved Spec Gate findings for Acceptance after a durable strict stop"
+      : "publishes and repairs Spec, then reloads it for Approval, Test and Acceptance", async () => {
     const root = fixtureRepository("spec-artifact-scenario-");
     let gateAgentLookup = null;
     let reviewProcess = null;
@@ -58,6 +65,9 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         flowManager, specId, runId: "run-spec-artifact-scenario",
         request: "Preserve repaired Spec requirements in downstream consumers.",
         execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+        nonblocking: advisoryRepair ? new NonBlockingPolicy({
+          activatedStep: "spec-gate", reason: "Use an advisory decision for accepted Spec Gate evidence.",
+        }).toJSON() : null,
       }).create().registerActive().activate("spec");
       const requests = [];
       const sharedGuardrail = "SPEC-SHARED";
@@ -94,6 +104,12 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       });
       const agent = {
         async call(_prompt, options) {
+          if (options.commandId === "flow.dispatch.nonblocking-decision") {
+            return JSON.stringify({
+              choice: "repair",
+              reason: "Repair the accepted Spec Gate observation before continuing.",
+            });
+          }
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const invocationId = options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -216,29 +232,111 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         return { status: 0, signal: null, stdout: "", stderr: "" };
       });
       syncBuiltinESMExports();
-      const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 64 });
-      dispatcher.container = dispatchContainer({ root, flowManager, agent });
-      const binding = FlowTargetBinding.capture({
-        flowState: flowManager.loadReadOnly(specId), mainRoot: root, authorityRoot: root,
-      }).serialize();
-      let result = await dispatcher.execute({
-        root, mainRoot: root, executionRoot: root, specId, flowManager,
-        flowState: flowManager.loadReadOnly(specId), expectBinding: binding,
-        _envelopeType: "run", _envelopeKey: "dispatch",
-      });
+      async function dispatch(maxDispatches = 64) {
+        const dispatcher = new RunDispatchCommand({ agent, maxDispatches });
+        dispatcher.container = dispatchContainer({ root, flowManager, agent });
+        return dispatcher.execute({
+          root, mainRoot: root, executionRoot: root, specId, flowManager,
+          flowState: flowManager.loadReadOnly(specId),
+          expectBinding: FlowTargetBinding.capture({
+            flowState: flowManager.loadReadOnly(specId), mainRoot: root, authorityRoot: root,
+          }).serialize(),
+          _envelopeType: "run", _envelopeKey: "dispatch",
+        });
+      }
+      let result;
+      if (advisoryRepair) {
+        let observedAwaitAfterReload = false;
+        for (let index = 0; index < 32; index += 1) {
+          const repaired = flowManager.activityLedger(specId).some((entry) => (
+            entry.transition?.operation === "plan_gate_repair"
+            && entry.transition?.nonblocking?.action === "repair"
+          ));
+          if (repaired) break;
+          if (flowManager.canonicalState(specId).current?.at(-1) === "spec-gate") {
+            const restored = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+            const saved = restored.readCurrentStepSettlement({ specId, stepId: "spec-gate" });
+            if (saved?.result.kind === "spec-gate-awaiting-decision") {
+              assert.equal(saved.receipt.settlementKind, "await");
+              assert.ok(readCurrentGateTransitionFacts({
+                flowManager: restored, flowState: restored.loadReadOnly(specId), phase: "spec", root,
+              }));
+              const next = await new GetNextActionCommand().execute({
+                root, mainRoot: root, executionRoot: root, specId,
+                flowManager: restored, flowState: restored.loadReadOnly(specId),
+              });
+              assert.ok(next.nonblockingDecision.allowedActions.includes("repair"));
+              observedAwaitAfterReload = true;
+            }
+          }
+          const partial = await dispatch(1);
+          assert.equal(partial.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(partial));
+        }
+        assert.equal(observedAwaitAfterReload, true);
+        const reloadedRepair = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+        assert.equal(reloadedRepair.canonicalState(specId).current.at(-1), "spec");
+        assert.equal(reloadedRepair.activityLedger(specId).filter((entry) => (
+          entry.transition?.operation === "plan_gate_repair"
+          && entry.transition?.nonblocking?.action === "repair"
+        )).length, 1);
+        const continuation = new RunDispatchCommand({ agent, maxDispatches: 64 });
+        continuation.container = dispatchContainer({ root, flowManager: reloadedRepair, agent });
+        result = await continuation.execute({
+          root, mainRoot: root, executionRoot: root, specId, flowManager: reloadedRepair,
+          flowState: reloadedRepair.loadReadOnly(specId),
+          expectBinding: FlowTargetBinding.capture({
+            flowState: reloadedRepair.loadReadOnly(specId), mainRoot: root, authorityRoot: root,
+          }).serialize(),
+          _envelopeType: "run", _envelopeKey: "dispatch",
+        });
+      } else {
+        result = await dispatch();
+      }
       if (retainGateFindings) {
         const stopped = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
         const strict = await new GetNextActionCommand().execute({
           root, mainRoot: root, executionRoot: root, specId,
           flowManager: stopped, flowState: stopped.loadReadOnly(specId),
         });
-        assert.deepEqual(strict.directive?.actionPrompt?.choices?.map((entry) => entry.actionId),
-          ["KEEP_STRICT_FLOW", "ENABLE_NONBLOCKING"], JSON.stringify({ result, strict }));
+        assert.equal(strict.directive.kind, "blocked", JSON.stringify({ result, strict }));
+        assert.equal(strict.directive.requiresUserAction, false);
+        assert.match(strict.directive.reason, /cycle 4 reached maximum 4/);
+        assert.match(strict.directive.resumeInstruction, /sennel flow set policy nonblocking/);
         const before = stopped.readCurrentStepSettlement({ specId, stepId: "spec-gate" });
         assert.equal(before.result.kind, "spec-gate-blocked");
+        assert.equal(before.result.error.data.reason, "cycle-limit");
+        const strictState = stopped.canonicalState(specId).toJSON();
+        const strictActivities = stopped.activityLedger(specId);
+        const strictCatalog = stopped.artifactCatalog(specId).toJSON();
+        const strictDispatcher = new RunDispatchCommand({ agent, maxDispatches: 64 });
+        strictDispatcher.container = dispatchContainer({ root, flowManager: stopped, agent });
+        const strictBoundary = await strictDispatcher.execute({
+          root, mainRoot: root, executionRoot: root, specId, flowManager: stopped,
+          flowState: stopped.loadReadOnly(specId),
+          expectBinding: FlowTargetBinding.capture({
+            flowState: stopped.loadReadOnly(specId), mainRoot: root, authorityRoot: root,
+          }).serialize(),
+          _envelopeType: "run", _envelopeKey: "dispatch",
+        });
+        assert.equal(strictBoundary.dispatch?.boundary, "blocked");
+        assert.deepEqual(stopped.canonicalState(specId).toJSON(), strictState);
+        assert.deepEqual(stopped.activityLedger(specId), strictActivities);
+        assert.deepEqual(stopped.artifactCatalog(specId).toJSON(), strictCatalog);
         activateNonBlockingPolicy({ root, flowManager: stopped, reason: "Retain the unresolved Spec observation for Acceptance." });
         const decision = decisionContextForActiveFlow(root, stopped.loadReadOnly(specId), stopped);
         assert.equal(decision.resultKind, "quality");
+        assert.deepEqual(decision.allowedActions, ["continue"]);
+        const advisoryState = stopped.canonicalState(specId).toJSON();
+        const advisoryActivities = stopped.activityLedger(specId);
+        const advisoryCatalog = stopped.artifactCatalog(specId).toJSON();
+        assert.throws(() => recordNonBlockingDecision({
+          root, flowManager: stopped, choice: "repair",
+          reason: "An exhausted Spec repair must be rejected.",
+          expectEvidenceDigest: decision.evidenceDigest,
+        }), /not allowed/);
+        assert.deepEqual(stopped.canonicalState(specId).toJSON(), advisoryState);
+        assert.deepEqual(stopped.activityLedger(specId), advisoryActivities);
+        assert.deepEqual(stopped.artifactCatalog(specId).toJSON(), advisoryCatalog);
         recordNonBlockingDecision({
           root, flowManager: stopped, choice: "continue",
           reason: "The Spec can proceed with explicit deferred review.",
@@ -288,9 +386,15 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         && entry.result?.draftSettlementReceipt?.targetStepId === "spec-repair").length, cycles);
       assert.equal(activities.filter((entry) => entry.nodeId === "spec-repair"
         && entry.result?.draftSettlementReceipt?.targetStepId === "spec-gate").length, cycles);
-      assert.equal(activities.find((entry) => entry.nodeId === "spec-gate"
-        && entry.result?.stepResult?.kind === "spec-gate-repair-required")
-        ?.result.draftSettlementReceipt.targetStepId, "spec");
+      if (advisoryRepair) {
+        assert.equal(activities.find((entry) => entry.nodeId === "spec-gate"
+          && entry.result?.stepResult?.kind === "spec-gate-awaiting-decision")
+          ?.result.draftSettlementReceipt.settlementKind, "await");
+      } else {
+        assert.equal(activities.find((entry) => entry.nodeId === "spec-gate"
+          && entry.result?.stepResult?.kind === "spec-gate-repair-required")
+          ?.result.draftSettlementReceipt.targetStepId, "spec");
+      }
       if (!retainGateFindings) {
         assert.equal(activities.find((entry) => entry.nodeId === "spec-gate"
           && entry.result?.stepResult?.kind === "spec-gate-passed")

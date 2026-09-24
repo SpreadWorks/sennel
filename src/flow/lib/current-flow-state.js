@@ -203,7 +203,7 @@ const OBSERVATION_TRANSITION_OPERATIONS = new Set(["record_metric", "record_note
 // stays out of flow.json so a resumed Flow replays the same immutable
 // observation/decision history rather than a mutable side-channel.
 const NONBLOCKING_TRANSITION_OPERATIONS = new Set(["record_nonblocking", "continue_nonblocking", "activate_nonblocking"]);
-const OPTIONAL_NONBLOCKING_TRANSITION_OPERATIONS = new Set(["record_draft_step_settlement", "fail_attempt"]);
+const OPTIONAL_NONBLOCKING_TRANSITION_OPERATIONS = new Set(["record_draft_step_settlement", "fail_attempt", "plan_gate_repair"]);
 const FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS = new Set(["skip_finalize_downstream", "reset_finalize_downstream"]);
 const STATE_CHANGING_TRANSITION_OPERATIONS = new Set([
   FLOW_CREATION_TRANSITION_OPERATION,
@@ -5922,7 +5922,22 @@ export class CurrentFlowState {
    * mutable status patch.  It may leave an active gate only after the route
    * has recorded blocking evidence in the same Version Store operation.
    */
-  repairPlanGate({ path: currentPath, attempt, taskLifecycle = null, result = null }) {
+  #restartSpecGateRepair(root, currentPath, attempt) {
+    const leaves = this.#leaves;
+    const targetIndex = leaves.findIndex((node) => node.id === "spec");
+    if (targetIndex < 0) throw new CurrentFlowStateInvariantError("Spec Gate repair target is not a Flow leaf");
+    for (const id of leaves.slice(targetIndex).map((node) => node.id)) {
+      const node = findNodeInRoot(root, id);
+      root = replaceNode(root, id, transitionNode(node, "invalidated", this.definition, { result: null }));
+    }
+    root = reconcileInvalidatedParents(root, this.definition);
+    return this.#activateAttemptFromRoot({
+      root, path: currentPath, attempt, allowedLeafStatuses: ["invalidated"],
+      initial: true, operation: "planGateRepair",
+    });
+  }
+
+  repairPlanGate({ path: currentPath, attempt, taskLifecycle = null, result = null, nonblocking = null }) {
     this.#assertExecutionActive();
     const target = nodeAtPath(this.root, currentPath);
     const route = planGateRepairRouteForTargetStep(target.id);
@@ -5942,22 +5957,13 @@ export class CurrentFlowState {
         throw new CurrentFlowStateInvariantError("Gate repair requires its Definition-selected target receipt");
       }
       const confirmed = this.confirmCurrentAttempt({ result: prospective, status: "done" });
-      if (route.phase === "spec") {
-        const leaves = confirmed.#leaves;
-        const targetIndex = leaves.findIndex((node) => node.id === target.id);
-        if (targetIndex < 0) throw new CurrentFlowStateInvariantError("Spec Gate repair target is not a Flow leaf");
-        let root = confirmed.root;
-        for (const id of leaves.slice(targetIndex).map((node) => node.id)) {
-          const node = findNodeInRoot(root, id);
-          root = replaceNode(root, id, transitionNode(node, "invalidated", this.definition, { result: null }));
-        }
-        root = reconcileInvalidatedParents(root, this.definition);
-        return confirmed.#activateAttemptFromRoot({
-          root, path: currentPath, attempt, allowedLeafStatuses: ["invalidated"],
-          initial: true, operation: "planGateRepair",
-        });
-      }
+      if (route.phase === "spec") return confirmed.#restartSpecGateRepair(confirmed.root, currentPath, attempt);
       return confirmed.executableStepClaim({ nodeId: target.id, attempt }).materialize(confirmed);
+    }
+    if (route.phase === "spec" && nonblocking?.kind === "decision"
+      && nonblocking.action === "repair" && nonblocking.sourceStep === "spec-gate"
+      && this.attempt.failure === null && prospective === null) {
+      return this.#restartSpecGateRepair(this.root, currentPath, attempt);
     }
     if (!isPlanGateRepairEligibleFailure(this, route)) {
       throw new CurrentFlowStateInvariantError("plan gate repair requires its mapped blocked semantic gate failure");
@@ -6918,6 +6924,11 @@ export class ActivityTransition {
           : `activity.transition ${operation} forbids a nonblocking ledger fact`,
       );
     }
+    if (operation === "plan_gate_repair" && this.nonblocking !== null
+      && (this.nodeId !== "spec" || this.nonblocking.kind !== "decision"
+        || this.nonblocking.sourceStep !== "spec-gate" || this.nonblocking.action !== "repair")) {
+      throw new CurrentFlowStateInvariantError("only Spec Gate advisory repair may bind a plan Gate repair Activity");
+    }
     const finalizationRequired = FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS.has(operation);
     if (finalizationRequired) {
       if (!Array.isArray(finalizeSteps) || finalizeSteps.length === 0 || finalizeSteps.some((step) => typeof step !== "string" || step === "")) {
@@ -7215,6 +7226,7 @@ export class ActivityTransition {
           attempt: this.attempt,
           taskLifecycle: this.gateTaskLifecycle,
           result: activity.result,
+          nonblocking: this.nonblocking,
         });
       }
       if (this.operation === "recover_missing_producer_artifact") {

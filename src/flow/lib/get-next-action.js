@@ -18,6 +18,8 @@ import {
   ConfirmAndAdvance,
   deriveNextAction,
   resolveDefinitionRoute,
+  resolveSpecGatePostFailure,
+  SpecGatePostFailureFacts,
   resolveTaskExecutionOverrun,
   selectedNonGateUserAction,
   testExecuteTransitionDefinition,
@@ -401,6 +403,14 @@ function definitionOwnedGateDirective(selection, { state, binding }) {
     reason: "Definition selected final defer; further Gate evaluation is not admitted.",
   });
   return null;
+}
+
+function strictRecoveryBlockedDirective(offer) {
+  return new BlockedDirective({
+    code: "STRICT_RECOVERY_EXHAUSTED",
+    reason: offer.blocker,
+    resumeInstruction: `Strict recovery remains blocked. To explicitly enable advisory handling, run ${offer.activationCommand}`,
+  });
 }
 
 function nextActionWithBinding(result, binding) {
@@ -865,9 +875,30 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const definitionDescriptor = descriptor
     .withReviewDisposition(reviewSelection.disposition)
     .withConditionalWorkerDisposition(conditionalWorkerDisposition);
-  const gateSelection = definitionOwnedGateSelection(ctx, state, target);
+  let specSettlementStatus = "missing";
+  let specSettlementDetail = null;
+  if (target.stepId === "spec-gate") {
+    try {
+      specSettlementStatus = ctx.flowManager.readCurrentStepSettlement({
+        specId: state.specId, stepId: "spec-gate",
+      }) === null ? "missing" : "present";
+    } catch (error) {
+      specSettlementStatus = "invalid";
+      specSettlementDetail = error.message;
+    }
+  }
+  const specPostFailure = target.stepId === "spec-gate" ? resolveSpecGatePostFailure(
+    new SpecGatePostFailureFacts({
+      failure: typedState.attempt?.failure ?? null,
+      settlementStatus: specSettlementStatus,
+      detail: specSettlementDetail,
+    }),
+  ) : null;
+  const gateSelection = specPostFailure === null
+    ? definitionOwnedGateSelection(ctx, state, target) : null;
   const gateDirective = definitionOwnedGateDirective(gateSelection, { state, binding });
-  const definitionEligibility = definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager);
+  const definitionEligibility = specPostFailure === null
+    ? definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager) : null;
   const activationOffer = nonblockingActivationOfferForStrictStop({
     state,
     eligibility: definitionEligibility,
@@ -939,15 +970,22 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   }).resolve();
   const activationDirective = activationOffer === null
     ? null
-    : new AwaitUserDecisionDirective({
-      prompt: activationOffer.prompt,
-      reason: activationOffer.blocker,
-      continuation: lifecycleDirective instanceof ExecuteCommandDirective
-        ? lifecycleDirective.continuation
-        : null,
+    : activationOffer.strictStopKind === "blocked"
+      ? strictRecoveryBlockedDirective(activationOffer)
+      : new AwaitUserDecisionDirective({
+        prompt: activationOffer.prompt,
+        reason: activationOffer.blocker,
+        continuation: lifecycleDirective instanceof ExecuteCommandDirective
+          ? lifecycleDirective.continuation
+          : null,
       });
   const workerContext = canonicalWorkerContext(ctx, derived, target, state, typedState);
-  let selectedDirective = userDecisionDirective ?? draftDecisionDirective ?? conditionalDirective ?? approvalDirective ?? activationDirective
+  let selectedDirective = specPostFailure === null ? null : new BlockedDirective({
+    code: specPostFailure.code,
+    reason: specPostFailure.reason,
+    resumeInstruction: specPostFailure.resumeInstruction,
+  });
+  selectedDirective ??= userDecisionDirective ?? draftDecisionDirective ?? conditionalDirective ?? approvalDirective ?? activationDirective
     ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
   if (target.scope === "task" && target.stepId === "task-triage" && typedState.attempt?.failure === null) {
     const filter = workerContext.taskReviewFilter;

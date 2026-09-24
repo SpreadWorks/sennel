@@ -1602,8 +1602,10 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(blocked.stepResult.kind, "spec-gate-blocked");
     assert.equal(blocked.stepResult.error.data.reason, "cycle-limit");
     const next = await new GetNextActionCommand().execute(context());
-    assert.equal(next.directive.kind, "await_user_decision");
-    assert.equal(next.directive.reason, "The accepted Spec Gate evidence requires an explicit disposition.");
+    assert.equal(next.directive.kind, "blocked");
+    assert.equal(next.directive.requiresUserAction, false);
+    assert.match(next.directive.reason, /Spec Gate.*(?:cycle|limit|maximum)/);
+    assert.notEqual(manager.canonicalState(created.specId).policy.nonblocking?.enabled, true);
     const reloaded = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     const reloadedFailure = reloaded.canonicalState(created.specId).attempt.failure;
     assert.equal(reloadedFailure.category, "semantic");

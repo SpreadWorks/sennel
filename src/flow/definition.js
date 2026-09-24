@@ -1120,6 +1120,44 @@ const GATE_DISPOSITIONS = new Set([
 ]);
 const GATE_TRANSITION_TOKEN = Symbol("definition-gate-transition");
 export const SPEC_GATE_MAXIMUM_CYCLE = 4;
+
+const SPEC_GATE_POST_FAILURE_TOKEN = Symbol("spec-gate-post-failure");
+
+export class SpecGatePostFailureFacts {
+  constructor({ failure = null, settlementStatus, detail = null } = {}) {
+    if (!["present", "missing", "invalid"].includes(settlementStatus)) {
+      throw new TypeError("Spec Gate post-failure settlement status is invalid");
+    }
+    this.failure = failure;
+    this.settlementStatus = settlementStatus;
+    this.detail = detail;
+    Object.freeze(this);
+  }
+}
+
+export class SpecGatePostFailureBlocked {
+  constructor(token, facts) {
+    if (token !== SPEC_GATE_POST_FAILURE_TOKEN || !(facts instanceof SpecGatePostFailureFacts)
+      || facts.settlementStatus === "present") {
+      throw new TypeError("Spec Gate post-failure block requires unresolved facts");
+    }
+    this.code = "SPEC_GATE_POST_FAILED";
+    this.reason = facts.settlementStatus === "missing"
+      ? "The failed Spec Gate post hook has no current Result and Settlement receipt authorizing replay."
+      : `The failed Spec Gate post hook has no valid current settlement: ${facts.detail}`;
+    this.resumeInstruction = "No recovery is authorized for this Attempt. Replay requires a current matching Result and settlement receipt from the canonical producer. Preserve the existing failure and publication evidence.";
+    Object.freeze(this);
+  }
+}
+
+export function resolveSpecGatePostFailure(facts) {
+  if (!(facts instanceof SpecGatePostFailureFacts)) {
+    throw new TypeError("Spec Gate post-failure recovery requires typed facts");
+  }
+  return facts.failure?.code === "SPEC_GATE_POST_FAILED"
+    && facts.failure.retryable === false && facts.settlementStatus !== "present"
+    ? new SpecGatePostFailureBlocked(SPEC_GATE_POST_FAILURE_TOKEN, facts) : null;
+}
 const NONBLOCKING_ELIGIBILITY_TOKEN = Symbol("definition-nonblocking-eligibility");
 export { DraftCompletionConnector } from "./lib/draft-completion-connector.js";
 
@@ -1355,7 +1393,9 @@ export class DefinitionNonblockingDecisionEffect {
       throw new Error("nonblocking decision effect action is invalid");
     }
     this.action = action;
-    this.operation = action === "continue" ? "continue" : "restart-source";
+    this.operation = action === "continue" ? "continue"
+      : action === "repair" && targetStepId === "spec" && sourceStepId === "spec-gate"
+        ? "repair-spec" : "restart-source";
     this.sourceStepId = requireString(sourceStepId, "nonblocking decision effect source Step");
     this.targetStepId = requireString(targetStepId, "nonblocking decision effect target Step");
     this.skippedStepIds = requireOptionalStepList(skippedStepIds, "nonblocking decision effect skipped Steps");
@@ -1363,7 +1403,7 @@ export class DefinitionNonblockingDecisionEffect {
       && (this.targetStepId !== this.sourceStepId || this.skippedStepIds.length !== 0)) {
       throw new Error("nonblocking restart effect must target only its source Step");
     }
-    this.nextAction = action === "continue" ? "refresh-next-action" : `run-${this.sourceStepId}`;
+    this.nextAction = action === "continue" ? "refresh-next-action" : `run-${this.targetStepId}`;
     Object.freeze(this);
   }
 
@@ -1388,6 +1428,9 @@ export class DefinitionNonblockingEligibility {
     continueTargetStepId = null,
     skippedStepIds = null,
     selectedFindingFingerprints = [],
+    repairAllowed = true,
+    repairTargetStepId = null,
+    strictStopKind = "await-user-decision",
     gateDecision = null,
     selection = null,
   } = {}) {
@@ -1418,8 +1461,18 @@ export class DefinitionNonblockingEligibility {
       selectedFindingFingerprints,
       "nonblocking selected finding fingerprints",
     );
+    this.repairTargetStepId = repairTargetStepId === null ? this.sourceStep
+      : requireString(repairTargetStepId, "nonblocking repair target Step");
+    if (!["await-user-decision", "blocked"].includes(strictStopKind)) {
+      throw new Error("nonblocking strict stop kind is invalid");
+    }
+    this.strictStopKind = strictStopKind;
+    if (this.repairTargetStepId !== this.sourceStep
+      && (this.sourceStep !== "spec-gate" || this.repairTargetStepId !== "spec")) {
+      throw new Error("nonblocking repair target is invalid");
+    }
     this.allowedActions = Object.freeze(resultKind === "quality"
-      ? ["repair", "continue"]
+      ? repairAllowed ? ["repair", "continue"] : ["continue"]
       : ["retry", "continue"]);
     this.acceptancePublication = resultKind === "quality" && ["gate", "review"].includes(route.kind)
       ? "semantic-findings"
@@ -1441,7 +1494,8 @@ export class DefinitionNonblockingEligibility {
     return new DefinitionNonblockingDecisionEffect(NONBLOCKING_ELIGIBILITY_TOKEN, {
       action,
       sourceStepId: this.sourceStep,
-      targetStepId: action === "continue" ? this.continueTargetStepId : this.sourceStep,
+      targetStepId: action === "continue" ? this.continueTargetStepId
+        : action === "repair" ? this.repairTargetStepId : this.sourceStep,
       skippedStepIds: action === "continue" ? this.skippedStepIds : Object.freeze([]),
     });
   }
@@ -1471,10 +1525,21 @@ export function specGateNonblockingEligibilityForResult(result) {
     && !(result instanceof TaskSpecGateBlockedResult)) return null;
   if (["integrity", "same-evidence"].includes(result.error?.data?.reason)) return null;
   const local = result.error?.data?.reason === "local";
+  const planSpec = result instanceof SpecGateAwaitingDecisionResult
+    || result instanceof SpecGateBlockedResult;
   return new DefinitionNonblockingEligibility(NONBLOCKING_ELIGIBILITY_TOKEN, {
     sourceStep: "spec-gate",
     resultKind: local ? "unavailable" : "quality",
-    blocker: "The accepted Spec Gate evidence requires an explicit disposition.",
+    repairTargetStepId: planSpec ? "spec" : null,
+    strictStopKind: planSpec ? "blocked" : "await-user-decision",
+    repairAllowed: !planSpec || !["cycle-limit", "repair-unavailable"].includes(result.error?.data?.reason),
+    blocker: result.error?.data?.reason === "cycle-limit"
+      ? `Spec Gate repair cycle ${result.error.data.cycle ?? SPEC_GATE_MAXIMUM_CYCLE} reached maximum ${result.error.data.maximum ?? SPEC_GATE_MAXIMUM_CYCLE} with unresolved findings.`
+      : result.error?.data?.reason === "repair-unavailable"
+        ? "Spec Gate has unresolved failure evidence but no repairable blocking observation."
+      : result.error?.data?.reason === "local"
+        ? "Spec Gate stopped on invalid local evidence; correct the input or explicitly choose advisory handling."
+        : "The accepted Spec Gate evidence requires an explicit disposition.",
     selection: result.toJSON(),
   });
 }
@@ -4871,22 +4936,62 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
     }
     if (gatePublication) draftGateRepairSelection.assertBinding(this.binding, executionLifecycle);
     this.draftGateRepairSelection = draftGateRepairSelection;
-    const identity = {
-      binding: this.binding,
-      resultKind: this.resultKind,
-      resultType: this.resultType,
-      resultDigest: this.resultDigest,
-      settlementKind: this.settlementKind,
-      targetStepId: this.targetStepId,
-      effects: this.effects?.toJSON() ?? null,
-      connector: this.connector,
-      publicationDigest: this.publicationDigest,
-      executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
-      awaitQuestion: this.awaitQuestion?.toJSON() ?? null,
-      ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
-    };
+    const identity = DraftStepSettlementReceipt.identity(this);
     this.id = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     Object.freeze(this);
+  }
+
+  static identity(value) {
+    return {
+      binding: value.binding,
+      resultKind: value.resultKind,
+      resultType: value.resultType,
+      resultDigest: value.resultDigest,
+      settlementKind: value.settlementKind,
+      targetStepId: value.targetStepId,
+      effects: value.effects?.toJSON?.() ?? value.effects ?? null,
+      connector: value.connector,
+      publicationDigest: value.publicationDigest,
+      executionLifecycle: value.executionLifecycle?.toJSON?.() ?? value.executionLifecycle ?? null,
+      awaitQuestion: value.awaitQuestion?.toJSON?.() ?? value.awaitQuestion ?? null,
+      ...(value.draftGateRepairSelection == null ? {} : {
+        draftGateRepairSelection: value.draftGateRepairSelection.toJSON?.() ?? value.draftGateRepairSelection,
+      }),
+    };
+  }
+
+  /** Authenticate a persisted receipt and its selected Result and Settlement when available. */
+  static assertStored(value, { binding = null, result = null, settlement = null } = {}) {
+    if (!SHA256_DIGEST.test(value?.publicationDigest ?? "")
+      || !SHA256_DIGEST.test(value?.resultDigest ?? "")
+      || value.id !== createHash("sha256").update(JSON.stringify(this.identity(value))).digest("hex")) {
+      throw new TypeError("stored Step settlement receipt identity is invalid");
+    }
+    if (binding !== null && (value.binding?.runId !== binding.runId
+      || value.binding?.specId !== binding.specId
+      || value.binding?.stepId !== binding.stepId
+      || value.binding?.attemptId !== binding.attempt?.id
+      || value.binding?.attemptSequence !== binding.attempt?.sequence)) {
+      throw new TypeError("stored Step settlement receipt binding is invalid");
+    }
+    if (result !== null && (!(result instanceof StepResult)
+      || value.resultKind !== result.kind
+      || value.resultType !== result.type
+      || value.resultDigest !== stepResultDigest(result))) {
+      throw new TypeError("stored Step settlement receipt Result is invalid");
+    }
+    if (settlement !== null && (!(settlement instanceof StepSettlement)
+      || value.settlementKind !== settlement.kind
+      || value.binding?.stepId !== settlement.sourceStepId
+      || value.resultKind !== settlement.resultKind
+      || value.resultType !== settlement.resultType
+      || value.targetStepId !== (settlement instanceof StepRoute ? settlement.targetStepId : null)
+      || JSON.stringify(value.effects?.toJSON?.() ?? value.effects ?? null)
+        !== JSON.stringify(settlement instanceof StepRoute ? settlement.effects.toJSON() : null)
+      || value.connector?.name !== (settlement instanceof StepRoute ? settlement.connector.name : undefined))) {
+      throw new TypeError("stored Step settlement receipt selection is invalid");
+    }
+    return value;
   }
 
   toJSON() {

@@ -359,10 +359,16 @@ export class NonBlockingDecisionContext {
 }
 
 export class NonBlockingActivationOffer {
-  constructor({ sourceStep, resultKind, blocker, state, binding = null } = {}) {
+  constructor({ sourceStep, resultKind, blocker, strictStopKind, state, binding = null } = {}) {
     this.sourceStep = assertStep(sourceStep);
     this.resultKind = resultKind;
     this.blocker = text(blocker, "nonblocking activation blocker");
+    this.strictStopKind = strictStopKind;
+    this.activationCommand = guardedCommand(
+      `sennel flow set policy nonblocking --reason "${this.blocker.replaceAll('"', "'")}"`,
+      state,
+      binding,
+    );
     this.prompt = new UserActionPrompt({
       question: "Strict recovery is exhausted for an eligible acceptance-backed check. Continue with advisory handling?",
       choices: [
@@ -370,11 +376,7 @@ export class NonBlockingActivationOffer {
         new UserActionChoice({
           actionId: "ENABLE_NONBLOCKING",
           label: "Enable advisory continuation",
-          nextAction: guardedCommand(
-            `sennel flow set policy nonblocking --reason "${this.blocker.replaceAll('"', "'")}"`,
-            state,
-            binding,
-          ),
+          nextAction: this.activationCommand,
           impact: new UserActionImpact({ changes: ["eligible non-pass handling with acceptance disposition"] }),
           reason: "Normal Flow ownership and finalization remain unchanged.",
         }),
@@ -463,6 +465,7 @@ export function nonblockingActivationOfferForStrictStop({ state, eligibility, bi
     sourceStep: eligibility.sourceStep,
     resultKind: eligibility.resultKind,
     blocker: eligibility.blocker,
+    strictStopKind: eligibility.strictStopKind,
     state,
     binding,
   });
