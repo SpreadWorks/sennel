@@ -43,6 +43,8 @@ import {
   MigrationReport,
 } from "./migration.js";
 import { resolveMigrationSpecRoot } from "./migration-spec-root.js";
+import { CanonicalGateRepairMigrationPreflight } from "./spec-gate-repair-migration.js";
+import { CURRENT_FLOW_SCHEMA_REVISION } from "./flow-schema-revision.js";
 import { buildCurrentFlowDefinition } from "../flow/definition.js";
 import {
   CurrentFlowSpecRecord,
@@ -656,7 +658,7 @@ function canonicalHistoricalState(source, definition, permanentReferences = null
     };
   const issue = flow.issue === undefined || flow.issue === null ? null : flow.issue;
   const state = new CurrentFlowState({
-    schemaRevision: 3,
+    schemaRevision: CURRENT_FLOW_SCHEMA_REVISION,
     flowId: claimedOrDerived(FlowId, flow.flowId, "flow", source.specId, flowHash),
     flowVersionId: claimedOrDerived(FlowVersionId, flow.flowVersionId, "flow-version", source.specId, flowHash),
     runId: claimedOrDerived(FlowRunId, flow.runId, "run", source.specId, flowHash),
@@ -684,6 +686,7 @@ function canonicalHistoricalState(source, definition, permanentReferences = null
     outbox: [],
     context: null,
     history,
+    migration: null,
   }, { definition });
   return state;
 }
@@ -2857,15 +2860,17 @@ class LegacyCanonicalVersionPreflight {
  * root can therefore never expose an earlier Version upgraded while a later
  * Version is still old. */
 export class CanonicalRevisionRootTransaction {
-  constructor({ root, specRoot, specId, definition, faultInjector = () => {} } = {}) {
+  constructor({ root, specRoot, specId, definition, revision = 2, faultInjector = () => {} } = {}) {
+    if (revision !== 2 && revision !== 3) throw new Error("canonical revision root transaction revision is invalid");
     this.root = path.resolve(root);
     this.specRoot = specRoot;
     this.specId = FlowSpecIdentity.from(specId).toString();
     this.definition = definition;
+    this.revision = revision;
     this.faultInjector = faultInjector;
     this.specDirectory = path.join(this.root, ...specRoot.relativePath.split("/"), this.specId);
     this.journalDirectory = journalDirectoryFor(this.root);
-    this.journalPath = path.join(this.journalDirectory, `${sha256(Buffer.from(`${specRoot.relativePath}\0${this.specId}\0revision-root`, "utf8"))}.json`);
+    this.journalPath = path.join(this.journalDirectory, `${sha256(Buffer.from(`${specRoot.relativePath}\0${this.specId}\0${revision === 2 ? "revision-root" : "revision-root-3"}`, "utf8"))}.json`);
     Object.freeze(this);
   }
 
@@ -2892,10 +2897,14 @@ export class CanonicalRevisionRootTransaction {
         version,
         definition: this.definition,
       });
+      if (this.revision === 3 && location.version.value === 1) {
+        new CurrentFlowVersionStore({ location, definition: this.definition }).load();
+      }
     }
   }
 
   #preflight() {
+    if (this.revision === 3) return this.#preflightGateRepair();
     const plans = new Map();
     for (const version of this.#versions(this.specDirectory)) {
       const location = new FlowVersionLocation({
@@ -2931,7 +2940,130 @@ export class CanonicalRevisionRootTransaction {
     return plans;
   }
 
+  #preflightGateRepair() {
+    const plans = new Map();
+    for (const version of this.#versions(this.specDirectory)) {
+      const location = new FlowVersionLocation({
+        repositoryRoot: this.root,
+        authorityScope: FlowVersionAuthorityScope.canonical(),
+        specRoot: this.specRoot.relativePath,
+        specId: this.specId,
+        version: Number(version),
+      });
+      const raw = parseObject(fs.readFileSync(location.flowStateFile), "canonical Flow state");
+      if (raw.schemaRevision === 4) {
+        validateExistingVersion({
+          root: this.root, specRoot: this.specRoot, specId: this.specId,
+          version, definition: this.definition,
+        });
+        plans.set(version, null);
+        continue;
+      }
+      plans.set(version, new CanonicalGateRepairMigrationPreflight({
+        location, definition: this.definition,
+      }).inspect());
+    }
+    if ([...plans.values()].every((plan) => plan === null)) {
+      throw new LegacyFlowMigrationError("ALREADY_MIGRATED", `canonical spec ${this.specId} has no revision-three source`);
+    }
+    return plans;
+  }
+
+  #materializeGateRepair(stageContainer, plans) {
+    const stage = path.join(stageContainer, ...this.specRoot.relativePath.split("/"), this.specId);
+    fs.mkdirSync(path.dirname(stage), { recursive: true, mode: 0o755 });
+    copyCanonicalTree(this.specDirectory, stage);
+    for (const version of this.#versions(stage)) {
+      const plan = plans.get(version);
+      if (plan === null) continue;
+      if (plan === undefined) throw new Error(`canonical Version ${version} lacks Gate repair migration preflight`);
+      const location = new FlowVersionLocation({
+        repositoryRoot: stageContainer,
+        authorityScope: FlowVersionAuthorityScope.canonical(),
+        specRoot: this.specRoot.relativePath,
+        specId: this.specId,
+        version: Number(version),
+      });
+      const archives = [
+        ["flow", "flow.json", plan.flowBytes],
+        ["activities", "activities.jsonl", plan.activitiesBytes],
+        ["catalog", "artifact-catalog.json", plan.catalogBytes],
+        ...(plan.issueLogBytes === null ? [] : [["issueLog", "issue-log.json", plan.issueLogBytes]]),
+      ];
+      const archiveDescriptors = archives.map(([, name, bytes]) => {
+        const relativePath = `artifacts/migration/spec-gate-repair-v3/${name}`;
+        writeExclusive(location.resolve(relativePath), bytes);
+        return FlowArtifactDescriptor.fromFile({
+          location, authoritySlot: migrationSlot(relativePath), relativePath,
+          mediaType: name === "activities.jsonl" ? "application/x-ndjson" : "application/json",
+          retention: "permanent", migrationMaterialization: true,
+        });
+      });
+      const legacyOutcomeIds = new Set(plan.legacyOutcomeActivityIds);
+      for (const descriptor of plan.catalog.artifacts.filter((entry) => (
+        entry.logicalKey === "plan.gate.repair.outcome" && legacyOutcomeIds.has(entry.activityId)
+      ))) {
+        const source = location.resolve(descriptor.relativePath);
+        const archivedPath = `artifacts/migration/spec-gate-repair-v3/outcomes/${path.basename(path.dirname(descriptor.relativePath))}.json`;
+        writeExclusive(location.resolve(archivedPath), fs.readFileSync(source));
+        fs.unlinkSync(source);
+        archiveDescriptors.push(FlowArtifactDescriptor.fromFile({
+          location, authoritySlot: migrationSlot(archivedPath), relativePath: archivedPath,
+          mediaType: "application/json", retention: "permanent", migrationMaterialization: true,
+        }));
+      }
+      const state = CurrentFlowState.fromCanonicalMigration({
+        legacyState: plan.state,
+        archiveDigests: plan.archiveDigests,
+        legacyAppliedCount: plan.legacyAppliedCount,
+        projectedActivitiesDigest: plan.projectedActivitiesDigest,
+        legacyCyclesDigest: plan.legacyCyclesDigest,
+        definition: this.definition,
+      });
+      const flowBytes = Buffer.from(`${JSON.stringify(state.toJSON(), null, 2)}\n`, "utf8");
+      fs.writeFileSync(location.flowStateFile, flowBytes);
+      fs.writeFileSync(location.activitiesFile, plan.projectedActivitiesBytes);
+      if (plan.liveIssueLogBytes !== null) {
+        fs.writeFileSync(location.resolve("issue-log.json"), plan.liveIssueLogBytes);
+      }
+      const count = {
+        version: 1,
+        legacyAppliedCount: plan.legacyAppliedCount,
+        legacyOutcomeActivityIds: [...plan.legacyOutcomeActivityIds],
+        sourceActivitiesDigest: plan.archiveDigests.activities,
+        legacyCycles: plan.legacyCycles,
+      };
+      const countArtifact = FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate.repair.migration");
+      writeExclusive(location.resolve(countArtifact.relativePath), Buffer.from(`${JSON.stringify(count, null, 2)}\n`, "utf8"));
+      const countDescriptor = FlowArtifactDescriptor.fromFile({
+        location,
+        ...countArtifact.publication({ mediaType: "application/json" }),
+        migrationMaterialization: true,
+      });
+      const retained = plan.catalog.artifacts.filter((entry) => (
+        entry.logicalKey !== "plan.gate.repair.outcome" || !legacyOutcomeIds.has(entry.activityId)
+      )).map((entry) => {
+        if (entry.relativePath === "flow.json") return new FlowArtifactDescriptor({
+          ...entry.toJSON(), hash: sha256(flowBytes), size: flowBytes.length, activityId: null,
+        });
+        if (entry.relativePath === "activities.jsonl") return new FlowArtifactDescriptor({
+          ...entry.toJSON(), hash: sha256(plan.projectedActivitiesBytes), size: plan.projectedActivitiesBytes.length,
+          activityId: null,
+        });
+        if (entry.relativePath === "issue-log.json" && plan.liveIssueLogBytes !== null) return new FlowArtifactDescriptor({
+          ...entry.toJSON(), hash: sha256(plan.liveIssueLogBytes), size: plan.liveIssueLogBytes.length,
+          activityId: null,
+        });
+        return entry;
+      });
+      new AtomicJsonFile(location.catalogFile).write(new FlowArtifactCatalog({
+        artifacts: [...retained, ...archiveDescriptors, countDescriptor],
+      }).toJSON());
+    }
+  }
+
   #materialize(stageContainer, plans) {
+    if (this.revision === 3) return this.#materializeGateRepair(stageContainer, plans);
     const stage = path.join(stageContainer, ...this.specRoot.relativePath.split("/"), this.specId);
     fs.mkdirSync(path.dirname(stage), { recursive: true, mode: 0o755 });
     copyCanonicalTree(this.specDirectory, stage);
@@ -3033,16 +3165,17 @@ export class CanonicalRevisionRootTransaction {
   }
 
   static recoverFromJournal({ root, specRoot, journal, journalPath, dryRun }) {
+    const revision = journal?.rootTransaction === "revision-three" ? 3 : 2;
     if (!isPlainObject(journal) || journal.schemaRevision !== JOURNAL_SCHEMA_REVISION
       || journal.component !== JOURNAL_COMPONENT || journal.revision !== REVISION
-      || journal.rootTransaction !== "revision-two" || journal.specRoot !== specRoot.relativePath
+      || journal.rootTransaction !== (revision === 3 ? "revision-three" : "revision-two") || journal.specRoot !== specRoot.relativePath
       || typeof journal.specId !== "string" || typeof journal.stageName !== "string" || typeof journal.backupName !== "string"
       || !/^[a-f0-9]{64}$/.test(journal.sourceHash) || !/^[a-f0-9]{64}$/.test(journal.stageHash)) {
       throw new Error("canonical revision migration journal is invalid");
     }
     const sourceIdentity = journalIdentity(journal.sourceDirectoryIdentity, "canonical revision migration source identity");
     const stageIdentity = journalIdentity(journal.stageDirectoryIdentity, "canonical revision migration stage identity");
-    const transaction = new CanonicalRevisionRootTransaction({ root, specRoot, specId: journal.specId, definition: buildCurrentFlowDefinition() });
+    const transaction = new CanonicalRevisionRootTransaction({ root, specRoot, specId: journal.specId, definition: buildCurrentFlowDefinition(), revision });
     if (transaction.journalPath !== journalPath) throw new Error("canonical revision migration journal identity does not match its path");
     if (path.basename(journal.stageName) !== journal.stageName || path.basename(journal.backupName) !== journal.backupName
       || !journal.stageName.startsWith(`.${transaction.specId}.sennel-migrate-revisions-stage-`)
@@ -3116,7 +3249,7 @@ export class CanonicalRevisionRootTransaction {
       if (treeFingerprint(this.specDirectory) !== sourceHash) throw new LegacyFlowMigrationError("SOURCE_CHANGED", "canonical spec root changed during revision migration");
       new AtomicJsonFile(this.journalPath).write({
         schemaRevision: JOURNAL_SCHEMA_REVISION, component: JOURNAL_COMPONENT, revision: REVISION,
-        rootTransaction: "revision-two", specRoot: this.specRoot.relativePath, specId: this.specId,
+        rootTransaction: this.revision === 3 ? "revision-three" : "revision-two", specRoot: this.specRoot.relativePath, specId: this.specId,
         stageName, backupName, sourceHash, stageHash, sourceDirectoryIdentity: sourceIdentity, stageDirectoryIdentity: stageIdentity,
       });
       journaled = true;
@@ -3535,7 +3668,7 @@ export class SpecsMigrationTransaction {
       if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".json")) throw new Error("specs migration recovery directory contains an unsafe entry");
       const journalPath = path.join(journalDirectory, entry.name);
       const journal = new AtomicJsonFile(journalPath).read(null);
-      if (journal?.rootTransaction === "revision-two") {
+      if (journal?.rootTransaction === "revision-two" || journal?.rootTransaction === "revision-three") {
         recoveries.push(CanonicalRevisionRootTransaction.recoverFromJournal({
           root, specRoot, journal, journalPath, dryRun,
         }));
@@ -4258,5 +4391,88 @@ export class SpecsMigrationRevisionOne {
     );
     global("FLOW_VERSION_ID_COLLISION", (state) => state.flowVersionId, "flowVersionId is already claimed");
     global("RUN_ID_COLLISION", (state) => state.runId, "runId is already claimed");
+  }
+}
+
+/** Explicit canonical v3 to v4 migration for the dedicated Spec Gate repair leaf. */
+export class SpecsMigrationRevisionThree {
+  constructor(root, { dryRun = false, logger = console } = {}) {
+    this.root = path.resolve(root);
+    this.dryRun = dryRun === true;
+    this.logger = logger;
+    this.definition = buildCurrentFlowDefinition();
+    Object.freeze(this);
+  }
+
+  run() {
+    const resolved = resolveMigrationSpecRoot(this.root);
+    if (resolved.blocker) {
+      this.logger.error(resolved.blocker.toString());
+      return { complete: false };
+    }
+    const specRoot = resolved.root;
+    const recovery = SpecsMigrationTransaction.recoverAll({
+      root: this.root, specRoot, dryRun: this.dryRun,
+    });
+    if (recovery.some((entry) => entry.requiresRecovery)) {
+      for (const entry of recovery) this.logger.error(`spec ${entry.specId}: RECOVERY_REQUIRED`);
+      return { complete: false, requiresRecovery: true };
+    }
+    const stat = lstatOrNull(specRoot.path);
+    if (stat === null) return { complete: true };
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      this.logger.error("SPEC_ROOT_INVALID: resolved spec root must be a real directory");
+      return { complete: false };
+    }
+    const candidates = [];
+    const failures = [];
+    for (const entry of fs.readdirSync(specRoot.path, { withFileTypes: true }).sort((a, b) => codeUnitOrder(a.name, b.name))) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      let specId;
+      try { specId = FlowSpecIdentity.from(entry.name).toString(); }
+      catch { continue; }
+      const directory = path.join(specRoot.path, specId);
+      try {
+        if (fs.existsSync(path.join(directory, "flow.json"))) {
+          throw new LegacyFlowMigrationError("REVISION_TWO_REQUIRED", "migrate specs --to 2 before revision 3");
+        }
+        const versions = canonicalVersionDirectories(directory);
+        const plans = [];
+        for (const version of versions) {
+          const location = new FlowVersionLocation({
+            repositoryRoot: this.root,
+            authorityScope: FlowVersionAuthorityScope.canonical(),
+            specRoot: specRoot.relativePath,
+            specId,
+            version: Number(version),
+          });
+          const raw = parseObject(fs.readFileSync(location.flowStateFile), "canonical Flow state");
+          if (raw.schemaRevision === 4) {
+            validateExistingVersion({ root: this.root, specRoot, specId, version, definition: this.definition });
+            plans.push({ version, classification: "already-migrated", legacyAppliedCount: 0 });
+          } else {
+            const plan = new CanonicalGateRepairMigrationPreflight({ location, definition: this.definition }).inspect();
+            plans.push({ version, classification: "canonical-v3-to-v4", legacyAppliedCount: plan.legacyAppliedCount });
+          }
+        }
+        if (this.dryRun) {
+          this.logger.log(JSON.stringify({ component: "specs", specId, versions: plans }));
+        } else if (plans.some((plan) => plan.classification === "canonical-v3-to-v4")) {
+          candidates.push(new CanonicalRevisionRootTransaction({
+            root: this.root, specRoot, specId, definition: this.definition, revision: 3,
+          }));
+        }
+      } catch (error) {
+        failures.push({ specId, error });
+      }
+    }
+    for (const candidate of candidates) {
+      try { candidate.apply(); }
+      catch (error) { failures.push({ specId: candidate.specId, error }); }
+    }
+    for (const { specId, error } of failures) {
+      this.logger.error(`spec ${specId}: ${error.code ?? "REVISION_THREE_BLOCKED"}: ${error.message}`);
+    }
+    return { complete: failures.length === 0 };
   }
 }

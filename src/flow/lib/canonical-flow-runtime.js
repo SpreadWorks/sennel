@@ -183,6 +183,9 @@ export class CanonicalFlowRuntime {
   readCurrentSpecReview(specId) {
     return this.store(specId).readCurrentSpecReview();
   }
+  readLatestSpecReview(specId) {
+    return this.store(specId).readLatestSpecReview();
+  }
   readCurrentSpecReviewInput(specId) {
     return this.store(specId).readCurrentSpecReviewInput();
   }

@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -21,7 +22,7 @@ function activity({ id, operation, transitionAttempt, attemptId = transitionAtte
 }
 
 function state(currentAttempt) {
-  return { schemaRevision: 3, current: ["impl-repair"], attempt: currentAttempt };
+  return { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, current: ["impl-repair"], attempt: currentAttempt };
 }
 
 describe("canonical repair Attempt lineage", () => {

@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import crypto from "node:crypto";
 
 import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
@@ -480,7 +481,7 @@ class TestReviewRepairProgressEpisode {
   static fromJSON(value) { return new TestReviewRepairProgressEpisode(value); }
 
   assertFlow(state) {
-    if (state?.schemaRevision !== 3
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION
       || this.sourceCandidate.bundle.specRevision.specId !== state.specId
       || state.attempt?.id !== this.coordinatorAttempt.id
       || state.attempt?.sequence !== this.coordinatorAttempt.sequence) {
@@ -687,7 +688,7 @@ export function canonicalTestReviewRepairProgress({ flowManager, state, repair, 
  */
 export class CanonicalTestReviewRepair {
   constructor({ state, attempt, artifactDigest, evidenceId, sourceCandidate, blockingFindings, sourceStepId = "test-review", sourceArtifact = "requirement-test-review.json" } = {}) {
-    if (state?.schemaRevision !== 3) {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
       throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test-review repair requires a Version-1 Flow");
     }
     this.version = 2;
@@ -926,7 +927,7 @@ function repairFromCatalog({ flowManager, state, consumerNodeId, reviewAttemptSe
 }
 
 export function canonicalTestReviewRepairForTarget({ flowManager, state, targetStepId } = {}) {
-  if (state?.schemaRevision !== 3 || targetStepId !== "test-repair" || state.currentNodeId !== "test-repair") return null;
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || targetStepId !== "test-repair" || state.currentNodeId !== "test-repair") return null;
   const typedState = typeof flowManager.canonicalState === "function"
     ? flowManager.canonicalState(state.specId)
     : state;

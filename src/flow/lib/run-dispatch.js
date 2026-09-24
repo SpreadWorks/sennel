@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Agent-independent Flow continuation dispatcher.
  *
@@ -25,6 +26,7 @@ import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import {
   AbortedDirective,
   AwaitDraftQuestionDirective,
+  AwaitWorkerInputDirective,
   AwaitUserDecisionDirective,
   AwaitTaskReviewFilterDirective,
   BlockedDirective,
@@ -177,14 +179,17 @@ export async function specWorkerStepDefinition(stepId) {
       return { Connector, StepClass };
     }
     case "spec-triage":
-    case "spec-repair": {
+    case "spec-repair":
+    case "spec-gate-repair": {
       const [{ SpecEntryConnector: Connector }, steps] = await Promise.all([
         import("../engine/connectors/spec/spec-entry-connector.js"),
         stepId === "spec-triage"
           ? import("../steps/spec/spec-triage.js")
-          : import("../steps/spec/spec-repair.js"),
+          : stepId === "spec-repair" ? import("../steps/spec/spec-repair.js")
+            : import("../steps/spec/spec-gate-repair.js"),
       ]);
-      return { Connector, StepClass: stepId === "spec-triage" ? steps.SpecTriageStep : steps.SpecRepairStep };
+      return { Connector, StepClass: stepId === "spec-triage" ? steps.SpecTriageStep
+        : stepId === "spec-repair" ? steps.SpecRepairStep : steps.SpecGateRepairStep };
     }
     default: return null;
   }
@@ -793,7 +798,7 @@ function persistDispatchApproval(ctx, invocation, fingerprint) {
   const state = readFlowState(ctx);
   const existing = ExplicitFlowDispatchAuthorization.matching(state, action);
   if (existing) return { authorization: existing, receiptMutation: null };
-  if (state?.schemaRevision !== 3 || typeof ctx.flowManager?.recordDispatchApproval !== "function") {
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowManager?.recordDispatchApproval !== "function") {
     throw new Error("flow dispatch approval requires the canonical Version Store receipt API");
   }
   if (state.runId !== action.target.runId) {
@@ -864,7 +869,8 @@ export class FlowDispatchAction {
 
   get awaitsUserDecision() {
     return this.directive instanceof AwaitUserDecisionDirective
-      || this.directive instanceof AwaitDraftQuestionDirective;
+      || this.directive instanceof AwaitDraftQuestionDirective
+      || this.directive instanceof AwaitWorkerInputDirective;
   }
 
   get awaitsHostAction() { return this.directive instanceof AwaitTaskReviewFilterDirective; }
@@ -1142,7 +1148,7 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
         timestamp: new Date().toISOString(),
       };
       const idempotencyKey = `worker-handoff-${actionDigest || "unknown"}-${error.classification || "invalid"}`;
-      if (state.schemaRevision !== 3 || typeof ctx.flowManager?.appendIssueLog !== "function") {
+      if (state.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowManager?.appendIssueLog !== "function") {
         throw new Error("worker handoff diagnostics require canonical FlowManager.appendIssueLog");
       }
       ctx.flowManager.appendIssueLog({ specId: state.specId, entry, idempotencyKey });
@@ -1759,14 +1765,27 @@ export default class RunDispatchCommand extends FlowCommand {
           workerInvocation = prepared.invocation;
           publicationRecovery = prepared.publicationRecovery;
         } else {
-          handoffRequest = this.handoffCoordinator.createRequest({
-            ctx,
-            state,
-            invocation,
-            workerInstructions,
-          });
+          const repairLifecycle = action.nextAction.step === "spec-gate-repair"
+            ? ctx.flowManager.draftStepExecutionState({ binding: {
+              runId: state.runId, specId: state.specId, stepId: "spec-gate-repair",
+              attempt: ctx.flowManager.canonicalState(state.specId).attempt,
+            } }).lifecycle : null;
+          if (repairLifecycle?.phase === "publication") {
+            handoffRequest = this.handoffCoordinator.restoreClaimedDraftRequest({
+              ctx, state, lifecycle: repairLifecycle,
+            });
+            if (handoffRequest === null || !fs.existsSync(handoffRequest.submissionPath)) {
+              throw new Error("published Spec Gate repair has no sealed worker response for restart");
+            }
+            publicationRecovery = true;
+          } else {
+            handoffRequest = this.handoffCoordinator.createRequest({
+              ctx, state, invocation, workerInstructions,
+            });
+          }
         }
-        resumeSealedDraftExecution = conditionalDraftExecution
+        resumeSealedDraftExecution = (conditionalDraftExecution
+          || handoffRequest.stepId === "spec-gate-repair")
           && fs.existsSync(handoffRequest.submissionPath);
         if (!resumeSealedDraftExecution) {
           work = new FlowDispatchWork(workerInvocation, handoffRequest);
@@ -1832,6 +1851,10 @@ export default class RunDispatchCommand extends FlowCommand {
             // any provider-visible effect is recorded.
             const workerInvocation = work.workerInvocation();
             const prompt = work.prompt(workerInvocation);
+            if (handoffRequest?.stepId === "spec-gate-repair") {
+              const { SpecGateRepairService } = await import("../services/spec-gate-repair-service.js");
+              SpecGateRepairService.reserveWorkerCall({ ctx, request: handoffRequest, prompt });
+            }
             if (handoffRequest?.policy.kind === "source") {
               this.handoffCoordinator.startSourceWorker({ ctx, request: handoffRequest, invocation });
               sourceWorkerStarted = true;
@@ -1937,7 +1960,9 @@ export default class RunDispatchCommand extends FlowCommand {
         } else if (specDefinition !== null) {
           const { SpecService } = await import("../services/spec-service.js");
           const { SpecReviewWorkerService } = await import("../services/spec-worker-review-service.js");
-          const Service = handoffRequest.stepId === "spec" ? SpecService : SpecReviewWorkerService;
+          const { SpecGateRepairService } = await import("../services/spec-gate-repair-service.js");
+          const Service = handoffRequest.stepId === "spec" ? SpecService
+            : handoffRequest.stepId === "spec-gate-repair" ? SpecGateRepairService : SpecReviewWorkerService;
           const prepared = await Service.prepare({
             ctx, request: handoffRequest,
             Connector: specDefinition.Connector,
@@ -2075,11 +2100,14 @@ export default class RunDispatchCommand extends FlowCommand {
   async runSpecWorkerStep(definition, service) {
     const { SpecService } = await import("../services/spec-service.js");
     const { SpecReviewWorkerService } = await import("../services/spec-worker-review-service.js");
-    if (definition === null || !(service instanceof SpecService || service instanceof SpecReviewWorkerService)) {
+    const { SpecGateRepairService } = await import("../services/spec-gate-repair-service.js");
+    if (definition === null || !(service instanceof SpecService || service instanceof SpecReviewWorkerService
+      || service instanceof SpecGateRepairService)) {
       throw new Error("Spec Step definition is missing");
     }
     const step = new StepFactory()
-      .provide(service instanceof SpecService ? SpecService : SpecReviewWorkerService, service)
+      .provide(service instanceof SpecService ? SpecService
+        : service instanceof SpecGateRepairService ? SpecGateRepairService : SpecReviewWorkerService, service)
       .create(definition.StepClass);
     const stepResult = await step.execute();
     return { ...service.workerOutcome, stepResult };

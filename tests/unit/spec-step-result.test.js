@@ -11,8 +11,9 @@ import { SpecRepairConnector } from "../../src/flow/engine/connectors/spec/spec-
 import { SpecGateConnector } from "../../src/flow/engine/connectors/spec/spec-gate-connector.js";
 import {
   SpecCreatedResult,
-  SpecPlanGateRepairAppliedResult,
-  SpecPlanGateRepairNoProgressResult,
+  SpecGateRepairReadyForGateResult,
+  SpecGateRepairReviewRequiredResult,
+  SpecGateRepairNoProgressResult,
   SpecTriageCompletedResult,
   SpecRepairChangedResult,
   SpecRepairUnchangedResult,
@@ -24,60 +25,7 @@ import {
   CanonicalWorkerSpecPublication,
 } from "../../src/flow/lib/current-flow-state.js";
 import { SpecWorkerCompletionFacts } from "../../src/flow/lib/spec-step-connection.js";
-import {
-  ArtifactGateRepairLineage,
-  ArtifactGateRepairObservationResult,
-  GateEvidenceIdentity,
-  GateObservationRepair,
-  GateRepairObservationRequest,
-  GateRepairReport,
-  PlanGateRepairOutcomeDraft,
-} from "../../src/flow/lib/gate-observation-convergence.js";
 import { specResult } from "../../src/flow/steps/spec/spec-result.js";
-
-function repairOutcome(disposition) {
-  const fingerprint = "a".repeat(64);
-  const before = "b".repeat(64);
-  const after = disposition === "applied" ? "c".repeat(64) : before;
-  const sourceAttempt = { id: "gate-attempt", sequence: 1 };
-  const sourceEvidence = new GateEvidenceIdentity({
-    sourceAttempt,
-    resultLogicalKey: "spec.gate",
-    publicationActivityId: "gate-publication",
-    catalogFingerprint: "d".repeat(64),
-    transitionLineage: {
-      sourceAttempt, canonicalAttempt: sourceAttempt,
-      sourceFingerprint: "d".repeat(64), canonicalFingerprint: "d".repeat(64),
-    },
-  });
-  const request = new GateRepairObservationRequest({ fingerprint });
-  const deltaIds = disposition === "applied" ? [after] : [];
-  const report = new GateRepairReport({
-    beforeEvidenceDigest: before,
-    outputEvidenceDigest: after,
-    summary: "Address the Gate observation",
-    requests: [request],
-    lineage: new ArtifactGateRepairLineage({ deltaIds }),
-    results: [new ArtifactGateRepairObservationResult({
-      fingerprint, strategy: "Revise the specification",
-      summary: "Checked the specification against the observation",
-      priorRepairInsufficiency: null, deltaIds,
-    })],
-  });
-  return new PlanGateRepairOutcomeDraft({
-    repair: new GateObservationRepair({
-      repairId: "repair-spec-gate",
-      sourceEvidence,
-      targetAttempt: { id: "spec-repair-attempt", sequence: 2 },
-      publicationActivityId: "repair-selection",
-      recordFingerprint: "e".repeat(64),
-      handoffRevision: "f".repeat(64),
-      requests: [request],
-    }),
-    disposition,
-    report,
-  });
-}
 
 test("initial Spec facts produce the semantic Result without I/O", () => {
   const facts = new SpecWorkerCompletionFacts({
@@ -91,23 +39,20 @@ test("initial Spec facts produce the semantic Result without I/O", () => {
   assert.deepEqual(result.toJSON(), { kind: "spec-created", type: "completed" });
 });
 
-test("bound Spec plan Gate repair facts produce distinct applied and no-progress Results", () => {
-  for (const [disposition, Result, settlementKind] of [
-    ["applied", SpecPlanGateRepairAppliedResult, "target-connection"],
-    ["rejected-no-progress", SpecPlanGateRepairNoProgressResult, "failure"],
+test("dedicated repair completion and no-progress Results retain their routes after readback", () => {
+  for (const [result, target, kind] of [
+    [new SpecGateRepairReadyForGateResult(), "spec-gate", "target-connection"],
+    [new SpecGateRepairReviewRequiredResult(), "spec-review", "target-connection"],
+    [new SpecGateRepairNoProgressResult(new Error("No accepted change")), null, "failure"],
   ]) {
-    const facts = new SpecWorkerCompletionFacts({
-      publication: new CanonicalWorkerSpecPublication({ version: 1 }),
-      baseline: new CanonicalFlowArtifactBaseline({ logicalKey: "spec.record" }),
-      planGateRepairOutcome: repairOutcome(disposition),
-    });
-    const result = specResult(facts);
-    assert.ok(result instanceof Result);
-    assert.equal(result.stepId, "spec");
-    assert.equal(settleSpecStepResult("spec", result).kind, settlementKind);
-    if (disposition === "rejected-no-progress") {
-      assert.equal(result.error.code, "FLOW_PLAN_GATE_REPAIR_NO_PROGRESS");
-    }
+    const restored = StepResult.fromStored("spec-gate-repair", result.toJSON());
+    const settlement = settleSpecStepResult("spec-gate-repair", restored);
+    assert.equal(restored.type, result.type);
+    assert.equal(settlement.kind, kind);
+    if (target !== null) {
+      assert.equal(restored.type, "completed");
+      assert.equal(settlement.targetStepId, target);
+    } else assert.equal(restored.error.message, "No accepted change");
   }
 });
 

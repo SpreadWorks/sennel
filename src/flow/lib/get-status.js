@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/get-status.js
  *
@@ -226,7 +227,7 @@ class CanonicalStatusArtifacts {
     if (!flowManager || typeof flowManager.readArtifact !== "function") {
       throw new Error("canonical status requires FlowManager.readArtifact");
     }
-    if (state?.schemaRevision !== 3 || typeof state.specId !== "string" || state.specId === "") {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state.specId !== "string" || state.specId === "") {
       throw new Error("canonical status requires a Version-1 Flow state");
     }
     this.flowManager = flowManager;
@@ -248,7 +249,7 @@ class CanonicalStatusArtifacts {
   requirements() {
     return new CanonicalSpecRecord({
       flowManager: this.flowManager,
-      state: { schemaRevision: 3, specId: this.specId },
+      state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: this.specId },
       consumerNodeId: "system",
     }).requirements();
   }
@@ -409,7 +410,7 @@ function validateRunId(runId) {
 
 function buildStatusOutput(state, root, options = {}) {
   const details = options.details === true;
-  const artifacts = state?.schemaRevision === 3
+  const artifacts = state?.schemaRevision === CURRENT_FLOW_SCHEMA_REVISION
     ? new CanonicalStatusArtifacts({ flowManager: options.flowManager, state })
     : null;
   const phase = state.steps ? derivePhase(state) : null;

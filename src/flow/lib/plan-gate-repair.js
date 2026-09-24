@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import crypto from "node:crypto";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { CanonicalGateInputStore } from "./canonical-gate-artifacts.js";
@@ -276,8 +277,9 @@ const ROUTES = Object.freeze([
   new PlanGateRepairRoute({
     phase: "spec",
     gateStepId: "spec-gate",
-    targetStepId: "spec",
-    resetStepIds: ["spec", "spec-review", "spec-triage", "spec-repair", "spec-gate"],
+    targetStepId: "spec-gate-repair",
+    resetStepIds: ["spec-gate-repair", "spec-gate"],
+    skippableSourceStepIds: ["spec-gate-repair"],
   }),
 ]);
 
@@ -883,7 +885,7 @@ export class PlanGateRepairRecord {
  * directly.
  */
 export function canonicalPlanGateRepairForTarget({ flowManager, state, targetStepId } = {}) {
-  if (state?.schemaRevision !== 3 || planGateRepairRouteForTargetStep(targetStepId) === null) return null;
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || planGateRepairRouteForTargetStep(targetStepId) === null) return null;
   if (!flowManager || typeof flowManager.readArtifact !== "function" || typeof flowManager.activityLedger !== "function") {
     throw new Error("canonical plan gate repair requires the Version Store catalog and Activity readers");
   }

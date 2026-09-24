@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -447,7 +448,7 @@ describe("Current Flow state foundation", () => {
   let tmp = null;
   afterEach(() => tmp && removeTmpDir(tmp));
 
-  it("enforces the exact schemaRevision 3 wire contract through its dedicated serializer and validator", () => {
+  it("enforces the exact current schemaRevision wire contract through its dedicated serializer and validator", () => {
     const currentDefinition = definition();
     const validator = new CurrentFlowStateValidator({ definition: currentDefinition });
     const serializer = new CurrentFlowStateSerializer({ validator });
@@ -460,14 +461,15 @@ describe("Current Flow state foundation", () => {
       request: "Original request must persist.",
     });
     const wire = serializer.serialize(fresh);
-    assert.equal(wire.schemaRevision, 3);
+    assert.equal(wire.schemaRevision, CURRENT_FLOW_SCHEMA_REVISION);
     assert.equal(wire.current, null);
     assert.equal(wire.attempt, null);
     assert.equal(wire.context, null);
     assert.equal(wire.history, null);
+    assert.equal(wire.migration, null);
     assert.deepEqual(Object.keys(wire).sort(), [
       "artifacts", "attempt", "attemptSequence", "confirmationOrder", "context", "current", "execution", "flowId",
-      "flowVersionId", "history", "id", "issue", "key", "kind", "lifecycle", "outbox", "policy", "request", "result", "runId",
+      "flowVersionId", "history", "id", "issue", "key", "kind", "lifecycle", "migration", "outbox", "policy", "request", "result", "runId",
       "schemaRevision", "specId", "status", "steps", "version",
     ].sort());
     assert.deepEqual(serializer.deserialize(JSON.parse(serializer.bytes(fresh).toString("utf8"))).toJSON(), wire);
@@ -1078,7 +1080,7 @@ describe("Current Flow state foundation", () => {
         retryKind: "semantic",
       },
     });
-    const repairPath = state.definition.pathFor(state.root, "spec");
+    const repairPath = state.definition.pathFor(state.root, "spec-gate-repair");
     state = state.repairPlanGate({
       path: repairPath,
       attempt: attemptFor(state, repairPath, "spec-plan-repair"),

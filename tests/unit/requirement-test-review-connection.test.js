@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -56,7 +57,7 @@ function fixture() {
   const descriptor = (logicalKey, value) => ({ logicalKey, mediaType: "application/json", hash: sha(value), size: value.length });
   const reads = [];
   const state = {
-    schemaRevision: 3, runId: "run-review-r", specId: "review-r",
+    schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, runId: "run-review-r", specId: "review-r",
     attempt: { id: "review-r6", nodeId: "test-review", sequence: 2 },
   };
   const flowManager = {

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { validateSpecJsonObject } from "../../lib/spec-json.js";
+import { FlowFindingSourceIdentity } from "./flow-findings.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const SHA256_REVISION = /^sha256:([a-f0-9]{64})$/;
@@ -15,7 +16,10 @@ const COLLECTION_TARGETS = new Set([
 const REPLACE_ROOTS = new Set(["goal", "background"]);
 const REQUIREMENT_FIELDS = new Set(["desc", "priority", "testable", "preimplementation_test_expectation"]);
 const TASK_FIELDS = new Set(["title", "goal", "acceptance", "implementation_notes"]);
+const OPTIONAL_REQUIREMENT_FIELDS = new Set(["priority", "testable", "preimplementation_test_expectation"]);
+const OPTIONAL_TASK_FIELDS = new Set(["acceptance", "implementation_notes"]);
 const OPERATION_TYPES = new Map();
+const GATE_OPERATION_TYPES = new Map();
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
@@ -34,10 +38,10 @@ export function specRepairProposalDigest(proposal) {
   return crypto.createHash("sha256").update(canonicalJson(proposal)).digest("hex");
 }
 /** Finds the actual edit, independent of worker prose or which finding named it. */
-function semanticOperationDigest(operation) {
+function semanticOperationDigest(operation, resolvedTarget = null) {
   const json = operation.toJSON?.() ?? operation;
   return crypto.createHash("sha256").update(canonicalJson({
-    kind: json.kind, target: json.target, expectedDigest: json.expectedDigest,
+    kind: json.kind, target: resolvedTarget ?? json.target, expectedDigest: json.expectedDigest,
     ...(Object.hasOwn(json, "replacement") ? { replacement: json.replacement } : {}),
     ...(Object.hasOwn(json, "edits") ? { edits: json.edits } : {}),
   })).digest("hex");
@@ -166,18 +170,41 @@ export class SpecRepairArrayTarget extends SpecRepairTarget {
 /** A triage permission is a capability: a collection location alone cannot
  * accidentally grant array-add or array-delete authority. */
 export class SpecRepairPermission {
-  constructor(value, field) {
+  constructor(value, field, operationTypes = OPERATION_TYPES) {
     exactKeys(value, ["target", "operationKinds"], field);
     this.target = SpecRepairTarget.fromJSON(value.target, `${field}.target`);
     if (!Array.isArray(value.operationKinds) || value.operationKinds.length === 0 || new Set(value.operationKinds).size !== value.operationKinds.length) throw new Error(`${field}.operationKinds must be a non-empty unique array`);
     for (const kind of value.operationKinds) {
-      if (!OPERATION_TYPES.has(kind)) throw new Error(`${field}.operationKinds contains an invalid kind`);
-      if (!OPERATION_TYPES.get(kind).supportsTarget(this.target)) throw new Error(`${field}.operationKinds is incompatible with its target`);
+      if (!operationTypes.has(kind)) throw new Error(`${field}.operationKinds contains an invalid kind`);
+      if (!operationTypes.get(kind).supportsTarget(this.target)) throw new Error(`${field}.operationKinds is incompatible with its target`);
     }
-    this.operationKinds = Object.freeze([...value.operationKinds]); Object.freeze(this);
+    this.operationKinds = Object.freeze([...value.operationKinds]);
+    if (new.target === SpecRepairPermission) Object.freeze(this);
   }
   allows(operation) { return this.target.permissionKey() === operation.target.permissionKey() && this.operationKinds.includes(operation.kind); }
   toJSON() { return { target: this.target.toJSON(), operationKinds: [...this.operationKinds] }; }
+}
+/** Gate array permissions can name one immutable-base element precisely. */
+export class SpecGateRepairPermission extends SpecRepairPermission {
+  constructor(value, field, operationTypes, spec) {
+    super(value, field, operationTypes);
+    this.expectedDigest = null;
+    if (this.target instanceof SpecRepairArrayTarget && this.target.position !== null) {
+      const collection = collectionReference(spec, this.target.collection);
+      if (!collection || this.target.position >= collection.value.length || this.operationKinds.includes("add-array-element")) {
+        throw new Error(`${field} names an impossible array element capability`);
+      }
+      this.expectedDigest = valueDigest(collection.value[this.target.position]);
+    }
+    Object.freeze(this);
+  }
+  allows(operation) {
+    if (!super.allows(operation)) return false;
+    if (!(this.target instanceof SpecRepairArrayTarget) || this.target.position === null) return true;
+    return operation.target instanceof SpecRepairArrayTarget
+      && operation.target.position === this.target.position
+      && operation.expectedDigest === this.expectedDigest;
+  }
 }
 
 export class SpecRepairOperation {
@@ -276,6 +303,30 @@ export class SpecRepairIdEntityFieldReplace extends SpecRepairOperation {
   static supportsTarget(target) { return target instanceof SpecRepairIdEntityTarget; }
   apply(context) { return context.replace(this.resolve(context), this); }
 }
+/** Gate groups may remove an optional entity field as part of a coupled fix. */
+export class SpecGateRepairIdEntityFieldDelete extends SpecRepairOperation {
+  constructor(input, index) {
+    super(input, index, { replacementRequired: false });
+    if (this.kind !== "delete-entity-field" || !SpecGateRepairIdEntityFieldDelete.supportsTarget(this.target)
+      || this.expectedDigest === null) throw new Error(`spec-repair.operations[${index}] delete-entity-field target or digest is invalid`);
+    Object.freeze(this);
+  }
+  static supportsTarget(target) {
+    return target instanceof SpecRepairIdEntityTarget
+      && (target.entity === "requirement" ? OPTIONAL_REQUIREMENT_FIELDS : OPTIONAL_TASK_FIELDS).has(target.field);
+  }
+  apply(context) { return context.deleteField(this.resolve(context), this); }
+}
+export class SpecGateRepairIdEntityFieldAdd extends SpecRepairOperation {
+  constructor(input, index) {
+    super(input, index);
+    if (this.kind !== "add-entity-field" || !SpecGateRepairIdEntityFieldAdd.supportsTarget(this.target)
+      || this.expectedDigest !== null) throw new Error(`spec-repair.operations[${index}] add-entity-field target or digest is invalid`);
+    Object.freeze(this);
+  }
+  static supportsTarget(target) { return SpecGateRepairIdEntityFieldDelete.supportsTarget(target); }
+  apply(context) { return context.addField(this.resolve(context), this); }
+}
 /** Applies one or more immutable-base UTF-8 byte edits to a string field. */
 export class SpecRepairTextFieldEdit extends SpecRepairOperation {
   constructor(input, index) {
@@ -312,6 +363,9 @@ OPERATION_TYPES.set("edit-text-field", SpecRepairTextFieldEdit);
 OPERATION_TYPES.set("add-array-element", SpecRepairArrayAdd);
 OPERATION_TYPES.set("replace-array-element", SpecRepairArrayReplace);
 OPERATION_TYPES.set("delete-array-element", SpecRepairArrayDelete);
+for (const [kind, Type] of OPERATION_TYPES) GATE_OPERATION_TYPES.set(kind, Type);
+GATE_OPERATION_TYPES.set("delete-entity-field", SpecGateRepairIdEntityFieldDelete);
+GATE_OPERATION_TYPES.set("add-entity-field", SpecGateRepairIdEntityFieldAdd);
 
 export class SpecRepairOperationBatch {
   constructor(document) {
@@ -400,9 +454,30 @@ class SpecRepairApplicationContext {
     lineage = new SpecRepairArrayLineage(reference, baseReference); this.collections.set(target.collection, lineage); return lineage;
   }
   arrayElementReference(target, expectedDigest) { const lineage = this.arrayLineage(target); return lineage ? lineage.resolve(target, expectedDigest) : { status: "stale" }; }
+  // Gate compares claims before staging groups; the same base element may be
+  // addressed by position or by its unique digest.
+  conflictClaim(operation) {
+    if (!(operation.target instanceof SpecRepairArrayTarget) || operation instanceof SpecRepairArrayAdd) {
+      return { status: "ok", key: operation.conflictKey() };
+    }
+    const reference = operation.resolve(this);
+    return reference.status === "ok"
+      ? { status: "ok", key: `array:${operation.target.collection}:${reference.entry.basePosition}` }
+      : reference;
+  }
   replace(reference, operation) {
     if (reference.status !== "ok") return reference;
     if (valueDigest(reference.value) !== operation.expectedDigest) return { status: "stale" };
+    reference.object[reference.key] = clone(operation.replacement); return { status: "ok" };
+  }
+  deleteField(reference, operation) {
+    if (reference.status !== "ok") return reference;
+    if (valueDigest(reference.value) !== operation.expectedDigest) return { status: "stale" };
+    delete reference.object[reference.key]; return { status: "ok" };
+  }
+  addField(reference, operation) {
+    if (reference.status !== "ok") return reference;
+    if (Object.hasOwn(reference.object, reference.key)) return { status: "stale" };
     reference.object[reference.key] = clone(operation.replacement); return { status: "ok" };
   }
   replaceText(reference, operation) {
@@ -458,27 +533,106 @@ function targetExists(spec, target) {
   if (target instanceof SpecRepairRootTarget || target instanceof SpecRepairIdEntityTarget) return immutableFieldReference(spec, target) !== null;
   if (target instanceof SpecRepairArrayTarget) return collectionReference(spec, target.collection) !== null;
 }
+function addFieldTargetExists(spec, target) {
+  if (!(target instanceof SpecRepairIdEntityTarget)) return false;
+  const matches = Array.isArray(spec[target.domain]) ? spec[target.domain].filter((entry) => entry?.id === target.id) : [];
+  return matches.length === 1 && !Object.hasOwn(matches[0], target.field);
+}
 function textTargetExists(spec, target) {
   return typeof immutableFieldReference(spec, target)?.value === "string";
 }
-function triageMap(triage, spec) {
-  const values = new Map();
-  for (const [index, item] of (triage.findings ?? []).entries()) {
-    if (item.disposition !== "apply") continue;
-    const findingId = requiredText(item.findingId, `spec-triage apply item ${index}.findingId`);
-    try {
-      if (!Array.isArray(item.allowedTargets) || item.allowedTargets.length === 0) throw new Error("must declare allowedTargets");
-      const permissions = item.allowedTargets.map((permission, permissionIndex) => new SpecRepairPermission(permission, `spec-triage apply item ${findingId}.allowedTargets[${permissionIndex}]`));
-      if (!unique(permissions.map((permission) => permission.target.permissionKey()))) throw new Error("has duplicate allowed target permissions");
-      if (spec != null && permissions.some((permission) => !targetExists(spec, permission.target)
-        || permission.operationKinds.some((kind) => OPERATION_TYPES.get(kind).requiresStringTarget && !textTargetExists(spec, permission.target)))) {
-        throw new Error("declares impossible targets");
-      }
-      values.set(findingId, Object.freeze({ permissions: Object.freeze(permissions) }));
-    } catch (cause) { throw new SpecRepairOperationsError("FLOW_SPEC_REPAIR_TRIAGE_TARGETS_INVALID", `spec-triage apply item ${findingId} ${cause.message}`, { retryable: false }); }
+/** Read-only inventory of the locations accepted by the repair grammar. */
+export class SpecRepairTargetEntry {
+  constructor(target, value, digest, exists = true) {
+    if (!(target instanceof SpecRepairTarget)) throw new Error("Spec repair entry requires a typed target");
+    this.target = target;
+    this.value = exists && digest !== null ? frozen(value) : null;
+    this.digest = digest;
+    this.exists = exists;
+    this.key = target.conflictKey(digest);
+    if (target instanceof SpecRepairRootTarget) {
+      this.operationKinds = Object.freeze(["replace-field", ...(typeof value === "string" ? ["edit-text-field"] : [])]);
+    } else if (target instanceof SpecRepairIdEntityTarget) {
+      const optional = SpecGateRepairIdEntityFieldDelete.supportsTarget(target);
+      this.operationKinds = Object.freeze(exists
+        ? ["replace-entity-field", ...(typeof value === "string" ? ["edit-text-field"] : []), ...(optional ? ["delete-entity-field"] : [])]
+        : ["add-entity-field"]);
+    } else {
+      this.operationKinds = Object.freeze(target.position === null
+        ? ["add-array-element", "replace-array-element", "delete-array-element"]
+        : ["replace-array-element", "delete-array-element"]);
+    }
+    Object.freeze(this);
   }
-  return values;
+  toJSON() { return { target: this.target.toJSON(), value: clone(this.value), digest: this.digest, exists: this.exists, key: this.key, operationKinds: [...this.operationKinds] }; }
 }
+export function specRepairTargetEntries(spec) {
+  const entries = [];
+  for (const field of REPLACE_ROOTS) {
+    if (Object.hasOwn(spec, field)) {
+      const target = new SpecRepairRootTarget({ entity: "spec", field }, "Spec target inventory");
+      entries.push(new SpecRepairTargetEntry(target, spec[field], valueDigest(spec[field])));
+    }
+  }
+  for (const [entity, fields] of [["requirement", REQUIREMENT_FIELDS], ["task", TASK_FIELDS]]) {
+    for (const item of spec[`${entity}s`] ?? []) {
+      for (const field of fields) {
+        const exists = Object.hasOwn(item, field);
+        if (!exists && !(entity === "requirement" ? OPTIONAL_REQUIREMENT_FIELDS : OPTIONAL_TASK_FIELDS).has(field)) continue;
+        const target = new SpecRepairIdEntityTarget({ entity, id: item.id, field }, "Spec target inventory");
+        entries.push(new SpecRepairTargetEntry(target, item[field], exists ? valueDigest(item[field]) : null, exists));
+      }
+    }
+  }
+  for (const collection of COLLECTION_TARGETS) {
+    const reference = collectionReference(spec, collection);
+    if (!reference) continue;
+    entries.push(new SpecRepairTargetEntry(new SpecRepairArrayTarget({ collection }, "Spec target inventory"), null, null));
+    reference.value.forEach((value, position) => {
+      const target = new SpecRepairArrayTarget({ collection, position }, "Spec target inventory");
+      entries.push(new SpecRepairTargetEntry(target, value, valueDigest(value)));
+    });
+  }
+  return Object.freeze(entries);
+}
+function permissionSet(allowedTargets, spec, field, operationTypes = OPERATION_TYPES, PermissionType = SpecRepairPermission) {
+  if (!Array.isArray(allowedTargets) || allowedTargets.length === 0) throw new Error("must declare allowedTargets");
+  const permissions = allowedTargets.map((permission, index) => new PermissionType(permission, `${field}.allowedTargets[${index}]`, operationTypes, spec));
+  if (!unique(permissions.map((permission) => PermissionType === SpecGateRepairPermission
+    ? JSON.stringify(permission.target.toJSON()) : permission.target.permissionKey()))) throw new Error("has duplicate allowed target permissions");
+  if (spec != null && permissions.some((permission) => permission.operationKinds.some((kind) => (
+    kind === "add-entity-field" ? !addFieldTargetExists(spec, permission.target) : !targetExists(spec, permission.target)
+  ) || operationTypes.get(kind).requiresStringTarget && !textTargetExists(spec, permission.target)))) {
+    throw new Error("declares impossible targets");
+  }
+  return Object.freeze(permissions);
+}
+/** Both producers grant the same typed target/kind capability. */
+export class SpecRepairAuthority {
+  #entries;
+  constructor(entries) { this.#entries = entries; }
+  has(identifier) { return this.#entries.has(identifier); }
+  allowsAny(identifiers, operation) {
+    return identifiers.some((identifier) => this.#entries.get(identifier)?.some((permission) => permission.allows(operation)) ?? false);
+  }
+  allows(identifiers, operation) {
+    return identifiers.every((identifier) => this.#entries.get(identifier)?.some((permission) => permission.allows(operation)) ?? false);
+  }
+}
+export class SpecReviewRepairAuthority extends SpecRepairAuthority {
+  constructor(triage, spec) {
+    const entries = new Map();
+    for (const [index, item] of (triage.findings ?? []).entries()) {
+      if (item.disposition !== "apply") continue;
+      const findingId = requiredText(item.findingId, `spec-triage apply item ${index}.findingId`);
+      try { entries.set(findingId, permissionSet(item.allowedTargets, spec, `spec-triage apply item ${findingId}`)); }
+      catch (cause) { throw new SpecRepairOperationsError("FLOW_SPEC_REPAIR_TRIAGE_TARGETS_INVALID", `spec-triage apply item ${findingId} ${cause.message}`, { retryable: false }); }
+    }
+    super(entries);
+    Object.freeze(this);
+  }
+}
+function triageMap(triage, spec) { return new SpecReviewRepairAuthority(triage, spec); }
 export function validateSpecRepairTriageTargets(triage, spec) { triageMap(triage, spec); }
 /** Validate one triage update so an invalid capability cannot poison siblings. */
 export function validateSpecRepairTriageFinding(update, spec) {
@@ -502,12 +656,12 @@ function commandOwnedAudit(batch, accepted, discarded, scopeExpansions = []) {
   });
 }
 function authorized(findings, operation) {
-  return operation.findingIds.every((findingId) => findings.get(findingId)?.permissions.some((permission) => permission.allows(operation)) ?? false);
+  return findings.allows(operation.findingIds, operation);
 }
-function currentAttemptConflictKeys(operations) {
+function currentAttemptConflictKeys(operations, keyFor = (operation) => operation.conflictKey()) {
   const groups = new Map();
   for (const operation of operations) {
-    const key = operation.conflictKey();
+    const key = keyFor(operation);
     const group = groups.get(key) ?? [];
     group.push(operation);
     groups.set(key, group);
@@ -595,4 +749,234 @@ export function applySpecRepairOperations({ spec, triage, repair, inputRevision 
   // owns readiness/completeness decisions for the resulting canonical Spec.
   const finalAudit = Object.freeze({ ...audit, resultRevision: Object.freeze({ digest: valueDigest(candidate), byteLength: stableBytes(candidate) }), acceptedOperations: Object.freeze(acceptedThisAttempt.map((operation) => operationAudit(operation, 1))), discardedOperations: Object.freeze(discarded.map((entry) => discardedAudit(entry, 1))), scopeExpansions: Object.freeze(batch.scopeExpansions.map((proposal) => Object.freeze({ proposal, attempt: 1 }))) });
   return Object.freeze({ spec: Object.freeze(candidate), audit: finalAudit });
+}
+
+/** Gate capabilities come from the canonical Gate producer, never from a worker proposal. */
+export class SpecGateRepairAuthority extends SpecRepairAuthority {
+  #units;
+  constructor({ baseRevision, findings, expectedUnits, spec }) {
+    if (typeof baseRevision !== "string" || !SHA256_REVISION.test(baseRevision)) throw new Error("Spec Gate repair authority requires a SHA-256 base revision");
+    if (!Array.isArray(findings)) throw new Error("Spec Gate repair authority requires findings");
+    if (!Array.isArray(expectedUnits)) throw new Error("Spec Gate repair authority requires expected units");
+    if (!spec || typeof spec !== "object" || Array.isArray(spec)) throw new Error("Spec Gate repair authority requires the immutable Spec");
+    const entries = new Map();
+    for (const [index, finding] of findings.entries()) {
+      const identity = new FlowFindingSourceIdentity(finding.identity);
+      const key = identity.toString();
+      if (entries.has(key)) throw new Error("Spec Gate repair authority has duplicate finding identities");
+      entries.set(key, permissionSet(finding.allowedTargets, spec, `Spec Gate repair finding ${index}`, GATE_OPERATION_TYPES, SpecGateRepairPermission));
+    }
+    super(entries);
+    const assigned = new Set();
+    const units = new Set();
+    for (const [index, unit] of expectedUnits.entries()) {
+      exactKeys(unit, ["findingIdentities"], `Spec Gate repair unit ${index}`);
+      if (!Array.isArray(unit.findingIdentities) || unit.findingIdentities.length === 0) throw new Error("Spec Gate repair unit requires finding identities");
+      const keys = unit.findingIdentities.map((value) => {
+        exactKeys(value, ["sourceArtifact", "sourceStep", "sourceFindingId", "fingerprint"], `Spec Gate repair unit ${index} finding identity`);
+        return new FlowFindingSourceIdentity(value).toString();
+      });
+      if (!unique(keys) || keys.some((key) => !entries.has(key) || assigned.has(key))) throw new Error("Spec Gate repair units duplicate or omit authority");
+      keys.forEach((key) => assigned.add(key));
+      units.add(JSON.stringify([...keys].sort()));
+    }
+    if (assigned.size !== entries.size) throw new Error("Spec Gate repair units must cover every authorized finding");
+    this.#units = units;
+    this.baseRevision = baseRevision;
+    Object.freeze(this);
+  }
+  authorizesGroup(group) {
+    return this.#units.has(group.unitKey)
+      && group.identityKeys.every((key) => this.has(key))
+      && group.operations.every((operation) => this.allowsAny(group.identityKeys, operation));
+  }
+}
+
+function gateOperationJSON(operation) {
+  const { findingIds, ...json } = operation.toJSON();
+  return json;
+}
+function gateGroupAudit(group, index) {
+  return Object.freeze({
+    index,
+    findingIdentities: Object.freeze(group.identities.map((identity) => identity.toJSON())),
+    operations: Object.freeze(group.operations.map(gateOperationJSON)),
+  });
+}
+function rejectedGateGroup(group, index, reason) {
+  return Object.freeze({ index, groupDigest: specRepairProposalDigest(group ?? null), reason: boundedErrorMessage(reason) });
+}
+
+/** A worker group is one indivisible semantic correction. */
+export class SpecGateRepairOperationGroup {
+  constructor(value, index) {
+    exactKeys(value, ["findingIdentities", "operations"], `Spec Gate repair group ${index}`);
+    if (!Array.isArray(value.findingIdentities) || value.findingIdentities.length === 0) throw new Error("Spec Gate repair group requires finding identities");
+    this.identities = Object.freeze(value.findingIdentities.map((entry, identityIndex) => {
+      exactKeys(entry, ["sourceArtifact", "sourceStep", "sourceFindingId", "fingerprint"], `Spec Gate repair group ${index} finding identity ${identityIndex}`);
+      return new FlowFindingSourceIdentity(entry);
+    }));
+    this.identityKeys = Object.freeze(this.identities.map((identity) => identity.toString()));
+    if (!unique(this.identityKeys)) throw new Error("Spec Gate repair group has duplicate finding identities");
+    this.unitKey = JSON.stringify([...this.identityKeys].sort());
+    if (!Array.isArray(value.operations) || value.operations.length === 0 || value.operations.length > MAX_OPERATIONS) throw new Error("Spec Gate repair group operations are invalid");
+    const operations = value.operations.map((operation, operationIndex) => {
+      const Type = GATE_OPERATION_TYPES.get(operation?.kind);
+      if (!Type) throw new Error(`Spec Gate repair group ${index} operation ${operationIndex} kind is invalid`);
+      // The shared edit grammar uses findingIds for Review operations. Gate's
+      // full identities live at group level; this key is internal to parsing.
+      const keys = Object.keys(operation ?? {});
+      if (keys.includes("findingIds")) throw new Error("Spec Gate operation must not declare Review findingIds");
+      return new Type({ ...operation, findingIds: ["gate-group"] }, operationIndex);
+    });
+    const seen = new Set();
+    this.operations = Object.freeze(operations.filter((operation) => {
+      const digest = semanticOperationDigest(operation);
+      if (seen.has(digest)) return false;
+      seen.add(digest);
+      return true;
+    }));
+    Object.freeze(this);
+  }
+}
+
+export class SpecGateRepairOperationBatch {
+  constructor(value) {
+    exactKeys(value, ["version", "stage", "baseRevision", "groups"], "Spec Gate repair proposal");
+    if (value.version !== 1 || value.stage !== "spec-gate-repair" || !SHA256_REVISION.test(value.baseRevision)
+      || !Array.isArray(value.groups) || value.groups.length > MAX_OPERATIONS
+      || value.groups.reduce((count, group) => count + (Array.isArray(group?.operations) ? group.operations.length : 1), 0) > MAX_OPERATIONS) {
+      throw new Error("Spec Gate repair proposal envelope is invalid");
+    }
+    this.baseRevision = value.baseRevision;
+    this.groups = Object.freeze(value.groups.map((group, index) => {
+      try { return new SpecGateRepairOperationGroup(group, index); }
+      catch (cause) { return rejectedGateGroup(group, index, cause.message); }
+    }));
+    Object.freeze(this);
+  }
+}
+
+/** Applies every Gate group against one immutable baseline. One bad operation
+ * rejects its entire group, while independent groups can still be adopted. */
+export function applySpecGateRepairOperations({ spec, authority, repair, inputRevision }) {
+  if (!(authority instanceof SpecGateRepairAuthority)) throw new Error("Spec Gate repair requires typed Gate authority");
+  const batch = repair instanceof SpecGateRepairOperationBatch ? repair : new SpecGateRepairOperationBatch(repair);
+  const revision = revisionFor(inputRevision);
+  if (authority.baseRevision !== revision || batch.baseRevision !== revision) {
+    throw new SpecRepairOperationsError("FLOW_SPEC_REPAIR_BASE_REVISION_MISMATCH", "Spec Gate repair does not match the immutable Spec revision");
+  }
+  const rejected = [];
+  const proposed = [];
+  const conflictContext = new SpecRepairApplicationContext(clone(spec), frozen(spec));
+  for (const [index, group] of batch.groups.entries()) {
+    if (!(group instanceof SpecGateRepairOperationGroup)) { rejected.push(group); continue; }
+    if (!authority.authorizesGroup(group)) {
+      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "unauthorized operation"));
+      continue;
+    }
+    const claims = new Map(group.operations.map((operation) => [operation, conflictContext.conflictClaim(operation)]));
+    const unresolved = [...claims.values()].find((claim) => claim.status !== "ok");
+    if (unresolved) {
+      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index,
+        unresolved.status === "conflict" ? "conflicting target resolution" : "stale target digest"));
+      continue;
+    }
+    const conflictKeys = new Map([...claims].map(([operation, claim]) => [operation, claim.key]));
+    const operationDigests = new Map(group.operations.map((operation) => [operation, semanticOperationDigest(operation, conflictKeys.get(operation))]));
+    const seenDigests = new Set();
+    const operations = group.operations.filter((operation) => {
+      const digest = operationDigests.get(operation);
+      if (seenDigests.has(digest)) return false;
+      seenDigests.add(digest);
+      return true;
+    });
+    const conflicts = currentAttemptConflictKeys(operations, (operation) => conflictKeys.get(operation));
+    if (conflicts.size > 0) {
+      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "conflicting operation"));
+      continue;
+    }
+    proposed.push({ group, index, operations, conflictKeys, operationDigests });
+  }
+  const proposalsByUnit = new Map();
+  for (const proposal of proposed) {
+    const sameUnit = proposalsByUnit.get(proposal.group.unitKey) ?? [];
+    sameUnit.push(proposal);
+    proposalsByUnit.set(proposal.group.unitKey, sameUnit);
+  }
+  const duplicateUnits = new Set([...proposalsByUnit.values()].filter((sameUnit) => sameUnit.length > 1).flat());
+  // Resolve competing proposals before adoption so no worker or input order
+  // can win a target after another group has already changed it.
+  const byTarget = new Map();
+  for (const proposal of proposed.filter((entry) => !duplicateUnits.has(entry))) {
+    for (const operation of proposal.operations) {
+      const key = proposal.conflictKeys.get(operation);
+      const claims = byTarget.get(key) ?? [];
+      claims.push({ proposal, operation, digest: proposal.operationDigests.get(operation) });
+      byTarget.set(key, claims);
+    }
+  }
+  const conflictingGroups = new Set();
+  for (const claims of byTarget.values()) {
+    for (let left = 0; left < claims.length; left += 1) {
+      for (let right = left + 1; right < claims.length; right += 1) {
+        const first = claims[left]; const second = claims[right];
+        if (first.proposal === second.proposal) continue;
+        if (first.digest !== second.digest
+          && !first.operation.isComposableWith(second.operation)) {
+          conflictingGroups.add(first.proposal); conflictingGroups.add(second.proposal);
+        }
+      }
+    }
+  }
+  const accepted = [];
+  const acceptedOperations = [];
+  const acceptedDigests = new Set();
+  let candidate = clone(spec);
+  for (const proposal of proposed) {
+    const { group, index } = proposal;
+    if (duplicateUnits.has(proposal)) {
+      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "duplicate repair unit"));
+      continue;
+    }
+    if (conflictingGroups.has(proposal)) {
+      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "conflicting operation"));
+      continue;
+    }
+    const fresh = proposal.operations.filter((operation) => !acceptedDigests.has(proposal.operationDigests.get(operation)));
+    // Reconstruct immutable-base array lineage before every staged group. A
+    // prior deletion must never reinterpret a later base position.
+    const staged = clone(spec);
+    const context = new SpecRepairApplicationContext(staged, frozen(spec));
+    let failure = null;
+    for (const operation of [...acceptedOperations, ...fresh]) {
+      const result = operation.apply(context);
+      if (result.status !== "ok") {
+        failure = result.status === "conflict" ? "conflicting target resolution"
+          : result.status === "invalid" ? "invalid UTF-8 text edit target or range"
+            : result.status === "oversized" ? "text edit result is oversized"
+              : "stale target digest";
+        break;
+      }
+    }
+    if (failure === null) {
+      try { validateSpecJsonObject(staged); }
+      catch { failure = "group produces an invalid Spec schema"; }
+    }
+    if (failure !== null) {
+      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, failure));
+      continue;
+    }
+    candidate = staged;
+    accepted.push(gateGroupAudit(group, index));
+    acceptedOperations.push(...fresh);
+    for (const operation of proposal.operations) acceptedDigests.add(proposal.operationDigests.get(operation));
+  }
+  const audit = Object.freeze({
+    version: 1, phase: "spec-gate-repair", baseRevision: revision,
+    acceptedGroups: Object.freeze(accepted), discardedGroups: Object.freeze(rejected.sort((a, b) => a.index - b.index)),
+    operationDigest: valueDigest({ accepted, rejected }),
+    resultRevision: Object.freeze({ digest: valueDigest(candidate), byteLength: stableBytes(candidate) }),
+  });
+  return Object.freeze({ spec: Object.freeze(candidate), audit });
 }

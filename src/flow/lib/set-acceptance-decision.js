@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { FlowCommand } from "./base-command.js";
 import { CanonicalAcceptanceDecision } from "./canonical-acceptance-artifacts.js";
 import {
@@ -12,7 +13,7 @@ export default class SetAcceptanceDecisionCommand extends FlowCommand {
     const choice = ctx.choice;
     if (!choice) throw new Error("usage: flow set acceptance-decision --choice <choice>");
     const state = ctx.flowManager.load();
-    if (state?.schemaRevision !== 3) {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
       throw new Error("acceptance decision requires a Version-1 Flow");
     }
     const result = new CanonicalAcceptanceDecision({

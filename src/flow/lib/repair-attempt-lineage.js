@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 const RETRY_OPERATIONS = new Set(["retry_attempt", "retry_recovery_attempt"]);
 const ENTRY_OPERATIONS = new Set([
   "start_attempt",
@@ -70,7 +71,7 @@ function predecessorAttempt({ activities, attempt, targetStepId }) {
  * entry starts a new lineage.
  */
 export function canonicalRepairAttemptOwner({ state, activities, targetStepId } = {}) {
-  if (state?.schemaRevision !== 3 || state.current?.at(-1) !== targetStepId || state.attempt == null) return null;
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || state.current?.at(-1) !== targetStepId || state.attempt == null) return null;
   if (!Array.isArray(activities)) throw new RepairAttemptLineageError("canonical repair lineage requires an Activity ledger");
 
   let attempt = state.attempt;

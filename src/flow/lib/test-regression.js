@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import fs from "fs";
 import path from "path";
 import crypto from "node:crypto";
@@ -875,7 +876,7 @@ export function listRegressionChangedFiles({ root, state }) {
 export function classifyRegression({ root, state, analysis, config, changedFiles = null }) {
   changedFiles ||= listRegressionChangedFiles({ root, state });
   const location = flowStateSpecLocation(state);
-  if (location === null || state?.schemaRevision !== 3) {
+  if (location === null || state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
     throw new Error("regression classification requires a manager-bound Version-1 Flow state");
   }
   const activeSpec = normalizePath(location.relativeDirectory);

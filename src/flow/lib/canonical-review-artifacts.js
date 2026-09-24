@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Version-1 review execution boundary.
  *
@@ -425,7 +426,7 @@ export class CanonicalDraftReviewHandoffEvidence {
     if (!route || typeof route !== "object") {
       throw new Error("canonical draft review handoff requires a review route");
     }
-    if (state?.schemaRevision !== 3) {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
       throw new Error("canonical draft review handoff requires a Version-1 Flow state");
     }
     if (!(review instanceof CanonicalDraftReviewHandoffArtifact) || review.name !== route.reviewArtifact) {
@@ -472,7 +473,7 @@ export class CanonicalDraftReviewHandoffEvidence {
 export class CanonicalDraftReviewSource {
   constructor({ flowManager, state, phase: reviewPhase } = {}) {
     this.flowManager = requiredFlowManager(flowManager);
-    if (state?.schemaRevision !== 3 || typeof state.specId !== "string" || state.specId === "") {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state.specId !== "string" || state.specId === "") {
       throw new Error("canonical draft review source requires a Version-1 Flow state");
     }
     this.state = state;
@@ -558,7 +559,7 @@ export class CanonicalReviewWorkUnit {
     if (!flowManager || typeof flowManager.readArtifact !== "function") {
       throw new Error("canonical review work unit requires FlowManager catalog reads");
     }
-    if (state?.schemaRevision !== 3 || typeof state.specId !== "string" || state.specId === "") {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state.specId !== "string" || state.specId === "") {
       throw new Error("canonical review work unit requires a Version-1 Flow state");
     }
     this.flowManager = flowManager;

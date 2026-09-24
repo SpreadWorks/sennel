@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import { ReviewFindingCycle } from "../../../src/flow/lib/finding-disposition-policy.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -135,7 +136,7 @@ describe("ReviewWorkUnit", () => {
     };
     const workUnit = new CanonicalReviewWorkUnit({
       flowManager,
-      state: { schemaRevision: 3, specId: "001-persisted-review", runId: "persisted-review-run" },
+      state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "001-persisted-review", runId: "persisted-review-run" },
       phase: "spec",
       executionRoot,
       treeSha: "a".repeat(40),

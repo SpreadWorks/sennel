@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { CURRENT_FLOW_SCHEMA_REVISION } from "./lib/flow-schema-revision.js";
 /**
  * sennel/upgrade.js
  *
@@ -85,7 +86,7 @@ const FLOW_EXECUTION_MODES = new Set(["direct", "branch", "worktree"]);
 class ActiveUpgradeFlow {
   constructor({ state, flowManager, mainRoot, executionRoot }) {
     if (
-      state?.schemaRevision !== 3
+      state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION
       || !state.specId
       || !state.runId
       || !state.baseBranch

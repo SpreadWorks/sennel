@@ -448,6 +448,35 @@ describe("prompt batch execution", () => {
       aggregateItemCount: 0,
     });
   });
+
+  it("restores spent and unsettled provider reservations without resetting any shared limit", () => {
+    const limit = new PromptExecutionLimit({ maxProviderCallCount: 2, maxSynthesisCallCount: 1,
+      maxAggregateCharacters: 10, maxAggregateItemCount: 2 });
+    const budget = new PromptExecutionBudget(limit);
+    const completed = new PromptProviderCallAdmission(budget);
+    completed.claim(); completed.beforeProviderAttempt(); completed.settle();
+    new PromptProviderCallAdmission(budget); // Crash after reserving, before saving the response.
+    budget.consumeSynthesisCalls(1);
+    budget.consumeAggregate({ characters: 10, items: 2 });
+    const serialized = JSON.parse(JSON.stringify(budget.snapshot()));
+    const restored = PromptExecutionBudget.fromSnapshot(limit, serialized);
+    assert.deepEqual(restored.snapshot(), serialized);
+    assert.throws(() => new PromptProviderCallAdmission(restored), { code: "PROMPT_CALL_LIMIT_EXCEEDED" });
+    assert.throws(() => restored.consumeSynthesisCalls(1), { code: "PROMPT_CALL_LIMIT_EXCEEDED" });
+    assert.throws(() => restored.consumeAggregate({ characters: 1, items: 0 }), { code: "PROMPT_RESPONSE_TOO_LARGE" });
+    assert.deepEqual(restored.snapshot(), serialized);
+  });
+
+  it("rejects malformed or over-budget durable accounting at the restore boundary", () => {
+    const limit = new PromptExecutionLimit({ maxProviderCallCount: 2 });
+    const snapshot = new PromptExecutionBudget(limit).snapshot();
+    for (const invalid of [null, {}, { ...snapshot, extra: 0 },
+      { ...snapshot, providerCallCount: -1 }, { ...snapshot, aggregateCharacters: 0.5 },
+      { ...snapshot, providerCallCount: 3 }]) {
+      assert.throws(() => PromptExecutionBudget.fromSnapshot(limit, invalid));
+    }
+    assert.deepEqual(snapshot, { providerCallCount: 0, synthesisCallCount: 0, aggregateCharacters: 0, aggregateItemCount: 0 });
+  });
 });
 
 describe("prompt reduction", () => {

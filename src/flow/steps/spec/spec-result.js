@@ -1,7 +1,5 @@
 import {
   SpecCreatedResult,
-  SpecPlanGateRepairAppliedResult,
-  SpecPlanGateRepairNoProgressResult,
   StepErrorResult,
   stepResultDigest,
 } from "../../engine/step-result.js";
@@ -13,14 +11,6 @@ export function specResult(facts) {
   if (facts instanceof Error) return new StepErrorResult("spec", facts);
   if (!(facts instanceof SpecWorkerCompletionFacts)) {
     throw new TypeError("Spec Result requires its typed completion facts");
-  }
-  if (facts.planGateRepairOutcome?.disposition === "applied") {
-    return new SpecPlanGateRepairAppliedResult();
-  }
-  if (facts.planGateRepairOutcome?.disposition === "rejected-no-progress") {
-    const error = new Error("Spec plan Gate repair produced no progress");
-    error.code = "FLOW_PLAN_GATE_REPAIR_NO_PROGRESS";
-    return new SpecPlanGateRepairNoProgressResult(error);
   }
   return new SpecCreatedResult();
 }
@@ -44,10 +34,9 @@ export class SpecWorkerResultSelection {
     }
   }
 
-  assertCandidate({ result, application, planGateRepairOutcome }) {
+  assertCandidate({ result, application }) {
     this.assertResult(result);
-    if (planGateRepairOutcome !== this.facts.planGateRepairOutcome
-      || (application !== null && application !== undefined
+    if ((application !== null && application !== undefined
         && application.baseline !== this.facts.baseline)) {
       throw new CurrentFlowStateConflictError("Spec publication differs from its selected worker candidate");
     }

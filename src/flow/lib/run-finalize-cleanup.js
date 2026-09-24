@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/run-finalize-cleanup.js
  *
@@ -2803,7 +2804,7 @@ function completeFinalizeCleanupStep(stateOwner, operationOwnerToken) {
  */
 function finalizeCanonicalFlowIfComplete(stateOwner) {
   const state = stateOwner.loadReadOnly();
-  if (state?.schemaRevision !== 3) {
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
     throw new Error("finalize cleanup requires a Version-1 Flow state");
   }
   if (state.lifecycle === "finalized") return state;

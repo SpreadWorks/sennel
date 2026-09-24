@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Typed flow step outcomes and durable attempt records.
  *
@@ -352,7 +353,7 @@ export function persistStepAttempt(ctx, attempt, routeOptions) {
 }
 
 export function recordStepAttempt(ctx, { stepId, attempt, outcome, result = null, routeOptions = undefined }) {
-  if (ctx?.flowState?.schemaRevision !== 3 || !ctx.flowState.runId) {
+  if (ctx?.flowState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || !ctx.flowState.runId) {
     throw new Error("recordStepAttempt requires an active canonical Flow state");
   }
   const record = new StepAttempt({
@@ -388,7 +389,7 @@ export function retryResetTimestampForStep(flowState, stepId) {
 }
 
 export function nextStepAttemptNumber(flowState, stepId) {
-  if (flowState?.schemaRevision !== 3) {
+  if (flowState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
     throw new Error("nextStepAttemptNumber requires an active canonical Flow state");
   }
   const find = (steps) => {

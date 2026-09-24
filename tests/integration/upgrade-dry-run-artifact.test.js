@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -27,7 +28,7 @@ function gitRepository() {
 
 function activeState({ specId, runId, mode = "direct", baseBranch = "main", worktreePath = null }) {
   return {
-    schemaRevision: 3,
+    schemaRevision: CURRENT_FLOW_SCHEMA_REVISION,
     specId,
     runId,
     baseBranch,

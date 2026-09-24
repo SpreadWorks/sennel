@@ -11,6 +11,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { DraftGateRepairSelection } from "../steps/draft/draft-gate-repair-selection.js";
 import {
   AgentFailurePersistenceContract,
@@ -24,6 +25,7 @@ import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { AuthoritativeSpecRecord, FlowActivityId, FlowArtifactCatalog, FlowArtifactCatalogStore, FlowArtifactDescriptor, FlowId, FlowRunId, FlowSpecIdentity, FlowSpecRevision, FlowVersionId, FlowVersionLocation, FlowVersionMigrationOutput, FlowVersionMigrationOutputBuilder, FlowVersionMigrationOutputSet, FlowVersionRuntimeLockLocation, FlowVersionSemanticValidator } from "../../lib/flow-version.js";
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactActivityEvidence, FlowArtifactUpdater } from "../../lib/flow-artifact-contract.js";
 import { CanonicalSpecReview, initialCanonicalSpecReview } from "./spec-review-artifacts.js";
+import { GateObservationCycleReader } from "./gate-observation-convergence.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import {
   artifactPublicationClaimForStep,
@@ -60,7 +62,7 @@ import {
  * from result-format versions and from the definition that supplies runtime
  * behaviour.  `flow.json` is the sole persisted identity authority.
  */
-export const CURRENT_FLOW_SCHEMA_REVISION = 3;
+export { CURRENT_FLOW_SCHEMA_REVISION };
 // `version` is the result-generation version persisted in flow.json.  It is
 // intentionally independent from the structural schemaRevision above.
 export const CURRENT_FLOW_RESULT_VERSION = 1;
@@ -831,6 +833,7 @@ const STATE_FIELDS = new Set([
   "outbox",
   "context",
   "history",
+  "migration",
 ]);
 const NODE_FIELDS = new Set(["kind", "id", "key", "status", "result", "attemptSequence", "steps"]);
 const JOURNAL_WRITER_AUTHORITY = Symbol("current-flow-state-store-writer");
@@ -897,6 +900,12 @@ function freshStateLike(state, definition) {
   }
   if (!(definition instanceof CurrentFlowDefinition)) {
     throw new CurrentFlowStateInvariantError("fresh state reconstruction requires CurrentFlowDefinition");
+  }
+  if (state.migration !== null) {
+    return new CurrentFlowState({
+      ...state.migration.baseline,
+      migration: state.migration.toJSON(),
+    }, { definition });
   }
   return CurrentFlowState.create({
     definition,
@@ -2137,7 +2146,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
     this.publicationDigest = value.publicationDigest;
     this.executionLifecycle = value.executionLifecycle === null
       ? null : new PersistedDraftExecutionLifecycle(value.executionLifecycle);
-    if ((value.settlementKind === "await" && this.binding.stepId !== "spec-gate")
+    if ((value.settlementKind === "await" && !["spec-gate", "spec-gate-repair"].includes(this.binding.stepId))
       !== (value.awaitQuestion !== null)) {
       throw new CurrentFlowStateInvariantError("Draft Await receipt must carry its question identity");
     }
@@ -4181,7 +4190,7 @@ function assertExecutionFrontier(leaves, currentPath, nodes) {
       continue;
     }
     if (!EXECUTABLE_NODE_STATUSES.has(suffixStatus) || leaf.status !== suffixStatus) {
-      throw new CurrentFlowStateInvariantError("execution frontier must have one active leaf and a uniform pending or invalidated suffix");
+      throw new CurrentFlowStateInvariantError(`execution frontier must have one active leaf and a uniform pending or invalidated suffix: ${leaves.map((item) => `${item.id}=${item.status}`).join(",")}`);
     }
   }
   if (frontier?.status === "in_progress") {
@@ -4190,6 +4199,48 @@ function assertExecutionFrontier(leaves, currentPath, nodes) {
     }
   } else if (currentPath !== null) {
     throw new CurrentFlowStateInvariantError("current path requires the execution frontier active leaf");
+  }
+}
+
+/** A one-time, explicit canonical-v3 migration replay boundary. */
+export class CurrentFlowMigrationCheckpoint {
+  constructor(value) {
+    requireExactFields(value, new Set(["version", "archiveDigests", "legacyAppliedCount", "legacyCyclesDigest", "boundaryOrder", "projectedActivitiesDigest", "baseline"]), "flow migration checkpoint");
+    if (value.version !== 1 || !isPlainObject(value.archiveDigests)
+      || !Number.isSafeInteger(value.legacyAppliedCount) || value.legacyAppliedCount < 0
+      || !Number.isSafeInteger(value.boundaryOrder) || value.boundaryOrder < 0
+      || !/^[a-f0-9]{64}$/.test(value.legacyCyclesDigest)
+      || !/^[a-f0-9]{64}$/.test(value.projectedActivitiesDigest)
+      || !isPlainObject(value.baseline)) {
+      throw new CurrentFlowStateInvariantError("flow migration checkpoint is invalid");
+    }
+    requireExactFields(value.archiveDigests, new Set(["flow", "activities", "catalog",
+      ...(Object.hasOwn(value.archiveDigests, "issueLog") ? ["issueLog"] : [])]),
+    "flow migration archive digests");
+    for (const digest of Object.values(value.archiveDigests)) {
+      if (!/^[a-f0-9]{64}$/.test(digest)) throw new CurrentFlowStateInvariantError("flow migration archive digest is invalid");
+    }
+    if (value.baseline.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION
+      || value.baseline.confirmationOrder !== value.boundaryOrder || value.baseline.attempt !== null
+      || value.baseline.migration !== null) {
+      throw new CurrentFlowStateInvariantError("flow migration replay baseline must be a fresh v4 journal boundary");
+    }
+    this.version = 1;
+    this.archiveDigests = Object.freeze({ ...value.archiveDigests });
+    this.legacyAppliedCount = value.legacyAppliedCount;
+    this.legacyCyclesDigest = value.legacyCyclesDigest;
+    this.boundaryOrder = value.boundaryOrder;
+    this.projectedActivitiesDigest = value.projectedActivitiesDigest;
+    this.baseline = Object.freeze(structuredClone(value.baseline));
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return { version: this.version, archiveDigests: { ...this.archiveDigests },
+      legacyAppliedCount: this.legacyAppliedCount, legacyCyclesDigest: this.legacyCyclesDigest,
+      boundaryOrder: this.boundaryOrder,
+      projectedActivitiesDigest: this.projectedActivitiesDigest,
+      baseline: structuredClone(this.baseline) };
   }
 }
 
@@ -4232,6 +4283,10 @@ export class CurrentFlowState {
     this.history = value.history === null
       ? null
       : value.history instanceof CurrentFlowHistory ? value.history : new CurrentFlowHistory(value.history);
+    this.migration = value.migration === null
+      ? null
+      : value.migration instanceof CurrentFlowMigrationCheckpoint
+        ? value.migration : new CurrentFlowMigrationCheckpoint(value.migration);
     this.#nodes = Object.freeze(collectNodes(this.root));
     this.#leaves = Object.freeze(this.#nodes.filter((node) => node.steps.length === 0));
     if (value.current !== null && typeof value.current !== "string") {
@@ -4267,6 +4322,7 @@ export class CurrentFlowState {
     outbox = [],
     context = null,
     history = null,
+    migration = null,
   }) {
     if (!(definition instanceof CurrentFlowDefinition)) {
       throw new CurrentFlowStateInvariantError("CurrentFlowState.create requires a CurrentFlowDefinition");
@@ -4292,7 +4348,75 @@ export class CurrentFlowState {
       outbox,
       context,
       history,
+      migration,
     }, { definition });
+  }
+
+  /** Project a validated canonical-v3 checkpoint into a new v4 Activity journal. */
+  static fromCanonicalMigration({ legacyState, archiveDigests, legacyAppliedCount,
+    legacyCyclesDigest, projectedActivitiesDigest, definition }) {
+    if (!isPlainObject(legacyState) || legacyState.schemaRevision !== 3
+      || legacyState.attempt !== null || legacyState.history !== null
+      || !(definition instanceof CurrentFlowDefinition)) {
+      throw new CurrentFlowStateInvariantError("canonical-v3 migration requires an idle current Flow and v4 Definition");
+    }
+    const fresh = definition.materializeRoot().toJSON();
+    let inserted = 0;
+    const projectNode = (template, previous, gate = null) => {
+      if (previous === undefined) {
+        if (template.id !== "spec-gate-repair") {
+          throw new CurrentFlowStateInvariantError(`migration encountered an unknown new Flow node: ${template.id}`);
+        }
+        inserted += 1;
+        if (gate?.status === "invalidated") return { ...template, status: "invalidated" };
+        if (gate?.status !== "done") return template;
+        return {
+          ...template, status: "skipped", attemptSequence: 1,
+          result: { outcome: "skipped", summary: "Canonical-v3 Gate required no repair step",
+            confirmedAt: gate.result.confirmedAt, artifactRefs: [] },
+        };
+      }
+      if (template.kind !== previous.kind || template.id !== previous.id || template.key !== previous.key) {
+        throw new CurrentFlowStateInvariantError(`migration Flow node differs from the v4 Definition: ${template.id}`);
+      }
+      const result = previous.result === null ? null : structuredClone(previous.result);
+      if (["spec-plan-gate-repair-applied", "spec-plan-gate-repair-no-progress"].includes(result?.stepResult?.kind)) {
+        if (!Object.hasOwn(result, "draftSettlementReceipt")) {
+          throw new CurrentFlowStateInvariantError("legacy Gate repair result lacks its exact Settlement receipt");
+        }
+        delete result.stepResult;
+        delete result.draftSettlementReceipt;
+      }
+      const oldChildren = new Map(previous.steps.map((child) => [child.id, child]));
+      const oldGate = previous.steps.find((child) => child.id === "spec-gate");
+      const taskTemplates = template.id === definition.dynamicTaskContainerId
+        ? previous.steps.filter((child) => child.kind === "task")
+          .map((child) => definition.taskFrom({ id: child.id, key: child.key }).toJSON())
+        : [];
+      const templateChildren = template.steps.flatMap((child) => child.id === definition.dynamicTaskInsertionAfterId
+        ? [child, ...taskTemplates] : [child]);
+      const projectedChildren = templateChildren.map((child) => projectNode(
+        child, oldChildren.get(child.id),
+        child.id === "spec-gate-repair" ? oldGate : null,
+      ));
+      if (previous.steps.some((child) => !templateChildren.some((candidate) => candidate.id === child.id))) {
+        throw new CurrentFlowStateInvariantError("migration cannot discard an old Flow node");
+      }
+      return { ...previous, result, steps: projectedChildren };
+    };
+    const projectedRoot = projectNode(fresh, legacyState);
+    if (inserted !== 1) throw new CurrentFlowStateInvariantError("migration must add exactly one Gate repair leaf");
+    const baseline = {
+      ...legacyState,
+      ...projectedRoot,
+      schemaRevision: CURRENT_FLOW_SCHEMA_REVISION,
+      migration: null,
+    };
+    const migration = new CurrentFlowMigrationCheckpoint({
+      version: 1, archiveDigests, legacyAppliedCount, legacyCyclesDigest,
+      boundaryOrder: legacyState.confirmationOrder, projectedActivitiesDigest, baseline,
+    });
+    return new CurrentFlowState({ ...baseline, migration: migration.toJSON() }, { definition });
   }
 
   definitionPathForCurrent(currentId) {
@@ -5680,8 +5804,8 @@ export class CurrentFlowState {
     let root = confirmed.root;
     for (const id of skippedNodeIds) {
       const node = findNodeInRoot(root, requireString(id, "nonblocking continuation skipped nodeId"));
-      if (node === null || node.steps.length !== 0 || node.status !== "pending") {
-        throw new CurrentFlowStateInvariantError("nonblocking continuation may skip only pending route leaves");
+      if (node === null || node.steps.length !== 0 || !["pending", "invalidated"].includes(node.status)) {
+        throw new CurrentFlowStateInvariantError("nonblocking continuation may skip only pending or invalidated route leaves");
       }
       root = replaceNode(root, node.id, node.with({
         status: "skipped",
@@ -5924,7 +6048,7 @@ export class CurrentFlowState {
    */
   #restartSpecGateRepair(root, currentPath, attempt) {
     const leaves = this.#leaves;
-    const targetIndex = leaves.findIndex((node) => node.id === "spec");
+    const targetIndex = leaves.findIndex((node) => node.id === "spec-gate-repair");
     if (targetIndex < 0) throw new CurrentFlowStateInvariantError("Spec Gate repair target is not a Flow leaf");
     for (const id of leaves.slice(targetIndex).map((node) => node.id)) {
       const node = findNodeInRoot(root, id);
@@ -5956,17 +6080,37 @@ export class CurrentFlowState {
           !== JSON.stringify(route.resetStepIds)) {
         throw new CurrentFlowStateInvariantError("Gate repair requires its Definition-selected target receipt");
       }
+      if (route.phase === "spec") {
+        const gate = this.findNode(this.current.at(-1));
+        const confirmedRoot = reconcileCompletedParents(replaceNode(
+          this.root, gate.id, transitionNode(gate, "done", this.definition, { result: prospective }),
+        ), this.definition);
+        return this.#restartSpecGateRepair(confirmedRoot, currentPath, attempt);
+      }
       const confirmed = this.confirmCurrentAttempt({ result: prospective, status: "done" });
-      if (route.phase === "spec") return confirmed.#restartSpecGateRepair(confirmed.root, currentPath, attempt);
       return confirmed.executableStepClaim({ nodeId: target.id, attempt }).materialize(confirmed);
     }
     if (route.phase === "spec" && nonblocking?.kind === "decision"
       && nonblocking.action === "repair" && nonblocking.sourceStep === "spec-gate"
       && this.attempt.failure === null && prospective === null) {
-      return this.#restartSpecGateRepair(this.root, currentPath, attempt);
+      const gate = this.findNode(this.current.at(-1));
+      const closed = replaceNode(this.root, gate.id, transitionNode(gate, "failed", this.definition, {
+        result: new NodeResult({ outcome: "failed", summary: "Spec Gate advisory repair selected",
+          confirmedAt: this.attempt.startedAt, artifactRefs: [] }),
+      }));
+      return this.#restartSpecGateRepair(reconcileCompletedParents(closed, this.definition), currentPath, attempt);
     }
     if (!isPlanGateRepairEligibleFailure(this, route)) {
       throw new CurrentFlowStateInvariantError("plan gate repair requires its mapped blocked semantic gate failure");
+    }
+    if (route.phase === "spec") {
+      const gate = this.findNode(this.current.at(-1));
+      const failedRoot = replaceNode(this.root, gate.id, transitionNode(gate, "failed", this.definition, {
+        result: new NodeResult({ outcome: "failed",
+          summary: this.attempt.failure.message,
+          confirmedAt: this.attempt.startedAt, artifactRefs: [] }),
+      }));
+      return this.#restartSpecGateRepair(reconcileCompletedParents(failedRoot, this.definition), currentPath, attempt);
     }
     if (route.phase === "task-impl") {
       if (taskLifecycle === null || taskLifecycle.operation !== "repair-task-impl") {
@@ -6449,6 +6593,7 @@ export class CurrentFlowState {
       outbox: this.outbox.toJSON(),
       context: this.context.toJSON(),
       history: this.history?.toJSON() ?? null,
+      migration: this.migration?.toJSON() ?? null,
     };
   }
 }
@@ -6925,7 +7070,7 @@ export class ActivityTransition {
       );
     }
     if (operation === "plan_gate_repair" && this.nonblocking !== null
-      && (this.nodeId !== "spec" || this.nonblocking.kind !== "decision"
+      && (this.nodeId !== "spec-gate-repair" || this.nonblocking.kind !== "decision"
         || this.nonblocking.sourceStep !== "spec-gate" || this.nonblocking.action !== "repair")) {
       throw new CurrentFlowStateInvariantError("only Spec Gate advisory repair may bind a plan Gate repair Activity");
     }
@@ -8573,9 +8718,63 @@ export class CurrentFlowStateStore {
     }
     const state = this.#validatedState?.stateFor(bytes) ?? this.#parse(bytes);
     const journalSnapshot = this.journal.readSnapshot();
+    this.#assertMigrationArchive(state, journalSnapshot);
     const activities = journalSnapshot.entries;
     this.#assertJournalConsistency(state, activities, { stateBytes: bytes, journalSnapshot });
     return new CurrentFlowStateSnapshot({ state, revision: digest(bytes), activities });
+  }
+
+  #assertMigrationArchive(state, journalSnapshot) {
+    if (state.migration === null) return;
+    if (journalSnapshot.entries.length < state.migration.boundaryOrder
+      || digest(journalSnapshot.prefix(state.migration.boundaryOrder).bytes)
+        !== state.migration.projectedActivitiesDigest) {
+      throw new CurrentFlowStateConflictError("canonical-v3 projected Activity prefix differs from migration checkpoint");
+    }
+    const archiveRoot = path.join(this.directory, "artifacts", "migration", "spec-gate-repair-v3");
+    for (const [field, name] of [["flow", "flow.json"], ["activities", "activities.jsonl"],
+      ["catalog", "artifact-catalog.json"],
+      ...(state.migration.archiveDigests.issueLog ? [["issueLog", "issue-log.json"]] : [])]) {
+      let bytes;
+      try { bytes = fs.readFileSync(path.join(archiveRoot, name)); }
+      catch (cause) { throw new CurrentFlowStateConflictError(`canonical-v3 migration archive is missing: ${name}`, { cause }); }
+      if (digest(bytes) !== state.migration.archiveDigests[field]) {
+        throw new CurrentFlowStateConflictError(`canonical-v3 migration archive digest differs: ${name}`);
+      }
+    }
+    const countPath = path.join(this.directory, "artifacts", "spec-gate-repairs", "migration.json");
+    let count;
+    try { count = JSON.parse(fs.readFileSync(countPath, "utf8")); }
+    catch (cause) { throw new CurrentFlowStateConflictError("canonical-v3 Gate repair count evidence is missing", { cause }); }
+    if (count?.version !== 1 || count.legacyAppliedCount !== state.migration.legacyAppliedCount
+      || count.sourceActivitiesDigest !== state.migration.archiveDigests.activities
+      || !isPlainObject(count.legacyCycles)
+      || digest(Buffer.from(JSON.stringify(count.legacyCycles), "utf8"))
+        !== state.migration.legacyCyclesDigest) {
+      throw new CurrentFlowStateConflictError("canonical-v3 Gate repair count evidence differs from migration checkpoint");
+    }
+    const cycles = count.legacyCycles;
+    if (!Array.isArray(cycles?.occurrences) || !Array.isArray(cycles?.repairs)
+      || !Array.isArray(cycles?.outcomes) || !Array.isArray(count.legacyOutcomeActivityIds)
+      || !isDeepStrictEqual(cycles.outcomes.map((outcome) => outcome.publicationActivityId),
+        count.legacyOutcomeActivityIds)
+      || cycles.outcomes.length !== count.legacyAppliedCount) {
+      throw new CurrentFlowStateConflictError("canonical-v3 Gate repair cycle evidence differs from its applied count");
+    }
+    try {
+      GateObservationCycleReader.fromCanonical({ observationRows: cycles.occurrences,
+        repairRows: cycles.repairs, outcomeRows: cycles.outcomes }).read();
+    } catch (cause) {
+      throw new CurrentFlowStateConflictError("canonical-v3 Gate repair cycle evidence is invalid", { cause });
+    }
+    let catalog;
+    try { catalog = JSON.parse(fs.readFileSync(path.join(this.directory, "artifact-catalog.json"), "utf8")); }
+    catch (cause) { throw new CurrentFlowStateConflictError("canonical-v3 migration artifact catalog is missing", { cause }); }
+    const descriptor = catalog?.artifacts?.find((entry) => entry.relativePath === "artifacts/spec-gate-repairs/migration.json");
+    if (descriptor?.logicalKey !== "spec.gate.repair.migration"
+      || descriptor.hash !== digest(fs.readFileSync(countPath)) || descriptor.activityId !== null) {
+      throw new CurrentFlowStateConflictError("canonical-v3 Gate repair count catalog binding differs");
+    }
   }
 
   /**
@@ -8759,7 +8958,7 @@ export class CurrentFlowStateStore {
       ? this.#validatedState?.replayBaseFor(state, journalSnapshot) ?? null
       : null;
     let replayed = cachedBase ?? freshStateLike(state, this.definition);
-    const replayStart = cachedBase?.confirmationOrder ?? 0;
+    const replayStart = replayed.confirmationOrder;
     try {
       const priorActivities = entries.slice(0, replayStart);
       for (let index = replayStart; index < state.confirmationOrder; index += 1) {
@@ -9118,6 +9317,49 @@ export class CurrentFlowVersionStore {
       },
     });
   }
+  /** Read the newest validated review snapshot, retaining its original revision. */
+  readLatestSpecReview() {
+    return this.catalogStore.read({
+      relativePaths: [resolvedArtifact("flow.state").relativePath],
+      read: (catalog) => {
+        const authority = this.#assertSpecRevisionAuthority(catalog);
+        const snapshot = this.#store().loadSnapshot();
+        this.#assertPersistedIdentity(snapshot.state);
+        const publications = snapshot.activities.filter((activity) => (
+          activity.nodeId === "spec-review" && activity.reviewPublication?.stage === "spec-review"
+        ));
+        for (let revision = authority.revision; revision >= 1; revision -= 1) {
+          const parameters = { revision: new FlowSpecRevision(revision).pathSegment };
+          const reviewPath = resolvedArtifact("spec.review", parameters).relativePath;
+          const descriptor = catalog.artifacts.find((entry) => entry.relativePath === reviewPath) ?? null;
+          if (descriptor === null) continue;
+          const snapshotPath = resolvedArtifact("spec.snapshot", parameters).relativePath;
+          const snapshotDescriptor = catalog.artifacts.find((entry) => entry.relativePath === snapshotPath) ?? null;
+          if (descriptor.logicalKey !== "spec.review" || snapshotDescriptor?.logicalKey !== "spec.snapshot") {
+            throw new CurrentFlowStateInvariantError("prior canonical Spec review has no matching snapshot authority");
+          }
+          const bytes = fs.readFileSync(this.location.resolve(reviewPath));
+          const snapshotBytes = fs.readFileSync(this.location.resolve(snapshotPath));
+          const review = new CanonicalSpecReview(JSON.parse(bytes.toString("utf8")));
+          if (descriptor.hash !== sha256Bytes(bytes) || descriptor.size !== bytes.length
+            || review.digest !== descriptor.hash
+            || snapshotDescriptor.hash !== sha256Bytes(snapshotBytes)
+            || snapshotDescriptor.size !== snapshotBytes.length
+            || review.identity.specId !== this.location.specId.toString()
+            || review.identity.revision.value !== revision
+            || review.identity.digest !== sha256Bytes(snapshotBytes)
+            || review.identity.byteLength !== snapshotBytes.length) {
+            throw new CurrentFlowStateInvariantError("prior canonical Spec review does not match its revision snapshot");
+          }
+          // Repair rebases preserve audit entries, but do not constitute a new
+          // review execution. Only the original publication proves this basis.
+          if (!publications.some((activity) => activity.reviewPublication.identity.matches(review.identity))) continue;
+          return Object.freeze({ revision, descriptor, bytes, review, snapshotBytes });
+        }
+        return null;
+      },
+    });
+  }
   /** Derive the immutable generation-zero review seed for a spec-review worker.
    * It has no descriptor until the worker's confirmation transaction publishes it. */
   readCurrentSpecReviewInput() {
@@ -9434,14 +9676,14 @@ export class CurrentFlowVersionStore {
     const sourceCompletion = value instanceof CanonicalSourceWorkerSpecCompletion;
     const workerProposal = value instanceof CanonicalWorkerSpecPublication && value.hasTaskProposal;
     const sourceActive = activity.nodeId === "implement" || this.#isActiveTaskImplementation(activity);
-    if (!isTypedSpecUpdate && !sourceCompletion && !["spec", "spec-repair", "approval"].includes(activity.nodeId)) {
-      throw new CurrentFlowStateInvariantError("only spec, spec-repair, and approval Activities may replace canonical spec.json");
+    if (!isTypedSpecUpdate && !sourceCompletion && !["spec", "spec-repair", "spec-gate-repair", "approval"].includes(activity.nodeId)) {
+      throw new CurrentFlowStateInvariantError("only Spec authoring, repair, and approval Activities may replace canonical spec.json");
     }
     if (sourceCompletion && (!sourceActive || activity.transition.operation !== "confirm_attempt")) {
       throw new CurrentFlowStateInvariantError("source worker Spec completion must target active implement or Task implementation confirmation");
     }
-    if (workerProposal && !["spec", "spec-repair"].includes(activity.nodeId)) {
-      throw new CurrentFlowStateInvariantError("only initial Spec and Spec repair workers may propose Tasks");
+    if (workerProposal && !["spec", "spec-repair", "spec-gate-repair"].includes(activity.nodeId)) {
+      throw new CurrentFlowStateInvariantError("only Spec authoring and repair workers may propose Tasks");
     }
     if (isTypedSpecUpdate && !this.#isActiveTaskImplementation(activity) && activity.nodeId !== "approval") {
       throw new CurrentFlowStateInvariantError("canonical Spec update must target approval or the active Task implementation Step");

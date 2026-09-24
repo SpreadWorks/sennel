@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Catalog-backed inputs for the report producer.
  *
@@ -26,7 +27,7 @@ function json(bytes, field) {
 }
 
 function canonicalState(state) {
-  if (state?.schemaRevision !== 3 || typeof state.specId !== "string" || state.specId === "") {
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state.specId !== "string" || state.specId === "") {
     throw new Error("CanonicalReportArtifactStore requires a Version-1 Flow state");
   }
   return state;

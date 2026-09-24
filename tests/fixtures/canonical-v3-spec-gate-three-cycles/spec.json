@@ -1,0 +1,39 @@
+{
+  "goal": " Correction 1. Correction 2. Correction 3.",
+  "scope": {
+    "in": [],
+    "out": []
+  },
+  "constraints": [],
+  "design_principles": [],
+  "overview": {
+    "modules": [],
+    "data_flow": [],
+    "decisions": []
+  },
+  "background": "",
+  "requirements": [
+    {
+      "id": "R1",
+      "desc": "Bound repeated Spec repair cycles.",
+      "task_ids": [
+        "T-1"
+      ],
+      "testable": false
+    }
+  ],
+  "acceptance_criteria": [],
+  "clarifications": [],
+  "alternatives_considered": [],
+  "open_questions": [],
+  "tasks": [
+    {
+      "id": "T-1",
+      "title": "Fixture Task T-1",
+      "goal": "Provide canonical ownership for T-1.",
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    }
+  ]
+}

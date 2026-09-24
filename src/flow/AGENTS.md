@@ -43,6 +43,7 @@
 | `spec-triage` | sealed triage handoff / triage artifactとStep Result | triage完了:`completed`、失敗:`error` | `spec-repair`へのnextまたはfailure | findingは4項目identityでreadbackし、別revision・別fingerprintへのfallbackを禁止 | e363 |
 | `spec-repair` | sealed repair handoff / repair audit、更新済み`spec.record`、Step Result | 変更あり:`completed`、変更なし:`completed`、失敗:`error` | 変更あり・変更なしとも`spec-gate`へnext、失敗はfailure | optimistic baseline差はpublication前に拒否。replayは同一operationとpublicationに限定 | e363 |
 | `spec-gate`（`task-spec`と共有するGate phase） | canonical gate evaluation / gate result artifactとStep Result | pass:`completed`、carry-forward:`completed`、repair要求:`loop-required`、ユーザー判断待ち:`user-input-required`、失敗:`error` | pass/carry-forward、repair loop、Await、FailureをResultだけから選択 | `spec`と`task-spec`のblocking stop、nonblocking decision、retry exhaustion、gate publication recoveryはDefinition-owned。復旧実行はService／Storeが担い、再開時は保存済みResult・receipt・evidence identityを再読込みしてGateを再判定しない。publication-only reconcileは正規経路としない | b645 |
+| `spec-gate-repair` | revision-bound Gate finding identity、選択されたSpec範囲、worker操作、元Review | 修正してGate再実行:`completed`、変更後Review要求:`completed`、文脈追加:`loop-required`、ユーザー判断待ち:`user-input-required`、進捗なし・失敗:`error` | 修正結果に応じて`spec-gate`または`spec-review`へroute。範囲探索・provider予算の実行継続は同じAttempt内に記録 | workerはSpec全文を受け取らず、完全finding identityと許可対象に限る。Serviceは外部呼出し前に予算claimを保存し、各応答・範囲・Resultを不変artifactへ保存。StepがReview根拠を再利用できると証明した場合だけGateへ進む。StoreはSpec更新・audit・Result・receipt・routeを原子的にcommit | Gate repair |
 
 初期`spec`の候補は、handoffが検証した`spec.json`から既存の`CanonicalWorkerSpecPublication`へ型付けされる。`SpecStep`はその候補を採用して`SpecCreatedResult`を確定するだけでよく、Spec内容の加工やファイル選択は行わない。Serviceは採用候補・Result・bindingを同じAttemptのStore入力へ渡す。StoreのreceiptがResultとpublicationを一体で識別し、正規writerがruntime-owned Tasksの統合とrevision snapshotを保存する。意味上のError Resultと、admission拒否・保存失敗は別経路で扱う。
 
@@ -54,6 +55,7 @@
 | 9219 | Spec Review executionとpublication | Spec Review専用Step / Definition | review execution、pass、findingのreceiptとrouteをcommit |
 | e363 | Spec Triage / Repair worker handoff | Triage・Repair専用Step / Definition | finding identityに結び付くtriage・repair publicationとrouteをcommit |
 | b645 | Spec Gate evaluation | Spec Gate専用Step / Definition | pass、repair、stop、retryの選択結果をcommit |
+| Gate repair | bounded Spec Gate修復 | `SpecGateRepairStep` / `SpecGateRepairService` / Definition | Gate findingの局所修正、Review lineage、durable予算・文脈継続、原子的publicationと再開をcommit |
 | 5c91 | 残存production caller監査 | 各所有Taskの保存済みResult / Definition readback | 未移行callerや重複判断を検出し、所有Taskへ差し戻す。Gate／recovery／nonblockingの実装を引き取らない |
 | 6065 | end-to-end caller convergence | 全Spec Stepの保存済みResult / Definition readback | 旧caller判断を除去し、全経路の再開・回帰検証を完成 |
 

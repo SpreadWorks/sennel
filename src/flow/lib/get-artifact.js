@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /** Explicit human display for one closed canonical Flow artifact view. */
 
 import { Command } from "../../lib/command.js";
@@ -195,7 +196,7 @@ export default class GetArtifactCommand extends FlowCommand {
       if (!request.historical && !ctx.flowState) {
         return Envelope.fail("get", "artifact", "NO_ACTIVE_FLOW", "an active canonical Flow is required when --spec-id/--version are omitted");
       }
-      if (!request.historical && (ctx.flowState?.schemaRevision !== 3 || typeof ctx.flowState.specId !== "string")) {
+      if (!request.historical && (ctx.flowState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowState.specId !== "string")) {
         return Envelope.fail("get", "artifact", "CANONICAL_FLOW_REQUIRED", "active Flow must be backed by the canonical Version Store");
       }
 

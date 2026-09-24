@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { CanonicalRequirementDefinitions } from "./canonical-requirement-definitions.js";
 
 /**
@@ -10,7 +11,7 @@ export class CanonicalSpecRecord {
     if (!flowManager || typeof flowManager.readArtifact !== "function") {
       throw new Error("canonical spec record requires FlowManager.readArtifact");
     }
-    if (state?.schemaRevision !== 3 || typeof state.specId !== "string" || state.specId === "") {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state.specId !== "string" || state.specId === "") {
       throw new Error("canonical spec record requires a Version-1 Flow state");
     }
     if (typeof consumerNodeId !== "string" || consumerNodeId === "") {

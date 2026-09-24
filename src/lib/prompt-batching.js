@@ -1340,6 +1340,27 @@ export class PromptExecutionBudget {
       aggregateItemCount: this.aggregateItemCount,
     });
   }
+
+  static fromSnapshot(executionLimit, snapshot) {
+    if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)
+      || Object.keys(snapshot).sort().join(",") !== [
+        "aggregateCharacters", "aggregateItemCount", "providerCallCount", "synthesisCallCount",
+      ].join(",")) {
+      throw new TypeError("Prompt execution budget snapshot is invalid");
+    }
+    const budget = new PromptExecutionBudget(executionLimit);
+    for (const [field, maximum] of [
+      ["providerCallCount", budget.limit.maxProviderCallCount],
+      ["synthesisCallCount", budget.limit.maxSynthesisCallCount],
+      ["aggregateItemCount", budget.limit.maxAggregateItemCount],
+      ["aggregateCharacters", budget.limit.maxAggregateCharacters],
+    ]) {
+      const value = safeInteger(snapshot[field], `Prompt execution ${field}`);
+      if (value > maximum) throw new RangeError(`Prompt execution ${field} exceeds its limit`);
+      budget[field] = value;
+    }
+    return budget;
+  }
 }
 
 /**
@@ -1642,52 +1663,66 @@ export class PromptReductionPlan {
     Object.freeze(this);
   }
 
+  /** Pure planning lets durable callers resume without charging past calls again. */
+  planRound({ level = this.initialLevel, depth = 0, isComplete, buildRound }) {
+    if (!(level instanceof PromptReductionLevel) || !Number.isSafeInteger(depth) || depth < 0
+      || depth > this.executionLimit.maxReductionDepth) throw new TypeError("Invalid reduction checkpoint");
+    if (isComplete(level.elements, depth)) return null;
+    if (depth === this.executionLimit.maxReductionDepth) {
+      throw new PromptReductionDidNotConvergeFailure("Prompt reduction reached its depth limit", {
+        depth,
+        characterCount: level.characterCount,
+        itemCount: level.elements.length,
+      });
+    }
+    const plan = buildRound(level.elements, depth);
+    if (!(plan instanceof PromptBatchPlan)) throw new TypeError("Prompt reduction buildRound() must return a PromptBatchPlan");
+    return plan;
+  }
+
+  /** Shared coverage, convergence and aggregate checks for both execution modes. */
+  advance({ level, depth, plan, completions, toNextLevel }) {
+    plan.assertCompletions(completions);
+    const next = toNextLevel(completions, depth);
+    if (!(next instanceof PromptReductionLevel)) throw new TypeError("Prompt reduction toNextLevel() must return a PromptReductionLevel");
+    if (next.coverageDigest !== this.initialLevel.coverageDigest) {
+      throw new PromptResponseCoverageInvalidFailure("Prompt reduction did not inherit its input coverage digest", {
+        expected: this.initialLevel.coverageDigest,
+        actual: next.coverageDigest,
+      });
+    }
+    const shrank = next.characterCount < level.characterCount
+      || (next.characterCount === level.characterCount && next.elements.length < level.elements.length);
+    if (!shrank) {
+      throw new PromptReductionDidNotConvergeFailure("Prompt reduction did not strictly shrink", {
+        depth,
+        previousCharacters: level.characterCount,
+        nextCharacters: next.characterCount,
+        previousItems: level.elements.length,
+        nextItems: next.elements.length,
+      });
+    }
+    if (next.characterCount > this.executionLimit.maxAggregateCharacters
+      || next.elements.length > this.executionLimit.maxAggregateItemCount) {
+      throw new PromptResponseTooLargeFailure("Prompt reduction aggregate exceeds its execution limit", {
+        characterCount: next.characterCount,
+        itemCount: next.elements.length,
+      });
+    }
+    return next;
+  }
+
   async execute({ isComplete, buildRound, executeRound, toNextLevel, finalize } = {}) {
     for (const [value, name] of [[isComplete, "isComplete"], [buildRound, "buildRound"], [executeRound, "executeRound"], [toNextLevel, "toNextLevel"], [finalize, "finalize"]]) {
       if (typeof value !== "function") throw new TypeError(`Prompt reduction requires ${name}()`);
     }
     let level = this.initialLevel;
     for (let depth = 0; depth <= this.executionLimit.maxReductionDepth; depth += 1) {
-      if (isComplete(level.elements, depth)) return finalize(level.elements, level.coverageDigest);
-      if (depth === this.executionLimit.maxReductionDepth) {
-        throw new PromptReductionDidNotConvergeFailure("Prompt reduction reached its depth limit", {
-          depth,
-          characterCount: level.characterCount,
-          itemCount: level.elements.length,
-        });
-      }
-      const plan = buildRound(level.elements, depth);
-      if (!(plan instanceof PromptBatchPlan)) throw new TypeError("Prompt reduction buildRound() must return a PromptBatchPlan");
+      const plan = this.planRound({ level, depth, isComplete, buildRound });
+      if (plan === null) return finalize(level.elements, level.coverageDigest);
       this.executionBudget.consumeSynthesisCalls(plan.batches.length);
       const completions = await executeRound(plan, depth);
-      plan.assertCompletions(completions);
-      const next = toNextLevel(completions, depth);
-      if (!(next instanceof PromptReductionLevel)) throw new TypeError("Prompt reduction toNextLevel() must return a PromptReductionLevel");
-      if (next.coverageDigest !== this.initialLevel.coverageDigest) {
-        throw new PromptResponseCoverageInvalidFailure("Prompt reduction did not inherit its input coverage digest", {
-          expected: this.initialLevel.coverageDigest,
-          actual: next.coverageDigest,
-        });
-      }
-      const shrank = next.characterCount < level.characterCount
-        || (next.characterCount === level.characterCount && next.elements.length < level.elements.length);
-      if (!shrank) {
-        throw new PromptReductionDidNotConvergeFailure("Prompt reduction did not strictly shrink", {
-          depth,
-          previousCharacters: level.characterCount,
-          nextCharacters: next.characterCount,
-          previousItems: level.elements.length,
-          nextItems: next.elements.length,
-        });
-      }
-      if (next.characterCount > this.executionLimit.maxAggregateCharacters
-        || next.elements.length > this.executionLimit.maxAggregateItemCount) {
-        throw new PromptResponseTooLargeFailure("Prompt reduction aggregate exceeds its execution limit", {
-          characterCount: next.characterCount,
-          itemCount: next.elements.length,
-        });
-      }
-      level = next;
+      level = this.advance({ level, depth, plan, completions, toNextLevel });
     }
     throw new PromptReductionDidNotConvergeFailure();
   }

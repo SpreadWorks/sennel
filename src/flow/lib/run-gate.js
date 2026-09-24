@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/run-gate.js
  *
@@ -32,6 +33,10 @@ import { PromptBuilder } from "../../lib/prompt-builder.js";
 import { GLOBAL_PROMPT_ELEMENT_HARD_MAX, PromptRequestLimit, PromptBatchingError, PromptBatchPlan, PromptExecutionBudget, PromptExecutionLimit, PromptLogicalFootprint } from "../../lib/prompt-batching.js";
 import {
   RequirementEvidenceInput, RequirementEvidencePlan, RequirementObservationResponse,
+  GuardrailEvidencePlan, GuardrailObservationResponse, GuardrailObservationCollection,
+  GuardrailJudgmentInput, GuardrailJudgmentPlan,
+  structuredGuardrailSourceInputs,
+  countDistinctGuardrailSourceRanges,
   executeGatePlan, gatePromptFits,
   reduceRequirementEvidence,
 } from "./gate-prompt-plan.js";
@@ -849,9 +854,9 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
   if (filtered.length === 0) return null;
 
   const articleList = filtered
-    .map((g) => options.completeEvidence
+    .map((g) => options.completeEvidence && (options.omitArticleBody || options.omitArticleIds?.includes(g.id))
       ? `- id: ${g.id}\n  title: ${g.title}`
-      : `- id: ${g.id}\n  title: ${g.title}\n  body: ${g.body.trim()}`)
+      : `- id: ${g.id}\n  title: ${g.title}\n  body: ${options.completeEvidence && options.sharedGuardrailEvidence ? g.body : g.body.trim()}`)
     .join("\n");
 
   const checkerRole = role || `You are a ${phase} compliance checker.`;
@@ -872,6 +877,10 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
     "- Matched Spec Acknowledgment Rationale is context only. Exception permission comes from the guardrail article clause, not from the rationale section alone.",
     "- To acknowledge a guardrail exception in a spec, write the target guardrail_id directly in constraints, clarifications, or alternatives_considered.",
     "- For each FAIL, describe the actionable Observation using these AI-owned fields: failureMode, requirementRef, where, observed. The system derives kind, severity, and refs.",
+    ...(phase === "spec" && options.sharedGuardrailEvidence ? [
+      "- At the Spec stage, check that confirmation methods and acceptance conditions are stated. Later implementation and test execution are owned by later steps unless explicit execution evidence is supplied.",
+      "- A planned later check is not executed evidence. Do not report missing later execution as a present Spec violation unless the article explicitly requires it now.",
+    ] : []),
   ].join("\n");
   pb.setRules(rules);
   const knownIds = filtered.map((guardrail) => guardrail.id);
@@ -1384,20 +1393,38 @@ export class GateProviderCallAdmission {
   get settled() { return this.base.settled; }
 }
 
-async function callGateAgent(agent, built, attempt, providerCallAdmission, providerCallGuard = null) {
+async function callGateAgent(agent, built, attempt, providerCallAdmission, providerCallGuard = null, promptStage = null, recordPromptMetric = null) {
   let cacheDecision = null;
   const admission = providerCallGuard === null
     ? providerCallAdmission
     : new GateProviderCallAdmission(providerCallAdmission, providerCallGuard);
-  const text = await agent.call(built.userPrompt, {
-    commandId: "flow.spec.gate",
-    systemPrompt: built.systemPrompt,
-    jsonSchema: built.jsonSchema,
-    fmtFallback: built.fmtFallback,
-    providerCallAdmission: admission,
-    cacheMode: attempt.cacheMode,
-    onCacheDecision(decision) { cacheDecision = decision; },
-  });
+  const startedAt = Date.now();
+  let text;
+  try {
+    text = await agent.call(built.userPrompt, {
+      commandId: "flow.spec.gate",
+      systemPrompt: built.systemPrompt,
+      jsonSchema: built.jsonSchema,
+      fmtFallback: built.fmtFallback,
+      providerCallAdmission: admission,
+      cacheMode: attempt.cacheMode,
+      onCacheDecision(decision) { cacheDecision = decision; },
+    });
+  } finally {
+    const providerCalls = admission.attemptCount;
+    if (recordPromptMetric && providerCalls > 0) {
+      try {
+        recordPromptMetric({
+          stage: attempt.repair ? "format-repair" : promptStage,
+          inputCharacters: PromptLogicalFootprint.measure(built).total * providerCalls,
+          callCount: providerCalls,
+          durationMs: Math.max(0, Date.now() - startedAt),
+        });
+      } catch (error) {
+        process.stderr.write(`[sennel] gate: prompt metric accumulation failed: ${error.message}\n`);
+      }
+    }
+  }
   return {
     text,
     cacheOutcome: cacheDecision?.cacheOutcome || attempt.cacheMode,
@@ -1544,20 +1571,50 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
   if (!pb) return { passed: true, evaluations: [] };
 
   const built = pb.build();
-  const knownIds = filtered.map((g) => g.id);
   let parsed;
   try {
-    const limit = new PromptRequestLimit({ maxCharacters: agent.promptCharacterLimit ?? MAX_IMPL_REQUIREMENT_BATCH_CHARS });
+    const executionBudget = options.executionBudget ?? createGateExecutionBudget();
+    const limit = new PromptRequestLimit({ maxCharacters: Math.min(
+      agent.promptCharacterLimit ?? MAX_IMPL_REQUIREMENT_BATCH_CHARS,
+      executionBudget.limit.maxRequestCharacters,
+    ) });
     const projectInvocation = gateInvocationProjector(agent);
     const direct = gatePromptFits(built, limit);
-    const evidencePlans = direct ? [] : filtered.map((article) => new RequirementEvidencePlan({
-      requirement: new GuardrailEvidenceObligation(article), limit,
-      inputs: [
-        new RequirementEvidenceInput({ id: `${article.id}:source`, text: targetText }),
-        new RequirementEvidenceInput({ id: `${article.id}:rationale`, text: options.acknowledgedRationale?.markdown ?? "" }),
-        new RequirementEvidenceInput({ id: `${article.id}:prior-memory`, text: options.priorMemoryMarkdown ?? "" }),
-      ],
-    }));
+    if (!direct && options.sharedGuardrailEvidence && phase === "spec") {
+      for (const article of filtered) {
+        const minimumJudgment = buildGuardrailArticleEvalPrompt(
+          "", [article], phase, role, promptPreviouslyPassedIds,
+          { completeEvidence: true, sharedGuardrailEvidence: true },
+        ).build();
+        if (!gatePromptFits(minimumJudgment, limit)) {
+          throw new PromptBatchingError("PROMPT_FIXED_CONTEXT_TOO_LARGE",
+            `Guardrail ${article.id} cannot fit its full canonical text in a final judgment`);
+        }
+        if (projectInvocation) projectInvocation(minimumJudgment).assertWithinLimit(limit);
+      }
+    }
+    const evidencePlans = [];
+    if (!direct && options.sharedGuardrailEvidence && phase === "spec") {
+      const inputs = [
+        ...structuredGuardrailSourceInputs(targetText, options.structuredSource, {
+          maxGroupCharacters: Math.max(1, Math.floor(limit.maxCharacters / 4)),
+        }),
+        new RequirementEvidenceInput({ id: "guardrail:rationale", text: options.acknowledgedRationale?.markdown ?? "" }),
+        new RequirementEvidenceInput({ id: "guardrail:prior-memory", text: options.priorMemoryMarkdown ?? "" }),
+      ];
+      evidencePlans.push(...GuardrailEvidencePlan.createGrouped({
+        articles: filtered, inputs, limit, executionLimit: executionBudget.limit,
+      }));
+    } else if (!direct) {
+      evidencePlans.push(...filtered.map((article) => new RequirementEvidencePlan({
+        requirement: new GuardrailEvidenceObligation(article), limit, executionLimit: executionBudget.limit,
+        inputs: [
+          new RequirementEvidenceInput({ id: `${article.id}:source`, text: targetText }),
+          new RequirementEvidenceInput({ id: `${article.id}:rationale`, text: options.acknowledgedRationale?.markdown ?? "" }),
+          new RequirementEvidenceInput({ id: `${article.id}:prior-memory`, text: options.priorMemoryMarkdown ?? "" }),
+        ],
+      })));
+    }
     const plans = direct
       ? [PromptBatchPlan.fromRequest({ request: built, limit, id: "guardrail-request" })]
       : evidencePlans.map((evidence) => evidence.plan);
@@ -1566,36 +1623,89 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
         for (const batch of plan.batches) projectInvocation(batch.request).assertWithinLimit(limit);
       }
     }
-    const executionBudget = options.executionBudget ?? createGateExecutionBudget();
-    executionBudget.assertCanExecute(plans.reduce((count, plan) => count + plan.batches.length, evidencePlans.length));
-    const observations = [];
-    const callAgent = (request, _batch, _index, attempt, providerCallAdmission) => callGateAgent(
-      agent, request, attempt, providerCallAdmission, options.providerCallGuard ?? null,
-    );
-    for (const [index, initialPlan] of plans.entries()) {
-      let plan = initialPlan;
-      if (!direct) {
-        const evidencePlan = evidencePlans[index];
-        const article = filtered[index];
-        const protocolPolicy = new GateOutputProtocolPolicy({
-          phase,
-          parseResponse: (raw, batch) => new RequirementObservationResponse(parseJsonObject(raw), article.id, batch),
-        });
-        const evidence = await evidencePlan.execute({ callAgent, projectInvocation, protocolPolicy, executionBudget });
-        const request = await reduceRequirementEvidence({
-          evidence, requirement: evidencePlan.requirement, limit, projectInvocation, protocolPolicy, executionBudget,
-          evaluateBatch: callAgent,
-          buildFinalRequest: (facts) => buildGuardrailArticleEvalPrompt(
-            "Complete evidence collected from all canonical ranges:\n" + facts,
-            [article], phase, role, promptPreviouslyPassedIds,
-            { completeEvidence: true },
-          ).build(),
-        });
-        plan = PromptBatchPlan.fromRequest({ request, limit, id: `${article.id}:final-judgment` });
+    if (!direct && options.sharedGuardrailEvidence && phase === "spec") {
+      const requiredPairs = evidencePlans.reduce((count, plan) => count + plan.plan.batches.reduce((batchCount, batch) =>
+        batchCount + batch.payloadElements.length * (plan instanceof GuardrailEvidencePlan ? plan.rules.length : 1), 0), 0);
+      if (requiredPairs > executionBudget.limit.maxAggregateItemCount - executionBudget.aggregateItemCount) {
+        throw new PromptBatchingError("PROMPT_RESPONSE_TOO_LARGE", "Complete rule-range response coverage exceeds the aggregate item budget");
       }
+    }
+    executionBudget.assertCanExecute(plans.reduce((count, plan) => count + plan.batches.length, 1));
+    if (!direct && options.recordPromptMetric) {
+      options.recordPromptMetric({ stage: "source-partition", count: countDistinctGuardrailSourceRanges(plans) });
+      options.recordPromptMetric({ stage: "rule-group", count: evidencePlans.length });
+    }
+    const observations = [];
+    const callAgentFor = (stage) => (request, _batch, _index, attempt, providerCallAdmission) => callGateAgent(
+      agent, request, attempt, providerCallAdmission, options.providerCallGuard ?? null,
+      stage, options.recordPromptMetric ?? null,
+    );
+    const judgmentInputs = [];
+    for (const [index] of plans.entries()) {
+      const evidencePlan = evidencePlans[index];
+      const rules = direct ? [] : evidencePlan instanceof GuardrailEvidencePlan
+        ? evidencePlan.rules
+        : [evidencePlan.requirement];
+      if (direct) break;
+      const protocolPolicy = new GateOutputProtocolPolicy({
+        phase,
+        parseResponse: (raw, batch) => evidencePlan instanceof GuardrailEvidencePlan
+          ? new GuardrailObservationResponse(parseJsonObject(raw), rules, batch)
+          : new RequirementObservationResponse(parseJsonObject(raw), rules[0].id, batch),
+      });
+      const evidence = await evidencePlan.execute({
+        callAgent: callAgentFor("collection"), projectInvocation, protocolPolicy, executionBudget,
+      });
+      for (const rule of rules) {
+        const article = filtered.find((entry) => entry.id === rule.id);
+        const ruleEvidence = evidence instanceof GuardrailObservationCollection ? evidence.forRule(rule) : evidence;
+        const reductionProtocol = new GateOutputProtocolPolicy({
+          phase,
+          parseResponse: (raw, batch) => new RequirementObservationResponse(parseJsonObject(raw), rule.id, batch),
+        });
+        const fullRuleFits = gatePromptFits(buildGuardrailArticleEvalPrompt(
+          "", [article], phase, role, promptPreviouslyPassedIds,
+          { completeEvidence: true, sharedGuardrailEvidence: options.sharedGuardrailEvidence },
+        ).build(), limit);
+        let facts = null;
+        await reduceRequirementEvidence({
+          evidence: ruleEvidence, requirement: rule, limit, projectInvocation,
+          protocolPolicy: reductionProtocol, executionBudget,
+          phase: options.sharedGuardrailEvidence && phase === "spec" ? "spec" : null,
+          evaluateBatch: callAgentFor("reduction"),
+          buildFinalRequest: (text) => {
+            facts = text;
+            return buildGuardrailArticleEvalPrompt(
+              "Complete evidence collected from all canonical ranges:\n" + text,
+              [article], phase, role, promptPreviouslyPassedIds,
+              { completeEvidence: true, omitArticleBody: !fullRuleFits,
+                sharedGuardrailEvidence: options.sharedGuardrailEvidence },
+            ).build();
+          },
+        });
+        judgmentInputs.push(new GuardrailJudgmentInput({ article, facts, omitArticleBody: !fullRuleFits }));
+      }
+    }
+    const judgmentPlans = direct ? plans : new GuardrailJudgmentPlan({
+      inputs: judgmentInputs,
+      limit,
+      buildRequest: (group) => buildGuardrailArticleEvalPrompt(
+        "Complete evidence collected from all canonical ranges:\n" + JSON.stringify({
+          guardrails: group.map((input) => input.toPromptValue()),
+        }),
+        group.map((input) => input.article), phase, role, promptPreviouslyPassedIds,
+        { completeEvidence: true, sharedGuardrailEvidence: options.sharedGuardrailEvidence,
+          omitArticleIds: group.filter((input) => input.omitArticleBody).map((input) => input.article.id) },
+      ).build(),
+    }).plans;
+    executionBudget.assertCanExecute(judgmentPlans.length);
+    if (!direct && options.recordPromptMetric) {
+      options.recordPromptMetric({ stage: "judgment-rule-group", count: judgmentPlans.length });
+    }
+    for (const plan of judgmentPlans) {
       const result = await executeGatePlan({
         plan, projectInvocation, executionBudget,
-        callAgent,
+        callAgent: callAgentFor("judgment"),
         protocolPolicy: new GateOutputProtocolPolicy({
           phase,
           parseResponse: (raw, batch) => parseGuardrailArticleEvaluation(raw,
@@ -1916,7 +2026,7 @@ export class PlanGateEvidenceTarget {
 
   static resolve({ flowManager, flowState, phase }) {
     if (!PLAN_GATE_EVIDENCE_LOGICAL_KEYS[phase]) return null;
-    if (flowState?.schemaRevision !== 3 || typeof flowManager?.artifactCatalog !== "function") {
+    if (flowState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof flowManager?.artifactCatalog !== "function") {
       throw new Error("plan gate evidence requires a Version-1 Flow artifact catalog");
     }
     return new PlanGateEvidenceTarget({
@@ -3554,6 +3664,23 @@ export async function runGateFlow(args) {
       executionBudget: ctx?.promptExecutionBudget ?? guardrailPromptOptions.executionBudget,
       providerCallGuard: ctx?.gateProviderCallGuard ?? null,
       priorMemoryMarkdown,
+      recordPromptMetric: phase === "spec" && typeof ctx?.flowManager?.appendMetric === "function"
+        ? ({ stage, count, inputCharacters, callCount, durationMs }) => {
+          try {
+            return ctx.flowManager.appendMetric({
+              phase,
+              kind: count === undefined ? `gate-prompt-${stage}` : "gate-prompt-plan",
+              counter: count === undefined ? `gatePromptInputChars:${stage}` : `gatePromptCount:${stage}`,
+              delta: count === undefined ? inputCharacters : count,
+              callCount: callCount ?? 0,
+              durationMs: durationMs ?? 0,
+            });
+          } catch (error) {
+            process.stderr.write(`[sennel] gate: prompt metric accumulation failed: ${error.message}\n`);
+            return null;
+          }
+        }
+        : null,
       excludedGuardrailIds: ownedEvaluations.map((evaluation) => evaluation.guardrail_id),
     },
   );
@@ -3835,7 +3962,11 @@ export class RunGateCommand extends FlowCommand {
         checkerRole: undefined,
         skipGuardrail,
         ctx: canonicalCtx,
-        guardrailPromptOptions: { acknowledgedRationale: buildAcknowledgedRationaleSection({ spec, guardrails }) },
+        guardrailPromptOptions: {
+          acknowledgedRationale: buildAcknowledgedRationaleSection({ spec, guardrails }),
+          sharedGuardrailEvidence: true,
+          structuredSource: spec,
+        },
         authoritativeEvaluations,
       });
     } else if (phase === "task-spec") {

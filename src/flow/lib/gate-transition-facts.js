@@ -175,13 +175,13 @@ export function readProspectiveSpecGateFacts({ flowManager, binding, commandResu
   const sameEvidence = new CanonicalGateObservationCycle({ flowManager, state })
     .prospectiveStatus().sameEvidenceFor({ phase, fingerprints });
   const repairOutcomes = flowManager.artifactCatalog(state.specId).artifacts.filter((entry) => (
-    entry.logicalKey === "plan.gate.repair.outcome"
+    entry.logicalKey === "spec.gate.repair.audit"
   ));
   const completedRepairs = activities.filter((activity) => (
-    activity.nodeId === "spec"
+    activity.nodeId === "spec-gate-repair"
     && activity.transition?.operation === "confirm_attempt"
-    && activity.result?.stepResult?.kind === "spec-plan-gate-repair-applied"
-    && activity.result?.draftSettlementReceipt?.resultKind === "spec-plan-gate-repair-applied"
+    && ["spec-gate-repair-ready-for-gate", "spec-gate-repair-review-required"].includes(activity.result?.stepResult?.kind)
+    && activity.result?.draftSettlementReceipt?.resultKind === activity.result?.stepResult?.kind
     && repairOutcomes.some((entry) => entry.activityId === activity.id)
   )).length;
   const nonblockingEnabled = state.policy?.nonblocking?.enabled === true;
@@ -190,7 +190,7 @@ export function readProspectiveSpecGateFacts({ flowManager, binding, commandResu
     phase, result: "fail", failureCategory: failure.category,
     failureCode: failure.code, retryExhausted: retry.exhausted,
     sameEvidence, repairAvailable: failure.category === "semantic" && fingerprints.size > 0,
-    cycle: phase === "spec" ? completedRepairs + 1 : 1,
+    cycle: phase === "spec" ? (state.migration?.legacyAppliedCount ?? 0) + completedRepairs + 1 : 1,
     nonblockingEnabled, acceptanceBacked, resultFingerprint,
     retryUsed: retry.used, retryMaximum: retry.maximum,
   });

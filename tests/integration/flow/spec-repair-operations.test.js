@@ -3,7 +3,14 @@ import crypto from "node:crypto";
 import { describe, it } from "node:test";
 
 import { validWorkerHandoffTaskSpec } from "../../support/infrastructure/worker-artifact.js";
-import { applySpecRepairOperations } from "../../../src/flow/lib/spec-repair-operations.js";
+import {
+  applySpecGateRepairOperations,
+  applySpecRepairOperations,
+  SpecGateRepairAuthority,
+  SpecRepairArrayTarget,
+  SpecRepairIdEntityTarget,
+  specRepairTargetEntries,
+} from "../../../src/flow/lib/spec-repair-operations.js";
 import { specRepairIncidentR6Description } from "./fixtures/spec-repair-r6-description.js";
 
 const INPUT_DIGEST = "b".repeat(64);
@@ -342,5 +349,326 @@ describe("revision-scoped spec repair operations", () => {
       [{ startByte: 0, endByte: 0, replacement: "not text" }],
       valueDigest(spec.requirements[0].testable),
     )]), (error) => error.code === "FLOW_SPEC_REPAIR_TRIAGE_TARGETS_INVALID");
+  });
+});
+
+const GATE_REVISION = `sha256:${INPUT_DIGEST}`;
+const gateIdentity = (sourceFindingId, fingerprint = "1".repeat(64)) => ({
+  sourceArtifact: "artifacts/spec-gate/result.json", sourceStep: "spec-gate", sourceFindingId, fingerprint,
+});
+function gateAuthority(spec, findings, expectedUnits = findings.map(([identity]) => ({ findingIdentities: [identity] }))) {
+  return new SpecGateRepairAuthority({
+    baseRevision: GATE_REVISION,
+    findings: findings.map(([identity, allowedTargets]) => ({ identity, allowedTargets })),
+    expectedUnits,
+    spec,
+  });
+}
+function gateOperation(operation) { const { findingIds, ...value } = operation; return value; }
+function gateApply(spec, authority, groups, baseRevision = GATE_REVISION) {
+  return applySpecGateRepairOperations({
+    spec, authority, inputRevision: INPUT_DIGEST,
+    repair: { version: 1, stage: "spec-gate-repair", baseRevision, groups },
+  });
+}
+
+describe("Gate-authorized atomic Spec repair groups", () => {
+  it("accepts a complete valid group after an intermediate schema violation and preserves unrelated UTF-8 bytes", () => {
+    const spec = sourceSpec();
+    spec.requirements[0].testable = true;
+    spec.requirements[0].preimplementation_test_expectation = "fail";
+    spec.background = "前文 untouched 後文";
+    const testable = { entity: "requirement", id: "R1", field: "testable" };
+    const expectation = { entity: "requirement", id: "R1", field: "preimplementation_test_expectation" };
+    const identity = gateIdentity("conditional-fields");
+    const authority = gateAuthority(spec, [[identity, [
+      permission(testable, ["replace-entity-field"]),
+      permission(expectation, ["delete-entity-field"]),
+      permission(rootTarget, ["edit-text-field"]),
+    ]]]);
+    const start = Buffer.from(spec.background).indexOf(Buffer.from("untouched"));
+    const operations = [
+      gateOperation(replace(["unused"], testable, false, valueDigest(true))),
+      { kind: "delete-entity-field", target: expectation, expectedDigest: valueDigest("fail"), reason: "Remove forbidden expectation." },
+      gateOperation(textEdit(["unused"], rootTarget, [{ startByte: start, endByte: start + 9, replacement: "edited" }], valueDigest(spec.background))),
+    ];
+    const result = gateApply(spec, authority, [{ findingIdentities: [identity], operations }]);
+    assert.equal(result.spec.requirements[0].testable, false);
+    assert.equal(Object.hasOwn(result.spec.requirements[0], "preimplementation_test_expectation"), false);
+    assert.deepEqual(Buffer.from(result.spec.background), Buffer.from("前文 edited 後文"));
+    assert.equal(result.audit.acceptedGroups.length, 1);
+    assert.deepEqual(result.audit.discardedGroups, []);
+    assert.equal(spec.requirements[0].testable, true);
+  });
+
+  it("rejects an entire group when one operation is stale while adopting an independent group", () => {
+    const spec = sourceSpec();
+    const identity = gateIdentity("mixed");
+    const independent = gateIdentity("independent", "2".repeat(64));
+    const authority = gateAuthority(spec, [
+      [identity, [permission(requirementTarget, ["replace-entity-field"]), permission(rootTarget, ["replace-field"])]],
+      [independent, [permission({ entity: "spec", field: "goal" }, ["replace-field"])]],
+    ]);
+    const result = gateApply(spec, authority, [
+      { findingIdentities: [identity], operations: [
+        gateOperation(replace(["unused"], rootTarget, "Must roll back.", valueDigest(spec.background))),
+        gateOperation(replace(["unused"], requirementTarget, "Stale.", "0".repeat(64))),
+      ] },
+      { findingIdentities: [independent], operations: [
+        gateOperation(replace(["unused"], { entity: "spec", field: "goal" }, "Independent correction.", valueDigest(spec.goal))),
+      ] },
+    ]);
+    assert.equal(result.spec.background, spec.background);
+    assert.equal(result.spec.requirements[0].desc, spec.requirements[0].desc);
+    assert.equal(result.spec.goal, "Independent correction.");
+    assert.deepEqual(result.audit.discardedGroups.map((entry) => entry.reason), ["stale target digest"]);
+    assert.equal(result.audit.acceptedGroups.length, 1);
+  });
+
+  it("binds authority to the full Gate finding identity and discards competing groups without a winner", () => {
+    const spec = sourceSpec();
+    const identity = gateIdentity("same-id", "3".repeat(64));
+    const changedFingerprint = gateIdentity("same-id", "4".repeat(64));
+    const second = gateIdentity("second", "5".repeat(64));
+    const authority = gateAuthority(spec, [
+      [identity, [permission(rootTarget, ["replace-field"])]],
+      [second, [permission(rootTarget, ["replace-field"])]],
+    ]);
+    const result = gateApply(spec, authority, [
+      { findingIdentities: [changedFingerprint], operations: [gateOperation(replace(["unused"], rootTarget, "Untrusted.", valueDigest(spec.background)))] },
+      { findingIdentities: [identity], operations: [gateOperation(replace(["unused"], rootTarget, "First.", valueDigest(spec.background)))] },
+      { findingIdentities: [second], operations: [gateOperation(replace(["unused"], rootTarget, "Second.", valueDigest(spec.background)))] },
+    ]);
+    assert.equal(result.spec.background, spec.background);
+    assert.deepEqual(result.audit.discardedGroups.map((entry) => entry.reason), ["unauthorized operation", "conflicting operation", "conflicting operation"]);
+    assert.deepEqual(result.audit.acceptedGroups, []);
+  });
+
+  it("keeps a multi-finding unit whole while each finding permits its own target", () => {
+    const spec = sourceSpec();
+    const requirement = gateIdentity("requirement-gap", "6".repeat(64));
+    const background = gateIdentity("background-gap", "7".repeat(64));
+    const interaction = gateIdentity("interaction", "8".repeat(64));
+    const goalTarget = { entity: "spec", field: "goal" };
+    const authority = gateAuthority(spec, [
+      [requirement, [permission(requirementTarget, ["replace-entity-field"])]],
+      [background, [permission(rootTarget, ["replace-field"])]],
+      [interaction, [permission(goalTarget, ["replace-field"])]],
+    ], [{ findingIdentities: [requirement, background, interaction] }]);
+    const operations = [
+      gateOperation(replace(["unused"], requirementTarget, "Updated requirement.", valueDigest(spec.requirements[0].desc))),
+      gateOperation(replace(["unused"], rootTarget, "Updated background.", valueDigest(spec.background))),
+      gateOperation(replace(["unused"], goalTarget, "Updated goal.", valueDigest(spec.goal))),
+    ];
+    const split = gateApply(spec, authority, [
+      { findingIdentities: [requirement], operations: [operations[0]] },
+      { findingIdentities: [background, interaction], operations: operations.slice(1) },
+    ]);
+    assert.deepEqual(split.spec, spec);
+    assert.deepEqual(split.audit.discardedGroups.map((entry) => entry.reason), ["unauthorized operation", "unauthorized operation"]);
+    const together = gateApply(spec, authority, [{ findingIdentities: [requirement, background, interaction], operations }]);
+    assert.equal(together.spec.requirements[0].desc, "Updated requirement.");
+    assert.equal(together.spec.background, "Updated background.");
+    assert.equal(together.spec.goal, "Updated goal.");
+    assert.equal(together.audit.acceptedGroups.length, 1);
+  });
+
+  it("rejects duplicate proposals for one canonical repair unit before applying either", () => {
+    const spec = sourceSpec();
+    const identity = gateIdentity("one-unit", "9".repeat(64));
+    const authority = gateAuthority(spec, [[identity, [permission(rootTarget, ["replace-field"])]]]);
+    const groups = ["First.", "Second."].map((replacement) => ({
+      findingIdentities: [identity],
+      operations: [gateOperation(replace(["unused"], rootTarget, replacement, valueDigest(spec.background)))],
+    }));
+    const result = gateApply(spec, authority, groups);
+    assert.equal(result.spec.background, spec.background);
+    assert.deepEqual(result.audit.discardedGroups.map((entry) => entry.reason), ["duplicate repair unit", "duplicate repair unit"]);
+  });
+
+  it("limits a Gate array permission to its declared immutable-base position", () => {
+    const spec = sourceSpec();
+    spec.constraints = ["first", "second"];
+    const identity = gateIdentity("one-array-item", "a".repeat(64));
+    const first = { collection: "constraints", position: 0 };
+    const second = { collection: "constraints", position: 1 };
+    const authority = gateAuthority(spec, [[identity, [permission(first, ["replace-array-element"])]]]);
+    const outside = gateApply(spec, authority, [{ findingIdentities: [identity], operations: [{
+      kind: "replace-array-element", target: second, expectedDigest: valueDigest("second"),
+      replacement: "outside", reason: "Try a different item.",
+    }] }]);
+    assert.deepEqual(outside.spec.constraints, ["first", "second"]);
+    assert.equal(outside.audit.discardedGroups[0].reason, "unauthorized operation");
+    const alias = gateApply(spec, authority, [{ findingIdentities: [identity], operations: [{
+      kind: "replace-array-element", target: { collection: "constraints" }, expectedDigest: valueDigest("first"),
+      replacement: "alias", reason: "Try a digest-only address for the permitted item.",
+    }] }]);
+    assert.deepEqual(alias.spec, spec);
+    assert.equal(alias.audit.discardedGroups[0].reason, "unauthorized operation");
+    const inside = gateApply(spec, authority, [{ findingIdentities: [identity], operations: [{
+      kind: "replace-array-element", target: first, expectedDigest: valueDigest("first"),
+      replacement: "inside", reason: "Correct the named item.",
+    }] }]);
+    assert.deepEqual(inside.spec.constraints, ["inside", "second"]);
+  });
+
+  it("rejects aliases for one immutable-base array element as one atomic conflict and retains an unrelated group", () => {
+    const spec = sourceSpec();
+    spec.constraints = ["first", "second"];
+    const conflicted = gateIdentity("array-conflict", "b".repeat(64));
+    const independent = gateIdentity("independent-goal", "c".repeat(64));
+    const collection = { collection: "constraints" };
+    const authority = gateAuthority(spec, [
+      [conflicted, [permission(collection, ["replace-array-element"])]],
+      [independent, [permission({ entity: "spec", field: "goal" }, ["replace-field"])]],
+    ]);
+    const result = gateApply(spec, authority, [
+      { findingIdentities: [conflicted], operations: [
+        { kind: "replace-array-element", target: { ...collection, position: 0 }, expectedDigest: valueDigest("first"), replacement: "first edit", reason: "Address the first base element." },
+        { kind: "replace-array-element", target: collection, expectedDigest: valueDigest("first"), replacement: "second edit", reason: "Address the same base element by digest." },
+      ] },
+      { findingIdentities: [independent], operations: [
+        gateOperation(replace(["unused"], { entity: "spec", field: "goal" }, "Independent correction.", valueDigest(spec.goal))),
+      ] },
+    ]);
+    assert.deepEqual(result.spec, { ...spec, goal: "Independent correction." });
+    assert.deepEqual(result.audit.discardedGroups.map((entry) => entry.reason), ["conflicting operation"]);
+    assert.deepEqual(result.audit.acceptedGroups.map((entry) => entry.index), [1]);
+  });
+
+  it("coalesces the same Gate array edit addressed by position and digest within one group", () => {
+    const spec = sourceSpec();
+    spec.constraints = ["first", "second"];
+    const identity = gateIdentity("same-array-edit", "6".repeat(64));
+    const collection = { collection: "constraints" };
+    const authority = gateAuthority(spec, [[identity, [permission(collection, ["replace-array-element"])]]]);
+    const edit = { kind: "replace-array-element", expectedDigest: valueDigest("first"), replacement: "shared", reason: "One correction with two addresses." };
+    const result = gateApply(spec, authority, [{ findingIdentities: [identity], operations: [
+      { ...edit, target: { ...collection, position: 0 } },
+      { ...edit, target: collection },
+    ] }]);
+    assert.deepEqual(result.spec.constraints, ["shared", "second"]);
+    assert.deepEqual(result.audit.acceptedGroups[0].operations.map((operation) => operation.target), [{ ...collection, position: 0 }, collection]);
+    assert.deepEqual(result.audit.discardedGroups, []);
+  });
+
+  it("rejects cross-group delete and replace claims on the same base element through different array addresses", () => {
+    const spec = sourceSpec();
+    spec.constraints = ["first", "second"];
+    const deletion = gateIdentity("delete-first", "d".repeat(64));
+    const replacement = gateIdentity("replace-first", "e".repeat(64));
+    const collection = { collection: "constraints" };
+    const authority = gateAuthority(spec, [
+      [deletion, [permission(collection, ["delete-array-element"])]],
+      [replacement, [permission(collection, ["replace-array-element"])]],
+    ]);
+    const result = gateApply(spec, authority, [
+      { findingIdentities: [deletion], operations: [
+        { kind: "delete-array-element", target: { ...collection, position: 0 }, expectedDigest: valueDigest("first"), reason: "Delete the first base element." },
+      ] },
+      { findingIdentities: [replacement], operations: [
+        { kind: "replace-array-element", target: collection, expectedDigest: valueDigest("first"), replacement: "replacement", reason: "Replace the same base element." },
+      ] },
+    ]);
+    assert.deepEqual(result.spec.constraints, ["first", "second"]);
+    assert.deepEqual(result.audit.discardedGroups.map((entry) => entry.reason), ["conflicting operation", "conflicting operation"]);
+    assert.deepEqual(result.audit.acceptedGroups, []);
+  });
+
+  it("keeps distinct duplicate-valued base positions after deletion while rejecting ambiguous and stale digest claims", () => {
+    const spec = sourceSpec();
+    spec.constraints = ["same", "same", "third"];
+    const valid = gateIdentity("distinct-positions", "f".repeat(64));
+    const ambiguous = gateIdentity("ambiguous-digest", "2".repeat(64));
+    const stale = gateIdentity("stale-digest", "3".repeat(64));
+    const collection = { collection: "constraints" };
+    const authority = gateAuthority(spec, [
+      [valid, [permission(collection, ["delete-array-element", "replace-array-element"])]],
+      [ambiguous, [permission(collection, ["replace-array-element"])]],
+      [stale, [permission(collection, ["replace-array-element"])]],
+    ]);
+    const result = gateApply(spec, authority, [
+      { findingIdentities: [valid], operations: [
+        { kind: "delete-array-element", target: { ...collection, position: 0 }, expectedDigest: valueDigest("same"), reason: "Delete base position zero." },
+        { kind: "replace-array-element", target: { ...collection, position: 1 }, expectedDigest: valueDigest("same"), replacement: "second only", reason: "Replace base position one." },
+      ] },
+      { findingIdentities: [ambiguous], operations: [
+        { kind: "replace-array-element", target: collection, expectedDigest: valueDigest("same"), replacement: "ambiguous", reason: "Digest matches two base positions." },
+      ] },
+      { findingIdentities: [stale], operations: [
+        { kind: "replace-array-element", target: { ...collection, position: 2 }, expectedDigest: valueDigest("wrong"), replacement: "stale", reason: "Digest does not match the base position." },
+      ] },
+    ]);
+    assert.deepEqual(result.spec.constraints, ["second only", "third"]);
+    assert.deepEqual(result.audit.acceptedGroups.map((entry) => entry.index), [0]);
+    assert.deepEqual(result.audit.discardedGroups.map((entry) => entry.reason), ["conflicting target resolution", "stale target digest"]);
+  });
+
+  it("applies an identical common array deletion only once across independent Gate groups", () => {
+    const spec = sourceSpec();
+    spec.constraints = ["first", "second"];
+    const first = gateIdentity("shared-one", "4".repeat(64));
+    const second = gateIdentity("shared-two", "5".repeat(64));
+    const collection = { collection: "constraints" };
+    const authority = gateAuthority(spec, [
+      [first, [permission(collection, ["delete-array-element"])]],
+      [second, [permission(collection, ["delete-array-element"])]],
+    ]);
+    const operation = { kind: "delete-array-element", target: collection, expectedDigest: valueDigest("first"), reason: "Delete the shared base element." };
+    const result = gateApply(spec, authority, [
+      { findingIdentities: [first], operations: [{ ...operation, target: { ...collection, position: 0 } }] },
+      { findingIdentities: [second], operations: [structuredClone(operation)] },
+    ]);
+    assert.deepEqual(result.spec.constraints, ["second"]);
+    assert.deepEqual(result.audit.acceptedGroups.map((entry) => entry.index), [0, 1]);
+    assert.deepEqual(result.audit.acceptedGroups.map((entry) => entry.operations[0].target), [{ ...collection, position: 0 }, collection]);
+    assert.deepEqual(result.audit.discardedGroups, []);
+  });
+
+  it("requires matching base revisions, typed permissions, and supports an empty no-change proposal", () => {
+    const spec = sourceSpec();
+    const identity = gateIdentity("one");
+    const authority = gateAuthority(spec, [[identity, [permission(rootTarget, ["replace-field"])]]]);
+    assert.throws(() => gateApply(spec, authority, [], `sha256:${"0".repeat(64)}`),
+      (error) => error.code === "FLOW_SPEC_REPAIR_BASE_REVISION_MISMATCH");
+    assert.throws(() => gateAuthority(spec, [[identity, [permission({ entity: "spec", field: "unknown" }, ["replace-field"])]]]),
+      /replaceable spec field/);
+    const noChange = gateApply(spec, authority, []);
+    assert.deepEqual(noChange.spec, spec);
+    assert.deepEqual(noChange.audit.acceptedGroups, []);
+    assert.deepEqual(noChange.audit.discardedGroups, []);
+  });
+
+  it("allows a group to add an absent optional field only with explicit Gate permission", () => {
+    const spec = sourceSpec();
+    const identity = gateIdentity("add-field");
+    const testable = { entity: "requirement", id: "R1", field: "testable" };
+    const expectation = { entity: "requirement", id: "R1", field: "preimplementation_test_expectation" };
+    const authority = gateAuthority(spec, [[identity, [
+      permission(testable, ["replace-entity-field"]), permission(expectation, ["add-entity-field"]),
+    ]]]);
+    const result = gateApply(spec, authority, [{ findingIdentities: [identity], operations: [
+      { kind: "add-entity-field", target: expectation, expectedDigest: null, replacement: "fail", reason: "Add the required expectation." },
+      gateOperation(replace(["unused"], testable, true, valueDigest(false))),
+    ] }]);
+    assert.equal(result.spec.requirements[0].testable, true);
+    assert.equal(result.spec.requirements[0].preimplementation_test_expectation, "fail");
+    assert.equal(result.audit.acceptedGroups.length, 1);
+  });
+
+  it("enumerates typed edit targets, including absent optional fields and array add anchors", () => {
+    const spec = sourceSpec();
+    const entries = specRepairTargetEntries(spec);
+    const absent = entries.find((entry) => entry.target instanceof SpecRepairIdEntityTarget
+      && entry.target.id === "R1" && entry.target.field === "preimplementation_test_expectation");
+    assert.equal(absent.exists, false);
+    assert.equal(absent.digest, null);
+    const collection = entries.find((entry) => entry.target instanceof SpecRepairArrayTarget
+      && entry.target.collection === "constraints" && entry.target.position === null);
+    assert.equal(collection.exists, true);
+    assert.equal(collection.value, null);
+    assert.equal(collection.digest, null);
+    assert.ok(entries.some((entry) => entry.target instanceof SpecRepairIdEntityTarget
+      && entry.target.field === "desc" && entry.digest === valueDigest(spec.requirements[0].desc)));
   });
 });

@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/run-update-overview.js
  *
@@ -72,7 +73,7 @@ export class RunUpdateOverviewCommand extends FlowCommand {
     const taskId = state.currentTaskId || null;
 
     try {
-      if (state.schemaRevision !== 3 || typeof fm.updateTaskOverview !== "function") {
+      if (state.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof fm.updateTaskOverview !== "function") {
         throw new Error("update-overview requires an active canonical Flow");
       }
       const outcome = fm.updateTaskOverview({

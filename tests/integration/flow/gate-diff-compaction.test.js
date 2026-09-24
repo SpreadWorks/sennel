@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -311,7 +312,7 @@ describe("gate lifecycle evidence", () => {
       hash: "b".repeat(64),
       activityId: "activity-test-1",
     };
-    const flowState = { schemaRevision: 3, specId: "999-example" };
+    const flowState = { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "999-example" };
     const resolve = (artifacts) => PlanGateEvidenceTarget.resolve({
       phase: "draft",
       flowState,

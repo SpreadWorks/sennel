@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../lib/flow-schema-revision.js";
 /**
  * src/flow/registry.js
  *
@@ -545,7 +546,7 @@ function tryUpdateStepStatus(target, stepId, status, opts, provenance = {}) {
     } else if (isHookContext) {
       state = target.flowState;
     }
-    if (state?.schemaRevision !== 3) {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
       throw new Error("flow lifecycle hooks require an active canonical Flow state");
     }
     const scope = mutationOpts?.taskId == null
@@ -1045,7 +1046,7 @@ class RegistryLifecycleAdapter {
     if (handler === "ensureFinalizeMergeInProgress") {
       const stateOwner = this.finalizeStateOwner();
       const current = stateOwner.loadReadOnly();
-      if (current?.schemaRevision !== 3) {
+      if (current?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
         throw new Error("finalize lifecycle hooks require an active canonical Flow state");
       }
       return;
@@ -1167,7 +1168,7 @@ async function applyLifecycleActionsFromRegistry(ctx, input, result = null, err 
     },
     result: result || { ok: false, error: err?.message },
     artifactRepositoryRoot: ctx.repositoryRoot || ctx.root,
-    artifactReader: ctx.flowState?.schemaRevision === 3
+    artifactReader: ctx.flowState?.schemaRevision === CURRENT_FLOW_SCHEMA_REVISION
       ? (request) => ctx.flowManager.readArtifact({
           specId: ctx.flowState.specId,
           consumerNodeId: "flow",
@@ -1176,7 +1177,7 @@ async function applyLifecycleActionsFromRegistry(ctx, input, result = null, err 
       : null,
   });
   if (hookResult.artifactWrites.length > 0) {
-    if (ctx.flowState?.schemaRevision !== 3) {
+    if (ctx.flowState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
       throw new Error("plugin hook artifact publication requires an active canonical Flow state");
     }
     ctx.flowManager.publishPluginArtifacts({
@@ -1196,7 +1197,7 @@ async function applyLifecycleActionsFromRegistry(ctx, input, result = null, err 
           pluginId: entry.pluginId,
           timestamp: new Date().toISOString(),
         };
-        if (ctx.flowState.schemaRevision !== 3) {
+        if (ctx.flowState.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
           throw new Error("plugin hook diagnostics require an active canonical Flow state");
         }
         ctx.flowManager.appendIssueLog({

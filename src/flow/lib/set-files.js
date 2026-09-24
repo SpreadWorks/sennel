@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/set-files.js
  *
@@ -18,7 +19,7 @@ export default class SetFilesCommand extends FlowCommand {
 
     let map;
     try {
-      if (ctx.flowState?.schemaRevision !== 3 || typeof ctx.flowManager?.updateFileMap !== "function") {
+      if (ctx.flowState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowManager?.updateFileMap !== "function") {
         throw new Error("canonical FlowManager.updateFileMap is required");
       }
       map = ctx.flowManager.updateFileMap({

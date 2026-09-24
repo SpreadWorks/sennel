@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/resolve-auto-check-input.js
  *
@@ -59,7 +60,7 @@ export class CanonicalAutoCheckInputError extends Error {
 }
 
 function canonicalState(state) {
-  if (state?.schemaRevision !== 3 || typeof state.specId !== "string" || state.specId === "") {
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state.specId !== "string" || state.specId === "") {
     throw new CanonicalAutoCheckInputError(
       "AUTO_CHECK_INPUT_INVALID",
       "canonical auto-check input requires a Version-1 Flow state",

@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Version-1 retry recovery.
  *
@@ -946,7 +947,7 @@ function readHistoricalRetryRecoveryReceipts({ flowManager, state, route, view }
 }
 
 function canonicalState(state) {
-  if (state?.schemaRevision !== 3) {
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
     throw new Error("retry recovery requires a Version-1 Flow");
   }
   return state;

@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/set-issue-log.js
  *
@@ -50,7 +51,7 @@ function canonicalIssueLogIdempotencyKey(state, entry) {
  * accepts a Flow identity and a consumer Step, never a guessed spec path.
  */
 export function loadCanonicalIssueLog(flowManager, state, { consumerNodeId = state?.currentNodeId } = {}) {
-  if (state?.schemaRevision !== 3 || typeof state?.specId !== "string") {
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state?.specId !== "string") {
     throw new Error("canonical issue-log read requires a Version-1 Flow state");
   }
   if (!flowManager || typeof flowManager.readArtifact !== "function") {
@@ -79,7 +80,7 @@ export function loadCanonicalIssueLog(flowManager, state, { consumerNodeId = sta
  * spec path or use the retired independent writer.
  */
 export function appendCanonicalIssueLogEntry(flowManager, state, entry, idempotencyKey = null, admission = undefined) {
-  if (state?.schemaRevision !== 3 || typeof state?.specId !== "string") {
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state?.specId !== "string") {
     throw new Error("canonical issue-log append requires a Version-1 Flow state");
   }
   if (!flowManager || typeof flowManager.appendIssueLog !== "function") {

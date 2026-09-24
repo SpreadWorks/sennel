@@ -1,0 +1,15 @@
+{
+  "route": {
+    "kind": "review",
+    "phase": "spec",
+    "taskId": null
+  },
+  "attemptId": "attempt-spec-review-cd7374d5-77c6-4bad-ac10-6ee8699f3c02",
+  "attempt": 2,
+  "runId": "canonical-manager-run",
+  "specId": "001-spec-gate-cycle-limit",
+  "issue": null,
+  "projectDigest": "aa21c72b4f375c456b9ff29bab7b47390a4e86e23d1da266f3786e0f0af850d7",
+  "runtimeDigest": "af275b4955331d657933b59bd5a02005f7db0959ffb0dbe443db765a3870a2b7",
+  "targetDigest": "aa21c72b4f375c456b9ff29bab7b47390a4e86e23d1da266f3786e0f0af850d7"
+}

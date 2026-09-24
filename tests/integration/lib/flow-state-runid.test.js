@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -45,7 +46,7 @@ describe("canonical Flow run identity", () => {
 
     assert.equal(loaded.runId, "existing-run-id-123");
     assert.equal(wire.runId, "existing-run-id-123");
-    assert.equal(wire.schemaRevision, 3);
+    assert.equal(wire.schemaRevision, CURRENT_FLOW_SCHEMA_REVISION);
     assert.equal(wire.lifecycle.state, "active");
   });
 });

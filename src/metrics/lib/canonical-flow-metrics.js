@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Canonical Flow Version-1 metric reader.
  *
@@ -98,8 +99,8 @@ export class CanonicalMetricsFlow {
     }
     this.flowManager = flowManager;
     this.specId = FlowSpecId.from(requiredText(specId, "canonical metrics specId")).toString();
-    if (state?.schemaRevision !== 3) {
-      throw new Error("canonical metrics Flow requires schemaRevision 3");
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
+      throw new Error(`canonical metrics Flow requires schemaRevision ${CURRENT_FLOW_SCHEMA_REVISION}`);
     }
     if (!location || typeof location.relativeSpecFile !== "string") {
       throw new Error("canonical metrics Flow requires a resolved Version location");

@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -6,6 +7,7 @@ import {
   CanonicalFlowFindingSourceArtifact,
   CanonicalFlowFindingsStore,
   FlowFindingSourceIdentity,
+  canonicalSourceFindings,
 } from "../../src/flow/lib/flow-findings.js";
 import { FLOW_ARTIFACT_VIEW_REGISTRY } from "../../src/flow/lib/artifact-view-registry.js";
 
@@ -76,7 +78,7 @@ describe("canonical flow finding source identity", () => {
     };
     const source = new CanonicalFlowFindingsStore({
       flowManager,
-      flowState: { schemaRevision: 3, specId: "001", runId: "run-1", currentTaskId: "T1", currentNodeId: "T1-gate" },
+      flowState: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "001", runId: "run-1", currentTaskId: "T1", currentNodeId: "T1-gate" },
       nodeId: "T1-gate",
     }).sourceArtifact(sourceArtifact);
     assert.equal(source.relativePath, sourceArtifact);
@@ -85,10 +87,54 @@ describe("canonical flow finding source identity", () => {
     })).guardrail_id, "TASK-SHARED");
   });
 
+  it("resolves exact stored Spec Gate identities from every source facet without changing publication selection", () => {
+    const sourceArtifact = "steps/spec-gate/result.json";
+    const evaluation = {
+      guardrail_id: "G-1", fingerprint: FIRST_FINGERPRINT,
+      result: "fail", reason: "The prior Gate evaluation failed.",
+    };
+    const observation = {
+      sourceFindingId: "R-1", fingerprint: SECOND_FINGERPRINT,
+      severity: "blocking", observed: "The precise requirement is missing.",
+    };
+    const review = {
+      sourceFindingId: "review-1", fingerprint: "c".repeat(64),
+      issue: "The review found another blocking issue.",
+    };
+    const payload = {
+      artifacts: {
+        evaluations: [evaluation], blockingFindings: [review],
+        nextAction: { diagnosis: { observations: [observation] } },
+      },
+    };
+    const source = CanonicalFlowFindingSourceArtifact.fromBytes({
+      logicalKey: "spec.gate", relativePath: sourceArtifact,
+      bytes: Buffer.from(JSON.stringify(payload), "utf8"),
+    });
+    const published = canonicalSourceFindings({
+      artifact: payload, sourceStep: "spec-gate", sourceArtifact,
+    });
+
+    assert.deepEqual(published.map(({ identity }) => identity.sourceFindingId), ["R-1"]);
+    for (const [finding, sourceFindingId, fingerprint] of [
+      [evaluation, "G-1", FIRST_FINGERPRINT],
+      [review, "review-1", "c".repeat(64)],
+      [observation, "R-1", SECOND_FINGERPRINT],
+    ]) {
+      assert.deepEqual(source.resolveFinding(new FlowFindingSourceIdentity({
+        sourceArtifact, sourceStep: "spec-gate", sourceFindingId, fingerprint,
+      })), finding);
+    }
+    assert.equal(source.resolveFinding(new FlowFindingSourceIdentity({
+      sourceArtifact, sourceStep: "spec-gate", sourceFindingId: "G-1",
+      fingerprint: SECOND_FINGERPRINT,
+    })), null);
+  });
+
   it("publishes observations with one producer id and distinct fingerprints as separate exact identities", () => {
     const publication = buildDeferredSemanticFindingsPublication({
       flowManager: manager(),
-      flowState: { schemaRevision: 3, specId: "001", runId: "run-1" },
+      flowState: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "001", runId: "run-1" },
       nodeId: "draft-gate",
       sourceStep: "draft-gate",
       sourceArtifact: SOURCE_PATH,
@@ -129,7 +175,7 @@ describe("canonical flow finding source identity", () => {
     const otherSource = "steps/impl/gate/result.json";
     const nextPublication = buildDeferredSemanticFindingsPublication({
       flowManager: manager(publication.artifact.toJSON()),
-      flowState: { schemaRevision: 3, specId: "001", runId: "run-1" },
+      flowState: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "001", runId: "run-1" },
       nodeId: "impl-gate",
       sourceStep: "impl-gate",
       sourceArtifact: otherSource,

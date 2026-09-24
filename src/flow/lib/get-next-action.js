@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/get-next-action.js
  *
@@ -31,6 +32,7 @@ import {
   AbortedDirective,
   BlockedDirective,
   AwaitDraftQuestionDirective,
+  AwaitWorkerInputDirective,
   AwaitUserDecisionDirective,
   AwaitTaskReviewFilterDirective,
   CompletedDirective,
@@ -665,6 +667,20 @@ function draftQuestionDirective(disposition) {
   });
 }
 
+function persistedSpecGateRepairInputDirective({ flowManager, typedState, target }) {
+  if (target.stepId !== "spec-gate-repair" || typedState.attempt === null) return null;
+  const saved = flowManager.readCurrentStepSettlement({ specId: typedState.specId, stepId: target.stepId });
+  if (saved?.result.kind !== "spec-gate-repair-awaiting-decision") return null;
+  const generation = saved.receipt.executionLifecycle.binding.executionGeneration;
+  const publication = flowManager.readArtifact({ specId: typedState.specId,
+    logicalKey: "spec.gate.repair.progress", consumerNodeId: target.stepId,
+    parameters: { attemptId: typedState.attempt.id, generation: String(generation), phase: "publication" } });
+  const progress = JSON.parse(publication.bytes.toString("utf8"));
+  return new AwaitWorkerInputDirective({ stepId: target.stepId, attemptId: typedState.attempt.id,
+    question: progress.proposal.stage === "spec-gate-repair-user-input" ? progress.proposal.question
+      : "Identify the canonical Spec locations for the unresolved Gate findings before repair can continue." });
+}
+
 function persistedDraftRefineDisposition({ flowManager, typedState }) {
   // A pending Draft Step has no Result or Settlement to project yet. Its
   // ordinary claim must create the Attempt before the Step selects either an
@@ -942,6 +958,9 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     plan: routePlan,
   });
   const draftDecisionDirective = draftQuestionDirective(definitionDescriptor.conditionalWorkerDisposition);
+  const repairInputDirective = persistedSpecGateRepairInputDirective({
+    flowManager: ctx.flowManager, typedState, target,
+  });
   const conditionalDirective = conditionalWorkerDirective(
     definitionDescriptor.conditionalWorkerDisposition,
     { state, binding },
@@ -985,7 +1004,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     reason: specPostFailure.reason,
     resumeInstruction: specPostFailure.resumeInstruction,
   });
-  selectedDirective ??= userDecisionDirective ?? draftDecisionDirective ?? conditionalDirective ?? approvalDirective ?? activationDirective
+  selectedDirective ??= userDecisionDirective ?? draftDecisionDirective ?? repairInputDirective ?? conditionalDirective ?? approvalDirective ?? activationDirective
     ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
   if (target.scope === "task" && target.stepId === "task-triage" && typedState.attempt?.failure === null) {
     const filter = workerContext.taskReviewFilter;
@@ -1081,7 +1100,7 @@ export default class GetNextActionCommand extends FlowCommand {
       };
     }
 
-    if (ctx.flowState.schemaRevision !== 3 || typeof ctx.flowManager?.canonicalState !== "function") {
+    if (ctx.flowState.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowManager?.canonicalState !== "function") {
       throw new NextActionPlanError(
         "NEXT_ACTION_TARGET_MISMATCH",
         "active Flow must be backed by the canonical Version Store",

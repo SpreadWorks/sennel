@@ -1,0 +1,15 @@
+{
+  "route": {
+    "kind": "gate",
+    "phase": "spec",
+    "taskId": null
+  },
+  "attemptId": "attempt-spec-gate-53f44191-1d78-4d59-a9f6-5f4fda7ec367",
+  "attempt": 3,
+  "runId": "canonical-manager-run",
+  "specId": "001-spec-gate-cycle-limit",
+  "issue": null,
+  "projectDigest": "aa21c72b4f375c456b9ff29bab7b47390a4e86e23d1da266f3786e0f0af850d7",
+  "runtimeDigest": "44d2354c7a5e3eeb4968d037b7df11524f692831e7955627f29957915f81144b",
+  "targetDigest": "688477036b68a625cbdde156c843f4128cb89a14863fd0f6acbad3470dfbb4c2"
+}

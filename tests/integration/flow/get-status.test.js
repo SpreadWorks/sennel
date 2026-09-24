@@ -66,6 +66,26 @@ describe("flow get status", () => {
     assert.ok(Array.isArray(envelope.data.steps));
   });
 
+  it("reads Gate prompt stage inputs without counting their calls or time twice", () => {
+    tmp = createTmpDir();
+    setupFlowState(tmp);
+    const manager = makeFlowManager(tmp);
+    manager.appendMetric({ phase: "spec", kind: "agent", callCount: 3, durationMs: 14, responseChars: 30 }, { specId: "001-test" });
+    manager.appendMetric({ phase: "spec", kind: "gate-prompt-collection", counter: "gatePromptInputChars:collection",
+      delta: 240, callCount: 2, durationMs: 10 }, { specId: "001-test" });
+    manager.appendMetric({ phase: "spec", kind: "gate-prompt-format-repair", counter: "gatePromptInputChars:format-repair",
+      delta: 120, callCount: 1, durationMs: 4 }, { specId: "001-test" });
+    const result = execFileSync("node", [FLOW_CMD, ...FLOW_CMD_ARGS_PREFIX, "get", "status", "--details"], {
+      encoding: "utf8", env: { ...process.env, SENNEL_WORK_ROOT: tmp },
+    });
+    const status = JSON.parse(result).data;
+    assert.equal(status.metricsSummary.total.spec.callCount, 3);
+    assert.equal(status.metricsSummary.total.spec.durationMs, 14);
+    assert.equal(status.metricsSummary.total.spec["gatePromptInputChars:collection"], 240);
+    assert.equal(status.metricsSummary.total.spec["gatePromptInputChars:format-repair"], 120);
+    assert.equal(status.metrics.filter((entry) => entry.kind?.startsWith("gate-prompt-")).length, 2);
+  });
+
   it("returns ok: true with active: false when no active flow", () => {
     tmp = createTmpDir();
     const result = execFileSync("node", [FLOW_CMD, ...FLOW_CMD_ARGS_PREFIX, "get", "status"], {

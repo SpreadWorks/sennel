@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Store-backed changelog projection for one canonical Flow Version.
  *
@@ -31,7 +32,7 @@ function firstScopeLine(spec) {
 export class CanonicalChangelogSpec {
   constructor({ specId, state, document, location, createdAt }) {
     this.specId = requiredText(specId, "canonical changelog specId");
-    if (state?.schemaRevision !== 3) {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
       throw new Error("canonical changelog requires a Version-1 Flow state");
     }
     if (document === null || typeof document !== "object" || Array.isArray(document)) {

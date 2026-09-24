@@ -1,9 +1,10 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /** Version-1 append-only Spec Task admission through the catalog and Store. */
 import { FlowManager } from "../../lib/flow-manager.js";
 import { TaskCollection } from "../../spec/lib/render-contract.js";
 
 function canonicalState(state) {
-  if (state?.schemaRevision !== 3 || typeof state.specId !== "string" || state.specId === "") {
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state.specId !== "string" || state.specId === "") {
     throw new Error("Spec Task sync requires an active Version-1 Flow");
   }
   return state;

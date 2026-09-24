@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/set-step.js
  *
@@ -70,7 +71,7 @@ export default class SetStepCommand extends FlowCommand {
     }
 
     const state = ctx.flowManager.load();
-    if (state?.schemaRevision !== 3) {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
       return Envelope.fail("set", "step", "CANONICAL_FLOW_REQUIRED", "active Flow must be backed by the canonical Version Store");
     }
     const activeNode = state ? findActiveNode(state) : null;

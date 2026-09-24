@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { describe, it } from "node:test";
@@ -60,7 +61,7 @@ function finding(id, { target = "shared.test.js:R1", testPaths = undefined, crea
 
 function repair(findings) {
   return new CanonicalTestReviewRepair({
-    state: { schemaRevision: 3, runId: "run-batches", specId: "batches", attempt: { id: "attempt-repair", sequence: 2 } }, attempt: 1,
+    state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, runId: "run-batches", specId: "batches", attempt: { id: "attempt-repair", sequence: 2 } }, attempt: 1,
     artifactDigest: digest("review"), evidenceId: digest("evidence"), sourceCandidate,
     blockingFindings: findings,
   });
@@ -173,7 +174,7 @@ describe("test-review repair batches", () => {
     const completed = TestReviewRepairProgress.start(canonical, stagedSources).markBatchComplete(canonical, batch, receipt, stagedSources);
     const selectedContract = canonical.forBatch(batch).toJSON();
     const recognize = (progressDocument) => testReviewRepairProgressReceiptForSelectedContract({
-      state: { schemaRevision: 3, runId: "run-batches", specId: "batches", attempt: { id: "attempt-repair", sequence: 2 } },
+      state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, runId: "run-batches", specId: "batches", attempt: { id: "attempt-repair", sequence: 2 } },
       progressDocument, selectedContract, requestDigest: receipt.requestDigest,
     });
     assert.equal(recognize(completed.toJSON()), receipt.handoffDigest);

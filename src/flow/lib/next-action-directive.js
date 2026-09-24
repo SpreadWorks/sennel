@@ -25,6 +25,7 @@ const DIRECTIVE_KINDS = new Set([
   "repair_evidence",
   "await_user_decision",
   "await_draft_question",
+  "await_worker_input",
   "await_task_review_filter",
   "blocked",
   "completed",
@@ -87,6 +88,7 @@ export class NextActionDirective {
     if (value.kind === "repair_evidence") return new RepairEvidenceDirective(value);
     if (value.kind === "await_user_decision") return new AwaitUserDecisionDirective(value);
     if (value.kind === "await_draft_question") return new AwaitDraftQuestionDirective(value);
+    if (value.kind === "await_worker_input") return new AwaitWorkerInputDirective(value);
     if (value.kind === "await_task_review_filter") return new AwaitTaskReviewFilterDirective(value);
     if (value.kind === "blocked") return new BlockedDirective(value);
     if (value.kind === "completed") return new CompletedDirective();
@@ -208,6 +210,20 @@ export class AwaitUserDecisionDirective extends NextActionDirective {
       reason: this.reason,
       ...(this.continuation && this.continuation.toJSON()),
     };
+  }
+}
+
+/** A worker's persisted inability to proceed requires free-form clarification. */
+export class AwaitWorkerInputDirective extends NextActionDirective {
+  constructor({ stepId, attemptId, question } = {}) {
+    super({ kind: "await_worker_input", terminal: false, requiresUserAction: true });
+    this.stepId = requireString(stepId, "directive.stepId");
+    this.attemptId = requireString(attemptId, "directive.attemptId");
+    this.question = requireString(question, "directive.question");
+    Object.freeze(this);
+  }
+  toJSON() {
+    return { ...super.toJSON(), stepId: this.stepId, attemptId: this.attemptId, question: this.question };
   }
 }
 

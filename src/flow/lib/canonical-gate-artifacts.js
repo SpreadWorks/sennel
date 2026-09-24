@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Version-1 gate persistence boundary.
  *
@@ -32,7 +33,7 @@ function jsonObject(value, field) {
 }
 
 function canonicalState(state) {
-  if (state?.schemaRevision !== 3 || typeof state.specId !== "string" || state.specId === "") {
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state.specId !== "string" || state.specId === "") {
     throw new Error("canonical gate requires a Version-1 Flow state");
   }
   return state;

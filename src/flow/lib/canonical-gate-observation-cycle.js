@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import crypto from "node:crypto";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
@@ -10,11 +11,13 @@ import {
   GateObservationOccurrence,
   GateObservationRepair,
   PlanGateRepairOutcome,
+  SpecGateRepairOutcome,
 } from "./gate-observation-convergence.js";
 import { PlanGateRepairObservation, PlanGateRepairRecord } from "./plan-gate-repair.js";
 import { assertGateSettlementPublication } from "./gate-settlement-publication.js";
 
 const OUTCOME_PATH = /^artifacts\/plan-gate-repairs\/([A-Za-z0-9][A-Za-z0-9._-]*)\/outcome\.json$/;
+const SPEC_GATE_AUDIT_PATH = /^artifacts\/spec-gate-repairs\/([A-Za-z0-9][A-Za-z0-9._-]*)\/audit\.json$/;
 const REPAIR_ID = /^plan-gate-repair-([a-f0-9]{64})$/;
 const ATTEMPT_ARTIFACT_PUBLICATION_OPERATIONS = new Set([
   "publish_artifacts",
@@ -196,7 +199,7 @@ class PostRepairGateResult {
 /** Status-safe projection of the latest canonical repair outcome. */
 class GateObservationRepairStatus {
   constructor(outcome) {
-    if (!(outcome instanceof PlanGateRepairOutcome)) {
+    if (!(outcome instanceof PlanGateRepairOutcome || outcome instanceof SpecGateRepairOutcome)) {
       throw new Error("Gate observation repair status requires a canonical outcome");
     }
     this.disposition = outcome.disposition;
@@ -232,7 +235,7 @@ export class CanonicalGateObservationCycle {
       || typeof flowManager.activityLedger !== "function") {
       throw new Error("canonical Gate observation cycle requires FlowManager catalog readers");
     }
-    if (state?.schemaRevision !== 3 || typeof state.specId !== "string" || state.specId === "") {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state.specId !== "string" || state.specId === "") {
       throw new Error("canonical Gate observation cycle requires a Version-1 Flow state");
     }
     this.flowManager = flowManager;
@@ -333,6 +336,36 @@ export class CanonicalGateObservationCycle {
     return document;
   }
 
+  #migrationCycles() {
+    if (this.state.migration === null || this.state.migration === undefined) {
+      return Object.freeze({ occurrences: Object.freeze([]), repairs: Object.freeze([]), outcomes: Object.freeze([]) });
+    }
+    const resolved = this.flowManager.readArtifact({
+      specId: this.state.specId, logicalKey: "spec.gate.repair.migration",
+      consumerNodeId: "spec-gate",
+    });
+    exactDescriptor(this.catalog, resolved, "spec.gate.repair.migration");
+    const document = json(resolved.bytes, "canonical Gate repair migration");
+    if (document.legacyAppliedCount !== this.state.migration.legacyAppliedCount
+      || !Array.isArray(document.legacyOutcomeActivityIds)) {
+      throw new Error("Gate repair migration count differs from its canonical checkpoint");
+    }
+    const read = GateObservationCycleReader.fromCanonical({
+      observationRows: document.legacyCycles?.occurrences,
+      repairRows: document.legacyCycles?.repairs,
+      outcomeRows: document.legacyCycles?.outcomes,
+    });
+    read.read();
+    if (read.outcomes.length !== document.legacyAppliedCount
+      || JSON.stringify(read.outcomes.map((outcome) => outcome.publicationActivityId))
+        !== JSON.stringify(document.legacyOutcomeActivityIds)) {
+      throw new Error("Gate repair migration cycles differ from their old applied count");
+    }
+    return Object.freeze({
+      occurrences: read.occurrences, repairs: read.repairs, outcomes: read.outcomes,
+    });
+  }
+
   #records(issueLog) {
     return issueLog.entries
       .filter((entry) => entry?.kind === "plan-gate-repair")
@@ -351,7 +384,7 @@ export class CanonicalGateObservationCycle {
     const byId = new Map(records.map((entry) => [entry.record.idempotencyKey, entry]));
     const descriptors = outcomeDescriptors(this.catalog);
     const seen = new Set();
-    return descriptors.map((descriptor) => {
+    const legacy = descriptors.map((descriptor) => {
       const pathMatch = descriptor.relativePath.match(OUTCOME_PATH);
       if (pathMatch === null || seen.has(pathMatch[1])) {
         throw new Error("plan Gate repair outcome catalog identity is malformed or duplicated");
@@ -391,6 +424,49 @@ export class CanonicalGateObservationCycle {
       }
       return Object.freeze({ outcome, repair });
     });
+    const audits = this.catalog.artifacts.filter((descriptor) => descriptor.logicalKey === "spec.gate.repair.audit");
+    const modern = audits.map((descriptor) => {
+      const pathMatch = descriptor.relativePath.match(SPEC_GATE_AUDIT_PATH);
+      if (pathMatch === null) throw new Error("Spec Gate repair audit path is malformed");
+      const attemptId = pathMatch[1];
+      const expected = FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate.repair.audit", { attemptId });
+      if (expected.relativePath !== descriptor.relativePath) {
+        throw new Error("Spec Gate repair audit path does not match its Attempt");
+      }
+      const resolved = this.flowManager.readArtifact({
+        specId: this.state.specId, logicalKey: "spec.gate.repair.audit",
+        parameters: { attemptId }, consumerNodeId: "spec-gate",
+      });
+      const exact = exactDescriptor(this.catalog, resolved, "spec.gate.repair.audit");
+      const audit = json(resolved.bytes, "Spec Gate repair audit");
+      const repair = byId.get(audit.repairId);
+      if (repair === undefined || repair.record.targetStepId !== "spec-gate-repair"
+        || repair.targetAttempt.id !== attemptId) {
+        throw new Error("Spec Gate repair audit has no exact repair record and Attempt");
+      }
+      const publications = this.activities.filter((activity) => activity.id === exact.activityId);
+      if (publications.length !== 1 || !matchingAttemptActivity(publications[0], {
+        nodeId: "spec-gate-repair", attempt: repair.targetAttempt,
+        operations: new Set(["confirm_attempt"]),
+      }) || !["spec-gate-repair-ready-for-gate", "spec-gate-repair-review-required"].includes(
+        publications[0].result?.stepResult?.kind,
+      ) || publications[0].result?.draftSettlementReceipt?.resultKind
+        !== publications[0].result?.stepResult?.kind) {
+        throw new Error("Spec Gate repair audit publication Activity is stale or mismatched");
+      }
+      const typedRepair = new GateObservationRepair({
+        repairId: repair.record.idempotencyKey,
+        sourceEvidence: repair.record.evidenceIdentity,
+        targetAttempt: repair.targetAttempt,
+        publicationActivityId: repair.activity.id,
+        recordFingerprint: recordFingerprint(repair.record),
+        handoffRevision: audit.baseRevision.slice("sha256:".length),
+        requests: repair.record.observationRequests,
+      });
+      const outcome = new SpecGateRepairOutcome({ audit, publicationActivityId: exact.activityId, repair: typedRepair });
+      return Object.freeze({ outcome, repair });
+    });
+    return [...legacy, ...modern];
   }
 
   #currentOccurrenceRows() {
@@ -599,12 +675,13 @@ export class CanonicalGateObservationCycle {
   }
 
   #readMaterial({ includeStatus = false, includeCurrent = true } = {}) {
+    const migration = this.#migrationCycles();
     const issueLog = this.#issueLog();
     const records = this.#records(issueLog);
     const outcomes = this.#outcomes(records);
-    const occurrences = records.flatMap(({ record }) => record.observations.map((observation) => (
+    const occurrences = [...migration.occurrences, ...records.flatMap(({ record }) => record.observations.map((observation) => (
       new GateObservationOccurrence({ evidence: record.evidenceIdentity, observation: observation.canonical, blocking: true })
-    )));
+    )))];
     if (includeCurrent) {
       for (const occurrence of this.#currentOccurrenceRows()) {
         if (!occurrences.some((candidate) => candidate.key() === occurrence.key())) occurrences.push(occurrence);
@@ -613,7 +690,7 @@ export class CanonicalGateObservationCycle {
 
     const completedByRepairId = new Map(outcomes.map((entry) => [entry.outcome.repairId, entry]));
     const terminalRepairs = this.#terminalRepairs(records);
-    const repairs = [];
+    const repairs = [...migration.repairs];
     for (const recordEntry of records.sort((left, right) => (
       left.record.evidenceIdentity.sourceAttempt.sequence - right.record.evidenceIdentity.sourceAttempt.sequence
     ))) {
@@ -632,7 +709,7 @@ export class CanonicalGateObservationCycle {
     const readModel = new GateObservationCycleReader({
       occurrences,
       repairs,
-      outcomes: outcomes.map((entry) => entry.outcome),
+      outcomes: [...migration.outcomes, ...outcomes.map((entry) => entry.outcome)],
     }).read();
     if (!includeStatus) {
       return Object.freeze({ readModel, postRepairResults: new Map(), occurrenceSettlements: new Map(), terminalRepairIds: new Set(terminalRepairs.keys()) });

@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -530,7 +531,7 @@ describe("definition-owned non-Gate transition boundary", () => {
     const snapshot = {
       runId: "run-10", specId: "010-non-gate-blocked", stepId, revision: "state-revision-10",
       state: {
-        schemaRevision: 3, runId: "run-10", specId: "010-non-gate-blocked", current: [stepId],
+        schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, runId: "run-10", specId: "010-non-gate-blocked", current: [stepId],
         attempt: {
           id: "attempt-10", sequence: 10,
           failure: { category: "semantic", code: "TEST_EXECUTE_REJECTED" },
@@ -596,7 +597,7 @@ describe("definition-owned non-Gate transition boundary", () => {
         canonicalState: () => ({ nextAction: () => ({ nodeId: stepId, operation: "resume" }) }),
       };
       await assert.rejects(
-        command.execute({ flowState: { schemaRevision: 3, specId: snapshot.specId }, flowManager, root: process.cwd() }),
+        command.execute({ flowState: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: snapshot.specId }, flowManager, root: process.cwd() }),
         /test-chain direct admission rejected/,
       );
     }
@@ -689,7 +690,7 @@ describe("definition-owned non-Gate transition boundary", () => {
     };
     const snapshot = {
       runId: "run-9", specId: "009-non-gate-transition", stepId: "test-execute", revision: "revision-9",
-      state: { schemaRevision: 3, runId: "run-9", specId: "009-non-gate-transition", policy: { nonblocking: null } },
+      state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, runId: "run-9", specId: "009-non-gate-transition", policy: { nonblocking: null } },
       attempt: { id: "attempt-9", sequence: 9, consumption: { semantic: 0, tooling: 0 } },
       activities: [{ id: "published", attemptId: "attempt-9", sequence: 9, nodeId: "test-execute" }, testSource.activity],
       catalog: [{ logicalKey: "test.execute", relativePath: "steps/test-execute/result.json", hash: "f".repeat(64), activityId: "published" }, testSource.descriptor],
@@ -768,7 +769,7 @@ describe("definition-owned non-Gate transition boundary", () => {
       process: { started: true, exitCode: 0, signal: null, timedOut: false, spawnError: null }, summary: [], regression: {} };
     const snapshot = {
       runId: "run-9", specId: "009-non-gate-transition", stepId: "test-execute", revision: "revision-9",
-      state: { schemaRevision: 3, runId: "run-9", specId: "009-non-gate-transition", policy: { nonblocking: null } },
+      state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, runId: "run-9", specId: "009-non-gate-transition", policy: { nonblocking: null } },
       attempt: { id: "attempt-1", sequence: 1, consumption: { semantic: 0, tooling: 0 } },
       activities: [{ id: "published", attemptId: "attempt-1", sequence: 1, nodeId: "test-execute" }, testSource.activity],
       catalog: [{ logicalKey: "test.execute", relativePath: "steps/test-execute/result.json", hash: "f".repeat(64), activityId: "published" }, testSource.descriptor],
@@ -805,7 +806,7 @@ describe("definition-owned non-Gate transition boundary", () => {
     };
     const snapshot = {
       runId: "run-9", specId: "009-non-gate-transition", stepId: "test-result-review", revision: "revision-9",
-      state: { schemaRevision: 3, runId: "run-9", specId: "009-non-gate-transition", policy: { nonblocking: null } },
+      state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, runId: "run-9", specId: "009-non-gate-transition", policy: { nonblocking: null } },
       attempt: { id: "review-attempt", sequence: 1, consumption: { semantic: 0, tooling: 0 } },
       activities: [
         { id: "review", attemptId: "review-attempt", sequence: 1, nodeId: "test-result-review" },

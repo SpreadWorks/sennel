@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { FlowCommand } from "./base-command.js";
 
@@ -8,7 +9,7 @@ export default class RunRecoverMissingProducerArtifactCommand extends FlowComman
   }
 
   execute(ctx) {
-    if (ctx.flowState?.schemaRevision !== 3 || typeof ctx.flowManager?.recoverMissingProducerArtifact !== "function") {
+    if (ctx.flowState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowManager?.recoverMissingProducerArtifact !== "function") {
       return Envelope.fail(
         "run",
         "recover-missing-producer-artifact",

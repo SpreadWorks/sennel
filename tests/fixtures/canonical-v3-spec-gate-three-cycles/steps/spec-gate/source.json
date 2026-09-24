@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "phase": "spec",
+  "generatedAt": "2026-09-24T14:29:25.494Z",
+  "result": "fail",
+  "evaluations": [],
+  "observations": [
+    {
+      "kind": "violation",
+      "failureMode": "spec-cycle-3",
+      "requirementRef": "R-1",
+      "where": {
+        "file": "spec.json",
+        "locator": "requirements[2]"
+      },
+      "observed": "Spec cycle 3 requires a distinct correction.",
+      "severity": "blocking",
+      "refs": [
+        "R-1"
+      ]
+    }
+  ],
+  "issues": [],
+  "reasons": [],
+  "failureKind": "ai_semantic_fail",
+  "failureCategory": {
+    "category": "semantic",
+    "code": "SPEC_GATE_REJECTED"
+  },
+  "lineage": "380f6768cd5e321bbe6001521ab78c80aa0dc8cb7148d73c25ab58e029bf0fc9",
+  "failureCode": "SPEC_GATE_REJECTED"
+}

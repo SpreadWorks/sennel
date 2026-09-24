@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import RunAcceptanceReviewCommand, {
@@ -46,7 +47,7 @@ test("fixture response requires an explicit injected test source", () => {
 
 test("acceptance has no Task Review handoff when no Task review artifact is a fourth repaired rejection", () => {
   const store = new CanonicalAcceptanceArtifactStore({
-    state: { schemaRevision: 3, specId: "001", runId: "run", flowId: "flow", flowVersionId: "v1", request: "x" },
+    state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "001", runId: "run", flowId: "flow", flowVersionId: "v1", request: "x" },
     flowManager: {
       readArtifact() { throw new Error("no task review should be read"); },
       readCatalogArtifact() {},
@@ -135,7 +136,7 @@ test("acceptance resolves the exact fingerprint when a historical Attempt repeat
     specLocation() { return { specRoot: "specs", specId: "001", relativeDirectory: "specs/001" }; },
   };
   const store = new CanonicalAcceptanceArtifactStore({
-    state: { schemaRevision: 3, specId: "001", runId: "run", flowId: "flow", flowVersionId: "v1", request: "x" },
+    state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "001", runId: "run", flowId: "flow", flowVersionId: "v1", request: "x" },
     flowManager: manager,
   });
   const blockers = [];
@@ -202,7 +203,7 @@ test("acceptance reads a deferred Task Gate source by its recorded catalog path 
     specLocation() { return { specRoot: "specs", specId: "001", relativeDirectory: "specs/001" }; },
   };
   const store = new CanonicalAcceptanceArtifactStore({
-    state: { schemaRevision: 3, specId: "001", runId: "run", flowId: "flow", flowVersionId: "v1", request: "x", currentTaskId: null },
+    state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "001", runId: "run", flowId: "flow", flowVersionId: "v1", request: "x", currentTaskId: null },
     flowManager: manager,
   });
   const blockers = [];

@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import path from "node:path";
 import crypto from "node:crypto";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
@@ -265,7 +266,7 @@ export class DeferredFlowFindingsPublication {
 }
 
 function canonicalFlowState(flowState) {
-  if (flowState?.schemaRevision !== 3 || typeof flowState.specId !== "string" || flowState.specId === "") {
+  if (flowState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof flowState.specId !== "string" || flowState.specId === "") {
     throw new Error("flow findings require a Version-1 Flow state");
   }
   return flowState;
@@ -682,12 +683,20 @@ function reviewBlockingFindings(artifact, sourceStep) {
   return candidates.find((candidate) => Array.isArray(candidate) && candidate.length > 0) || [];
 }
 
-function sourceFindingsForArtifact(artifact, sourceStep) {
+function evaluatedSource(artifact) {
   // Command-result artifacts retain the producer payload under `artifacts`.
   // Findings always inspect the evaluated payload, never the envelope.
-  const source = artifact?.artifacts && typeof artifact.artifacts === "object" && !Array.isArray(artifact.artifacts)
+  return artifact?.artifacts && typeof artifact.artifacts === "object" && !Array.isArray(artifact.artifacts)
     ? artifact.artifacts
     : artifact;
+}
+
+function sourceFindingsForArtifact(artifact, sourceStep) {
+  const source = evaluatedSource(artifact);
+  if (sourceStep === "spec-gate") {
+    const observations = blockingObservations(source);
+    if (observations.length > 0) return observations;
+  }
   const evaluations = failedEvaluations(source);
   if (evaluations.length > 0) return evaluations;
   const review = reviewBlockingFindings(source, sourceStep);
@@ -699,10 +708,20 @@ function findSourceFinding(artifact, identity) {
   if (!(identity instanceof FlowFindingSourceIdentity)) {
     throw new Error("source finding resolution requires a FlowFindingSourceIdentity");
   }
-  return sourceFindingsForArtifact(artifact, identity.sourceStep).find((finding, index) => (
-    stableSourceFindingId(identity.sourceStep, finding, index) === identity.sourceFindingId
-      && sourceFindingFingerprint(identity.sourceStep, finding) === identity.fingerprint
-  )) || null;
+  const source = evaluatedSource(artifact);
+  const facets = [
+    failedEvaluations(source),
+    reviewBlockingFindings(source, identity.sourceStep),
+    blockingObservations(source),
+  ];
+  for (const findings of facets) {
+    const match = findings.find((finding, index) => (
+      stableSourceFindingId(identity.sourceStep, finding, index) === identity.sourceFindingId
+        && sourceFindingFingerprint(identity.sourceStep, finding) === identity.fingerprint
+    ));
+    if (match !== undefined) return match;
+  }
+  return null;
 }
 
 function stableSourceFindingId(sourceStep, finding, index) {
@@ -720,12 +739,39 @@ function sourceFindingFingerprint(sourceStep, finding) {
   }
   const canonical = JSON.stringify({
     sourceStep,
-    requirementId: String(finding?.requirementId || finding?.guardrail_id || "").trim(),
+    requirementId: String(finding?.requirementId || finding?.requirementRef || finding?.guardrail_id || "").trim(),
     category: String(finding?.category || finding?.failureMode || finding?.failureKind || "").trim(),
-    file: String(finding?.file || finding?.location?.file || "").trim().replace(/\\/g, "/"),
-    issue: String(finding?.issue || finding?.reason || finding?.title || "").trim(),
+    file: String(finding?.file || finding?.where?.file || finding?.location?.file || "").trim().replace(/\\/g, "/"),
+    issue: String(finding?.issue || finding?.observed || finding?.reason || finding?.title || "").trim(),
   });
   return crypto.createHash("sha256").update(canonical).digest("hex");
+}
+
+/** Canonical source finding and its complete identity for exact consumers. */
+export class CanonicalSourceFinding {
+  constructor({ identity, finding }) {
+    if (!(identity instanceof FlowFindingSourceIdentity) || finding === null
+      || typeof finding !== "object" || Array.isArray(finding)) {
+      throw new TypeError("canonical source finding requires an exact identity and source value");
+    }
+    this.identity = identity;
+    this.finding = Object.freeze(structuredClone(finding));
+    Object.freeze(this);
+  }
+}
+
+export function canonicalSourceFindings({ artifact, sourceStep, sourceArtifact } = {}) {
+  return Object.freeze(sourceFindingsForArtifact(artifact, sourceStep).map((finding, index) => (
+    new CanonicalSourceFinding({
+      identity: new FlowFindingSourceIdentity({
+        sourceArtifact,
+        sourceStep,
+        sourceFindingId: stableSourceFindingId(sourceStep, finding, index),
+        fingerprint: sourceFindingFingerprint(sourceStep, finding),
+      }),
+      finding,
+    })
+  )));
 }
 
 function sourceFindingRationale(finding) {
@@ -763,18 +809,11 @@ export function buildDeferredSemanticFindingsPublication({
       });
   const artifact = source?.payload ?? null;
   const selectedFingerprints = fingerprints instanceof Set ? fingerprints : null;
-  const sourceFindings = sourceFindingsForArtifact(artifact, sourceStep).filter((finding) => (
-    selectedFingerprints === null || selectedFingerprints.has(sourceFindingFingerprint(sourceStep, finding))
-  ));
+  const sourceFindings = canonicalSourceFindings({
+    artifact, sourceStep, sourceArtifact: source.relativePath,
+  }).filter(({ identity }) => selectedFingerprints === null || selectedFingerprints.has(identity.fingerprint));
   const byIdentity = new Map();
-  sourceFindings.forEach((finding, index) => {
-    const fingerprint = sourceFindingFingerprint(sourceStep, finding);
-    const identity = new FlowFindingSourceIdentity({
-      sourceArtifact: source.relativePath,
-      sourceStep,
-      sourceFindingId: stableSourceFindingId(sourceStep, finding, index),
-      fingerprint,
-    });
+  sourceFindings.forEach(({ identity, finding }) => {
     if (!byIdentity.has(identity.toString())) byIdentity.set(identity.toString(), { identity, finding });
   });
   const snapshot = store.readSnapshot();

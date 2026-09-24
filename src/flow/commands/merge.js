@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/commands/merge.js
  *
@@ -138,7 +139,7 @@ export class CanonicalFinalizeMergeSpecSource {
     if (!flowManager || typeof flowManager.readArtifact !== "function") {
       throw new Error("finalize merge Spec source requires FlowManager.readArtifact");
     }
-    if (state?.schemaRevision !== 3 || typeof state.specId !== "string" || state.specId === "") {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state.specId !== "string" || state.specId === "") {
       throw new Error("finalize merge Spec source requires a Version-1 Flow state");
     }
     const resolved = flowManager.readArtifact({

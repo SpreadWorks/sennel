@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -7,7 +8,7 @@ import {
 } from "../../../src/flow/lib/retry-recovery.js";
 import { RetryRecoveryBasis, RetryRecoveryPlan } from "../../../src/flow/definition.js";
 
-const canonicalState = Object.freeze({ schemaRevision: 3, specId: "001-retry" });
+const canonicalState = Object.freeze({ schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "001-retry" });
 
 describe("Version-1 retry recovery view", () => {
   it("does not offer a recovery command while the definition still owns retry budget", () => {

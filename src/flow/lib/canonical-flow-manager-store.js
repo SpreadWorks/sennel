@@ -44,6 +44,7 @@ import {
   resolveRequirementTestLifecycle,
   StepErrorDecision,
   DraftAwaitUserDecision,
+  SpecGateAwaitDecision,
   StepRoute,
   DraftExecutionSettlement,
   StepSettlement,
@@ -70,8 +71,10 @@ import {
   DraftGatePassedResult,
   DraftGateRepairRequiredResult,
   SpecCreatedResult,
-  SpecPlanGateRepairAppliedResult,
-  SpecPlanGateRepairNoProgressResult,
+  SpecGateRepairReadyForGateResult,
+  SpecGateRepairReviewRequiredResult,
+  SpecGateRepairContextRequiredResult,
+  SpecGateRepairAwaitingDecisionResult,
   SpecTriageCompletedResult,
   SpecRepairChangedResult,
   SpecRepairUnchangedResult,
@@ -211,6 +214,7 @@ import {
 import { DraftGateIssuePublication, DraftGatePublicationIntent } from "./draft-gate-prospective.js";
 import { SpecGateResultSelection } from "../steps/spec/spec-gate-result.js";
 import { SpecWorkerResultSelection } from "../steps/spec/spec-result.js";
+import { SpecGateRepairSelection } from "./spec-gate-repair-worker-facts.js";
 import { ExternalBlockedOutcome, StepAttempt } from "./step-outcome.js";
 import { CanonicalSpecReview } from "./spec-review-artifacts.js";
 import { TaskCollection } from "../../spec/lib/render-contract.js";
@@ -1822,6 +1826,27 @@ export class CanonicalFlowManagerStore {
       descriptor: artifact.descriptor,
       bytes: Buffer.from(artifact.bytes),
       review: artifact.review,
+    });
+  }
+
+  /** Read the latest review with its immutable source revision and snapshot. */
+  readLatestSpecReview({ specId = null, consumerNodeId } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const consumer = FlowArtifactUpdater.fromActivityNodeId(
+      requiredText(consumerNodeId, "canonical historical review consumer nodeId"),
+    ).toString();
+    if (consumer !== "spec-gate-repair") {
+      throw new CurrentFlowStateInvariantError("only Spec Gate repair may read the prior review lineage");
+    }
+    const artifact = this.runtime.readLatestSpecReview(resolved);
+    if (artifact === null) return null;
+    return Object.freeze({
+      revision: artifact.revision,
+      descriptor: artifact.descriptor,
+      bytes: Buffer.from(artifact.bytes),
+      review: artifact.review,
+      snapshotBytes: Buffer.from(artifact.snapshotBytes),
     });
   }
 
@@ -3657,13 +3682,12 @@ export class CanonicalFlowManagerStore {
     if (planGateRepairOutcome !== null) {
       if (!(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
         || status !== "done"
-        || (nodeId !== "draft-gate-repair" && planGateRepairOutcome.disposition !== "applied")) {
+        || nodeId !== "draft-gate-repair") {
         throw new CurrentFlowStateInvariantError("plan-Gate repair confirmation requires its matching typed outcome");
       }
       const outcome = planGateRepairOutcome.seal(confirmationActivityId);
-      if (nodeId === "draft-gate-repair" || nodeId === "spec") {
-        this.#assertPlanGateRepairOutcome({ resolved, state, nodeId, outcome, handoffRevision: planGateRepairOutcome.repair.handoffRevision });
-      }
+      this.#assertPlanGateRepairOutcome({ resolved, state, nodeId, outcome,
+        handoffRevision: planGateRepairOutcome.repair.handoffRevision });
       if (outcome.targetAttempt.id !== state.attempt.id
         || outcome.targetAttempt.sequence !== state.attempt.sequence) {
         throw new CurrentFlowStateInvariantError("plan-Gate repair outcome does not target the current Attempt");
@@ -3864,7 +3888,7 @@ export class CanonicalFlowManagerStore {
       );
     }
     if (latest === null) return null;
-    if (settlement instanceof DraftAwaitUserDecision) {
+    if (settlement instanceof DraftAwaitUserDecision || settlement instanceof SpecGateAwaitDecision) {
       if (latest.phase === "claimed") return latest.published();
       return latest.phase === "publication" ? latest : null;
     }
@@ -4007,7 +4031,7 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  #recordDraftExecutionLifecycle({ resolved, binding, stepResult, settlement, executionLifecycle }) {
+  #recordDraftExecutionLifecycle({ resolved, binding, stepResult, settlement, executionLifecycle, artifactWrites = [] }) {
     if (!(stepResult instanceof StepResult) || !(settlement instanceof DraftExecutionSettlement)
       || settlement.sourceStepId !== stepResult.stepId
       || !(executionLifecycle instanceof DraftStepExecutionLifecycle)
@@ -4021,6 +4045,7 @@ export class CanonicalFlowManagerStore {
       stepResult,
       settlement,
       executionLifecycle,
+      artifactWrites,
     });
     const state = this.runtime.load(resolved);
     if (state.attempt?.failure !== null && state.attempt?.failure !== undefined) {
@@ -4040,12 +4065,13 @@ export class CanonicalFlowManagerStore {
       specId: resolved,
       activityId: activityId(`draft-execution-${executionLifecycle.phase}`),
       result,
+      artifactWrites,
     });
     return Object.freeze({ state: next, receipt });
   }
 
   /** Atomically reserve one execution generation before request materialization. */
-  checkpointDraftStepExecution({ specId = null, binding, stepResult, settlement, executionBinding } = {}) {
+  checkpointDraftStepExecution({ specId = null, binding, stepResult, settlement, executionBinding, artifactWrites = [] } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(executionBinding instanceof DraftReviewExecutionBinding)
@@ -4058,6 +4084,7 @@ export class CanonicalFlowManagerStore {
       stepResult,
       settlement,
       executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding),
+      artifactWrites,
     });
   }
 
@@ -4069,6 +4096,7 @@ export class CanonicalFlowManagerStore {
     settlement,
     executionBinding,
     executionClaim,
+    artifactWrites = [],
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
@@ -4086,6 +4114,7 @@ export class CanonicalFlowManagerStore {
       stepResult,
       settlement,
       executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding).claimed(executionClaim),
+      artifactWrites,
     });
   }
 
@@ -4774,6 +4803,8 @@ export class CanonicalFlowManagerStore {
     planGateRepairOutcome = null,
     gatePublication = null,
     specSelection = null,
+    specGateRepairSelection = null,
+    executionLifecycle = undefined,
   } = {}) {
     if (binding?.stepId === "spec-gate") {
       return this.settleDraftStepResult({
@@ -4793,20 +4824,47 @@ export class CanonicalFlowManagerStore {
         lifecycleResult, references, artifactWrites, artifactRemovals, artifactBaselines,
       });
     }
+    if (binding?.stepId === "spec-gate-repair") {
+      const completed = stepResult instanceof SpecGateRepairReadyForGateResult
+        || stepResult instanceof SpecGateRepairReviewRequiredResult;
+      if (completed !== (specGateRepairSelection instanceof SpecGateRepairSelection)) {
+        throw new CurrentFlowStateConflictError("Spec Gate repair Result differs from its Step selection");
+      }
+      if (completed) {
+        specGateRepairSelection.assertResult(stepResult);
+        if (specGateRepairSelection.publication !== specRecord
+          || artifactWrites.length !== 1
+          || artifactWrites[0].logicalKey !== "spec.gate.repair.audit"
+          || artifactWrites[0].parameters?.attemptId !== binding.attempt.id
+          || JSON.stringify(JSON.parse(artifactWrites[0].bytes.toString("utf8")))
+            !== JSON.stringify(specGateRepairSelection.audit)
+          || artifactBaselines.length !== 1
+          || CanonicalFlowArtifactBaseline.from(artifactBaselines[0]).artifact.logicalKey !== "spec.record") {
+          throw new CurrentFlowStateConflictError("Spec Gate repair publication does not match its Step selection");
+        }
+      } else if (!(settlement instanceof StepErrorDecision)
+        && !(stepResult instanceof SpecGateRepairContextRequiredResult
+          || stepResult instanceof SpecGateRepairAwaitingDecisionResult)) {
+        throw new CurrentFlowStateInvariantError("Spec Gate repair requires a concrete selected Result");
+      }
+      return this.settleDraftStepResult({
+        specId, binding, stepResult, settlement,
+        specRecord, lifecycleResult, references,
+        artifactWrites, artifactRemovals, artifactBaselines,
+        executionLifecycle,
+      });
+    }
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const errorSettlement = settlement instanceof StepErrorDecision;
     if (binding?.stepId === "spec") {
-      const selectedCandidate = stepResult instanceof SpecCreatedResult
-        || stepResult instanceof SpecPlanGateRepairAppliedResult
-        || stepResult instanceof SpecPlanGateRepairNoProgressResult;
+      const selectedCandidate = stepResult instanceof SpecCreatedResult;
       if (selectedCandidate !== (specSelection instanceof SpecWorkerResultSelection)) {
         throw new CurrentFlowStateConflictError("Spec candidate settlement differs from its Step Result selection");
       }
       specSelection?.assertCandidate({ result: stepResult, application, planGateRepairOutcome });
     }
-    const initialRoute = (stepResult instanceof SpecCreatedResult
-      || stepResult instanceof SpecPlanGateRepairAppliedResult)
+    const initialRoute = stepResult instanceof SpecCreatedResult
       && settlement instanceof SpecNextRoute
       && application instanceof SpecReviewSettlementApplication
       && application.sourceStepId === "spec"
@@ -7279,7 +7337,7 @@ export class CanonicalFlowManagerStore {
       return fact.toJSON();
     }
     if (effect.operation === "repair-spec") {
-      if (target !== "spec-gate" || effect.targetStepId !== "spec" || existing !== null) {
+      if (target !== "spec-gate" || effect.targetStepId !== "spec-gate-repair" || existing !== null) {
         throw new CurrentFlowStateInvariantError("Spec Gate advisory repair requires its current uncommitted decision");
       }
       const saved = this.readCurrentStepSettlement({ specId: resolved, stepId: target });
@@ -7309,8 +7367,8 @@ export class CanonicalFlowManagerStore {
       });
       const nextIssueLog = repair.appendToIssueLog(issueLog);
       this.runtime.planGateRepair({
-        specId: resolved, activityId: stableId, nodeId: "spec",
-        attempt: commandContextAttempt(state, "spec"),
+        specId: resolved, activityId: stableId, nodeId: "spec-gate-repair",
+        attempt: commandContextAttempt(state, "spec-gate-repair"),
         references: { evaluations: [], findings: [], repairs: [repair.activityReference()], artifacts: [] },
         artifactWrites: [{
           logicalKey: "issue.log", mediaType: "application/json",
@@ -7319,7 +7377,7 @@ export class CanonicalFlowManagerStore {
         nonblocking: fact.toJSON(),
         admission: new CombinedAdmission(
           selectionAdmission,
-          this.#replacementConsumerAdmission(state, { route: "repair-plan-gate", targetNodeId: "spec" }),
+          this.#replacementConsumerAdmission(state, { route: "repair-plan-gate", targetNodeId: "spec-gate-repair" }),
         ),
       });
       return fact.toJSON();
@@ -7826,8 +7884,7 @@ export class CanonicalFlowManagerStore {
       lifecycleResult: jsonIdentity(lifecycleResult, "lifecycle result"),
       references: settlement instanceof StepErrorDecision ? null : jsonIdentity(references, "references"),
       specRecord: settlement instanceof StepErrorDecision ? null : jsonIdentity(specRecord, "Spec record"),
-      planGateRepairOutcome: settlement instanceof StepErrorDecision
-        && !(settlement.resultKind === "spec-plan-gate-repair-no-progress") ? null : planGateRepair,
+      planGateRepairOutcome: settlement instanceof StepErrorDecision ? null : planGateRepair,
     });
   }
 

@@ -768,6 +768,13 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+
+  readLatestSpecReview(input = {}) {
+    return this._store.readLatestSpecReview({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   /** Prepare the authoritative input for the first spec-review publication. */
   readCurrentSpecReviewInput(input = {}) {
     return this._store.readCurrentSpecReviewInput({

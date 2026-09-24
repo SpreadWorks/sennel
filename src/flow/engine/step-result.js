@@ -154,11 +154,20 @@ export const DraftCreatedResult = resultClass("DraftCreatedResult", {
 export const SpecCreatedResult = resultClass("SpecCreatedResult", {
   stepId: "spec", kind: "spec-created", type: STEP_RESULT_TYPE.COMPLETED,
 });
-export const SpecPlanGateRepairAppliedResult = resultClass("SpecPlanGateRepairAppliedResult", {
-  stepId: "spec", kind: "spec-plan-gate-repair-applied", type: STEP_RESULT_TYPE.COMPLETED,
+export const SpecGateRepairReadyForGateResult = resultClass("SpecGateRepairReadyForGateResult", {
+  stepId: "spec-gate-repair", kind: "spec-gate-repair-ready-for-gate", type: STEP_RESULT_TYPE.COMPLETED,
 });
-export const SpecPlanGateRepairNoProgressResult = errorResultClass("SpecPlanGateRepairNoProgressResult", {
-  stepId: "spec", kind: "spec-plan-gate-repair-no-progress", type: STEP_RESULT_TYPE.ERROR,
+export const SpecGateRepairReviewRequiredResult = resultClass("SpecGateRepairReviewRequiredResult", {
+  stepId: "spec-gate-repair", kind: "spec-gate-repair-review-required", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const SpecGateRepairContextRequiredResult = resultClass("SpecGateRepairContextRequiredResult", {
+  stepId: "spec-gate-repair", kind: "spec-gate-repair-context-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
+});
+export const SpecGateRepairAwaitingDecisionResult = resultClass("SpecGateRepairAwaitingDecisionResult", {
+  stepId: "spec-gate-repair", kind: "spec-gate-repair-awaiting-decision", type: STEP_RESULT_TYPE.USER_INPUT_REQUIRED,
+});
+export const SpecGateRepairNoProgressResult = errorResultClass("SpecGateRepairNoProgressResult", {
+  stepId: "spec-gate-repair", kind: "spec-gate-repair-no-progress", type: STEP_RESULT_TYPE.ERROR,
 });
 export const SpecTriageCompletedResult = resultClass("SpecTriageCompletedResult", {
   stepId: "spec-triage", kind: "spec-triage-completed", type: STEP_RESULT_TYPE.COMPLETED,

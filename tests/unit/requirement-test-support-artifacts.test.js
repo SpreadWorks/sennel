@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { describe, it } from "node:test";
@@ -174,7 +175,7 @@ describe("Requirement test shared support artifact", () => {
       bytes: supportBytes,
     });
     const value = candidate({ support: [support] });
-    const state = { schemaRevision: 3, specId: "support-contract" };
+    const state = { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "support-contract" };
     const bundleBytes = Buffer.from(`${JSON.stringify(value.bundle.toJSON())}\n`);
     const restored = new RequirementTestArtifactStore({ flowManager: manager({
       supportBytes, bundleBytes, sourceBytes: value.sourceBytes,
@@ -250,7 +251,7 @@ describe("Requirement test shared support artifact", () => {
       flowManager: manager({
         candidateManifests: [{ requirementId: "R1", revision: 1, bytes: r1Bytes }],
       }),
-      state: { schemaRevision: 3, specId: "support-contract" },
+      state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "support-contract" },
     });
     assert.throws(
       () => store.assertCandidatePrimaryPathsAvailable(r2.bundle),
@@ -271,7 +272,7 @@ describe("Requirement test shared support artifact", () => {
     const readCounts = {};
     const store = new RequirementTestArtifactStore({
       flowManager: manager({ supportBytes, bundleBytes, readCounts }),
-      state: { schemaRevision: 3, specId: "support-contract" },
+      state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "support-contract" },
     });
     const index = store.candidateProvenanceIndex({ consumerNodeId: "test-generate" });
     assert.equal(readCounts.candidateBundle, 1);
@@ -302,7 +303,7 @@ describe("Requirement test shared support artifact", () => {
         sourceBytes: value.sourceBytes,
         readCounts: promotionReads,
       }),
-      state: { schemaRevision: 3, specId: "support-contract" },
+      state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "support-contract" },
     });
     const candidateRead = promotionStore.readCandidate({ bundle: value.bundle.bundle });
     promotionReads.candidateBundle = 0;
@@ -315,7 +316,7 @@ describe("Requirement test shared support artifact", () => {
     );
     const siblingStore = new RequirementTestArtifactStore({
       flowManager: manager({ supportBytes, bundleBytes }),
-      state: { schemaRevision: 3, specId: "support-contract" },
+      state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "support-contract" },
     });
     assert.throws(
       () => siblingStore.assertCandidatePrimaryPathsAvailable(value.bundle, index),

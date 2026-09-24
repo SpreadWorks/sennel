@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { repairJson } from "../../lib/json-parse.js";
 import { createHash } from "node:crypto";
 import { container } from "../../lib/container.js";
@@ -966,7 +967,7 @@ export default class RunAcceptanceReviewCommand extends FlowCommand {
 
   async execute(ctx) {
     const state = ctx.flowManager.load();
-    if (state?.schemaRevision !== 3) {
+    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
       throw new Error("acceptance review requires a Version-1 Flow");
     }
     return executeCanonicalAcceptanceReview.call(this, { ...ctx, flowState: state });

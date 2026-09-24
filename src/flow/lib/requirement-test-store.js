@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import crypto from "node:crypto";
 
 import {
@@ -24,7 +25,7 @@ function requiredManager(value) {
 }
 
 function requiredState(value) {
-  if (value?.schemaRevision !== 3 || typeof value.specId !== "string" || value.specId === "") {
+  if (value?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof value.specId !== "string" || value.specId === "") {
     throw new Error("Requirement test store requires a Version-1 Flow state");
   }
   return value;

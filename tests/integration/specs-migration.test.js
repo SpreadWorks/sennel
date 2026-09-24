@@ -8,7 +8,13 @@ import { afterEach, describe, it } from "node:test";
 import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../support/builders/tmp-dir.js";
 import { buildCurrentFlowDefinition } from "../../src/flow/definition.js";
 import { FlowArtifactCatalog, FlowVersionAuthorityScope, FlowVersionLocation } from "../../src/lib/flow-version.js";
+import { FlowManager } from "../../src/lib/flow-manager.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../src/lib/flow-artifact-contract.js";
+import { CanonicalGateObservationCycle } from "../../src/flow/lib/canonical-gate-observation-cycle.js";
+import { GateEvidenceIdentity, GateObservationCycleReader, GateObservationOccurrence } from "../../src/flow/lib/gate-observation-convergence.js";
+import { PlanGateRepairObservation, PlanGateRepairRecord } from "../../src/flow/lib/plan-gate-repair.js";
+import { SpecGateProspectiveFacts } from "../../src/flow/lib/spec-gate-prospective.js";
+import { specGateResult } from "../../src/flow/steps/spec/spec-gate-result.js";
 import { CurrentFlowVersionStore, CurrentFlowState, FlowActivity } from "../../src/flow/lib/current-flow-state.js";
 import { initialCanonicalSpecReview, SpecReviewDelta, mergeSpecReviewDelta } from "../../src/flow/lib/spec-review-artifacts.js";
 import {
@@ -386,6 +392,265 @@ function seedLegacySpecReviewChain(root, id, { malformed = false, acceptedRepair
 
 afterEach(() => {
   while (roots.length > 0) removeTmpDir(roots.pop());
+});
+
+function seedCanonicalV3(root, id) {
+  createExistingVersion(root, id, {
+    flowId: `flow-${id}`, flowVersionId: `version-${id}`, runId: `run-${id}`,
+  });
+  const version = path.join(root, "specs", id, "001");
+  const current = versionStore(root, id).load();
+  const file = path.join(version, "flow.json");
+  const state = JSON.parse(fs.readFileSync(file, "utf8"));
+  const removeGateRepair = (node) => {
+    node.steps = node.steps.filter((child) => child.id !== "spec-gate-repair");
+    for (const child of node.steps) removeGateRepair(child);
+  };
+  removeGateRepair(state);
+  state.schemaRevision = 3;
+  delete state.migration;
+  fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
+  refreshCatalogDescriptorForBytes(version, "flow.json");
+  return { version, current };
+}
+
+function seedFrozenThreeCycleV3(root) {
+  const id = "001-spec-gate-cycle-limit";
+  const version = path.join(root, "specs", id, "001");
+  fs.cpSync(path.resolve("tests/fixtures/canonical-v3-spec-gate-three-cycles"), version, { recursive: true });
+  return { id, version };
+}
+
+function appendValidDraftRepairRecord(version) {
+  const state = JSON.parse(fs.readFileSync(path.join(version, "flow.json"), "utf8"));
+  const issuePath = path.join(version, "issue-log.json");
+  const issueLog = JSON.parse(fs.readFileSync(issuePath, "utf8"));
+  const sourceAttempt = { id: "draft-source-attempt", sequence: 1 };
+  const lineage = {
+    sourceAttempt, canonicalAttempt: sourceAttempt,
+    sourceFingerprint: "b".repeat(64), canonicalFingerprint: "b".repeat(64),
+    sourceRevisionFingerprint: "c".repeat(64), canonicalRevisionFingerprint: "c".repeat(64),
+  };
+  const observation = new PlanGateRepairObservation({
+    kind: "violation", failureMode: "draft-invariant", requirementRef: "R-DRAFT",
+    where: { file: "draft.json", locator: "goal" }, observed: "The draft needs a retained invariant.",
+    severity: "blocking", refs: ["R-DRAFT"], phase: "draft", scope: "flow", taskId: null,
+  });
+  const evidence = new GateEvidenceIdentity({
+    sourceAttempt, resultLogicalKey: "draft.gate", publicationActivityId: "draft-source-publication",
+    catalogFingerprint: "b".repeat(64), transitionLineage: lineage,
+  });
+  const source = { issueLogId: "draft-source-entry", observations: [observation.toJSON()] };
+  const record = PlanGateRepairRecord.create({
+    state: { runId: state.runId, specId: state.specId, issue: state.issue },
+    issueLogEntry: source,
+    gateFacts: {
+      currentAttempt: sourceAttempt,
+      catalogPublication: { producerActivityId: evidence.publicationActivityId, fingerprint: evidence.catalogFingerprint },
+      lineage,
+    },
+    connector: {
+      phase: "draft", sourceGateStepId: "draft-gate", sourceAttempt,
+      resultLogicalKey: "draft.gate", resultArtifactId: "steps/draft-gate/result.json",
+      catalogFingerprint: evidence.catalogFingerprint,
+      targetStepId: "draft-gate-repair",
+      resetStepIds: ["draft-gate-repair", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate"],
+      taskLifecycle: null,
+    },
+    cycleReadModel: new GateObservationCycleReader({ occurrences: [new GateObservationOccurrence({
+      evidence, observation: observation.canonical, blocking: true,
+    })] }).read(),
+    requestedAt: "2026-09-24T00:00:00.000Z",
+  });
+  issueLog.entries.push(source, { ...record.issueLogEntry(), issueLogId: record.idempotencyKey });
+  fs.writeFileSync(issuePath, `${JSON.stringify(issueLog, null, 2)}\n`);
+  refreshCatalogDescriptorForBytes(version, "issue-log.json");
+  return record;
+}
+
+describe("migrate specs --to 3", () => {
+  it("preserves three old producer repair cycles, their exact archive, and the new runtime count", () => {
+    const root = project();
+    const { id, version } = seedFrozenThreeCycleV3(root);
+    const originals = ["flow.json", "activities.jsonl", "artifact-catalog.json"]
+      .map((name) => fs.readFileSync(path.join(version, name)));
+    const preview = runTo(root, 3, ["--dry-run"]);
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /"legacyAppliedCount":3/);
+    for (const [index, name] of ["flow.json", "activities.jsonl", "artifact-catalog.json"].entries()) {
+      assert.deepEqual(fs.readFileSync(path.join(version, name)), originals[index]);
+    }
+    const migrated = runTo(root, 3);
+    assert.equal(migrated.status, 0, migrated.stderr);
+    const loaded = versionStore(root, id).load();
+    assert.equal(loaded.migration.legacyAppliedCount, 3);
+    assert.equal(loaded.findNode("spec-gate-repair").status, "invalidated");
+    assert.equal(versionStore(root, id).activities().length, 55);
+    const count = JSON.parse(fs.readFileSync(path.join(version, "artifacts/spec-gate-repairs/migration.json"), "utf8"));
+    assert.equal(count.legacyAppliedCount, 3);
+    assert.equal(count.legacyOutcomeActivityIds.length, 3);
+    assert.equal(count.legacyCycles.repairs.length, 3);
+    assert.equal(count.legacyCycles.outcomes.length, 3);
+    const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: id });
+    const readModel = new CanonicalGateObservationCycle({ flowManager, state: loaded }).read();
+    assert.equal(readModel.repairCount, 3);
+    assert.equal(readModel.cycles.length, 3);
+    assert.ok(readModel.cycles.every((cycle) => cycle.outcomes[0].report.results[0].strategy));
+    const fourth = specGateResult(new SpecGateProspectiveFacts({
+      phase: "spec", result: "fail", failureCategory: "semantic", repairAvailable: true,
+      cycle: loaded.migration.legacyAppliedCount + 1, resultFingerprint: "a".repeat(64),
+    }));
+    assert.equal(fourth.kind, "spec-gate-blocked");
+    assert.equal(fourth.error.data.reason, "cycle-limit");
+    for (const [index, name] of ["flow.json", "activities.jsonl", "artifact-catalog.json"].entries()) {
+      assert.deepEqual(fs.readFileSync(path.join(version, "artifacts/migration/spec-gate-repair-v3", name)), originals[index]);
+    }
+    assert.deepEqual(fs.readFileSync(path.join(version, "artifacts/migration/spec-gate-repair-v3/issue-log.json")),
+      fs.readFileSync(path.resolve("tests/fixtures/canonical-v3-spec-gate-three-cycles/issue-log.json")));
+    const liveIssueLog = JSON.parse(fs.readFileSync(path.join(version, "issue-log.json"), "utf8"));
+    assert.equal(liveIssueLog.entries.some((entry) => entry.kind === "plan-gate-repair"), false);
+    assert.equal(runTo(root, 3).status, 0, "migration replay is idempotent");
+  });
+
+  it("rejects a forged historical Gate fingerprint even when the old Catalog is rehashed", () => {
+    const root = project();
+    const { version } = seedFrozenThreeCycleV3(root);
+    const catalog = JSON.parse(fs.readFileSync(path.join(version, "artifact-catalog.json"), "utf8"));
+    const outcomePath = catalog.artifacts.find((entry) => entry.logicalKey === "plan.gate.repair.outcome").relativePath;
+    const file = path.join(version, outcomePath);
+    const outcome = JSON.parse(fs.readFileSync(file, "utf8"));
+    outcome.sourceEvidence.catalogFingerprint = "f".repeat(64);
+    outcome.sourceEvidence.transitionLineage.canonicalFingerprint = "f".repeat(64);
+    fs.writeFileSync(file, `${JSON.stringify(outcome, null, 2)}\n`);
+    refreshCatalogDescriptorForBytes(version, outcomePath);
+    const before = fs.readFileSync(path.join(version, "flow.json"));
+    const preview = runTo(root, 3, ["--dry-run"]);
+    assert.equal(preview.status, 1);
+    assert.match(preview.stderr, /does not match its exact repair binding|unproven|repair record/i);
+    assert.deepEqual(fs.readFileSync(path.join(version, "flow.json")), before);
+    assert.equal(fs.existsSync(path.join(version, "artifacts/spec-gate-repairs/migration.json")), false);
+  });
+
+  it("rejects a rewritten migration strategy after count and Catalog hashes are refreshed", () => {
+    const root = project();
+    const { id, version } = seedFrozenThreeCycleV3(root);
+    assert.equal(runTo(root, 3).status, 0);
+    const relativePath = "artifacts/spec-gate-repairs/migration.json";
+    const file = path.join(version, relativePath);
+    const count = JSON.parse(fs.readFileSync(file, "utf8"));
+    count.legacyCycles.outcomes[0].report.results[0].strategy = "forged strategy";
+    fs.writeFileSync(file, `${JSON.stringify(count, null, 2)}\n`);
+    refreshCatalogDescriptorForBytes(version, relativePath);
+    assert.throws(() => versionStore(root, id).load(), /migration checkpoint|cycle.*digest/i);
+  });
+
+  it("retains an unrelated canonical Draft repair record while projecting old Spec repairs", () => {
+    const root = project();
+    const { version } = seedFrozenThreeCycleV3(root);
+    const draft = appendValidDraftRepairRecord(version);
+    assert.equal(runTo(root, 3).status, 0);
+    const live = JSON.parse(fs.readFileSync(path.join(version, "issue-log.json"), "utf8"));
+    const draftEntry = live.entries.find((entry) => entry.issueLogId === draft.idempotencyKey);
+    assert.equal(PlanGateRepairRecord.fromIssueLogEntry(draftEntry).fingerprint, draft.fingerprint);
+    assert.equal(live.entries.filter((entry) => entry.kind === "plan-gate-repair").length, 1);
+    const archived = JSON.parse(fs.readFileSync(path.join(version,
+      "artifacts/migration/spec-gate-repair-v3/issue-log.json"), "utf8"));
+    assert.equal(archived.entries.filter((entry) => entry.kind === "plan-gate-repair").length, 4);
+  });
+
+  it("refuses an active or partially imported old cycle without changing its Version", () => {
+    for (const mutation of [
+      (state) => { state.attempt = { id: "unproven-active" }; },
+      (state) => { state.history = { execution: "dormant" }; },
+    ]) {
+      const root = project();
+      const { version } = seedFrozenThreeCycleV3(root);
+      const file = path.join(version, "flow.json");
+      const state = JSON.parse(fs.readFileSync(file, "utf8"));
+      mutation(state);
+      fs.writeFileSync(file, `${JSON.stringify(state, null, 2)}\n`);
+      refreshCatalogDescriptorForBytes(version, "flow.json");
+      const before = fs.readFileSync(file);
+      const refused = runTo(root, 3);
+      assert.equal(refused.status, 1);
+      assert.match(refused.stderr, /in-flight Attempt|native canonical-v3 ledger/i);
+      assert.deepEqual(fs.readFileSync(file), before);
+      assert.equal(fs.existsSync(path.join(version, "artifacts/spec-gate-repairs/migration.json")), false);
+    }
+  });
+
+  it("previews without mutation and explicitly upgrades an idle canonical v3 Version", () => {
+    const root = project();
+    const id = "515-v3-gate-repair-zero";
+    const { version } = seedCanonicalV3(root, id);
+    const source = ["flow.json", "activities.jsonl", "artifact-catalog.json"]
+      .map((name) => fs.readFileSync(path.join(version, name)));
+    const preview = runTo(root, 3, ["--dry-run"]);
+    assert.equal(preview.status, 0, preview.stderr);
+    assert.match(preview.stdout, /canonical-v3-to-v4/);
+    for (const [index, name] of ["flow.json", "activities.jsonl", "artifact-catalog.json"].entries()) {
+      assert.deepEqual(fs.readFileSync(path.join(version, name)), source[index]);
+    }
+    assert.equal(fs.existsSync(path.join(version, "artifacts/spec-gate-repairs/migration.json")), false);
+
+    const migrated = runTo(root, 3);
+    assert.equal(migrated.status, 0, migrated.stderr);
+    const loaded = versionStore(root, id).load();
+    assert.equal(loaded.schemaRevision, 4);
+    assert.equal(loaded.findNode("spec-gate-repair").status, "pending");
+    assert.equal(loaded.migration.legacyAppliedCount, 0);
+    assert.deepEqual(fs.readFileSync(path.join(version, "artifacts/migration/spec-gate-repair-v3/flow.json")), source[0]);
+    assert.deepEqual(fs.readFileSync(path.join(version, "artifacts/migration/spec-gate-repair-v3/activities.jsonl")), source[1]);
+    assert.deepEqual(fs.readFileSync(path.join(version, "artifacts/migration/spec-gate-repair-v3/artifact-catalog.json")), source[2]);
+    assert.equal(runTo(root, 3).status, 0, "explicit migration is idempotent");
+  });
+
+  it("rejects an altered source Catalog before writing migration artifacts", () => {
+    const root = project();
+    const id = "515-v3-gate-repair-tampered";
+    const { version } = seedCanonicalV3(root, id);
+    fs.appendFileSync(path.join(version, "flow.json"), " ");
+    const preview = runTo(root, 3, ["--dry-run"]);
+    assert.equal(preview.status, 1);
+    assert.match(preview.stderr, /catalog|artifact content|UNPROVEN/i);
+    assert.equal(fs.existsSync(path.join(version, "artifacts/spec-gate-repairs/migration.json")), false);
+  });
+
+  it("rejects a catalog-bound Activity prefix that does not replay to the saved state", () => {
+    const root = project();
+    const id = "515-v3-gate-repair-replay";
+    const { version, current } = seedCanonicalV3(root, id);
+    const activity = startActivity(current, { id: "migration-uncommitted-start", nodeId: current.nextAction().nodeId });
+    fs.appendFileSync(path.join(version, "activities.jsonl"), `${JSON.stringify(activity.toJSON())}\n`);
+    refreshCatalogDescriptorForBytes(version, "activities.jsonl");
+    const statePath = path.join(version, "flow.json");
+    const saved = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    saved.confirmationOrder += 1;
+    fs.writeFileSync(statePath, `${JSON.stringify(saved, null, 2)}\n`);
+    refreshCatalogDescriptorForBytes(version, "flow.json");
+    const preview = runTo(root, 3, ["--dry-run"]);
+    assert.equal(preview.status, 1);
+    assert.match(preview.stderr, /old Activity replay failed|old Activity ledger does not reproduce/i);
+    assert.equal(fs.existsSync(path.join(version, "artifacts/spec-gate-repairs/migration.json")), false);
+  });
+
+  it("recovers the journaled root swap after the old canonical root is backed up", () => {
+    const root = project();
+    const id = "515-v3-gate-repair-crash";
+    seedCanonicalV3(root, id);
+    const specRoot = resolveMigrationSpecRoot(root).root;
+    const interrupted = new CanonicalRevisionRootTransaction({
+      root, specRoot, specId: id, definition: buildCurrentFlowDefinition(), revision: 3,
+      faultInjector({ phase }) {
+        if (phase === "source-backed-up") throw new Error("revision-three-crash");
+      },
+    });
+    assert.throws(() => interrupted.apply(), /revision-three-crash/);
+    const recovery = SpecsMigrationTransaction.recoverAll({ root, specRoot, dryRun: false });
+    assert.equal(recovery.some((entry) => entry.recovered === "placed-staging"), true);
+    assert.equal(versionStore(root, id).load().migration.legacyAppliedCount, 0);
+    assert.equal(runTo(root, 3).status, 0);
+  });
 });
 
 describe("specs migration root authority", () => {

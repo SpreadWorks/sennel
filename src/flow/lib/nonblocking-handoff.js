@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Catalog-backed acceptance handoff for a non-semantic checkpoint.
  *
@@ -36,7 +37,7 @@ function requireString(value, field) {
 }
 
 function canonicalFlowState(flowState) {
-  if (flowState?.schemaRevision !== 3 || typeof flowState.specId !== "string" || flowState.specId === "") {
+  if (flowState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof flowState.specId !== "string" || flowState.specId === "") {
     throw new Error("nonblocking handoff requires a Version-1 Flow state");
   }
   return flowState;

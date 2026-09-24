@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/run-prepare-spec.js
  *
@@ -723,7 +724,7 @@ class WorktreePrepareAttemptJournal {
     if (flowBytes != null) {
       const flow = JSON.parse(flowBytes.toString("utf8"));
       if (
-        flow.schemaRevision !== 3
+        flow.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION
         ||
         flow.runId !== record.runId
         || flow.specId !== record.specId

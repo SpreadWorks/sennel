@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { describe, it } from "node:test";
@@ -15,8 +16,10 @@ import {
   GateObservationCycleReader,
   GateObservationOccurrence,
   GateObservationRepair,
+  GateRepairObservationRequest,
   GateRepairReport,
   PlanGateRepairOutcome,
+  SpecGateRepairOutcome,
 } from "../../src/flow/lib/gate-observation-convergence.js";
 import { PlanGateRepairObservation, PlanGateRepairRecord } from "../../src/flow/lib/plan-gate-repair.js";
 import { DraftStepSettlementPublication, DraftStepSettlementReceipt, settleSpecStepResult } from "../../src/flow/definition.js";
@@ -37,7 +40,7 @@ function manager({ artifacts = [], reads = new Map(), activities = [] } = {}) {
     artifactCatalog() { return { artifacts }; },
     activityLedger() { return activities; },
     readArtifact({ logicalKey, parameters = {}, optional = false }) {
-      const key = `${logicalKey}:${parameters.repairId ?? ""}`;
+      const key = `${logicalKey}:${parameters.repairId ?? parameters.attemptId ?? ""}`;
       const value = reads.get(key) ?? null;
       if (value === null && !optional) throw new Error(`missing ${key}`);
       return value;
@@ -63,7 +66,7 @@ function settledSpecGateFixture({ blocked = false } = {}) {
     failure: blocked ? { category: "semantic", code: "GATE_BLOCKED" } : null,
   };
   const state = {
-    schemaRevision: 3, runId: "run-1", specId: "spec-1", issue: null,
+    schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, runId: "run-1", specId: "spec-1", issue: null,
     current: ["spec-gate"], attempt,
   };
   const payload = {
@@ -104,7 +107,7 @@ function settledSpecGateFixture({ blocked = false } = {}) {
 
 function repairFixture({ phase = "draft" } = {}) {
   const gateStepId = phase === "spec" ? "spec-gate" : "draft-gate";
-  const targetStepId = phase === "spec" ? "spec" : "draft-gate-repair";
+  const targetStepId = phase === "spec" ? "spec-gate-repair" : "draft-gate-repair";
   const logicalKey = `${phase}.gate`;
   const sourceAttempt = { id: "gate-attempt-1", sequence: 1 };
   const sourceGatePayload = {
@@ -145,7 +148,7 @@ function repairFixture({ phase = "draft" } = {}) {
     catalogFingerprint: sourceCatalogFingerprint,
     targetStepId,
     resetStepIds: phase === "spec"
-      ? ["spec", "spec-review", "spec-triage", "spec-repair", "spec-gate"]
+      ? ["spec-gate-repair", "spec-gate"]
       : ["draft-gate-repair", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate"],
     taskLifecycle: null,
   };
@@ -241,6 +244,29 @@ function noProgressOutcome(fixture) {
   });
 }
 
+function specAuditOutcome(repair, { operationReason = "Fixed the canonical Spec.", groupIndex = 0 } = {}) {
+  const identity = { sourceArtifact: "steps/spec-gate/result.json", sourceStep: "spec-gate",
+    sourceFindingId: "R-1", fingerprint: DIGEST_A };
+  const operations = [{ kind: "replace-field", reason: operationReason }];
+  const strategy = `sha256:${crypto.createHash("sha256").update(JSON.stringify(operations)).digest("hex")}`;
+  const audit = {
+    version: 1, phase: "spec-gate-repair", baseRevision: `sha256:${DIGEST_B}`,
+    resultRevision: { digest: DIGEST_C, byteLength: 200 },
+    repairId: repair.repairId, repairRecordFingerprint: repair.recordFingerprint,
+    targetAttempt: repair.targetAttempt.toJSON(),
+    sourceEvidenceIdentity: repair.sourceEvidence.toJSON(),
+    sourceFindingIdentities: [identity], observationIdentities: [identity],
+    acceptedGroups: [{ index: groupIndex, findingIdentities: [identity], operations }],
+    observationResults: repair.requests.map((request) => ({
+      fingerprint: request.fingerprint.toString(), strategy, summary: operationReason,
+      priorRepairInsufficiency: request.recurrenceCount > 0
+        ? `The prior strategy did not resolve this recurring Gate observation: ${request.priorStrategy}` : null,
+      groupIndices: [groupIndex],
+    })),
+  };
+  return new SpecGateRepairOutcome({ audit, publicationActivityId: `audit-publication-${groupIndex}`, repair });
+}
+
 function statusFixture({ phase = "draft", outcome = null, nextResult = null, settlement = null, sourceSettlement = null } = {}) {
   const fixture = repairFixture({ phase });
   const selectedOutcome = outcome === "no-progress" ? noProgressOutcome(fixture) : (outcome === "applied" ? fixture.outcome : null);
@@ -271,17 +297,39 @@ function statusFixture({ phase = "draft", outcome = null, nextResult = null, set
     });
   }
   if (selectedOutcome !== null) {
+    const identity = { sourceArtifact: "steps/spec-gate/result.json", sourceStep: "spec-gate",
+      sourceFindingId: "R-1", fingerprint: DIGEST_A };
+    const operations = [{ kind: "replace-field", reason: "Fixed R-1." }];
+    const specAudit = phase === "spec" && outcome === "applied" ? {
+      version: 1, phase: "spec-gate-repair", baseRevision: `sha256:${DIGEST_B}`,
+      resultRevision: { digest: DIGEST_C, byteLength: 200 },
+      repairId: fixture.record.idempotencyKey,
+      repairRecordFingerprint: fixture.record.fingerprint,
+      targetAttempt: fixture.targetAttempt,
+      sourceEvidenceIdentity: fixture.record.evidenceIdentity.toJSON(),
+      sourceFindingIdentities: [identity], observationIdentities: [identity],
+      acceptedGroups: [{ index: 0, findingIdentities: [identity], operations }],
+      observationResults: [{
+        fingerprint: fixture.record.observationFingerprints[0],
+        strategy: `sha256:${crypto.createHash("sha256").update(JSON.stringify(operations)).digest("hex")}`,
+        summary: "Fixed R-1.", priorRepairInsufficiency: null, groupIndices: [0],
+      }],
+    } : null;
     const outcomeDescriptor = descriptor({
-      logicalKey: "plan.gate.repair.outcome",
-      relativePath: `artifacts/plan-gate-repairs/${fixture.record.idempotencyKey}/outcome.json`,
+      logicalKey: specAudit === null ? "plan.gate.repair.outcome" : "spec.gate.repair.audit",
+      relativePath: specAudit === null
+        ? `artifacts/plan-gate-repairs/${fixture.record.idempotencyKey}/outcome.json`
+        : `artifacts/spec-gate-repairs/${fixture.targetAttempt.id}/audit.json`,
       hash: DIGEST_C,
       activityId: selectedOutcome.publicationActivityId,
     });
     artifacts.push(outcomeDescriptor);
-    reads.set(`plan.gate.repair.outcome:${fixture.record.idempotencyKey}`, {
+    reads.set(specAudit === null
+      ? `plan.gate.repair.outcome:${fixture.record.idempotencyKey}`
+      : `spec.gate.repair.audit:${fixture.targetAttempt.id}`, {
       descriptor: outcomeDescriptor,
       relativePath: outcomeDescriptor.relativePath,
-      bytes: Buffer.from(JSON.stringify(selectedOutcome.toJSON())),
+      bytes: Buffer.from(JSON.stringify(specAudit ?? selectedOutcome.toJSON())),
     });
     activities.push({
       id: selectedOutcome.publicationActivityId,
@@ -289,6 +337,10 @@ function statusFixture({ phase = "draft", outcome = null, nextResult = null, set
       attemptId: fixture.targetAttempt.id,
       sequence: fixture.targetAttempt.sequence,
       transition: { operation: "confirm_attempt" },
+      ...(specAudit === null ? {} : { result: {
+        stepResult: { kind: "spec-gate-repair-ready-for-gate", type: "completed" },
+        draftSettlementReceipt: { resultKind: "spec-gate-repair-ready-for-gate" },
+      } }),
     });
   }
   const nextResults = nextResult === null ? [] : (Array.isArray(nextResult) ? nextResult : [nextResult]);
@@ -338,7 +390,7 @@ function statusFixture({ phase = "draft", outcome = null, nextResult = null, set
   }
   return {
     flowManager: manager({ artifacts, reads, activities }),
-    state: { schemaRevision: 3, specId: "spec-1", runId: "run-1", issue: 1, current: [fixture.targetStepId], attempt: fixture.targetAttempt },
+    state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "spec-1", runId: "run-1", issue: 1, current: [fixture.targetStepId], attempt: fixture.targetAttempt },
     artifacts,
     activities,
     reads,
@@ -389,7 +441,7 @@ describe("canonical Gate observation cycle", () => {
       artifacts: [issue],
       reads: new Map([["issue.log:", { descriptor: issue, relativePath: issue.relativePath, bytes: Buffer.from('{"entries":[]}') }]]),
     });
-    const state = { schemaRevision: 3, specId: "spec-1", runId: "run-1", issue: 1, current: null, attempt: null };
+    const state = { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "spec-1", runId: "run-1", issue: 1, current: null, attempt: null };
     const cycle = new CanonicalGateObservationCycle({ flowManager, state }).read();
     const status = GateObservationConvergenceStatus.fromCanonical({ flowManager, state });
 
@@ -661,7 +713,7 @@ describe("canonical Gate observation cycle", () => {
       failure: { category: "semantic" },
     };
     const state = {
-      schemaRevision: 3, specId: "spec-1", runId: "run-1", issue: null,
+      schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "spec-1", runId: "run-1", issue: null,
       current: ["draft-gate"], attempt,
     };
     const resultDescriptor = descriptor({
@@ -784,6 +836,101 @@ describe("canonical Gate observation cycle", () => {
     assert.equal(status.entries[0].nextGate.publicationActivityId, publication.id);
   });
 
+  it("retains a settled Spec Gate audit, recurrence memory, and advisory Gate result after reload", () => {
+    const fixture = statusFixture({ phase: "spec", outcome: "applied", nextResult: "fail", settlement: "nonblocking" });
+    const first = GateObservationConvergenceStatus.fromCanonical(fixture).toJSON();
+    const snapshotReads = new Map([...fixture.reads].map(([key, value]) => [key, {
+      descriptor: structuredClone(value.descriptor), relativePath: value.relativePath,
+      bytes: Buffer.from(value.bytes),
+    }]));
+    const reloaded = GateObservationConvergenceStatus.fromCanonical({
+      state: structuredClone(fixture.state),
+      flowManager: manager({
+        artifacts: structuredClone(fixture.artifacts),
+        activities: structuredClone(fixture.activities), reads: snapshotReads,
+      }),
+    }).toJSON();
+    assert.deepEqual(reloaded, first);
+    assert.equal(first.entries[0].repairCount, 1);
+    assert.equal(first.entries[0].nextGate.result, "fail");
+    assert.equal(first.entries[0].nextGate.settlement, "nonblocking-advisory");
+    assert.equal(first.entries[0].finalDisposition, "nonblocking-advisory");
+  });
+
+  it("rejects a rehashed Spec Gate audit with a strategy that its accepted operations do not support", () => {
+    const fixture = statusFixture({ phase: "spec", outcome: "applied" });
+    const published = fixture.reads.get("spec.gate.repair.audit:repair-attempt-2");
+    const audit = JSON.parse(published.bytes.toString("utf8"));
+    audit.observationResults[0].strategy = `sha256:${DIGEST_D}`;
+    published.bytes = Buffer.from(JSON.stringify(audit));
+    published.descriptor.hash = crypto.createHash("sha256").update(published.bytes).digest("hex");
+    assert.throws(() => GateObservationConvergenceStatus.fromCanonical(fixture), /strategy does not match/);
+  });
+
+  it("uses the new Spec audit strategy for same-observation recurrence and separates changed observations", () => {
+    const fixture = repairFixture({ phase: "spec" });
+    const firstRepair = new GateObservationRepair({
+      repairId: fixture.record.idempotencyKey,
+      sourceEvidence: fixture.record.evidenceIdentity,
+      targetAttempt: fixture.targetAttempt,
+      publicationActivityId: fixture.repairActivity.id,
+      recordFingerprint: fixture.record.fingerprint,
+      handoffRevision: DIGEST_E,
+      requests: fixture.record.observationRequests,
+    });
+    const firstOutcome = specAuditOutcome(firstRepair);
+    const firstStrategy = firstOutcome.report.results[0].strategy;
+    const firstObservation = new PlanGateRepairObservation({ ...sourceObservation(), phase: "spec", scope: "flow", taskId: null });
+    const firstOccurrence = new GateObservationOccurrence({
+      evidence: firstRepair.sourceEvidence, observation: firstObservation.canonical, blocking: true,
+    });
+    for (const changed of [false, true]) {
+      const sourceAttempt = { id: "gate-attempt-2", sequence: 2 };
+      const sourceEvidence = new GateEvidenceIdentity({
+        sourceAttempt, resultLogicalKey: "spec.gate", publicationActivityId: "gate-publication-2",
+        catalogFingerprint: DIGEST_E,
+        transitionLineage: {
+          sourceAttempt, canonicalAttempt: sourceAttempt,
+          sourceFingerprint: DIGEST_E, canonicalFingerprint: DIGEST_E,
+          sourceRevisionFingerprint: DIGEST_E, canonicalRevisionFingerprint: DIGEST_E,
+        },
+      });
+      const observation = new PlanGateRepairObservation({
+        ...sourceObservation(), observed: changed ? "A different invariant is missing." : sourceObservation().observed,
+        phase: "spec", scope: "flow", taskId: null,
+      });
+      const secondOccurrence = new GateObservationOccurrence({
+        evidence: sourceEvidence, observation: observation.canonical, blocking: true,
+      });
+      const secondRequest = new GateRepairObservationRequest({
+        fingerprint: observation.fingerprint,
+        recurrenceCount: changed ? 0 : 1,
+        priorStrategy: changed ? null : firstStrategy,
+      });
+      const secondRepair = new GateObservationRepair({
+        repairId: `plan-gate-repair-${DIGEST_C}`,
+        sourceEvidence, targetAttempt: { id: "repair-attempt-3", sequence: 3 },
+        publicationActivityId: "plan-repair-activity-2", recordFingerprint: DIGEST_C,
+        handoffRevision: DIGEST_E, requests: [secondRequest],
+      });
+      const secondOutcome = specAuditOutcome(secondRepair, { operationReason: "A different correction fixed the Spec.", groupIndex: 1 });
+      const readModel = new GateObservationCycleReader({
+        occurrences: [firstOccurrence, secondOccurrence],
+        repairs: [firstRepair, secondRepair], outcomes: [firstOutcome, secondOutcome],
+      }).read();
+      assert.equal(readModel.recurrenceCount, changed ? 0 : 1);
+      const handoff = new GateObservationRecurrenceHandoff({
+        record: {
+          phase: "spec", targetStepId: "spec-gate-repair", evidenceIdentity: sourceEvidence,
+          observationRequests: [secondRequest],
+        },
+        readModel,
+      }).toJSON();
+      assert.equal(handoff.entries[0].priorStrategy, changed ? null : firstStrategy);
+      assert.equal(handoff.entries[0].previousCycle === null, changed);
+    }
+  });
+
   it("fails closed when a repair record is not bound to its exact plan_gate_repair Activity", () => {
     const fixture = repairFixture();
     fixture.repairActivity.references.repairs[0] = { id: "different-repair", label: "gate-source-1" };
@@ -797,7 +944,7 @@ describe("canonical Gate observation cycle", () => {
       }]]),
       activities: [fixture.repairActivity],
     });
-    const state = { schemaRevision: 3, specId: "spec-1", runId: "run-1", issue: 1, current: ["draft-gate-repair"], attempt: fixture.targetAttempt };
+    const state = { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "spec-1", runId: "run-1", issue: 1, current: ["draft-gate-repair"], attempt: fixture.targetAttempt };
 
     assert.throws(
       () => new CanonicalGateObservationCycle({ flowManager, state }).read(),

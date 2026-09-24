@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { FlowCommand } from "./base-command.js";
 
@@ -14,7 +15,7 @@ export default class RunSettleFailureCommand extends FlowCommand {
 
   execute(ctx) {
     const projectedState = ctx.flowState;
-    if (projectedState?.schemaRevision !== 3 || typeof ctx.flowManager?.canonicalState !== "function") {
+    if (projectedState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowManager?.canonicalState !== "function") {
       return Envelope.fail(
         "run",
         "settle-failure",

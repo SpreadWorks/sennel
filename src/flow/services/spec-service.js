@@ -58,11 +58,7 @@ export class SpecService {
     }
     const settlement = settleSpecStepResult(this.binding.stepId, stepResult);
     const errorSettlement = settlement instanceof StepErrorDecision;
-    const planGateRepairOutcome = this.#adoption?.facts.planGateRepairOutcome ?? null;
     if (this.#adoption !== null) this.#adoption.assertResult(stepResult);
-    if (this.preparation.facts.planGateRepairOutcome !== null && this.#adoption === null) {
-      throw new TypeError("Spec plan Gate repair requires the Step-adopted Result");
-    }
     if (!errorSettlement && (!(settlement instanceof StepRoute) || this.#adoption === null)) {
       throw new TypeError("Spec publication requires the Step-adopted candidate and Result");
     }
@@ -80,7 +76,6 @@ export class SpecService {
       settlement,
       specSelection: this.#adoption,
       application,
-      planGateRepairOutcome,
       ...this.#publication,
       lifecycleResult: errorSettlement ? null : this.#publication.lifecycleResult,
     };

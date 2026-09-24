@@ -1,0 +1,286 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "spec-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "artifacts": {
+          "phase": "spec",
+          "failureKind": "ai_semantic_fail",
+          "failureCode": "SPEC_GATE_REJECTED",
+          "nextAction": {
+            "diagnosis": {
+              "observations": []
+            }
+          },
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "SPEC_GATE_REJECTED"
+          },
+          "gateTransitionLineage": "4997228ee782af59e0eaae4f0ee58651c3eec60ff81a74e2269009c2b7967827",
+          "gateTransitionAttemptId": "attempt-spec-gate-cc96fa81-1c79-4fb2-abcd-8d3020c9293d",
+          "gateTransitionAttemptSequence": 1
+        }
+      },
+      "artifact": {
+        "logicalKey": "spec.gate",
+        "payload": {
+          "result": "fail",
+          "artifacts": {
+            "phase": "spec",
+            "failureKind": "ai_semantic_fail",
+            "failureCode": "SPEC_GATE_REJECTED",
+            "nextAction": {
+              "diagnosis": {
+                "observations": []
+              }
+            },
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "SPEC_GATE_REJECTED"
+            },
+            "gateTransitionLineage": "4997228ee782af59e0eaae4f0ee58651c3eec60ff81a74e2269009c2b7967827",
+            "gateTransitionAttemptId": "attempt-spec-gate-cc96fa81-1c79-4fb2-abcd-8d3020c9293d",
+            "gateTransitionAttemptSequence": 1
+          }
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "spec-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "artifacts": {
+          "phase": "spec",
+          "failureKind": "ai_semantic_fail",
+          "failureCode": "SPEC_GATE_REJECTED",
+          "nextAction": {
+            "diagnosis": {
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "spec-cycle-1",
+                  "requirementRef": "R-1",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[0]"
+                  },
+                  "observed": "Spec cycle 1 requires a distinct correction.",
+                  "severity": "blocking",
+                  "refs": [
+                    "R-1"
+                  ]
+                }
+              ]
+            }
+          },
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "SPEC_GATE_REJECTED"
+          },
+          "gateTransitionLineage": "2763fbd72d6edc634b366966dd212b38271311c65e4138530c7bba401e762b43",
+          "gateTransitionAttemptId": "attempt-spec-gate-gate-retry-f726b543-9cf3-4e3b-a5b5-a639efe863e3",
+          "gateTransitionAttemptSequence": 2
+        }
+      },
+      "artifact": {
+        "logicalKey": "spec.gate",
+        "payload": {
+          "result": "fail",
+          "artifacts": {
+            "phase": "spec",
+            "failureKind": "ai_semantic_fail",
+            "failureCode": "SPEC_GATE_REJECTED",
+            "nextAction": {
+              "diagnosis": {
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "spec-cycle-1",
+                    "requirementRef": "R-1",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[0]"
+                    },
+                    "observed": "Spec cycle 1 requires a distinct correction.",
+                    "severity": "blocking",
+                    "refs": [
+                      "R-1"
+                    ]
+                  }
+                ]
+              }
+            },
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "SPEC_GATE_REJECTED"
+            },
+            "gateTransitionLineage": "2763fbd72d6edc634b366966dd212b38271311c65e4138530c7bba401e762b43",
+            "gateTransitionAttemptId": "attempt-spec-gate-gate-retry-f726b543-9cf3-4e3b-a5b5-a639efe863e3",
+            "gateTransitionAttemptSequence": 2
+          }
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "spec-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "artifacts": {
+          "phase": "spec",
+          "failureKind": "ai_semantic_fail",
+          "failureCode": "SPEC_GATE_REJECTED",
+          "nextAction": {
+            "diagnosis": {
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "spec-cycle-2",
+                  "requirementRef": "R-1",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[1]"
+                  },
+                  "observed": "Spec cycle 2 requires a distinct correction.",
+                  "severity": "blocking",
+                  "refs": [
+                    "R-1"
+                  ]
+                }
+              ]
+            }
+          },
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "SPEC_GATE_REJECTED"
+          },
+          "gateTransitionLineage": "e32e2b304878fc906af3f413131ab7bce8f04e46c19317ccac3ca4c1f789c5b6",
+          "gateTransitionAttemptId": "attempt-spec-gate-53f44191-1d78-4d59-a9f6-5f4fda7ec367",
+          "gateTransitionAttemptSequence": 3
+        }
+      },
+      "artifact": {
+        "logicalKey": "spec.gate",
+        "payload": {
+          "result": "fail",
+          "artifacts": {
+            "phase": "spec",
+            "failureKind": "ai_semantic_fail",
+            "failureCode": "SPEC_GATE_REJECTED",
+            "nextAction": {
+              "diagnosis": {
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "spec-cycle-2",
+                    "requirementRef": "R-1",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[1]"
+                    },
+                    "observed": "Spec cycle 2 requires a distinct correction.",
+                    "severity": "blocking",
+                    "refs": [
+                      "R-1"
+                    ]
+                  }
+                ]
+              }
+            },
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "SPEC_GATE_REJECTED"
+            },
+            "gateTransitionLineage": "e32e2b304878fc906af3f413131ab7bce8f04e46c19317ccac3ca4c1f789c5b6",
+            "gateTransitionAttemptId": "attempt-spec-gate-53f44191-1d78-4d59-a9f6-5f4fda7ec367",
+            "gateTransitionAttemptSequence": 3
+          }
+        }
+      }
+    },
+    {
+      "attempt": 4,
+      "nodeId": "spec-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "artifacts": {
+          "phase": "spec",
+          "failureKind": "ai_semantic_fail",
+          "failureCode": "SPEC_GATE_REJECTED",
+          "nextAction": {
+            "diagnosis": {
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "spec-cycle-3",
+                  "requirementRef": "R-1",
+                  "where": {
+                    "file": "spec.json",
+                    "locator": "requirements[2]"
+                  },
+                  "observed": "Spec cycle 3 requires a distinct correction.",
+                  "severity": "blocking",
+                  "refs": [
+                    "R-1"
+                  ]
+                }
+              ]
+            }
+          },
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "SPEC_GATE_REJECTED"
+          },
+          "gateTransitionLineage": "380f6768cd5e321bbe6001521ab78c80aa0dc8cb7148d73c25ab58e029bf0fc9",
+          "gateTransitionAttemptId": "attempt-spec-gate-3f4eaffc-a42d-4b9e-88d6-3c1c0d8a81a1",
+          "gateTransitionAttemptSequence": 4
+        }
+      },
+      "artifact": {
+        "logicalKey": "spec.gate",
+        "payload": {
+          "result": "fail",
+          "artifacts": {
+            "phase": "spec",
+            "failureKind": "ai_semantic_fail",
+            "failureCode": "SPEC_GATE_REJECTED",
+            "nextAction": {
+              "diagnosis": {
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "spec-cycle-3",
+                    "requirementRef": "R-1",
+                    "where": {
+                      "file": "spec.json",
+                      "locator": "requirements[2]"
+                    },
+                    "observed": "Spec cycle 3 requires a distinct correction.",
+                    "severity": "blocking",
+                    "refs": [
+                      "R-1"
+                    ]
+                  }
+                ]
+              }
+            },
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "SPEC_GATE_REJECTED"
+            },
+            "gateTransitionLineage": "380f6768cd5e321bbe6001521ab78c80aa0dc8cb7148d73c25ab58e029bf0fc9",
+            "gateTransitionAttemptId": "attempt-spec-gate-3f4eaffc-a42d-4b9e-88d6-3c1c0d8a81a1",
+            "gateTransitionAttemptSequence": 4
+          }
+        }
+      }
+    }
+  ]
+}

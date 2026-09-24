@@ -1,0 +1,433 @@
+{
+  "entries": [
+    {
+      "step": "spec-gate",
+      "phase": "spec",
+      "observations": [],
+      "reason": "Spec cycle 1 requires evaluation.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-24T14:29:13.566Z",
+      "issueLogId": "spec-gate-result-5b03bb76f935415613fda88503f32ad9478e1e27c19bf1c64eb52ad60fd61d12"
+    },
+    {
+      "step": "spec-gate",
+      "phase": "spec",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-cycle-1",
+          "requirementRef": "R-1",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[0]"
+          },
+          "observed": "Spec cycle 1 requires a distinct correction.",
+          "severity": "blocking",
+          "refs": [
+            "R-1"
+          ]
+        }
+      ],
+      "reason": "Spec cycle 1 requires evaluation.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-24T14:29:14.117Z",
+      "issueLogId": "spec-gate-result-3b3fd4ab05658cf488d9f7c80e55c141cca39a066b66bf25eca9ef8b9aa30ab5"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "spec-gate",
+      "phase": "spec",
+      "reason": "Guarded spec gate repair rewound to spec.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-cycle-1",
+          "requirementRef": "R-1",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[0]"
+          },
+          "observed": "Spec cycle 1 requires a distinct correction.",
+          "severity": "blocking",
+          "refs": [
+            "R-1"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "R-1"
+          },
+          "rootCause": null,
+          "fingerprint": "9448743178e0b65ede9e797676047a8c7dd8367fae02fcc1218482e15fdcac2a"
+        }
+      ],
+      "timestamp": "2026-09-24T14:29:14.688Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "canonical-manager-run",
+        "specId": "001-spec-gate-cycle-limit",
+        "issue": null,
+        "phase": "spec",
+        "targetStepId": "spec",
+        "connector": {
+          "phase": "spec",
+          "sourceGateStepId": "spec-gate",
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-gate-retry-f726b543-9cf3-4e3b-a5b5-a639efe863e3",
+            "sequence": 2
+          },
+          "resultLogicalKey": "spec.gate",
+          "resultArtifactId": "steps/spec-gate/result.json",
+          "catalogFingerprint": "502654bc609d3d1b7aa820765021fe3f8e4a7e5debe0af9b49d936181d2bb91a",
+          "targetStepId": "spec",
+          "resetStepIds": [
+            "spec",
+            "spec-review",
+            "spec-triage",
+            "spec-repair",
+            "spec-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-gate-retry-f726b543-9cf3-4e3b-a5b5-a639efe863e3",
+            "sequence": 2
+          },
+          "resultLogicalKey": "spec.gate",
+          "publicationActivityId": "plan-gate-repaired-4a30e08f-1b33-417d-ac84-e249f6703d0c",
+          "catalogFingerprint": "502654bc609d3d1b7aa820765021fe3f8e4a7e5debe0af9b49d936181d2bb91a",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-spec-gate-gate-retry-f726b543-9cf3-4e3b-a5b5-a639efe863e3",
+              "sequence": 2
+            },
+            "canonicalAttempt": {
+              "id": "attempt-spec-gate-gate-retry-f726b543-9cf3-4e3b-a5b5-a639efe863e3",
+              "sequence": 2
+            },
+            "sourceFingerprint": "f4951950a47a3e6e525ff9765c244ea1aee36a04f0659c8b692cf007f25bf9bc",
+            "canonicalFingerprint": "502654bc609d3d1b7aa820765021fe3f8e4a7e5debe0af9b49d936181d2bb91a",
+            "sourceRevisionFingerprint": "2763fbd72d6edc634b366966dd212b38271311c65e4138530c7bba401e762b43",
+            "canonicalRevisionFingerprint": "2763fbd72d6edc634b366966dd212b38271311c65e4138530c7bba401e762b43"
+          }
+        },
+        "sourceIssueLogId": "spec-gate-result-3b3fd4ab05658cf488d9f7c80e55c141cca39a066b66bf25eca9ef8b9aa30ab5",
+        "sourceEntryDigest": "f08f1b3e99b9d39cfea6be6b948aee5170001d131d4883c546ac94a224dba8d2",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "spec-cycle-1",
+            "requirementRef": "R-1",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[0]"
+            },
+            "observed": "Spec cycle 1 requires a distinct correction.",
+            "severity": "blocking",
+            "refs": [
+              "R-1"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "R-1"
+            },
+            "rootCause": null,
+            "fingerprint": "9448743178e0b65ede9e797676047a8c7dd8367fae02fcc1218482e15fdcac2a"
+          }
+        ],
+        "observationFingerprints": [
+          "9448743178e0b65ede9e797676047a8c7dd8367fae02fcc1218482e15fdcac2a"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "9448743178e0b65ede9e797676047a8c7dd8367fae02fcc1218482e15fdcac2a",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-09-24T14:29:14.688Z"
+      },
+      "issueLogId": "plan-gate-repair-1dfc8119cdd89cfd8e8bef0f51b08703d12c9c9209ecaa8315bf4325b4170d03"
+    },
+    {
+      "step": "spec-gate",
+      "phase": "spec",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-cycle-2",
+          "requirementRef": "R-1",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[1]"
+          },
+          "observed": "Spec cycle 2 requires a distinct correction.",
+          "severity": "blocking",
+          "refs": [
+            "R-1"
+          ]
+        }
+      ],
+      "reason": "Spec cycle 2 requires evaluation.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-24T14:29:19.379Z",
+      "issueLogId": "spec-gate-result-e4392af75876064bbec2d68b2838fda92a5e2f30096117c86a0acdb2a9b2a71b"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "spec-gate",
+      "phase": "spec",
+      "reason": "Guarded spec gate repair rewound to spec.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-cycle-2",
+          "requirementRef": "R-1",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[1]"
+          },
+          "observed": "Spec cycle 2 requires a distinct correction.",
+          "severity": "blocking",
+          "refs": [
+            "R-1"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "R-1"
+          },
+          "rootCause": null,
+          "fingerprint": "01694c3842bab55b901bb8763738e1d0d910d39f0d7e90ee3c6155390b0a1f50"
+        }
+      ],
+      "timestamp": "2026-09-24T14:29:20.115Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "canonical-manager-run",
+        "specId": "001-spec-gate-cycle-limit",
+        "issue": null,
+        "phase": "spec",
+        "targetStepId": "spec",
+        "connector": {
+          "phase": "spec",
+          "sourceGateStepId": "spec-gate",
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-53f44191-1d78-4d59-a9f6-5f4fda7ec367",
+            "sequence": 3
+          },
+          "resultLogicalKey": "spec.gate",
+          "resultArtifactId": "steps/spec-gate/result.json",
+          "catalogFingerprint": "4cd6fd32dc4efce4feafa0cd6707605c2f4582b67a1afa1bef8ad688675a286e",
+          "targetStepId": "spec",
+          "resetStepIds": [
+            "spec",
+            "spec-review",
+            "spec-triage",
+            "spec-repair",
+            "spec-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-53f44191-1d78-4d59-a9f6-5f4fda7ec367",
+            "sequence": 3
+          },
+          "resultLogicalKey": "spec.gate",
+          "publicationActivityId": "plan-gate-repaired-6c14f835-dce4-4d97-bdf4-cdc27316ad8d",
+          "catalogFingerprint": "4cd6fd32dc4efce4feafa0cd6707605c2f4582b67a1afa1bef8ad688675a286e",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-spec-gate-53f44191-1d78-4d59-a9f6-5f4fda7ec367",
+              "sequence": 3
+            },
+            "canonicalAttempt": {
+              "id": "attempt-spec-gate-53f44191-1d78-4d59-a9f6-5f4fda7ec367",
+              "sequence": 3
+            },
+            "sourceFingerprint": "935f7e9cad0ccda5076a955e29a75aea3a5ec4b8e66e8756e8deb00512364be1",
+            "canonicalFingerprint": "4cd6fd32dc4efce4feafa0cd6707605c2f4582b67a1afa1bef8ad688675a286e",
+            "sourceRevisionFingerprint": "e32e2b304878fc906af3f413131ab7bce8f04e46c19317ccac3ca4c1f789c5b6",
+            "canonicalRevisionFingerprint": "e32e2b304878fc906af3f413131ab7bce8f04e46c19317ccac3ca4c1f789c5b6"
+          }
+        },
+        "sourceIssueLogId": "spec-gate-result-e4392af75876064bbec2d68b2838fda92a5e2f30096117c86a0acdb2a9b2a71b",
+        "sourceEntryDigest": "066c217a6f0006cdbbba01a1264ca79a01bc7dcbdc200d1b701c6d0ee996eb33",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "spec-cycle-2",
+            "requirementRef": "R-1",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[1]"
+            },
+            "observed": "Spec cycle 2 requires a distinct correction.",
+            "severity": "blocking",
+            "refs": [
+              "R-1"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "R-1"
+            },
+            "rootCause": null,
+            "fingerprint": "01694c3842bab55b901bb8763738e1d0d910d39f0d7e90ee3c6155390b0a1f50"
+          }
+        ],
+        "observationFingerprints": [
+          "01694c3842bab55b901bb8763738e1d0d910d39f0d7e90ee3c6155390b0a1f50"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "01694c3842bab55b901bb8763738e1d0d910d39f0d7e90ee3c6155390b0a1f50",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-09-24T14:29:20.115Z"
+      },
+      "issueLogId": "plan-gate-repair-8208a1197585c079c31ed2e1839d0f6f81c2cb3d560ec9a26d6d209416b2f9c7"
+    },
+    {
+      "step": "spec-gate",
+      "phase": "spec",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-cycle-3",
+          "requirementRef": "R-1",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[2]"
+          },
+          "observed": "Spec cycle 3 requires a distinct correction.",
+          "severity": "blocking",
+          "refs": [
+            "R-1"
+          ]
+        }
+      ],
+      "reason": "Spec cycle 3 requires evaluation.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-09-24T14:29:25.196Z",
+      "issueLogId": "spec-gate-result-4419376faf5db3c970dcf6c045e11c9e9e3f0544b1a38bb8b4ff5918531f65df"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "spec-gate",
+      "phase": "spec",
+      "reason": "Guarded spec gate repair rewound to spec.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "spec-cycle-3",
+          "requirementRef": "R-1",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[2]"
+          },
+          "observed": "Spec cycle 3 requires a distinct correction.",
+          "severity": "blocking",
+          "refs": [
+            "R-1"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "R-1"
+          },
+          "rootCause": null,
+          "fingerprint": "691340798f3522efb91b54ef5fe8d16f783a042b6b636f4c55ccd05dc35d7335"
+        }
+      ],
+      "timestamp": "2026-09-24T14:29:25.995Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "canonical-manager-run",
+        "specId": "001-spec-gate-cycle-limit",
+        "issue": null,
+        "phase": "spec",
+        "targetStepId": "spec",
+        "connector": {
+          "phase": "spec",
+          "sourceGateStepId": "spec-gate",
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-3f4eaffc-a42d-4b9e-88d6-3c1c0d8a81a1",
+            "sequence": 4
+          },
+          "resultLogicalKey": "spec.gate",
+          "resultArtifactId": "steps/spec-gate/result.json",
+          "catalogFingerprint": "363858652cc6b70c4596b7e34dbd20c48b7f3580a45920baf97b91a7ab3ed807",
+          "targetStepId": "spec",
+          "resetStepIds": [
+            "spec",
+            "spec-review",
+            "spec-triage",
+            "spec-repair",
+            "spec-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-3f4eaffc-a42d-4b9e-88d6-3c1c0d8a81a1",
+            "sequence": 4
+          },
+          "resultLogicalKey": "spec.gate",
+          "publicationActivityId": "plan-gate-repaired-a692c244-c24b-4565-878d-3d5d6b85576e",
+          "catalogFingerprint": "363858652cc6b70c4596b7e34dbd20c48b7f3580a45920baf97b91a7ab3ed807",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-spec-gate-3f4eaffc-a42d-4b9e-88d6-3c1c0d8a81a1",
+              "sequence": 4
+            },
+            "canonicalAttempt": {
+              "id": "attempt-spec-gate-3f4eaffc-a42d-4b9e-88d6-3c1c0d8a81a1",
+              "sequence": 4
+            },
+            "sourceFingerprint": "a1eb2c1a1eb4c3bd4b8d29fafd7312a7483bce6d1f57ce1821a7c18ed0280447",
+            "canonicalFingerprint": "363858652cc6b70c4596b7e34dbd20c48b7f3580a45920baf97b91a7ab3ed807",
+            "sourceRevisionFingerprint": "380f6768cd5e321bbe6001521ab78c80aa0dc8cb7148d73c25ab58e029bf0fc9",
+            "canonicalRevisionFingerprint": "380f6768cd5e321bbe6001521ab78c80aa0dc8cb7148d73c25ab58e029bf0fc9"
+          }
+        },
+        "sourceIssueLogId": "spec-gate-result-4419376faf5db3c970dcf6c045e11c9e9e3f0544b1a38bb8b4ff5918531f65df",
+        "sourceEntryDigest": "297f2ae7ae0186d2e7778b4c7329580dbd5db3a571d4800009539fb5e998631d",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "spec-cycle-3",
+            "requirementRef": "R-1",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[2]"
+            },
+            "observed": "Spec cycle 3 requires a distinct correction.",
+            "severity": "blocking",
+            "refs": [
+              "R-1"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "R-1"
+            },
+            "rootCause": null,
+            "fingerprint": "691340798f3522efb91b54ef5fe8d16f783a042b6b636f4c55ccd05dc35d7335"
+          }
+        ],
+        "observationFingerprints": [
+          "691340798f3522efb91b54ef5fe8d16f783a042b6b636f4c55ccd05dc35d7335"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "691340798f3522efb91b54ef5fe8d16f783a042b6b636f4c55ccd05dc35d7335",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-09-24T14:29:25.995Z"
+      },
+      "issueLogId": "plan-gate-repair-85c4c5efbab67de26c3f4ddbd895afbd56fcf0436284f85abc2c871c0a66530f"
+    }
+  ]
+}

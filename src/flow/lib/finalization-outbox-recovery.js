@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import {
   FlowOutboxStore,
   finalizationOutboxIdentity,
@@ -206,7 +207,7 @@ export class FinalizationOutboxRecovery {
    * allowed here.
    */
   #hasCanonicalReport(entry) {
-    if (this.state?.schemaRevision !== 3) return false;
+    if (this.state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) return false;
     try {
       const artifact = this.ctx.flowManager.readArtifact({
         specId: this.state.specId,

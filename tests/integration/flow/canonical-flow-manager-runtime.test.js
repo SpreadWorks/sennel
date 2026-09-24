@@ -1,3 +1,5 @@
+import { completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
 import {
   completeDraftWorkerThroughStep,
@@ -1042,7 +1044,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     manager.addActiveFlow(created.specId, "direct");
     const loaded = manager.load();
     assert.equal(loaded.request, "Keep the request exactly as supplied.");
-    assert.equal(loaded.schemaRevision, 3);
+    assert.equal(loaded.schemaRevision, CURRENT_FLOW_SCHEMA_REVISION);
     assert.equal(loaded.execution.mode, "direct");
   });
 
@@ -1503,7 +1505,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
         kind: "violation",
         failureMode: observation,
         requirementRef: "R-1",
-        where: { file: "spec.json", locator: `requirements[${cycle - 1}]` },
+        where: { file: "spec.json", locator: "requirements[R-1].desc" },
         observed: `Spec cycle ${cycle} requires a distinct correction.`,
         severity: "blocking",
         refs: ["R-1"],
@@ -1544,53 +1546,32 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(retry.facts.cycle, 1);
     assert.equal(manager.activityLedger(created.specId).at(-1).transition.operation, "settle_spec_gate_retry");
     assert.equal(manager.activityLedger(created.specId).filter((activity) => (
-      activity.nodeId === "spec" && activity.transition.operation === "plan_gate_repair"
+      activity.nodeId === "spec-gate-repair" && activity.transition.operation === "plan_gate_repair"
     )).length, 0);
 
     for (let cycle = 1; cycle <= 3; cycle += 1) {
       const gate = await runCurrentCycle(cycle);
       assert.equal(gate.facts.cycle, cycle);
       assert.equal(gate.stepResult.kind, "spec-gate-repair-required");
-      assert.equal(manager.canonicalState(created.specId).current.at(-1), "spec");
-      const coordinator = new WorkerArtifactHandoffCoordinator();
-      const request = coordinator.createRequest({
-        ctx: context(), state: manager.load(created.specId),
+      assert.equal(manager.canonicalState(created.specId).current.at(-1), "spec-gate-repair");
+      const repaired = await completeSpecGateRepairHandoff({
+        ctx: context(), replacement: `Bound repeated Spec repair cycles. Correction ${cycle}.`,
         invocation: {
           id: `spec-cycle-repair-${cycle}`,
           target: { digest: "b".repeat(64) },
-          action: { digest: "a".repeat(64), nextAction: { step: "spec" } },
+          action: { digest: "a".repeat(64), nextAction: { step: "spec-gate-repair" } },
         },
       });
-      const currentSpec = request.inputs.find((entry) => entry.name === "spec.json").document;
-      fs.writeFileSync(request.payloadPath("spec.json"), `${JSON.stringify({
-        ...currentSpec, goal: `${currentSpec.goal} Correction ${cycle}.`,
-      }, null, 2)}\n`);
-      const recurrence = request.inputs.find((entry) => entry.name === "gate-observation-recurrence.json").document;
-      fs.writeFileSync(request.payloadPath("gate-repair-report.json"), `${JSON.stringify({
-        version: 1, summary: `Applied correction ${cycle}.`,
-        results: recurrence.entries.map((entry) => ({
-          fingerprint: entry.fingerprint, strategy: `Clarify cycle ${cycle}`,
-          summary: `Corrected the cycle ${cycle} observation.`,
-          priorRepairInsufficiency: entry.recurrenceCount > 0
-            ? "The previous correction did not resolve this observation." : null,
-        })),
-      }, null, 2)}\n`);
-      sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
-      const service = await SpecService.prepare({
-        ctx: context(), request, Connector: SpecEntryConnector,
-        handoffCoordinator: coordinator,
-      });
-      const repairResult = await new SpecStep(service).execute();
-      assert.equal(repairResult.kind, "spec-plan-gate-repair-applied");
+      assert.equal(repaired.result.kind, "spec-gate-repair-review-required");
       assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "spec-review");
-      const repair = service.preparation.facts.planGateRepairOutcome.repair;
-      const outcome = manager.readArtifact({
-        specId: created.specId, logicalKey: "plan.gate.repair.outcome",
-        parameters: { repairId: repair.repairId }, consumerNodeId: "system",
+      const audit = manager.readArtifact({
+        specId: created.specId, logicalKey: "spec.gate.repair.audit",
+        parameters: { attemptId: repaired.service.binding.attempt.id }, consumerNodeId: "spec-gate",
       });
-      assert.equal(JSON.parse(outcome.bytes).disposition, "applied");
+      assert.equal(JSON.parse(audit.bytes).acceptedGroups.length, 1);
       assert.equal(manager.activityLedger(created.specId).filter((activity) => (
-        activity.nodeId === "spec" && activity.result?.stepResult?.kind === "spec-plan-gate-repair-applied"
+        activity.nodeId === "spec-gate-repair"
+        && activity.result?.stepResult?.kind === "spec-gate-repair-review-required"
       )).length, cycle);
       advanceTo(manager, created.specId, "spec-gate");
     }
@@ -1645,9 +1626,11 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const continued = manager.canonicalState(created.specId);
     assert.equal(continued.nextAction().nodeId, "approval");
     assert.equal(continued.findNode("approval").status, "invalidated");
-    assert.equal(continued.findNode("spec").attemptSequence, 4);
+    assert.equal(continued.findNode("spec").attemptSequence, 1);
+    assert.equal(continued.findNode("spec-gate-repair").attemptSequence, 4);
+    assert.equal(continued.findNode("spec-gate-repair").status, "skipped");
     assert.equal(manager.activityLedger(created.specId).filter((activity) => (
-      activity.nodeId === "spec" && activity.result?.stepResult?.kind === "spec-plan-gate-repair-applied"
+      activity.nodeId === "spec-gate-repair" && activity.result?.stepResult?.kind === "spec-gate-repair-review-required"
     )).length, 3);
   });
 
@@ -5354,7 +5337,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
   });
 
   it("derives every cataloged test member finalization from durable test confirmations", () => {
-    const state = { schemaRevision: 3, runId: "test-source-run", specId: "001-test-source-provenance" };
+    const state = { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, runId: "test-source-run", specId: "001-test-source-provenance" };
     const descriptor = (testPath, activityId) => ({
       logicalKey: "tests.source",
       slot: { publicationStep: "test-gate" },
@@ -5408,7 +5391,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
   });
 
   it("rejects test-source revisions without complete durable provenance", () => {
-    const state = { schemaRevision: 3, runId: "test-source-run", specId: "001-test-source-provenance-errors" };
+    const state = { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, runId: "test-source-run", specId: "001-test-source-provenance-errors" };
     const descriptor = (activityId) => ({
       logicalKey: "tests.source",
       slot: { publicationStep: "test-gate" },

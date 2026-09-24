@@ -1,0 +1,23 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "cf8a039960a5f3544a5e56d4108d969ba62fb7dff30c3d9ae6aea9e179351978",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "no-op",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    }
+  ],
+  "findings": [],
+  "generation": 1,
+  "identity": {
+    "byteLength": 722,
+    "digest": "0865504e0d35990a0d4eb7b49f7b9597016f69abdaee50413f88b7c7c3f5b322",
+    "revision": 3,
+    "specId": "001-spec-gate-cycle-limit"
+  },
+  "version": 2
+}

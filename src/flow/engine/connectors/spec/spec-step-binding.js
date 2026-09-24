@@ -3,12 +3,13 @@ import { WorkerArtifactHandoffRequest } from "../../../lib/worker-artifact-hando
 import { StepBinding, canonicalStepState } from "../../step-binding.js";
 import { SpecRevisionIdentity } from "../../../lib/spec-review-artifacts.js";
 import { CurrentFlowStateConflictError } from "../../../lib/current-flow-state.js";
+import { createHash } from "node:crypto";
 
 /** Binds a Spec worker publication to its exact active Attempt. */
 export class SpecWorkerStepBinding extends StepBinding {
   constructor({ request } = {}) {
     if (!(request instanceof WorkerArtifactHandoffRequest)
-      || !["spec", "spec-triage", "spec-repair"].includes(request.stepId)
+      || !["spec", "spec-triage", "spec-repair", "spec-gate-repair"].includes(request.stepId)
       || !requiresWorkerArtifactHandoff(request.stepId)) {
       throw new TypeError("Spec worker binding requires a Spec handoff request");
     }
@@ -20,7 +21,16 @@ export class SpecWorkerStepBinding extends StepBinding {
 
   assertCurrent() {
     const state = super.assertCurrent();
-    this.request.assertCurrent(this.flowManager.loadReadOnly(this.specId));
+    if (this.stepId === "spec-gate-repair") {
+      const revision = this.request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document?.baseRevision;
+      const spec = this.flowManager.readArtifact({ specId: this.specId,
+        logicalKey: "spec.record", consumerNodeId: this.stepId });
+      if (revision !== `sha256:${createHash("sha256").update(spec.bytes).digest("hex")}`) {
+        throw new CurrentFlowStateConflictError("Spec Gate repair handoff is stale for the canonical Spec revision");
+      }
+    } else {
+      this.request.assertCurrent(this.flowManager.loadReadOnly(this.specId));
+    }
     return state;
   }
 }

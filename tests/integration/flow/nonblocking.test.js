@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -537,7 +538,7 @@ describe("canonical nonblocking policy", () => {
       remainingRisk: null,
     });
     const state = {
-      schemaRevision: 3,
+      schemaRevision: CURRENT_FLOW_SCHEMA_REVISION,
       specId: "477-ambiguous-replay",
       policy: { nonblocking: { enabled: true } },
       currentNodeId: null,

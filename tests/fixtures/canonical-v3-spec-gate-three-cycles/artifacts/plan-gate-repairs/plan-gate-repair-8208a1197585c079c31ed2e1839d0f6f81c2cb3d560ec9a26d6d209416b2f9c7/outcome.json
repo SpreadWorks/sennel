@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-8208a1197585c079c31ed2e1839d0f6f81c2cb3d560ec9a26d6d209416b2f9c7",
+  "repairRecordFingerprint": "8208a1197585c079c31ed2e1839d0f6f81c2cb3d560ec9a26d6d209416b2f9c7",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-spec-gate-53f44191-1d78-4d59-a9f6-5f4fda7ec367",
+      "sequence": 3
+    },
+    "resultLogicalKey": "spec.gate",
+    "publicationActivityId": "plan-gate-repaired-6c14f835-dce4-4d97-bdf4-cdc27316ad8d",
+    "catalogFingerprint": "4cd6fd32dc4efce4feafa0cd6707605c2f4582b67a1afa1bef8ad688675a286e",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-spec-gate-53f44191-1d78-4d59-a9f6-5f4fda7ec367",
+        "sequence": 3
+      },
+      "canonicalAttempt": {
+        "id": "attempt-spec-gate-53f44191-1d78-4d59-a9f6-5f4fda7ec367",
+        "sequence": 3
+      },
+      "sourceFingerprint": "935f7e9cad0ccda5076a955e29a75aea3a5ec4b8e66e8756e8deb00512364be1",
+      "canonicalFingerprint": "4cd6fd32dc4efce4feafa0cd6707605c2f4582b67a1afa1bef8ad688675a286e",
+      "sourceRevisionFingerprint": "e32e2b304878fc906af3f413131ab7bce8f04e46c19317ccac3ca4c1f789c5b6",
+      "canonicalRevisionFingerprint": "e32e2b304878fc906af3f413131ab7bce8f04e46c19317ccac3ca4c1f789c5b6"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-spec-gate-53f44191-1d78-4d59-a9f6-5f4fda7ec367",
+    "sequence": 3
+  },
+  "targetAttempt": {
+    "id": "attempt-spec-9c9132a4-ae1f-4cae-8c99-38905b4c0f89",
+    "sequence": 3
+  },
+  "publicationActivityId": "attempt-confirmed-b859eb09-1204-46f0-8609-0560fefb3a1b",
+  "handoffRevision": "9f1a21b86a410a4f620a391e783dbe323656fbd530ae6a55f542a7d0ee43bf61",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "0865504e0d35990a0d4eb7b49f7b9597016f69abdaee50413f88b7c7c3f5b322",
+    "outputEvidenceDigest": "52a1e8b657b67b9e502f4e63d7aa327702c1e73fb20f9cd40b2361445e78db98",
+    "summary": "Applied correction 2.",
+    "requests": [
+      {
+        "fingerprint": "01694c3842bab55b901bb8763738e1d0d910d39f0d7e90ee3c6155390b0a1f50",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "01694c3842bab55b901bb8763738e1d0d910d39f0d7e90ee3c6155390b0a1f50",
+        "strategy": "Clarify cycle 2",
+        "summary": "Corrected the cycle 2 observation.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "52a1e8b657b67b9e502f4e63d7aa327702c1e73fb20f9cd40b2361445e78db98"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "52a1e8b657b67b9e502f4e63d7aa327702c1e73fb20f9cd40b2361445e78db98"
+      ]
+    }
+  }
+}

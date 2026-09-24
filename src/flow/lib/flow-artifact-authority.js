@@ -275,6 +275,7 @@ const ENTRIES = Object.freeze([
   workerHandoffOwned("spec-triage", "spec-repair", "spec triage linkage validator"),
   workerHandoffOwned("spec-repair", "spec-gate", "spec repair and revision transaction"),
   commandOwned("spec-gate", "approval"),
+  workerHandoffOwned("spec-gate-repair", "spec-gate or spec-review", "revision-bound Gate repair transaction"),
   userOwned("approval", "test-generate"),
   workerHandoffOwned("test-generate", "test-review", "Requirement-bound candidate bundle validator"),
   commandOwned("test-review", "test-review, test-repair, or test-gate"),

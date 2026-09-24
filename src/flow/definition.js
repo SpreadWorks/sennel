@@ -73,8 +73,10 @@ import {
   DraftRefineCompletedResult,
   DraftRefineWorkerRequiredResult,
   SpecCreatedResult,
-  SpecPlanGateRepairAppliedResult,
-  SpecPlanGateRepairNoProgressResult,
+  SpecGateRepairReadyForGateResult,
+  SpecGateRepairReviewRequiredResult,
+  SpecGateRepairContextRequiredResult,
+  SpecGateRepairAwaitingDecisionResult,
   SpecTriageCompletedResult,
   SpecRepairChangedResult,
   SpecRepairUnchangedResult,
@@ -102,7 +104,7 @@ import {
   stepResultDigest,
 } from "./engine/step-result.js";
 import { DraftReviewConnector } from "./engine/connectors/draft/draft-review-connector.js";
-import { SpecGateRepairConnector, SpecGateApprovalConnector } from "./engine/connectors/spec/spec-gate-target-connectors.js";
+import { SpecGateRepairConnector, SpecGateApprovalConnector, SpecGateRepairReviewConnector } from "./engine/connectors/spec/spec-gate-target-connectors.js";
 import { DraftTriageConnector } from "./engine/connectors/draft/draft-triage-connector.js";
 import { DraftRepairConnector } from "./engine/connectors/draft/draft-repair-connector.js";
 import { DraftRefineConnector } from "./engine/connectors/draft/draft-refine-connector.js";
@@ -1394,7 +1396,7 @@ export class DefinitionNonblockingDecisionEffect {
     }
     this.action = action;
     this.operation = action === "continue" ? "continue"
-      : action === "repair" && targetStepId === "spec" && sourceStepId === "spec-gate"
+      : action === "repair" && targetStepId === "spec-gate-repair" && sourceStepId === "spec-gate"
         ? "repair-spec" : "restart-source";
     this.sourceStepId = requireString(sourceStepId, "nonblocking decision effect source Step");
     this.targetStepId = requireString(targetStepId, "nonblocking decision effect target Step");
@@ -1468,7 +1470,7 @@ export class DefinitionNonblockingEligibility {
     }
     this.strictStopKind = strictStopKind;
     if (this.repairTargetStepId !== this.sourceStep
-      && (this.sourceStep !== "spec-gate" || this.repairTargetStepId !== "spec")) {
+      && (this.sourceStep !== "spec-gate" || this.repairTargetStepId !== "spec-gate-repair")) {
       throw new Error("nonblocking repair target is invalid");
     }
     this.allowedActions = Object.freeze(resultKind === "quality"
@@ -1530,7 +1532,7 @@ export function specGateNonblockingEligibilityForResult(result) {
   return new DefinitionNonblockingEligibility(NONBLOCKING_ELIGIBILITY_TOKEN, {
     sourceStep: "spec-gate",
     resultKind: local ? "unavailable" : "quality",
-    repairTargetStepId: planSpec ? "spec" : null,
+    repairTargetStepId: planSpec ? "spec-gate-repair" : null,
     strictStopKind: planSpec ? "blocked" : "await-user-decision",
     repairAllowed: !planSpec || !["cycle-limit", "repair-unavailable"].includes(result.error?.data?.reason),
     blocker: result.error?.data?.reason === "cycle-limit"
@@ -4428,7 +4430,8 @@ export class DraftExecutionSettlement extends StepSettlement {
 export class SpecGateAwaitDecision extends StepSettlement {
   constructor(token, result) {
     if (!(result instanceof SpecGateAwaitingDecisionResult)
-      && !(result instanceof TaskSpecGateAwaitingDecisionResult)) {
+      && !(result instanceof TaskSpecGateAwaitingDecisionResult)
+      && !(result instanceof SpecGateRepairAwaitingDecisionResult)) {
       throw new TypeError("Spec Gate await requires its phase-specific Result");
     }
     super(token, result, "await");
@@ -4905,10 +4908,11 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
     }
     const executionPhase = executionLifecycle?.phase ?? null;
     const specGateExecution = binding.stepId === "spec-gate" && executionSettlement;
+    const publicationAwait = awaitSettlement || settlement instanceof SpecGateAwaitDecision;
     if ((["checkpoint", "claimed"].includes(executionPhase) && !executionSettlement)
       || (executionSettlement && !specGateExecution && !["checkpoint", "claimed", "publication"].includes(executionPhase))
-      || (executionPhase === "publication" && !(executionSettlement || awaitSettlement))
-      || (executionPhase === "terminal" && (executionSettlement || awaitSettlement))) {
+      || (executionPhase === "publication" && !(executionSettlement || publicationAwait))
+      || (executionPhase === "terminal" && (executionSettlement || publicationAwait))) {
       throw new TypeError("Draft settlement receipt execution phase does not match its Settlement");
     }
     this.binding = Object.freeze({
@@ -5042,7 +5046,7 @@ export class DraftStepExecutionIdentity {
     if (stepResultDigest(stepResult) !== receipt.resultDigest) {
       throw new TypeError("Draft execution identity Result digest is invalid");
     }
-    const settlement = binding.stepId === "spec-review"
+    const settlement = ["spec-review", "spec-gate-repair"].includes(binding.stepId)
       ? settleSpecStepResult(binding.stepId, stepResult)
       : settleDraftStepResult(binding.stepId, stepResult);
     if (!(settlement instanceof DraftExecutionSettlement)
@@ -5302,11 +5306,30 @@ export function settleSpecStepResult(stepId, result) {
     });
   }
   if (result instanceof SpecGateRepairRequiredResult) {
-    const leaves = collectFlowLeafIds();
     return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
-      result, targetStepId: "spec", connector: SpecGateRepairConnector,
-      effects: new StepRouteEffects({ resetStepIds: leaves.slice(leaves.indexOf("spec")) }),
+      result, targetStepId: "spec-gate-repair", connector: SpecGateRepairConnector,
+      effects: new StepRouteEffects({ resetStepIds: ["spec-gate-repair", "spec-gate"] }),
     });
+  }
+  if (result instanceof SpecGateRepairReadyForGateResult) {
+    return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
+      result, targetStepId: "spec-gate", connector: SpecGateConnector,
+      effects: new StepRouteEffects({ resetStepIds: ["spec-gate", "spec-gate-repair"] }),
+    });
+  }
+  if (result instanceof SpecGateRepairReviewRequiredResult) {
+    return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
+      result, targetStepId: "spec-review", connector: SpecGateRepairReviewConnector,
+      effects: new StepRouteEffects({ resetStepIds: collectFlowLeafIds().slice(
+        collectFlowLeafIds().indexOf("spec-review"),
+      ) }),
+    });
+  }
+  if (result instanceof SpecGateRepairContextRequiredResult) {
+    return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof SpecGateRepairAwaitingDecisionResult) {
+    return new SpecGateAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
   }
   if (result instanceof SpecGateRetryRequiredResult || result instanceof TaskSpecGateRetryRequiredResult
     || result instanceof TaskSpecGateRepairRequiredResult
@@ -5316,7 +5339,7 @@ export function settleSpecStepResult(stepId, result) {
   if (result instanceof SpecGateAwaitingDecisionResult || result instanceof TaskSpecGateAwaitingDecisionResult) {
     return new SpecGateAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
   }
-  if (result instanceof SpecCreatedResult || result instanceof SpecPlanGateRepairAppliedResult) {
+  if (result instanceof SpecCreatedResult) {
     return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
       result,
       targetStepId: "spec-review",
@@ -5552,6 +5575,15 @@ const FLOW_DEFINITION = Object.freeze([
         definitionLifecycleOwned: true,
         executionCommand: new FlowExecutionCommand("gate"),
         failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
+      }),
+      new FlowNode({
+        id: "spec-gate-repair",
+        label: "Spec Gate repair",
+        action: "write-spec",
+        instructionsKey: "plan.spec-gate-repair",
+        contextKinds: ["spec", "guardrail"],
+        outputSchemaRef: "next-action/worker-artifact-handoff.schema.json",
+        maxAttempts: 1,
       }),
       new FlowNode({
         id: "approval",
@@ -5982,7 +6014,7 @@ export function buildCurrentFlowDefinition() {
     DRAFT_QUESTIONS_ROUTE.triageStepId, DRAFT_QUESTIONS_ROUTE.repairStepId,
     DRAFT_COVERAGE_ROUTE.triageStepId, DRAFT_COVERAGE_ROUTE.repairStepId,
   ]);
-  const transitionsFor = ({ skippable = false, conditionalWorker = false, triageNoRepair = false, taskStageBypass = false, draftReviewBypass = false, requirementTestInitialization = false, existingImplementation = false, finalizationRoute = false, taskOverrunRecovery = false, failurePolicy = null } = {}) => [
+  const transitionsFor = ({ skippable = false, conditionalWorker = false, triageNoRepair = false, taskStageBypass = false, draftReviewBypass = false, gateRepairBypass = false, requirementTestInitialization = false, existingImplementation = false, finalizationRoute = false, taskOverrunRecovery = false, failurePolicy = null } = {}) => [
     "pending:in_progress",
     "in_progress:done",
     ...(skippable ? ["in_progress:skipped"] : []),
@@ -5992,6 +6024,7 @@ export function buildCurrentFlowDefinition() {
     ...(triageNoRepair ? ["pending:skipped", "invalidated:skipped"] : []),
     ...(taskStageBypass ? ["pending:skipped", "invalidated:skipped"] : []),
     ...(draftReviewBypass ? ["pending:skipped", "invalidated:skipped"] : []),
+    ...(gateRepairBypass ? ["pending:skipped", "invalidated:skipped"] : []),
     ...(conditionalWorker ? ["pending:skipped", "invalidated:skipped"] : []),
     // Reopening a draft invalidates every downstream leaf. Approval of the
     // revised Spec must still be able to apply the same typed empty-lifecycle
@@ -6034,6 +6067,7 @@ export function buildCurrentFlowDefinition() {
       taskOverrunRecovery: scope === "task" && taskOverrunRecoveryLeaves.has(node.id),
       taskStageBypass: scope === "task" && taskStageBypassLeaves.has(node.id),
       draftReviewBypass: scope === "flow" && draftReviewBypassLeaves.has(node.id),
+      gateRepairBypass: node.id === "spec-gate-repair",
     }),
     // Context requirements stay definition-owned. Current Attempt claims may
     // cover them as completed operations or typed incomplete operations, but

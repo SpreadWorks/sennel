@@ -43,7 +43,7 @@ export class NonBlockingRoute {
 }
 
 const ROUTES = [
-  new NonBlockingRoute({ sourceStep: "spec-gate", artifact: "spec-gate-result.json", kind: "gate", phase: "spec", targetStep: "approval" }),
+  new NonBlockingRoute({ sourceStep: "spec-gate", artifact: "spec-gate-result.json", kind: "gate", phase: "spec", targetStep: "approval", skippedSteps: ["spec-gate-repair"] }),
   new NonBlockingRoute({ sourceStep: "test-result-review", artifact: "test-result-review.json", kind: "verification", targetStep: "impl-review" }),
   new NonBlockingRoute({
     sourceStep: "task-review",

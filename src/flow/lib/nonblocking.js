@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { projectAdvisorySummary } from "./advisory-summary.js";
 /** Canonical Version-1 advisory handling. */
 
@@ -90,7 +91,7 @@ function activeNodeForStep(state, step) {
 }
 
 function assertCanonical(state, flowManager) {
-  if (state?.schemaRevision !== 3 || !state?.policy || typeof flowManager?.readActiveProducerArtifact !== "function"
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || !state?.policy || typeof flowManager?.readActiveProducerArtifact !== "function"
     || typeof flowManager?.activityLedger !== "function" || typeof flowManager?.recordNonblocking !== "function"
     || typeof flowManager?.applyNonblockingDecision !== "function") {
     throw new Error("nonblocking requires the canonical Flow Version-1 runtime");
@@ -731,7 +732,7 @@ export function recordNonBlockingDecision({
 export function reconcileNonblockingAcceptanceContinuation() { return false; }
 
 export function advisorySummary(state, flowManager = null) {
-  if (state?.schemaRevision !== 3 || typeof state?.specId !== "string") return [];
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state?.specId !== "string") return [];
   if (Array.isArray(state.advisorySummary)) return state.advisorySummary;
   if (typeof flowManager?.activityLedger !== "function") return [];
   return projectAdvisorySummary(flowManager.activityLedger(state.specId));

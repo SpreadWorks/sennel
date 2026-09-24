@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   CanonicalFindingFingerprint,
   CanonicalFindingIdentity,
@@ -346,6 +348,33 @@ export class GateRepairObservationRequest {
   }
 }
 
+/** One accepted Spec edit strategy, derived from its canonical repair unit. */
+export function specGateRepairObservationResult({ request, identity, acceptedGroups } = {}) {
+  if (!(request instanceof GateRepairObservationRequest) || !Array.isArray(acceptedGroups)) {
+    throw new Error("Spec Gate repair strategy requires its typed observation request and accepted groups");
+  }
+  const groups = acceptedGroups.filter((group) => group.findingIdentities?.some((candidate) => (
+    isDeepStrictEqual(candidate, identity)
+  )));
+  if (groups.length === 0) throw new Error("Gate repair left a blocking observation without an accepted change");
+  const operations = groups.flatMap((group) => group.operations);
+  const strategy = `sha256:${createHash("sha256").update(JSON.stringify(operations)).digest("hex")}`;
+  if (request.priorStrategy === strategy) {
+    throw new Error("Gate repair repeated the prior strategy for a recurring observation");
+  }
+  const reasons = [...new Set(operations.map((operation) => operation.reason).filter(Boolean))];
+  return Object.freeze({
+    fingerprint: request.fingerprint.toString(),
+    strategy,
+    summary: reasons.length > 0 ? reasons.join(" ")
+      : `Applied ${operations.length} bounded Spec correction operations.`,
+    priorRepairInsufficiency: request.recurrenceCount > 0
+      ? `The prior strategy did not resolve this recurring Gate observation: ${request.priorStrategy}`
+      : null,
+    groupIndices: Object.freeze(groups.map((group) => group.index)),
+  });
+}
+
 class GateRepairObservationResult {
   constructor({ fingerprint, strategy, summary, priorRepairInsufficiency = null } = {}) {
     this.fingerprint = new GateObservationFingerprint(fingerprintValue(fingerprint));
@@ -689,6 +718,141 @@ export class PlanGateRepairOutcome {
   }
 }
 
+/** A Spec Gate repair settled through its own leaf and immutable audit. */
+class SpecGateRepairObservationResult {
+  constructor({ fingerprint, strategy, summary, priorRepairInsufficiency = null, groupIndices } = {}) {
+    this.fingerprint = new GateObservationFingerprint(fingerprintValue(fingerprint));
+    this.strategy = requiredText(strategy, "Spec Gate repair strategy");
+    this.summary = requiredText(summary, "Spec Gate repair observation summary");
+    this.priorRepairInsufficiency = optionalText(priorRepairInsufficiency, "Spec Gate repair prior insufficiency");
+    if (!Array.isArray(groupIndices) || groupIndices.length === 0
+      || groupIndices.some((index) => !Number.isSafeInteger(index) || index < 0)
+      || new Set(groupIndices).size !== groupIndices.length) {
+      throw new Error("Spec Gate repair observation needs distinct accepted group indices");
+    }
+    this.groupIndices = Object.freeze([...groupIndices]);
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      fingerprint: this.fingerprint.toString(), strategy: this.strategy, summary: this.summary,
+      priorRepairInsufficiency: this.priorRepairInsufficiency, groupIndices: [...this.groupIndices],
+    };
+  }
+}
+
+class SpecGateRepairReport {
+  constructor({ audit, requests } = {}) {
+    if (audit?.version !== 1 || audit.phase !== "spec-gate-repair"
+      || !/^sha256:[a-f0-9]{64}$/.test(audit.baseRevision)
+      || !/^[a-f0-9]{64}$/.test(audit.resultRevision?.digest)
+      || !Array.isArray(audit.acceptedGroups) || audit.acceptedGroups.length === 0
+      || !Array.isArray(audit.observationIdentities)
+      || !Array.isArray(audit.observationResults)) {
+      throw new Error("Spec Gate repair audit has no complete result lineage");
+    }
+    this.beforeEvidenceDigest = audit.baseRevision.slice("sha256:".length);
+    this.outputEvidenceDigest = audit.resultRevision.digest;
+    if (this.beforeEvidenceDigest === this.outputEvidenceDigest) {
+      throw new Error("Spec Gate repair audit has no changed Spec digest");
+    }
+    this.requests = uniqueTyped(requests, GateRepairObservationRequest, "Spec Gate repair requests", { allowEmpty: false });
+    this.results = uniqueTyped(audit.observationResults.map((value) => new SpecGateRepairObservationResult(value)),
+      SpecGateRepairObservationResult, "Spec Gate repair observation results", { allowEmpty: false });
+    const requested = this.requests.map((entry) => entry.fingerprint.toString());
+    const reported = this.results.map((entry) => entry.fingerprint.toString());
+    if (!sameSet(requested, reported)) {
+      throw new Error("Spec Gate repair audit must resolve each exact blocking observation");
+    }
+    if (audit.observationIdentities.length !== this.requests.length
+      || this.results.length !== this.requests.length) {
+      throw new Error("Spec Gate repair audit observation identities are incomplete");
+    }
+    const accepted = new Set(audit.acceptedGroups.map((entry) => entry.index));
+    const requestByFingerprint = new Map(this.requests.map((entry) => [entry.fingerprint.toString(), entry]));
+    for (const result of this.results) {
+      if (result.groupIndices.some((index) => !accepted.has(index))) {
+        throw new Error("Spec Gate repair observation cites a group that was not accepted");
+      }
+      const request = requestByFingerprint.get(result.fingerprint.toString());
+      const identity = audit.observationIdentities[this.requests.indexOf(request)];
+      if (!audit.sourceFindingIdentities?.some((entry) => isDeepStrictEqual(entry, identity))) {
+        throw new Error("Spec Gate repair observation is not bound to its canonical source finding");
+      }
+      const derived = specGateRepairObservationResult({ request, identity, acceptedGroups: audit.acceptedGroups });
+      if (!isDeepStrictEqual(result.toJSON(), derived)) {
+        throw new Error("Spec Gate repair audit strategy does not match accepted operation lineage");
+      }
+      if (request.recurrenceCount > 0
+        && (result.priorRepairInsufficiency === null || result.strategy === request.priorStrategy)) {
+        throw new Error("recurring Spec Gate repair needs a changed strategy and prior insufficiency");
+      }
+    }
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      beforeEvidenceDigest: this.beforeEvidenceDigest,
+      outputEvidenceDigest: this.outputEvidenceDigest,
+      requests: this.requests.map((entry) => entry.toJSON()),
+      results: this.results.map((entry) => entry.toJSON()),
+    };
+  }
+}
+
+export class SpecGateRepairOutcome {
+  constructor({ audit, publicationActivityId, repair } = {}) {
+    if (!(repair instanceof GateObservationRepair)
+      || audit?.repairId !== repair.repairId
+      || audit.repairRecordFingerprint !== repair.recordFingerprint
+      || audit.targetAttempt?.id !== repair.targetAttempt.id
+      || audit.targetAttempt?.sequence !== repair.targetAttempt.sequence
+      || typeof publicationActivityId !== "string" || publicationActivityId === "") {
+      throw new Error("Spec Gate repair audit has stale repair or publication authority");
+    }
+    this.repairId = repair.repairId;
+    this.repairRecordFingerprint = repair.recordFingerprint;
+    this.sourceEvidence = GateEvidenceIdentity.fromJSON(audit.sourceEvidenceIdentity);
+    this.sourceAttempt = this.sourceEvidence.sourceAttempt;
+    this.targetAttempt = repair.targetAttempt;
+    this.publicationActivityId = publicationActivityId;
+    this.handoffRevision = repair.handoffRevision;
+    this.disposition = "applied";
+    this.report = new SpecGateRepairReport({ audit, requests: repair.requests });
+    this.assertRepair(repair);
+    Object.freeze(this);
+  }
+
+  assertRepair(repair) {
+    if (!(repair instanceof GateObservationRepair)
+      || this.repairId !== repair.repairId
+      || this.repairRecordFingerprint !== repair.recordFingerprint
+      || !this.sourceEvidence.matches(repair.sourceEvidence)
+      || !this.targetAttempt.matches(repair.targetAttempt)
+      || !sameSet(this.report.requests.map((entry) => entry.fingerprint.toString()),
+        repair.requests.map((entry) => entry.fingerprint.toString()))) {
+      throw new Error("Spec Gate repair audit does not match its exact repair binding");
+    }
+    return this;
+  }
+
+  toJSON() {
+    return {
+      version: 1, phase: "spec-gate-repair", repairId: this.repairId,
+      repairRecordFingerprint: this.repairRecordFingerprint,
+      sourceEvidence: this.sourceEvidence.toJSON(), sourceAttempt: this.sourceAttempt.toJSON(),
+      targetAttempt: this.targetAttempt.toJSON(), publicationActivityId: this.publicationActivityId,
+      handoffRevision: this.handoffRevision, disposition: this.disposition, report: this.report.toJSON(),
+    };
+  }
+}
+
+function isGateRepairOutcome(value) {
+  return value instanceof PlanGateRepairOutcome || value instanceof SpecGateRepairOutcome;
+}
+
 /** Parent-owned outcome before the canonical Store assigns its Activity id. */
 export class PlanGateRepairOutcomeDraft {
   constructor({ repair, disposition, report } = {}) {
@@ -726,7 +890,10 @@ export class GateObservationCycle {
     this.fingerprint = new GateObservationFingerprint(fingerprintValue(fingerprint));
     this.occurrences = uniqueTyped(occurrences, GateObservationOccurrence, "Gate observation cycle occurrences", { allowEmpty: false });
     this.repairs = uniqueTyped(repairs, GateObservationRepair, "Gate observation cycle repairs");
-    this.outcomes = uniqueTyped(outcomes, PlanGateRepairOutcome, "Gate observation cycle outcomes");
+    if (!Array.isArray(outcomes) || outcomes.some((entry) => !isGateRepairOutcome(entry))) {
+      throw new Error("Gate observation cycle outcomes require typed repair outcomes");
+    }
+    this.outcomes = Object.freeze([...outcomes]);
     const expected = this.fingerprint.toString();
     if (this.occurrences.some((entry) => entry.fingerprint.toString() !== expected)
       || this.repairs.some((entry) => !entry.requests.some((request) => request.fingerprint.toString() === expected))
@@ -792,7 +959,7 @@ export class GateObservationCycleReader {
     if (!Array.isArray(repairs) || repairs.some((entry) => !(entry instanceof GateObservationRepair))) {
       throw new Error("Gate observation cycle reader requires typed repairs");
     }
-    if (!Array.isArray(outcomes) || outcomes.some((entry) => !(entry instanceof PlanGateRepairOutcome))) {
+    if (!Array.isArray(outcomes) || outcomes.some((entry) => !isGateRepairOutcome(entry))) {
       throw new Error("Gate observation cycle reader requires typed outcomes");
     }
     this.occurrences = Object.freeze([...occurrences]);

@@ -19,8 +19,11 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
   const expected = [
     ["DraftCreatedResult", "draft", "draft-created", "completed"],
     ["SpecCreatedResult", "spec", "spec-created", "completed"],
-    ["SpecPlanGateRepairAppliedResult", "spec", "spec-plan-gate-repair-applied", "completed"],
-    ["SpecPlanGateRepairNoProgressResult", "spec", "spec-plan-gate-repair-no-progress", "error"],
+    ["SpecGateRepairReadyForGateResult", "spec-gate-repair", "spec-gate-repair-ready-for-gate", "completed"],
+    ["SpecGateRepairReviewRequiredResult", "spec-gate-repair", "spec-gate-repair-review-required", "completed"],
+    ["SpecGateRepairContextRequiredResult", "spec-gate-repair", "spec-gate-repair-context-required", "loop-required"],
+    ["SpecGateRepairAwaitingDecisionResult", "spec-gate-repair", "spec-gate-repair-awaiting-decision", "user-input-required"],
+    ["SpecGateRepairNoProgressResult", "spec-gate-repair", "spec-gate-repair-no-progress", "error"],
     ["SpecTriageCompletedResult", "spec-triage", "spec-triage-completed", "completed"],
     ["SpecRepairChangedResult", "spec-repair", "spec-repair-changed", "completed"],
     ["SpecRepairUnchangedResult", "spec-repair", "spec-repair-unchanged", "completed"],
@@ -64,7 +67,7 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     ["DraftGateRepairAppliedResult", "draft-gate-repair", "draft-gate-repair-applied", "completed"],
     ["DraftGateRepairCarryForwardResult", "draft-gate-repair", "draft-gate-repair-carry-forward", "completed"],
     ...[
-      "draft", "spec", "spec-triage", "spec-repair", "spec-gate", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
+      "draft", "spec", "spec-gate-repair", "spec-triage", "spec-repair", "spec-gate", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
       "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "draft-gate-repair",
     ].map((stepId) => ["StepErrorResult", stepId, `${stepId}-error`, "error"]),
   ];

@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -162,7 +163,7 @@ export function validateCanonicalUpgradeEvidence({
   if (!flowManager || typeof flowManager.readArtifact !== "function") {
     throw new Error("canonical upgrade evidence requires FlowManager.readArtifact");
   }
-  if (!state?.specId || state.schemaRevision !== 3) {
+  if (!state?.specId || state.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
     throw new Error("canonical upgrade evidence requires a Version-1 Flow state");
   }
   const requiredPaths = currentRequiredPaths

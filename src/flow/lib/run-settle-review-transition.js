@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { FlowCommand } from "./base-command.js";
 import { settleDefinitionReviewTransition } from "./review-transition-persistence.js";
@@ -13,7 +14,7 @@ export default class RunSettleReviewTransitionCommand extends FlowCommand {
   }
 
   execute(ctx) {
-    if (ctx.flowState?.schemaRevision !== 3 || typeof ctx.flowManager?.canonicalState !== "function") {
+    if (ctx.flowState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowManager?.canonicalState !== "function") {
       return Envelope.fail("run", "settle-review-transition", "CANONICAL_FLOW_REQUIRED", "settling a Review transition requires a Version-1 Flow");
     }
     try {

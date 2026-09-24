@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -711,7 +712,7 @@ describe("flow query", () => {
     assert.equal(stateEnvelope.recordRevision, 1);
     assert.equal(stateEnvelope.flowVersion, 2);
     assert.equal(stateEnvelope.state.flowVersion, 2);
-    assert.equal(stateEnvelope.state.schemaRevision, 3);
+    assert.equal(stateEnvelope.state.schemaRevision, CURRENT_FLOW_SCHEMA_REVISION);
     assert.equal(stateEnvelope.state.version, 1);
     assert.equal(specEnvelope.recordRevision, 1);
     assert.equal(fs.readFileSync(fixture.locations[2].activitiesFile, "utf8"), "");

@@ -1,3 +1,4 @@
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -50,7 +51,7 @@ describe("approval Task admission (REQ-2, REQ-6)", () => {
   });
 
   it("adopts cataloged Spec Tasks append-only and is idempotent", () => {
-    const state = { schemaRevision: 3, specId: "215-flow-task-decomposition", currentNodeId: "approval", tasks: [taskDocument("T-1")] };
+    const state = { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "215-flow-task-decomposition", currentNodeId: "approval", tasks: [taskDocument("T-1")] };
     const added = [];
     const flowManager = {
       readArtifact: () => ({ bytes: Buffer.from(JSON.stringify({ tasks: [taskDocument("T-1"), taskDocument("T-2", 1)] })) }),
