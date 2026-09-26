@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { DraftRepairCandidate } from "../../../src/flow/steps/draft/draft-repair-candidate.js";
-import crypto from "node:crypto";
 import fs from "node:fs";
 
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
@@ -139,7 +138,6 @@ export class DraftGateRepairScenario {
       version: 1, baseRevision: `sha256:${this.request.inputRevision}`,
       operations: [{
         kind: "replace-value", path, replacement, reason,
-        expectedDigest: crypto.createHash("sha256").update(JSON.stringify(reference.value)).digest("hex"),
       }],
       report: {
         version: 1, summary: reason,

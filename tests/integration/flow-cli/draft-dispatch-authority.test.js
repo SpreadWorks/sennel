@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -12,7 +11,9 @@ import { FlowHandoffAuthorityLease } from "../../../src/lib/flow-handoff-authori
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
+import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
+import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
 import {
@@ -30,6 +31,7 @@ import { DraftGateRepairScenario } from "../../support/infrastructure/draft-gate
 import {
   dispatchContainer,
   fixtureRepository,
+  installGateProviderFake,
   requestInput,
   requestPayloadPath,
 } from "../../support/infrastructure/flow-dispatch-scenario.js";
@@ -49,8 +51,6 @@ function startDraftFlow(root, suffix) {
 }
 
 function writeDraftGateRepair(request, replacement) {
-  const draft = requestInput(request, "draft.json").document;
-  const previous = draft.analysis.validation;
   const recurrence = requestInput(request, "gate-observation-recurrence.json").document;
   fs.writeFileSync(requestPayloadPath(request, "draft-gate-repair.json"), workerArtifactJson({
     version: 1,
@@ -60,7 +60,6 @@ function writeDraftGateRepair(request, replacement) {
       path: "analysis.validation",
       replacement,
       reason: "State the dispatcher authority regression scenario explicitly.",
-      expectedDigest: crypto.createHash("sha256").update(JSON.stringify(previous)).digest("hex"),
     }],
     report: {
       version: 1,
@@ -114,13 +113,14 @@ function createAgent({ flowManager, specId, onRequest = () => {}, noProgress = f
   };
 }
 
-async function runReviewCommand(ctx, phase) {
+async function runReviewCommand(ctx, phase, onDraftSource = () => {}) {
   const command = new RunReviewCommand({
     resolveTreeSha: () => "a".repeat(40),
     resolveTargetStateDigest: () => "b".repeat(64),
     runCommand(_command, _args, options) {
       const work = ReviewWorkUnit.fromEnvironment(options.env);
       const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+      onDraftSource({ source, work });
       fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), `${JSON.stringify({
         version: 2,
         phase,
@@ -140,6 +140,13 @@ async function runReviewCommand(ctx, phase) {
   const commandCtx = { ...ctx, phase: "draft", config: {}, flowState: ctx.flowManager.loadReadOnly(ctx.specId) };
   const result = await command.execute(commandCtx);
   await FLOW_COMMANDS.run.review.post(commandCtx, result);
+  return { ok: true, data: result, errors: [] };
+}
+
+async function runCanonicalGateCommand(ctx) {
+  const commandCtx = { ...ctx, phase: "draft", config: {}, flowState: ctx.flowManager.loadReadOnly(ctx.specId) };
+  const result = await new RunGateCommand().execute(commandCtx);
+  await FLOW_COMMANDS.run.gate.post(commandCtx, result);
   return { ok: true, data: result, errors: [] };
 }
 
@@ -377,8 +384,6 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
           // The payload is bounded and otherwise well-formed, but repair workers
           // have no authority to address the question ledger.
           payload.operations[0].path = "questionLedger";
-          payload.operations[0].expectedDigest = crypto.createHash("sha256")
-            .update(JSON.stringify(draft.questionLedger)).digest("hex");
           payload.operations[0].replacement = structuredClone(draft.questionLedger);
           fs.writeFileSync(payloadPath, workerArtifactJson(payload));
         },
@@ -780,6 +785,7 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
 
   it("continues a fixture-prepared boundary from Store readback and hands the exact canonical Draft to Spec", async () => {
     const root = fixtureRepository("draft-dispatch-readback-spec-");
+    let gateAgentLookup;
     try {
       const repair = gateRepairBoundary(root, "readback-spec");
       const repaired = await repair.dispatcher.execute(repair.context);
@@ -788,7 +794,35 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
 
       const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: repair.specId });
       assert.equal(flowManager.canonicalState(repair.specId).nextAction().nodeId, "draft-coverage-review");
+      const repairedDraft = flowManager.readArtifact({
+        specId: repair.specId,
+        logicalKey: "draft",
+        consumerNodeId: "draft-coverage-review",
+      });
+      const repairedDocument = JSON.parse(repairedDraft.bytes.toString("utf8"));
+      const repairedRevision = new CanonicalDraftReviewSource({
+        flowManager,
+        state: flowManager.loadReadOnly(repair.specId),
+        phase: "draft-coverage",
+      }).revision();
+      assert.equal(repairedDocument.analysis.validation,
+        "Verify a worker-free refinement followed by a worker-backed Gate repair.");
+      assert.equal(repairedRevision.digest, repairedDraft.descriptor.hash);
+      assert.equal(repairedRevision.sourceStepId, "draft-gate-repair");
+      fs.writeFileSync(path.join(root, ".sennel", "guardrail.json"), workerArtifactJson({
+        guardrails: [{
+          id: "DRAFT-REPAIRED", title: "Repaired Draft reaches Gate",
+          body: "Check the repaired validation behavior in the canonical Draft.",
+          meta: { phase: ["draft"], category: "requirements" },
+        }],
+      }));
+      const gatePrompts = [];
+      gateAgentLookup = installGateProviderFake((prompt) => {
+        gatePrompts.push(prompt);
+        return JSON.stringify({ observations: [] });
+      });
       const requests = [];
+      const reviewInputs = [];
       const agent = createAgent({
         flowManager,
         specId: repair.specId,
@@ -799,8 +833,14 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
         repositoryFingerprint: () => "draft-dispatch-readback-spec",
         maxDispatches: 6,
         commandRunner: async ({ ctx, command }) => {
-          if (command.commandName === "review") return runReviewCommand(ctx, "draft-coverage");
-          if (command.commandName === "gate") return runGateCommand(ctx, "pass");
+          if (command.commandName === "review") return runReviewCommand(ctx, "draft-coverage", ({ source, work }) => {
+            reviewInputs.push({
+              source,
+              input: work.manifestDocument.inputs.find((entry) => entry.logicalKey === "draft"),
+              bytes: fs.readFileSync(path.join(work.root, "draft.json")),
+            });
+          });
+          if (command.commandName === "gate") return runCanonicalGateCommand(ctx);
           throw new Error(`unexpected readback command: ${command.commandName}`);
         },
       });
@@ -822,16 +862,42 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
         _envelopeKey: "dispatch",
       });
 
-      assert.equal(errorCode(continued), "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(continued, null, 2));
+      assert.equal(reviewInputs.length, 1);
+      assert.deepEqual(reviewInputs[0].bytes, repairedDraft.bytes);
+      assert.equal(reviewInputs[0].input.digest, repairedDraft.descriptor.hash);
+      assert.deepEqual(reviewInputs[0].source.revision, repairedRevision);
+      assert.ok(gatePrompts.length > 0);
+      const contentHeader = "## Content\n";
+      for (const prompt of gatePrompts) {
+        assert.ok(prompt.includes(contentHeader));
+        const evaluatedDraft = JSON.parse(prompt.slice(prompt.lastIndexOf(contentHeader) + contentHeader.length));
+        assert.deepEqual(evaluatedDraft, repairedDocument);
+      }
+      for (const request of requests) {
+        const specDraft = requestInput(request, "draft.json");
+        assert.equal(specDraft.digest, repairedDraft.descriptor.hash);
+        assert.deepEqual(specDraft.document, repairedDocument);
+      }
       assert.deepEqual(requests.map((request) => request.stepId), ["spec"]);
+      assert.equal(errorCode(continued), "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(continued, null, 2));
+      const coverageReview = flowManager.readArtifact({
+        specId: repair.specId,
+        logicalKey: "draft.coverage.review",
+        consumerNodeId: "draft-coverage-triage",
+      });
+      const reviewHistory = JSON.parse(coverageReview.bytes.toString("utf8"));
+      assert.deepEqual(reviewHistory.attempts.at(-1).artifact.payload.sourceDraftRevision, repairedRevision);
       assert.equal(flowManager.canonicalState(repair.specId).nextAction().nodeId, "spec-review");
-      const repairedDraft = flowManager.readArtifact({
+      const draftAfterSpec = flowManager.readArtifact({
         specId: repair.specId,
         logicalKey: "draft",
         consumerNodeId: "spec",
       });
-      assert.equal(JSON.parse(repairedDraft.bytes.toString("utf8")).analysis.validation, agent.repairedValidation);
+      assert.equal(draftAfterSpec.descriptor.hash, repairedDraft.descriptor.hash);
+      assert.deepEqual(draftAfterSpec.bytes, repairedDraft.bytes);
+      assert.equal(repairedDocument.analysis.validation, agent.repairedValidation);
     } finally {
+      gateAgentLookup?.mock.restore();
       removeTmpDir(root);
     }
   });

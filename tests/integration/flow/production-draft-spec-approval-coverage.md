@@ -12,6 +12,7 @@ connections without replaying the entire Flow.
 | --- | --- | --- | --- | --- |
 | Draft: same-ID findings remain distinct | The production dispatcher runs Draft, registered Reviews and two Gate Attempts. The final Gate result has two observations with the same guardrail ID and different fingerprints; both are carried forward | A new `FlowManager` and dispatcher read and construct the real Spec worker handoff; the Acceptance artifact store resolves both exact saved sources | Draft, Review, Gate and `flow.findings` artifacts are read after reload and their descriptor hashes/byte lengths are checked. Draft Review/Gate StepResults and settlement receipt bindings identify the producing attempt and target | `draft-artifact-scenario.test.js`: “produces Draft through registered Review/Gate commands and reloads its exact findings for Spec and Acceptance” |
 | Draft: safe carry-forward and refusal | An unresolved finding follows the legal Draft Gate repair/carry-forward path; stale admission or invalid repair is rejected | Spec is selected only after the Draft repair and coverage route completes; Spec authentication failure leaves Spec unpublished on both initial dispatch and dispatcher restart | The restarted dispatcher issues only a new Spec request. Its metric and issue-log publication add exactly two Activities; the prior ledger prefix, semantic state, retry budget, Draft/Gate/findings descriptors and bytes remain unchanged | `draft-artifact-scenario.test.js`; `draft-gate-terminal-continuation.test.js`: “rejects stale Draft Gate admission without persisting an Error Result”, “rejects invalid repair payload without changing Draft state or artifacts”, and “persists no-progress repair completion and defers the recurring draft Gate finding to Spec” |
+| Draft: changed Gate repair survives reload | The dispatcher saves a changed `draft-gate-repair` result and selects Coverage Review; the saved Draft revision names that repair as producer | The registered Review command materializes the repaired Draft into its sealed work unit and records its exact source revision; the registered Gate evaluator reads the repaired Draft; the Spec worker handoff receives those same bytes | A new `FlowManager` reads the repaired Draft before dispatch. Review input bytes, manifest digest and source revision, Gate provider input, Spec handoff digest and document, and the final Draft descriptor are checked against that saved revision | `draft-dispatch-authority.test.js`: “continues a fixture-prepared boundary from Store readback and hands the exact canonical Draft to Spec” |
 | Spec: created and reviewed artifact reaches consumers | Production Spec worker output passes Review, Triage, Repair and a new Gate evaluation; the repaired revision is re-reviewed | Test reads the requirement; Acceptance reads the Spec and builds evidence; Approval saves approval and advances the Flow | Spec revisions, review publications, Gate history, StepResults and receipts are persisted; a new `FlowManager` reads the Spec before Test, Acceptance and Approval use it | `spec-artifact-scenario.test.js`: “publishes and repairs Spec, then reloads it for Approval, Test and Acceptance” |
 | Spec: deferred Gate finding reaches Acceptance after explicit continuation | Strict stop is durable, nonblocking policy is activated, and a recorded decision authorizes continuation | Acceptance reads the exact unresolved Spec Gate source and reports its disposition | Reloaded Gate source, findings and continuation state are read by the Acceptance artifact store | `spec-artifact-scenario.test.js`: “retains unresolved Spec Gate findings for Acceptance after a durable strict stop” |
 
@@ -46,6 +47,22 @@ connections without replaying the entire Flow.
   `flow-artifact-contract.test.js`.
 - Nonblocking eligibility, explicit decision, stale activation and dispatcher
   behavior: `nonblocking.test.js`.
+
+## Draft producer to consumer boundary
+
+The durable `draft` artifact can be written by `draft`,
+`draft-questions-repair`, `draft-refine`, `draft-coverage-repair`, and
+`draft-gate-repair`. Review, Gate and Spec consume the current catalog
+publication. The Review source revision identifies its writer, digest and
+byte length; Gate and Spec receive the corresponding document.
+
+| Producer route | Save and readback evidence | Consumer connection and remaining boundary |
+| --- | --- | --- |
+| Initial `draft` | `draft-artifact-scenario.test.js` dispatches the worker and reloads its cataloged Draft | Registered Questions and Coverage Reviews, Gate, Spec handoff and Acceptance finding source are exercised. The same-ID/different-fingerprint pair remains distinct after reload. |
+| `draft-questions-repair` | `draft-review-repair-handoff.test.js` covers changed and unchanged handoff publication and reconstructs `CanonicalDraftReviewSource` after reload | The focused test checks the source projection selected for Review. It does not run the Review command or later Gate and Spec consumers for this changed branch. |
+| `draft-refine` | `draft-dispatch-authority.test.js` covers worker-free settlement and handoff authority; `worker-handoff-full-flow.test.js` covers recovered Refine publication | The production Draft scenario runs this step without a Draft change. A changed Refine revision is not followed through every downstream consumer here. |
+| `draft-coverage-repair` | `worker-handoff-full-flow.test.js` saves a changed revision, reloads it, and also covers unchanged repair | This producer has a focused repair connection; the phase scenario does not enter a changed Coverage repair branch. |
+| `draft-gate-repair` | `draft-dispatch-authority.test.js` saves a changed repair and reconstructs its manager; `draft-artifact-scenario.test.js` retains the unchanged/no-progress branch | The changed revision is checked at Review input and source revision, Gate evaluation, and Spec handoff. Focused Gate tests retain rejection and replay ownership. |
 
 ## Responsibility check
 
@@ -182,3 +199,51 @@ to verify these outcomes.
   completed. Draft worker refusal/restart is covered separately by
   `draft-dispatch-authority.test.js`, with classification checks in
   `definition-lifecycle-failure.test.js` and `commands/review.test.js`.
+
+## c825 measured verification (2026-09-27)
+
+Baseline: `a76c4fb457c174f5e8a9ce8b6db71310194013e4`, with the c825
+uncommitted product and test changes. Independent review and the managing
+agent's diff/result inspection found no blocking issue. No live Flow was
+started or resumed for verification.
+
+| Test selection | Observed result |
+| --- | --- |
+| `draft-repair-operations.test.js` and `draft-gate-repair-handoff.test.js` | 33 passed, including authority, stale input/evidence, atomic rejection, replay, obsolete field refusal, and observed target digests. |
+| `draft-artifact-scenario.test.js` and `draft-dispatch-authority.test.js` | Initial run: 11 passed and 2 fixture failures. Removing the retired Gate field and using the actual Review source revision API resolved both; targeted rerun: 2 passed. The unchanged primary phase scenario passed. The final consumer observation assertions were rerun separately: 1 passed. |
+| `draft-gate-terminal-continuation.test.js` and `draft-review-repair-handoff.test.js` | Initial run: 11 passed and 1 failure from the retired field in the shared fixture. After updating the fixture, that case passed. |
+| Draft-named cases in `canonical-flow-manager-runtime.test.js` and `draft-completion-connector.test.js` | 32 passed. |
+
+The assertions were not relaxed to resolve fixture failures. Consumer inputs
+are captured at the external provider/worker boundary and compared after
+dispatch, before status/count assertions, so provider error handling cannot
+hide the actual mismatch behind a retry or terminal code.
+
+The fixed multiple-array-element test was copied unchanged into an isolated
+baseline checkout: it failed with `FLOW_DRAFT_GATE_REPAIR_INVALID` under the
+old required-digest contract and passed with the product fix. This demonstrates
+the new contract; it does not reclassify the old invalid payload's correct
+rejection as a defect or claim an exact historical worker replay.
+
+| Isolated fault injection | Observed failing assertion |
+| --- | --- |
+| Record the containing array's digest instead of each element's digest | Multiple-element test rejects `acceptedOperations` observed digests. |
+| Change only the repaired validation text back to the old text when materializing Review input, preserving other bytes | Readback scenario rejects Review input bytes versus saved Draft bytes. |
+| Change the Draft validation text to the old text in the Gate evaluator input | Readback scenario rejects the evaluated `## Content` document versus saved Draft. |
+| Serialize the old validation text into the Spec request's Draft document | Readback scenario rejects the actual Spec request document versus saved Draft, before retry/request-count assertions. |
+
+Each mutation was applied separately to a disposable repository with independent
+Git metadata; the live product and canonical Flow evidence were not mutated.
+Syntax/import errors and unrelated terminal failures were not accepted as
+mutation evidence. Raw logs and disposable copies were removed after inspection;
+this section retains the measured outcomes.
+
+These measurements do not cover every producer/consumer combination listed
+above, OS-crash behavior, the full repository suite, or stochastic live-agent
+success. The normal deterministic scenarios cover the changed Gate contract
+and its real downstream consumers; the other repair contracts are unchanged.
+Unknown-defect completeness is not claimed.
+
+Frozen final test SHA-256, `tests/integration/flow/draft-repair-operations.test.js`: `c935714c6786a0430ff920d68c161566aa3293af36fa1c55b5839f4e8cbaddf6`.
+
+Frozen final test SHA-256, `tests/integration/flow-cli/draft-dispatch-authority.test.js`: `c43d2b54f7b9067e7f64c2b755ac914686b687cbcbee3d9012c45587bd32883a`.

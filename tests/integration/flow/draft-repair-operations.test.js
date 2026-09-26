@@ -78,7 +78,7 @@ function gateRepair(operations, overrides = {}) {
   };
 }
 function gateOperation(overrides = {}) {
-  const { title: _title, target: _target, ...bounded } = operation(overrides);
+  const { title: _title, target: _target, expectedDigest: _expectedDigest, ...bounded } = operation(overrides);
   return bounded;
 }
 function validGateDraft() {
@@ -214,14 +214,34 @@ describe("command-owned draft repair operations", () => {
     assert.equal(result.draft.goal, "Corrected goal");
     assert.equal(source.goal, "Original goal");
     assert.equal(result.audit.sourceAuthority.kind, "plan-gate-repair");
+    assert.deepEqual(result.audit.acceptedOperations[0], {
+      ...gateOperation(), observedDigest: digest("Original goal"),
+    });
     assert.deepEqual(result.audit.audit.lifecycleIssues, []);
+  });
+
+  it("applies multiple Gate array-element replacements using immutable targets and records observed digests", () => {
+    const source = validGateDraft();
+    source.decisionMap.knownFacts = ["First fact", "Second fact", "Untouched fact"];
+    const operations = [
+      gateOperation({ path: "decisionMap.knownFacts[0]", replacement: "Revised first fact" }),
+      gateOperation({ path: "decisionMap.knownFacts[1]", replacement: "Revised second fact" }),
+    ];
+    const result = applyGate(gateRepair(operations), source);
+    assert.deepEqual(result.draft.decisionMap.knownFacts, ["Revised first fact", "Revised second fact", "Untouched fact"]);
+    assert.deepEqual(source.decisionMap.knownFacts, ["First fact", "Second fact", "Untouched fact"]);
+    assert.deepEqual(result.audit.acceptedOperations, [
+      { ...operations[0], observedDigest: digest("First fact") },
+      { ...operations[1], observedDigest: digest("Second fact") },
+    ]);
+    assert.equal(result.audit.operationDigest, digest({ accepted: result.audit.acceptedOperations, discarded: [] }));
   });
 
   it("rejects a whole Gate batch when any operation is stale or outside authoring authority", () => {
     const source = validGateDraft();
     assert.throws(() => applyGate(gateRepair([
       gateOperation(),
-      gateOperation({ path: "questionLedger.questions", expectedDigest: digest(source.questionLedger.questions), replacement: [] }),
+      gateOperation({ path: "questionLedger.questions", replacement: [] }),
     ]), source), (error) => {
       assert.equal(error instanceof DraftRepairOperationsError, true);
       assert.equal(error.code, "FLOW_DRAFT_GATE_REPAIR_INVALID");
@@ -236,13 +256,14 @@ describe("command-owned draft repair operations", () => {
     const cases = [
       gateRepair([], { baseRevision: `sha256:${"f".repeat(64)}` }),
       { ...gateRepair([]), draft: draft() },
+      gateRepair([{ ...gateOperation(), expectedDigest: digest("Original goal") }]),
       gateRepair([gateOperation(), gateOperation()]),
       gateRepair([
-        gateOperation({ path: "analysis", expectedDigest: digest(draft().analysis), replacement: draft().analysis }),
-        gateOperation({ path: "analysis.problem", expectedDigest: digest("Original problem"), replacement: "Changed" }),
+        gateOperation({ path: "analysis", replacement: draft().analysis }),
+        gateOperation({ path: "analysis.problem", replacement: "Changed" }),
       ]),
-      gateRepair([gateOperation({ path: "goal", replacement: "", expectedDigest: digest("Original goal") })]),
-      gateRepair([gateOperation({ path: "analysis.missing", expectedDigest: digest(null), replacement: "created" })]),
+      gateRepair([gateOperation({ path: "goal", replacement: "" })]),
+      gateRepair([gateOperation({ path: "analysis.missing", replacement: "created" })]),
     ];
     for (const candidate of cases) {
       assert.throws(() => applyGate(candidate), DraftRepairOperationsError);

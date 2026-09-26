@@ -278,6 +278,8 @@ describe("dedicated draft Gate repair handoff", () => {
         "draft.json", "plan-gate-repair.json", "gate-observation-recurrence.json",
       ]);
       assert.deepEqual(request.payloads.map(({ rule }) => rule.logicalName), ["draft-gate-repair.json"]);
+      assert.match(request.workerInstructions.schemaGuidance, /exactly kind, path, replacement, and reason/);
+      assert.doesNotMatch(request.workerInstructions.schemaGuidance, /expectedDigest/);
       const authority = request.inputs.find((entry) => entry.name === "plan-gate-repair.json").document;
       assert.match(authority.sourceIssueLogId, /^draft-gate-result-[a-f0-9]{64}$/);
       assert.equal(authority.sourceEntryDigest.length, 64);
@@ -302,7 +304,11 @@ describe("dedicated draft Gate repair handoff", () => {
         specId: value.scenario.specId, logicalKey: "plan.gate.repair.outcome",
         parameters: { repairId }, consumerNodeId: "draft-gate-repair",
       });
-      assert.equal(JSON.parse(audit.bytes).report.outputEvidenceDigest, draft.descriptor.hash);
+      const repairAudit = JSON.parse(audit.bytes);
+      assert.equal(repairAudit.report.outputEvidenceDigest, draft.descriptor.hash);
+      assert.equal(repairAudit.acceptedOperations[0].observedDigest,
+        digest(request.inputs.find((entry) => entry.name === "draft.json").document.goal));
+      assert.equal(Object.hasOwn(repairAudit.acceptedOperations[0], "expectedDigest"), false);
       assert.equal(JSON.parse(outcome.bytes).report.outputEvidenceDigest, draft.descriptor.hash);
       assert.equal(JSON.parse(outcome.bytes).disposition, "applied");
     } finally {
@@ -707,32 +713,28 @@ describe("dedicated draft Gate repair handoff", () => {
       ["foreign fingerprint", (payload) => { payload.report.results[0].fingerprint = "f".repeat(64); }],
       ["duplicate fingerprint", (payload) => { payload.report.results[1].fingerprint = payload.report.results[0].fingerprint; }],
       ["missing observation result", (payload) => { payload.report.results.pop(); }],
-      ["missing target", (payload) => { payload.operations[0].path = "analysis.missing"; payload.operations[0].expectedDigest = "f".repeat(64); }],
-      ["stale target digest", (payload) => { payload.operations[0].expectedDigest = "f".repeat(64); }],
+      ["missing target", (payload) => { payload.operations[0].path = "analysis.missing"; }],
+      ["retired target digest field", (payload) => { payload.operations[0].expectedDigest = "f".repeat(64); }],
       ["duplicate target", (payload) => { payload.operations.push(structuredClone(payload.operations[0])); }],
       ["overlapping targets", (payload, request) => {
         const draft = request.inputs.find((entry) => entry.name === "draft.json").document;
         payload.operations[0].path = "analysis";
-        payload.operations[0].expectedDigest = digest(draft.analysis);
         payload.operations[0].replacement = { ...draft.analysis, problem: "Parent replacement" };
         payload.operations.push({
           ...structuredClone(payload.operations[0]),
           path: "analysis.problem",
-          expectedDigest: digest(draft.analysis.problem),
           replacement: "Child replacement",
         });
       }],
       ["question authority", (payload, request) => {
         const draft = request.inputs.find((entry) => entry.name === "draft.json").document;
         payload.operations[0].path = "questionLedger";
-        payload.operations[0].expectedDigest = digest(draft.questionLedger);
         payload.operations[0].replacement = structuredClone(draft.questionLedger);
       }],
       ["oversized replacement", (payload) => { payload.operations[0].replacement = "x".repeat((32 * 1024) + 1); }],
       ["invalid lifecycle", (payload, request) => {
         const draft = request.inputs.find((entry) => entry.name === "draft.json").document;
         payload.operations[0].path = "analysis";
-        payload.operations[0].expectedDigest = digest(draft.analysis);
         payload.operations[0].replacement = null;
       }],
       ["unknown full draft field", (payload, request) => {

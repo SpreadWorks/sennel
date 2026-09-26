@@ -102,19 +102,19 @@ export class DraftRepairPath {
 }
 
 export class DraftRepairOperation {
-  constructor(value, index, { includeFindingIdentity = true } = {}) {
+  constructor(value, index, { gateOwned = false } = {}) {
     exactKeys(value, [
-      ...(includeFindingIdentity ? ["title", "target"] : []),
-      "kind", "path", "expectedDigest", "replacement", "reason",
+      ...(gateOwned ? [] : ["title", "target"]),
+      "kind", "path", ...(gateOwned ? [] : ["expectedDigest"]), "replacement", "reason",
     ], `draft-repair.operations[${index}]`);
-    this.title = includeFindingIdentity ? requiredText(value.title, `draft-repair.operations[${index}].title`) : null;
-    this.target = includeFindingIdentity ? requiredText(value.target, `draft-repair.operations[${index}].target`) : null;
+    this.title = gateOwned ? null : requiredText(value.title, `draft-repair.operations[${index}].title`);
+    this.target = gateOwned ? null : requiredText(value.target, `draft-repair.operations[${index}].target`);
     this.kind = requiredText(value.kind, `draft-repair.operations[${index}].kind`);
     if (this.kind !== "replace-value") throw new Error(`draft-repair.operations[${index}].kind is invalid`);
     this.path = new DraftRepairPath(value.path, `draft-repair.operations[${index}].path`);
-    if (!SHA256.test(value.expectedDigest ?? "")) throw new Error(`draft-repair.operations[${index}].expectedDigest must be a SHA-256 digest`);
+    if (!gateOwned && !SHA256.test(value.expectedDigest ?? "")) throw new Error(`draft-repair.operations[${index}].expectedDigest must be a SHA-256 digest`);
     if (byteLength(value.replacement) > MAX_REPLACEMENT_BYTES) throw new Error(`draft-repair.operations[${index}].replacement is oversized`);
-    this.expectedDigest = value.expectedDigest;
+    this.expectedDigest = gateOwned ? null : value.expectedDigest;
     this.replacement = frozen(clone(value.replacement));
     this.reason = requiredText(value.reason, `draft-repair.operations[${index}].reason`);
     Object.freeze(this);
@@ -128,13 +128,22 @@ export class DraftRepairOperation {
     return {
       ...(this.title === null ? {} : { title: this.title, target: this.target }),
       kind: this.kind, path: this.path.value,
-      expectedDigest: this.expectedDigest, replacement: clone(this.replacement), reason: this.reason,
+      ...(this.expectedDigest === null ? {} : { expectedDigest: this.expectedDigest }),
+      replacement: clone(this.replacement), reason: this.reason,
     };
   }
 }
 
+export class DraftGateRepairOperation extends DraftRepairOperation {
+  constructor(value, index) { super(value, index, { gateOwned: true }); }
+
+  observedAudit(observedDigest) {
+    return { ...this.toJSON(), observedDigest };
+  }
+}
+
 export class DraftRepairOperationBatch {
-  constructor(document, { strict = false, includeFindingIdentity = true, envelopeFields = [] } = {}) {
+  constructor(document, { strict = false, gateOwned = false, envelopeFields = [] } = {}) {
     const source = document && typeof document === "object" && !Array.isArray(document) ? document : {};
     this.baseRevision = typeof source.baseRevision === "string" && SHA256_REVISION.test(source.baseRevision)
       ? source.baseRevision
@@ -154,7 +163,9 @@ export class DraftRepairOperationBatch {
     const discarded = [];
     if (Array.isArray(source.operations) && source.operations.length <= MAX_OPERATIONS) {
       source.operations.forEach((operation, index) => {
-        try { operations.push(new DraftRepairOperation(operation, index, { includeFindingIdentity })); }
+        try { operations.push(gateOwned
+          ? new DraftGateRepairOperation(operation, index)
+          : new DraftRepairOperation(operation, index)); }
         catch (error) { discarded.push(discardedOperation(operation, error.message)); }
       });
     }
@@ -237,12 +248,13 @@ export function applyDraftRepairOperations({ draft, triage = null, repair, input
   const gateOwned = authority !== null;
   const batch = repair instanceof DraftRepairOperationBatch ? repair : new DraftRepairOperationBatch(repair, gateOwned ? {
     strict: true,
-    includeFindingIdentity: false,
+    gateOwned: true,
     envelopeFields: ["report"],
   } : {});
   const candidate = clone(draft);
   const permissions = gateOwned ? new Map() : triagePermissions(triage);
   const accepted = [];
+  const observedDigests = new Map();
   const discarded = [...batch.discardedOperations];
   const required = new Map();
   for (const [key, permission] of permissions) {
@@ -285,9 +297,11 @@ export function applyDraftRepairOperations({ draft, triage = null, repair, input
     }
     const sourceReference = operation.path.resolve(gateOwned ? draft : candidate);
     const targetReference = operation.path.resolve(candidate);
-    if (sourceReference === null || targetReference === null || digest(sourceReference.value) !== operation.expectedDigest) {
+    if (sourceReference === null || targetReference === null
+      || (!gateOwned && digest(sourceReference.value) !== operation.expectedDigest)) {
       discarded.push(discardedOperation(operation.toJSON(), "stale target")); continue;
     }
+    if (gateOwned) observedDigests.set(operation, digest(sourceReference.value));
     targetReference.object[targetReference.key] = clone(operation.replacement);
     accepted.push(operation);
   }
@@ -297,6 +311,8 @@ export function applyDraftRepairOperations({ draft, triage = null, repair, input
     .map(([, value]) => value);
   const lifecycleIssues = validateDraftLifecycleForCompletion(candidate);
   const outputByteLength = canonicalDraftByteLength(candidate);
+  const acceptedOperations = accepted.map((operation) => gateOwned
+    ? operation.observedAudit(observedDigests.get(operation)) : operation.toJSON());
   const audit = frozen({
     version: 2,
     phase,
@@ -308,10 +324,10 @@ export function applyDraftRepairOperations({ draft, triage = null, repair, input
       },
     } : { sourceTriage: `${phase.replace(/-repair$/, "")}-triage.json` }),
     baseRevision: batch.baseRevision,
-    acceptedOperations: accepted.map((operation) => operation.toJSON()),
+    acceptedOperations,
     discardedOperations: discarded,
     appliedFindingKeys: gateOwned ? [] : [...new Set(accepted.map((operation) => operation.findingKey()))],
-    operationDigest: digest({ accepted: accepted.map((operation) => operation.toJSON()), discarded }),
+    operationDigest: digest({ accepted: acceptedOperations, discarded }),
     audit: {
       envelopeErrors: [...batch.envelopeErrors],
       baseRevisionMatches: baseMatches,

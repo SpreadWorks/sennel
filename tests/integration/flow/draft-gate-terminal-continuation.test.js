@@ -375,7 +375,6 @@ async function exerciseTerminalContinuation(kind) {
     if (kind === "no-progress") payload.operations = [];
     else {
       payload.operations[0].path = "analysis.missing";
-      payload.operations[0].expectedDigest = "f".repeat(64);
     }
     const before = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" }).descriptor.hash;
     if (kind === "invalid-payload") {

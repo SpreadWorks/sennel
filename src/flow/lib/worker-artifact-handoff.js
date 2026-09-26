@@ -4857,7 +4857,7 @@ function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
     return [
       target,
       ...(stepId === "draft-gate-repair" ? [
-        "The payload must have exactly version, baseRevision, operations, and report. Each operation must have exactly kind, path, expectedDigest, replacement, and reason; kind must be replace-value.",
+        "The payload must have exactly version, baseRevision, operations, and report. Each operation must have exactly kind, path, replacement, and reason; kind must be replace-value. Do not include a target digest; the parent records the observed value digest from the immutable draft.",
         "Use the request inputRevision as baseRevision with the sha256: prefix. Do not emit draft.json or a separate report file.",
         `The fixed authoring paths are ${JSON.stringify(inputs.find((input) => input.name === "plan-gate-repair.json")?.document?.authoringPaths ?? [])}. A replacement path must equal or descend from one of them.`,
       ] : []),

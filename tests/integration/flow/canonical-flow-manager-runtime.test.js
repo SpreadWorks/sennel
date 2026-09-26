@@ -6926,7 +6926,6 @@ describe("FlowManager canonical Version-1 runtime", () => {
       operations: [{
         kind: "replace-value",
         path: "goal",
-        expectedDigest: crypto.createHash("sha256").update(JSON.stringify(draftInput.goal)).digest("hex"),
         replacement: `${draftInput.goal} The retained behavior is now explicit.`,
         reason: "Preserve the behavior identified by the Gate observations.",
       }],
