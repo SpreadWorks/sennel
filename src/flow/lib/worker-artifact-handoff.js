@@ -5350,6 +5350,8 @@ export class WorkerArtifactHandoffRequest {
     return digest(stableStringify(this.toJSON()));
   }
 
+  hasSealedSubmission() { return fs.existsSync(this.submissionPath); }
+
   get actionRequestPath() {
     return path.join(this.directory, "action.json");
   }
@@ -6967,6 +6969,20 @@ function requireCanonicalDraftExecutionClaimForStored({ flowManager, state, stor
     );
   }
   return lifecycle;
+}
+
+function completedSpecGateRepairClaim({ flowManager, state, stored, executionRoot }) {
+  if (stored.stepId !== "spec-gate-repair") return false;
+  const lifecycle = canonicalWorkerExecutionClaimForStored({ flowManager, stored });
+  if (lifecycle?.phase !== "publication") return false;
+  const { ledger } = readProgressBoundSpecGateRepairInput({ flowManager,
+    state: flowManager.canonicalState(state.specId), executionRoot, executionLifecycle: lifecycle });
+  if (ledger.completion !== null) return true;
+  const settled = flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: stored.stepId });
+  return settled?.result.kind === "spec-gate-repair-awaiting-decision"
+    && settled.receipt.executionLifecycle?.phase === "publication"
+    && settled.receipt.executionLifecycle.binding.executionGeneration === lifecycle.executionGeneration
+    && settled.receipt.executionLifecycle.claim.requestDigest === lifecycle.claim.requestDigest;
 }
 
 /** Private in-memory boundary between Draft handoff preparation and commit. */
@@ -9137,6 +9153,12 @@ export class WorkerArtifactHandoffCoordinator {
         }
         // Source recovery is driven above by canonical checkpoints. Runtime is
         // only a capability location, never an enumeration authority.
+        continue;
+      }
+      // The canonical completion and exact claim already authorize cleanup.
+      // A crash may have removed any subset of the transient companion files.
+      if (completedSpecGateRepairClaim({ flowManager: ctx.flowManager, state, stored, executionRoot })) {
+        if (cleanupTransientExecutionHandoffDirectory(handoffRoot, stored.directory)) cleaned += 1;
         continue;
       }
       let submission;

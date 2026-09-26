@@ -7,25 +7,33 @@ import { createHash } from "node:crypto";
 
 /** Binds a Spec worker publication to its exact active Attempt. */
 export class SpecWorkerStepBinding extends StepBinding {
-  constructor({ request } = {}) {
-    if (!(request instanceof WorkerArtifactHandoffRequest)
+  constructor({ request = null, flowManager = null, specId = null, revision = null } = {}) {
+    if (request !== null && (flowManager !== null || specId !== null || revision !== null)) {
+      throw new TypeError("Spec worker binding accepts one authority source");
+    }
+    if (request !== null && (!(request instanceof WorkerArtifactHandoffRequest)
       || !["spec", "spec-triage", "spec-repair", "spec-gate-repair"].includes(request.stepId)
-      || !requiresWorkerArtifactHandoff(request.stepId)) {
+      || !requiresWorkerArtifactHandoff(request.stepId))
+      || request === null && (typeof revision !== "string" || !revision.startsWith("sha256:"))) {
       throw new TypeError("Spec worker binding requires a Spec handoff request");
     }
-    const state = canonicalStepState(request.flowManager, request.specId);
-    super({ flowManager: request.flowManager, state, stepId: request.stepId, attempt: state.attempt });
+    const selectedManager = request?.flowManager ?? flowManager;
+    const selectedSpecId = request?.specId ?? specId;
+    const state = canonicalStepState(selectedManager, selectedSpecId);
+    super({ flowManager: selectedManager, state, stepId: request?.stepId ?? "spec-gate-repair", attempt: state.attempt });
     this.request = request;
+    this.revision = request === null ? revision : request.inputs.find((entry) => (
+      entry.name === "spec-gate-repair-context.json"
+    ))?.document?.baseRevision;
     Object.freeze(this);
   }
 
   assertCurrent() {
     const state = super.assertCurrent();
     if (this.stepId === "spec-gate-repair") {
-      const revision = this.request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document?.baseRevision;
       const spec = this.flowManager.readArtifact({ specId: this.specId,
         logicalKey: "spec.record", consumerNodeId: this.stepId });
-      if (revision !== `sha256:${createHash("sha256").update(spec.bytes).digest("hex")}`) {
+      if (this.revision !== `sha256:${createHash("sha256").update(spec.bytes).digest("hex")}`) {
         throw new CurrentFlowStateConflictError("Spec Gate repair handoff is stale for the canonical Spec revision");
       }
     } else {

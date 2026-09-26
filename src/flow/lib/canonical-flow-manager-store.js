@@ -4228,6 +4228,51 @@ export class CanonicalFlowManagerStore {
     return Object.freeze({ result, settlement, receipt, activityId: activity.id });
   }
 
+  /** Complete a published intermediate Gate repair response in the same Attempt. */
+  completeSpecGateRepairProgress({ binding, stepResult, settlement, publicationReceipt }) {
+    const resolved = this.#resolveSpecId(binding?.specId);
+    const current = this.readCurrentStepSettlement({ specId: resolved, stepId: "spec-gate-repair" });
+    const generation = current?.receipt.executionLifecycle?.binding.executionGeneration;
+    const completed = generation === undefined ? null : this.readArtifact({ specId: resolved,
+      logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
+      parameters: { attemptId: binding.attempt.id, generation: String(generation), phase: "completed" },
+      optional: true });
+    if (completed !== null) {
+      const saved = JSON.parse(completed.bytes.toString("utf8"));
+      if (saved.publicationReceiptId !== publicationReceipt?.id
+        || saved.runId !== binding.runId || saved.specId !== binding.specId
+        || saved.attemptId !== binding.attempt.id || saved.attemptSequence !== binding.attempt.sequence
+        || saved.generation !== generation || saved.resultKind !== stepResult?.kind
+        || current.activityId !== completed.descriptor.activityId
+        || current.receipt.executionLifecycle?.phase !== "publication"
+        || current.receipt.executionLifecycle.claim.requestDigest !== saved.requestDigest) {
+        throw new CurrentFlowStateConflictError("Spec Gate repair completion replay differs from its receipt");
+      }
+      return Object.freeze({ state: this.runtime.load(resolved), receipt: current.receipt });
+    }
+    if (binding?.stepId !== "spec-gate-repair"
+      || !(stepResult instanceof SpecGateRepairContextRequiredResult)
+      || current?.receipt?.id !== publicationReceipt?.id
+      || current.receipt.executionLifecycle?.phase !== "publication"
+      || current.result.kind !== stepResult.kind
+      || current.receipt.settlementKind !== "execution") {
+      throw new CurrentFlowStateConflictError("Spec Gate repair completion differs from its published response");
+    }
+    const document = {
+      version: 1, phase: "completed", runId: binding.runId, specId: binding.specId,
+      attemptId: binding.attempt.id, attemptSequence: binding.attempt.sequence,
+      generation, publicationReceiptId: publicationReceipt.id,
+      requestDigest: current.receipt.executionLifecycle.claim.requestDigest,
+      resultKind: stepResult.kind,
+    };
+    return this.settleSpecStepResult({ binding, stepResult, settlement,
+      artifactWrites: [{ logicalKey: "spec.gate.repair.progress",
+        parameters: { attemptId: binding.attempt.id, generation: String(generation), phase: "completed" },
+        mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8") }],
+    });
+  }
+
   /** Read the latest exact Await receipt without reconstructing its publication. */
   findDraftAwaitSettlementReceipt({ specId = null, binding, stepResult, settlement, awaitQuestion } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
@@ -4418,6 +4463,43 @@ export class CanonicalFlowManagerStore {
     const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
       resolved, binding, settlement, executionLifecycle,
     });
+    if (binding.stepId === "spec-gate-repair"
+      && stepResult instanceof SpecGateRepairContextRequiredResult
+      && selectedExecutionLifecycle?.phase === "publication") {
+      const prior = this.readCurrentStepSettlement({ specId: resolved, stepId: binding.stepId });
+      if (prior?.receipt.executionLifecycle?.phase === "publication") {
+        const generation = prior.receipt.executionLifecycle.binding.executionGeneration;
+        const marker = artifactWrites.length === 1 && artifactWrites[0].logicalKey === "spec.gate.repair.progress"
+          && artifactWrites[0].parameters?.attemptId === binding.attempt.id
+          && artifactWrites[0].parameters?.generation === String(generation)
+          && artifactWrites[0].parameters?.phase === "completed"
+          ? JSON.parse(artifactWrites[0].bytes.toString("utf8")) : null;
+        const alreadyCompleted = this.readArtifact({ specId: resolved,
+          logicalKey: "spec.gate.repair.progress", consumerNodeId: binding.stepId,
+          parameters: { attemptId: binding.attempt.id, generation: String(generation), phase: "completed" },
+          optional: true });
+        const replay = alreadyCompleted === null ? null : this.findStepSettlementReceipt({
+          binding, stepResult, settlement, draftCompletionApplication, commandResult,
+          gatePublication, artifactWrites, artifactRemovals, artifactBaselines,
+          testSourceBaseline, lifecycleResult, references, specRecord, planGateRepairOutcome,
+          executionLifecycle: selectedExecutionLifecycle, awaitQuestion, draftGateRepairSelection,
+        });
+        if (replay?.id === prior.receipt.id) return Object.freeze({
+          state: this.runtime.load(resolved), receipt: replay,
+        });
+        if (alreadyCompleted !== null || !(settlement instanceof DraftExecutionSettlement)
+          || prior.receipt.settlementKind !== "execution"
+          || marker?.version !== 1 || marker.phase !== "completed"
+          || marker.attemptId !== binding.attempt.id || marker.generation !== generation
+          || marker?.publicationReceiptId !== prior.receipt.id
+          || marker.requestDigest !== prior.receipt.executionLifecycle.claim.requestDigest
+          || marker.attemptSequence !== binding.attempt.sequence
+          || marker.runId !== binding.runId || marker.specId !== binding.specId
+          || marker.resultKind !== stepResult.kind) {
+          throw new CurrentFlowStateConflictError("Spec Gate repair completion must publish one exact generation receipt");
+        }
+      }
+    }
     if (draftGateRepairSelection !== null) {
       if (!(draftGateRepairSelection instanceof DraftGateRepairSelection)) {
         throw new CurrentFlowStateInvariantError("Draft Gate publication selection must be typed");

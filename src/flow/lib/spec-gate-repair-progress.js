@@ -12,7 +12,8 @@ export function latestRepairBudget({ flowManager, specId, attemptId, baseRevisio
   const phaseOrder = { checkpoint: 0, claimed: 1, publication: 2 };
   const descriptor = flowManager.artifactCatalog(specId).artifacts
     .filter((entry) => entry.logicalKey === "spec.gate.repair.progress"
-      && entry.relativePath.startsWith(prefix))
+      && entry.relativePath.startsWith(prefix)
+      && /\d+-(checkpoint|claimed|publication)\.json$/.test(entry.relativePath))
     .sort((a, b) => {
       const left = a.relativePath.slice(prefix.length).match(/^(\d+)-(checkpoint|claimed|publication)\.json$/);
       const right = b.relativePath.slice(prefix.length).match(/^(\d+)-(checkpoint|claimed|publication)\.json$/);
@@ -105,6 +106,43 @@ export class SpecGateRepairProgressLedger {
       this.publication = saved;
     }
     this.entries = Object.freeze(this.publication === null ? entries : entries.slice(0, -1));
+    this.completion = null;
+    if (executionLifecycle?.phase === "publication") {
+      const generation = String(executionLifecycle.executionGeneration);
+      const artifact = flowManager.readArtifact({ specId, logicalKey: "spec.gate.repair.progress",
+        consumerNodeId: "spec-gate-repair",
+        parameters: { attemptId, generation, phase: "completed" }, optional: true });
+      if (artifact !== null) {
+        const completion = JSON.parse(artifact.bytes.toString("utf8"));
+        if (completion.version !== 1 || completion.phase !== "completed"
+          || completion.runId !== flowManager.canonicalState(specId).runId
+          || completion.specId !== specId || completion.attemptId !== attemptId
+          || completion.attemptSequence !== flowManager.canonicalState(specId).attempt.sequence
+          || completion.generation !== executionLifecycle.executionGeneration
+          || completion.requestDigest !== executionLifecycle.claim.requestDigest
+          || completion.resultKind !== "spec-gate-repair-context-required") {
+          throw new Error("Gate repair completion differs from its canonical execution claim");
+        }
+        const current = flowManager.readCurrentStepSettlement({ specId, stepId: "spec-gate-repair" });
+        const publication = flowManager.activityLedger(specId).find((entry) => (
+          entry.result?.draftSettlementReceipt?.id === completion.publicationReceiptId
+        ))?.result?.draftSettlementReceipt;
+        if (current?.activityId !== artifact.descriptor.activityId
+          || current.receipt.id === completion.publicationReceiptId
+          || current.result.kind !== completion.resultKind
+          || current.receipt.executionLifecycle?.phase !== "publication"
+          || current.receipt.executionLifecycle.binding.executionGeneration !== completion.generation
+          || current.receipt.executionLifecycle.claim.requestDigest !== completion.requestDigest
+          || publication?.binding?.attemptId !== attemptId
+          || publication.binding.attemptSequence !== completion.attemptSequence
+          || publication.executionLifecycle?.phase !== "publication"
+          || publication.executionLifecycle.binding.executionGeneration !== completion.generation
+          || publication.executionLifecycle.claim.requestDigest !== completion.requestDigest) {
+          throw new Error("Gate repair completion has no exact publication and Step receipt");
+        }
+        this.completion = Object.freeze(completion);
+      }
+    }
     Object.freeze(this);
   }
 

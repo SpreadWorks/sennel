@@ -2098,9 +2098,16 @@ export function assertDraftSettlementReceiptTransition(priorReceipts, receipt, {
     && previous?.phase === "publication"
     && ["execution", "await"].includes(executionHistory.at(-1)?.settlementKind)
     && receipt.settlementKind === "await";
+  const gateRepairCompletion = lifecycle.phase === "publication"
+    && previous?.phase === "publication"
+    && receipt.binding.stepId === "spec-gate-repair"
+    && executionHistory.at(-1)?.settlementKind === "execution"
+    && receipt.settlementKind === "execution"
+    && receipt.resultKind === "spec-gate-repair-context-required"
+    && executionHistory.at(-1)?.resultKind === receipt.resultKind;
   const expectedPhases = lifecycle.phase === "claimed"
     ? ["checkpoint"] : lifecycle.phase === "publication"
-      ? (publicationAwaitContinuation ? ["publication"] : ["claimed"])
+      ? (publicationAwaitContinuation || gateRepairCompletion ? ["publication"] : ["claimed"])
       : ["publication"];
   const previousGeneration = previous?.executionGeneration ?? previous?.binding?.executionGeneration;
   if (previous === null || !expectedPhases.includes(previous.phase)

@@ -143,4 +143,38 @@ describe("Spec Gate repair durable handoff", () => {
       assert.deepEqual(currentProgress(restored, value.specId, request, "claimed"), claimed);
     } finally { removeTmpDir(value.root); }
   });
+
+  it("keeps an exhausted provider budget across a manager restart", async () => {
+    const value = await gateRepairFixture();
+    try {
+      for (let index = 0; index < 16; index += 1) {
+        const request = value.coordinator.createRequest({
+          ctx: value.ctx, state: value.ctx.flowManager.load(value.specId),
+          invocation: { ...value.invocation, id: `dispatch-spec-gate-repair-budget-${index}` },
+        });
+        SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+          prompt: JSON.stringify(request.toPromptReference()) });
+      }
+      const restored = new FlowManager({ root: value.root, mainRoot: value.root,
+        inWorktree: false, specId: value.specId });
+      const before = {
+        state: restored.canonicalState(value.specId).toJSON(),
+        activities: restored.activityLedger(value.specId),
+        catalog: restored.artifactCatalog(value.specId).toJSON(),
+      };
+      const context = { ...value.ctx, flowManager: restored };
+      const request = value.coordinator.createRequest({ ctx: context,
+        state: restored.load(value.specId),
+        invocation: { ...value.invocation, id: "dispatch-spec-gate-repair-budget-exhausted" },
+      });
+      assert.throws(() => SpecGateRepairService.reserveWorkerCall({ ctx: context, request,
+        prompt: JSON.stringify(request.toPromptReference()) }), /budget|limit|exhaust/i);
+      assert.deepEqual({ state: restored.canonicalState(value.specId).toJSON(),
+        activities: restored.activityLedger(value.specId),
+        catalog: restored.artifactCatalog(value.specId).toJSON(),
+      }, before);
+      assert.equal(currentProgress(restored, value.specId, request, "claimed", "15")
+        .budget.providerCallCount, 16);
+    } finally { removeTmpDir(value.root); }
+  });
 });

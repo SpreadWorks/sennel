@@ -12,7 +12,7 @@ import { SpecGateRepairContextRequiredResult,
   SpecGateRepairAwaitingDecisionResult } from "../engine/step-result.js";
 import { readProgressBoundSpecGateRepairInput, SPEC_GATE_REPAIR_REQUEST_LIMIT, latestRepairBudget } from "../lib/spec-gate-repair-progress.js";
 import { nextSpecGateRepairEvidence, SpecGateRepairContextExpansion } from "../lib/spec-gate-repair-evidence.js";
-import { canonicalWorkerExecutionClaimForStored } from "../lib/worker-artifact-handoff.js";
+import { canonicalWorkerExecutionClaimForStored, WorkerArtifactHandoffError } from "../lib/worker-artifact-handoff.js";
 import { isDeepStrictEqual } from "node:util";
 
 function progressWrite(binding, generation, phase, document) {
@@ -22,11 +22,93 @@ function progressWrite(binding, generation, phase, document) {
     bytes: Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8") };
 }
 
+class SpecGateRepairPublishedDecision {
+  constructor({ source, ledger, refreshed, proposal, contextMode }) {
+    const continuation = new SpecGateRepairContinuationFacts({ input: refreshed.source,
+      ledger: refreshed.ledger, locationPlan: refreshed.locationPlan, proposal });
+    const intermediate = continuation.unresolvedLocationCount > 0
+      || contextMode === "evidence" || continuation.decisionRequired
+      || continuation.additionalContextRequested || continuation.completedUnitCount < continuation.unitCount;
+    this.facts = new SpecGateRepairWorkerFacts({ input: source, proposal: intermediate
+      ? proposal : { ...proposal, groups: [...ledger.groups(), ...proposal.groups] } });
+    this.continuation = intermediate ? continuation : null;
+    Object.freeze(this);
+  }
+}
+
+export class SpecGateRepairWorkerExecution {
+  constructor({ request, canonicalReplay = false, sealedReplay = false }) {
+    if (request === null && !canonicalReplay || sealedReplay && request === null
+      || canonicalReplay && sealedReplay) {
+      throw new TypeError("Gate repair execution requires one durable response source");
+    }
+    this.request = request;
+    this.canonicalReplay = canonicalReplay;
+    this.sealedReplay = sealedReplay;
+    Object.freeze(this);
+  }
+}
+
 /** Parent-owned bounded proposal publication; the worker never writes canonical Spec bytes. */
 export class SpecGateRepairService {
   #selection = null;
   #outcome = null;
   #publication = null;
+
+  /** Choose the worker effect from durable execution state before any new request is created. */
+  static planWorkerExecution({ ctx, state, invocation, workerInstructions, handoffCoordinator }) {
+    const canonical = ctx.flowManager.canonicalState(state.specId);
+    const execution = ctx.flowManager.draftStepExecutionState({ binding: {
+      runId: canonical.runId, specId: canonical.specId,
+      stepId: "spec-gate-repair", attempt: canonical.attempt,
+    } });
+    const lifecycle = execution.lifecycle;
+    if (lifecycle?.phase === "claimed" || lifecycle?.phase === "publication") {
+      const progress = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
+        state: canonical, executionRoot: ctx.executionRoot || ctx.root,
+        executionLifecycle: lifecycle });
+      if (lifecycle.phase === "publication" && progress.ledger.completion !== null) {
+        return new SpecGateRepairWorkerExecution({ request: handoffCoordinator.createRequest({
+          ctx, state, invocation, workerInstructions,
+        }) });
+      }
+      const request = handoffCoordinator.restoreClaimedDraftRequest({ ctx, state, lifecycle });
+      if (lifecycle.phase === "claimed" && (request === null || !request.hasSealedSubmission())) {
+        throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE",
+          "claimed Spec Gate repair has no exact sealed worker response",
+          { retryable: false, recoveryPossible: false });
+      }
+      return new SpecGateRepairWorkerExecution({ request,
+        canonicalReplay: lifecycle.phase === "publication" && (request === null || !request.hasSealedSubmission()),
+        sealedReplay: request !== null && request.hasSealedSubmission() });
+    }
+    return new SpecGateRepairWorkerExecution({ request: handoffCoordinator.createRequest({
+      ctx, state, invocation, workerInstructions,
+    }) });
+  }
+
+  static async resumePublished({ ctx, state: requestedState, handoffCoordinator }) {
+    const state = ctx.flowManager.canonicalState(requestedState.specId);
+    const execution = ctx.flowManager.draftStepExecutionState({ binding: {
+      runId: state.runId, specId: state.specId, stepId: "spec-gate-repair", attempt: state.attempt,
+    } });
+    if (execution.lifecycle?.phase !== "publication") throw new Error("Gate repair has no published response to resume");
+    const { source, ledger } = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
+      state, executionRoot: ctx.executionRoot || ctx.root, executionLifecycle: execution.lifecycle });
+    const saved = ledger.publication;
+    if (saved === null || ledger.completion !== null) throw new Error("Gate repair response is already completed or unavailable");
+    const binding = new SpecWorkerStepBinding({ flowManager: ctx.flowManager,
+      specId: state.specId, revision: source.baseRevision });
+    const refreshed = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
+      state, executionRoot: ctx.executionRoot || ctx.root });
+    const { facts, continuation } = new SpecGateRepairPublishedDecision({ source, ledger, refreshed,
+      proposal: saved.proposal, contextMode: saved.context.mode });
+    return new this({ ctx, request: null, binding, preparation: null,
+      facts, handoffCoordinator, continuation,
+      publicationReceipt: ctx.flowManager.readCurrentStepSettlement({
+        specId: state.specId, stepId: "spec-gate-repair",
+      }).receipt });
+  }
 
   /** The claimed budget is committed before a provider-visible call. */
   static reserveWorkerCall({ ctx, request, prompt }) {
@@ -172,6 +254,9 @@ export class SpecGateRepairService {
     } else if (lifecycle.phase !== "publication") {
       throw new Error("Spec Gate repair worker response lacks a durable provider claim");
     }
+    publicationReceipt ??= ctx.flowManager.readCurrentStepSettlement({
+      specId: binding.specId, stepId: binding.stepId,
+    })?.receipt;
     if (alreadyPublished) {
       const saved = ledger.publication;
       if (saved?.requestDigest !== request.requestDigest
@@ -182,32 +267,23 @@ export class SpecGateRepairService {
     }
     const refreshed = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
       state: ctx.flowManager.canonicalState(binding.specId), executionRoot: request.executionRoot });
-    const continuation = new SpecGateRepairContinuationFacts({ input: refreshed.source,
-      ledger: refreshed.ledger, locationPlan: refreshed.locationPlan,
-      proposal: preparation.facts.proposal });
-    if (continuation.unresolvedLocationCount > 0
-      || context.mode === "evidence" || continuation.decisionRequired
-      || continuation.additionalContextRequested
-      || continuation.completedUnitCount < continuation.unitCount) {
+    const selected = new SpecGateRepairPublishedDecision({ source, ledger, refreshed,
+      proposal: preparation.facts.proposal, contextMode: context.mode });
+    if (selected.continuation !== null) {
       return new this({ ctx, request, binding, preparation, handoffCoordinator,
-        continuation, publicationReceipt });
+        continuation: selected.continuation, publicationReceipt });
     }
-    const priorGroups = ledger.groups();
-    const aggregate = { ...preparation.facts.proposal,
-      groups: [...priorGroups, ...preparation.facts.proposal.groups] };
-    const combined = preparation.withSpecGateRepairFacts(new SpecGateRepairWorkerFacts({
-      input: source, proposal: aggregate,
-    }));
+    const combined = preparation.withSpecGateRepairFacts(selected.facts);
     return new this({ ctx, request, binding, preparation: combined, handoffCoordinator,
       publicationReceipt });
   }
 
   constructor({ ctx, request, binding, preparation, handoffCoordinator,
-    continuation = null, publicationReceipt = null }) {
+    facts = preparation?.facts ?? null, continuation = null, publicationReceipt = null }) {
     if (!(binding instanceof SpecWorkerStepBinding) || binding.stepId !== "spec-gate-repair"
       || binding.flowManager !== ctx?.flowManager
-      || !(preparation?.facts instanceof SpecGateRepairWorkerFacts)
-      || preparation.request !== request
+      || !(facts instanceof SpecGateRepairWorkerFacts)
+      || (request === null ? preparation !== null : preparation?.request !== request)
       || typeof handoffCoordinator?.completeSpecWorkerHandoff !== "function") {
       throw new TypeError("Spec Gate repair service requires its exact sealed handoff");
     }
@@ -215,6 +291,7 @@ export class SpecGateRepairService {
     this.request = request;
     this.binding = binding;
     this.preparation = preparation;
+    this.facts = facts;
     this.handoffCoordinator = handoffCoordinator;
     this.continuation = continuation;
     this.publicationReceipt = publicationReceipt;
@@ -222,11 +299,11 @@ export class SpecGateRepairService {
 
   inspectWorkerCompletion() {
     this.binding.assertCurrent();
-    return this.preparation.facts;
+    return this.facts;
   }
 
   adoptWorkerSelection(facts, selection) {
-    if (facts !== this.preparation.facts || !(selection instanceof SpecGateRepairSelection)
+    if (facts !== this.facts || !(selection instanceof SpecGateRepairSelection)
       || selection.facts !== facts) throw new TypeError("Spec Gate repair selection changed after handoff");
     this.binding.assertCurrent();
     this.#selection = selection;
@@ -249,12 +326,13 @@ export class SpecGateRepairService {
       const receipt = stepResult instanceof SpecGateRepairAwaitingDecisionResult
         ? this.ctx.flowManager.settleSpecStepResult({ binding: this.binding,
           stepResult, settlement }).receipt
-        : this.publicationReceipt ?? this.ctx.flowManager.readCurrentStepSettlement({
-          specId: this.binding.specId, stepId: this.binding.stepId,
-        })?.receipt;
-      this.#outcome = this.handoffCoordinator.completeSpecWorkerHandoff({
-        request: this.request, preparation: this.preparation, stepResult, receipt,
-      });
+        : this.ctx.flowManager.completeSpecGateRepairProgress({ binding: this.binding,
+          stepResult, settlement, publicationReceipt: this.publicationReceipt }).receipt;
+      this.#outcome = this.request === null ? { completed: true, replayed: true,
+        stepId: this.binding.stepId, stepResult, receipt, settlementReceipt: receipt }
+        : this.handoffCoordinator.completeSpecWorkerHandoff({
+          request: this.request, preparation: this.preparation, stepResult, receipt,
+        });
       return this.#outcome.receipt;
     }
     const error = settlement instanceof StepErrorDecision;
@@ -262,11 +340,11 @@ export class SpecGateRepairService {
     if (!error && await new settlement.connector().connect() !== settlement.targetStepId) {
       throw new TypeError("Spec Gate repair connector disagrees with its route");
     }
-    const input = this.preparation.facts.input;
+    const input = this.facts.input;
     this.#publication ??= error ? {
       lifecycleResult: null, references: undefined, artifactWrites: [], artifactBaselines: [],
     } : {
-      ...this.preparation.settlementPublication(this.handoffCoordinator.now),
+      ...(this.preparation?.settlementPublication(this.handoffCoordinator.now) ?? {}),
       specRecord: this.#selection.publication,
       artifactWrites: [{
         logicalKey: "spec.gate.repair.audit",
@@ -298,12 +376,16 @@ export class SpecGateRepairService {
       if (receipt === null) throw new StepPersistenceFailure(cause);
       committed = { receipt };
     }
-    this.#outcome = this.handoffCoordinator.completeSpecWorkerHandoff({
-      request: this.request, preparation: this.preparation,
-      stepResult, receipt: committed.receipt, replayed,
-    });
+    this.#outcome = this.request === null ? { completed: true, replayed: true,
+      stepId: this.binding.stepId, stepResult, receipt: committed.receipt,
+      settlementReceipt: committed.receipt }
+      : this.handoffCoordinator.completeSpecWorkerHandoff({
+        request: this.request, preparation: this.preparation,
+        stepResult, receipt: committed.receipt, replayed,
+      });
     return this.#outcome.receipt;
   }
 
   get workerOutcome() { return this.#outcome; }
+  get partialRepair() { return this.#outcome?.stepResult instanceof SpecGateRepairContextRequiredResult; }
 }

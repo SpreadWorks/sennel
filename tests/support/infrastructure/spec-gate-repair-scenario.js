@@ -20,6 +20,7 @@ import { workerArtifactJson } from "./worker-artifact.js";
 export async function createSpecGateRepairScenario({
   specId = "500-spec-gate-repair-scenario", specRecord = validWorkerHandoffSpec(),
   locator = "requirements[R1].desc", requirementRef = "R1", beforeGate = null,
+  additionalObservations = [],
   versionStoreFaultInjector = null, coordinatorFaultInjector = () => {},
 } = {}) {
   const root = createTmpDir("spec-gate-repair-scenario-");
@@ -39,7 +40,7 @@ export async function createSpecGateRepairScenario({
     const observations = [{ kind: "violation", failureMode: "guardrail-violation",
       requirementRef, where: { file: "spec.json", locator },
       observed: "The selected Spec field needs a bounded correction.",
-      severity: "blocking", refs: [requirementRef] }];
+      severity: "blocking", refs: [requirementRef] }, ...additionalObservations];
     const commandResult = new CanonicalGatePromotion({
       state: flowManager.canonicalState(specId), phase: "spec", nodeId: "spec-gate",
     }).promote({ result: "fail", artifacts: { phase: "spec", failureKind: "ai_semantic_fail",

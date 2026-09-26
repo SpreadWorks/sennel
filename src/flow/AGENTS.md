@@ -9,6 +9,12 @@
 - **MUST:** retry、retry exhaustion、repair、defer、block、external block、Step status、次の route の選択を、実行コマンド、registry、状態読取り、`get-next-action` に重複実装しない。
 - command の返却値に含まれる `next` や成果物内の `nextAction` は、必要であれば互換用の投影値として保持できるが、遷移判断の権限として使用してはならない。
 
+## Dispatcher の責務
+
+- Dispatcher は Definition が選んだ Action の実行と、Service が返す型付き worker 実行指示の投影だけを担う。Spec Gate repair の公開済み応答、予算、世代、追加文脈、残作業を dispatcher 内で解釈しない。
+- 中断後は Service が canonical Attempt、実行 claim、進捗 artifact、Step receipt を読み戻して、sealed 応答の再処理、canonical 公開応答の再処理、または次世代の worker 実行を選ぶ。公開だけで Step 完了とは扱わない。
+- Step が確定した中間 Result と完了 receipt は Store が同一 transaction で保存する。Dispatcher は保存済み Result と次 Action を再取得し、独自の route や semantic retry を選ばない。
+
 ## 実行と永続化
 
 - `run-*` コマンドは、選択済み Action の実行、外部出力の境界検証、観測事実の保存を担う。Draftでは、StepのpureなResult factoryだけがtyped factsからsemantic Resultを決める。実行コマンドはsemantic resultからretry回数、上限、repair、次のrouteを独自に決めてはならない。

@@ -1123,7 +1123,8 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
   // alongside the interrupted handoff.
   // Source failures have their own checkpoint-bound canonical facts. An
   // unrelated diagnostic write would invalidate an unsettled checkpoint.
-  if (state?.specId && error.recoveryPossible !== true
+  if (state?.specId && error.classification !== "recovery-required"
+    && error.recoveryPossible !== true
     && (request?.policy ?? workerArtifactHandoffPolicy(stepId))?.kind !== "source") {
     try {
       const entry = {
@@ -1702,6 +1703,7 @@ export default class RunDispatchCommand extends FlowCommand {
     let work = null;
     let resumeSealedDraftExecution = false;
     let publicationRecovery = false;
+    let repairExecution = null;
     let agentOptions = {};
     let draftDefinition = null;
     let specDefinition = null;
@@ -1765,19 +1767,21 @@ export default class RunDispatchCommand extends FlowCommand {
           workerInvocation = prepared.invocation;
           publicationRecovery = prepared.publicationRecovery;
         } else {
-          const repairLifecycle = action.nextAction.step === "spec-gate-repair"
-            ? ctx.flowManager.draftStepExecutionState({ binding: {
-              runId: state.runId, specId: state.specId, stepId: "spec-gate-repair",
-              attempt: ctx.flowManager.canonicalState(state.specId).attempt,
-            } }).lifecycle : null;
-          if (repairLifecycle?.phase === "publication") {
-            handoffRequest = this.handoffCoordinator.restoreClaimedDraftRequest({
-              ctx, state, lifecycle: repairLifecycle,
+          if (action.nextAction.step === "spec-gate-repair") {
+            const { SpecGateRepairService } = await import("../services/spec-gate-repair-service.js");
+            repairExecution = SpecGateRepairService.planWorkerExecution({
+              ctx, state, invocation, workerInstructions, handoffCoordinator: this.handoffCoordinator,
             });
-            if (handoffRequest === null || !fs.existsSync(handoffRequest.submissionPath)) {
-              throw new Error("published Spec Gate repair has no sealed worker response for restart");
+            if (repairExecution.canonicalReplay) {
+              const service = await SpecGateRepairService.resumePublished({
+                ctx, state, handoffCoordinator: this.handoffCoordinator,
+              });
+              const result = await this.runSpecWorkerStep(specDefinition, service);
+              return { error: null, handoffRequest: null, agentError: null,
+                partialRepair: service.partialRepair,
+                stepResult: result.stepResult, supervisorEvents: [], deferredMetric: null };
             }
-            publicationRecovery = true;
+            handoffRequest = repairExecution.request;
           } else {
             handoffRequest = this.handoffCoordinator.createRequest({
               ctx, state, invocation, workerInstructions,
@@ -1785,8 +1789,8 @@ export default class RunDispatchCommand extends FlowCommand {
           }
         }
         resumeSealedDraftExecution = (conditionalDraftExecution
-          || handoffRequest.stepId === "spec-gate-repair")
-          && fs.existsSync(handoffRequest.submissionPath);
+          && fs.existsSync(handoffRequest.submissionPath))
+          || repairExecution?.sealedReplay === true;
         if (!resumeSealedDraftExecution) {
           work = new FlowDispatchWork(workerInvocation, handoffRequest);
         }

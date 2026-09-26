@@ -482,6 +482,9 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  completeSpecGateRepairProgress(input = {}) {
+    return this._store.completeSpecGateRepairProgress(input);
+  }
   readCurrentStepSettlement(input = {}) {
     return this._store.readCurrentStepSettlement({
       ...input,
