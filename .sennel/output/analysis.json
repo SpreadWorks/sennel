@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-26T14:28:16.097Z",
+  "analyzedAt": "2026-09-26T16:03:28.599Z",
   "package": {
     "entries": [
       {
@@ -7895,13 +7895,14 @@
       },
       {
         "file": "src/flow/lib/draft-repair-operations.js",
-        "hash": "3f9847b7e67b715abc7d0676d1c1f728",
-        "lines": 343,
-        "mtime": "2026-09-15T00:04:37.598Z",
+        "hash": "9dcae8f4ea851f7b2688adbddf502cf7",
+        "lines": 359,
+        "mtime": "2026-09-26T16:03:20.890Z",
         "className": "draft-repair-operations",
         "methods": [
           "DraftRepairPath",
           "DraftRepairOperation",
+          "DraftGateRepairOperation",
           "DraftRepairOperationBatch",
           "DraftGateRepairAuthority",
           "DraftRepairOperationsError",
@@ -7926,35 +7927,34 @@
         "exports": [
           "DraftRepairPath",
           "DraftRepairOperation",
+          "DraftGateRepairOperation",
           "DraftRepairOperationBatch",
           "DraftGateRepairAuthority",
           "DraftRepairOperationsError",
           "validateDraftRepairTriage",
           "applyDraftRepairOperations"
         ],
-        "extends": "Error",
+        "extends": "DraftRepairOperation",
         "usedBy": [
           "src/flow/lib/draft-review-artifacts.js",
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "a3186012",
-        "summary": "Validates and applies bounded draft repair operations under Gate-owned path authority.",
-        "detail": "This module defines draft repair paths, operations, batches, Gate repair authority, triage permissions, and repair errors. It enforces exact field structures, path safety, operation and envelope limits, allowed and required paths, duplicate and overlapping path detection, Gate-owned conflict rules, finding-based acceptance, and immutable audit output before returning a repaired draft.",
+        "summary": "Provides bounded, validated operations for repairing draft documents with typed Gate authority and audit generation.",
+        "detail": "Defines draft repair paths, operations, Gate-specific operations, operation batches, authority checks, triage validation, and structured repair errors. The module enforces limits on operation counts, payload sizes, path depth, and envelope errors; rejects forbidden path segments; validates allowed and required paths; detects duplicate or overlapping paths; verifies permissions and Gate ownership; resolves source and target references; and returns a frozen repaired draft with an audit record. It also provides cloning, SHA-256 digest, byte-length, key-validation, and discarded-operation helpers.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-15T04:24:56.696Z",
+          "processedAt": "2026-09-26T16:03:57.889Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
           "draft repair",
-          "Gate authority",
           "path validation",
-          "triage permissions",
-          "operation limits",
-          "conflict detection",
-          "repair audit"
+          "Gate authority",
+          "triage validation",
+          "operation batching",
+          "audit records"
         ]
       },
       {
@@ -20033,9 +20033,9 @@
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "867daf642fcdbe03de5ba93706b1417f",
+        "hash": "0e109f4c17a2d2d56a379b2aee28b584",
         "lines": 10195,
-        "mtime": "2026-09-26T14:15:17.374Z",
+        "mtime": "2026-09-26T16:03:20.892Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "WorkerArtifactHandoffError",
@@ -20375,24 +20375,24 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Implements durable worker artifact handoff for Flow execution.",
-        "detail": "Defines immutable, versioned handoff contracts for Draft and Spec workers, including requests, policies, input snapshots, payload manifests, source-effect reports, mutation baselines, repository-authority snapshots, rollback checkpoints, publication journals, receipts, and sealed submissions. Validates canonical Flow and Requirement-test bindings, payload integrity, path and size limits, and repository ownership boundaries; materializes source-worker effects; supports artifact publication, restoration, upgrade staging, replay reconciliation, retry handling, failure quarantine, rollback, recovery, and safe cleanup of transient handoff directories through typed errors and immutable contracts.",
+        "summary": "Coordinates secure, sealed worker artifact handoffs, validation, publication, recovery, and source rollback for Flow worker steps.",
+        "detail": "This module defines versioned handoff requests and sealed submissions with payload policies, typed input snapshots, canonical input binding, source and artifact effect reports, repository authority snapshots, mutation manifests, immutable digests, and rollback checkpoints. It validates worker outputs against step-specific contracts and strict path, ownership, size, and state boundaries; builds canonical Draft and Spec publications through atomic filesystem operations; records durable receipts and reconciles replayed or committed results. It also manages retry instructions, checkpoint-bound recovery, rollback verification, quarantine of failed handoffs, transient-directory cleanup, test-review repair artifacts, and detection of stale or conflicting repository state.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-26T14:29:00.898Z",
+          "processedAt": "2026-09-26T16:03:57.889Z",
           "attempts": 1
         },
-        "app": "senti",
+        "app": "flow",
         "keywords": [
-          "worker handoff",
-          "artifact publication",
-          "payload validation",
+          "worker artifact handoff",
+          "artifact validation",
+          "canonical inputs",
           "source mutation",
-          "repository authority",
+          "publication journal",
           "rollback recovery",
-          "execution receipts",
-          "handoff cleanup"
+          "quarantine cleanup",
+          "atomic publication"
         ]
       },
       {
@@ -28716,9 +28716,9 @@
     ],
     "summary": {
       "total": 504,
-      "totalMethods": 5198
+      "totalMethods": 5199
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-26T14:29:00.898Z"
+  "enrichedAt": "2026-09-26T16:03:57.889Z"
 }
