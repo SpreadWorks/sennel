@@ -16,6 +16,7 @@ import { loadSpecJsonSchema } from "../../lib/spec-json.js";
 import { FlowCommand } from "./base-command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { AgentFailure } from "../../lib/agent-failure.js";
+import { PromptBatchingError } from "../../lib/prompt-batching.js";
 import { Agent } from "../../lib/agent.js";
 import { DeferredAgentInvocationMetric } from "../../lib/agent-invocation-metric.js";
 import { flowCommands } from "../../lib/command-registry.js";
@@ -1778,7 +1779,7 @@ export default class RunDispatchCommand extends FlowCommand {
               });
               const result = await this.runSpecWorkerStep(specDefinition, service);
               return { error: null, handoffRequest: null, agentError: null,
-                partialRepair: service.partialRepair,
+                partialProgressReceipt: service.partialProgressReceipt,
                 stepResult: result.stepResult, supervisorEvents: [], deferredMetric: null };
             }
             handoffRequest = repairExecution.request;
@@ -1878,6 +1879,12 @@ export default class RunDispatchCommand extends FlowCommand {
             });
           }
         } catch (error) {
+          if (handoffRequest?.stepId === "spec-gate-repair" && error instanceof PromptBatchingError) {
+            return { error: new WorkerArtifactHandoffError("recovery-required", error.code,
+              error.message, { cause: error, recoveryPossible: false,
+                data: { ...error.details, stepId: handoffRequest.stepId } }),
+            handoffRequest, agentError: null };
+          }
           processError = error;
           throw error;
         } finally {
@@ -2068,6 +2075,7 @@ export default class RunDispatchCommand extends FlowCommand {
         handoffRequest,
         agentError,
         partialRepair: reconciliation?.partial === true,
+        partialProgressReceipt: reconciliation?.partialProgressReceipt ?? null,
         stepResult: reconciliation?.stepResult ?? null,
         supervisorEvents,
         deferredMetric: holdsSpecRepairMetric ? deferredMetric : null,
@@ -2775,8 +2783,6 @@ export default class RunDispatchCommand extends FlowCommand {
       await flushDeferredMetrics(deferredMetrics);
       const agentError = attempt.agentError;
 
-      if (attempt.partialRepair) stalledDispatches = 0;
-
       const refreshed = await this.fetchNextAction(target);
       if (refreshed instanceof Envelope) {
         current = refreshed;
@@ -2811,6 +2817,7 @@ export default class RunDispatchCommand extends FlowCommand {
         "post-handoff-progress",
       );
       stalledDispatches = invocation.hasProgressedTo(refreshedIdentity)
+        || attempt.partialRepair === true || attempt.partialProgressReceipt != null
         ? 0
         : stalledDispatches + 1;
       if (stalledDispatches >= this.maxStalledDispatches) {

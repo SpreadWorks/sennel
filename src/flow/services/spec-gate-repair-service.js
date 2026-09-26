@@ -11,6 +11,7 @@ import {
 import { SpecGateRepairContextRequiredResult,
   SpecGateRepairAwaitingDecisionResult } from "../engine/step-result.js";
 import { readProgressBoundSpecGateRepairInput, SPEC_GATE_REPAIR_REQUEST_LIMIT, latestRepairBudget } from "../lib/spec-gate-repair-progress.js";
+import { readSpecGateRepairInput } from "../lib/spec-gate-repair-input.js";
 import { nextSpecGateRepairEvidence, SpecGateRepairContextExpansion } from "../lib/spec-gate-repair-evidence.js";
 import { canonicalWorkerExecutionClaimForStored, WorkerArtifactHandoffError } from "../lib/worker-artifact-handoff.js";
 import { isDeepStrictEqual } from "node:util";
@@ -20,6 +21,17 @@ function progressWrite(binding, generation, phase, document) {
     parameters: { attemptId: binding.attempt.id, generation: String(generation), phase },
     mediaType: "application/json",
     bytes: Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8") };
+}
+
+function changedLocationPlanError({ stepId, attemptId, context, locationPlan }) {
+  if (context?.mode !== "locate") return null;
+  const batch = locationPlan?.batches[context.batchIndex];
+  if (batch?.digest === context.batchDigest) return null;
+  return new WorkerArtifactHandoffError("recovery-required", "FLOW_SPEC_GATE_REPAIR_PLAN_CHANGED",
+    "saved Spec Gate repair location batch differs from the current frozen plan",
+    { recoveryPossible: false, data: { stepId, attemptId,
+      baseRevision: context.baseRevision, batchIndex: context.batchIndex,
+      savedBatchDigest: context.batchDigest, currentBatchDigest: batch?.digest ?? null } });
 }
 
 class SpecGateRepairPublishedDecision {
@@ -100,7 +112,7 @@ export class SpecGateRepairService {
     const binding = new SpecWorkerStepBinding({ flowManager: ctx.flowManager,
       specId: state.specId, revision: source.baseRevision });
     const refreshed = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
-      state, executionRoot: ctx.executionRoot || ctx.root });
+      state, executionRoot: ctx.executionRoot || ctx.root, acceptedPublication: true });
     const { facts, continuation } = new SpecGateRepairPublishedDecision({ source, ledger, refreshed,
       proposal: saved.proposal, contextMode: saved.context.mode });
     return new this({ ctx, request: null, binding, preparation: null,
@@ -122,11 +134,26 @@ export class SpecGateRepairService {
     if (typeof prompt !== "string" || prompt.length + inputCharacters > limit.maxRequestCharacters) {
       throw new Error("Spec Gate repair prompt exceeds its durable request limit");
     }
-    budget.assertCanExecute(1);
+    const selectedContext = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document;
+    const state = flowManager.canonicalState(binding.specId);
+    const { ledger, locationPlan } = readProgressBoundSpecGateRepairInput({ flowManager,
+      state, executionRoot: request.executionRoot });
+    let requiredCalls = 1;
+    if (selectedContext.mode === "locate") {
+      requiredCalls = locationPlan.batches.length - ledger.completedLocationBatches(locationPlan).length + 1;
+    } else if (selectedContext.mode === "evidence") {
+      const completed = ledger.entries.filter((entry) => entry.context.mode === "evidence"
+        && entry.context.unitId === selectedContext.unitId
+        && entry.context.evidenceContextDigest === selectedContext.evidenceContextDigest
+        && entry.context.evidenceDepth === selectedContext.evidenceDepth);
+      requiredCalls = selectedContext.batchCount - completed.length + 1;
+    } else if (selectedContext.mode === "repair") {
+      requiredCalls = selectedContext.batchCount;
+    }
+    budget.assertCanExecute(requiredCalls);
     if (budget.providerCallCount + 1 > limit.maxBatchCount) {
       throw new Error("Spec Gate repair exceeds its durable batch limit");
     }
-    const selectedContext = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document;
     if (selectedContext?.mode === "evidence" && selectedContext.evidenceDepth > 0) {
       budget.consumeSynthesisCalls(1);
     }
@@ -159,7 +186,35 @@ export class SpecGateRepairService {
   }
 
   static async prepare({ ctx, request, Connector, handoffCoordinator }) {
-    const preparation = handoffCoordinator.prepareSpecWorker({ ctx, request });
+    let preparation;
+    try {
+      preparation = handoffCoordinator.prepareSpecWorker({ ctx, request });
+    } catch (error) {
+      // A saved locate request can become stale when a newer frozen context
+      // resolves its ordinal path. Classify that exact old plan before the
+      // generic stale handoff path records an issue-log mutation.
+      const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document;
+      if (!(error instanceof WorkerArtifactHandoffError)
+        || error.code !== "FLOW_ARTIFACT_HANDOFF_STALE" || context?.mode !== "locate") throw error;
+      const lifecycle = canonicalWorkerExecutionClaimForStored({ flowManager: ctx.flowManager, stored: request });
+      if (lifecycle === null) throw error;
+      const canonical = ctx.flowManager.canonicalState(request.specId);
+      let source;
+      try {
+        source = readSpecGateRepairInput({ flowManager: ctx.flowManager, state: canonical,
+          executionRoot: request.executionRoot });
+      } catch (sourceError) {
+        if (sourceError instanceof CurrentFlowStateConflictError) throw error;
+        throw sourceError;
+      }
+      if (context.baseRevision !== source.baseRevision) throw error;
+      const { locationPlan } = readProgressBoundSpecGateRepairInput({
+        flowManager: ctx.flowManager, state: canonical,
+        executionRoot: request.executionRoot, executionLifecycle: lifecycle,
+      });
+      throw changedLocationPlanError({ stepId: request.stepId, attemptId: canonical.attempt.id,
+        context, locationPlan }) ?? error;
+    }
     if (preparation.completed) return preparation;
     const binding = await new Connector(request).connect();
     const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document;
@@ -174,11 +229,13 @@ export class SpecGateRepairService {
     }
     const alreadyPublished = lifecycle.phase === "publication";
     if (context.mode === "locate") {
-      const batch = locationPlan?.batches[context.batchIndex];
+      const planError = changedLocationPlanError({ stepId: binding.stepId,
+        attemptId: binding.attempt.id, context, locationPlan });
+      if (planError) throw planError;
       const allowed = new Set(context.tableOfContents.map((entry) => entry.id));
       const exactIdentity = context.finding.identity;
       const proposal = preparation.facts.proposal;
-      if (batch?.digest !== context.batchDigest || proposal.baseRevision !== context.baseRevision
+      if (proposal.baseRevision !== context.baseRevision
         || proposal.locations.length !== 1
         || !isDeepStrictEqual(proposal.locations[0].identity, exactIdentity)
         || !Array.isArray(proposal.locations[0].rangeIds)
@@ -266,7 +323,8 @@ export class SpecGateRepairService {
       }
     }
     const refreshed = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
-      state: ctx.flowManager.canonicalState(binding.specId), executionRoot: request.executionRoot });
+      state: ctx.flowManager.canonicalState(binding.specId), executionRoot: request.executionRoot,
+      acceptedPublication: true });
     const selected = new SpecGateRepairPublishedDecision({ source, ledger, refreshed,
       proposal: preparation.facts.proposal, contextMode: context.mode });
     if (selected.continuation !== null) {
@@ -323,16 +381,18 @@ export class SpecGateRepairService {
         || stepResult instanceof SpecGateRepairAwaitingDecisionResult)) {
         throw new TypeError("Gate repair continuation requires a Step-selected Result");
       }
-      const receipt = stepResult instanceof SpecGateRepairAwaitingDecisionResult
+      const committed = stepResult instanceof SpecGateRepairAwaitingDecisionResult
         ? this.ctx.flowManager.settleSpecStepResult({ binding: this.binding,
-          stepResult, settlement }).receipt
+          stepResult, settlement })
         : this.ctx.flowManager.completeSpecGateRepairProgress({ binding: this.binding,
-          stepResult, settlement, publicationReceipt: this.publicationReceipt }).receipt;
-      this.#outcome = this.request === null ? { completed: true, replayed: true,
+          stepResult, settlement, publicationReceipt: this.publicationReceipt });
+      const receipt = committed.receipt;
+      const outcome = this.request === null ? { completed: true, replayed: true,
         stepId: this.binding.stepId, stepResult, receipt, settlementReceipt: receipt }
         : this.handoffCoordinator.completeSpecWorkerHandoff({
           request: this.request, preparation: this.preparation, stepResult, receipt,
         });
+      this.#outcome = { ...outcome, partialProgressReceipt: committed.newlyCompleted ? receipt : null };
       return this.#outcome.receipt;
     }
     const error = settlement instanceof StepErrorDecision;
@@ -387,5 +447,5 @@ export class SpecGateRepairService {
   }
 
   get workerOutcome() { return this.#outcome; }
-  get partialRepair() { return this.#outcome?.stepResult instanceof SpecGateRepairContextRequiredResult; }
+  get partialProgressReceipt() { return this.#outcome?.partialProgressReceipt ?? null; }
 }

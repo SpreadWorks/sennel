@@ -2218,9 +2218,10 @@ function specGateRepairContextHandoffInput({ flowManager, state, policy, executi
   let document;
   if (source.context.unresolvedFindings().length > 0) {
     const plan = locationPlan;
-    const completed = ledger.forMode("locate");
+    const completed = ledger.completedLocationBatches(plan);
     if (completed.length < plan.batches.length) {
-      const batch = plan.batches[completed.length];
+      const completedIndexes = new Set(completed.map((entry) => entry.context.batchIndex));
+      const batch = plan.batches.find((entry) => !completedIndexes.has(entry.index));
       document = { version: 1, stage: "spec-gate-repair", mode: "locate",
         baseRevision: source.baseRevision, batchIndex: batch.index, batchCount: batch.count,
         batchDigest: batch.digest, finding: JSON.parse(batch.contextElements[0].text),

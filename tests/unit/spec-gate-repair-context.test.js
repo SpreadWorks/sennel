@@ -75,6 +75,28 @@ test("free text is unresolved until a version-bound canonical location response 
   assert.throws(() => ctx.resolveLocations({ ...response, locations: [response.locations[0], response.locations[0]] }), /duplicate/);
 });
 
+test("ordinal Gate locations resolve to the frozen entity range without granting edit authority", () => {
+  const findings = ["requirements[R2].desc", "$.requirements[1].desc", "requirements[1].desc",
+    "$.requirements[9].desc", "$.requirements[1].missing", "the second requirement"].map((locator, index) => ({
+    ...finding(`F${index + 1}`, []), where: { locator },
+  }));
+  const ctx = context(findings);
+  assert.deepEqual(ctx.unresolvedFindings().map((entry) => entry.where.locator), [
+    "$.requirements[9].desc", "$.requirements[1].missing", "the second requirement",
+  ]);
+  const ranges = ctx.tableOfContents();
+  const canonical = ranges.find((entry) => entry.id === "requirements[R2].desc");
+  assert(canonical);
+  const resolved = findings.slice(0, 3).map((entry) => {
+    const selected = context([entry]);
+    return selected.select(selected.units()[0].id).toJSON();
+  });
+  for (const selection of resolved) {
+    assert.deepEqual(selection.unit.rangeIds, [canonical.id]);
+    assert.equal(selection.ranges.find((range) => range.id === canonical.id).writable, false);
+  }
+});
+
 test("additional context is canonical and read-only without minting edit authority", () => {
   const ctx = context([finding("F1")]);
   const unit = ctx.units()[0];

@@ -4248,7 +4248,7 @@ export class CanonicalFlowManagerStore {
         || current.receipt.executionLifecycle.claim.requestDigest !== saved.requestDigest) {
         throw new CurrentFlowStateConflictError("Spec Gate repair completion replay differs from its receipt");
       }
-      return Object.freeze({ state: this.runtime.load(resolved), receipt: current.receipt });
+      return Object.freeze({ state: this.runtime.load(resolved), receipt: current.receipt, newlyCompleted: false });
     }
     if (binding?.stepId !== "spec-gate-repair"
       || !(stepResult instanceof SpecGateRepairContextRequiredResult)
@@ -4265,12 +4265,13 @@ export class CanonicalFlowManagerStore {
       requestDigest: current.receipt.executionLifecycle.claim.requestDigest,
       resultKind: stepResult.kind,
     };
-    return this.settleSpecStepResult({ binding, stepResult, settlement,
+    const committed = this.settleSpecStepResult({ binding, stepResult, settlement,
       artifactWrites: [{ logicalKey: "spec.gate.repair.progress",
         parameters: { attemptId: binding.attempt.id, generation: String(generation), phase: "completed" },
         mediaType: "application/json",
         bytes: Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8") }],
     });
+    return Object.freeze({ ...committed, newlyCompleted: true });
   }
 
   /** Read the latest exact Await receipt without reconstructing its publication. */

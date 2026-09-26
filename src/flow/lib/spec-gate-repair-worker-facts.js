@@ -13,7 +13,7 @@ export class SpecGateRepairContinuationFacts {
     this.input = input;
     this.unresolvedLocationCount = input.context.unresolvedFindings().length;
     this.locationBatchCount = locationPlan?.batches.length ?? 0;
-    this.completedLocationBatchCount = ledger.forMode("locate").length;
+    this.completedLocationBatchCount = ledger.acceptedLocationBatches(locationPlan).length;
     this.unitCount = this.unresolvedLocationCount === 0 ? input.context.units().length : 0;
     this.completedUnitCount = this.unresolvedLocationCount === 0
       ? ledger.completedUnitIds(input.context).length : 0;

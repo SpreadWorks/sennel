@@ -39,16 +39,65 @@ export function latestRepairBudget({ flowManager, specId, attemptId, baseRevisio
 
 export const SPEC_GATE_REPAIR_REQUEST_LIMIT = new PromptRequestLimit({ maxCharacters: 100_000 });
 
-export function readProgressBoundSpecGateRepairInput({ flowManager, state, executionRoot, executionLifecycle = null }) {
+class SpecGateRepairCompletedPublication {
+  constructor({ completion, activityId, receipt }) {
+    this.completion = Object.freeze(completion);
+    this.activityId = activityId;
+    this.receipt = receipt;
+    Object.freeze(this);
+  }
+}
+
+function completedRepairPublication({ flowManager, specId, attemptId, attemptSequence, runId, entry, activities }) {
+  const artifact = flowManager.readArtifact({ specId, logicalKey: "spec.gate.repair.progress",
+    consumerNodeId: "spec-gate-repair",
+    parameters: { attemptId, generation: String(entry.generation), phase: "completed" }, optional: true });
+  if (artifact === null) return null;
+  const completion = JSON.parse(artifact.bytes.toString("utf8"));
+  const settled = activities.find((activity) => activity.id === artifact.descriptor.activityId);
+  const receipt = settled?.result?.draftSettlementReceipt;
+  const publication = activities.find((activity) => (
+    activity.result?.draftSettlementReceipt?.id === completion.publicationReceiptId
+  ))?.result?.draftSettlementReceipt;
+  if (completion.version !== 1 || completion.phase !== "completed"
+    || completion.runId !== runId || completion.specId !== specId
+    || completion.attemptId !== attemptId || completion.attemptSequence !== attemptSequence
+    || completion.generation !== entry.generation
+    || completion.requestDigest !== entry.requestDigest
+    || completion.resultKind !== "spec-gate-repair-context-required"
+    || receipt?.binding?.runId !== runId || receipt.binding.specId !== specId
+    || receipt.binding.stepId !== "spec-gate-repair"
+    || receipt.binding.attemptId !== attemptId || receipt.binding.attemptSequence !== attemptSequence
+    || receipt.resultKind !== completion.resultKind || receipt.id === completion.publicationReceiptId
+    || receipt.executionLifecycle?.phase !== "publication"
+    || receipt.executionLifecycle.binding.executionGeneration !== entry.generation
+    || receipt.executionLifecycle.binding.inputRevision !== entry.inputRevision
+    || receipt.executionLifecycle.claim.requestDigest !== entry.requestDigest
+    || publication?.binding?.runId !== runId || publication.binding.specId !== specId
+    || publication.binding.stepId !== "spec-gate-repair"
+    || publication.binding.attemptId !== attemptId || publication.binding.attemptSequence !== attemptSequence
+    || publication.executionLifecycle?.phase !== "publication"
+    || publication.executionLifecycle.binding.executionGeneration !== entry.generation
+    || publication.executionLifecycle.binding.inputRevision !== entry.inputRevision
+    || publication.executionLifecycle.claim.requestDigest !== entry.requestDigest) {
+    throw new Error("Gate repair completion has no exact publication and Step receipt");
+  }
+  return new SpecGateRepairCompletedPublication({ completion, activityId: artifact.descriptor.activityId, receipt });
+}
+
+export function readProgressBoundSpecGateRepairInput({ flowManager, state, executionRoot,
+  executionLifecycle = null, acceptedPublication = false }) {
   let source = readSpecGateRepairInput({ flowManager, state, executionRoot });
   const ledger = new SpecGateRepairProgressLedger({ flowManager, specId: state.specId,
     attemptId: state.attempt.id, baseRevision: source.baseRevision, executionLifecycle });
   const locationPlan = source.context.unresolvedFindings().length > 0
     ? source.context.locationPlan({ limit: SPEC_GATE_REPAIR_REQUEST_LIMIT }) : null;
-  if (locationPlan !== null && ledger.forMode("locate").length === locationPlan.batches.length) {
+  const completedLocations = locationPlan === null ? [] : acceptedPublication
+    ? ledger.acceptedLocationBatches(locationPlan) : ledger.completedLocationBatches(locationPlan);
+  if (locationPlan !== null && completedLocations.length === locationPlan.batches.length) {
     const unresolved = new Set(source.context.unresolvedFindings().map((finding) => finding.identity.toString()));
     const resolved = source.context.resolveLocationBatches({ plan: locationPlan,
-      responses: ledger.forMode("locate").map((entry) => ({
+      responses: completedLocations.map((entry) => ({
         batchDigest: entry.context.batchDigest, baseRevision: entry.context.baseRevision,
         locations: entry.proposal.locations,
       })) });
@@ -106,38 +155,32 @@ export class SpecGateRepairProgressLedger {
       this.publication = saved;
     }
     this.entries = Object.freeze(this.publication === null ? entries : entries.slice(0, -1));
+    const state = flowManager.canonicalState(specId);
+    const activities = flowManager.activityLedger(specId);
+    const completed = (entry) => completedRepairPublication({ flowManager, specId, attemptId,
+      attemptSequence: state.attempt.sequence, runId: state.runId, entry, activities });
+    this.completedLocations = Object.freeze(this.entries.filter((entry) => (
+      entry.context.mode === "locate" && completed(entry) !== null
+    )));
+    const current = flowManager.readCurrentStepSettlement({ specId, stepId: "spec-gate-repair" });
+    const activeLifecycle = current?.receipt.executionLifecycle;
+    const active = activeLifecycle?.phase === "publication" && current.receipt.binding.attemptId === attemptId
+      ? entries.find((entry) => entry.generation === activeLifecycle.binding.executionGeneration) : null;
+    if (active !== null && active !== undefined && (active.requestDigest !== activeLifecycle.claim.requestDigest
+      || active.inputRevision !== activeLifecycle.binding.inputRevision)) {
+      throw new Error("Gate repair active publication differs from its exact Step receipt");
+    }
+    this.activePublicationGeneration = active?.generation ?? null;
     this.completion = null;
     if (executionLifecycle?.phase === "publication") {
-      const generation = String(executionLifecycle.executionGeneration);
-      const artifact = flowManager.readArtifact({ specId, logicalKey: "spec.gate.repair.progress",
-        consumerNodeId: "spec-gate-repair",
-        parameters: { attemptId, generation, phase: "completed" }, optional: true });
-      if (artifact !== null) {
-        const completion = JSON.parse(artifact.bytes.toString("utf8"));
-        if (completion.version !== 1 || completion.phase !== "completed"
-          || completion.runId !== flowManager.canonicalState(specId).runId
-          || completion.specId !== specId || completion.attemptId !== attemptId
-          || completion.attemptSequence !== flowManager.canonicalState(specId).attempt.sequence
-          || completion.generation !== executionLifecycle.executionGeneration
-          || completion.requestDigest !== executionLifecycle.claim.requestDigest
-          || completion.resultKind !== "spec-gate-repair-context-required") {
-          throw new Error("Gate repair completion differs from its canonical execution claim");
-        }
+      const saved = completed(this.publication);
+      if (saved !== null) {
+        const { completion } = saved;
         const current = flowManager.readCurrentStepSettlement({ specId, stepId: "spec-gate-repair" });
-        const publication = flowManager.activityLedger(specId).find((entry) => (
-          entry.result?.draftSettlementReceipt?.id === completion.publicationReceiptId
-        ))?.result?.draftSettlementReceipt;
-        if (current?.activityId !== artifact.descriptor.activityId
-          || current.receipt.id === completion.publicationReceiptId
+        if (current?.activityId !== saved.activityId
+          || current.receipt.id !== saved.receipt.id
           || current.result.kind !== completion.resultKind
-          || current.receipt.executionLifecycle?.phase !== "publication"
-          || current.receipt.executionLifecycle.binding.executionGeneration !== completion.generation
-          || current.receipt.executionLifecycle.claim.requestDigest !== completion.requestDigest
-          || publication?.binding?.attemptId !== attemptId
-          || publication.binding.attemptSequence !== completion.attemptSequence
-          || publication.executionLifecycle?.phase !== "publication"
-          || publication.executionLifecycle.binding.executionGeneration !== completion.generation
-          || publication.executionLifecycle.claim.requestDigest !== completion.requestDigest) {
+          || completion.requestDigest !== executionLifecycle.claim.requestDigest) {
           throw new Error("Gate repair completion has no exact publication and Step receipt");
         }
         this.completion = Object.freeze(completion);
@@ -147,6 +190,28 @@ export class SpecGateRepairProgressLedger {
   }
 
   forMode(mode) { return this.entries.filter((entry) => entry.context.mode === mode); }
+
+  completedLocationBatches(plan) {
+    if (plan === null) return Object.freeze([]);
+    const matched = this.completedLocations.filter((entry) => {
+      const batch = plan.batches[entry.context.batchIndex];
+      return batch?.digest === entry.context.batchDigest && entry.context.batchCount === plan.batches.length;
+    });
+    if (new Set(matched.map((entry) => entry.context.batchIndex)).size !== matched.length) {
+      throw new Error("Gate repair location plan has duplicate completed batches");
+    }
+    return Object.freeze(matched.sort((a, b) => a.context.batchIndex - b.context.batchIndex));
+  }
+
+  acceptedLocationBatches(plan) {
+    const completed = this.completedLocationBatches(plan);
+    if (plan === null) return completed;
+    const active = this.entries.find((entry) => entry.generation === this.activePublicationGeneration
+      && entry.context.mode === "locate" && plan.batches[entry.context.batchIndex]?.digest === entry.context.batchDigest
+      && entry.context.batchCount === plan.batches.length);
+    return active === undefined || completed.includes(active) ? completed
+      : Object.freeze([...completed, active].sort((a, b) => a.context.batchIndex - b.context.batchIndex));
+  }
 
   groups() { return this.forMode("repair")
     .filter((entry) => entry.proposal.stage === "spec-gate-repair")

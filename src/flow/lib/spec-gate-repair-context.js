@@ -122,6 +122,7 @@ function planFor(elements, envelope, limit) {
 /** Pure canonical context selection. Persistence and call admission belong to the Service. */
 export class SpecGateRepairContext {
   #ranges = new Map();
+  #ordinalRanges = new Map();
   #targets = new Map();
   #findings;
   #spec;
@@ -145,25 +146,28 @@ export class SpecGateRepairContext {
           : json.position == null ? json.collection : `${json.collection}[${json.position}]`;
       byPath.set(path, entry);
     }
-    const add = (path, value, entity = null, collectionAnchor = false) => {
+    const add = (path, value, entity = null, collectionAnchor = false, ordinalPath = path) => {
       const entry = byPath.get(path);
       const range = new SpecGateRepairRange({ id: path, path, value, entity,
         target: entry?.target ?? null, collectionAnchor, ...(entry ? { digest: entry.digest, exists: entry.exists } : {}) });
       this.#ranges.set(range.id, range);
+      this.#ordinalRanges.set(ordinalPath, range.id);
       if (range.target) this.#targets.set(targetKey(range.target), range.id);
     };
-    const walk = (value, path = "", entity = null) => {
+    const walk = (value, path = "", entity = null, ordinalPath = path) => {
       if (Array.isArray(value)) {
         // Collections themselves are available for explicit additions, not implicit replacements.
-        if (byPath.has(path)) add(path, { itemCount: value.length, contentOmitted: true }, entity, true);
+        if (byPath.has(path)) add(path, { itemCount: value.length, contentOmitted: true }, entity, true, ordinalPath);
         value.forEach((item, index) => {
           const identified = ["requirements", "tasks"].includes(path) && typeof item?.id === "string";
-          walk(item, `${path}[${identified ? item.id : index}]`, identified ? `${path}:${item.id}` : entity);
+          walk(item, `${path}[${identified ? item.id : index}]`, identified ? `${path}:${item.id}` : entity,
+            `${ordinalPath}[${index}]`);
         });
       } else if (value && typeof value === "object") {
-        if (byPath.has(path)) add(path, value, entity);
-        else Object.entries(value).forEach(([key, child]) => walk(child, path ? `${path}.${key}` : key, entity));
-      } else add(path, value, entity);
+        if (byPath.has(path)) add(path, value, entity, false, ordinalPath);
+        else Object.entries(value).forEach(([key, child]) => walk(child, path ? `${path}.${key}` : key, entity,
+          ordinalPath ? `${ordinalPath}.${key}` : key));
+      } else add(path, value, entity, false, ordinalPath);
     };
     walk(this.#spec);
     for (const [path, entry] of byPath) {
@@ -189,7 +193,10 @@ export class SpecGateRepairContext {
   #initialRanges(finding) {
     if (finding.targets?.length) return finding.targets.map((target) => this.#targetRange(target));
     const locator = finding.where?.locator;
-    return this.#ranges.has(locator) ? [locator] : [];
+    if (typeof locator !== "string") return [];
+    const path = locator.startsWith("$.") ? locator.slice(2) : locator;
+    const id = this.#ordinalRanges.get(path) ?? (this.#ranges.has(path) ? path : null);
+    return id === null ? [] : [id];
   }
   #targetRange(target) {
     const id = this.#targets.get(targetKey(target));
