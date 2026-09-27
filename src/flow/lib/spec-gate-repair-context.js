@@ -7,6 +7,7 @@ import {
 } from "../../lib/prompt-batching.js";
 import { FlowFindingSourceIdentity } from "./flow-findings.js";
 import { SpecRepairTarget, specRepairTargetEntries } from "./spec-repair-operations.js";
+import { SpecGateRepairSource } from "./spec-gate-repair-sources.js";
 
 function hash(value) { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function freeze(value) {
@@ -102,7 +103,7 @@ class SpecGateRepairEnvelope extends PromptRequestEnvelope {
         "Never rewrite the full Spec. All proposals share the given baseRevision and original value digests. Do not apply a proposal to another proposal's output.",
         this.mode === "locate" ? "Return locations with exact finding identity and existing rangeIds only. Do not fabricate a position or declare a free-text location resolved by approximation. The repeated location element is the finding; other elements are one part of the structural index. Return that exact finding once, with only rangeIds present in this part. Return an empty rangeIds array if this part contains no matching location; the parent combines every part before declaring it unresolved."
           : this.mode === "evidence" ? "Collect support, contradictions, unresolved questions and exact range citations; do not propose independent partial changes. The final proposal must cover the entire unit."
-            : "Return one atomic group per unit, preserving all findingIdentities. A resolved report is a proposal for re-Gate, not a final acceptance decision. Return userInputRequired for new user decisions.",
+            : "Return one atomic group per unit, preserving all findingIdentities. Resolve facts from supplied Issue, request, prior Draft answers, rules and source evidence before proposing any return to Draft. Only a genuinely missing user choice may produce spec-gate-repair-draft-return with unitId, decision, evidence and unresolvedBecause. Missing context, tooling failures or inability to locate text are not user choices. Never ask the user directly.",
       ].join("\n"))
       .addUserPrompt("## Canonical revision", this.baseRevision)
       .addUserPrompt("## Required context", JSON.stringify(this.fixed))
@@ -121,6 +122,16 @@ function planFor(elements, envelope, limit) {
 
 /** Pure canonical context selection. Persistence and call admission belong to the Service. */
 export class SpecGateRepairContext {
+  static evidenceDigestFor({ sources, guardrails }) {
+    if (!Array.isArray(sources) || sources.some((source) => !(source instanceof SpecGateRepairSource))) {
+      throw new TypeError("Repair evidence requires typed read-only sources");
+    }
+    if (!Array.isArray(guardrails)) throw new TypeError("Repair evidence requires canonical guardrails");
+    return createHash("sha256").update(JSON.stringify({
+      sources: sources.map((source) => [source.id, source.digest]), guardrails,
+    }, (_, value) => value instanceof RegExp
+      ? { source: value.source, flags: value.flags } : value)).digest("hex");
+  }
   #ranges = new Map();
   #ordinalRanges = new Map();
   #targets = new Map();
@@ -128,14 +139,18 @@ export class SpecGateRepairContext {
   #spec;
   #guardrails;
   #rationale;
+  #sources;
 
-  constructor({ spec, baseRevision, findings, guardrails, acknowledgedRationale = "" }) {
+  constructor({ spec, baseRevision, findings, guardrails, acknowledgedRationale = "", sources = [] }) {
     if (!/^sha256:[a-f0-9]{64}$/.test(baseRevision)) throw new TypeError("Repair context requires a canonical base revision");
     if (!Array.isArray(findings) || !findings.length || !Array.isArray(guardrails)) throw new TypeError("Repair context requires canonical findings and rules");
     this.baseRevision = baseRevision;
     this.#spec = freeze(structuredClone(spec));
     this.#guardrails = freeze(structuredClone(guardrails));
     this.#rationale = acknowledgedRationale;
+    const evidenceDigest = SpecGateRepairContext.evidenceDigestFor({ sources, guardrails: this.#guardrails });
+    this.#sources = Object.freeze([...sources]);
+    this.evidenceDigest = evidenceDigest;
     const editable = specRepairTargetEntries(spec);
     const byPath = new Map();
     for (const entry of editable) {
@@ -188,6 +203,11 @@ export class SpecGateRepairContext {
     for (const finding of this.#findings) {
       if (!guardrails.some((rule) => rule.id === finding.requirementRef)) throw new Error("Canonical guardrail body is missing for a repair finding");
     }
+    for (const source of this.#sources) {
+      if (this.#ranges.has(source.id)) throw new Error("Duplicate repair evidence source");
+      this.#ranges.set(source.id, new SpecGateRepairRange({ id: source.id, path: source.id,
+        value: source.toJSON(), digest: source.digest }));
+    }
   }
 
   #initialRanges(finding) {
@@ -218,10 +238,12 @@ export class SpecGateRepairContext {
       const key = identity(location.identity).toString();
       if (!unresolved.has(key) || resolved.has(key)) throw new Error("Foreign or duplicate repair location identity");
       this.#assertRanges(location.rangeIds);
+      if (location.rangeIds.some((id) => id.startsWith("evidence:"))) throw new Error("Read-only evidence is not a Spec finding location");
       resolved.set(key, location.rangeIds);
     }
     if (resolved.size !== unresolved.size) throw new Error("Location response omitted a Gate finding");
     return new SpecGateRepairContext({ spec: this.#spec, baseRevision, guardrails: this.#guardrails,
+      sources: this.#sources,
       acknowledgedRationale: this.#rationale, findings: this.#findings.map((finding) => ({
         ...finding.toJSON(), rangeIds: resolved.get(finding.identity.toString()) ?? finding.rangeIds,
       })) });
@@ -244,7 +266,7 @@ export class SpecGateRepairContext {
     this.#assertRanges(additionalRangeIds);
     const unit = this.units().find((entry) => entry.id === unitId);
     if (!unit) throw new Error("Unknown Spec Gate repair unit");
-    const selected = new Set([...unit.rangeIds, ...additionalRangeIds]);
+    const selected = new Set([...unit.rangeIds, ...additionalRangeIds, ...this.#sources.map((source) => source.id)]);
     const entities = new Set([...selected].map((id) => this.#ranges.get(id).entity).filter(Boolean));
     let previousSize;
     do {
@@ -287,7 +309,7 @@ export class SpecGateRepairContext {
       const context = new AtomicPromptElement({ id, sourceRevision: this.baseRevision,
         sequence: sequence++, text: JSON.stringify(finding.toJSON()) });
       builder.add(context);
-      const payloadElements = this.tableOfContents().map((range) => {
+      const payloadElements = this.tableOfContents().filter((range) => !range.id.startsWith("evidence:")).map((range) => {
         const element = new AtomicPromptElement({ id: `${id}:${range.id}`, sourceRevision: this.baseRevision,
           sequence: sequence++, text: JSON.stringify(range) });
         builder.add(element);

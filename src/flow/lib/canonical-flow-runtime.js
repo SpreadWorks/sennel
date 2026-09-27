@@ -714,7 +714,8 @@ export class CanonicalFlowRuntime {
   }
 
   /** Apply one fixed draft-reopen route; route selection remains Store-owned. */
-  reopenDraft({ specId, activityId, route, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references } = {}) {
+  reopenDraft({ specId, activityId, route, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references,
+    result = null, artifactWrites = undefined, artifactBaselines = undefined } = {}) {
     const state = this.#state(specId);
     if (!new Set(["preimplementation", "task-addition", "spec-correction"]).has(route)) {
       throw new CurrentFlowStateInvariantError("canonical draft reopen route is invalid");
@@ -729,6 +730,9 @@ export class CanonicalFlowRuntime {
           ? "reopen_draft_spec_correction"
           : `reopen_draft_${route}`,
       attempt: requiredAttempt(attempt, "reopenDraft"),
+      result,
+      artifactWrites,
+      artifactBaselines,
       timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 },
       provider,
       model,
@@ -1290,6 +1294,8 @@ export class CanonicalFlowRuntime {
       ? state.attempt
       : new Set(["repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "recover_missing_producer_artifact", "recover_task_execution_overrun", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", "initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle"]).has(operation)
       ? state.attempt ?? attempt
+      : operation.startsWith("reopen_draft_") && result !== null
+      ? state.attempt
       : ["start_attempt", "rewind", "rewind_test_evidence", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "retry_recovery_attempt", "accept_final_regression_failure"].includes(operation)
       ? attempt
       : state.attempt;

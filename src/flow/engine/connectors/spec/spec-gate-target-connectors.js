@@ -12,3 +12,8 @@ export class SpecGateApprovalConnector extends StepConnector {
 export class SpecGateRepairReviewConnector extends StepConnector {
   async connect() { return "spec-review"; }
 }
+
+/** The selected repair disposition returns to the shared Draft recovery route. */
+export class SpecGateRepairDraftReturnConnector extends StepConnector {
+  async connect() { return "draft"; }
+}

@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 
 import { attachCanonicalCommandResultPublications } from "../../../src/flow/lib/canonical-command-result.js";
 import { RunReopenDraftCommand } from "../../../src/flow/lib/run-reopen-draft.js";
+import { DraftCreatedResult } from "../../../src/flow/engine/step-result.js";
+import { DraftWorkerStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
+import { settleDraftStepResult } from "../../../src/flow/definition.js";
+import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { readDraftTransitionFacts } from "../../../src/flow/lib/draft-transition-facts.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
 import {
   canonicalDraftDocument,
@@ -11,8 +17,25 @@ import {
   makeFlowManager,
 } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import fs from "node:fs";
 
 const SPEC_ID = "441-reopen-spec-correction";
+
+function publishDraftWorker({ root, flowManager, draft, invocationId }) {
+  const coordinator = new WorkerArtifactHandoffCoordinator();
+  const ctx = { root, executionRoot: root, mainRoot: root, specId: SPEC_ID, flowManager };
+  const request = coordinator.createRequest({ ctx, state: flowManager.load(SPEC_ID),
+    invocation: { id: invocationId, target: { digest: "b".repeat(64) },
+      action: { digest: "c".repeat(64), nextAction: { step: "draft" } } } });
+  fs.writeFileSync(request.payloadPath("draft.json"), JSON.stringify(draft));
+  sealWorkerArtifactHandoff({ requestPath: request.requestPath,
+    invocationId: request.dispatchInvocationId });
+  const preparation = coordinator.prepareDraftWorker({ ctx, request });
+  const result = new DraftCreatedResult();
+  coordinator.commitDraftWorker({ ctx, request, preparation, stepResult: result,
+    settlement: settleDraftStepResult(result.stepId, result),
+    binding: new DraftWorkerStepBinding({ request }) });
+}
 
 describe("canonical reopen draft routes", () => {
   let root;
@@ -46,7 +69,13 @@ describe("canonical reopen draft routes", () => {
     assert.equal(refreshed.currentNodeId, "draft");
     assert.equal(findStepById(refreshed.steps, "draft").status, "in_progress");
     assert.equal(findStepById(refreshed.steps, "spec-review").status, "invalidated");
-    assert.equal(flowManager.activityLedger(SPEC_ID).at(-2).transition.operation, "reopen_draft_preimplementation");
+    const reopening = flowManager.activityLedger(SPEC_ID).at(-1);
+    assert.equal(reopening.transition.operation, "reopen_draft_preimplementation");
+    const issueLog = JSON.parse(flowManager.readArtifact({ specId: SPEC_ID,
+      logicalKey: "issue.log", consumerNodeId: "draft" }).bytes.toString("utf8"));
+    const carried = issueLog.entries.at(-1).draftReopen;
+    assert.equal(carried.draftAttemptId, reopening.transition.attempt.id);
+    assert.equal(carried.source.stepId, "spec-review");
   });
 
   it("reopens draft-refine when the persisted draft cannot accept a question answer", async () => {
@@ -90,7 +119,7 @@ describe("canonical reopen draft routes", () => {
     assert.equal(result.data.mode, "implementation");
     assert.equal(result.data.doneTaskCount, 1);
     assert.equal(flowManager.loadReadOnly(SPEC_ID).currentNodeId, "draft");
-    assert.equal(flowManager.activityLedger(SPEC_ID).at(-2).transition.operation, "reopen_draft_task_addition");
+    assert.equal(flowManager.activityLedger(SPEC_ID).at(-1).transition.operation, "reopen_draft_task_addition");
   });
 
   it("requires exact guards and catalog draft/spec authority for spec correction", async () => {
@@ -125,6 +154,62 @@ describe("canonical reopen draft routes", () => {
     assert.ok(result.data.evidence.draftBytes > 0);
     assert.ok(result.data.evidence.specRecordBytes > 0);
     assert.equal(flowManager.loadReadOnly(SPEC_ID).currentNodeId, "draft");
-    assert.equal(flowManager.activityLedger(SPEC_ID).at(-2).transition.operation, "reopen_draft_spec_correction");
+    assert.equal(flowManager.activityLedger(SPEC_ID).at(-1).transition.operation, "reopen_draft_spec_correction");
+    const saved = JSON.parse(flowManager.readArtifact({ specId: SPEC_ID,
+      logicalKey: "issue.log", consumerNodeId: "draft" }).bytes.toString("utf8")).entries.at(-1);
+    assert.deepEqual(saved.evidence, result.data.evidence);
+    assert.equal(saved.trigger, "user invoked sennel flow reopen-draft");
+    assert.equal(saved.draftReopen.source.stepId, "implement");
+  });
+
+  it("publishes a corrected prior answer after a guarded spec correction reopen", async () => {
+    root = createTmpDir("reopen-draft-correct-answer-");
+    const flowManager = makeFlowManager(root);
+    const fixture = new FlowAtStepFixture({
+      flowManager, specId: SPEC_ID, runId: "run-reopen-correct-answer",
+      request: "correct a prior answer contradicted by source evidence",
+      execution: { mode: "branch", baseBranch: "main", featureBranch: `feature/${SPEC_ID}` },
+      issue: 441, issueSnapshot: "# Issue 441\nCorrect the public behavior.\n",
+      specRecord: { goal: "fixture", requirements: [] }, targetStep: "draft",
+    }).create();
+    const originalQuestion = {
+      state: "AnsweredQuestion", id: "q1", question: "Which behavior is required?",
+      category: "user-visible-behavior", revision: 1,
+      provenance: { producer: "prior-draft" }, evidenceDigest: "a".repeat(64),
+      answer: "Use the old public behavior.", why: "The original request indicated it.",
+      considered: "The changed behavior was not yet supported.",
+    };
+    flowManager.publishCurrentAttemptResult({ specId: SPEC_ID,
+      commandResult: attachCanonicalCommandResultPublications({ result: "ok" }, [{
+        logicalKey: "draft", payload: canonicalDraftDocument({
+          goal: "Choose the public behavior.", questions: [originalQuestion],
+        }),
+      }]),
+    });
+    fixture.flow.flow.activate("implement");
+    const state = flowManager.loadReadOnly(SPEC_ID);
+    const reopened = await new RunReopenDraftCommand().execute(commandContext(flowManager, state, {
+      category: "spec-correction", reason: "source evidence contradicts the old answer",
+      expectRunId: state.runId, expectSpec: state.specId, expectIssue: 441,
+    }));
+    assert.equal(reopened.ok, true, JSON.stringify(reopened));
+
+    const correctedQuestion = { ...originalQuestion, revision: 2,
+      answer: "Use the corrected public behavior.",
+      why: "Source evidence now establishes the revised contract.",
+      considered: "The old behavior conflicts with that evidence." };
+    const correctedDraft = canonicalDraftDocument({
+      goal: "Use the corrected public behavior.", questions: [correctedQuestion],
+    });
+    publishDraftWorker({ root, flowManager, draft: correctedDraft,
+      invocationId: "correct-answer-worker" });
+
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: SPEC_ID });
+    const saved = JSON.parse(reloaded.readArtifact({ specId: SPEC_ID,
+      logicalKey: "draft", consumerNodeId: "draft-refine" }).bytes.toString("utf8"));
+    assert.deepEqual(saved.questionLedger.questions, [correctedQuestion]);
+    const transition = readDraftTransitionFacts({ flowManager: reloaded,
+      flowState: reloaded.loadReadOnly(SPEC_ID) });
+    assert.equal(transition.ledger.questions[0].answer, correctedQuestion.answer);
   });
 });

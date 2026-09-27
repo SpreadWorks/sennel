@@ -3,6 +3,7 @@ import { readSpecGateRepairInput } from "./spec-gate-repair-input.js";
 import { FlowFindingSourceIdentity } from "./flow-findings.js";
 import { SpecGateRepairContextExpansion } from "./spec-gate-repair-evidence.js";
 import { PromptRequestLimit, PromptExecutionLimit, PromptExecutionBudget } from "../../lib/prompt-batching.js";
+import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 
 const REPAIR_BUDGET_LIMIT = Object.freeze({ maxBatchCount: 16, maxProviderCallCount: 16,
   maxSynthesisCallCount: 16, maxAggregateCharacters: 1_000_000, maxAggregateItemCount: 100_000 });
@@ -90,6 +91,20 @@ export function readProgressBoundSpecGateRepairInput({ flowManager, state, execu
   let source = readSpecGateRepairInput({ flowManager, state, executionRoot });
   const ledger = new SpecGateRepairProgressLedger({ flowManager, specId: state.specId,
     attemptId: state.attempt.id, baseRevision: source.baseRevision, executionLifecycle });
+  const activeDraftReturn = ledger.publication?.proposal.stage === "spec-gate-repair-draft-return"
+    || (acceptedPublication && ledger.entries.at(-1)?.proposal.stage === "spec-gate-repair-draft-return"
+      && ledger.entries.at(-1).generation === ledger.activePublicationGeneration);
+  // A Draft return consumes its current publication only. Prior locate batches
+  // are bound by their canonical revision and exact location-plan batch digest;
+  // only evidence and repair publications carry semantic content into new work.
+  if (!activeDraftReturn && ledger.entries.some((entry) => (
+    entry.context.mode !== "locate"
+      && entry.context.evidenceDigest !== source.context.evidenceDigest
+  ))) {
+    throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED",
+      "published Spec Gate repair evidence changed before further work",
+      { retryable: false, recoveryPossible: false });
+  }
   const locationPlan = source.context.unresolvedFindings().length > 0
     ? source.context.locationPlan({ limit: SPEC_GATE_REPAIR_REQUEST_LIMIT }) : null;
   const completedLocations = locationPlan === null ? [] : acceptedPublication

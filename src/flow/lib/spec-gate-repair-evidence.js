@@ -67,6 +67,7 @@ function finalRequest(selection, evidence) {
       "All operations bind to baseRevision and original digests. Cite exact original text and UTF-8 offsets for local edits.",
       "Ranges without a value omit the original body; omission is not absence. Request additional canonical range IDs when evidence is insufficient.",
       "Do not propose changes to read-only context. Do not claim final acceptance; the parent applies atomically and re-runs Gate.",
+      "Resolve the finding from supplied Issue, existing Draft answers, rules and source evidence. Return to Draft only for a genuinely missing user choice; never ask the user directly or treat a tooling/context failure as a user choice.",
     ].join("\n"))
     .addUserPrompt("## Full canonical obligation and complete evidence", JSON.stringify(finalSelection(selection, evidence)))
     .build();
@@ -88,7 +89,7 @@ export class SpecGateRepairEvidenceWork {
 export function nextSpecGateRepairEvidence({ context, unitId, limit = new PromptRequestLimit(),
   additionalRangeIds = [], publications = [], executionBudget = new PromptExecutionBudget() }) {
   const evidenceContextDigest = createHash("sha256").update(JSON.stringify({
-    baseRevision: context.baseRevision, unitId, additionalRangeIds: [...additionalRangeIds].sort(),
+    baseRevision: context.baseRevision, evidenceDigest: context.evidenceDigest, unitId, additionalRangeIds: [...additionalRangeIds].sort(),
   })).digest("hex");
   const prepared = planSpecGateRepairEvidence({ context, unitId, limit, additionalRangeIds });
   if (prepared.mode === "direct") return new SpecGateRepairEvidenceWork({ ...prepared, mode: "repair", evidenceContextDigest, batch: prepared.plan.batches[0] });

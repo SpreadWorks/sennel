@@ -27,7 +27,6 @@ import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import {
   AbortedDirective,
   AwaitDraftQuestionDirective,
-  AwaitWorkerInputDirective,
   AwaitUserDecisionDirective,
   AwaitTaskReviewFilterDirective,
   BlockedDirective,
@@ -870,8 +869,7 @@ export class FlowDispatchAction {
 
   get awaitsUserDecision() {
     return this.directive instanceof AwaitUserDecisionDirective
-      || this.directive instanceof AwaitDraftQuestionDirective
-      || this.directive instanceof AwaitWorkerInputDirective;
+      || this.directive instanceof AwaitDraftQuestionDirective;
   }
 
   get awaitsHostAction() { return this.directive instanceof AwaitTaskReviewFilterDirective; }

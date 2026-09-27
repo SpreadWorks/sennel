@@ -74,7 +74,7 @@ import {
   SpecGateRepairReadyForGateResult,
   SpecGateRepairReviewRequiredResult,
   SpecGateRepairContextRequiredResult,
-  SpecGateRepairAwaitingDecisionResult,
+  SpecGateRepairDraftReturnRequiredResult,
   SpecTriageCompletedResult,
   SpecRepairChangedResult,
   SpecRepairUnchangedResult,
@@ -95,6 +95,7 @@ import {
   stepResultDigest,
 } from "../engine/step-result.js";
 import { SpecReviewSettlementApplication } from "./spec-step-connection.js";
+import { DraftReopenContext } from "./draft-reopen-context.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { normalizeAgentMetricDimension } from "../../lib/agent-metrics.js";
 import { managedDir } from "../../lib/config.js";
@@ -2674,7 +2675,8 @@ export class CanonicalFlowManagerStore {
   }
 
   /** Reopen draft through one of the three definition-owned recovery routes. */
-  reopenDraft({ specId = null, route } = {}) {
+  reopenDraft({ specId = null, route, reason = "", source = null, result = null,
+    draftReturn = null, artifactBaselines = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!new Set(["preimplementation", "task-addition", "spec-correction"]).has(route)) {
@@ -2692,11 +2694,55 @@ export class CanonicalFlowManagerStore {
     if (route === "preimplementation" && hasDoneTask) {
       throw new CurrentFlowStateInvariantError("canonical preimplementation reopen cannot follow a completed Task");
     }
+    const attempt = commandContextAttempt(state, "draft");
+    const prior = this.readArtifact({ specId: resolved, logicalKey: "draft",
+      consumerNodeId: "draft-questions-review", optional: true });
+    const previousDraft = prior === null ? null : {
+      digest: prior.descriptor.hash,
+      questionLedger: JSON.parse(prior.bytes.toString("utf8")).questionLedger ?? null,
+    };
+    const reopen = (draftReturn instanceof DraftReopenContext
+      ? new DraftReopenContext({ ...draftReturn.toJSON(), previousDraft })
+      : new DraftReopenContext({ route,
+        reason: reason || `Reconsider the Draft after ${state.current.at(-1)}`,
+        source: source ?? { stepId: state.current.at(-1), attemptId: state.attempt.id,
+          attemptSequence: state.attempt.sequence }, previousDraft })).withDraftAttempt(attempt.id);
+    if (reopen.route !== route || reopen.source.stepId !== state.current.at(-1)
+      || reopen.source.attemptId !== state.attempt.id
+      || reopen.source.attemptSequence !== state.attempt.sequence) {
+      throw new CurrentFlowStateConflictError("Draft reopen source differs from the current Attempt");
+    }
+    const existing = this.readArtifact({ specId: resolved, logicalKey: "issue.log",
+      consumerNodeId: state.current.at(-1), optional: true });
+    const issueLog = new IssueLogDocument(existing === null
+      ? { entries: [] } : JSON.parse(existing.bytes.toString("utf8")));
+    issueLog.append(reopen.toIssueLogEntry(), `reopen-draft:${state.runId}:${attempt.id}`);
+    const ownedBaselines = [
+      new CanonicalFlowArtifactBaseline({ logicalKey: "draft",
+        digest: prior?.descriptor.hash ?? null, byteLength: prior?.descriptor.size ?? 0 }),
+      new CanonicalFlowArtifactBaseline({ logicalKey: "issue.log",
+        digest: existing?.descriptor.hash ?? null, byteLength: existing?.descriptor.size ?? 0 }),
+    ];
+    const suppliedBaselines = artifactBaselines?.map((value) => CanonicalFlowArtifactBaseline.from(value)) ?? [];
+    if (new Set(suppliedBaselines.map((value) => value.artifact.logicalKey)).size !== suppliedBaselines.length
+      || suppliedBaselines.some((value) => ownedBaselines.some((owned) => (
+        value.artifact.logicalKey === owned.artifact.logicalKey
+        && (value.digest !== owned.digest || value.byteLength !== owned.byteLength)
+      )))) {
+      throw new CurrentFlowStateConflictError("Draft reopen artifact baseline changed before apply");
+    }
+    const additionalBaselines = suppliedBaselines.filter((value) => !ownedBaselines.some((owned) => (
+      owned.artifact.logicalKey === value.artifact.logicalKey
+    )));
     return this.runtime.reopenDraft({
       specId: resolved,
       activityId: activityId(`draft-reopened-${route}`),
       route,
-      attempt: commandContextAttempt(state, "draft"),
+      attempt,
+      result,
+      artifactWrites: [{ logicalKey: "issue.log", mediaType: "application/json",
+        bytes: Buffer.from(`${JSON.stringify(issueLog.toJSON(), null, 2)}\n`, "utf8") }],
+      artifactBaselines: [...additionalBaselines, ...ownedBaselines],
     });
   }
 
@@ -4118,6 +4164,87 @@ export class CanonicalFlowManagerStore {
     });
   }
 
+  #draftReturnReceiptInput({ resolved, binding, stepResult, draftReturn, references, artifactBaselines }) {
+    if (!(stepResult instanceof SpecGateRepairDraftReturnRequiredResult)) {
+      return { references, artifactBaselines };
+    }
+    if (!(draftReturn instanceof DraftReopenContext) || references !== undefined
+      || artifactBaselines?.length !== 1) {
+      throw new CurrentFlowStateConflictError("Spec Gate repair Draft return lacks its exact source baseline");
+    }
+    const specBaseline = CanonicalFlowArtifactBaseline.from(artifactBaselines[0]);
+    if (specBaseline.artifact.logicalKey !== "spec.record"
+      || specBaseline.digest !== draftReturn.source.baseRevision?.slice("sha256:".length)
+      || specBaseline.byteLength !== draftReturn.source.specByteLength) {
+      throw new CurrentFlowStateConflictError("Spec Gate repair Draft return baseline differs from its source Spec");
+    }
+    const priorDraft = this.readArtifact({ specId: resolved, logicalKey: "draft",
+      consumerNodeId: "draft-questions-review", optional: true });
+    const issueLog = this.readArtifact({ specId: resolved, logicalKey: "issue.log",
+      consumerNodeId: binding.stepId, optional: true });
+    return { references: { draftReturn: draftReturn.toJSON() },
+      artifactBaselines: [specBaseline,
+        new CanonicalFlowArtifactBaseline({ logicalKey: "draft",
+          digest: priorDraft?.descriptor.hash ?? null, byteLength: priorDraft?.descriptor.size ?? 0 }),
+        new CanonicalFlowArtifactBaseline({ logicalKey: "issue.log",
+          digest: issueLog?.descriptor.hash ?? null, byteLength: issueLog?.descriptor.size ?? 0 })] };
+  }
+
+  #assertDraftReturnPublicationInput({ stepResult, commandResult, gatePublication,
+    lifecycleResult, specRecord, planGateRepairOutcome, draftCompletionApplication,
+    testSourceBaseline, executionLifecycle, awaitQuestion, draftGateRepairSelection,
+    artifactWrites, artifactRemovals }) {
+    if (!(stepResult instanceof SpecGateRepairDraftReturnRequiredResult)) return;
+    if (commandResult !== undefined || gatePublication !== null || lifecycleResult !== null
+      || specRecord !== undefined || planGateRepairOutcome !== null
+      || draftCompletionApplication !== null || testSourceBaseline !== undefined
+      || executionLifecycle !== undefined || awaitQuestion !== null
+      || draftGateRepairSelection !== null || artifactWrites.length !== 0
+      || (artifactRemovals?.length ?? 0) !== 0) {
+      throw new CurrentFlowStateConflictError("Spec Gate repair Draft return has unrelated publication input");
+    }
+  }
+
+  #replayedDraftReturn({ resolved, binding, stepResult, settlement, draftReturn,
+    artifactWrites, artifactRemovals, artifactBaselines, references, specRecord }) {
+    if (!(stepResult instanceof SpecGateRepairDraftReturnRequiredResult)
+      || !(draftReturn instanceof DraftReopenContext)) return null;
+    const activity = this.activityLedger(resolved).findLast((entry) => (
+      entry.result?.draftSettlementReceipt?.binding?.attemptId === binding.attempt.id
+      && entry.result.draftSettlementReceipt.binding.attemptSequence === binding.attempt.sequence
+      && entry.result.stepResult?.kind === stepResult.kind
+      && entry.transition?.operation === "reopen_draft_preimplementation"
+    ));
+    if (activity === undefined) return null;
+    const receipt = activity.result.draftSettlementReceipt;
+    const issue = this.readArtifact({ specId: resolved, logicalKey: "issue.log",
+      consumerNodeId: "draft", optional: true });
+    const saved = DraftReopenContext.fromSourceIssueLog(issue === null
+      ? null : JSON.parse(issue.bytes.toString("utf8")), binding.attempt.id);
+    const specBaseline = artifactBaselines?.length === 1
+      ? CanonicalFlowArtifactBaseline.from(artifactBaselines[0]) : null;
+    if (receipt.binding.runId !== binding.runId || receipt.binding.specId !== binding.specId
+      || receipt.binding.stepId !== binding.stepId
+      || receipt.binding.attemptId !== binding.attempt.id
+      || receipt.binding.attemptSequence !== binding.attempt.sequence
+      || receipt.resultKind !== stepResult.kind || receipt.resultType !== stepResult.type
+      || receipt.settlementKind !== settlement.kind
+      || receipt.targetStepId !== settlement.targetStepId
+      || settlement.sourceStepId !== binding.stepId
+      || receipt.connector?.name !== settlement.connector?.name
+      || JSON.stringify(receipt.effects?.toJSON?.() ?? receipt.effects)
+        !== JSON.stringify(settlement.effects?.toJSON?.() ?? settlement.effects)
+      || artifactWrites.length !== 0 || (artifactRemovals?.length ?? 0) !== 0
+      || references !== undefined || specRecord !== undefined
+      || specBaseline?.artifact.logicalKey !== "spec.record"
+      || specBaseline.digest !== saved?.source.baseRevision?.slice("sha256:".length)
+      || specBaseline.byteLength !== saved?.source.specByteLength
+      || !saved?.matchesRequest(draftReturn)) {
+      throw new CurrentFlowStateConflictError("Spec Gate repair Draft return replay differs from its saved decision");
+    }
+    return receipt;
+  }
+
   findStepSettlementReceipt({
     specId = null,
     binding,
@@ -4137,12 +4264,22 @@ export class CanonicalFlowManagerStore {
     executionLifecycle = undefined,
     awaitQuestion = null,
     draftGateRepairSelection = null,
+    draftReturn = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null || !(stepResult instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       return null;
     }
+    this.#assertDraftReturnPublicationInput({ stepResult, commandResult, gatePublication,
+      lifecycleResult, specRecord, planGateRepairOutcome, draftCompletionApplication,
+      testSourceBaseline, executionLifecycle, awaitQuestion, draftGateRepairSelection,
+      artifactWrites, artifactRemovals });
+    const reopened = this.#replayedDraftReturn({ resolved, binding, stepResult, settlement,
+      draftReturn, artifactWrites, artifactRemovals, artifactBaselines, references, specRecord });
+    if (reopened !== null) return reopened;
     this.#assertDraftCompletionApplication({ settlement, application: draftCompletionApplication });
+    ({ references, artifactBaselines } = this.#draftReturnReceiptInput({ resolved, binding,
+      stepResult, draftReturn, references, artifactBaselines }));
     const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
       resolved, binding, settlement, executionLifecycle,
     });
@@ -4448,12 +4585,20 @@ export class CanonicalFlowManagerStore {
     executionLifecycle = undefined,
     awaitQuestion = null,
     draftGateRepairSelection = null,
+    draftReturn = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(stepResult instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       throw new CurrentFlowStateInvariantError("Draft settlement requires typed Result and Settlement");
     }
+    this.#assertDraftReturnPublicationInput({ stepResult, commandResult, gatePublication,
+      lifecycleResult, specRecord, planGateRepairOutcome, draftCompletionApplication,
+      testSourceBaseline, executionLifecycle, awaitQuestion, draftGateRepairSelection,
+      artifactWrites, artifactRemovals });
+    const reopened = this.#replayedDraftReturn({ resolved, binding, stepResult, settlement,
+      draftReturn, artifactWrites, artifactRemovals, artifactBaselines, references, specRecord });
+    if (reopened !== null) return Object.freeze({ state: this.runtime.load(resolved), receipt: reopened });
     if (binding.stepId === "spec-gate") {
       if (!(gatePublication instanceof SpecGateResultSelection)) {
         throw new CurrentFlowStateInvariantError("Spec Gate settlement requires its sealed Step Result selection");
@@ -4461,6 +4606,8 @@ export class CanonicalFlowManagerStore {
       gatePublication.assertPublication({ binding, commandResult, stepResult });
     }
     this.#assertDraftCompletionApplication({ settlement, application: draftCompletionApplication });
+    ({ references, artifactBaselines } = this.#draftReturnReceiptInput({ resolved, binding,
+      stepResult, draftReturn, references, artifactBaselines }));
     const selectedExecutionLifecycle = this.#settlementExecutionLifecycle({
       resolved, binding, settlement, executionLifecycle,
     });
@@ -4581,6 +4728,20 @@ export class CanonicalFlowManagerStore {
         ...this.#commandPublicationWrites(commandResult),
       ]),
     ];
+    if (stepResult instanceof SpecGateRepairDraftReturnRequiredResult) {
+      if (!(draftReturn instanceof DraftReopenContext)
+        || draftReturn.route !== "preimplementation"
+        || draftReturn.source.stepId !== binding.stepId
+        || draftReturn.source.attemptId !== binding.attempt.id
+        || draftReturn.source.attemptSequence !== binding.attempt.sequence
+        || !(settlement instanceof StepRoute)
+        || settlement.targetStepId !== "draft") {
+        throw new CurrentFlowStateConflictError("Spec Gate repair Draft return differs from its selected Attempt");
+      }
+      const next = this.reopenDraft({ specId: resolved, route: draftReturn.route,
+        draftReturn, result: baseResult, artifactBaselines });
+      return Object.freeze({ state: next, receipt });
+    }
     if (binding.stepId === "spec-gate") {
       const issueWrite = this.#specGateIssueWrite({ resolved, binding, issue: gatePublication.issue });
       if (stepResult instanceof SpecGatePassedResult || stepResult instanceof TaskSpecGatePassedResult) {
@@ -4888,6 +5049,7 @@ export class CanonicalFlowManagerStore {
     specSelection = null,
     specGateRepairSelection = null,
     executionLifecycle = undefined,
+    draftReturn = null,
   } = {}) {
     if (binding?.stepId === "spec-gate") {
       return this.settleDraftStepResult({
@@ -4927,7 +5089,7 @@ export class CanonicalFlowManagerStore {
         }
       } else if (!(settlement instanceof StepErrorDecision)
         && !(stepResult instanceof SpecGateRepairContextRequiredResult
-          || stepResult instanceof SpecGateRepairAwaitingDecisionResult)) {
+          || stepResult instanceof SpecGateRepairDraftReturnRequiredResult)) {
         throw new CurrentFlowStateInvariantError("Spec Gate repair requires a concrete selected Result");
       }
       return this.settleDraftStepResult({
@@ -4935,6 +5097,7 @@ export class CanonicalFlowManagerStore {
         specRecord, lifecycleResult, references,
         artifactWrites, artifactRemovals, artifactBaselines,
         executionLifecycle,
+        draftReturn,
       });
     }
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);

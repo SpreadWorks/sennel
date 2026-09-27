@@ -21,6 +21,8 @@ export async function createSpecGateRepairScenario({
   specId = "500-spec-gate-repair-scenario", specRecord = validWorkerHandoffSpec(),
   locator = "requirements[R1].desc", requirementRef = "R1", beforeGate = null,
   additionalObservations = [],
+  issue = null, issueSnapshot = null, request = "Repair the bounded Spec Gate finding.",
+  taskTestStrategy = null,
   versionStoreFaultInjector = null, coordinatorFaultInjector = () => {},
 } = {}) {
   const root = createTmpDir("spec-gate-repair-scenario-");
@@ -28,11 +30,12 @@ export async function createSpecGateRepairScenario({
     const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId,
       ...(versionStoreFaultInjector ? { versionStoreFaultInjector } : {}) });
     const flow = new CanonicalFlowFixture({ flowManager, specId,
-      runId: `run-${specId}`, request: "Repair the bounded Spec Gate finding.", specRecord,
+      runId: `run-${specId}`, request, issue, issueSnapshot, specRecord,
     }).create().registerActive();
     for (const taskId of new Set(specRecord.requirements.flatMap((requirement) => requirement.task_ids))) {
       flow.addTask({ id: taskId, title: `Implement ${taskId}`, goal: "Exercise the repair route.",
-        origin: "plan", added_round: 0, status: "pending" });
+        origin: "plan", added_round: 0, status: "pending",
+        ...(taskTestStrategy === null ? {} : { test_strategy: taskTestStrategy }) });
     }
     if (beforeGate) await beforeGate({ root, specId, flowManager, flow });
     if (flowManager.canonicalState(specId).current?.at(-1) !== "spec-gate") flow.activate("spec-gate");

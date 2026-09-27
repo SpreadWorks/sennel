@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SpecGateRepairContext } from "../../src/flow/lib/spec-gate-repair-context.js";
 import { PromptRequestLimit } from "../../src/lib/prompt-batching.js";
+import { SpecGateRepairSource } from "../../src/flow/lib/spec-gate-repair-sources.js";
 
 const revision = `sha256:${"a".repeat(64)}`;
 const rule = { id: "planned-check", title: "Planned checks", body: "State a check and its passing condition. Exception: a justified non-testable item needs no executable check." };
@@ -26,6 +27,46 @@ function context(findings, document = spec()) {
   return new SpecGateRepairContext({ spec: document, baseRevision: revision, findings,
     guardrails: [rule], acknowledgedRationale: "Justification alone does not grant an exception." });
 }
+
+test("existing decisions are read-only evidence in every repair unit and cannot become edit locations", () => {
+  const source = new SpecGateRepairSource({ id: "issue", origin: "issue.md", revision: "approved-request",
+    content: "The confirmed request includes shared consumers in regression coverage." });
+  const ctx = new SpecGateRepairContext({ spec: spec(), baseRevision: revision,
+    findings: [finding("F1"), finding("F2", [target("R2")])], guardrails: [rule], sources: [source] });
+  for (const unit of ctx.units()) {
+    const range = ctx.select(unit.id).ranges.find((entry) => entry.id === source.id);
+    assert.equal(range.writable, false);
+    assert.equal(range.target, null);
+    assert.equal(range.value.content, source.content);
+    assert.equal(range.value.revision, source.revision);
+    assert.equal(range.digest, source.digest);
+  }
+  const unresolved = { ...finding("F3", []), where: { file: "spec.json", locator: "unlocated decision" } };
+  const location = new SpecGateRepairContext({ spec: spec(), baseRevision: revision,
+    findings: [unresolved], guardrails: [rule], sources: [source] });
+  assert.throws(() => location.resolveLocations({ baseRevision: revision,
+    locations: [{ identity: unresolved.identity, rangeIds: [source.id] }] }), /not a Spec finding location/);
+  const resolved = location.resolveLocations({ baseRevision: revision,
+    locations: [{ identity: unresolved.identity, rangeIds: ["requirements[R1].desc"] }] });
+  assert.equal(resolved.evidenceDigest, location.evidenceDigest);
+  assert(resolved.select(resolved.units()[0].id).ranges.some((entry) => entry.id === source.id));
+});
+
+test("repair evidence binds merged rule content and regular expression semantics across location resolution", () => {
+  const unresolved = { ...finding("F1", []), where: { locator: "an unresolved target" } };
+  const withRule = (body, lint) => new SpecGateRepairContext({
+    spec: spec(), baseRevision: revision, findings: [unresolved], sources: [],
+    guardrails: [{ ...rule, body, meta: { lint } }],
+  });
+  const original = withRule(rule.body, /planned/i);
+  const changedBody = withRule("Require the precise planned check.", /planned/i);
+  const changedLint = withRule(rule.body, /planned/);
+  assert.notEqual(original.evidenceDigest, changedBody.evidenceDigest);
+  assert.notEqual(original.evidenceDigest, changedLint.evidenceDigest);
+  const resolved = original.resolveLocations({ baseRevision: revision,
+    locations: [{ identity: unresolved.identity, rangeIds: ["requirements[R1].desc"] }] });
+  assert.equal(resolved.evidenceDigest, original.evidenceDigest);
+});
 
 test("repair selection includes linked task and decisions but excludes unrelated body", () => {
   const ctx = context([finding("F1")]);

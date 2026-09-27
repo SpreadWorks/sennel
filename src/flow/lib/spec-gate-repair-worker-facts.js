@@ -14,10 +14,10 @@ export class SpecGateRepairContinuationFacts {
     this.unresolvedLocationCount = input.context.unresolvedFindings().length;
     this.locationBatchCount = locationPlan?.batches.length ?? 0;
     this.completedLocationBatchCount = ledger.acceptedLocationBatches(locationPlan).length;
+    this.draftReturnRequired = proposal?.stage === "spec-gate-repair-draft-return";
     this.unitCount = this.unresolvedLocationCount === 0 ? input.context.units().length : 0;
-    this.completedUnitCount = this.unresolvedLocationCount === 0
+    this.completedUnitCount = this.unresolvedLocationCount === 0 && !this.draftReturnRequired
       ? ledger.completedUnitIds(input.context).length : 0;
-    this.decisionRequired = proposal?.stage === "spec-gate-repair-user-input";
     this.additionalContextRequested = proposal?.stage === "spec-gate-repair-context-request";
     Object.freeze(this);
   }
@@ -27,7 +27,7 @@ export class SpecGateRepairWorkerFacts {
   constructor({ input, proposal }) {
     if (!(input instanceof SpecGateRepairInput)
       || !["spec-gate-repair", "spec-gate-repair-locate", "spec-gate-repair-evidence",
-        "spec-gate-repair-context-request", "spec-gate-repair-user-input"].includes(proposal?.stage)) {
+        "spec-gate-repair-context-request", "spec-gate-repair-draft-return"].includes(proposal?.stage)) {
       throw new TypeError("Spec Gate repair worker facts require canonical input and proposal");
     }
     this.input = input;

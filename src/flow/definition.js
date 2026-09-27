@@ -76,7 +76,7 @@ import {
   SpecGateRepairReadyForGateResult,
   SpecGateRepairReviewRequiredResult,
   SpecGateRepairContextRequiredResult,
-  SpecGateRepairAwaitingDecisionResult,
+  SpecGateRepairDraftReturnRequiredResult,
   SpecTriageCompletedResult,
   SpecRepairChangedResult,
   SpecRepairUnchangedResult,
@@ -104,7 +104,8 @@ import {
   stepResultDigest,
 } from "./engine/step-result.js";
 import { DraftReviewConnector } from "./engine/connectors/draft/draft-review-connector.js";
-import { SpecGateRepairConnector, SpecGateApprovalConnector, SpecGateRepairReviewConnector } from "./engine/connectors/spec/spec-gate-target-connectors.js";
+import { SpecGateRepairConnector, SpecGateApprovalConnector, SpecGateRepairReviewConnector,
+  SpecGateRepairDraftReturnConnector } from "./engine/connectors/spec/spec-gate-target-connectors.js";
 import { DraftTriageConnector } from "./engine/connectors/draft/draft-triage-connector.js";
 import { DraftRepairConnector } from "./engine/connectors/draft/draft-repair-connector.js";
 import { DraftRefineConnector } from "./engine/connectors/draft/draft-refine-connector.js";
@@ -4430,8 +4431,7 @@ export class DraftExecutionSettlement extends StepSettlement {
 export class SpecGateAwaitDecision extends StepSettlement {
   constructor(token, result) {
     if (!(result instanceof SpecGateAwaitingDecisionResult)
-      && !(result instanceof TaskSpecGateAwaitingDecisionResult)
-      && !(result instanceof SpecGateRepairAwaitingDecisionResult)) {
+      && !(result instanceof TaskSpecGateAwaitingDecisionResult)) {
       throw new TypeError("Spec Gate await requires its phase-specific Result");
     }
     super(token, result, "await");
@@ -5328,8 +5328,13 @@ export function settleSpecStepResult(stepId, result) {
   if (result instanceof SpecGateRepairContextRequiredResult) {
     return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
   }
-  if (result instanceof SpecGateRepairAwaitingDecisionResult) {
-    return new SpecGateAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof SpecGateRepairDraftReturnRequiredResult) {
+    return new SpecNextRoute(STEP_SETTLEMENT_TOKEN, {
+      result, targetStepId: "draft", connector: SpecGateRepairDraftReturnConnector,
+      effects: new StepRouteEffects({ resetStepIds: collectFlowLeafIds().slice(
+        collectFlowLeafIds().indexOf("draft"),
+      ) }),
+    });
   }
   if (result instanceof SpecGateRetryRequiredResult || result instanceof TaskSpecGateRetryRequiredResult
     || result instanceof TaskSpecGateRepairRequiredResult

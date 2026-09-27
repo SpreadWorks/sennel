@@ -9,7 +9,8 @@ import {
   DraftWorkerExecutionBinding, DraftWorkerExecutionClaim, settleSpecStepResult as selectSettlement,
 } from "../definition.js";
 import { SpecGateRepairContextRequiredResult,
-  SpecGateRepairAwaitingDecisionResult } from "../engine/step-result.js";
+  SpecGateRepairDraftReturnRequiredResult } from "../engine/step-result.js";
+import { DraftReopenContext } from "../lib/draft-reopen-context.js";
 import { readProgressBoundSpecGateRepairInput, SPEC_GATE_REPAIR_REQUEST_LIMIT, latestRepairBudget } from "../lib/spec-gate-repair-progress.js";
 import { readSpecGateRepairInput } from "../lib/spec-gate-repair-input.js";
 import { nextSpecGateRepairEvidence, SpecGateRepairContextExpansion } from "../lib/spec-gate-repair-evidence.js";
@@ -39,7 +40,7 @@ class SpecGateRepairPublishedDecision {
     const continuation = new SpecGateRepairContinuationFacts({ input: refreshed.source,
       ledger: refreshed.ledger, locationPlan: refreshed.locationPlan, proposal });
     const intermediate = continuation.unresolvedLocationCount > 0
-      || contextMode === "evidence" || continuation.decisionRequired
+      || contextMode === "evidence" || continuation.draftReturnRequired
       || continuation.additionalContextRequested || continuation.completedUnitCount < continuation.unitCount;
     this.facts = new SpecGateRepairWorkerFacts({ input: source, proposal: intermediate
       ? proposal : { ...proposal, groups: [...ledger.groups(), ...proposal.groups] } });
@@ -84,6 +85,9 @@ export class SpecGateRepairService {
           ctx, state, invocation, workerInstructions,
         }) });
       }
+      if (lifecycle.phase === "publication") {
+        return new SpecGateRepairWorkerExecution({ request: null, canonicalReplay: true });
+      }
       const request = handoffCoordinator.restoreClaimedDraftRequest({ ctx, state, lifecycle });
       if (lifecycle.phase === "claimed" && (request === null || !request.hasSealedSubmission())) {
         throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE",
@@ -91,8 +95,7 @@ export class SpecGateRepairService {
           { retryable: false, recoveryPossible: false });
       }
       return new SpecGateRepairWorkerExecution({ request,
-        canonicalReplay: lifecycle.phase === "publication" && (request === null || !request.hasSealedSubmission()),
-        sealedReplay: request !== null && request.hasSealedSubmission() });
+        sealedReplay: request.hasSealedSubmission() });
     }
     return new SpecGateRepairWorkerExecution({ request: handoffCoordinator.createRequest({
       ctx, state, invocation, workerInstructions,
@@ -109,6 +112,11 @@ export class SpecGateRepairService {
       state, executionRoot: ctx.executionRoot || ctx.root, executionLifecycle: execution.lifecycle });
     const saved = ledger.publication;
     if (saved === null || ledger.completion !== null) throw new Error("Gate repair response is already completed or unavailable");
+    if (saved.context.evidenceDigest !== source.context.evidenceDigest) {
+      throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED",
+        "published Spec Gate repair evidence changed before replay",
+        { retryable: false, recoveryPossible: false });
+    }
     const binding = new SpecWorkerStepBinding({ flowManager: ctx.flowManager,
       specId: state.specId, revision: source.baseRevision });
     const refreshed = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
@@ -227,6 +235,11 @@ export class SpecGateRepairService {
     if (context?.baseRevision !== source.baseRevision) {
       throw new Error("Spec Gate repair response differs from its selected context revision");
     }
+    if (context.evidenceDigest !== source.context.evidenceDigest) {
+      throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED",
+        "Spec Gate repair worker context changed before publication",
+        { retryable: false, recoveryPossible: false });
+    }
     const alreadyPublished = lifecycle.phase === "publication";
     if (context.mode === "locate") {
       const planError = changedLocationPlanError({ stepId: binding.stepId,
@@ -270,9 +283,11 @@ export class SpecGateRepairService {
           unitId: proposal.unitId, baseRevision: proposal.baseRevision,
           requestedRangeIds: proposal.additionalRangeIds,
           previousRangeIds: ledger.additionalRangeIds(source.context, proposal.unitId) });
-      } else if (proposal.stage === "spec-gate-repair-user-input") {
-        if (typeof proposal.question !== "string" || proposal.question.trim() === "") {
-          throw new Error("Spec Gate repair user decision requires a question");
+      } else if (proposal.stage === "spec-gate-repair-draft-return") {
+        if (![proposal.decision, proposal.evidence, proposal.unresolvedBecause].every((value) => (
+          typeof value === "string" && value.trim() !== ""
+        )) || !context.selections.some((selection) => selection.unit.id === proposal.unitId)) {
+          throw new Error("Spec Gate repair Draft return requires a selected unit and cited decision gap");
         }
       } else if (proposal.groups.length !== context.selections.length
         || proposal.groups.some((group, index) => !isDeepStrictEqual(
@@ -371,27 +386,58 @@ export class SpecGateRepairService {
     if (!(stepResult instanceof StepResult) || stepResult.stepId !== "spec-gate-repair"
       || (!(stepResult instanceof StepErrorResult || stepResult instanceof SpecGateRepairNoProgressResult
         || stepResult instanceof SpecGateRepairContextRequiredResult
-        || stepResult instanceof SpecGateRepairAwaitingDecisionResult)
+        || stepResult instanceof SpecGateRepairDraftReturnRequiredResult)
         && this.#selection?.result !== stepResult)) {
       throw new TypeError("Spec Gate repair settlement requires its Step-selected Result");
     }
     const settlement = settleSpecStepResult(this.binding.stepId, stepResult);
-    if (this.continuation !== null) {
+    if (this.continuation !== null && !(stepResult instanceof StepErrorResult)) {
       if (!(stepResult instanceof SpecGateRepairContextRequiredResult
-        || stepResult instanceof SpecGateRepairAwaitingDecisionResult)) {
+        || stepResult instanceof SpecGateRepairDraftReturnRequiredResult)) {
         throw new TypeError("Gate repair continuation requires a Step-selected Result");
       }
-      const committed = stepResult instanceof SpecGateRepairAwaitingDecisionResult
-        ? this.ctx.flowManager.settleSpecStepResult({ binding: this.binding,
-          stepResult, settlement })
-        : this.ctx.flowManager.completeSpecGateRepairProgress({ binding: this.binding,
+      let committed;
+      if (stepResult instanceof SpecGateRepairDraftReturnRequiredResult) {
+        if (!(settlement instanceof StepRoute) || settlement.targetStepId !== "draft"
+          || await new settlement.connector().connect() !== "draft") {
+          throw new TypeError("Spec Gate repair Draft return requires its Definition route");
+        }
+        committed = this.ctx.flowManager.settleSpecStepResult({ binding: this.binding,
+          stepResult, settlement,
+          artifactBaselines: [new CanonicalFlowArtifactBaseline({
+            logicalKey: "spec.record",
+            digest: this.facts.input.baseRevision.slice("sha256:".length),
+            byteLength: this.facts.input.specByteLength,
+          })],
+          draftReturn: new DraftReopenContext({
+            route: "preimplementation",
+            reason: this.facts.proposal.decision,
+            source: { stepId: this.binding.stepId, attemptId: this.binding.attempt.id,
+              attemptSequence: this.binding.attempt.sequence,
+              baseRevision: this.facts.input.baseRevision,
+              specByteLength: this.facts.input.specByteLength,
+              repairId: this.facts.input.repair.idempotencyKey,
+              selectedUnitIds: this.facts.input.context.units().map((unit) => unit.id),
+              findingIdentities: this.facts.input.context.units().flatMap((unit) => (
+                unit.findings.map((finding) => finding.identity.toJSON())
+              )),
+              evidence: this.facts.proposal.evidence,
+              unresolvedBecause: this.facts.proposal.unresolvedBecause,
+            },
+          }) });
+      } else {
+        committed = this.ctx.flowManager.completeSpecGateRepairProgress({ binding: this.binding,
           stepResult, settlement, publicationReceipt: this.publicationReceipt });
+      }
       const receipt = committed.receipt;
       const outcome = this.request === null ? { completed: true, replayed: true,
         stepId: this.binding.stepId, stepResult, receipt, settlementReceipt: receipt }
         : this.handoffCoordinator.completeSpecWorkerHandoff({
           request: this.request, preparation: this.preparation, stepResult, receipt,
         });
+      if (this.request === null) this.handoffCoordinator.cleanupCompletedSpecGateRepairHandoff({
+        ctx: this.ctx, receipt,
+      });
       this.#outcome = { ...outcome, partialProgressReceipt: committed.newlyCompleted ? receipt : null };
       return this.#outcome.receipt;
     }
@@ -443,6 +489,9 @@ export class SpecGateRepairService {
         request: this.request, preparation: this.preparation,
         stepResult, receipt: committed.receipt, replayed,
       });
+    if (this.request === null) this.handoffCoordinator.cleanupCompletedSpecGateRepairHandoff({
+      ctx: this.ctx, receipt: committed.receipt,
+    });
     return this.#outcome.receipt;
   }
 

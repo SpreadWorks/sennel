@@ -68,6 +68,13 @@ function nextRequest(value, index) {
   });
 }
 
+function draftReturnProposal(context, decision) {
+  return { version: 1, stage: "spec-gate-repair-draft-return",
+    baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+    decision, evidence: "The supplied Issue, Draft and Spec leave this choice unresolved.",
+    unresolvedBecause: "No supplied source selects the required validation target." };
+}
+
 function historicalRepairSeed(name) {
   // Captured through the canonical HEAD 7e49c90d2 writer after completed
   // locate generations. Each portable archive contains its canonical specs tree.
@@ -213,7 +220,7 @@ describe("Spec Gate repair restart boundaries", () => {
     } finally { removeTmpDir(value.root); }
   });
 
-  it("treats an empty location response as completed coverage and awaits a decision", async () => {
+  it("treats an empty location response as a repair failure", async () => {
     const value = await createSpecGateRepairScenario({ locator: "an unclear validation location" });
     try {
       const request = nextRequest(value, "empty-location");
@@ -224,7 +231,7 @@ describe("Spec Gate repair restart boundaries", () => {
         version: 1, stage: "spec-gate-repair-locate", baseRevision: selected.baseRevision,
         locations: [{ identity: selected.finding.identity, rangeIds: [] }],
       });
-      assert.equal(result.kind, "spec-gate-repair-awaiting-decision");
+      assert.equal(result.kind, "spec-gate-repair-error");
       const ledger = new SpecGateRepairProgressLedger({ flowManager: value.ctx.flowManager,
         specId: value.specId, attemptId: value.ctx.flowManager.canonicalState(value.specId).attempt.id,
         baseRevision: selected.baseRevision });
@@ -427,15 +434,15 @@ describe("Spec Gate repair restart boundaries", () => {
             return { version: 1, stage: "spec-gate-repair-context-request",
               baseRevision: selected.baseRevision, unitId: selected.selections[0].unit.id,
               additionalRangeIds: [extra.id] };
-          })() : { version: 1, stage: "spec-gate-repair-user-input",
-            baseRevision: selected.baseRevision, question: "Which exact acceptance condition is intended?" };
+          })() : draftReturnProposal(selected, "Which exact acceptance condition is intended?");
           fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson(proposal));
           sealWorkerArtifactHandoff({ requestPath,
             invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
           generations.push({ requestDigest: request.requestDigest, proposal });
           return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
         } };
-        const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 7, maxStalledDispatches,
+        const repairAttemptId = value.flowManager.canonicalState(value.specId).attempt.id;
+        const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 5, maxStalledDispatches,
           repositoryFingerprint: () => "f".repeat(64) });
         dispatcher.container = dispatchContainer({ root: value.root, flowManager: value.flowManager, agent });
         const result = await dispatcher.execute({ ...value.ctx,
@@ -443,17 +450,17 @@ describe("Spec Gate repair restart boundaries", () => {
           expectBinding: FlowTargetBinding.capture({ flowState: value.flowManager.loadReadOnly(value.specId),
             mainRoot: value.root, authorityRoot: value.root }).serialize(),
           _envelopeType: "run", _envelopeKey: "dispatch" });
-        assert.equal(result.dispatch?.boundary, "await_user_decision", JSON.stringify(result));
+        assert.equal(value.flowManager.canonicalState(value.specId).current.at(-1), "draft", JSON.stringify(result));
         assert.equal(generations.length, 5, JSON.stringify(result));
         const ledger = new SpecGateRepairProgressLedger({ flowManager: value.flowManager,
-          specId: value.specId, attemptId: value.flowManager.canonicalState(value.specId).attempt.id,
+          specId: value.specId, attemptId: repairAttemptId,
           baseRevision });
         assert.equal(ledger.entries.length, 5);
         const activities = value.flowManager.activityLedger(value.specId);
         for (const entry of ledger.entries.slice(0, 4)) {
           const completion = value.flowManager.readArtifact({ specId: value.specId,
             logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
-            parameters: { attemptId: value.flowManager.canonicalState(value.specId).attempt.id,
+            parameters: { attemptId: repairAttemptId,
               generation: String(entry.generation), phase: "completed" } });
           const saved = JSON.parse(completion.bytes.toString("utf8"));
           const receipt = activities.find((activity) => activity.id === completion.descriptor.activityId)
@@ -466,7 +473,7 @@ describe("Spec Gate repair restart boundaries", () => {
           assert.notEqual(receipt?.id, saved.publicationReceiptId);
         }
         assert.equal(latestRepairBudget({ flowManager: value.flowManager, specId: value.specId,
-          attemptId: value.flowManager.canonicalState(value.specId).attempt.id,
+          attemptId: repairAttemptId,
           baseRevision, consumerNodeId: "spec-gate-repair" }).budget.providerCallCount, 5);
         assert.equal(durableSnapshot(value.flowManager, value.specId).spec, initialSpec);
       } finally { removeTmpDir(value.root); }
@@ -520,16 +527,14 @@ describe("Spec Gate repair restart boundaries", () => {
         const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
         const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
         nextContext = requestInput(request, "spec-gate-repair-context.json").document;
-        fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson({
-          version: 1, stage: "spec-gate-repair-user-input",
-          baseRevision: nextContext.baseRevision,
-          question: "Which validation target should the repair name?",
-        }));
+        fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson(
+          draftReturnProposal(nextContext, "Which validation target should the repair name?")));
         sealWorkerArtifactHandoff({ requestPath,
           invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
         return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
       } };
-      const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 2 });
+      const repairAttemptId = restarted.canonicalState(value.specId).attempt.id;
+      const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1 });
       dispatcher.container = dispatchContainer({ root: value.root, flowManager: restarted, agent });
       const result = await dispatcher.execute({ ...value.ctx, flowManager: restarted,
         flowState: restarted.loadReadOnly(value.specId),
@@ -538,10 +543,10 @@ describe("Spec Gate repair restart boundaries", () => {
       assert.equal(workerCalls, 1, JSON.stringify(result));
       assert.equal(nextContext.mode, "repair");
       assert.notEqual(nextContext.batchDigest, context.batchDigest);
-      assert.equal(result.dispatch?.boundary, "await_user_decision");
+      assert.equal(restarted.canonicalState(value.specId).current.at(-1), "draft");
       assert.equal(durableSnapshot(restarted, value.specId).spec, initialSpec);
       const { budget } = latestRepairBudget({ flowManager: restarted, specId: value.specId,
-        attemptId: restarted.canonicalState(value.specId).attempt.id,
+        attemptId: repairAttemptId,
         baseRevision: context.baseRevision, consumerNodeId: "spec-gate-repair" });
       assert.equal(budget.providerCallCount, 2);
     } finally { removeTmpDir(value.root); }
@@ -580,16 +585,14 @@ describe("Spec Gate repair restart boundaries", () => {
         const next = JSON.parse(fs.readFileSync(requestPath, "utf8"));
         const nextContext = requestInput(next, "spec-gate-repair-context.json").document;
         assert.notEqual(nextContext.batchDigest, context.batchDigest);
-        fs.writeFileSync(requestPayloadPath(next, "spec-gate-repair.json"), workerArtifactJson({
-          version: 1, stage: "spec-gate-repair-user-input",
-          baseRevision: nextContext.baseRevision,
-          question: "Which validation target should the repair name?",
-        }));
+        fs.writeFileSync(requestPayloadPath(next, "spec-gate-repair.json"), workerArtifactJson(
+          draftReturnProposal(nextContext, "Which validation target should the repair name?")));
         sealWorkerArtifactHandoff({ requestPath,
           invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
         return JSON.stringify({ sealed: true, requestDigest: next.requestDigest });
       } };
-      const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 3 });
+      const repairAttemptId = restarted.canonicalState(value.specId).attempt.id;
+      const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 2 });
       dispatcher.container = dispatchContainer({ root: value.root, flowManager: restarted, agent });
       const result = await dispatcher.execute({ ...value.ctx, flowManager: restarted,
         flowState: restarted.loadReadOnly(value.specId),
@@ -597,16 +600,16 @@ describe("Spec Gate repair restart boundaries", () => {
           mainRoot: value.root, authorityRoot: value.root }).serialize(),
         _envelopeType: "run", _envelopeKey: "dispatch" });
       assert.equal(workerCalls, 1, JSON.stringify(result));
-      assert.equal(result.dispatch?.boundary, "await_user_decision");
+      assert.equal(restarted.canonicalState(value.specId).current.at(-1), "draft");
       assert.equal(durableSnapshot(restarted, value.specId).spec, original.spec);
       const ledger = new SpecGateRepairProgressLedger({ flowManager: restarted,
-        specId: value.specId, attemptId: restarted.canonicalState(value.specId).attempt.id,
+        specId: value.specId, attemptId: repairAttemptId,
         baseRevision: context.baseRevision });
       assert.equal(ledger.entries.length, 2);
       assert.equal(ledger.entries[0].proposal.stage, "spec-gate-repair-context-request");
-      assert.equal(ledger.entries[1].proposal.stage, "spec-gate-repair-user-input");
+      assert.equal(ledger.entries[1].proposal.stage, "spec-gate-repair-draft-return");
       assert.equal(latestRepairBudget({ flowManager: restarted, specId: value.specId,
-        attemptId: restarted.canonicalState(value.specId).attempt.id,
+        attemptId: repairAttemptId,
         baseRevision: context.baseRevision, consumerNodeId: "spec-gate-repair" }).budget.providerCallCount, 2);
     } finally { removeTmpDir(value.root); }
   });
@@ -614,15 +617,14 @@ describe("Spec Gate repair restart boundaries", () => {
   it("restores a sealed claimed response without another provider call", async () => {
     const value = await createSpecGateRepairScenario();
     try {
+      const repairAttemptId = value.flowManager.canonicalState(value.specId).attempt.id;
       initGitRepo(value.root);
       fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
       commitAll(value.root, "Create isolated claimed response repository");
       const request = nextRequest(value, "sealed-claim");
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
-      fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
-        version: 1, stage: "spec-gate-repair-user-input", baseRevision: context.baseRevision,
-        question: "Which target should the repair use?",
-      }));
+      fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(
+        draftReturnProposal(context, "Which target should the repair use?")));
       SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
         prompt: JSON.stringify(request.toPromptReference()) });
       sealWorkerArtifactHandoff({ requestPath: request.requestPath,
@@ -634,18 +636,18 @@ describe("Spec Gate repair restart boundaries", () => {
         inWorktree: false, specId: value.specId });
       let workerCalls = 0;
       const agent = { async call() { workerCalls += 1; throw new Error("sealed claim must not call provider again"); } };
-      const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 2 });
+      const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1 });
       dispatcher.container = dispatchContainer({ root: value.root, flowManager: restarted, agent });
       const result = await dispatcher.execute({ ...value.ctx, flowManager: restarted,
         flowState: restarted.loadReadOnly(value.specId),
         expectBinding: FlowTargetBinding.capture({ flowState: restarted.loadReadOnly(value.specId),
           mainRoot: value.root, authorityRoot: value.root }).serialize(),
         _envelopeType: "run", _envelopeKey: "dispatch" });
-      assert.equal(result.dispatch?.boundary, "await_user_decision", JSON.stringify(result));
+      assert.equal(restarted.canonicalState(value.specId).current.at(-1), "draft", JSON.stringify(result));
       assert.equal(workerCalls, 0);
       assert.equal(fs.existsSync(request.directory), false);
       assert.equal(latestRepairBudget({ flowManager: restarted, specId: value.specId,
-        attemptId: restarted.canonicalState(value.specId).attempt.id,
+        attemptId: repairAttemptId,
         baseRevision: context.baseRevision, consumerNodeId: "spec-gate-repair" }).budget.providerCallCount,
       before.providerCallCount);
     } finally { removeTmpDir(value.root); }
@@ -708,10 +710,8 @@ describe("Spec Gate repair restart boundaries", () => {
     try {
       const request = nextRequest(value, "unclaimed-seal");
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
-      fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
-        version: 1, stage: "spec-gate-repair-user-input",
-        baseRevision: context.baseRevision, question: "Which target is intended?",
-      }));
+      fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(
+        draftReturnProposal(context, "Which target is intended?")));
       sealWorkerArtifactHandoff({ requestPath: request.requestPath,
         invocationId: request.dispatchInvocationId });
       const before = durableSnapshot(value.flowManager, value.specId);
@@ -727,19 +727,15 @@ describe("Spec Gate repair restart boundaries", () => {
     try {
       const request = nextRequest(value, "changed-seal");
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
-      fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
-        version: 1, stage: "spec-gate-repair-user-input",
-        baseRevision: context.baseRevision, question: "Which target is intended?",
-      }));
+      fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(
+        draftReturnProposal(context, "Which target is intended?")));
       SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
         prompt: JSON.stringify(request.toPromptReference()) });
       sealWorkerArtifactHandoff({ requestPath: request.requestPath,
         invocationId: request.dispatchInvocationId });
       const before = durableSnapshot(value.flowManager, value.specId);
-      fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
-        version: 1, stage: "spec-gate-repair-user-input",
-        baseRevision: context.baseRevision, question: "A different target?",
-      }));
+      fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(
+        draftReturnProposal(context, "A different target?")));
       await assert.rejects(SpecGateRepairService.prepare({ ctx: value.ctx, request,
         Connector: SpecEntryConnector, handoffCoordinator: value.coordinator }),
       /handoff|payload|sealed/i);
@@ -1000,6 +996,7 @@ describe("Spec Gate repair restart boundaries", () => {
   it("publishes an additional read and a user decision without minting edit authority", async () => {
     const value = await createSpecGateRepairScenario();
     try {
+      const repairAttemptId = value.flowManager.canonicalState(value.specId).attempt.id;
       const before = durableSnapshot(value.flowManager, value.specId);
       const first = nextRequest(value, 0);
       const initial = first.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
@@ -1020,18 +1017,17 @@ describe("Spec Gate repair restart boundaries", () => {
       const readOnly = expanded.selections[0].ranges.find((range) => range.id === "background");
       assert.equal(readOnly.value, "The worker cannot write canonical Flow artifacts.");
       assert.equal(readOnly.writable, false);
-      const decision = await completeWorkerResponse(value, second, { version: 1,
-        stage: "spec-gate-repair-user-input", baseRevision: expanded.baseRevision,
-        question: "Which planned validation target should the requirement name?" });
-      assert.equal(decision.result.kind, "spec-gate-repair-awaiting-decision");
+      const decision = await completeWorkerResponse(value, second,
+        draftReturnProposal(expanded, "Which planned validation target should the requirement name?"));
+      assert.equal(decision.result.kind, "spec-gate-repair-draft-return-required");
       const ledger = new SpecGateRepairProgressLedger({ flowManager: value.ctx.flowManager,
-        specId: value.specId, attemptId: restarted.canonicalState(value.specId).attempt.id,
+        specId: value.specId, attemptId: repairAttemptId,
         baseRevision: expanded.baseRevision });
       assert.deepEqual(ledger.entries.map((entry) => entry.proposal.stage),
-        ["spec-gate-repair-context-request", "spec-gate-repair-user-input"]);
+        ["spec-gate-repair-context-request", "spec-gate-repair-draft-return"]);
       assert.equal(ledger.groups().length, 0);
       const { budget } = latestRepairBudget({ flowManager: value.ctx.flowManager, specId: value.specId,
-        attemptId: restarted.canonicalState(value.specId).attempt.id,
+        attemptId: repairAttemptId,
         baseRevision: expanded.baseRevision, consumerNodeId: "spec-gate-repair" });
       assert.equal(budget.providerCallCount, 2);
       const after = durableSnapshot(restarted, value.specId);
@@ -1039,29 +1035,12 @@ describe("Spec Gate repair restart boundaries", () => {
       assert.equal(artifactCount(after, "spec.snapshot"), artifactCount(before, "spec.snapshot"));
       const next = await new GetNextActionCommand().execute({ ...value.ctx,
         flowState: restarted.loadReadOnly(value.specId), flowResolutionError: null });
-      assert.equal(next.directive.kind, "await_worker_input");
-      assert.equal(next.directive.requiresUserAction, true);
-      assert.equal(next.directive.terminal, false);
-      assert.match(next.directive.question,
-        /Which planned validation target should the requirement name/);
-      let workerCalls = 0;
-      const agent = { async call() { workerCalls += 1; throw new Error("await must not run a worker"); } };
-      const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 2 });
-      dispatcher.container = dispatchContainer({ root: value.root, flowManager: restarted, agent });
-      const boundary = await dispatcher.execute({ ...value.ctx,
-        flowState: restarted.loadReadOnly(value.specId),
-        expectBinding: FlowTargetBinding.capture({
-          flowState: restarted.loadReadOnly(value.specId),
-          mainRoot: value.root, authorityRoot: value.root,
-        }).serialize(),
-        _envelopeType: "run", _envelopeKey: "dispatch",
-      });
-      assert.equal(boundary.dispatch?.boundary, "await_user_decision");
-      assert.equal(workerCalls, 0);
+      assert.equal(next.directive.kind, "execute_step");
+      assert.equal(restarted.canonicalState(value.specId).current.at(-1), "draft");
     } finally { removeTmpDir(value.root); }
   });
 
-  for (const mode of ["locate", "evidence", "context", "user-input", "repair"]) {
+  for (const mode of ["locate", "evidence", "context", "draft-return", "repair"]) {
     it(`dispatches a published ${mode} response after restart without another provider call`, async () => {
       const value = await createSpecGateRepairScenario({
         ...(mode === "evidence" ? { specRecord: oversizedSpec() } : {}),
@@ -1096,8 +1075,8 @@ describe("Spec Gate repair restart boundaries", () => {
           const range = selection.ranges.find((entry) => entry.writable);
           proposal = mode === "context" ? { version: 1, stage: "spec-gate-repair-context-request",
             baseRevision: context.baseRevision, unitId: selection.unit.id, additionalRangeIds: ["background"] }
-            : mode === "user-input" ? { version: 1, stage: "spec-gate-repair-user-input",
-              baseRevision: context.baseRevision, question: "Which validation target is intended?" }
+            : mode === "draft-return"
+              ? draftReturnProposal(context, "Which validation target is intended?")
               : { version: 1, stage: "spec-gate-repair", baseRevision: context.baseRevision,
                 groups: [{ findingIdentities: selection.unit.findings.map((finding) => finding.identity),
                   operations: [{ kind: "edit-text-field", target: range.target, expectedDigest: range.digest,
@@ -1122,7 +1101,7 @@ describe("Spec Gate repair restart boundaries", () => {
           inWorktree: false, specId: value.specId });
         let workerCalls = 0;
         const agent = { async call() { workerCalls += 1; throw new Error("published response must replay"); } };
-        const dispatcher = new RunDispatchCommand({ agent, maxDispatches: mode === "user-input" ? 2 : 1 });
+        const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1 });
         dispatcher.container = dispatchContainer({ root: value.root, flowManager: restarted, agent });
         const result = await dispatcher.execute({ ...value.ctx, flowManager: restarted,
           flowState: restarted.loadReadOnly(value.specId),
@@ -1170,8 +1149,7 @@ describe("Spec Gate repair restart boundaries", () => {
                   contradictions: [], unresolved: [],
                 })) };
             } else {
-              response = { version: 1, stage: "spec-gate-repair-user-input",
-                baseRevision: nextContext.baseRevision, question: "Which target should this repair use?" };
+              response = draftReturnProposal(nextContext, "Which target should this repair use?");
             }
             fs.writeFileSync(requestPayloadPath(following, "spec-gate-repair.json"), workerArtifactJson(response));
             sealWorkerArtifactHandoff({ requestPath,
@@ -1194,8 +1172,8 @@ describe("Spec Gate repair restart boundaries", () => {
             { code: "FLOW_ARTIFACT_HANDOFF_STALE" });
           assert.deepEqual(durableSnapshot(restarted, value.specId), afterNewClaim);
           assert.equal(latestRepairBudget({ ...budgetInput, flowManager: restarted }).budget.providerCallCount, 2);
-        } else if (mode === "user-input") {
-          assert.equal(result.dispatch?.boundary, "await_user_decision");
+        } else if (mode === "draft-return") {
+          assert.equal(restarted.canonicalState(value.specId).current.at(-1), "draft");
           assert.equal(after.spec, before.spec);
         } else assertOneTerminalPublication(restarted, value.specId, before);
       } finally { removeTmpDir(value.root); }

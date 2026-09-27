@@ -20,6 +20,7 @@ const PREIMPLEMENTATION_STAGES = new Set([
   "spec-review",
   "spec-triage",
   "spec-repair",
+  "spec-gate-repair",
   "spec-gate",
   "approval",
   "test-generate",
@@ -106,18 +107,6 @@ function correctionEvidence(flowManager, specId) {
   return new DraftSpecCorrectionEvidence({ draft: draft.bytes, specRecord: specRecord.bytes });
 }
 
-function issueEntry({ route, reason, previousActiveStep, evidence = null }) {
-  return {
-    step: "draft",
-    reason: `reopen-draft ${route}${reason ? `: ${reason}` : ""}`,
-    trigger: "user invoked sennel flow reopen-draft",
-    resolution: `definition-owned draft replacement started after ${previousActiveStep}`,
-    ...(evidence === null ? {} : {
-      evidence: { draftBytes: evidence.draftBytes, specRecordBytes: evidence.specRecordBytes },
-    }),
-  };
-}
-
 export class RunReopenDraftCommand extends FlowCommand {
   async execute(ctx) {
     if (!REOPEN_CATEGORIES.has(ctx.category)) {
@@ -139,12 +128,15 @@ export class RunReopenDraftCommand extends FlowCommand {
       const route = routeFor({ category: ctx.category, state });
       const evidence = route === "spec-correction" ? correctionEvidence(ctx.flowManager, state.specId) : null;
       const doneTaskCount = completedTaskCount(state);
-      ctx.flowManager.reopenDraft({ specId: state.specId, route });
-      ctx.flowManager.appendIssueLog({
-        specId: state.specId,
-        entry: issueEntry({ route, reason, previousActiveStep, evidence }),
-        idempotencyKey: `reopen-draft:${state.runId}:${route}:${reason || "default"}`,
-      });
+      const attempt = ctx.flowManager.canonicalState(state.specId).attempt;
+      ctx.flowManager.reopenDraft({ specId: state.specId, route, reason,
+        source: { stepId: previousActiveStep, attemptId: attempt.id,
+          attemptSequence: attempt.sequence,
+          trigger: "user invoked sennel flow reopen-draft",
+          ...(evidence === null ? {} : { issueLogEvidence: {
+            draftBytes: evidence.draftBytes, specRecordBytes: evidence.specRecordBytes,
+          } }),
+        } });
       const resetSteps = flattenSteps(ctx.flowManager.loadReadOnly(state.specId).steps)
         .filter((step) => step.status === "invalidated")
         .map((step) => step.id);

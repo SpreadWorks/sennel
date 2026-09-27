@@ -6,6 +6,16 @@
    **Draft artifact format: draft.json**
    The draft artifact is a JSON file (`draft.json`), not markdown. The AI writes structured JSON directly.
 
+   If `contextSnapshot.entries` contains an available `reopen` entry, use its
+   `reason`, cited source evidence, and previous Draft question ledger as input.
+   Reconsider the missing decision in the normal `questionLedger`. For a Spec
+   Gate repair return, preserve earlier valid answers and resolutions exactly.
+   For another reopen, retain supported answers and correct entries that the
+   reopen reason and evidence show are obsolete. Do not turn a note or an unresolved
+   proposal into an answered question. If the Issue, request, project rules, or
+   source evidence already resolves the reason, record that fact and do not
+   create a duplicate question. The reopen entry is bound to this Draft Attempt.
+
    **Communication rules:**
    - Questions MUST be written in the language specified by `config.lang`. Do not mix languages within a single question.
    - When using a technical term for the first time, add a 1-2 line definition or explanation.
@@ -38,6 +48,6 @@
      3. Do not run nested Flow context, Issue, or guardrail commands; the parent materializes and binds those values before worker startup.
    - Fill draft.json fields for the initial question list:
      - Candidates record provenance and evidence digests; do not select a user wait from this worker.
-     - Do not create answered or discarded entries while generating the initial question list.
+     - On an initial Draft, do not create answered or discarded entries while generating the question list. On a Spec Gate repair return, retain prior valid answered and resolved entries exactly; on another reopen, correct only entries made obsolete by the reason and evidence.
    - When the initial question list is complete, proceed to `draft-questions-review`.
    - Write `draft.json` only to its exact handoff `payloadPath`, then run the exact handoff `sealCommand` once.

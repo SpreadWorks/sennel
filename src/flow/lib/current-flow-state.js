@@ -139,7 +139,7 @@ const CONDITIONAL_WORKER_SETTLEMENT_OPERATION = "settle_conditional_worker";
 const TASK_REVIEW_STAGE_TRANSITION_OPERATION = "complete_task_review_stage";
 const REQUIREMENT_TEST_INITIALIZATION_OPERATION = "initialize_requirement_test_lifecycle";
 const REQUIREMENT_TEST_TRANSITION_OPERATION = "advance_requirement_test_lifecycle";
-const REPLACEMENT_ATTEMPT_OPERATIONS = new Set(["repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "plan_gate_repair", "recover_missing_producer_artifact", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION]);
+const REPLACEMENT_ATTEMPT_OPERATIONS = new Set(["repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "plan_gate_repair", "recover_missing_producer_artifact", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION]);
 const SOURCE_WORKER_COMPLETION_OPERATIONS = new Set([
   "confirm_attempt",
   "repair_implementation",
@@ -2104,7 +2104,7 @@ export function assertDraftSettlementReceiptTransition(priorReceipts, receipt, {
     && executionHistory.at(-1)?.settlementKind === "execution"
     && receipt.settlementKind === "execution"
     && receipt.resultKind === "spec-gate-repair-context-required"
-    && executionHistory.at(-1)?.resultKind === receipt.resultKind;
+    && executionHistory.at(-1)?.resultKind === "spec-gate-repair-context-required";
   const expectedPhases = lifecycle.phase === "claimed"
     ? ["checkpoint"] : lifecycle.phase === "publication"
       ? (publicationAwaitContinuation || gateRepairCompletion ? ["publication"] : ["claimed"])
@@ -7142,8 +7142,11 @@ export class ActivityTransition {
     }
     const draftReceipt = activity.result?.draftSettlementReceipt ?? null;
     if (draftReceipt !== null) {
+      const receiptSource = this.operation === "reopen_draft_preimplementation"
+        && activity.result.stepResult?.kind === "spec-gate-repair-draft-return-required"
+        ? "spec-gate-repair" : targetId;
       if (draftReceipt.binding.runId !== state.runId || draftReceipt.binding.specId !== state.specId
-        || draftReceipt.binding.stepId !== targetId || state.current?.at(-1) !== targetId
+        || draftReceipt.binding.stepId !== receiptSource || state.current?.at(-1) !== receiptSource
         || draftReceipt.binding.attemptId !== state.attempt?.id
         || draftReceipt.binding.attemptSequence !== state.attempt?.sequence) {
         throw new CurrentFlowStateConflictError("Draft settlement receipt binding is stale");
@@ -7680,8 +7683,21 @@ export class FlowActivity {
     if (["confirm_attempt", DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "complete_acceptance_decision_noop", "fail_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result == null) {
       throw new CurrentFlowStateInvariantError("completed Attempt Activity requires a result");
     }
-    if (!["confirm_attempt", DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "complete_acceptance_decision_noop", "fail_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "plan_gate_repair"].includes(this.transition.operation) && this.result !== null) {
+    if (!["confirm_attempt", DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "complete_acceptance_decision_noop", "fail_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "plan_gate_repair", "reopen_draft_preimplementation"].includes(this.transition.operation) && this.result !== null) {
       throw new CurrentFlowStateInvariantError("only completed Attempt Activity may carry a result");
+    }
+    if (this.transition.operation === "reopen_draft_preimplementation" && this.result !== null
+      && (this.result.stepResult?.kind !== "spec-gate-repair-draft-return-required"
+        || this.result.draftSettlementReceipt?.binding.stepId !== "spec-gate-repair"
+        || this.result.draftSettlementReceipt?.targetStepId !== "draft"
+        || this.attemptId !== this.result.draftSettlementReceipt.binding.attemptId
+        || this.sequence !== this.result.draftSettlementReceipt.binding.attemptSequence)) {
+      throw new CurrentFlowStateInvariantError("Draft reopen Result must settle its active Spec Gate repair Attempt");
+    }
+    if (this.transition.operation === "reopen_draft_preimplementation" && this.result === null
+      && (this.attemptId !== this.transition.attempt.id
+        || this.sequence !== this.transition.attempt.sequence)) {
+      throw new CurrentFlowStateInvariantError("ordinary Draft reopen must identify its new Attempt");
     }
     if (["fail_attempt", "settle_spec_gate_retry", "record_failure"].includes(this.transition.operation) && !["failed", "incomplete"].includes(this.result.outcome)) {
       throw new CurrentFlowStateInvariantError(`${this.transition.operation} Activity result must be failed or incomplete`);

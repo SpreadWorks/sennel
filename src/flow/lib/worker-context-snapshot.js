@@ -5,11 +5,12 @@ import path from "node:path";
 import { filterByPhase, loadMergedGuardrails } from "../../lib/guardrail.js";
 import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
 import { CanonicalTaskContext } from "./task-canonical-context.js";
+import { DraftReopenContext } from "./draft-reopen-context.js";
 
 const SNAPSHOT_VERSION = 1;
 const SHA256 = /^[a-f0-9]{64}$/;
 const MAX_CONTEXT_BYTES = 2 * 1024 * 1024;
-const CONTEXT_KINDS = new Set(["issue", "request", "guardrail", "project_overview"]);
+const CONTEXT_KINDS = new Set(["issue", "request", "guardrail", "project_overview", "reopen"]);
 
 function requireString(value, field) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
@@ -235,6 +236,12 @@ function projectOverviewContext(executionRoot) {
   });
 }
 
+function reopenContext(reopen) {
+  return reopen instanceof DraftReopenContext
+    ? new WorkerContextDocument({ kind: "reopen", document: reopen.toJSON() })
+    : new WorkerContextOmission({ kind: "reopen", reason: "no-draft-reopen" });
+}
+
 export class DraftWorkerContextSnapshot {
   constructor({ binding, inputAuthority, entries, digest: expectedDigest = null }) {
     if (!(binding instanceof WorkerContextBinding)) {
@@ -262,7 +269,7 @@ export class DraftWorkerContextSnapshot {
     Object.freeze(this);
   }
 
-  static materialize({ executionRoot, state, invocation, issueText = null }) {
+  static materialize({ executionRoot, state, invocation, issueText = null, reopen = null }) {
     const binding = new WorkerContextBinding({
       runId: state.runId,
       specId: state.specId,
@@ -276,6 +283,7 @@ export class DraftWorkerContextSnapshot {
       requestContext(state),
       guardrailContext(executionRoot),
       projectOverviewContext(executionRoot),
+      reopenContext(reopen),
     ];
     return new DraftWorkerContextSnapshot({
       binding,

@@ -22,7 +22,7 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     ["SpecGateRepairReadyForGateResult", "spec-gate-repair", "spec-gate-repair-ready-for-gate", "completed"],
     ["SpecGateRepairReviewRequiredResult", "spec-gate-repair", "spec-gate-repair-review-required", "completed"],
     ["SpecGateRepairContextRequiredResult", "spec-gate-repair", "spec-gate-repair-context-required", "loop-required"],
-    ["SpecGateRepairAwaitingDecisionResult", "spec-gate-repair", "spec-gate-repair-awaiting-decision", "user-input-required"],
+    ["SpecGateRepairDraftReturnRequiredResult", "spec-gate-repair", "spec-gate-repair-draft-return-required", "loop-required"],
     ["SpecGateRepairNoProgressResult", "spec-gate-repair", "spec-gate-repair-no-progress", "error"],
     ["SpecTriageCompletedResult", "spec-triage", "spec-triage-completed", "completed"],
     ["SpecRepairChangedResult", "spec-repair", "spec-repair-changed", "completed"],

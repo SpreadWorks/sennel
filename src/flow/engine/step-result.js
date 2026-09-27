@@ -163,8 +163,8 @@ export const SpecGateRepairReviewRequiredResult = resultClass("SpecGateRepairRev
 export const SpecGateRepairContextRequiredResult = resultClass("SpecGateRepairContextRequiredResult", {
   stepId: "spec-gate-repair", kind: "spec-gate-repair-context-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
 });
-export const SpecGateRepairAwaitingDecisionResult = resultClass("SpecGateRepairAwaitingDecisionResult", {
-  stepId: "spec-gate-repair", kind: "spec-gate-repair-awaiting-decision", type: STEP_RESULT_TYPE.USER_INPUT_REQUIRED,
+export const SpecGateRepairDraftReturnRequiredResult = resultClass("SpecGateRepairDraftReturnRequiredResult", {
+  stepId: "spec-gate-repair", kind: "spec-gate-repair-draft-return-required", type: STEP_RESULT_TYPE.LOOP_REQUIRED,
 });
 export const SpecGateRepairNoProgressResult = errorResultClass("SpecGateRepairNoProgressResult", {
   stepId: "spec-gate-repair", kind: "spec-gate-repair-no-progress", type: STEP_RESULT_TYPE.ERROR,

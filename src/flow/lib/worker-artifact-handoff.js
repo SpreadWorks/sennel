@@ -38,6 +38,7 @@ import {
 } from "../definition.js";
 import { SourceHandoffFailureFacts } from "./source-handoff-failure.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
+import { DraftReopenContext } from "./draft-reopen-context.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import {
   DraftCompletionFacts,
@@ -137,6 +138,8 @@ import { SourceTriageEffect } from "./source-triage-contract.js";
 export { SourceTriageEffect } from "./source-triage-contract.js";
 import { ApprovedFindingExceptionSet } from "./acknowledged-rationale.js";
 import { loadMergedGuardrails } from "../../lib/guardrail.js";
+import { WorkerArtifactHandoffError, requiredString } from "./worker-artifact-handoff-error.js";
+export { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 import { CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
 import { getPorcelainV2Status } from "../../lib/git-helpers.js";
 import {
@@ -211,11 +214,6 @@ function sourceHandoffReadError(cause, message) {
     `${message}: ${cause.message}`,
     { cause, retryable: temporary, recoveryPossible: false },
   );
-}
-
-function requiredString(value, field) {
-  if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
-  return value.trim();
 }
 
 function requiredDigest(value, field) {
@@ -387,32 +385,6 @@ function ensureRealDirectory(directory, boundary) {
       `worker artifact directory authority is invalid: ${cause.message}`,
       { cause, data: { directory: resolved, boundary: stop } },
     );
-  }
-}
-
-export class WorkerArtifactHandoffError extends Error {
-  constructor(classification, code, message, {
-    cause = null,
-    data = {},
-    retryable = false,
-    recoveryPossible = classification === "recovery-required",
-  } = {}) {
-    if (!["missing", "invalid", "stale", "conflict", "recovery-required"].includes(classification)) {
-      throw new Error(`invalid worker artifact handoff classification: ${classification}`);
-    }
-    if (typeof retryable !== "boolean") throw new Error("worker artifact handoff retryable must be boolean");
-    if (typeof recoveryPossible !== "boolean") throw new Error("worker artifact handoff recoveryPossible must be boolean");
-    super(message, cause ? { cause } : undefined);
-    this.name = "WorkerArtifactHandoffError";
-    this.classification = classification;
-    this.code = requiredString(code, "worker artifact handoff error code");
-    this.recoveryPossible = recoveryPossible;
-    this.retryable = retryable;
-    this.data = Object.freeze({ ...data });
-  }
-
-  get isAdmissionRejection() {
-    return ["invalid", "stale", "conflict"].includes(this.classification);
   }
 }
 
@@ -2270,6 +2242,7 @@ function specGateRepairContextHandoffInput({ flowManager, state, policy, executi
           : batch.payloadElements.map((entry) => JSON.parse(entry.text)) }) };
     }
   }
+  document = { ...document, evidenceDigest: source.context.evidenceDigest };
   Object.freeze(document);
   const bytes = Buffer.from(stableStringify(document), "utf8");
   return [new WorkerArtifactInputSnapshot({
@@ -2304,6 +2277,15 @@ function canonicalIssueSnapshotText({ flowManager, state }) {
     specId: state.specId,
     consumerNodeId: "draft",
   }).text("linked Issue context");
+}
+
+function canonicalDraftReopenContext({ flowManager, state }) {
+  const canonical = flowManager.canonicalState(state.specId);
+  if (canonical.current?.at(-1) !== "draft" || canonical.attempt === null) return null;
+  const issue = flowManager.readArtifact({ specId: canonical.specId, logicalKey: "issue.log",
+    consumerNodeId: "draft", optional: true });
+  return DraftReopenContext.fromIssueLog(issue === null
+    ? null : JSON.parse(issue.bytes.toString("utf8")), canonical.attempt.id);
 }
 
 function canonicalPayloadBaseline({ flowManager, state, rule, requirementTestContext = null, testReviewRepairProgress = null }) {
@@ -5169,6 +5151,7 @@ export class WorkerArtifactHandoffRequest {
             state,
             invocation,
             issueText: canonicalIssueSnapshotText({ flowManager, state }),
+            reopen: canonicalDraftReopenContext({ flowManager, state }),
           });
       } catch (cause) {
         throw new WorkerArtifactHandoffError(
@@ -5562,6 +5545,7 @@ export class WorkerArtifactHandoffRequest {
             state,
             invocation,
             issueText: canonicalIssueSnapshotText({ flowManager: this.flowManager, state }),
+            reopen: canonicalDraftReopenContext({ flowManager: this.flowManager, state }),
           });
         if (currentContext.digest !== this.contextSnapshot.digest) {
           throw new Error("worker context content changed after handoff capture");
@@ -6974,16 +6958,18 @@ function requireCanonicalDraftExecutionClaimForStored({ flowManager, state, stor
 
 function completedSpecGateRepairClaim({ flowManager, state, stored, executionRoot }) {
   if (stored.stepId !== "spec-gate-repair") return false;
+  const current = flowManager.canonicalState(state.specId);
+  if (current.current?.at(-1) === "draft" && current.attempt !== null) {
+    const reopen = canonicalDraftReopenContext({ flowManager, state: current });
+    if (reopen?.source.stepId === stored.stepId
+      && reopen.source.attemptId === stored.state?.attempt?.id) return true;
+  }
   const lifecycle = canonicalWorkerExecutionClaimForStored({ flowManager, stored });
   if (lifecycle?.phase !== "publication") return false;
   const { ledger } = readProgressBoundSpecGateRepairInput({ flowManager,
     state: flowManager.canonicalState(state.specId), executionRoot, executionLifecycle: lifecycle });
   if (ledger.completion !== null) return true;
-  const settled = flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: stored.stepId });
-  return settled?.result.kind === "spec-gate-repair-awaiting-decision"
-    && settled.receipt.executionLifecycle?.phase === "publication"
-    && settled.receipt.executionLifecycle.binding.executionGeneration === lifecycle.executionGeneration
-    && settled.receipt.executionLifecycle.claim.requestDigest === lifecycle.claim.requestDigest;
+  return false;
 }
 
 /** Private in-memory boundary between Draft handoff preparation and commit. */
@@ -7081,9 +7067,12 @@ function validateSpecGateRepairWorkerPayload(request, proposal) {
       if (typeof proposal.unitId !== "string" || !Array.isArray(proposal.additionalRangeIds)) {
         throw new Error("Spec Gate repair additional context request is invalid");
       }
-    } else if (proposal?.stage === "spec-gate-repair-user-input") {
-      if (typeof proposal.question !== "string" || proposal.question.trim() === "") {
-        throw new Error("Spec Gate repair user decision request is invalid");
+    } else if (proposal?.stage === "spec-gate-repair-draft-return") {
+      if (proposal.version !== 1 || typeof proposal.unitId !== "string" || proposal.unitId === ""
+        || ![proposal.decision, proposal.evidence, proposal.unresolvedBecause].every((value) => (
+          typeof value === "string" && value.trim() !== ""
+        ))) {
+        throw new Error("Spec Gate repair Draft return proposal is invalid");
       }
     } else throw new Error("Spec Gate repair response has no typed repair disposition");
   } else if (mode === "evidence") {
@@ -7337,6 +7326,10 @@ function validateDraftPayload(request, submission, state) {
   const draft = payloadDocument(request, submission, "draft.json");
   if (!draft || typeof draft !== "object" || Array.isArray(draft)) {
     throw new Error("draft.json must contain a JSON object");
+  }
+  if (request.stepId === "draft") {
+    const reopen = request.contextSnapshot?.entries.find((entry) => entry.kind === "reopen");
+    if (reopen?.document !== undefined) new DraftReopenContext(reopen.document).assertCandidateDraft(draft);
   }
 }
 
@@ -8433,6 +8426,45 @@ export class WorkerArtifactHandoffCoordinator {
     this.now = now;
   }
 
+  /** Remove a consumed repair capability using its canonical claim, without decoding transient request bytes. */
+  cleanupCompletedSpecGateRepairHandoff({ ctx, receipt }) {
+    if (receipt?.binding?.stepId !== "spec-gate-repair") return false;
+    const activity = ctx.flowManager.activityLedger(ctx.specId).find((entry) => (
+      entry.result?.draftSettlementReceipt?.id === receipt.id
+    ));
+    if (activity === undefined) {
+      throw new WorkerArtifactHandoffError("conflict", "FLOW_SPEC_GATE_REPAIR_COMPLETION_STALE",
+        "Spec Gate repair cleanup requires its committed receipt");
+    }
+    return this.#cleanupCompletedSpecGateRepairActivity({ ctx, activity,
+      runId: ctx.flowManager.canonicalState(ctx.specId).runId,
+      root: executionHandoffRoot(ctx.executionRoot || ctx.root, ctx.specId) });
+  }
+
+  #cleanupCompletedSpecGateRepairActivity({ ctx, activity, runId, root }) {
+    const saved = activity?.result?.draftSettlementReceipt;
+    if (saved == null) return false;
+    if (saved.binding.stepId !== "spec-gate-repair") return false;
+    if (saved.binding.runId !== runId) {
+      throw new WorkerArtifactHandoffError("conflict", "FLOW_SPEC_GATE_REPAIR_COMPLETION_STALE",
+        "Spec Gate repair cleanup requires its committed receipt");
+    }
+    const claim = saved.executionLifecycle?.claim;
+    if (claim?.kind !== "worker") return false;
+    if (saved.resultKind === "spec-gate-repair-context-required") {
+      const generation = saved.executionLifecycle.binding.executionGeneration;
+      const completion = ctx.flowManager.readArtifact({ specId: ctx.specId,
+        logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
+        parameters: { attemptId: saved.binding.attemptId,
+          generation: String(generation), phase: "completed" }, optional: true });
+      if (completion?.descriptor.activityId !== activity.id) return false;
+    } else if (saved.executionLifecycle?.phase !== "terminal") {
+      return false;
+    }
+    return cleanupTransientExecutionHandoffDirectory(root,
+      handoffActionDirectory(root, saved.binding.runId, claim.dispatchInvocationId, claim.actionDigest));
+  }
+
   createRequest({
     ctx,
     state,
@@ -9124,6 +9156,10 @@ export class WorkerArtifactHandoffCoordinator {
     const canonicalLocation = ctx.flowManager.specLocation(state.specId);
     const handoffRoot = executionHandoffRoot(executionRoot, state.specId);
     let cleaned = 0;
+    for (const activity of ctx.flowManager.activityLedger(state.specId)) {
+      if (this.#cleanupCompletedSpecGateRepairActivity({ ctx, activity,
+        runId: state.runId, root: handoffRoot })) cleaned += 1;
+    }
     const runtimeEntries = executionHandoffRuntimeEntries(handoffRoot);
     for (const requestPath of runtimeEntries.requestPaths) {
       let stored;

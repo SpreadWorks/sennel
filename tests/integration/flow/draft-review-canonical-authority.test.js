@@ -78,7 +78,13 @@ describe("draft reopen canonical authority", () => {
       const state = flowManager.loadReadOnly(SPEC_ID);
       assert.equal(state.currentNodeId, "draft");
       assert.equal(findStepById(state.steps, targetStep).status, "invalidated");
-      assert.equal(flowManager.activityLedger(SPEC_ID).at(-2).transition.operation, "reopen_draft_preimplementation");
+      // The reason now commits with the reopen, without a later note Activity.
+      assert.equal(flowManager.activityLedger(SPEC_ID).at(-1).transition.operation, "reopen_draft_preimplementation");
+      const issueLog = flowManager.readArtifact({ specId: SPEC_ID, logicalKey: "issue.log",
+        consumerNodeId: "draft" });
+      const reopen = JSON.parse(issueLog.bytes.toString("utf8")).entries.at(-1).draftReopen;
+      assert.equal(reopen.source.stepId, targetStep);
+      assert.equal(reopen.draftAttemptId, flowManager.canonicalState(SPEC_ID).attempt.id);
     }
   });
 

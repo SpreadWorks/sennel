@@ -80,7 +80,7 @@ function printHelp(component = null) {
     return;
   }
   if (component === "specs") {
-    console.log("Usage: sennel migrate specs --to 3 [--dry-run]\n\nMigrate Flow specifications to a target revision.");
+    console.log("Usage: sennel migrate specs --to 4 [--dry-run]\n\nMigrate Flow specifications to a target revision.");
     return;
   }
   console.log("Usage: sennel migrate <layout|specs> --to 1 [--dry-run]");
@@ -116,12 +116,20 @@ function registry() {
       return new SpecsMigrationRevisionThree(root, { dryRun, logger: output }).run();
     },
   });
+  const specsRevisionFour = new MigrationRevision({
+    component: "specs",
+    revision: 4,
+    apply: async ({ root, dryRun, output }) => {
+      const { SpecsMigrationRevisionFour } = await import("./lib/specs-migration.js");
+      return new SpecsMigrationRevisionFour(root, { dryRun, logger: output }).run();
+    },
+  });
   const executeSpecsRoute = ({ plan, ...context }) => specsRevision.apply({
     ...context,
     targetRevision: plan.toRevision,
   });
   return new MigrationRegistry({
-    revisions: [layoutRevision, specsRevision, specsRevisionTwo, specsRevisionThree],
+    revisions: [layoutRevision, specsRevision, specsRevisionTwo, specsRevisionThree, specsRevisionFour],
     executors: [
       new MigrationComponentExecutor({
         component: "layout",
@@ -132,9 +140,11 @@ function registry() {
       }),
       new MigrationComponentExecutor({
         component: "specs",
-        executePlan: ({ plan, ...context }) => plan.toRevision === 3
-          ? specsRevisionThree.apply(context)
-          : executeSpecsRoute({ plan, ...context }),
+        executePlan: ({ plan, ...context }) => plan.toRevision === 4
+          ? specsRevisionFour.apply(context)
+          : plan.toRevision === 3
+            ? specsRevisionThree.apply(context)
+            : executeSpecsRoute({ plan, ...context }),
       }),
     ],
   });

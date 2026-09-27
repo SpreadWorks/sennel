@@ -6,9 +6,24 @@ import { canonicalSourceFindings } from "./flow-findings.js";
 import { canonicalPlanGateRepairForTarget, PlanGateRepairObservation } from "./plan-gate-repair.js";
 import { SpecGateRepairContext } from "./spec-gate-repair-context.js";
 import { specRepairTargetEntries } from "./spec-repair-operations.js";
+import { readSpecGateRepairSources } from "./spec-gate-repair-sources.js";
 
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 function key(value) { return JSON.stringify(value); }
+
+/** The exact merged Spec rules and requirement fallback supplied to repair workers. */
+export class SpecGateRepairRuleSet {
+  constructor({ executionRoot, spec }) {
+    const rules = filterByPhase(loadMergedGuardrails(executionRoot), "spec");
+    const byRule = new Map(rules.map((rule) => [rule.id, rule]));
+    for (const requirement of spec.requirements ?? []) {
+      if (!byRule.has(requirement.id)) byRule.set(requirement.id, requirement);
+    }
+    this.guardrails = Object.freeze([...byRule.values()]);
+    this.acknowledgedRationale = buildAcknowledgedRationaleSection({ spec, guardrails: rules });
+    Object.freeze(this);
+  }
+}
 
 /** One version-bound, permission-limited parent input for Gate repair. */
 export class SpecGateRepairInput {
@@ -74,15 +89,11 @@ export function readSpecGateRepairInput({ flowManager, state, executionRoot, loc
       allowedTargets: matches[0].finding.allowedTargets ?? [],
     };
   });
-  const rules = filterByPhase(loadMergedGuardrails(executionRoot), "spec");
-  const byRule = new Map(rules.map((rule) => [rule.id, rule]));
-  for (const requirement of spec.requirements ?? []) {
-    if (!byRule.has(requirement.id)) byRule.set(requirement.id, requirement);
-  }
-  const guardrails = [...byRule.values()];
+  const ruleSet = new SpecGateRepairRuleSet({ executionRoot, spec });
+  const sources = readSpecGateRepairSources({ flowManager, state, executionRoot, spec });
   let context = new SpecGateRepairContext({
-    spec, baseRevision, findings, guardrails,
-    acknowledgedRationale: buildAcknowledgedRationaleSection({ spec, guardrails: rules }),
+    spec, baseRevision, findings, guardrails: ruleSet.guardrails, sources,
+    acknowledgedRationale: ruleSet.acknowledgedRationale,
   });
   if (locations !== null) context = context.resolveLocations({ baseRevision, locations });
   if (context.unresolvedFindings().length === 0) {
@@ -114,8 +125,8 @@ export function readSpecGateRepairInput({ flowManager, state, executionRoot, loc
       }
     }
     context = new SpecGateRepairContext({
-      spec, baseRevision, guardrails,
-      acknowledgedRationale: buildAcknowledgedRationaleSection({ spec, guardrails: rules }),
+      spec, baseRevision, guardrails: ruleSet.guardrails, sources,
+      acknowledgedRationale: ruleSet.acknowledgedRationale,
       findings: context.units().flatMap((unit) => unit.findings.map((finding) => ({
         ...finding.toJSON(), allowedTargets: permissions.get(finding.identity.toString()) ?? [],
       }))),

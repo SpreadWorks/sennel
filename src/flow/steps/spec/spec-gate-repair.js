@@ -4,7 +4,7 @@ import {
   SpecGateRepairReviewRequiredResult,
   SpecGateRepairReadyForGateResult,
   SpecGateRepairNoProgressResult, StepErrorResult,
-  SpecGateRepairContextRequiredResult, SpecGateRepairAwaitingDecisionResult,
+  SpecGateRepairContextRequiredResult, SpecGateRepairDraftReturnRequiredResult,
 } from "../../engine/step-result.js";
 import { CanonicalWorkerSpecPublication } from "../../lib/current-flow-state.js";
 import { SpecGateRepairAuthority, applySpecGateRepairOperations } from "../../lib/spec-repair-operations.js";
@@ -86,10 +86,12 @@ export class SpecGateRepairStep extends Step {
     try {
       const continuation = this.#service.continuation;
       selection = continuation === null ? selectSpecGateRepair(facts)
-        : continuation.decisionRequired || continuation.unresolvedLocationCount > 0
-          && continuation.completedLocationBatchCount === continuation.locationBatchCount
-          ? new SpecGateRepairAwaitingDecisionResult()
-          : new SpecGateRepairContextRequiredResult();
+        : continuation.draftReturnRequired
+          ? new SpecGateRepairDraftReturnRequiredResult()
+          : continuation.unresolvedLocationCount > 0
+            && continuation.completedLocationBatchCount === continuation.locationBatchCount
+            ? new StepErrorResult("spec-gate-repair", new Error("Spec Gate repair could not locate the selected finding"))
+            : new SpecGateRepairContextRequiredResult();
     }
     catch (error) { selection = new StepErrorResult("spec-gate-repair", error); }
     if (selection instanceof SpecGateRepairSelection) this.#service.adoptWorkerSelection(facts, selection);
