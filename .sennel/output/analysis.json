@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-27T08:55:59.843Z",
+  "analyzedAt": "2026-09-27T10:54:17.033Z",
   "package": {
     "entries": [
       {
@@ -3610,9 +3610,9 @@
       },
       {
         "file": "src/flow/definition.js",
-        "hash": "ad83ee86a096f475e6ad914877524884",
-        "lines": 6630,
-        "mtime": "2026-09-27T08:23:19.319Z",
+        "hash": "472fd2e85a9312d82c8ef5c5f3465967",
+        "lines": 6639,
+        "mtime": "2026-09-27T09:52:59.040Z",
         "className": "definition",
         "methods": [
           "RetryRecoveryBasis",
@@ -3884,6 +3884,7 @@
         ],
         "imports": [
           "node:crypto",
+          "./lib/draft-worker-rejection.js",
           "./steps/draft/draft-gate-repair-selection.js",
           "./lib/draft-conditional-worker.js",
           "./lib/source-handoff-failure.js",
@@ -4129,6 +4130,7 @@
           "findBranchForLeaf",
           "TaskReviewReconciliationDecision",
           "resolveTaskReviewReconciliation",
+          "resolveDraftWorkerCorrection",
           "resolveDraftWorkerRecovery",
           "DraftWorkerRecoveryRefusal",
           "RequirementTestInitializationDecision",
@@ -4201,24 +4203,24 @@
           "src/flow/registry.js"
         ],
         "id": "2cb27b93",
-        "summary": "Defines flow and task structures plus typed execution, recovery, lifecycle, transition, settlement, and routing behavior.",
-        "detail": "This module centralizes flow-definition behavior through FlowNode trees and helpers for leaf collection, node ordering, phase and prerequisite derivation, node and active-step resolution, initial execution-state construction, and next-action determination. It enforces skippable-step, attempt, side-effect, lifecycle-ownership, and dispatcher-action rules, while producing validated recovery plans and explicit transition decisions for source handoffs, requirement-test lifecycle outcomes, Task Review completion, finalization recovery, nonblocking eligibility, Gate and non-Gate classification, review routing, lifecycle plans, orphan reconciliation, and draft/spec settlement. Immutable plans, typed effects, execution identities, durable receipts, disposition objects, and validation guards keep state changes consistent across draft, specification, testing, review, Gate, finalization, reporting, and acceptance flows.",
+        "summary": "Defines the central flow model, traversal utilities, and deterministic transition logic for drafting, specification, review, testing, gating, recovery, finalization, and reporting.",
+        "detail": "This module declares flow and task definitions composed of FlowNode instances, typed facts, dispositions, decisions, plans, lifecycle actions, execution identities, settlement receipts, and review routes. It provides helpers for collecting leaf identifiers, deriving phase maps and prerequisites, resolving nodes and branch membership, initializing nested or task step state, and locating active or latest in-progress leaves. Resolver functions validate state integrity, evidence bindings, retry and tooling limits, side effects, lifecycle ownership, worker settlement, nonblocking eligibility, gate and finalization recovery, review routing, test-chain outcomes, and step settlement, then produce explicit transitions, lifecycle updates, recovery operations, user actions, next actions, or blocked outcomes. Controlled domain objects also model source-quality recovery, Task Review completion, and Task Review reconciliation.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-27T08:57:33.759Z",
+          "processedAt": "2026-09-27T10:56:00.358Z",
           "attempts": 1
         },
         "app": "senti",
         "keywords": [
-          "flow definitions",
-          "task definitions",
-          "tree traversal",
-          "execution state",
-          "recovery plans",
-          "lifecycle transitions",
+          "flow orchestration",
+          "state transitions",
+          "step traversal",
+          "prerequisites",
+          "recovery planning",
+          "gate decisions",
           "review routing",
-          "draft settlement"
+          "settlement receipts"
         ]
       },
       {
@@ -6084,9 +6086,9 @@
       },
       {
         "file": "src/flow/lib/canonical-flow-manager-store.js",
-        "hash": "c9a96262b6d0895d5046e317322a5a4b",
+        "hash": "e19467118e3ebd78fe55ee5bed7e7b62",
         "lines": 8297,
-        "mtime": "2026-09-27T08:30:37.867Z",
+        "mtime": "2026-09-27T09:52:59.045Z",
         "className": "canonical-flow-manager-store",
         "methods": [
           "CanonicalRawActivityReplayOnlyError",
@@ -6244,26 +6246,23 @@
           "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "041f2538",
-        "summary": "Canonical flow manager store for validating, projecting, transitioning, and persisting flow execution state and artifacts.",
-        "detail": "This module is the canonical persistence and validation boundary for flow execution. It validates flow creation requests, canonical identifiers, attempts, task reviews, failures, retries, nonblocking decisions, runtime metadata, and command history; projects runtime state and observations; manages task execution and attempt settlement; and coordinates Draft, Spec, Gate, Review, Requirement Test, and source-handoff lifecycles. Before delegating reads and writes to the canonical runtime, it enforces typed admissions, sealed decisions, artifact ownership and baselines, catalog paths, draft publications, publication identities, lineage bindings, replay checks, conflict detection, state invariants, and invariant protection. It also supports recovery routes, artifact admissions, metrics, notes, policy updates, and canonical Flow Version resolution.",
+        "summary": "Canonical flow manager store coordinating flow state, execution attempts, lifecycle transitions, artifact publication, recovery, and review settlements.",
+        "detail": "Implements the central persistence and orchestration layer for canonical flows. It validates creation requests, runtime metadata, typed state bindings, active attempts, definition plans, event heads, source freshness, and transition conflicts. The store projects canonical state and observations; manages attempts, retries, failures, recoveries, and nonblocking decisions; coordinates specification, task, gate, draft, review, testing, source-handoff, and acceptance workflows; and enforces typed admission and conflict checks before settlement. It persists activity and issue logs, artifacts, runtime metadata, metrics, notes, policies, attempt histories, outbox operations, lineage records, approval receipts, execution budgets, recovery identities, and deterministic replay bindings through catalog-aware and atomic operations, while delegating durable execution to the canonical runtime. It also provides artifact reads and publication admissions, retry archives, canonical command result publications, flow-version resolution, and safeguards against stale, malformed, conflicting, or unauthorized state.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-27T08:57:33.759Z",
+          "processedAt": "2026-09-27T10:56:00.358Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
           "canonical flow state",
-          "runtime projection",
-          "attempt settlement",
+          "attempt lifecycle",
           "artifact publication",
-          "typed admissions",
-          "replay validation",
-          "task lifecycle",
-          "artifact catalog",
+          "workflow recovery",
           "state invariants",
-          "flow version"
+          "task review",
+          "retry recovery",
+          "canonical runtime"
         ]
       },
       {
@@ -6930,9 +6929,9 @@
       },
       {
         "file": "src/flow/lib/current-flow-state.js",
-        "hash": "e02cd2a9353a6dc563960826ce0195ad",
-        "lines": 10266,
-        "mtime": "2026-09-27T08:23:35.243Z",
+        "hash": "a622621892cda9d38da73367d584487d",
+        "lines": 10283,
+        "mtime": "2026-09-27T09:57:20.756Z",
         "className": "current-flow-state",
         "methods": [
           "CanonicalFlowArtifactWrite",
@@ -7084,6 +7083,7 @@
         ],
         "imports": [
           "node:crypto",
+          "./draft-worker-rejection.js",
           "node:fs",
           "node:path",
           "node:util",
@@ -7255,25 +7255,24 @@
           "src/flow/registry.js"
         ],
         "id": "42607a0e",
-        "summary": "Defines and validates the canonical Current Flow state model and transition machinery.",
-        "detail": "This module implements the durable Current Flow state model and its coordination machinery, covering typed identities, lifecycle and policy records, hierarchical flow nodes, Attempts, Steps, Gates, Tasks, Reviews, results, artifact contracts, outbox operations, draft execution receipts, failure decisions, recovery targets, and migration checkpoints. It enforces lifecycle, execution-frontier, retry, recovery, continuation, finalization, task-admission, canonical-artifact-publication, and schema-migration invariants through immutable value objects and explicit transition validation. It also defines typed activities and transition records; validates serialized state, append-only activity journals, snapshot and revision consistency, canonical artifact removals, review publication facts and identity, Spec revision authority, revision-history continuity, and immutable snapshots; protects filesystem authority through locking and identity checks; and coordinates atomic Current Flow Version and Spec storage, migration output construction, canonical specification, artifact, review, migration, and task-admission updates, including filesystem conflict detection.",
+        "summary": "Canonical immutable flow-state model with validated lifecycle transitions, recovery, artifact publication, and schema migration.",
+        "detail": "Defines the invariant-checked runtime model for flows, nodes, tasks, steps, attempts, task gates, artifacts, activities, outbox records, execution claims, failure dispositions, Spec revisions, and migration checkpoints. It validates serialized state and typed inputs, enforces node and execution-frontier lifecycles, controls retries, recovery, deferral, parking, resumption, finalization, dynamic task admission, and historical continuation according to definition-owned policies, and maintains append-only activity journals with revision and offset checks. The module provides canonical artifact, test-source, specification, review, and Task bindings; validates immutable revision snapshots, root descriptors, source-worker upgrades, artifact removals, and review publication; and persists validated Flow Versions and Specs through locked atomic filesystem operations while producing semantically validated migration outputs.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-27T08:57:33.759Z",
+          "processedAt": "2026-09-27T10:56:00.358Z",
           "attempts": 1
         },
         "app": "senti",
         "keywords": [
-          "Current Flow state",
-          "state machine",
+          "flow state",
+          "workflow state machine",
+          "lifecycle validation",
           "activity journal",
-          "lifecycle invariants",
-          "artifact publication",
-          "failure recovery",
-          "Spec revision",
-          "schema migration",
-          "version store"
+          "retry recovery",
+          "canonical artifacts",
+          "atomic persistence",
+          "schema migration"
         ]
       },
       {
@@ -7742,9 +7741,9 @@
       },
       {
         "file": "src/flow/lib/draft-lifecycle.js",
-        "hash": "41778b5b78fc823db3bb251f1ef0b67e",
-        "lines": 227,
-        "mtime": "2026-08-28T16:05:42.270Z",
+        "hash": "f4dcdf5bbd63949ece2f8b48cfc8a30d",
+        "lines": 233,
+        "mtime": "2026-09-27T09:55:02.248Z",
         "className": "draft-lifecycle",
         "methods": [
           "DeferredToSpecEntry",
@@ -7780,28 +7779,28 @@
           "src/flow/lib/draft-completion-connector.js",
           "src/flow/lib/draft-repair-operations.js",
           "src/flow/lib/draft-transition-facts.js",
+          "src/flow/lib/get-next-action.js",
           "src/flow/lib/get-qa-count.js",
           "src/flow/lib/run-gate.js",
           "src/flow/lib/set-draft-answer.js",
-          "src/flow/lib/worker-artifact-handoff.js",
-          "src/flow/lib/get-next-action.js"
+          "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "9c36c232",
-        "summary": "Defines the draft lifecycle schema and validation rules used across draft processing stages. It supports general validation plus stricter publication and completion checks.",
-        "detail": "The module models draft decisions and deferred-to-spec entries while enforcing known top-level fields, development types, and question-ledger structure. DraftLifecycle exposes derived question-ledger access and stage-specific validation methods. Validation helpers convert malformed input and thrown errors into issue arrays for callers. Utility functions count QA states and allocate the next draft question identifier.",
+        "summary": "Models and validates the lifecycle of a draft and its question ledger.",
+        "detail": "This module defines draft schema constants, decision-map validation, deferred-to-Spec entry rules, lifecycle parsing, and validation paths for ordinary use, publication, and completion. It also exposes question-state counting and sequential draft QA identifier generation.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-08-28T16:08:35.815Z",
+          "processedAt": "2026-09-27T10:56:00.358Z",
           "attempts": 1
         },
         "keywords": [
           "draft lifecycle",
-          "schema validation",
           "question ledger",
+          "decision map",
+          "schema validation",
           "publication validation",
-          "completion validation",
-          "QA states"
+          "QA identifiers"
         ]
       },
       {
@@ -7956,15 +7955,16 @@
       },
       {
         "file": "src/flow/lib/draft-repair-operations.js",
-        "hash": "9dcae8f4ea851f7b2688adbddf502cf7",
-        "lines": 359,
-        "mtime": "2026-09-26T16:03:20.890Z",
+        "hash": "f9e091df0070a4f368fe56f6a830352a",
+        "lines": 367,
+        "mtime": "2026-09-27T09:55:02.249Z",
         "className": "draft-repair-operations",
         "methods": [
           "DraftRepairPath",
           "DraftRepairOperation",
           "DraftGateRepairOperation",
           "DraftRepairOperationBatch",
+          "DraftGateRepairScope",
           "DraftGateRepairAuthority",
           "DraftRepairOperationsError",
           "validateDraftRepairTriage",
@@ -7990,6 +7990,7 @@
           "DraftRepairOperation",
           "DraftGateRepairOperation",
           "DraftRepairOperationBatch",
+          "DraftGateRepairScope",
           "DraftGateRepairAuthority",
           "DraftRepairOperationsError",
           "validateDraftRepairTriage",
@@ -8001,21 +8002,21 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "a3186012",
-        "summary": "Provides bounded, validated operations for repairing draft documents with typed Gate authority and audit generation.",
-        "detail": "Defines draft repair paths, operations, Gate-specific operations, operation batches, authority checks, triage validation, and structured repair errors. The module enforces limits on operation counts, payload sizes, path depth, and envelope errors; rejects forbidden path segments; validates allowed and required paths; detects duplicate or overlapping paths; verifies permissions and Gate ownership; resolves source and target references; and returns a frozen repaired draft with an audit record. It also provides cloning, SHA-256 digest, byte-length, key-validation, and discarded-operation helpers.",
+        "summary": "Applies authorized, bounded repair operations to draft data.",
+        "detail": "This module validates repair triage permissions, parses safe field paths, enforces operation and payload limits, checks duplicate and overlapping paths, verifies Gate-owned authority, and applies accepted repairs while producing audit evidence and digest comparisons.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-26T16:03:57.889Z",
+          "processedAt": "2026-09-27T10:56:00.358Z",
           "attempts": 1
         },
         "keywords": [
           "draft repair",
-          "path validation",
+          "repair operations",
+          "path permissions",
           "Gate authority",
           "triage validation",
-          "operation batching",
-          "audit records"
+          "audit evidence"
         ]
       },
       {
@@ -8294,6 +8295,48 @@
           "checkpoint lineage",
           "recovery refusal",
           "execution recovery"
+        ]
+      },
+      {
+        "file": "src/flow/lib/draft-worker-rejection.js",
+        "hash": "16f39513ff2b74b18a524d6acbc219ca",
+        "lines": 86,
+        "mtime": "2026-09-27T10:14:40.981Z",
+        "className": "draft-worker-rejection",
+        "methods": [
+          "DraftWorkerRejection",
+          "DraftWorkerCorrectionBudget",
+          "DraftWorkerCorrectionPlan",
+          "resolveDraftWorkerCorrection"
+        ],
+        "imports": [],
+        "exports": [
+          "DraftWorkerRejection",
+          "DraftWorkerCorrectionBudget",
+          "DraftWorkerCorrectionPlan",
+          "resolveDraftWorkerCorrection"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/definition.js",
+          "src/flow/lib/current-flow-state.js",
+          "src/flow/lib/run-dispatch.js"
+        ],
+        "id": "e4d519ce",
+        "summary": "Represents draft-worker rejection diagnostics and correction planning.",
+        "detail": "This module validates supported protocol diagnostics, provides typed rejection and correction-budget objects, and resolves worker facts into a DraftWorkerCorrectionPlan for subsequent handling.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-27T10:56:00.358Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "draft worker",
+          "rejection diagnostics",
+          "correction budget",
+          "correction plan",
+          "protocol validation"
         ]
       },
       {
@@ -10294,9 +10337,9 @@
       },
       {
         "file": "src/flow/lib/get-next-action.js",
-        "hash": "f8c2aab78bd57624aea483f0f8d3f5f0",
-        "lines": 1192,
-        "mtime": "2026-09-27T08:38:37.139Z",
+        "hash": "ed5bbad114d7c97e7ead00e599142bfe",
+        "lines": 1203,
+        "mtime": "2026-09-27T10:00:22.319Z",
         "className": "get-next-action",
         "methods": [
           "NextActionPlanError",
@@ -10385,23 +10428,22 @@
           "src/flow/lib/run-dispatch.js"
         ],
         "id": "c68afd69",
-        "summary": "Builds canonical next-action plans and directives for Flow execution, gates, recovery, drafts, and final regression.",
-        "detail": "The module loads schemas and persistent rules, derives state and task context, captures target bindings, and projects canonical instructions. It routes approval and acceptance decisions, Spec Gate execution, conditional Draft questions, retry and interruption recovery, final-regression handling, blocked states, user decisions, and completed or aborted Flow outcomes into guarded directives and next-action results.",
+        "summary": "Computes the canonical next action for the current Flow state.",
+        "detail": "This command derives next-action targets, instructions, context, directives, and user choices from canonical state and persisted evidence. It coordinates approval, acceptance, Gate, draft, review, retry, recovery, interrupted-finalization, and final-regression routes while enforcing target identity and schema consistency.",
         "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-27T08:57:33.759Z",
+          "processedAt": "2026-09-27T10:56:00.358Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
           "next action",
-          "Flow routing",
-          "guarded directive",
-          "Spec Gate",
-          "Draft lifecycle",
-          "final regression",
-          "retry recovery"
+          "Flow command",
+          "route planning",
+          "approval decisions",
+          "recovery handling",
+          "user directives",
+          "target binding"
         ]
       },
       {
@@ -14097,9 +14139,9 @@
       },
       {
         "file": "src/flow/lib/run-dispatch.js",
-        "hash": "9065b0783ecaefea5f36a7723764c857",
-        "lines": 2874,
-        "mtime": "2026-09-27T08:41:06.797Z",
+        "hash": "133169729ef5204d2a2625cb7fb1ce5e",
+        "lines": 2898,
+        "mtime": "2026-09-27T10:11:14.918Z",
         "className": "run-dispatch",
         "methods": [
           "draftWorkerStepDefinition",
@@ -14122,6 +14164,7 @@
           "settleRequirementTestToolingFailure",
           "settleRequirementTestExternalFailure",
           "settleRequirementTestStructuralHandoff",
+          "draftWorkerCorrection",
           "settleDraftWorkerFailure",
           "targetGuardArguments",
           "commandEnvelope",
@@ -14156,6 +14199,7 @@
         "imports": [
           "../../lib/flow-schema-revision.js",
           "node:fs",
+          "./draft-worker-rejection.js",
           "node:path",
           "../../lib/spec-json.js",
           "./base-command.js",
@@ -14208,23 +14252,22 @@
         "extends": "Error",
         "usedBy": null,
         "id": "6c7fd82a",
-        "summary": "Dispatches Flow commands and worker handoffs with authorization, locking, approval receipts, recovery, and failure settlement.",
-        "detail": "The dispatcher coordinates registered commands, agent workers, Draft and Spec step definitions, repository fingerprints, process locks, dispatch boundaries, approval continuation, worker artifact handoffs, retries, nonblocking decisions, and deferred metrics. It validates targets and schemas, persists canonical approval mutations, quarantines rejected handoffs, records failures, and returns guarded success or failure envelopes.",
-        "chapter": "cli_commands",
+        "summary": "Dispatches Flow actions, workers, approvals, retries, and recovery boundaries.",
+        "detail": "This command coordinates registered Flow commands and worker handoffs under locks, target bindings, repository fingerprints, approval receipts, and dispatch limits. It handles Draft and Spec worker execution, artifact validation, external and tooling failures, correction feedback, nonblocking decisions, deferred metrics, and dispatcher-owned recovery or repair commands.",
+        "chapter": "project_structure",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-27T08:57:33.759Z",
+          "processedAt": "2026-09-27T10:56:00.358Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
           "Flow dispatch",
           "worker handoff",
           "approval receipt",
           "repository fingerprint",
-          "dispatch lock",
-          "artifact retry",
-          "failure settlement"
+          "retry recovery",
+          "dispatch boundary",
+          "artifact validation"
         ]
       },
       {
@@ -20257,9 +20300,9 @@
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "4d7f8e98e37aa3047d9fb192bdc53490",
-        "lines": 10327,
-        "mtime": "2026-09-27T08:38:10.190Z",
+        "hash": "9f03c4b58f7ebdb5c9541a71cad9a992",
+        "lines": 10348,
+        "mtime": "2026-09-27T09:55:02.252Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "RequirementTestStructuralHandoffResult",
@@ -20404,6 +20447,8 @@
           "validateSpecReviewDeltaPayloadAtProducerBoundary",
           "validateSpecTriagePayloadAtProducerBoundary",
           "validateSpecRepairPayloadAtProducerBoundary",
+          "draftGateRepairReport",
+          "validateDraftGateRepairPayloadAtProducerBoundary",
           "validateFilePayloadAtCliBoundary",
           "unsealedFilePayloadError",
           "prePublicationArtifactError",
@@ -20605,24 +20650,24 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Implements secure worker artifact handoff, publication, recovery, and cleanup for Flow execution.",
-        "detail": "Defines typed request and submission models, validated handoff policies, payload manifests, bounded worker input snapshots, source-effect reports, repository authority and mutation snapshots, canonical observation checkpoints, receipts, retry instructions, rollback operations, and integrity-checked errors. It securely captures worker inputs; validates generated artifacts and source changes; enforces repository boundaries and ownership; stages and publishes Draft, Spec, and test-review artifacts; materializes sealed effects; reconciles committed results; and supports checkpoint authority, quarantine, recovery, mutation rollback, filesystem cleanup, and verification of canonical Flow, Requirement, Spec, and review-repair state across worker lifecycle transitions.",
+        "summary": "Coordinates validated worker artifact handoffs for Flow tasks, source mutations, and Draft, Spec, and test-review workflows.",
+        "detail": "Defines typed handoff policies and contracts; validates sealed submissions, payload manifests, canonical identities, lifecycle state, execution paths, schemas, publication baselines, receipts, source mutation manifests, and size, path, file, mutation, and completion constraints. It stages and seals results, records publication and quarantine receipts, reconciles committed or replayed outcomes, restores canonical requests, and performs guarded cleanup of completed or transient handoff directories. Source-worker recovery validates repository authority and start intent, uses checkpoint-bound immutable mutation snapshots for rollback, settles failures, and detects untrusted or uncertain execution states while preserving immutable evidence.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-27T08:57:33.759Z",
+          "processedAt": "2026-09-27T10:56:00.358Z",
           "attempts": 1
         },
         "app": "senti",
         "keywords": [
-          "worker artifact handoff",
-          "artifact publication",
-          "payload validation",
+          "worker handoff",
+          "artifact validation",
           "source mutation",
+          "publication journal",
+          "rollback checkpoint",
           "repository authority",
-          "rollback recovery",
-          "canonical observation",
-          "filesystem cleanup"
+          "payload manifest",
+          "quarantine receipt"
         ]
       },
       {
@@ -29005,10 +29050,10 @@
       }
     ],
     "summary": {
-      "total": 510,
-      "totalMethods": 5217
+      "total": 511,
+      "totalMethods": 5225
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-27T08:57:33.759Z"
+  "enrichedAt": "2026-09-27T10:56:00.358Z"
 }
