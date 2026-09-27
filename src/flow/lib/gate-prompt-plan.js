@@ -346,11 +346,25 @@ export class GuardrailJudgmentInput {
   }
 }
 
+export class GuardrailFileJudgmentInput {
+  constructor(article) {
+    if (!article || typeof article.id !== "string" || !article.id) {
+      throw new TypeError("File judgment requires a guardrail article");
+    }
+    this.article = article;
+    Object.freeze(this);
+  }
+}
+
 /** Greedy stable grouping preserves one judgment when the complete input fits. */
 export class GuardrailJudgmentPlan {
-  constructor({ inputs, limit, buildRequest }) {
-    if (!Array.isArray(inputs) || inputs.length === 0 || inputs.some((input) => !(input instanceof GuardrailJudgmentInput))) {
+  constructor({ inputs, limit, buildRequest, projectInvocation = null }) {
+    if (!Array.isArray(inputs) || inputs.length === 0 || inputs.some((input) =>
+      !(input instanceof GuardrailJudgmentInput) && !(input instanceof GuardrailFileJudgmentInput))) {
       throw new TypeError("Guardrail judgment plan requires typed inputs");
+    }
+    if (inputs.some((input) => input.constructor !== inputs[0].constructor)) {
+      throw new TypeError("Guardrail judgment plan cannot mix evidence and file inputs");
     }
     if (typeof buildRequest !== "function") throw new TypeError("Guardrail judgment plan requires a request builder");
     const groups = [];
@@ -359,19 +373,19 @@ export class GuardrailJudgmentPlan {
     for (const input of inputs) {
       const candidate = [...pending, input];
       const request = buildRequest(candidate);
-      if (gatePromptFits(request, limit)) {
+      if (gatePromptFits(request, limit, projectInvocation)) {
         pending = candidate;
         pendingPlan = PromptBatchPlan.fromRequest({ request, limit, id: `guardrail-judgment:${groups.length}` });
         continue;
       }
       if (pending.length === 0) {
-        throw new PromptBatchingError("PROMPT_ELEMENT_TOO_LARGE", "Collected evidence for one guardrail cannot fit its final judgment");
+        throw new PromptBatchingError("PROMPT_ELEMENT_TOO_LARGE", "One guardrail cannot fit its final judgment");
       }
       groups.push(pendingPlan);
       pending = [input];
       const singleRequest = buildRequest(pending);
-      if (!gatePromptFits(singleRequest, limit)) {
-        throw new PromptBatchingError("PROMPT_ELEMENT_TOO_LARGE", "Collected evidence for one guardrail cannot fit its final judgment");
+      if (!gatePromptFits(singleRequest, limit, projectInvocation)) {
+        throw new PromptBatchingError("PROMPT_ELEMENT_TOO_LARGE", "One guardrail cannot fit its final judgment");
       }
       pendingPlan = PromptBatchPlan.fromRequest({ request: singleRequest, limit, id: `guardrail-judgment:${groups.length}` });
     }
@@ -772,8 +786,9 @@ export async function reduceRequirementEvidence({ evidence, requirement, limit, 
   });
 }
 
-export function gatePromptFits(request, limit = new PromptRequestLimit()) {
-  return PromptLogicalFootprint.measure(request).fits(limit);
+export function gatePromptFits(request, limit = new PromptRequestLimit(), projectInvocation = null) {
+  return PromptLogicalFootprint.measure(request).fits(limit)
+    && (!projectInvocation || projectInvocation(request).fits(limit.maxCharacters));
 }
 
 export async function executeGatePlan({ plan, callAgent, parseResponse, projectInvocation, protocolPolicy, executionBudget }) {

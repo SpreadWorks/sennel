@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "manifestSha256": "4454565f32ef1fa61c2428f0d12126cd851b7ba0c2255a4ffe7d7c79c2cb93e8",
+  "baselineRevision": "aea1f13cf1a3556444aa50d7a8b6afc1bc3a168a",
+  "configuredProfile": "codex-only",
+  "configuredCommand": "flow.spec.gate",
+  "expectedProvider": "codex/gpt-6-sol-medium",
+  "configuredAgent": {
+    "default": "codex",
+    "workDir": ".tmp",
+    "retryCount": 2,
+    "useProfile": "codex-only",
+    "promptCharacterLimit": 60000
+  },
+  "cacheMode": "bypass",
+  "trials": [
+    {
+      "id": "large-violation/1/file",
+      "scenario": "large-violation",
+      "pair": 1,
+      "version": "file",
+      "sourceSha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "durationMs": 94812,
+      "calls": [
+        {
+          "durationMs": 94788,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 151907,
+              "cached_input_tokens": 123264,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1954,
+              "reasoning_output_tokens": 651
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "usage": [
+        {
+          "input_tokens": 151907,
+          "cached_input_tokens": 123264,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1954,
+          "reasoning_output_tokens": 651
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "Sets the K7 checkpoint timeout to 29 seconds; analysis.validation specifies 14 seconds. Change this answer to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[9].answer"
+                },
+                "observed": "Sets the K7 checkpoint timeout to 29 seconds; analysis.validation specifies 14 seconds. Change this answer to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "fail",
+            "reason": "Rejects the K7 bulk-bypass option without stating a concrete reason. Add the reason to this answer.",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-rejection-reason",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[19].answer"
+                },
+                "observed": "Rejects the K7 bulk-bypass option without stating a concrete reason. Add the reason to this answer.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-rejection-reason"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "Sets the K7 checkpoint timeout to 41 seconds; analysis.validation specifies 14 seconds. Change this answer to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[29].answer"
+                },
+                "observed": "Sets the K7 checkpoint timeout to 41 seconds; analysis.validation specifies 14 seconds. Change this answer to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "Sets the K7 checkpoint timeout to 29 seconds; analysis.validation specifies 14 seconds. Change this answer to 14 seconds.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[9].answer"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "Rejects the K7 bulk-bypass option without stating a concrete reason. Add the reason to this answer.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[19].answer"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "Sets the K7 checkpoint timeout to 41 seconds; analysis.validation specifies 14 seconds. Change this answer to 14 seconds.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[29].answer"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

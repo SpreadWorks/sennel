@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   GuardrailEvidenceRule, GuardrailEvidencePlan, GuardrailObservationResponse,
+  GuardrailFileJudgmentInput, GuardrailJudgmentPlan,
   RequirementEvidenceInput, RequirementEvidencePlan,
   RequirementObservationEnvelope,
   structuredGuardrailSourceInputs, countDistinctGuardrailSourceRanges,
@@ -23,6 +24,21 @@ function planFor(source) {
     limit: new PromptRequestLimit({ maxCharacters: 12000 }),
   });
 }
+
+it("groups whole file judgments by projected request size and refuses one oversized rule", () => {
+  const inputs = rules.map((article) => new GuardrailFileJudgmentInput(article));
+  const limit = new PromptRequestLimit({ maxCharacters: 1000 });
+  const buildRequest = (group) => ({ userPrompt: JSON.stringify(group.map((input) => input.article.id)) });
+  const plan = new GuardrailJudgmentPlan({
+    inputs, limit, buildRequest,
+    projectInvocation: (request) => ({ fits: () => JSON.parse(request.userPrompt).length <= 2 }),
+  });
+  assert.deepEqual(plan.plans.map((part) => JSON.parse(part.batches[0].request.userPrompt)),
+    [["first", "second"], ["third"]]);
+  assert.throws(() => new GuardrailJudgmentPlan({
+    inputs: inputs.slice(0, 1), limit, buildRequest: () => ({ userPrompt: "x".repeat(1200) }),
+  }), (error) => error.code === "PROMPT_ELEMENT_TOO_LARGE");
+});
 
 describe("shared Guardrail evidence", () => {
   it("collects every rule and source range pair with one source scan", async () => {

@@ -43,7 +43,7 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
         meta: { phase: ["draft"], category: "requirements" },
       }],
     }));
-    const draftDocument = canonicalDraftDocument({ goal: "Retain both unresolved Draft observations." });
+    const draftDocument = canonicalDraftDocument({ goal: `Retain both unresolved Draft observations. ${"X".repeat(130000)}` });
     const observations = ["goal", "analysis.validation"].map((locator, index) => ({
       failureMode: `missing-behavior-${index + 1}`, requirementRef: sharedGuardrail,
       where: { file: "draft.json", locator },
@@ -57,14 +57,19 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     const gateAttempts = new Set();
     const reviewSteps = [];
     const reviewAttempts = [];
-    gateAgentLookup = installGateProviderFake((_prompt, options) => {
+    const draftInputPaths = [];
+    gateAgentLookup = installGateProviderFake((prompt, options) => {
       gateCalls += 1;
       const state = activeFlowManager.canonicalState(specId);
       assert.equal(state.current.at(-1), "draft-gate");
       gateAttemptIds.push(state.attempt.id);
       gateAttempts.add(state.attempt.id);
       const knownIds = options.jsonSchema?.properties?.observations?.items?.properties?.requirementRef?.enum ?? [];
-      return JSON.stringify({ observations: knownIds.includes(sharedGuardrail) ? observations : [] });
+      const filePath = /^Absolute file path: (.+)$/m.exec(prompt)?.[1];
+      assert.ok(filePath, "the oversized canonical Draft must be evaluated from a complete file");
+      draftInputPaths.push(filePath);
+      assert.equal(fs.readFileSync(filePath, "utf8"), `${JSON.stringify(draftDocument, null, 2)}\n`);
+      return JSON.stringify({ observations: knownIds.includes(sharedGuardrail) ? observations : [], evaluationUnavailable: null });
     });
     const originalSpawnSync = childProcess.spawnSync;
     reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
@@ -150,6 +155,7 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     assert.deepEqual(requests.map((request) => request.stepId), ["draft", "draft-gate-repair", "spec"]);
     assert.deepEqual(reviewSteps, ["draft-questions-review", "draft-coverage-review", "draft-coverage-review"]);
     assert.equal(gateAttempts.size, 2);
+    assert.ok(draftInputPaths.every((filePath) => !fs.existsSync(filePath)));
 
     const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     activeFlowManager = reloaded;

@@ -1,0 +1,83 @@
+{
+  "baselineRevision": "aea1f13cf1a3556444aa50d7a8b6afc1bc3a168a",
+  "historicalSeed": "specs/252-persistent-rules-injection/001/steps/draft/result.json",
+  "historicalSeedSha256": "2e54559096c0047638189df1cd643e4354216db81df4ce596bf951394218da6d",
+  "historicalSeedCharacters": 50538,
+  "syntheticChanges": [
+    "analysis.validation adds a planned K7 14-second checkpoint validation",
+    "nine neutral QA entries extend the real Draft beyond 60,000 characters",
+    "three K7 QA entries at separated positions vary between violation and normal versions",
+    "small-normal is entirely synthetic and follows the current canonical Draft shape"
+  ],
+  "rules": [
+    {
+      "id": "checkpoint-timeout",
+      "title": "K7 checkpoint timeout consistency",
+      "body": "If this Draft defines a K7 checkpoint timeout, every normative K7 checkpoint timeout decision in a QA answer must equal the 14-second timeout stated in analysis.validation. Report one observation at each conflicting QA answer. Distinct conflicting answers are distinct violations. This rule applies only to K7 checkpoint timeout decisions, not other timing values.",
+      "meta": {
+        "phase": [
+          "draft"
+        ],
+        "category": "testing"
+      }
+    },
+    {
+      "id": "checkpoint-rejection-reason",
+      "title": "K7 rejected option reason",
+      "body": "If a QA answer rejects the K7 bulk-bypass option, that same answer must state a concrete reason for rejecting it. A reason in another answer cannot cure the omission. Report one observation at each offending QA answer. This rule applies only to K7 bulk-bypass decisions.",
+      "meta": {
+        "phase": [
+          "draft"
+        ],
+        "category": "testing"
+      }
+    },
+    {
+      "id": "draft-stage-validation",
+      "title": "Draft stage validation",
+      "body": "At Draft stage, a planned validation method in analysis.validation suffices. Executed test results belong to later stages. Their absence is never a violation of this Draft rule.",
+      "meta": {
+        "phase": [
+          "draft"
+        ],
+        "category": "testing"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "large-violation",
+      "sha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "characters": 71913,
+      "expected": [
+        {
+          "rule": "checkpoint-timeout",
+          "marker": "29 seconds",
+          "locator": "Synthetic K7 checkpoint decision A"
+        },
+        {
+          "rule": "checkpoint-timeout",
+          "marker": "41 seconds",
+          "locator": "Synthetic K7 checkpoint decision B"
+        },
+        {
+          "rule": "checkpoint-rejection-reason",
+          "marker": "bulk-bypass",
+          "locator": "Synthetic K7 rejected option decision"
+        }
+      ]
+    },
+    {
+      "id": "large-normal",
+      "sha256": "ac3286139266c1cd9254d92c397ee5147247869ae6737b7c8f47fec9c9ef4976",
+      "characters": 71996,
+      "expected": []
+    },
+    {
+      "id": "small-normal",
+      "sha256": "2d612247c3ffcc4b5905f06c6c94c432e78d3acf5801b8555af76c0de021966f",
+      "characters": 1432,
+      "expected": []
+    }
+  ]
+}

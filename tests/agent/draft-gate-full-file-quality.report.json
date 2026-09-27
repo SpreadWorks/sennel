@@ -1,0 +1,5199 @@
+{
+  "version": 1,
+  "manifestSha256": "4454565f32ef1fa61c2428f0d12126cd851b7ba0c2255a4ffe7d7c79c2cb93e8",
+  "baselineRevision": "aea1f13cf1a3556444aa50d7a8b6afc1bc3a168a",
+  "configuredProfile": "codex-only",
+  "configuredCommand": "flow.spec.gate",
+  "expectedProvider": "codex/gpt-6-sol-medium",
+  "configuredAgent": {
+    "default": "codex",
+    "workDir": ".tmp",
+    "retryCount": 2,
+    "useProfile": "codex-only",
+    "promptCharacterLimit": 60000
+  },
+  "cacheMode": "bypass",
+  "trials": [
+    {
+      "id": "large-violation/1/file",
+      "scenario": "large-violation",
+      "pair": 1,
+      "version": "file",
+      "sourceSha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 74919,
+      "calls": [
+        {
+          "durationMs": 74849,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 322006,
+              "cached_input_tokens": 267776,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2205,
+              "reasoning_output_tokens": 423
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 5535,
+          "callCount": 1,
+          "durationMs": 74849
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 322006,
+          "cached_input_tokens": 267776,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2205,
+          "reasoning_output_tokens": 423
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "/qa/9/answer"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "fail",
+            "reason": "This answer rejects the K7 bulk-bypass option but gives no concrete reason. Saying the implementation uses the ordinary checkpoint path states the choice, not why bulk-bypass was rejected.",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-rejection-reason",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "/qa/19/answer"
+                },
+                "observed": "This answer rejects the K7 bulk-bypass option but gives no concrete reason. Saying the implementation uses the ordinary checkpoint path states the choice, not why bulk-bypass was rejected.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-rejection-reason"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "/qa/29/answer"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "draft.json",
+              "locator": "/qa/9/answer"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "This answer rejects the K7 bulk-bypass option but gives no concrete reason. Saying the implementation uses the ordinary checkpoint path states the choice, not why bulk-bypass was rejected.",
+            "where": {
+              "file": "draft.json",
+              "locator": "/qa/19/answer"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "draft.json",
+              "locator": "/qa/29/answer"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "All three independent violations cite the expected QA and explain 29/41 versus 14 seconds or the missing rejection reason."
+      }
+    },
+    {
+      "id": "large-violation/1/baseline",
+      "scenario": "large-violation",
+      "pair": 1,
+      "version": "baseline",
+      "sourceSha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 142698,
+      "calls": [
+        {
+          "durationMs": 14843,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30227,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 439,
+              "reasoning_output_tokens": 157
+            }
+          ]
+        },
+        {
+          "durationMs": 16881,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25497,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 434,
+              "reasoning_output_tokens": 234
+            }
+          ]
+        },
+        {
+          "durationMs": 23977,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33605,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 706,
+              "reasoning_output_tokens": 381
+            }
+          ]
+        },
+        {
+          "durationMs": 17486,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25513,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 495,
+              "reasoning_output_tokens": 254
+            }
+          ]
+        },
+        {
+          "durationMs": 28895,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33565,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 748,
+              "reasoning_output_tokens": 328
+            }
+          ]
+        },
+        {
+          "durationMs": 28572,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25497,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 831,
+              "reasoning_output_tokens": 266
+            }
+          ]
+        },
+        {
+          "durationMs": 11833,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 24135,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 302,
+              "reasoning_output_tokens": 64
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 7,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 2
+        },
+        {
+          "stage": "rule-group",
+          "count": 3
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59852,
+          "callCount": 1,
+          "durationMs": 14843
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18432,
+          "callCount": 1,
+          "durationMs": 16880
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59813,
+          "callCount": 1,
+          "durationMs": 23976
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18504,
+          "callCount": 1,
+          "durationMs": 17485
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59682,
+          "callCount": 1,
+          "durationMs": 28895
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18464,
+          "callCount": 1,
+          "durationMs": 28572
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 15565,
+          "callCount": 1,
+          "durationMs": 11833
+        }
+      ],
+      "observedThreadCount": 7,
+      "usage": [
+        {
+          "input_tokens": 30227,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 439,
+          "reasoning_output_tokens": 157
+        },
+        {
+          "input_tokens": 25497,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 434,
+          "reasoning_output_tokens": 234
+        },
+        {
+          "input_tokens": 33605,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 706,
+          "reasoning_output_tokens": 381
+        },
+        {
+          "input_tokens": 25513,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 495,
+          "reasoning_output_tokens": 254
+        },
+        {
+          "input_tokens": 33565,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 748,
+          "reasoning_output_tokens": 328
+        },
+        {
+          "input_tokens": 25497,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 831,
+          "reasoning_output_tokens": 266
+        },
+        {
+          "input_tokens": 24135,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 302,
+          "reasoning_output_tokens": 64
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 29 seconds. Change it to the 14 seconds stated in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa answer: “Synthetic K7 checkpoint decision A: what timeout applies?”"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 29 seconds. Change it to the 14 seconds stated in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 41 seconds. Change it to the 14 seconds stated in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa answer: “Synthetic K7 checkpoint decision B: what timeout applies?”"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 41 seconds. Change it to the 14 seconds stated in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "fail",
+            "reason": "This answer rejects the K7 bulk-bypass option without stating a concrete reason. Add the reason to this answer; saying the implementation uses the ordinary checkpoint path only names the chosen alternative.",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-rejection-reason",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[19].answer"
+                },
+                "observed": "This answer rejects the K7 bulk-bypass option without stating a concrete reason. Add the reason to this answer; saying the implementation uses the ordinary checkpoint path only names the chosen alternative.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-rejection-reason"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 29 seconds. Change it to the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa answer: “Synthetic K7 checkpoint decision A: what timeout applies?”"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 41 seconds. Change it to the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa answer: “Synthetic K7 checkpoint decision B: what timeout applies?”"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "This answer rejects the K7 bulk-bypass option without stating a concrete reason. Add the reason to this answer; saying the implementation uses the ordinary checkpoint path only names the chosen alternative.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[19].answer"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "All three independent violations cite the expected QA and explain 29/41 versus 14 seconds or the missing rejection reason."
+      }
+    },
+    {
+      "id": "large-violation/2/baseline",
+      "scenario": "large-violation",
+      "pair": 2,
+      "version": "baseline",
+      "sourceSha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 144532,
+      "calls": [
+        {
+          "durationMs": 22571,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30227,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 611,
+              "reasoning_output_tokens": 214
+            }
+          ]
+        },
+        {
+          "durationMs": 19784,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25497,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 557,
+              "reasoning_output_tokens": 251
+            }
+          ]
+        },
+        {
+          "durationMs": 16038,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33605,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 415,
+              "reasoning_output_tokens": 107
+            }
+          ]
+        },
+        {
+          "durationMs": 21572,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25513,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 536,
+              "reasoning_output_tokens": 278
+            }
+          ]
+        },
+        {
+          "durationMs": 20711,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33565,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 534,
+              "reasoning_output_tokens": 132
+            }
+          ]
+        },
+        {
+          "durationMs": 30386,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25497,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1092,
+              "reasoning_output_tokens": 379
+            }
+          ]
+        },
+        {
+          "durationMs": 13356,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 24373,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 280,
+              "reasoning_output_tokens": 58
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 7,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 2
+        },
+        {
+          "stage": "rule-group",
+          "count": 3
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59852,
+          "callCount": 1,
+          "durationMs": 22571
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18432,
+          "callCount": 1,
+          "durationMs": 19784
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59813,
+          "callCount": 1,
+          "durationMs": 16038
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18504,
+          "callCount": 1,
+          "durationMs": 21572
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59682,
+          "callCount": 1,
+          "durationMs": 20711
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18464,
+          "callCount": 1,
+          "durationMs": 30386
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 16769,
+          "callCount": 1,
+          "durationMs": 13356
+        }
+      ],
+      "observedThreadCount": 7,
+      "usage": [
+        {
+          "input_tokens": 30227,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 611,
+          "reasoning_output_tokens": 214
+        },
+        {
+          "input_tokens": 25497,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 557,
+          "reasoning_output_tokens": 251
+        },
+        {
+          "input_tokens": 33605,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 415,
+          "reasoning_output_tokens": 107
+        },
+        {
+          "input_tokens": 25513,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 536,
+          "reasoning_output_tokens": 278
+        },
+        {
+          "input_tokens": 33565,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 534,
+          "reasoning_output_tokens": 132
+        },
+        {
+          "input_tokens": 25497,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1092,
+          "reasoning_output_tokens": 379
+        },
+        {
+          "input_tokens": 24373,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 280,
+          "reasoning_output_tokens": 58
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "The answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[9] — Synthetic K7 checkpoint decision A"
+                },
+                "observed": "The answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "The answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa — Synthetic K7 checkpoint decision B"
+                },
+                "observed": "The answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "fail",
+            "reason": "The answer rejects K7 bulk-bypass but gives no concrete reason for rejecting it; saying the implementation uses the ordinary checkpoint path only identifies the selected option.",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-rejection-reason",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa — Synthetic K7 rejected option decision"
+                },
+                "observed": "The answer rejects K7 bulk-bypass but gives no concrete reason for rejecting it; saying the implementation uses the ordinary checkpoint path only identifies the selected option.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-rejection-reason"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "The answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[9] — Synthetic K7 checkpoint decision A"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "The answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa — Synthetic K7 checkpoint decision B"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "The answer rejects K7 bulk-bypass but gives no concrete reason for rejecting it; saying the implementation uses the ordinary checkpoint path only identifies the selected option.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa — Synthetic K7 rejected option decision"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "All three independent violations cite the expected QA and explain 29/41 versus 14 seconds or the missing rejection reason."
+      }
+    },
+    {
+      "id": "large-violation/2/file",
+      "scenario": "large-violation",
+      "pair": 2,
+      "version": "file",
+      "sourceSha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 54964,
+      "calls": [
+        {
+          "durationMs": 54933,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 210390,
+              "cached_input_tokens": 167296,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1666,
+              "reasoning_output_tokens": 472
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 5535,
+          "callCount": 1,
+          "durationMs": 54932
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 210390,
+          "cached_input_tokens": 167296,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1666,
+          "reasoning_output_tokens": 472
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 29 seconds; analysis.validation sets it to 14 seconds. Change this answer to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[9].answer"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 29 seconds; analysis.validation sets it to 14 seconds. Change this answer to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "fail",
+            "reason": "This answer rejects K7 bulk-bypass but gives no concrete reason for the rejection. Using the ordinary checkpoint path describes the chosen approach, not why bulk-bypass was rejected. State the reason in this answer.",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-rejection-reason",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[19].answer"
+                },
+                "observed": "This answer rejects K7 bulk-bypass but gives no concrete reason for the rejection. Using the ordinary checkpoint path describes the chosen approach, not why bulk-bypass was rejected. State the reason in this answer.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-rejection-reason"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 41 seconds; analysis.validation sets it to 14 seconds. Change this answer to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[29].answer"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 41 seconds; analysis.validation sets it to 14 seconds. Change this answer to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 29 seconds; analysis.validation sets it to 14 seconds. Change this answer to 14 seconds.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[9].answer"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "This answer rejects K7 bulk-bypass but gives no concrete reason for the rejection. Using the ordinary checkpoint path describes the chosen approach, not why bulk-bypass was rejected. State the reason in this answer.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[19].answer"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 41 seconds; analysis.validation sets it to 14 seconds. Change this answer to 14 seconds.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[29].answer"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "All three independent violations cite the expected QA and explain 29/41 versus 14 seconds or the missing rejection reason."
+      }
+    },
+    {
+      "id": "large-violation/3/file",
+      "scenario": "large-violation",
+      "pair": 3,
+      "version": "file",
+      "sourceSha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 51892,
+      "calls": [
+        {
+          "durationMs": 51871,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 124191,
+              "cached_input_tokens": 104832,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1749,
+              "reasoning_output_tokens": 540
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 5535,
+          "callCount": 1,
+          "durationMs": 51871
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 124191,
+          "cached_input_tokens": 104832,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1749,
+          "reasoning_output_tokens": 540
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 29 seconds. Change it to the 14 seconds stated in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[9].answer"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 29 seconds. Change it to the 14 seconds stated in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "fail",
+            "reason": "This answer rejects K7 bulk-bypass but gives no concrete reason for the rejection. State the reason in this answer.",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-rejection-reason",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[19].answer"
+                },
+                "observed": "This answer rejects K7 bulk-bypass but gives no concrete reason for the rejection. State the reason in this answer.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-rejection-reason"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 41 seconds. Change it to the 14 seconds stated in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[29].answer"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 41 seconds. Change it to the 14 seconds stated in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 29 seconds. Change it to the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[9].answer"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "This answer rejects K7 bulk-bypass but gives no concrete reason for the rejection. State the reason in this answer.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[19].answer"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 41 seconds. Change it to the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[29].answer"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "All three independent violations cite the expected QA and explain 29/41 versus 14 seconds or the missing rejection reason."
+      }
+    },
+    {
+      "id": "large-violation/3/baseline",
+      "scenario": "large-violation",
+      "pair": 3,
+      "version": "baseline",
+      "sourceSha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 148562,
+      "calls": [
+        {
+          "durationMs": 23490,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30227,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 468,
+              "reasoning_output_tokens": 72
+            }
+          ]
+        },
+        {
+          "durationMs": 16331,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25497,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 369,
+              "reasoning_output_tokens": 148
+            }
+          ]
+        },
+        {
+          "durationMs": 13513,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33605,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 390,
+              "reasoning_output_tokens": 159
+            }
+          ]
+        },
+        {
+          "durationMs": 21377,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25513,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 527,
+              "reasoning_output_tokens": 301
+            }
+          ]
+        },
+        {
+          "durationMs": 32269,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33565,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 944,
+              "reasoning_output_tokens": 477
+            }
+          ]
+        },
+        {
+          "durationMs": 28354,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25497,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 865,
+              "reasoning_output_tokens": 293
+            }
+          ]
+        },
+        {
+          "durationMs": 13100,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 20723,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 284,
+              "reasoning_output_tokens": 41
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 7,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 2
+        },
+        {
+          "stage": "rule-group",
+          "count": 3
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59852,
+          "callCount": 1,
+          "durationMs": 23490
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18432,
+          "callCount": 1,
+          "durationMs": 16331
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59813,
+          "callCount": 1,
+          "durationMs": 13513
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18504,
+          "callCount": 1,
+          "durationMs": 21377
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59682,
+          "callCount": 1,
+          "durationMs": 32269
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18464,
+          "callCount": 1,
+          "durationMs": 28354
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 15645,
+          "callCount": 1,
+          "durationMs": 13101
+        }
+      ],
+      "observedThreadCount": 7,
+      "usage": [
+        {
+          "input_tokens": 30227,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 468,
+          "reasoning_output_tokens": 72
+        },
+        {
+          "input_tokens": 25497,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 369,
+          "reasoning_output_tokens": 148
+        },
+        {
+          "input_tokens": 33605,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 390,
+          "reasoning_output_tokens": 159
+        },
+        {
+          "input_tokens": 25513,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 527,
+          "reasoning_output_tokens": 301
+        },
+        {
+          "input_tokens": 33565,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 944,
+          "reasoning_output_tokens": 477
+        },
+        {
+          "input_tokens": 25497,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 865,
+          "reasoning_output_tokens": 293
+        },
+        {
+          "input_tokens": 20723,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 284,
+          "reasoning_output_tokens": 41
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This QA answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation. Set the answer to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa: Synthetic K7 checkpoint decision A: what timeout applies?"
+                },
+                "observed": "This QA answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation. Set the answer to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This QA answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation. Set the answer to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa: Synthetic K7 checkpoint decision B: what timeout applies?"
+                },
+                "observed": "This QA answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation. Set the answer to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "fail",
+            "reason": "This answer rejects the K7 bulk-bypass option without stating a concrete reason. Add the reason to this answer.",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-rejection-reason",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa: Synthetic K7 rejected option decision: why reject bulk-bypass?"
+                },
+                "observed": "This answer rejects the K7 bulk-bypass option without stating a concrete reason. Add the reason to this answer.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-rejection-reason"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This QA answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation. Set the answer to 14 seconds.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa: Synthetic K7 checkpoint decision A: what timeout applies?"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This QA answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation. Set the answer to 14 seconds.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa: Synthetic K7 checkpoint decision B: what timeout applies?"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "This answer rejects the K7 bulk-bypass option without stating a concrete reason. Add the reason to this answer.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa: Synthetic K7 rejected option decision: why reject bulk-bypass?"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "All three independent violations cite the expected QA and explain 29/41 versus 14 seconds or the missing rejection reason."
+      }
+    },
+    {
+      "id": "large-violation/4/baseline",
+      "scenario": "large-violation",
+      "pair": 4,
+      "version": "baseline",
+      "sourceSha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 167582,
+      "calls": [
+        {
+          "durationMs": 17678,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30227,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 591,
+              "reasoning_output_tokens": 229
+            }
+          ]
+        },
+        {
+          "durationMs": 22550,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25497,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 359,
+              "reasoning_output_tokens": 136
+            }
+          ]
+        },
+        {
+          "durationMs": 23676,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33605,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 584,
+              "reasoning_output_tokens": 313
+            }
+          ]
+        },
+        {
+          "durationMs": 20191,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25513,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 632,
+              "reasoning_output_tokens": 277
+            }
+          ]
+        },
+        {
+          "durationMs": 18842,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33565,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 523,
+              "reasoning_output_tokens": 127
+            }
+          ]
+        },
+        {
+          "durationMs": 52432,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25497,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1807,
+              "reasoning_output_tokens": 636
+            }
+          ]
+        },
+        {
+          "durationMs": 12091,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 24770,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 278,
+              "reasoning_output_tokens": 41
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 7,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 2
+        },
+        {
+          "stage": "rule-group",
+          "count": 3
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59852,
+          "callCount": 1,
+          "durationMs": 17678
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18432,
+          "callCount": 1,
+          "durationMs": 22550
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59813,
+          "callCount": 1,
+          "durationMs": 23676
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18504,
+          "callCount": 1,
+          "durationMs": 20191
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59682,
+          "callCount": 1,
+          "durationMs": 18842
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18464,
+          "callCount": 1,
+          "durationMs": 52432
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 18535,
+          "callCount": 1,
+          "durationMs": 12090
+        }
+      ],
+      "observedThreadCount": 7,
+      "usage": [
+        {
+          "input_tokens": 30227,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 591,
+          "reasoning_output_tokens": 229
+        },
+        {
+          "input_tokens": 25497,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 359,
+          "reasoning_output_tokens": 136
+        },
+        {
+          "input_tokens": 33605,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 584,
+          "reasoning_output_tokens": 313
+        },
+        {
+          "input_tokens": 25513,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 632,
+          "reasoning_output_tokens": 277
+        },
+        {
+          "input_tokens": 33565,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 523,
+          "reasoning_output_tokens": 127
+        },
+        {
+          "input_tokens": 25497,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1807,
+          "reasoning_output_tokens": 636
+        },
+        {
+          "input_tokens": 24770,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 278,
+          "reasoning_output_tokens": 41
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "Sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "qa answer: “Synthetic K7 checkpoint decision A: what timeout applies?”"
+                },
+                "observed": "Sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "Sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "qa answer: “Synthetic K7 checkpoint decision B: what timeout applies?”"
+                },
+                "observed": "Sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "fail",
+            "reason": "Rejects the K7 bulk-bypass option without stating a concrete reason in the same answer. Naming the ordinary checkpoint path does not explain the rejection.",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-rejection-reason",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "qa answer: “Synthetic K7 rejected option decision: why reject bulk-bypass?”"
+                },
+                "observed": "Rejects the K7 bulk-bypass option without stating a concrete reason in the same answer. Naming the ordinary checkpoint path does not explain the rejection.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-rejection-reason"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "miss",
+        "miss": [
+          {
+            "rule": "checkpoint-timeout",
+            "marker": "29 seconds",
+            "locator": "Synthetic K7 checkpoint decision A"
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "marker": "41 seconds",
+            "locator": "Synthetic K7 checkpoint decision B"
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "marker": "bulk-bypass",
+            "locator": "Synthetic K7 rejected option decision"
+          }
+        ],
+        "extras": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "Sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "spec.json",
+              "locator": "qa answer: “Synthetic K7 checkpoint decision A: what timeout applies?”"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "Sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "spec.json",
+              "locator": "qa answer: “Synthetic K7 checkpoint decision B: what timeout applies?”"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "Rejects the K7 bulk-bypass option without stating a concrete reason in the same answer. Naming the ordinary checkpoint path does not explain the rejection.",
+            "where": {
+              "file": "spec.json",
+              "locator": "qa answer: “Synthetic K7 rejected option decision: why reject bulk-bypass?”"
+            }
+          }
+        ],
+        "findings": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "Sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "spec.json",
+              "locator": "qa answer: “Synthetic K7 checkpoint decision A: what timeout applies?”"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "Sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation.",
+            "where": {
+              "file": "spec.json",
+              "locator": "qa answer: “Synthetic K7 checkpoint decision B: what timeout applies?”"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "Rejects the K7 bulk-bypass option without stating a concrete reason in the same answer. Naming the ordinary checkpoint path does not explain the rejection.",
+            "where": {
+              "file": "spec.json",
+              "locator": "qa answer: “Synthetic K7 rejected option decision: why reject bulk-bypass?”"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": false,
+        "classification": "content-correct/location-invalid",
+        "note": "All three observations cite the right QA decision and explain the violation, but where.file is spec.json instead of draft.json."
+      }
+    },
+    {
+      "id": "large-violation/4/file",
+      "scenario": "large-violation",
+      "pair": 4,
+      "version": "file",
+      "sourceSha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 58738,
+      "calls": [
+        {
+          "durationMs": 58716,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 155602,
+              "cached_input_tokens": 123392,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2112,
+              "reasoning_output_tokens": 785
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 5535,
+          "callCount": 1,
+          "durationMs": 58715
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 155602,
+          "cached_input_tokens": 123392,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2112,
+          "reasoning_output_tokens": 785
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "$.qa[9].answer"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "fail",
+            "reason": "This answer rejects the K7 bulk-bypass option but gives no concrete reason for rejecting it. State the reason in this answer.",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-rejection-reason",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "$.qa[19].answer"
+                },
+                "observed": "This answer rejects the K7 bulk-bypass option but gives no concrete reason for rejecting it. State the reason in this answer.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-rejection-reason"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "$.qa[29].answer"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+            "where": {
+              "file": "draft.json",
+              "locator": "$.qa[9].answer"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "This answer rejects the K7 bulk-bypass option but gives no concrete reason for rejecting it. State the reason in this answer.",
+            "where": {
+              "file": "draft.json",
+              "locator": "$.qa[19].answer"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+            "where": {
+              "file": "draft.json",
+              "locator": "$.qa[29].answer"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "All three independent violations cite the expected QA and explain 29/41 versus 14 seconds or the missing rejection reason."
+      }
+    },
+    {
+      "id": "large-violation/5/file",
+      "scenario": "large-violation",
+      "pair": 5,
+      "version": "file",
+      "sourceSha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 60737,
+      "calls": [
+        {
+          "durationMs": 60712,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 175521,
+              "cached_input_tokens": 135808,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1936,
+              "reasoning_output_tokens": 561
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 5535,
+          "callCount": 1,
+          "durationMs": 60713
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 175521,
+          "cached_input_tokens": 135808,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1936,
+          "reasoning_output_tokens": 561
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14-second timeout in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "$.qa[9].answer"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14-second timeout in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "fail",
+            "reason": "This answer rejects the K7 bulk-bypass option but gives no concrete reason for rejecting it. Saying the implementation uses the ordinary checkpoint path states the choice, not its reason.",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-rejection-reason",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "$.qa[19].answer"
+                },
+                "observed": "This answer rejects the K7 bulk-bypass option but gives no concrete reason for rejecting it. Saying the implementation uses the ordinary checkpoint path states the choice, not its reason.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-rejection-reason"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14-second timeout in analysis.validation.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "$.qa[29].answer"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14-second timeout in analysis.validation.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14-second timeout in analysis.validation.",
+            "where": {
+              "file": "draft.json",
+              "locator": "$.qa[9].answer"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "This answer rejects the K7 bulk-bypass option but gives no concrete reason for rejecting it. Saying the implementation uses the ordinary checkpoint path states the choice, not its reason.",
+            "where": {
+              "file": "draft.json",
+              "locator": "$.qa[19].answer"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14-second timeout in analysis.validation.",
+            "where": {
+              "file": "draft.json",
+              "locator": "$.qa[29].answer"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "All three independent violations cite the expected QA and explain 29/41 versus 14 seconds or the missing rejection reason."
+      }
+    },
+    {
+      "id": "large-violation/5/baseline",
+      "scenario": "large-violation",
+      "pair": 5,
+      "version": "baseline",
+      "sourceSha256": "fc997876b4f0c837d6251dd4cc60e2f328be8632e290b70c709a3bb91daac1e6",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 175979,
+      "calls": [
+        {
+          "durationMs": 18921,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33602,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 516,
+              "reasoning_output_tokens": 226
+            }
+          ]
+        },
+        {
+          "durationMs": 15087,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25497,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 393,
+              "reasoning_output_tokens": 154
+            }
+          ]
+        },
+        {
+          "durationMs": 17056,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33605,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 499,
+              "reasoning_output_tokens": 167
+            }
+          ]
+        },
+        {
+          "durationMs": 23971,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25513,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 787,
+              "reasoning_output_tokens": 482
+            }
+          ]
+        },
+        {
+          "durationMs": 23007,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33565,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 645,
+              "reasoning_output_tokens": 227
+            }
+          ]
+        },
+        {
+          "durationMs": 63453,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22122,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1100,
+              "reasoning_output_tokens": 364
+            }
+          ]
+        },
+        {
+          "durationMs": 14393,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 24233,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 341,
+              "reasoning_output_tokens": 110
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 7,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 2
+        },
+        {
+          "stage": "rule-group",
+          "count": 3
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59852,
+          "callCount": 1,
+          "durationMs": 18921
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18432,
+          "callCount": 1,
+          "durationMs": 15087
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59813,
+          "callCount": 1,
+          "durationMs": 17057
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18504,
+          "callCount": 1,
+          "durationMs": 23971
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59682,
+          "callCount": 1,
+          "durationMs": 23007
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18464,
+          "callCount": 1,
+          "durationMs": 63453
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 16347,
+          "callCount": 1,
+          "durationMs": 14393
+        }
+      ],
+      "observedThreadCount": 7,
+      "usage": [
+        {
+          "input_tokens": 33602,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 516,
+          "reasoning_output_tokens": 226
+        },
+        {
+          "input_tokens": 25497,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 393,
+          "reasoning_output_tokens": 154
+        },
+        {
+          "input_tokens": 33605,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 499,
+          "reasoning_output_tokens": 167
+        },
+        {
+          "input_tokens": 25513,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 787,
+          "reasoning_output_tokens": 482
+        },
+        {
+          "input_tokens": 33565,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 645,
+          "reasoning_output_tokens": 227
+        },
+        {
+          "input_tokens": 22122,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1100,
+          "reasoning_output_tokens": 364
+        },
+        {
+          "input_tokens": 24233,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 341,
+          "reasoning_output_tokens": 110
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[9].answer"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "fail",
+            "reason": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-timeout",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "QA answer: “Synthetic K7 checkpoint decision B: what timeout applies?”"
+                },
+                "observed": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-timeout"
+                ]
+              }
+            ]
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "fail",
+            "reason": "This answer rejects the K7 bulk-bypass option without stating a concrete reason for the rejection. Add the reason to this answer.",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "checkpoint-rejection-reason",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "qa[19].answer"
+                },
+                "observed": "This answer rejects the K7 bulk-bypass option without stating a concrete reason for the rejection. Add the reason to this answer.",
+                "severity": "blocking",
+                "refs": [
+                  "checkpoint-rejection-reason"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": [
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 29 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[9].answer"
+            }
+          },
+          {
+            "rule": "checkpoint-timeout",
+            "observed": "This answer sets the K7 checkpoint timeout to 41 seconds, conflicting with the 14 seconds stated in analysis.validation. Set this decision to 14 seconds.",
+            "where": {
+              "file": "draft.json",
+              "locator": "QA answer: “Synthetic K7 checkpoint decision B: what timeout applies?”"
+            }
+          },
+          {
+            "rule": "checkpoint-rejection-reason",
+            "observed": "This answer rejects the K7 bulk-bypass option without stating a concrete reason for the rejection. Add the reason to this answer.",
+            "where": {
+              "file": "draft.json",
+              "locator": "qa[19].answer"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "All three independent violations cite the expected QA and explain 29/41 versus 14 seconds or the missing rejection reason."
+      }
+    },
+    {
+      "id": "large-normal/1/file",
+      "scenario": "large-normal",
+      "pair": 1,
+      "version": "file",
+      "sourceSha256": "ac3286139266c1cd9254d92c397ee5147247869ae6737b7c8f47fec9c9ef4976",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 53214,
+      "calls": [
+        {
+          "durationMs": 53190,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 262662,
+              "cached_input_tokens": 197504,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1681,
+              "reasoning_output_tokens": 685
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 5532,
+          "callCount": 1,
+          "durationMs": 53190
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 262662,
+          "cached_input_tokens": 197504,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1681,
+          "reasoning_output_tokens": 685
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "large-normal/1/baseline",
+      "scenario": "large-normal",
+      "pair": 1,
+      "version": "baseline",
+      "sourceSha256": "ac3286139266c1cd9254d92c397ee5147247869ae6737b7c8f47fec9c9ef4976",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 126329,
+      "calls": [
+        {
+          "durationMs": 17783,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30221,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 464,
+              "reasoning_output_tokens": 121
+            }
+          ]
+        },
+        {
+          "durationMs": 14698,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25478,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 398,
+              "reasoning_output_tokens": 173
+            }
+          ]
+        },
+        {
+          "durationMs": 17442,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33599,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 546,
+              "reasoning_output_tokens": 276
+            }
+          ]
+        },
+        {
+          "durationMs": 17669,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25494,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 427,
+              "reasoning_output_tokens": 230
+            }
+          ]
+        },
+        {
+          "durationMs": 15722,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33559,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 330,
+              "reasoning_output_tokens": 100
+            }
+          ]
+        },
+        {
+          "durationMs": 33497,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25478,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1104,
+              "reasoning_output_tokens": 348
+            }
+          ]
+        },
+        {
+          "durationMs": 9381,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 24082,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 36,
+              "reasoning_output_tokens": 19
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 7,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 2
+        },
+        {
+          "stage": "rule-group",
+          "count": 3
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59935,
+          "callCount": 1,
+          "durationMs": 17784
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18432,
+          "callCount": 1,
+          "durationMs": 14698
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59896,
+          "callCount": 1,
+          "durationMs": 17442
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18504,
+          "callCount": 1,
+          "durationMs": 17669
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59765,
+          "callCount": 1,
+          "durationMs": 15722
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18464,
+          "callCount": 1,
+          "durationMs": 33498
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 15527,
+          "callCount": 1,
+          "durationMs": 9382
+        }
+      ],
+      "observedThreadCount": 7,
+      "usage": [
+        {
+          "input_tokens": 30221,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 464,
+          "reasoning_output_tokens": 121
+        },
+        {
+          "input_tokens": 25478,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 398,
+          "reasoning_output_tokens": 173
+        },
+        {
+          "input_tokens": 33599,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 546,
+          "reasoning_output_tokens": 276
+        },
+        {
+          "input_tokens": 25494,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 427,
+          "reasoning_output_tokens": 230
+        },
+        {
+          "input_tokens": 33559,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 330,
+          "reasoning_output_tokens": 100
+        },
+        {
+          "input_tokens": 25478,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1104,
+          "reasoning_output_tokens": 348
+        },
+        {
+          "input_tokens": 24082,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 36,
+          "reasoning_output_tokens": 19
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "large-normal/2/baseline",
+      "scenario": "large-normal",
+      "pair": 2,
+      "version": "baseline",
+      "sourceSha256": "ac3286139266c1cd9254d92c397ee5147247869ae6737b7c8f47fec9c9ef4976",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 111954,
+      "calls": [
+        {
+          "durationMs": 17930,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33596,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 510,
+              "reasoning_output_tokens": 96
+            }
+          ]
+        },
+        {
+          "durationMs": 13685,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22103,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 297,
+              "reasoning_output_tokens": 116
+            }
+          ]
+        },
+        {
+          "durationMs": 18377,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30224,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 451,
+              "reasoning_output_tokens": 156
+            }
+          ]
+        },
+        {
+          "durationMs": 15804,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25494,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 391,
+              "reasoning_output_tokens": 153
+            }
+          ]
+        },
+        {
+          "durationMs": 18428,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33559,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 517,
+              "reasoning_output_tokens": 129
+            }
+          ]
+        },
+        {
+          "durationMs": 18623,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25478,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 505,
+              "reasoning_output_tokens": 174
+            }
+          ]
+        },
+        {
+          "durationMs": 8949,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 23819,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 36,
+              "reasoning_output_tokens": 19
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 7,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 2
+        },
+        {
+          "stage": "rule-group",
+          "count": 3
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59935,
+          "callCount": 1,
+          "durationMs": 17930
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18432,
+          "callCount": 1,
+          "durationMs": 13685
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59896,
+          "callCount": 1,
+          "durationMs": 18377
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18504,
+          "callCount": 1,
+          "durationMs": 15804
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59765,
+          "callCount": 1,
+          "durationMs": 18429
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18464,
+          "callCount": 1,
+          "durationMs": 18623
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 14634,
+          "callCount": 1,
+          "durationMs": 8950
+        }
+      ],
+      "observedThreadCount": 7,
+      "usage": [
+        {
+          "input_tokens": 33596,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 510,
+          "reasoning_output_tokens": 96
+        },
+        {
+          "input_tokens": 22103,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 297,
+          "reasoning_output_tokens": 116
+        },
+        {
+          "input_tokens": 30224,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 451,
+          "reasoning_output_tokens": 156
+        },
+        {
+          "input_tokens": 25494,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 391,
+          "reasoning_output_tokens": 153
+        },
+        {
+          "input_tokens": 33559,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 517,
+          "reasoning_output_tokens": 129
+        },
+        {
+          "input_tokens": 25478,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 505,
+          "reasoning_output_tokens": 174
+        },
+        {
+          "input_tokens": 23819,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 36,
+          "reasoning_output_tokens": 19
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "large-normal/2/file",
+      "scenario": "large-normal",
+      "pair": 2,
+      "version": "file",
+      "sourceSha256": "ac3286139266c1cd9254d92c397ee5147247869ae6737b7c8f47fec9c9ef4976",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 56980,
+      "calls": [
+        {
+          "durationMs": 56957,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 343499,
+              "cached_input_tokens": 291456,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1769,
+              "reasoning_output_tokens": 564
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 5532,
+          "callCount": 1,
+          "durationMs": 56958
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 343499,
+          "cached_input_tokens": 291456,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1769,
+          "reasoning_output_tokens": 564
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "large-normal/3/file",
+      "scenario": "large-normal",
+      "pair": 3,
+      "version": "file",
+      "sourceSha256": "ac3286139266c1cd9254d92c397ee5147247869ae6737b7c8f47fec9c9ef4976",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 39119,
+      "calls": [
+        {
+          "durationMs": 39101,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 110164,
+              "cached_input_tokens": 87936,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1256,
+              "reasoning_output_tokens": 404
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 5532,
+          "callCount": 1,
+          "durationMs": 39101
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 110164,
+          "cached_input_tokens": 87936,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1256,
+          "reasoning_output_tokens": 404
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "large-normal/3/baseline",
+      "scenario": "large-normal",
+      "pair": 3,
+      "version": "baseline",
+      "sourceSha256": "ac3286139266c1cd9254d92c397ee5147247869ae6737b7c8f47fec9c9ef4976",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 129872,
+      "calls": [
+        {
+          "durationMs": 21951,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33596,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 642,
+              "reasoning_output_tokens": 191
+            }
+          ]
+        },
+        {
+          "durationMs": 17279,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22103,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 507,
+              "reasoning_output_tokens": 265
+            }
+          ]
+        },
+        {
+          "durationMs": 13795,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30224,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 330,
+              "reasoning_output_tokens": 77
+            }
+          ]
+        },
+        {
+          "durationMs": 18990,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25494,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 496,
+              "reasoning_output_tokens": 218
+            }
+          ]
+        },
+        {
+          "durationMs": 16188,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33559,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 532,
+              "reasoning_output_tokens": 262
+            }
+          ]
+        },
+        {
+          "durationMs": 31752,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25478,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1228,
+              "reasoning_output_tokens": 486
+            }
+          ]
+        },
+        {
+          "durationMs": 9764,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 24222,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 30,
+              "reasoning_output_tokens": 13
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 7,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 2
+        },
+        {
+          "stage": "rule-group",
+          "count": 3
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59935,
+          "callCount": 1,
+          "durationMs": 21951
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18432,
+          "callCount": 1,
+          "durationMs": 17279
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59896,
+          "callCount": 1,
+          "durationMs": 13794
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18504,
+          "callCount": 1,
+          "durationMs": 18990
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59765,
+          "callCount": 1,
+          "durationMs": 16189
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18464,
+          "callCount": 1,
+          "durationMs": 31752
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 16374,
+          "callCount": 1,
+          "durationMs": 9764
+        }
+      ],
+      "observedThreadCount": 7,
+      "usage": [
+        {
+          "input_tokens": 33596,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 642,
+          "reasoning_output_tokens": 191
+        },
+        {
+          "input_tokens": 22103,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 507,
+          "reasoning_output_tokens": 265
+        },
+        {
+          "input_tokens": 30224,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 330,
+          "reasoning_output_tokens": 77
+        },
+        {
+          "input_tokens": 25494,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 496,
+          "reasoning_output_tokens": 218
+        },
+        {
+          "input_tokens": 33559,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 532,
+          "reasoning_output_tokens": 262
+        },
+        {
+          "input_tokens": 25478,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1228,
+          "reasoning_output_tokens": 486
+        },
+        {
+          "input_tokens": 24222,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 13
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "large-normal/4/baseline",
+      "scenario": "large-normal",
+      "pair": 4,
+      "version": "baseline",
+      "sourceSha256": "ac3286139266c1cd9254d92c397ee5147247869ae6737b7c8f47fec9c9ef4976",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 134431,
+      "calls": [
+        {
+          "durationMs": 17886,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33596,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 582,
+              "reasoning_output_tokens": 259
+            }
+          ]
+        },
+        {
+          "durationMs": 16673,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25478,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 539,
+              "reasoning_output_tokens": 289
+            }
+          ]
+        },
+        {
+          "durationMs": 22277,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33599,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 793,
+              "reasoning_output_tokens": 515
+            }
+          ]
+        },
+        {
+          "durationMs": 21300,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25494,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 607,
+              "reasoning_output_tokens": 405
+            }
+          ]
+        },
+        {
+          "durationMs": 16852,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30184,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 509,
+              "reasoning_output_tokens": 195
+            }
+          ]
+        },
+        {
+          "durationMs": 31646,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22103,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1275,
+              "reasoning_output_tokens": 412
+            }
+          ]
+        },
+        {
+          "durationMs": 7684,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 20881,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 33,
+              "reasoning_output_tokens": 16
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 7,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 2
+        },
+        {
+          "stage": "rule-group",
+          "count": 3
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59935,
+          "callCount": 1,
+          "durationMs": 17886
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18432,
+          "callCount": 1,
+          "durationMs": 16673
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59896,
+          "callCount": 1,
+          "durationMs": 22277
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18504,
+          "callCount": 1,
+          "durationMs": 21300
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59765,
+          "callCount": 1,
+          "durationMs": 16853
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18464,
+          "callCount": 1,
+          "durationMs": 31646
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 16407,
+          "callCount": 1,
+          "durationMs": 7683
+        }
+      ],
+      "observedThreadCount": 7,
+      "usage": [
+        {
+          "input_tokens": 33596,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 582,
+          "reasoning_output_tokens": 259
+        },
+        {
+          "input_tokens": 25478,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 539,
+          "reasoning_output_tokens": 289
+        },
+        {
+          "input_tokens": 33599,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 793,
+          "reasoning_output_tokens": 515
+        },
+        {
+          "input_tokens": 25494,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 607,
+          "reasoning_output_tokens": 405
+        },
+        {
+          "input_tokens": 30184,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 509,
+          "reasoning_output_tokens": 195
+        },
+        {
+          "input_tokens": 22103,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1275,
+          "reasoning_output_tokens": 412
+        },
+        {
+          "input_tokens": 20881,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 33,
+          "reasoning_output_tokens": 16
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "large-normal/4/file",
+      "scenario": "large-normal",
+      "pair": 4,
+      "version": "file",
+      "sourceSha256": "ac3286139266c1cd9254d92c397ee5147247869ae6737b7c8f47fec9c9ef4976",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 64822,
+      "calls": [
+        {
+          "durationMs": 64792,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 294647,
+              "cached_input_tokens": 242048,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1681,
+              "reasoning_output_tokens": 600
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 5532,
+          "callCount": 1,
+          "durationMs": 64792
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 294647,
+          "cached_input_tokens": 242048,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1681,
+          "reasoning_output_tokens": 600
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "large-normal/5/file",
+      "scenario": "large-normal",
+      "pair": 5,
+      "version": "file",
+      "sourceSha256": "ac3286139266c1cd9254d92c397ee5147247869ae6737b7c8f47fec9c9ef4976",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 69180,
+      "calls": [
+        {
+          "durationMs": 69158,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 218237,
+              "cached_input_tokens": 179840,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2438,
+              "reasoning_output_tokens": 1103
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 5532,
+          "callCount": 1,
+          "durationMs": 69157
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 218237,
+          "cached_input_tokens": 179840,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2438,
+          "reasoning_output_tokens": 1103
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "large-normal/5/baseline",
+      "scenario": "large-normal",
+      "pair": 5,
+      "version": "baseline",
+      "sourceSha256": "ac3286139266c1cd9254d92c397ee5147247869ae6737b7c8f47fec9c9ef4976",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 132227,
+      "calls": [
+        {
+          "durationMs": 23862,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33596,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 893,
+              "reasoning_output_tokens": 516
+            }
+          ]
+        },
+        {
+          "durationMs": 21782,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25478,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 452,
+              "reasoning_output_tokens": 224
+            }
+          ]
+        },
+        {
+          "durationMs": 12850,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33599,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 367,
+              "reasoning_output_tokens": 134
+            }
+          ]
+        },
+        {
+          "durationMs": 18238,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25494,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 648,
+              "reasoning_output_tokens": 362
+            }
+          ]
+        },
+        {
+          "durationMs": 26341,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33559,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 736,
+              "reasoning_output_tokens": 463
+            }
+          ]
+        },
+        {
+          "durationMs": 21452,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 25478,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 841,
+              "reasoning_output_tokens": 287
+            }
+          ]
+        },
+        {
+          "durationMs": 7619,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 23920,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 38,
+              "reasoning_output_tokens": 21
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 7,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 2
+        },
+        {
+          "stage": "rule-group",
+          "count": 3
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59935,
+          "callCount": 1,
+          "durationMs": 23862
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18432,
+          "callCount": 1,
+          "durationMs": 21782
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59896,
+          "callCount": 1,
+          "durationMs": 12850
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18504,
+          "callCount": 1,
+          "durationMs": 18238
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59765,
+          "callCount": 1,
+          "durationMs": 26341
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 18464,
+          "callCount": 1,
+          "durationMs": 21452
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 14838,
+          "callCount": 1,
+          "durationMs": 7619
+        }
+      ],
+      "observedThreadCount": 7,
+      "usage": [
+        {
+          "input_tokens": 33596,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 893,
+          "reasoning_output_tokens": 516
+        },
+        {
+          "input_tokens": 25478,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 452,
+          "reasoning_output_tokens": 224
+        },
+        {
+          "input_tokens": 33599,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 367,
+          "reasoning_output_tokens": 134
+        },
+        {
+          "input_tokens": 25494,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 648,
+          "reasoning_output_tokens": 362
+        },
+        {
+          "input_tokens": 33559,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 736,
+          "reasoning_output_tokens": 463
+        },
+        {
+          "input_tokens": 25478,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 841,
+          "reasoning_output_tokens": 287
+        },
+        {
+          "input_tokens": 23920,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 38,
+          "reasoning_output_tokens": 21
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "small-normal/1/file",
+      "scenario": "small-normal",
+      "pair": 1,
+      "version": "file",
+      "sourceSha256": "2d612247c3ffcc4b5905f06c6c94c432e78d3acf5801b8555af76c0de021966f",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 9014,
+      "calls": [
+        {
+          "durationMs": 9009,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 21994,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 40,
+              "reasoning_output_tokens": 23
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 6028,
+          "callCount": 1,
+          "durationMs": 9009
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 21994,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 40,
+          "reasoning_output_tokens": 23
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "small-normal/1/baseline",
+      "scenario": "small-normal",
+      "pair": 1,
+      "version": "baseline",
+      "sourceSha256": "2d612247c3ffcc4b5905f06c6c94c432e78d3acf5801b8555af76c0de021966f",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 8122,
+      "calls": [
+        {
+          "durationMs": 8115,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22002,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 41,
+              "reasoning_output_tokens": 24
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 6028,
+          "callCount": 1,
+          "durationMs": 8114
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 22002,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 41,
+          "reasoning_output_tokens": 24
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "small-normal/2/baseline",
+      "scenario": "small-normal",
+      "pair": 2,
+      "version": "baseline",
+      "sourceSha256": "2d612247c3ffcc4b5905f06c6c94c432e78d3acf5801b8555af76c0de021966f",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 19618,
+      "calls": [
+        {
+          "durationMs": 19616,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22002,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 41,
+              "reasoning_output_tokens": 24
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 6028,
+          "callCount": 1,
+          "durationMs": 19616
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 22002,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 41,
+          "reasoning_output_tokens": 24
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "small-normal/2/file",
+      "scenario": "small-normal",
+      "pair": 2,
+      "version": "file",
+      "sourceSha256": "2d612247c3ffcc4b5905f06c6c94c432e78d3acf5801b8555af76c0de021966f",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 8661,
+      "calls": [
+        {
+          "durationMs": 8657,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 21994,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 32,
+              "reasoning_output_tokens": 15
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 6028,
+          "callCount": 1,
+          "durationMs": 8656
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 21994,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 32,
+          "reasoning_output_tokens": 15
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "small-normal/3/file",
+      "scenario": "small-normal",
+      "pair": 3,
+      "version": "file",
+      "sourceSha256": "2d612247c3ffcc4b5905f06c6c94c432e78d3acf5801b8555af76c0de021966f",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 9748,
+      "calls": [
+        {
+          "durationMs": 9737,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 21994,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 58,
+              "reasoning_output_tokens": 41
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 6028,
+          "callCount": 1,
+          "durationMs": 9737
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 21994,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 58,
+          "reasoning_output_tokens": 41
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "small-normal/3/baseline",
+      "scenario": "small-normal",
+      "pair": 3,
+      "version": "baseline",
+      "sourceSha256": "2d612247c3ffcc4b5905f06c6c94c432e78d3acf5801b8555af76c0de021966f",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 8229,
+      "calls": [
+        {
+          "durationMs": 8228,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22002,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 42,
+              "reasoning_output_tokens": 25
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 6028,
+          "callCount": 1,
+          "durationMs": 8228
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 22002,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 42,
+          "reasoning_output_tokens": 25
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "small-normal/4/baseline",
+      "scenario": "small-normal",
+      "pair": 4,
+      "version": "baseline",
+      "sourceSha256": "2d612247c3ffcc4b5905f06c6c94c432e78d3acf5801b8555af76c0de021966f",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 8071,
+      "calls": [
+        {
+          "durationMs": 8069,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22002,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 30,
+              "reasoning_output_tokens": 13
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 6028,
+          "callCount": 1,
+          "durationMs": 8069
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 22002,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 30,
+          "reasoning_output_tokens": 13
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "small-normal/4/file",
+      "scenario": "small-normal",
+      "pair": 4,
+      "version": "file",
+      "sourceSha256": "2d612247c3ffcc4b5905f06c6c94c432e78d3acf5801b8555af76c0de021966f",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 9689,
+      "calls": [
+        {
+          "durationMs": 9683,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 21994,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 31,
+              "reasoning_output_tokens": 14
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 6028,
+          "callCount": 1,
+          "durationMs": 9683
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 21994,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 31,
+          "reasoning_output_tokens": 14
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "small-normal/5/file",
+      "scenario": "small-normal",
+      "pair": 5,
+      "version": "file",
+      "sourceSha256": "2d612247c3ffcc4b5905f06c6c94c432e78d3acf5801b8555af76c0de021966f",
+      "productSha256": {
+        "runGate": "a43a7382ba9491d76c8b1a25039ded35c44613e10748652f50289a293a075fbf",
+        "promptPlan": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5"
+      },
+      "durationMs": 8156,
+      "calls": [
+        {
+          "durationMs": 8149,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 21994,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 38,
+              "reasoning_output_tokens": 21
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 6028,
+          "callCount": 1,
+          "durationMs": 8149
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 21994,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 38,
+          "reasoning_output_tokens": 21
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    },
+    {
+      "id": "small-normal/5/baseline",
+      "scenario": "small-normal",
+      "pair": 5,
+      "version": "baseline",
+      "sourceSha256": "2d612247c3ffcc4b5905f06c6c94c432e78d3acf5801b8555af76c0de021966f",
+      "productSha256": {
+        "runGate": "715ae9dd1835c46b326b5a52c6baa0446d9bbba27137d8652fb2ac938657b40e",
+        "promptPlan": "c829b85d52e16fb6bc97b1fdaaeb9ac106716b981613d62328b550a1ec5b5201"
+      },
+      "durationMs": 14249,
+      "calls": [
+        {
+          "durationMs": 14242,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22002,
+              "cached_input_tokens": 11904,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 31,
+              "reasoning_output_tokens": 14
+            }
+          ]
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 6028,
+          "callCount": 1,
+          "durationMs": 14242
+        }
+      ],
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 22002,
+          "cached_input_tokens": 11904,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 31,
+          "reasoning_output_tokens": 14
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "checkpoint-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "checkpoint-rejection-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 rejected option reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "draft-stage-validation",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Draft stage validation",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "findings": []
+      },
+      "manualReview": {
+        "reviewed": true,
+        "contentMatchesFrozenExpectation": true,
+        "locationMatchesFrozenExpectation": true,
+        "classification": "correct",
+        "note": "No violations returned; consistent K7 decisions and Draft-stage planned validation are present."
+      }
+    }
+  ]
+}
