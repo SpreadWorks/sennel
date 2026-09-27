@@ -52,6 +52,7 @@ import {
   workerArtifactHandoffPolicy,
 } from "./worker-artifact-handoff.js";
 import { TaskSourceFailureObservation } from "./task-source-failure.js";
+import { isStepAdmissionRefusal } from "./step-admission-refusal.js";
 import { SourceHandoffFailureFacts } from "./source-handoff-failure.js";
 import { sourceWorkerEffectJsonSchema } from "./source-worker-effect-schema.js";
 import {
@@ -68,6 +69,7 @@ import {
 import { buildFlowCommandHookContext } from "./flow-context.js";
 import {
   ConfirmAndAdvance,
+  DraftConditionalWorkerExecutionBinding,
   DraftWorkerExecutionBinding,
   DraftWorkerExecutionClaim,
   resolveDefinitionRoute,
@@ -122,6 +124,16 @@ const NON_REPLAYABLE_HANDOFF_ERROR_CODES = new Set([
   "FLOW_SOURCE_HANDOFF_CANONICAL_PATH_VIOLATION",
 ]);
 const REQUIREMENT_TEST_WORKER_LEAVES = new Set(["test-generate", "test-repair"]);
+
+function conditionalDraftAdmissionError(classification, code, message, resumeInstruction = null) {
+  return new WorkerArtifactHandoffError(classification, code, message, {
+    retryable: false,
+    data: {
+      failureKind: "step-admission",
+      ...(resumeInstruction === null ? {} : { resumeInstruction }),
+    },
+  });
+}
 
 export async function draftWorkerStepDefinition(stepId) {
   switch (stepId) {
@@ -276,6 +288,7 @@ function settleRequirementTestStructuralHandoff(ctx, attempt, error) {
 /** Persist a pre-Step worker or handoff failure without inventing StepResult. */
 function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoffRequest?.stepId ?? null) {
   if (!stepId?.startsWith("draft")) return false;
+  if (isStepAdmissionRefusal(error)) return false;
   const request = attempt?.handoffRequest ?? null;
   if (isConditionalDraftWorkerStep(stepId) && request !== null) {
     const state = ctx.flowManager.canonicalState(request.specId);
@@ -299,10 +312,11 @@ function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoff
         binding,
         stepResult,
         settlement,
-        executionBinding: new DraftWorkerExecutionBinding({
+        executionBinding: new DraftConditionalWorkerExecutionBinding({
           executionGeneration: execution.lifecycle.executionGeneration + 1,
           inputDigest: execution.lifecycle.binding.inputDigest,
           inputRevision: execution.lifecycle.binding.inputRevision,
+          contentDigest: execution.lifecycle.binding.contentDigest,
         }),
       });
     }
@@ -1124,6 +1138,7 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
   // unrelated diagnostic write would invalidate an unsettled checkpoint.
   if (state?.specId && error.classification !== "recovery-required"
     && error.recoveryPossible !== true
+    && !isStepAdmissionRefusal(error)
     && (request?.policy ?? workerArtifactHandoffPolicy(stepId))?.kind !== "source") {
     try {
       const entry = {
@@ -1542,25 +1557,32 @@ export default class RunDispatchCommand extends FlowCommand {
     });
     const executionState = ctx.flowManager.draftStepExecutionState({ binding: stepBinding });
     const prior = executionState.lifecycle;
+    if (prior?.binding instanceof DraftWorkerExecutionBinding
+      && !(prior.binding instanceof DraftConditionalWorkerExecutionBinding)) {
+      throw conditionalDraftAdmissionError(
+        "recovery-required",
+        "FLOW_DRAFT_EXECUTION_MIGRATION_REQUIRED",
+        "conditional Draft worker execution requires explicit migration of its prior binding",
+        "Preserve the Attempt and its ledger, then use recover-draft-execution if an exact unpublished legacy checkpoint and unchanged inputs can be proven.",
+      );
+    }
     const refineProjection = stepId === "draft-refine"
       ? ctx.flowManager.draftRefineStepState({ binding: stepBinding })
       : null;
     const stepFirst = stepId === "draft-refine"
       && refineProjection.requiresStepSelection;
     if (prior?.phase === "terminal") {
-      throw new WorkerArtifactHandoffError(
+      throw conditionalDraftAdmissionError(
         "stale",
         "FLOW_DRAFT_EXECUTION_TERMINAL",
         "conditional Draft worker execution is already terminal",
-        { retryable: false },
       );
     }
     if (retrying && prior?.phase !== "claimed") {
-      throw new WorkerArtifactHandoffError(
+      throw conditionalDraftAdmissionError(
         "conflict",
         "FLOW_DRAFT_EXECUTION_RETRY_STALE",
         "conditional Draft worker retry requires the prior claimed generation",
-        { retryable: false },
       );
     }
     const reusePrior = !stepFirst && !retrying && ["checkpoint", "claimed", "publication"].includes(prior?.phase);
@@ -1578,11 +1600,10 @@ export default class RunDispatchCommand extends FlowCommand {
       ? invocation
       : reboundWorkerInvocation(invocation, invocation.action.nextAction, claimed.dispatchInvocationId);
     if (claimed !== null && workerInvocation.action.digest !== claimed.actionDigest) {
-      throw new WorkerArtifactHandoffError(
+      throw conditionalDraftAdmissionError(
         "stale",
         "FLOW_DRAFT_EXECUTION_ACTION_STALE",
         "conditional Draft worker action no longer matches its canonical claim",
-        { retryable: false },
       );
     }
     const persistedRequest = claimed === null ? null : this.handoffCoordinator.restoreClaimedDraftRequest({
@@ -1621,17 +1642,20 @@ export default class RunDispatchCommand extends FlowCommand {
         { retryable: false, recoveryPossible: false },
       );
     }
-    const executionBinding = new DraftWorkerExecutionBinding({
+    const executionBinding = new DraftConditionalWorkerExecutionBinding({
       executionGeneration,
       inputDigest: request.inputDigest,
       inputRevision: request.inputRevision,
+      contentDigest: claimed === null ? request.checkpointContentDigest() : prior.binding.contentDigest,
     });
-    if (reusePrior && !executionBinding.equals(prior.binding)) {
-      throw new WorkerArtifactHandoffError(
+    const sameExecution = prior?.phase === "checkpoint"
+      && executionBinding instanceof DraftConditionalWorkerExecutionBinding
+      && executionBinding.continuesCheckpoint(prior.binding);
+    if (reusePrior && !sameExecution && !executionBinding.equals(prior.binding)) {
+      throw conditionalDraftAdmissionError(
         "stale",
         "FLOW_DRAFT_EXECUTION_INPUT_STALE",
         "conditional Draft worker inputs no longer match their canonical execution generation",
-        { retryable: false },
       );
     }
     if (!reusePrior) {

@@ -57,6 +57,8 @@ import {
   DraftRefineStepState,
   DraftReviewExecutionBinding,
   DraftWorkerExecutionBinding,
+  DraftConditionalWorkerExecutionBinding,
+  resolveDraftWorkerRecovery,
   DraftReviewExecutionClaim,
   DraftWorkerExecutionClaim,
   SpecNextRoute,
@@ -228,6 +230,7 @@ import {
   SourceWorkerEffect,
   SourceWorkerCanonicalObservationAdvance,
   SourceWorkerHandoffIdentity,
+  DraftWorkerRecoveryInputPreview,
 } from "./worker-artifact-handoff.js";
 import {
   assertSourceHandoffEventTransition,
@@ -970,6 +973,38 @@ export class TaskGateSettlementAdmission {
   issueLogActivityId() {
     if (this.effect !== "issue-log") return null;
     return taskGateSettlementIssueLogActivityId({ issueLogId: this.issueEntry.issueLogId });
+  }
+}
+
+/** The normal artifact reader bound to the catalog already locked by a transition. */
+class DraftWorkerRecoveryReader {
+  constructor(store, view) { this.store = store; this.view = view; }
+  canonicalState() { return this.view.state; }
+  activityLedger() { return this.view.activities.map((activity) => activity.toJSON()); }
+  artifactCatalog() { return this.view.catalog; }
+  specLocation() { return this.view.location; }
+  readArtifact(input) { return this.store.readArtifact({ ...input, view: this.view }); }
+}
+
+class DraftWorkerRecoveryAdmission {
+  constructor({ store, revision, decision, preview, executionRoot, targetDigest }) {
+    Object.assign(this, { store, revision, decision, preview, executionRoot, targetDigest });
+    Object.freeze(this);
+  }
+  assert(view) {
+    const current = resolveDraftWorkerRecovery({ state: view.state, activities: view.activities });
+    if (view.revision !== this.revision || current.activityId !== this.decision.activityId) {
+      throw new CurrentFlowStateConflictError("Draft recovery authority changed before publication");
+    }
+    const preview = DraftWorkerRecoveryInputPreview.capture({
+      flowManager: new DraftWorkerRecoveryReader(this.store, view), state: view.state,
+      executionRoot: this.executionRoot, targetDigest: this.targetDigest,
+      claim: new DraftWorkerExecutionClaim(current.claim),
+    });
+    if (!preview.matches(current.checkpointReceipt.executionLifecycle.binding)
+      || preview.contentDigest !== this.preview.contentDigest) {
+      throw new CurrentFlowStateConflictError("Draft recovery inputs changed before publication");
+    }
   }
 }
 
@@ -2327,6 +2362,51 @@ export class CanonicalFlowManagerStore {
       references: { evaluations: [], findings: [], repairs: [], artifacts: [] },
       admission: new TaskGateSettlementAdmission(current, "classification-recovery"),
     });
+  }
+
+  /** Migrate only a proven, unpublished legacy checkpoint; never rerun its rejected payload. */
+  recoverLegacyDraftWorkerExecution({ specId = null, targetDigest, executionRoot } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const prepared = this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      const state = view.state;
+      const decision = resolveDraftWorkerRecovery({ state, activities: view.activities });
+      const preview = DraftWorkerRecoveryInputPreview.capture({
+        flowManager: new DraftWorkerRecoveryReader(this, view), state, executionRoot, targetDigest,
+        claim: new DraftWorkerExecutionClaim(decision.claim),
+      });
+      if (!preview.matches(decision.checkpointReceipt.executionLifecycle.binding)) {
+        throw new CurrentFlowStateConflictError("Draft recovery cannot reproduce the retained input digests");
+      }
+      const binding = { runId: state.runId, specId: resolved, stepId: decision.stepId, attempt: state.attempt };
+      const retained = view.activities.findLast((activity) => (
+        activity.result?.draftSettlementReceipt?.id === decision.checkpointReceipt.id
+      )).result.draftSettlementReceipt;
+      const execution = new DraftStepExecutionState({ binding, receipt: retained });
+      const { stepResult, settlement } = execution.executionIdentity();
+      const receipt = this.#stepSettlementReceipt({
+        binding, stepResult, settlement,
+        executionLifecycle: DraftStepExecutionLifecycle.checkpoint(new DraftConditionalWorkerExecutionBinding({
+          executionGeneration: execution.lifecycle.executionGeneration + 1,
+          inputDigest: preview.inputDigest, inputRevision: preview.inputRevision,
+          contentDigest: preview.contentDigest,
+        })),
+      });
+      const attempt = new CurrentAttempt({ ...state.attempt.toJSON(), failure: null });
+      decision.assertTransition({ activityId: decision.activityId, previousAttempt: state.attempt, attempt, receipt });
+      return {
+        decision, receipt, attempt,
+        result: resultWithDraftStepResult(resultFor("done", decision.stepId), decision.stepId, stepResult, receipt),
+        admission: new DraftWorkerRecoveryAdmission({
+          store: this, revision: view.revision, decision, preview, executionRoot, targetDigest,
+        }),
+      };
+    });
+    const state = this.runtime.recoverLegacyDraftWorkerExecution({
+      specId: resolved, activityId: prepared.decision.activityId,
+      attempt: prepared.attempt, result: prepared.result, admission: prepared.admission,
+    });
+    return Object.freeze({ state, receipt: prepared.receipt });
   }
 
   recordGateObservationDecision({ specId = null, decision } = {}) {
@@ -7659,7 +7739,7 @@ export class CanonicalFlowManagerStore {
    * Resolve one cataloged input through the same Version Store that wrote it.
    * Command code never infers a Version directory or trusts a raw path.
    */
-  readArtifact({ specId = null, logicalKey, parameters = {}, consumerNodeId, optional = false } = {}) {
+  readArtifact({ specId = null, logicalKey, parameters = {}, consumerNodeId, optional = false, view = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (optional !== true && optional !== false) {
@@ -7674,7 +7754,10 @@ export class CanonicalFlowManagerStore {
         `canonical artifact consumer is not authorized: ${consumer}/${artifact.logicalKey}`,
       );
     }
-    const catalog = this.runtime.catalog(resolved);
+    if (view !== null && view.state.specId !== resolved) {
+      throw new CurrentFlowStateConflictError("artifact view belongs to another Flow");
+    }
+    const catalog = view?.catalog ?? this.runtime.catalog(resolved);
     const descriptor = catalog.artifacts.find((entry) => entry.relativePath === artifact.relativePath) ?? null;
     if (descriptor === null) {
       if (optional) return null;
@@ -7683,12 +7766,14 @@ export class CanonicalFlowManagerStore {
     if (descriptor.logicalKey !== artifact.logicalKey) {
       throw new CurrentFlowStateInvariantError("canonical artifact catalog logical key conflicts with its resolved contract");
     }
-    const location = this.location(resolved);
+    const location = view?.location ?? this.location(resolved);
     location.assertAuthority(artifact.relativePath, { mustExist: true });
     return Object.freeze({
       descriptor: Object.freeze(descriptor.toJSON()),
       relativePath: artifact.relativePath,
-      bytes: Buffer.from(fs.readFileSync(location.resolve(artifact.relativePath))),
+      bytes: view === null
+        ? Buffer.from(fs.readFileSync(location.resolve(artifact.relativePath)))
+        : view.readCatalogedArtifact(descriptor),
     });
   }
 

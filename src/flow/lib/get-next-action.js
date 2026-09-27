@@ -12,13 +12,16 @@ import { readFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { FlowCommand } from "./base-command.js";
+import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import { getStepInstructions } from "./get-step-instructions.js";
 import {
   AwaitAcceptanceDecision,
   AwaitApproval,
   ConfirmAndAdvance,
   deriveNextAction,
+  DraftWorkerRecoveryRefusal,
   resolveDefinitionRoute,
+  resolveDraftWorkerRecovery,
   resolveSpecGatePostFailure,
   SpecGatePostFailureFacts,
   resolveTaskExecutionOverrun,
@@ -988,6 +991,25 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   });
   selectedDirective ??= userDecisionDirective ?? draftDecisionDirective ?? conditionalDirective ?? approvalDirective ?? activationDirective
     ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
+  if (isConditionalDraftWorkerStep(typedState.current?.at(-1))) {
+    let draftRecovery = null;
+    try {
+      draftRecovery = resolveDraftWorkerRecovery({
+        state: typedState,
+        activities: ctx.flowManager.activityLedger(typedState.specId),
+      });
+    } catch (error) {
+      if (!(error instanceof DraftWorkerRecoveryRefusal)) throw error;
+    }
+    if (draftRecovery !== null) {
+      selectedDirective = new ExecuteCommandDirective({
+        actionId: "RECOVER_DRAFT_EXECUTION",
+        nextAction: guardedCommand("sennel flow run recover-draft-execution", state, binding),
+        instruction: `Verify inputs and recover the retained legacy ${draftRecovery.stepId} checkpoint before resuming dispatch.`,
+        reason: "Definition selected the retained unpublished worker claim and its checkpoint on this Attempt.",
+      });
+    }
+  }
   if (target.scope === "task" && target.stepId === "task-triage" && typedState.attempt?.failure === null) {
     const filter = workerContext.taskReviewFilter;
     const quoted = (value) => `'${String(value).replaceAll("'", "'\"'\"'")}'`;

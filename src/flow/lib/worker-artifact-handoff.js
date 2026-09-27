@@ -31,7 +31,8 @@ import {
   RequirementTestLifecycleFacts,
   DraftAwaitUserDecision,
   DraftExecutionSettlement,
-  DraftWorkerExecutionBinding,
+  DraftConditionalWorkerExecutionBinding,
+  DraftWorkerExecutionClaim,
   resolveRequirementTestLifecycle,
   resolveSourceHandoffTransitionPlan,
   SourceHandoffTransitionPlan,
@@ -4617,15 +4618,158 @@ function approvedFindingExceptionHandoffInputs({ flowManager, state, policy, exe
   })];
 }
 
-function handoffInputDigest(inputs, contextSnapshot) {
+function handoffInputDigest(inputs, contextSnapshot, { content = false } = {}) {
   return digest(stableStringify({
     artifacts: inputs.map((input) => ({
       path: input.targetRelativePath,
       digest: input.digest,
       byteLength: input.byteLength,
     })),
-    context: contextSnapshot?.digest ?? null,
+    context: content ? contextSnapshot?.contentDigest() ?? null : contextSnapshot?.digest ?? null,
   }));
+}
+
+function draftCheckpointContentDigest({ inputs, contextSnapshot, semanticIdentity, planGateRepair }) {
+  if (!(contextSnapshot instanceof DraftWorkerContextSnapshot)) {
+    throw new TypeError("Draft content identity requires a Draft context snapshot");
+  }
+  return inputRevision(handoffInputDigest(inputs, contextSnapshot, { content: true }), {
+    semanticIdentity, planGateRepair,
+  });
+}
+
+/** Read-only canonical input capture shared by execution and recovery proof. */
+class WorkerHandoffInputCapture {
+  constructor({ policy, planGateRepair, testReviewRepair, testReviewRepairProgress, acceptanceRepairRoute, inputs, contextSnapshot }) {
+    if (!(policy instanceof WorkerArtifactHandoffPolicy)
+      || !Array.isArray(inputs) || inputs.some((input) => !(input instanceof WorkerArtifactInputSnapshot))) {
+      throw new TypeError("worker handoff input capture requires a policy and typed inputs");
+    }
+    this.policy = policy;
+    this.planGateRepair = planGateRepair;
+    this.testReviewRepair = testReviewRepair;
+    this.testReviewRepairProgress = testReviewRepairProgress;
+    this.acceptanceRepairRoute = acceptanceRepairRoute;
+    this.inputs = Object.freeze(inputs);
+    this.contextSnapshot = contextSnapshot;
+    this.inputDigest = handoffInputDigest(inputs, contextSnapshot);
+    Object.freeze(this);
+  }
+
+  contentDigest(semanticIdentity) {
+    return draftCheckpointContentDigest({
+      inputs: this.inputs, contextSnapshot: this.contextSnapshot,
+      semanticIdentity, planGateRepair: this.planGateRepair,
+    });
+  }
+}
+
+function captureWorkerHandoffInputs({ flowManager, state, invocation, executionRoot, policy }) {
+  const planGateRepair = currentPlanGateRepair({ flowManager, state, stepId: policy.stepId });
+  const testReviewRepair = currentTestReviewRepair({ flowManager, state, stepId: policy.stepId });
+  const testReviewRepairProgress = currentTestReviewRepairProgress({ flowManager, state, repair: testReviewRepair });
+  if (testReviewRepairProgress?.complete) {
+    throw new WorkerArtifactHandoffError("recovery-required", "FLOW_TEST_REVIEW_REPAIR_PROGRESS_COMPLETE",
+      "all canonical test-review repair findings are complete but the test step was not finalized",
+      { retryable: false, recoveryPossible: true });
+  }
+  const acceptanceRepairRoute = currentAcceptanceImplementationRepair({ flowManager, state, stepId: policy.stepId });
+  const inputs = policy.inputContract.resolveCanonical({ planGateRepair, testReviewRepair, acceptanceRepairRoute }).map((relativePath) => {
+    const { document, snapshot } = canonicalHandoffInputSnapshot({
+      flowManager, state, workerPath: relativePath, consumerNodeId: policy.stepId,
+      label: `canonical handoff input ${relativePath}`,
+    });
+    if (snapshot.byteLength > MAX_INPUT_BYTES) {
+      throw new WorkerArtifactHandoffError("invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", `canonical handoff input ${relativePath} is oversized`);
+    }
+    return new WorkerArtifactInputSnapshot({
+      name: path.posix.basename(relativePath), targetRelativePath: relativePath, snapshot, document,
+    });
+  });
+  let contextSnapshot = null;
+  if (workerContextKind(policy) !== null) {
+    try {
+      contextSnapshot = workerContextKind(policy) === "task"
+        ? TaskWorkerContextSnapshot.materialize({
+          state, invocation, flowManager,
+          sourceFingerprint: captureCurrentTaskSource({
+            root: executionRoot, flowManager, state, taskId: invocation.action.nextAction.taskId,
+          }).fingerprint,
+        })
+        : DraftWorkerContextSnapshot.materialize({
+          executionRoot, state, invocation,
+          issueText: canonicalIssueSnapshotText({ flowManager, state }),
+          reopen: canonicalDraftReopenContext({ flowManager, state }),
+        });
+    } catch (cause) {
+      throw new WorkerArtifactHandoffError("invalid", "FLOW_ARTIFACT_HANDOFF_CONTEXT_INVALID",
+        `worker context could not be materialized: ${cause.message}`, { cause });
+    }
+  }
+  inputs.push(...workerVirtualHandoffInputs({ flowManager, state, policy, contextSnapshot, executionRoot }));
+  return new WorkerHandoffInputCapture({
+    policy, planGateRepair, testReviewRepair, testReviewRepairProgress,
+    acceptanceRepairRoute, inputs, contextSnapshot,
+  });
+}
+
+class DraftWorkerRecoveryInvocation {
+  constructor({ claim, stepId, targetDigest }) {
+    if (!(claim instanceof DraftWorkerExecutionClaim) || !isConditionalDraftWorkerStep(stepId)) {
+      throw new TypeError("Draft recovery invocation requires an old conditional worker claim");
+    }
+    this.id = claim.dispatchInvocationId;
+    this.action = Object.freeze({ digest: claim.actionDigest, nextAction: Object.freeze({ step: stepId }) });
+    this.target = Object.freeze({ digest: requiredDigest(targetDigest, "Draft recovery target digest") });
+    Object.freeze(this);
+  }
+}
+
+/** Evidence only: this value cannot prepare, claim, or publish a worker request. */
+export class DraftWorkerRecoveryInputPreview {
+  constructor({ state, stepId, claim, targetDigest, capture, semanticIdentity }) {
+    if (!(claim instanceof DraftWorkerExecutionClaim)
+      || !(capture instanceof WorkerHandoffInputCapture)
+      || !isConditionalDraftWorkerStep(stepId)) {
+      throw new TypeError("Draft recovery preview requires a conditional Step and old typed claim");
+    }
+    this.runId = requiredString(state.runId, "Draft recovery run ID");
+    this.specId = requiredString(state.specId, "Draft recovery spec ID");
+    this.stepId = stepId;
+    this.attempt = CurrentAttemptIdentity.from(state.attempt);
+    this.claim = claim;
+    this.targetDigest = requiredDigest(targetDigest, "Draft recovery target digest");
+    this.inputDigest = capture.inputDigest;
+    this.inputRevision = inputRevision(capture.inputDigest, {
+      semanticIdentity, planGateRepair: capture.planGateRepair,
+    });
+    this.contentDigest = capture.contentDigest(semanticIdentity);
+    Object.freeze(this);
+  }
+
+  static capture({ flowManager, state, executionRoot, claim, targetDigest }) {
+    const stepId = state.current?.at(-1);
+    if (!(claim instanceof DraftWorkerExecutionClaim) || !isConditionalDraftWorkerStep(stepId)
+      || (state.attempt?.failure !== null
+        && state.attempt?.failure?.code !== "FLOW_DRAFT_EXECUTION_INPUT_STALE")) {
+      throw new TypeError("Draft recovery preview requires the conditional worker Attempt");
+    }
+    const invocation = new DraftWorkerRecoveryInvocation({ claim, stepId, targetDigest });
+    const policy = workerArtifactHandoffPolicy(stepId);
+    const capture = captureWorkerHandoffInputs({ flowManager, state, invocation, executionRoot, policy });
+    return new DraftWorkerRecoveryInputPreview({
+      state, stepId, claim, targetDigest, capture,
+      semanticIdentity: Object.freeze({
+        flowIdentity: state.identity,
+        attempt: CurrentAttemptIdentity.from(state.attempt),
+      }),
+    });
+  }
+
+  matches(binding) {
+    return binding?.inputDigest === this.inputDigest
+      && binding?.inputRevision === this.inputRevision;
+  }
 }
 
 export class WorkerArtifactRetryInstruction {
@@ -5068,6 +5212,16 @@ export class WorkerArtifactHandoffRequest {
     Object.freeze(this);
   }
 
+  /** Stable checkpoint identity; the sealed request keeps its full invocation binding. */
+  checkpointContentDigest() {
+    const semanticIdentity = canonicalSemanticInputIdentity({ flowManager: this.flowManager, state: this.state });
+    return draftCheckpointContentDigest({
+      inputs: this.inputs, contextSnapshot: this.contextSnapshot,
+      semanticIdentity,
+      planGateRepair: currentPlanGateRepair({ flowManager: this.flowManager, state: this.state, stepId: this.stepId }),
+    });
+  }
+
   static create({
     mainRoot,
     executionRoot,
@@ -5099,73 +5253,12 @@ export class WorkerArtifactHandoffRequest {
       ? state
       : assertConditionalWorkerExecutionSelected({ flowManager, state, policy });
     state = admittedState;
-    const planGateRepair = currentPlanGateRepair({ flowManager, state: admittedState, stepId: policy.stepId });
-    const testReviewRepair = currentTestReviewRepair({ flowManager, state, stepId: policy.stepId });
-    const testReviewRepairProgress = currentTestReviewRepairProgress({
-      flowManager, state, repair: testReviewRepair,
-    });
-    if (testReviewRepairProgress?.complete) {
-      throw new WorkerArtifactHandoffError(
-        "recovery-required",
-        "FLOW_TEST_REVIEW_REPAIR_PROGRESS_COMPLETE",
-        "all canonical test-review repair findings are complete but the test step was not finalized",
-        { retryable: false, recoveryPossible: true },
-      );
-    }
-    const acceptanceRepairRoute = currentAcceptanceImplementationRepair({ flowManager, state, stepId: policy.stepId });
-    const inputs = policy.inputContract.resolveCanonical({ planGateRepair, testReviewRepair, acceptanceRepairRoute }).map((relativePath) => {
-      const { document, snapshot } = canonicalHandoffInputSnapshot({
-        flowManager,
-        state,
-        workerPath: relativePath,
-        consumerNodeId: policy.stepId,
-        label: `canonical handoff input ${relativePath}`,
-      });
-      if (snapshot.byteLength > MAX_INPUT_BYTES) {
-        throw new WorkerArtifactHandoffError("invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", `canonical handoff input ${relativePath} is oversized`);
-      }
-      return new WorkerArtifactInputSnapshot({
-        name: path.posix.basename(relativePath),
-        targetRelativePath: relativePath,
-        snapshot,
-        document,
-      });
-    });
-    let contextSnapshot = null;
-    if (workerContextKind(policy) !== null) {
-      try {
-        contextSnapshot = workerContextKind(policy) === "task"
-          ? TaskWorkerContextSnapshot.materialize({
-            state,
-            invocation,
-            flowManager,
-            sourceFingerprint: captureCurrentTaskSource({
-              root: executionRoot,
-              flowManager,
-              state,
-              taskId: invocation.action.nextAction.taskId,
-            }).fingerprint,
-          })
-          : DraftWorkerContextSnapshot.materialize({
-            executionRoot,
-            state,
-            invocation,
-            issueText: canonicalIssueSnapshotText({ flowManager, state }),
-            reopen: canonicalDraftReopenContext({ flowManager, state }),
-          });
-      } catch (cause) {
-        throw new WorkerArtifactHandoffError(
-          "invalid",
-          "FLOW_ARTIFACT_HANDOFF_CONTEXT_INVALID",
-          `worker context could not be materialized: ${cause.message}`,
-          { cause },
-        );
-      }
-    }
-    inputs.push(...workerVirtualHandoffInputs({
-      flowManager, state, policy, contextSnapshot, executionRoot,
-    }));
-    const inputDigestValue = handoffInputDigest(inputs, contextSnapshot);
+    const capture = captureWorkerHandoffInputs({ flowManager, state, invocation, executionRoot, policy });
+    const {
+      planGateRepair, testReviewRepair, testReviewRepairProgress, acceptanceRepairRoute,
+      inputs, contextSnapshot,
+    } = capture;
+    const inputDigestValue = capture.inputDigest;
     const semanticIdentity = canonicalSemanticInputIdentity({ flowManager, state });
     const requirementTestContext = requirementTestHandoffContext({ flowManager, state, policy, semanticIdentity });
     const payloads = policy.payloads.map((rule) => {
@@ -6932,7 +7025,8 @@ export function canonicalWorkerExecutionClaimForStored({ flowManager, stored }) 
   const claim = lifecycle?.claim;
   const binding = lifecycle?.binding;
   if (!["claimed", "publication"].includes(lifecycle?.phase)
-    || claim?.kind !== "worker" || binding?.kind !== "worker"
+    || claim?.kind !== "worker"
+    || binding?.kind !== (isConditionalDraftWorkerStep(stored.stepId) ? "conditional-worker" : "worker")
     || binding.inputDigest !== stored.inputDigest
     || binding.inputRevision !== stored.inputRevision
     || claim.dispatchInvocationId !== stored.dispatchInvocationId
@@ -8511,7 +8605,8 @@ export class WorkerArtifactHandoffCoordinator {
     const claim = lifecycle?.claim;
     const binding = lifecycle?.binding;
     const activeStepId = activeFlowStepId(state);
-    if (claim?.kind !== "worker" || binding?.kind !== "worker"
+    if (claim?.kind !== "worker"
+      || binding?.kind !== (isConditionalDraftWorkerStep(activeStepId) ? "conditional-worker" : "worker")
       || !(isConditionalDraftWorkerStep(activeStepId)
         || activeStepId === "spec-gate-repair")) return null;
     const requestPath = path.join(
@@ -9646,10 +9741,11 @@ export class WorkerArtifactHandoffCoordinator {
         binding,
         stepResult,
         settlement,
-        executionBinding: new DraftWorkerExecutionBinding({
+        executionBinding: new DraftConditionalWorkerExecutionBinding({
           executionGeneration: execution.lifecycle.executionGeneration + 1,
           inputDigest: nextRequest.inputDigest,
           inputRevision: nextRequest.inputRevision,
+          contentDigest: nextRequest.checkpointContentDigest(),
         }),
       });
     } else if (request.stepId === "draft-refine" && settlement instanceof DraftAwaitUserDecision) {

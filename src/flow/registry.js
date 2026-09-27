@@ -2455,6 +2455,28 @@ export const FLOW_COMMANDS = {
         "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
       ].join("\n"),
     },
+    "recover-draft-execution": {
+      helpKey: "flow.run.recover-draft-execution",
+      requiresFlow: true,
+      runtimeLog: { stepMetadata: false },
+      explicitTargetResolution: true,
+      command: () => import("./lib/run-recover-draft-execution.js"),
+      args: {
+        flags: FLOW_TARGET_GUARD_FLAGS,
+        options: [...FLOW_RUN_OPTIONS],
+      },
+      help: [
+        `Usage: sennel flow run recover-draft-execution ${FLOW_TARGET_GUARD_USAGE}`,
+        "",
+        "Reconcile one legacy conditional Draft checkpoint with or without a subsequent stale-input admission failure.",
+        "Preserve the Attempt and audit ledger; require the exact prior claim and unchanged canonical inputs.",
+        "This command does not execute a worker or advance the Step.",
+        "",
+        "Options:",
+        ...FLOW_TARGET_GUARD_HELP_LINES,
+        "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
+      ].join("\n"),
+    },
     "reconcile-task-review": {
       helpKey: "flow.run.reconcile-task-review",
       runtimeLog: { stepMetadata: false },

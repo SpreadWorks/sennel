@@ -12,6 +12,7 @@
  */
 
 import { createHash } from "node:crypto";
+export { resolveDraftWorkerRecovery, DraftWorkerRecoveryRefusal } from "./lib/draft-worker-recovery.js";
 import { DraftGateRepairSelection } from "./steps/draft/draft-gate-repair-selection.js";
 import { isConditionalDraftWorkerStep } from "./lib/draft-conditional-worker.js";
 import { SourceHandoffFailureFacts } from "./lib/source-handoff-failure.js";
@@ -4615,7 +4616,7 @@ export class DraftWorkerExecutionBinding {
     this.executionGeneration = executionGeneration;
     this.inputDigest = requireDraftExecutionDigest(inputDigest, "Draft worker execution input digest");
     this.inputRevision = requireDraftExecutionDigest(inputRevision, "Draft worker execution input revision");
-    Object.freeze(this);
+    if (new.target === DraftWorkerExecutionBinding) Object.freeze(this);
   }
 
   toJSON() {
@@ -4628,10 +4629,32 @@ export class DraftWorkerExecutionBinding {
   }
 
   equals(other) {
-    return other instanceof DraftWorkerExecutionBinding
+    return other?.constructor === this.constructor
       && this.executionGeneration === other.executionGeneration
       && this.inputDigest === other.inputDigest
       && this.inputRevision === other.inputRevision;
+  }
+}
+
+/** Conditional Draft checkpoint identity with a separate, invocation-free content revision. */
+export class DraftConditionalWorkerExecutionBinding extends DraftWorkerExecutionBinding {
+  constructor({ contentDigest, ...requestBinding } = {}) {
+    super(requestBinding);
+    this.kind = "conditional-worker";
+    this.contentDigest = requireDraftExecutionDigest(contentDigest, "Draft conditional worker content digest");
+    Object.freeze(this);
+  }
+
+  toJSON() { return { ...super.toJSON(), kind: this.kind, contentDigest: this.contentDigest }; }
+
+  equals(other) {
+    return super.equals(other) && this.contentDigest === other.contentDigest;
+  }
+
+  continuesCheckpoint(other) {
+    return other instanceof DraftConditionalWorkerExecutionBinding
+      && this.executionGeneration === other.executionGeneration
+      && this.contentDigest === other.contentDigest;
   }
 }
 
@@ -4644,6 +4667,10 @@ function draftExecutionBindingFromJSON(value) {
   if (value.kind === "worker") {
     requireExactObject(value, ["kind", "executionGeneration", "inputDigest", "inputRevision"], "Draft worker execution binding");
     return new DraftWorkerExecutionBinding(value);
+  }
+  if (value.kind === "conditional-worker") {
+    requireExactObject(value, ["kind", "executionGeneration", "inputDigest", "inputRevision", "contentDigest"], "Draft conditional worker execution binding");
+    return new DraftConditionalWorkerExecutionBinding(value);
   }
   throw new TypeError("Draft execution binding kind is invalid");
 }
@@ -4731,7 +4758,8 @@ export class DraftStepExecutionLifecycle {
     if ((phase === "checkpoint") !== (claim === null)) {
       throw new TypeError("Draft execution checkpoint is the only unclaimed lifecycle phase");
     }
-    if (claim !== null && claim.kind !== binding.kind) {
+    if (claim !== null && claim.kind !== binding.kind
+      && !(binding instanceof DraftConditionalWorkerExecutionBinding && claim.kind === "worker")) {
       throw new TypeError("Draft execution claim does not match its binding kind");
     }
     this.phase = phase;

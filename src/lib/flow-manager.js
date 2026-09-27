@@ -869,6 +869,9 @@ export class FlowManager {
   recoverTaskGateClassification(input = {}) {
     return this._store.recoverTaskGateClassification({ ...input, specId: input.specId ?? this._boundSpecId });
   }
+  recoverLegacyDraftWorkerExecution(input = {}) {
+    return this._store.recoverLegacyDraftWorkerExecution({ ...input, specId: input.specId ?? this._boundSpecId });
+  }
   retryGateTransition(input = {}) {
     return this._store.retryGateTransition({ ...input, specId: input.specId ?? this._boundSpecId });
   }

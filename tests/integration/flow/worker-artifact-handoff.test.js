@@ -15,7 +15,7 @@ import { findStepById, flattenSteps } from "../../../src/flow/lib/step-tree.js";
 import {
   buildInitialNestedSteps,
   buildInitialTaskSteps,
-  DraftWorkerExecutionBinding,
+  DraftConditionalWorkerExecutionBinding,
   DraftWorkerExecutionClaim,
   resolveSourceHandoffTransitionPlan,
   DraftStepSettlementReceipt,
@@ -240,11 +240,12 @@ function fixture(stepId = "draft", {
         attempt: state.attempt,
       };
       const execution = flowManager.draftStepExecutionState({ binding });
-      const executionBinding = new DraftWorkerExecutionBinding({
+      const executionBinding = new DraftConditionalWorkerExecutionBinding({
         executionGeneration: execution.lifecycle === null
           ? 0 : execution.lifecycle.executionGeneration + 1,
         inputDigest: handoff.inputDigest,
         inputRevision: handoff.inputRevision,
+        contentDigest: handoff.checkpointContentDigest(),
       });
       const stepResult = handoff.stepId === "draft-refine"
         ? createDraftRefineResult({
@@ -5109,10 +5110,11 @@ describe("worker artifact handoff", () => {
         stepId: "draft-refine",
       });
       const beforeAttempt = value.flowManager.canonicalState(value.specId).attempt;
-      const executionBinding = new DraftWorkerExecutionBinding({
+      const executionBinding = new DraftConditionalWorkerExecutionBinding({
         executionGeneration: 0,
         inputDigest: request.inputDigest,
         inputRevision: request.inputRevision,
+        contentDigest: request.checkpointContentDigest(),
       });
       const service = new DraftService({
         flowManager: value.flowManager,

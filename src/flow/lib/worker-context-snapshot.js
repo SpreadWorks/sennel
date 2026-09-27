@@ -310,6 +310,13 @@ export class DraftWorkerContextSnapshot {
     return this;
   }
 
+  /** The context's execution identity without the dispatcher invocation lease. */
+  contentDigest() {
+    const { binding, ...snapshot } = this.unsignedJSON();
+    const { dispatchInvocationId, ...contentBinding } = binding;
+    return digest({ ...snapshot, binding: contentBinding });
+  }
+
   unsignedJSON() {
     return {
       version: this.version,
