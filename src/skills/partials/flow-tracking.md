@@ -3,7 +3,7 @@
 Worker-artifact-handoff-managed exceptions:
 
 - When `next-action.context.workerArtifactHandoff.required` is true, the worker MUST NOT run `flow set step` or write canonical Flow artifacts.
-- The worker writes every declared payload to its exact handoff `payloadPath` and runs the exact `sealCommand` once.
+- The worker writes every declared payload to its exact handoff `payloadPath` and runs the exact `sealCommand`. A rejected seal is not completion; the worker follows request-bound correction instructions before sealing. A successful seal is final and its payload must not be changed.
 - The parent dispatcher validates and publishes the sealed payload, records its revision and receipt, and completes the step. This applies to the managed draft, draft triage/repair/refine, spec, spec triage/repair, and spec-test authoring steps.
 
 Post-hook-managed exceptions:

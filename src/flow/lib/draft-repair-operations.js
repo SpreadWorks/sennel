@@ -175,18 +175,15 @@ export class DraftRepairOperationBatch {
   }
 }
 
-export class DraftGateRepairAuthority {
-  constructor(repair) {
-    if (!(repair instanceof GateObservationRepair)) {
-      throw new Error("draft Gate repair authority requires a typed Gate observation repair");
-    }
-    this.repair = repair;
+/** Pure authoring scope shared by producer preview and canonical Gate authority. */
+export class DraftGateRepairScope {
+  constructor() {
     this.allowedPaths = Object.freeze(GATE_AUTHORED_PATHS.map((value) => new DraftRepairPath(value)));
-    Object.freeze(this);
+    if (new.target === DraftGateRepairScope) Object.freeze(this);
   }
 
   permits(path) {
-    if (!(path instanceof DraftRepairPath)) throw new Error("draft Gate repair authority requires a typed path");
+    if (!(path instanceof DraftRepairPath)) throw new Error("draft Gate repair scope requires a typed path");
     return this.allowedPaths.some((allowed) => {
       if (path.segments.length < allowed.segments.length) return false;
       return allowed.segments.every((segment, index) => path.segments[index] === segment);
@@ -194,6 +191,17 @@ export class DraftGateRepairAuthority {
   }
 
   static authoringPaths() { return Object.freeze([...GATE_AUTHORED_PATHS]); }
+}
+
+export class DraftGateRepairAuthority extends DraftGateRepairScope {
+  constructor(repair) {
+    super();
+    if (!(repair instanceof GateObservationRepair)) {
+      throw new Error("draft Gate repair authority requires a typed Gate observation repair");
+    }
+    this.repair = repair;
+    Object.freeze(this);
+  }
 }
 
 export class DraftRepairOperationsError extends Error {
@@ -242,7 +250,7 @@ export function validateDraftRepairTriage(triage) {
  * remains safe and leaves lifecycle judgment to the downstream draft gate.
  */
 export function applyDraftRepairOperations({ draft, triage = null, repair, inputRevision, phase, authority = null }) {
-  if (authority !== null && !(authority instanceof DraftGateRepairAuthority)) {
+  if (authority !== null && !(authority instanceof DraftGateRepairScope)) {
     throw new Error("draft repair requires a typed Gate authority");
   }
   const gateOwned = authority !== null;
@@ -316,13 +324,13 @@ export function applyDraftRepairOperations({ draft, triage = null, repair, input
   const audit = frozen({
     version: 2,
     phase,
-    ...(gateOwned ? {
+    ...(authority instanceof DraftGateRepairAuthority ? {
       sourceAuthority: {
         kind: "plan-gate-repair",
         repairId: authority.repair.repairId,
         recordFingerprint: authority.repair.recordFingerprint,
       },
-    } : { sourceTriage: `${phase.replace(/-repair$/, "")}-triage.json` }),
+    } : gateOwned ? {} : { sourceTriage: `${phase.replace(/-repair$/, "")}-triage.json` }),
     baseRevision: batch.baseRevision,
     acceptedOperations,
     discardedOperations: discarded,

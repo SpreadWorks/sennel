@@ -8,6 +8,7 @@
  */
 
 import crypto from "node:crypto";
+import { DraftWorkerRejection, DraftWorkerCorrectionBudget } from "./draft-worker-rejection.js";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -2045,7 +2046,7 @@ class PersistedDraftExecutionClaim {
 
 class PersistedDraftExecutionLifecycle {
   constructor(value) {
-    requireExactFields(value, new Set(["phase", "binding", "claim"]), "result.draftSettlementReceipt.executionLifecycle");
+    requireExactFields(value, new Set(["phase", "binding", "claim", ...(Object.hasOwn(value, "rejection") ? ["rejection"] : [])]), "result.draftSettlementReceipt.executionLifecycle");
     if (!DRAFT_EXECUTION_PHASES.has(value.phase)) {
       throw new CurrentFlowStateInvariantError("Draft execution lifecycle phase is invalid");
     }
@@ -2057,6 +2058,10 @@ class PersistedDraftExecutionLifecycle {
         && !(this.binding.kind === "conditional-worker" && this.claim.kind === "worker"))) {
       throw new CurrentFlowStateInvariantError("Draft execution lifecycle claim does not match its phase and binding");
     }
+    this.rejection = Object.hasOwn(value, "rejection") ? DraftWorkerRejection.fromJSON(value.rejection) : null;
+    if (this.rejection !== null && (this.phase !== "checkpoint" || this.binding.kind !== "conditional-worker")) {
+      throw new CurrentFlowStateInvariantError("Draft rejection requires a conditional checkpoint");
+    }
     Object.freeze(this);
   }
 
@@ -2067,6 +2072,7 @@ class PersistedDraftExecutionLifecycle {
       phase: this.phase,
       binding: this.binding.toJSON(),
       claim: this.claim?.toJSON() ?? null,
+      ...(this.rejection === null ? {} : { rejection: this.rejection.toJSON() }),
     };
   }
 }
@@ -2100,12 +2106,23 @@ export function assertDraftSettlementReceiptTransition(priorReceipts, receipt, {
     return receipt;
   }
   const previous = executionHistory.at(-1)?.executionLifecycle ?? null;
+  if (lifecycle.phase === "claimed" && receipt.binding.stepId === "draft-gate-repair"
+    && new DraftWorkerCorrectionBudget(executionHistory.filter((entry) => entry.executionLifecycle.rejection != null).length).exhausted) {
+    throw new CurrentFlowStateConflictError("Draft producer correction budget is exhausted");
+  }
   if (previous?.phase === "terminal") {
     throw new CurrentFlowStateConflictError("Draft execution is already terminal");
   }
   if (lifecycle.phase === "checkpoint") {
     const previousGeneration = previous?.executionGeneration ?? previous?.binding?.executionGeneration;
     const expectedGeneration = previous === null ? 0 : previousGeneration + 1;
+    if (lifecycle.rejection != null && (receipt.binding.stepId !== "draft-gate-repair"
+      || previous?.phase !== "claimed" || previous.binding.kind !== "conditional-worker"
+      || lifecycle.binding.inputDigest !== previous.binding.inputDigest
+      || lifecycle.binding.inputRevision !== previous.binding.inputRevision
+      || lifecycle.binding.contentDigest !== previous.binding.contentDigest)) {
+      throw new CurrentFlowStateConflictError("Draft rejection must retain its exact unpublished claim inputs");
+    }
     if (lifecycle.executionGeneration !== expectedGeneration) {
       throw new CurrentFlowStateConflictError("Draft execution checkpoint generation is not monotonic");
     }

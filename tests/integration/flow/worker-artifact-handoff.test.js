@@ -1,3 +1,4 @@
+import { rewriteWorkerSubmission as rewriteSubmission } from "../../support/infrastructure/worker-artifact.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -542,27 +543,6 @@ function completedWorkerAction() {
 
 function loadWorkerArtifactHandoffSchema() {
   return JSON.parse(fs.readFileSync(WORKER_ARTIFACT_HANDOFF_SCHEMA_PATH, "utf8"));
-}
-
-function stableStringify(value) {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) => (
-      `${JSON.stringify(key)}:${stableStringify(value[key])}`
-    )).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function rewriteSubmission(request, mutate) {
-  const document = JSON.parse(fs.readFileSync(request.submissionPath, "utf8"));
-  mutate(document);
-  const unsigned = { ...document };
-  delete unsigned.handoffDigest;
-  document.handoffDigest = crypto.createHash("sha256")
-    .update(stableStringify(unsigned))
-    .digest("hex");
-  fs.writeFileSync(request.submissionPath, `${JSON.stringify(document, null, 2)}\n`);
 }
 
 async function completeSpecReviewWorkerThroughStep(value, request) {
@@ -7787,7 +7767,7 @@ describe("worker artifact handoff", () => {
 
       const issueLog = readCatalogJson(value, "issue.log", "impl-gate");
       const entry = issueLog.entries.find((candidate) => candidate.issueLogId === (
-        `worker-handoff-${result.data.actionDigest}-invalid`
+        `worker-handoff-${result.data.dispatchInvocationId}-${result.data.actionDigest}-invalid`
       ));
       assert.ok(entry);
       assert.match(entry.reason, /Worker artifact handoff invalid:/);

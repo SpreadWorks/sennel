@@ -28,9 +28,15 @@ function isNonEmptyString(value) {
 
 /** A Draft-owned delegation, deliberately not a free-form specification hole. */
 export class DeferredToSpecEntry {
+  static fields() { return Object.freeze(["boundary", "relevance", "owner"]); }
+
+  static repairGuidance() {
+    return `Each decisionMap.deferredToSpec entry has exactly ${this.fields().join(", ")}. boundary and relevance are non-empty strings; owner is spec. Put inventory, retained behavior, and verification details in those existing text values; never add entry fields.`;
+  }
+
   constructor(value) {
     if (!isObject(value)) throw new Error("deferredToSpec entry must be an object");
-    const allowed = new Set(["boundary", "relevance", "owner"]);
+    const allowed = new Set(DeferredToSpecEntry.fields());
     const extra = unknownFields(value, allowed);
     if (extra.length > 0) throw new Error(`deferredToSpec entry has unknown field \"${extra[0]}\"`);
     this.boundary = isNonEmptyString(value.boundary) ? value.boundary.trim() : null;

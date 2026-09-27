@@ -22,6 +22,7 @@ import {
   DraftWorkerRecoveryRefusal,
   resolveDefinitionRoute,
   resolveDraftWorkerRecovery,
+  resolveDraftWorkerCorrection,
   resolveSpecGatePostFailure,
   SpecGatePostFailureFacts,
   resolveTaskExecutionOverrun,
@@ -1009,6 +1010,16 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
         reason: "Definition selected the retained unpublished worker claim and its checkpoint on this Attempt.",
       });
     }
+  }
+  const correction = resolveDraftWorkerCorrection({
+    state: typedState, activities: ctx.flowManager.activityLedger(typedState.specId),
+  });
+  if (correction.exhausted) {
+    selectedDirective = new BlockedDirective({
+      code: "FLOW_DRAFT_WORKER_CORRECTION_EXHAUSTED",
+      reason: `Draft producer correction exhausted after ${correction.used} rejected submissions. Latest diagnostic: ${correction.feedback.code}.`,
+      resumeInstruction: "Correct the artifact producer using the retained diagnostics before starting a new authorized Attempt. Do not reset the checkpoint or bypass validation.",
+    });
   }
   if (target.scope === "task" && target.stepId === "task-triage" && typedState.attempt?.failure === null) {
     const filter = workerContext.taskReviewFilter;

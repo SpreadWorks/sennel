@@ -11,6 +11,7 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
  */
 
 import fs from "node:fs";
+import { DraftWorkerRejection } from "./draft-worker-rejection.js";
 import path from "node:path";
 import { loadSpecJsonSchema } from "../../lib/spec-json.js";
 import { FlowCommand } from "./base-command.js";
@@ -73,6 +74,7 @@ import {
   DraftWorkerExecutionBinding,
   DraftWorkerExecutionClaim,
   resolveDefinitionRoute,
+  resolveDraftWorkerCorrection,
   resolveDispatcherOwnedFlowAction,
   resolveSourceHandoffTransitionPlan,
 } from "../definition.js";
@@ -285,10 +287,15 @@ function settleRequirementTestStructuralHandoff(ctx, attempt, error) {
   return true;
 }
 
+function draftWorkerCorrection(ctx) {
+  const state = ctx.flowManager.canonicalState(ctx.specId);
+  return resolveDraftWorkerCorrection({ state, activities: ctx.flowManager.activityLedger(state.specId) });
+}
+
 /** Persist a pre-Step worker or handoff failure without inventing StepResult. */
 function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoffRequest?.stepId ?? null) {
-  if (!stepId?.startsWith("draft")) return false;
-  if (isStepAdmissionRefusal(error)) return false;
+  if (!stepId?.startsWith("draft")) return null;
+  if (isStepAdmissionRefusal(error)) return null;
   const request = attempt?.handoffRequest ?? null;
   if (isConditionalDraftWorkerStep(stepId) && request !== null) {
     const state = ctx.flowManager.canonicalState(request.specId);
@@ -302,16 +309,19 @@ function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoff
     const publicationRecoveryPending = error instanceof WorkerArtifactHandoffError
       && error.classification === "recovery-required"
       && error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED";
+    let correction = null;
     if (execution.lifecycle?.phase === "claimed" && !publicationRecoveryPending) {
       const executionIdentity = execution.executionIdentity();
       if (executionIdentity === null) {
         throw new Error("conditional Draft worker failure has no persisted execution identity");
       }
       const { stepResult, settlement } = executionIdentity;
+      const rejection = stepId === "draft-gate-repair" ? DraftWorkerRejection.fromFailure(error) : null;
       ctx.flowManager.checkpointDraftStepExecution({
         binding,
         stepResult,
         settlement,
+        rejection,
         executionBinding: new DraftConditionalWorkerExecutionBinding({
           executionGeneration: execution.lifecycle.executionGeneration + 1,
           inputDigest: execution.lifecycle.binding.inputDigest,
@@ -319,9 +329,10 @@ function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoff
           contentDigest: execution.lifecycle.binding.contentDigest,
         }),
       });
+      if (rejection !== null) correction = draftWorkerCorrection(ctx);
     }
     ctx.flowState = ctx.flowManager.loadReadOnly(request.specId);
-    return true;
+    return correction;
   }
   ctx.flowManager.failCurrentAttempt({
     specId: request?.specId ?? ctx.specId,
@@ -334,7 +345,7 @@ function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoff
     },
   });
   ctx.flowState = ctx.flowManager.loadReadOnly(request?.specId ?? ctx.specId);
-  return true;
+  return null;
 }
 
 /**
@@ -1067,7 +1078,7 @@ export class FlowDispatchWork {
           "Write every declared payload only to its exact payloadPath. Existing",
           "instructions naming canonical artifact paths are overridden for outputs.",
           "Do not mark the Flow step done. After writing all payloads, run the exact",
-          "sealCommand from request.json once. The parent dispatcher alone validates, publishes, records",
+          "sealCommand from request.json. If validation rejects it, follow workerInstructions for correction before sealing. Never modify a successfully sealed payload. The parent dispatcher alone performs final validation, publishes, records",
           "revisions, and completes the step under canonical repository authority.",
           "Return the successful seal command data object as the worker report; it must",
           "match the guarded action output_schema but is never a completion signal.",
@@ -1162,7 +1173,7 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
         taskId: null,
         timestamp: new Date().toISOString(),
       };
-      const idempotencyKey = `worker-handoff-${actionDigest || "unknown"}-${error.classification || "invalid"}`;
+      const idempotencyKey = `worker-handoff-${dispatchInvocationId || "unknown"}-${actionDigest || "unknown"}-${error.classification || "invalid"}`;
       if (state.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowManager?.appendIssueLog !== "function") {
         throw new Error("worker handoff diagnostics require canonical FlowManager.appendIssueLog");
       }
@@ -1555,6 +1566,11 @@ export default class RunDispatchCommand extends FlowCommand {
       specId: state.specId,
       stepId,
     });
+    const correction = draftWorkerCorrection(ctx);
+    if (correction.exhausted) {
+      throw conditionalDraftAdmissionError("invalid", "FLOW_DRAFT_WORKER_CORRECTION_EXHAUSTED",
+        "Draft producer correction budget is exhausted; inspect the retained rejection diagnostics.");
+    }
     const executionState = ctx.flowManager.draftStepExecutionState({ binding: stepBinding });
     const prior = executionState.lifecycle;
     if (prior?.binding instanceof DraftWorkerExecutionBinding
@@ -1597,7 +1613,7 @@ export default class RunDispatchCommand extends FlowCommand {
     const claimed = reusePrior && ["claimed", "publication"].includes(prior.phase)
       ? prior.claim : null;
     const workerInvocation = claimed === null
-      ? invocation
+      ? (prior?.phase === "checkpoint" ? freshWorkerInvocation(invocation, invocation.action.nextAction) : invocation)
       : reboundWorkerInvocation(invocation, invocation.action.nextAction, claimed.dispatchInvocationId);
     if (claimed !== null && workerInvocation.action.digest !== claimed.actionDigest) {
       throw conditionalDraftAdmissionError(
@@ -1751,9 +1767,9 @@ export default class RunDispatchCommand extends FlowCommand {
         specDefinition = await specWorkerStepDefinition(action.nextAction.step);
         const conditionalDraftExecution = isConditionalDraftWorkerStep(action.nextAction.step);
         const workerInstructions = new WorkerArtifactWorkerInstructions({
-          // Conditional Draft retry authority is fully reconstructible from
-          // canonical generation state; transient error prose is not identity.
-          retryFeedback: conditionalDraftExecution ? null : retryFeedback?.toJSON() ?? null,
+          // Reconstruct producer feedback from the canonical checkpoint, including
+          // when reproducing a claimed request after process interruption.
+          retryFeedback: conditionalDraftExecution ? draftWorkerCorrection(ctx).feedback : retryFeedback?.toJSON() ?? null,
           schemaGuidance: workerRequestGuidance,
         });
         handoffAuthority = new FlowHandoffAuthorityLease({
@@ -2704,8 +2720,12 @@ export default class RunDispatchCommand extends FlowCommand {
             current = await this.fetchNextAction(target);
             continue;
           }
-          settleDraftWorkerFailure(ctx, attempt, attempt.error, invocation.action.nextAction.step);
+          const correction = settleDraftWorkerFailure(ctx, attempt, attempt.error, invocation.action.nextAction.step);
           discardDeferredMetrics(deferredMetrics);
+          if (correction?.continue) {
+            current = await this.fetchNextAction(target);
+            continue;
+          }
           return this.failure(
             ctx,
             attempt.error.code,
@@ -2785,7 +2805,11 @@ export default class RunDispatchCommand extends FlowCommand {
             current = await this.fetchNextAction(target);
             continue;
           }
-          settleDraftWorkerFailure(ctx, attempt, exhausted, invocation.action.nextAction.step);
+          const correction = settleDraftWorkerFailure(ctx, attempt, exhausted, invocation.action.nextAction.step);
+          if (correction?.continue) {
+            current = await this.fetchNextAction(target);
+            continue;
+          }
           return this.failure(
             ctx,
             exhausted.code,

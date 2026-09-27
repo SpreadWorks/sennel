@@ -38,7 +38,7 @@ import {
   SourceHandoffTransitionPlan,
 } from "../definition.js";
 import { SourceHandoffFailureFacts } from "./source-handoff-failure.js";
-import { DraftLifecycle } from "./draft-lifecycle.js";
+import { DraftLifecycle, DeferredToSpecEntry } from "./draft-lifecycle.js";
 import { DraftReopenContext } from "./draft-reopen-context.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import {
@@ -79,7 +79,7 @@ import {
   SpecGateRepairOperationBatch,
 } from "./spec-repair-operations.js";
 import { DraftRepairInput, DraftRepairCandidate } from "../steps/draft/draft-repair-candidate.js";
-import { DraftGateRepairAuthority } from "./draft-repair-operations.js";
+import { DraftGateRepairAuthority, DraftGateRepairScope, DraftRepairOperationsError, applyDraftRepairOperations } from "./draft-repair-operations.js";
 import {
   flowArtifactAuthorityForStep,
   requiresWorkerArtifactHandoff,
@@ -4974,7 +4974,7 @@ function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
   const gateRecurrence = inputs.find((input) => (
     input.name === "gate-observation-recurrence.json"
   ))?.document ?? null;
-  if (Array.isArray(gateRecurrence?.entries) && gateRecurrence.entries.length > 0) {
+  if (stepId === "draft-gate-repair" || (Array.isArray(gateRecurrence?.entries) && gateRecurrence.entries.length > 0)) {
     const target = stepId === "task-impl"
       ? "Populate the gateRepair field in the structured source response."
       : stepId === "draft-gate-repair"
@@ -4984,11 +4984,13 @@ function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
       target,
       ...(stepId === "draft-gate-repair" ? [
         "The payload must have exactly version, baseRevision, operations, and report. Each operation must have exactly kind, path, replacement, and reason; kind must be replace-value. Do not include a target digest; the parent records the observed value digest from the immutable draft.",
-        "Use the request inputRevision as baseRevision with the sha256: prefix. Do not emit draft.json or a separate report file.",
+        "Use the request inputRevision as baseRevision with the sha256: prefix. Do not hash draft.json to invent a revision. Do not emit draft.json or a separate report file.",
+        DeferredToSpecEntry.repairGuidance(),
+        "seal-handoff validates the replacement Draft before sealing. If it rejects the payload, correct only the declared payload using its diagnostics, then seal again. Never change the request, immutable inputs, or canonical artifacts.",
         `The fixed authoring paths are ${JSON.stringify(inputs.find((input) => input.name === "plan-gate-repair.json")?.document?.authoringPaths ?? [])}. A replacement path must equal or descend from one of them.`,
       ] : []),
       "Use version 1 with summary and exactly one results entry for every fingerprint below.",
-      JSON.stringify(gateRecurrence.entries.map((entry) => ({
+      JSON.stringify((gateRecurrence?.entries ?? []).map((entry) => ({
         fingerprint: entry.fingerprint,
         recurrenceCount: entry.recurrenceCount,
         priorStrategy: entry.priorStrategy,
@@ -5993,6 +5995,32 @@ function validateSpecRepairPayloadAtProducerBoundary(request, document) {
   });
 }
 
+function draftGateRepairReport(payload) {
+  try { return GateRepairWorkerReport.fromDocument(payload.report); }
+  catch (cause) {
+    throw new WorkerArtifactHandoffError("invalid", "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID",
+      `draft-gate-repair.json report violates its canonical contract: ${cause.message}`,
+      { cause, retryable: false, data: { stepId: "draft-gate-repair" } });
+  }
+}
+
+/** Pure preview of immutable inputs. Canonical authority is rechecked by the parent. */
+function validateDraftGateRepairPayloadAtProducerBoundary(request, document) {
+  draftGateRepairReport(document);
+  const draft = request.inputs.find((input) => input.name === "draft.json").document;
+  try {
+    applyDraftRepairOperations({
+      draft, repair: document, inputRevision: request.inputRevision,
+      phase: request.stepId, authority: new DraftGateRepairScope(),
+    });
+  } catch (cause) {
+    if (!(cause instanceof DraftRepairOperationsError)) throw cause;
+    throw new WorkerArtifactHandoffError("invalid", cause.code, cause.message, {
+      cause, retryable: false, data: { stepId: request.stepId, draftRepairAudit: cause.audit },
+    });
+  }
+}
+
 function validateFilePayloadAtCliBoundary(request, rule, source, { normalizeGeneratedSpecRequirements = false } = {}) {
   try {
     // Every file payload is JSON. Parsing it here keeps malformed worker
@@ -6003,6 +6031,9 @@ function validateFilePayloadAtCliBoundary(request, rule, source, { normalizeGene
       `handoff payload ${rule.logicalName}`,
       { retryableMalformedJson: true, transport: "worker-payload" },
     );
+    if (request.stepId === "draft-gate-repair" && rule.logicalName === "draft-gate-repair.json") {
+      validateDraftGateRepairPayloadAtProducerBoundary(request, document);
+    }
     if (rule.logicalName === "upgrade.result") {
       const validation = validateUpgradeResultArtifact(document);
       if (!validation.ok) throw new Error(`upgrade result is invalid: ${validation.reason}`);
@@ -6932,17 +6963,7 @@ class DraftGateRepairInput extends DraftRepairInput {
       );
     }
     const payload = payloadDocument(request, submission, "draft-gate-repair.json");
-    let workerReport;
-    try {
-      workerReport = GateRepairWorkerReport.fromDocument(payload.report);
-    } catch (cause) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID",
-        `draft-gate-repair.json report violates its canonical contract: ${cause.message}`,
-        { cause, retryable: false, data: { stepId: request.stepId } },
-      );
-    }
+    const workerReport = draftGateRepairReport(payload);
     super({
       stepId: request.stepId,
       draft: draftInput.document,

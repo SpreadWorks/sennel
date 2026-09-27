@@ -4197,7 +4197,7 @@ export class CanonicalFlowManagerStore {
   }
 
   /** Atomically reserve one execution generation before request materialization. */
-  checkpointDraftStepExecution({ specId = null, binding, stepResult, settlement, executionBinding, artifactWrites = [] } = {}) {
+  checkpointDraftStepExecution({ specId = null, binding, stepResult, settlement, executionBinding, rejection = null, artifactWrites = [] } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(executionBinding instanceof DraftReviewExecutionBinding)
@@ -4209,7 +4209,7 @@ export class CanonicalFlowManagerStore {
       binding,
       stepResult,
       settlement,
-      executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding),
+      executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding, rejection),
       artifactWrites,
     });
   }

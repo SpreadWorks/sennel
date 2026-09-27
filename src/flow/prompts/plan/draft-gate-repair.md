@@ -6,4 +6,4 @@
    - If the correction needs a new candidate question, an unanswered question, or any user decision, stop without writing or sealing. The non-interactive worker cannot choose, ask, or create that decision.
    - The report must cover every supplied blocking fingerprint exactly once. For recurrence, explain why the prior repair was insufficient and use a different strategy. Do not derive or replace fingerprints from titles, paths, summaries, or proposed operations.
    - Use the exact envelope and operation fields declared in the handoff instructions. An empty or semantically unchanged valid batch is recorded by the parent as rejected-no-progress; an invalid batch publishes nothing.
-   - **On complete**: run the exact handoff `sealCommand` once after the one declared payload is complete.
+   - **On complete**: run the exact handoff `sealCommand` after the one declared payload is complete. If its producer validation rejects the payload, correct the declared payload using the returned diagnostics and retry sealing. A successful seal is final; never edit or resubmit it.

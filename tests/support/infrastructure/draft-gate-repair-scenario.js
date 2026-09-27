@@ -16,7 +16,7 @@ import {
   DraftWorkerStepBinding,
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import {
-  DraftWorkerExecutionBinding,
+  DraftConditionalWorkerExecutionBinding,
   DraftWorkerExecutionClaim,
   settleDraftStepResult,
 } from "../../../src/flow/definition.js";
@@ -100,10 +100,11 @@ export class DraftGateRepairScenario {
     });
     const stepResult = new DraftGateRepairWorkerRequiredResult();
     const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
-    const executionBinding = new DraftWorkerExecutionBinding({
+    const executionBinding = new DraftConditionalWorkerExecutionBinding({
       executionGeneration: 0,
       inputDigest: this.request.inputDigest,
       inputRevision: this.request.inputRevision,
+      contentDigest: this.request.checkpointContentDigest(),
     });
     this.flowManager.checkpointDraftStepExecution({
       binding, stepResult, settlement, executionBinding,

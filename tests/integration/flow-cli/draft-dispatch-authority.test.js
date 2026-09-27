@@ -441,7 +441,7 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
       const entries = JSON.parse(issueLog.bytes.toString("utf8")).entries;
       assert.deepEqual(entries.slice(0, priorEntries.length), priorEntries);
       assert.equal(entries.length, priorEntries.length + 1);
-      assert.equal(entries.at(-1).issueLogId, `worker-handoff-${result.data.actionDigest}-invalid`);
+      assert.equal(entries.at(-1).issueLogId, `worker-handoff-${result.data.dispatchInvocationId}-${result.data.actionDigest}-invalid`);
       assert.equal(entries.at(-1).step, "draft-gate-repair");
       const issuePublication = activityDelta.find((entry) => entry.id === issueLog.descriptor.activityId);
       assert.ok(issuePublication);

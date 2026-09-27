@@ -12,6 +12,8 @@
  */
 
 import { createHash } from "node:crypto";
+import { DraftWorkerRejection } from "./lib/draft-worker-rejection.js";
+export { resolveDraftWorkerCorrection } from "./lib/draft-worker-rejection.js";
 export { resolveDraftWorkerRecovery, DraftWorkerRecoveryRefusal } from "./lib/draft-worker-recovery.js";
 import { DraftGateRepairSelection } from "./steps/draft/draft-gate-repair-selection.js";
 import { isConditionalDraftWorkerStep } from "./lib/draft-conditional-worker.js";
@@ -4747,7 +4749,7 @@ function draftExecutionClaimFromJSON(value) {
 
 /** One durable point in the execution generation lifecycle. */
 export class DraftStepExecutionLifecycle {
-  constructor({ phase, binding, claim = null } = {}) {
+  constructor({ phase, binding, claim = null, rejection = null } = {}) {
     if (!DRAFT_EXECUTION_PHASES.has(phase)) throw new TypeError("Draft execution lifecycle phase is invalid");
     if (!(binding instanceof DraftReviewExecutionBinding) && !(binding instanceof DraftWorkerExecutionBinding)) {
       throw new TypeError("Draft execution lifecycle requires a typed binding");
@@ -4762,6 +4764,11 @@ export class DraftStepExecutionLifecycle {
       && !(binding instanceof DraftConditionalWorkerExecutionBinding && claim.kind === "worker")) {
       throw new TypeError("Draft execution claim does not match its binding kind");
     }
+    if (rejection !== null && (!(rejection instanceof DraftWorkerRejection)
+      || phase !== "checkpoint" || !(binding instanceof DraftConditionalWorkerExecutionBinding))) {
+      throw new TypeError("Draft rejection requires an unclaimed conditional worker checkpoint");
+    }
+    this.rejection = rejection;
     this.phase = phase;
     this.binding = binding;
     this.claim = claim;
@@ -4779,6 +4786,7 @@ export class DraftStepExecutionLifecycle {
       phase: this.phase,
       binding: this.binding.toJSON(),
       claim: this.claim?.toJSON() ?? null,
+      ...(this.rejection === null ? {} : { rejection: this.rejection.toJSON() }),
     };
   }
 
@@ -4787,14 +4795,15 @@ export class DraftStepExecutionLifecycle {
       && stableJson(this.toJSON()) === stableJson(other.toJSON());
   }
 
-  static checkpoint(binding) {
-    return new this({ phase: "checkpoint", binding });
+  static checkpoint(binding, rejection = null) {
+    return new this({ phase: "checkpoint", binding, rejection });
   }
 
   static fromJSON(value) {
-    requireExactObject(value, ["phase", "binding", "claim"], "Draft execution lifecycle");
+    requireExactObject(value, ["phase", "binding", "claim", ...(Object.hasOwn(value, "rejection") ? ["rejection"] : [])], "Draft execution lifecycle");
     return new this({
       phase: value.phase,
+      rejection: Object.hasOwn(value, "rejection") ? DraftWorkerRejection.fromJSON(value.rejection) : null,
       binding: draftExecutionBindingFromJSON(value.binding),
       claim: value.claim === null ? null : draftExecutionClaimFromJSON(value.claim),
     });

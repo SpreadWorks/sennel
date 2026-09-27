@@ -1,3 +1,4 @@
+import { writeUncheckedWorkerSubmission } from "../../support/infrastructure/worker-artifact.js";
 import assert from "node:assert/strict";
 import { CurrentFlowStateConflictError, CurrentFlowStateInvariantError } from "../../../src/flow/lib/current-flow-state.js";
 import { DraftRepairCandidate } from "../../../src/flow/steps/draft/draft-repair-candidate.js";
@@ -22,7 +23,7 @@ import {
   DraftWorkerStepBinding,
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import {
-  DraftWorkerExecutionBinding,
+  DraftConditionalWorkerExecutionBinding,
   DraftWorkerExecutionClaim,
   settleDraftStepResult,
 } from "../../../src/flow/definition.js";
@@ -194,10 +195,11 @@ describe("dedicated draft Gate repair handoff", () => {
         specId: value.scenario.specId,
         stepId: "draft-gate-repair",
       });
-      const executionBinding = new DraftWorkerExecutionBinding({
+      const executionBinding = new DraftConditionalWorkerExecutionBinding({
         executionGeneration: 0,
         inputDigest: request.inputDigest,
         inputRevision: request.inputRevision,
+        contentDigest: request.checkpointContentDigest(),
       });
       const service = new DraftService({
         flowManager: value.flowManager,
@@ -751,7 +753,7 @@ describe("dedicated draft Gate repair handoff", () => {
         }).descriptor.hash;
         const payload = value.scenario.replacement("goal", "Retain the complete behavior explicitly.");
         mutate(payload, request);
-        seal(request, payload);
+        writeUncheckedWorkerSubmission(request, "draft-gate-repair.json", payload);
         assert.throws(
           () => prepareCandidate(value.scenario.coordinator, { ctx: value.scenario.ctx, request }),
           (error) => ["FLOW_ARTIFACT_HANDOFF_INVALID", "FLOW_ARTIFACT_HANDOFF_STALE", "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID", "FLOW_DRAFT_GATE_REPAIR_INVALID"].includes(error.code),
@@ -776,7 +778,7 @@ describe("dedicated draft Gate repair handoff", () => {
       const draftBefore = value.flowManager.readArtifact({
         specId: value.scenario.specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair",
       }).descriptor.hash;
-      seal(request, value.scenario.replacement("goal", "Retain the complete behavior explicitly."));
+      writeUncheckedWorkerSubmission(request, "draft-gate-repair.json", value.scenario.replacement("goal", "Retain the complete behavior explicitly."));
       assert.throws(
         () => prepareCandidate(value.scenario.coordinator, { ctx: value.scenario.ctx, request }),
         (error) => ["FLOW_ARTIFACT_HANDOFF_INVALID", "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID", "FLOW_DRAFT_GATE_REPAIR_INVALID"].includes(error.code),

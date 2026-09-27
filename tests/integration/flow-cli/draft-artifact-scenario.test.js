@@ -304,7 +304,7 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     assert.equal(retryIssueEntries.length, priorIssueEntries.length + 1);
     assert.equal(retryIssueEntries.at(-1).step, "spec");
     assert.equal(retryIssueEntries.at(-1).issueLogId,
-      `worker-handoff-${requests.at(-1).actionDigest}-missing`);
+      `worker-handoff-${requests.at(-1).dispatchInvocationId}-${requests.at(-1).actionDigest}-missing`);
     assert.match(retryIssueEntries.at(-1).reason, /^Worker artifact handoff missing:/);
     assert.deepEqual(reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "spec" }).descriptor, draftBeforeRetry);
     assert.deepEqual(reloaded.readArtifact({ specId, logicalKey: "flow.findings", consumerNodeId: "spec" }).descriptor, findingsBeforeRetry);
