@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-28T00:05:30.869Z",
+  "analyzedAt": "2026-09-28T08:41:09.274Z",
   "package": {
     "entries": [
       {
@@ -9650,9 +9650,9 @@
       },
       {
         "file": "src/flow/lib/gate-prompt-plan.js",
-        "hash": "e9ae1133c2f84263efe127c120bd6010",
-        "lines": 800,
-        "mtime": "2026-09-27T14:57:11.431Z",
+        "hash": "b682d58fc69994f753a3bfabc68323b0",
+        "lines": 435,
+        "mtime": "2026-09-28T08:40:25.232Z",
         "className": "gate-prompt-plan",
         "methods": [
           "planObservationBatches",
@@ -9660,11 +9660,6 @@
           "GateResultReducer",
           "RequirementSourceObservation",
           "RequirementObservationResponse",
-          "GuardrailEvidenceRule",
-          "GuardrailRangeObservation",
-          "GuardrailObservationResponse",
-          "GuardrailEvidencePlan",
-          "GuardrailObservationCollection",
           "GuardrailJudgmentInput",
           "GuardrailFileJudgmentInput",
           "GuardrailJudgmentPlan",
@@ -9672,9 +9667,6 @@
           "RequirementObservationCollection",
           "RequirementObservationEnvelope",
           "RequirementEvidenceInput",
-          "GuardrailStructuredSourceInput",
-          "GuardrailSourceMember",
-          "structuredGuardrailSourceInputs",
           "RequirementEvidencePlan",
           "RequirementReductionEvidenceElement",
           "requirementReductionElements",
@@ -9685,11 +9677,7 @@
           "digest",
           "observationResponseFootprint",
           "responseFits",
-          "guardrailSourceElement",
-          "skipJsonWhitespace",
-          "scanJsonString",
-          "scanJsonValue",
-          "parentFor"
+          "guardrailSourceElement"
         ],
         "imports": [
           "node:crypto",
@@ -9702,11 +9690,6 @@
           "GateResultReducer",
           "RequirementSourceObservation",
           "RequirementObservationResponse",
-          "GuardrailEvidenceRule",
-          "GuardrailRangeObservation",
-          "GuardrailObservationResponse",
-          "GuardrailEvidencePlan",
-          "GuardrailObservationCollection",
           "GuardrailJudgmentInput",
           "GuardrailFileJudgmentInput",
           "GuardrailJudgmentPlan",
@@ -9714,9 +9697,6 @@
           "RequirementObservationCollection",
           "RequirementObservationEnvelope",
           "RequirementEvidenceInput",
-          "GuardrailStructuredSourceInput",
-          "GuardrailSourceMember",
-          "structuredGuardrailSourceInputs",
           "RequirementEvidencePlan",
           "RequirementReductionEvidenceElement",
           "requirementReductionElements",
@@ -9731,22 +9711,22 @@
           "src/flow/lib/spec-gate-repair-evidence.js"
         ],
         "id": "a824bced",
-        "summary": "Plans and executes bounded Gate prompts with typed observations, guardrail evidence, and reduction support.",
-        "detail": "Calculates prompt response footprints and batches observations according to execution limits. Defines typed requirement and guardrail responses, source-range coverage validation, structured JSON source grouping, evidence plans, reducers, reduction elements, coverage digests, and Gate plan execution through a prompt batch executor.",
+        "summary": "Plans, validates, reduces, and executes bounded prompt batches for gate observations and requirement evidence.",
+        "detail": "This module manages prompt sizing through logical footprint and execution-budget checks, creates typed observation and guardrail judgment inputs, and enforces exact source-range coverage. It provides reducers and response envelopes for requirement observations, supports digest-based reduction evidence, and executes gate plans through batch executors while rejecting oversized or structurally invalid responses.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-28T00:06:01.176Z",
+          "processedAt": "2026-09-28T08:41:32.930Z",
           "attempts": 1
         },
         "keywords": [
-          "prompt planning",
-          "batch execution",
-          "guardrail evidence",
-          "source ranges",
-          "response reduction",
-          "coverage validation",
-          "execution budget"
+          "prompt batching",
+          "gate observations",
+          "requirement evidence",
+          "response validation",
+          "source coverage",
+          "guardrail judgments",
+          "prompt reduction"
         ]
       },
       {
@@ -9936,9 +9916,9 @@
       },
       {
         "file": "src/flow/lib/gate-transition-facts.js",
-        "hash": "f34ba685204d11edd06dc1f808e9b378",
-        "lines": 868,
-        "mtime": "2026-09-24T16:04:26.247Z",
+        "hash": "0e08ec245540ab720b336fa769a8a78d",
+        "lines": 871,
+        "mtime": "2026-09-28T08:40:25.237Z",
         "className": "gate-transition-facts",
         "methods": [
           "SpecGateAdmissionRefusal",
@@ -10000,22 +9980,22 @@
           "src/flow/registry.js"
         ],
         "id": "16206052",
-        "summary": "Reads and validates canonical Gate transition facts across draft, Spec, task, and integration phases.",
-        "detail": "Builds prospective and current Gate facts, verifies Attempt and lineage bindings, classifies failures, checks source evidence, evaluates review readiness, and tracks Task Gate settlement progress.",
+        "summary": "Derives and validates canonical facts for Draft, Spec, and Task Gate transitions.",
+        "detail": "This module verifies prospective gate facts, retry usage, task lifecycle ownership, review readiness, canonical result and source artifacts, failure classifications, lineage bindings, and settlement activity ordering. It produces validated GateTransitionFacts and related typed observations only when persisted artifacts, attempts, fingerprints, phases, tasks, and canonical state agree.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-24T16:07:53.231Z",
+          "processedAt": "2026-09-28T08:41:32.930Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "Gate transitions",
-          "prospective facts",
-          "Attempt lineage",
+          "gate transitions",
+          "canonical facts",
+          "lineage validation",
+          "task lifecycle",
           "failure classification",
-          "Task Gate settlement",
-          "review readiness"
+          "artifact verification",
+          "settlement progress"
         ]
       },
       {
@@ -14790,9 +14770,9 @@
       },
       {
         "file": "src/flow/lib/run-gate.js",
-        "hash": "7ea6069538c937875e6c66411947fef5",
-        "lines": 4785,
-        "mtime": "2026-09-28T00:00:14.117Z",
+        "hash": "11b2db184b4a51ad0326e1b160378713",
+        "lines": 4760,
+        "mtime": "2026-09-28T08:40:25.238Z",
         "className": "run-gate",
         "methods": [
           "parsePublicGateArguments",
@@ -14866,9 +14846,10 @@
           "filterGuardrailsForEvaluation",
           "buildGuardrailPrompt",
           "specArticleEvaluationSchema",
+          "guardrailFileEvaluationSchema",
           "exactIdSchema",
           "exactIdFallback",
-          "parseDraftFileEvaluation",
+          "parseGuardrailFileEvaluation",
           "extractJsonCandidate",
           "parseEvaluationsArray",
           "parseJsonObject",
@@ -15048,22 +15029,23 @@
           "src/flow/lib/task-review-prompt-plan.js"
         ],
         "id": "b4aa4dad",
-        "summary": "Orchestrates Flow Gate execution, evidence collection, evaluation, retry handling, and canonical result publication.",
-        "detail": "This module coordinates gate phases across specification, draft, implementation, integration, and task workflows. It collects Git diffs and untracked files, excludes lifecycle artifacts, validates gate inputs, builds guardrail and requirement prompts, enforces prompt budgets, parses structured evaluations, retries protocol failures, tracks evaluation scope and evidence, manages repair and issue-log artifacts, and exposes the RunGateCommand controller.",
+        "summary": "Orchestrates gate execution across flow phases, including diff collection, guardrail evaluation, requirement checks, and canonical result settlement.",
+        "detail": "This module implements the gate command and flow runner, parses public gate arguments, collects and filters Git diffs, builds structured prompts, validates JSON evaluations, retries malformed agent output, batches requirement checks, and tracks evaluation scope identity. It also handles phase-specific artifacts, canonical gate results, issue-log entries, task and integration workflows, and failure or pass reporting.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-28T00:06:01.176Z",
+          "processedAt": "2026-09-28T08:41:32.930Z",
           "attempts": 1
         },
         "keywords": [
-          "flow gate",
-          "guardrails",
-          "git diff",
-          "prompt batching",
-          "evaluation retry",
-          "canonical state",
-          "repair artifacts",
+          "gate orchestration",
+          "flow phases",
+          "Git diff collection",
+          "guardrail evaluation",
+          "requirement batching",
+          "JSON schema validation",
+          "evaluation retries",
+          "canonical artifacts",
           "issue log"
         ]
       },
@@ -26941,9 +26923,9 @@
       },
       {
         "file": "src/lib/prompt-batching.js",
-        "hash": "33dc64c841dcc730a8b0fa645d2e679a",
-        "lines": 1730,
-        "mtime": "2026-09-24T16:04:26.265Z",
+        "hash": "b9adf0313256c5f7af4613e351893c3c",
+        "lines": 1734,
+        "mtime": "2026-09-28T08:40:25.238Z",
         "className": "prompt-batching",
         "methods": [
           "normalizePromptRequest",
@@ -27068,19 +27050,20 @@
           "src/lib/spec-json.js"
         ],
         "id": "92459e32",
-        "summary": "Provides bounded prompt batching, execution, coverage, and reduction.",
-        "detail": "Defines prompt elements, ranged partitioning, collections, batch topologies, request limits, invocation projections, execution budgets, provider admission, typed completions, reducers, and reduction plans. It uses digests and strict validation to preserve coverage, ordering, size limits, progress, and aggregate execution constraints.",
+        "summary": "Implements typed prompt batching, partitioning, execution, response validation, and reduction with strict size and coverage controls.",
+        "detail": "Defines prompt request normalization, SHA-256 digests, character and byte-limit accounting, typed prompt elements, ranged partitioning, coverage entries, input collections, batch topologies, scoped Cartesian grouping, batch plans, execution budgets, provider-call admission, completion reducers, protocol execution, and multi-level reduction. The module uses dedicated error classes for oversized elements, invalid or incomplete coverage, partitioning failures, batch-count and call-limit violations, invocation projection overflow, oversized or invalid responses, incomplete execution, and non-convergent reduction. It preserves element identities and source coverage while fitting ranged payloads into request limits and validating batch and completion consistency.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-24T16:07:53.231Z",
+          "processedAt": "2026-09-28T08:41:32.930Z",
           "attempts": 1
         },
         "keywords": [
           "prompt batching",
-          "prompt partitioning",
           "request limits",
+          "range partitioning",
           "coverage validation",
+          "batch topology",
           "execution budget",
           "response reduction"
         ]
@@ -29120,9 +29103,9 @@
     ],
     "summary": {
       "total": 512,
-      "totalMethods": 5236
+      "totalMethods": 5225
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-28T00:06:01.176Z"
+  "enrichedAt": "2026-09-28T08:41:32.930Z"
 }
