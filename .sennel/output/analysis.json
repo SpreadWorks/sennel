@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-27T10:54:17.033Z",
+  "analyzedAt": "2026-09-28T00:05:30.869Z",
   "package": {
     "entries": [
       {
@@ -6314,9 +6314,9 @@
       },
       {
         "file": "src/flow/lib/canonical-gate-artifacts.js",
-        "hash": "64d5ffcbe952e49ff0aa9d034815b01e",
-        "lines": 362,
-        "mtime": "2026-09-24T16:04:26.242Z",
+        "hash": "c03b45c68e9a3532f6168dd77964d050",
+        "lines": 376,
+        "mtime": "2026-09-28T00:00:14.115Z",
         "className": "canonical-gate-artifacts",
         "methods": [
           "canonicalGateLogicalKeys",
@@ -6324,6 +6324,7 @@
           "taskGateSettlementIssueLogId",
           "taskGateSettlementIssueLogActivityId",
           "taskGateSettlementMetricActivityId",
+          "CanonicalSpecGateRecord",
           "CanonicalGateInputStore",
           "CanonicalGatePromotion",
           "CanonicalGatePublishedResultRecovery",
@@ -6349,6 +6350,7 @@
           "taskGateSettlementIssueLogId",
           "taskGateSettlementIssueLogActivityId",
           "taskGateSettlementMetricActivityId",
+          "CanonicalSpecGateRecord",
           "CanonicalGateInputStore",
           "CanonicalGatePromotion",
           "CanonicalGatePublishedResultRecovery",
@@ -6363,22 +6365,22 @@
           "src/flow/lib/run-gate.js"
         ],
         "id": "a1402c7f",
-        "summary": "Defines canonical Gate artifact identities, input access, promotion, publication recovery, and node naming.",
-        "detail": "The module validates Version 1 state, Gate phases, task scope, JSON inputs, and logical artifact keys. It provides deterministic Gate revisions, settlement issue-log and metric identifiers, a catalog-backed CanonicalGateInputStore, CanonicalGatePromotion, and recovery logic that verifies active Attempt bindings, source fingerprints, reconciliation decisions, and selected catalog publications before returning a Gate result.",
+        "summary": "Implements canonical gate artifacts, promotion, publication recovery, and settlement identity handling.",
+        "detail": "Defines validation and normalization for canonical Flow state, gate phases, task scope, source payloads, and gate node identifiers. Provides canonical input-store access, spec and task artifact handling, deterministic revision and activity identifiers, gate promotion, publication recovery, issue-log reconciliation, and settlement metric tracking.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-24T16:07:53.231Z",
+          "processedAt": "2026-09-28T00:06:01.176Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
-          "Gate artifacts",
-          "artifact catalog",
-          "Gate promotion",
+          "canonical gate",
+          "Flow state",
+          "artifact store",
+          "gate promotion",
           "publication recovery",
-          "lineage",
-          "input store"
+          "issue log",
+          "task gate"
         ]
       },
       {
@@ -9195,9 +9197,9 @@
       },
       {
         "file": "src/flow/lib/flow-findings.js",
-        "hash": "1b73babc9827e9174f11c063940a1358",
-        "lines": 880,
-        "mtime": "2026-09-24T16:04:26.246Z",
+        "hash": "57de5662f509f5ae73fa9f4af42fb396",
+        "lines": 889,
+        "mtime": "2026-09-28T00:00:14.115Z",
         "className": "flow-findings",
         "methods": [
           "normalizeSourceArtifactPath",
@@ -9300,22 +9302,22 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "1c664aa8",
-        "summary": "Models canonical Flow findings, source identities, deferred publication, and disposition mirroring.",
-        "detail": "Validates bounded finding data, source artifact paths and fingerprints, canonical snapshots, deferred findings publications, source resolution, retry exhaustion, and final disposition summaries.",
+        "summary": "Provides typed flow-finding models, canonical source resolution, deferred publication, and disposition mirroring.",
+        "detail": "Defines validation and serialization for flow findings, source identities, fingerprints, artifacts, and bounded source references. Supports canonical source-artifact lookup, deferred semantic finding publication, retry-exhaustion resolution, finding summaries, and mirroring of final dispositions while preventing copied full finding details.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-24T16:07:53.231Z",
+          "processedAt": "2026-09-28T00:06:01.176Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "Flow findings",
+          "flow findings",
           "source identity",
+          "finding fingerprint",
+          "artifact catalog",
           "deferred publication",
-          "finding fingerprints",
-          "artifact resolution",
-          "final dispositions"
+          "retry exhaustion",
+          "final disposition"
         ]
       },
       {
@@ -9551,9 +9553,9 @@
       },
       {
         "file": "src/flow/lib/gate-observation-convergence.js",
-        "hash": "bb4f2b39d85369bcf7f859262e5468f3",
-        "lines": 1068,
-        "mtime": "2026-09-24T16:04:26.246Z",
+        "hash": "7eac48f3f38e2cf6c4d5b96d26b23e2b",
+        "lines": 1076,
+        "mtime": "2026-09-28T00:00:14.115Z",
         "className": "gate-observation-convergence",
         "methods": [
           "GateObservationAuthority",
@@ -9628,29 +9630,29 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "3267397d",
-        "summary": "Converges recurring Gate observations with typed identities, evidence, repairs, and outcomes.",
-        "detail": "Defines Gate observation fingerprints and occurrences, repair requests and reports, artifact and source mutation lineages, applied or rejected outcomes, and canonical cycle read models.",
+        "summary": "Models Gate observation convergence across evidence, repair cycles, outcomes, and canonical read models.",
+        "detail": "Defines typed identities and fingerprints for Gate observations and evidence, including transition lineage and task scope. Implements recurring repair requests, artifact and source repair results, mutation and delta lineage, repair reports, repair outcomes, observation cycles, duplicate detection, recurrence checks, and cycle read-model construction.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-24T16:07:53.231Z",
+          "processedAt": "2026-09-28T00:06:01.176Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "Gate observations",
+          "Gate observation",
+          "convergence cycle",
           "repair lineage",
-          "observation fingerprints",
-          "artifact repair",
-          "source repair",
-          "cycle convergence"
+          "evidence identity",
+          "observation fingerprint",
+          "repair outcome",
+          "read model"
         ]
       },
       {
         "file": "src/flow/lib/gate-prompt-plan.js",
-        "hash": "4ecaf8e6d27f2af134f777570e4ba909",
-        "lines": 785,
-        "mtime": "2026-09-24T16:04:26.247Z",
+        "hash": "e9ae1133c2f84263efe127c120bd6010",
+        "lines": 800,
+        "mtime": "2026-09-27T14:57:11.431Z",
         "className": "gate-prompt-plan",
         "methods": [
           "planObservationBatches",
@@ -9664,6 +9666,7 @@
           "GuardrailEvidencePlan",
           "GuardrailObservationCollection",
           "GuardrailJudgmentInput",
+          "GuardrailFileJudgmentInput",
           "GuardrailJudgmentPlan",
           "countDistinctGuardrailSourceRanges",
           "RequirementObservationCollection",
@@ -9705,6 +9708,7 @@
           "GuardrailEvidencePlan",
           "GuardrailObservationCollection",
           "GuardrailJudgmentInput",
+          "GuardrailFileJudgmentInput",
           "GuardrailJudgmentPlan",
           "countDistinctGuardrailSourceRanges",
           "RequirementObservationCollection",
@@ -9727,22 +9731,22 @@
           "src/flow/lib/spec-gate-repair-evidence.js"
         ],
         "id": "a824bced",
-        "summary": "Plans, batches, reduces, and executes structured Gate and guardrail prompt evidence.",
-        "detail": "Enforces prompt size budgets and exact source coverage while constructing typed requirement and guardrail observations, reduction evidence, judgment plans, and executable Gate prompt plans.",
+        "summary": "Plans and executes bounded Gate prompts with typed observations, guardrail evidence, and reduction support.",
+        "detail": "Calculates prompt response footprints and batches observations according to execution limits. Defines typed requirement and guardrail responses, source-range coverage validation, structured JSON source grouping, evidence plans, reducers, reduction elements, coverage digests, and Gate plan execution through a prompt batch executor.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-24T16:07:53.231Z",
+          "processedAt": "2026-09-28T00:06:01.176Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "prompt batching",
-          "Gate evidence",
-          "guardrails",
+          "prompt planning",
+          "batch execution",
+          "guardrail evidence",
           "source ranges",
           "response reduction",
-          "execution budgets"
+          "coverage validation",
+          "execution budget"
         ]
       },
       {
@@ -11566,9 +11570,9 @@
       },
       {
         "file": "src/flow/lib/observation.js",
-        "hash": "726e910f123906472dae278b3e6bbfd9",
-        "lines": 281,
-        "mtime": "2026-06-18T00:33:52.047Z",
+        "hash": "bbd88762cec6f4fd36b624a8d44aab33",
+        "lines": 306,
+        "mtime": "2026-09-28T00:00:14.115Z",
         "className": "observation",
         "methods": [
           "Observation",
@@ -11586,7 +11590,9 @@
           "legacyFailureMode"
         ],
         "imports": [
-          "crypto"
+          "crypto",
+          "./spec-repair-operations.js",
+          "./spec-gate-targets.js"
         ],
         "exports": [
           "Observation",
@@ -11599,23 +11605,22 @@
           "src/flow/lib/run-gate.js"
         ],
         "id": "1dd5bb71",
-        "summary": "Defines normalized observation, diagnosis, and next-action models for flow review outputs. It enforces strict validation, severity policy rules, and compatibility conversion from legacy evaluation records.",
-        "detail": "The module validates observation payloads by checking required string fields, allowed keys, structured location data, reference arrays, and supported failure modes and severities. It includes policy logic that forces certain failure modes, especially process-evidence issues, to use blocking severity when the evidence should be diff-verifiable. Each domain class can serialize to plain JSON, render concise markdown, and generate stable hashes for deduplication or tracking. A legacy conversion helper maps older evaluation objects into the newer `Observation` and `NextAction` structures so existing review data can still be consumed consistently.",
+        "summary": "Defines normalized observations, diagnoses, next actions, severity rules, and legacy evaluation conversion.",
+        "detail": "Validates observation keys, locations, references, failure modes, severities, and Spec Gate target bindings. Provides typed Observation, Diagnosis, and NextAction models with Markdown rendering, fingerprint generation, policy checks for diff-verifiable evidence, and conversion of legacy evaluations into next-action data.",
         "chapter": "internal_design",
-        "role": "Typed review-observation model with validation and legacy normalization.",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-06-19T01:33:26.682Z",
+          "processedAt": "2026-09-28T00:06:01.176Z",
           "attempts": 1
         },
         "keywords": [
           "observation model",
-          "review findings",
+          "failure mode",
           "severity policy",
-          "failure modes",
           "diagnosis",
           "next action",
-          "schema normalization",
-          "legacy migration"
+          "Spec Gate",
+          "legacy conversion"
         ]
       },
       {
@@ -11664,9 +11669,9 @@
       },
       {
         "file": "src/flow/lib/plan-gate-repair.js",
-        "hash": "544e6ea8ec36a084339fa318fe7b6320",
-        "lines": 915,
-        "mtime": "2026-09-24T16:04:26.249Z",
+        "hash": "76dd95f8c45adcd02b9dcbbbaecdad2f",
+        "lines": 943,
+        "mtime": "2026-09-28T00:00:14.116Z",
         "className": "plan-gate-repair",
         "methods": [
           "PlanGateRepairLocation",
@@ -11698,6 +11703,8 @@
         "imports": [
           "../../lib/flow-schema-revision.js",
           "node:crypto",
+          "./spec-repair-operations.js",
+          "./spec-gate-targets.js",
           "../../lib/flow-artifact-contract.js",
           "./canonical-gate-artifacts.js",
           "./repair-attempt-lineage.js",
@@ -11734,22 +11741,22 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "5791341e",
-        "summary": "Models canonical plan-gate repair routes, observations, and repair records.",
-        "detail": "Defines phase-specific repair routes, source and target step relationships, connector bindings, blocking observations, issue-log identities, fingerprints, and canonical evidence inspection. It validates prospective and persisted repair records against gate results, Activity records, catalogs, exact publication writes, and Flow identity.",
+        "summary": "Builds canonical Plan Gate repair routes, evidence records, connector bindings, and repair resolution.",
+        "detail": "Defines Plan Gate repair observations, locations, routes, source-step status rules, eligibility checks, canonical Gate-result matching, issue-log evidence, repair records, replacement Attempts, and Activity references. Supports phase, target-step, and gate-step route lookup plus canonical repair resolution from cataloged Flow artifacts.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-24T16:07:53.231Z",
+          "processedAt": "2026-09-28T00:06:01.176Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "plan gate repair",
+          "Plan Gate repair",
           "repair route",
-          "gate observation",
           "issue log",
+          "canonical evidence",
           "connector binding",
-          "repair record"
+          "repair record",
+          "Flow artifacts"
         ]
       },
       {
@@ -14783,9 +14790,9 @@
       },
       {
         "file": "src/flow/lib/run-gate.js",
-        "hash": "3c4cec9ce455aeb95e846246829dd7f0",
-        "lines": 4535,
-        "mtime": "2026-09-24T16:04:26.252Z",
+        "hash": "7ea6069538c937875e6c66411947fef5",
+        "lines": 4785,
+        "mtime": "2026-09-28T00:00:14.117Z",
         "className": "run-gate",
         "methods": [
           "parsePublicGateArguments",
@@ -14858,8 +14865,10 @@
           "checkDraftJson",
           "filterGuardrailsForEvaluation",
           "buildGuardrailPrompt",
+          "specArticleEvaluationSchema",
           "exactIdSchema",
           "exactIdFallback",
+          "parseDraftFileEvaluation",
           "extractJsonCandidate",
           "parseEvaluationsArray",
           "parseJsonObject",
@@ -14873,6 +14882,7 @@
           "requiredGuardrailFailure",
           "requiredGateAgentResolutionFailure",
           "requiredGateEvaluationFailure",
+          "executeGuardrailJudgments",
           "checkGuardrail",
           "gateOutputFailure",
           "evaluateGateOutputWithRepair",
@@ -14913,6 +14923,7 @@
           "fs",
           "path",
           "crypto",
+          "../../lib/atomic-file.js",
           "child_process",
           "util",
           "../../lib/process.js",
@@ -14943,6 +14954,7 @@
           "./draft-lifecycle.js",
           "./test-artifacts.js",
           "./observation.js",
+          "./spec-gate-targets.js",
           "./task-scope.js",
           "./artifact-completion.js",
           "./step-tree.js",
@@ -15036,22 +15048,23 @@
           "src/flow/lib/task-review-prompt-plan.js"
         ],
         "id": "b4aa4dad",
-        "summary": "Orchestrates flow gate evaluation across specifications, tasks, integrations, and guardrails.",
-        "detail": "Collects and filters Git diffs, builds prompt batches, parses and validates agent evaluations, applies retry and reuse policies, tracks canonical gate scopes, and produces pass, fail, or required-evaluation results for flow commands.",
-        "chapter": "cli_commands",
+        "summary": "Orchestrates Flow Gate execution, evidence collection, evaluation, retry handling, and canonical result publication.",
+        "detail": "This module coordinates gate phases across specification, draft, implementation, integration, and task workflows. It collects Git diffs and untracked files, excludes lifecycle artifacts, validates gate inputs, builds guardrail and requirement prompts, enforces prompt budgets, parses structured evaluations, retries protocol failures, tracks evaluation scope and evidence, manages repair and issue-log artifacts, and exposes the RunGateCommand controller.",
+        "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-24T16:07:53.231Z",
+          "processedAt": "2026-09-28T00:06:01.176Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "gate evaluation",
+          "flow gate",
           "guardrails",
-          "Git diff",
+          "git diff",
           "prompt batching",
-          "canonical flow",
-          "requirement checks"
+          "evaluation retry",
+          "canonical state",
+          "repair artifacts",
+          "issue log"
         ]
       },
       {
@@ -17397,9 +17410,9 @@
       },
       {
         "file": "src/flow/lib/spec-gate-repair-context.js",
-        "hash": "004cb97745196beb55ea6e7d0c77ea44",
-        "lines": 357,
-        "mtime": "2026-09-27T02:33:49.114Z",
+        "hash": "35267c46a1139ee9b4575b5357b4efd8",
+        "lines": 372,
+        "mtime": "2026-09-28T00:00:14.117Z",
         "className": "spec-gate-repair-context",
         "methods": [
           "SpecGateRepairRange",
@@ -17419,6 +17432,7 @@
           "../../lib/prompt-batching.js",
           "./flow-findings.js",
           "./spec-repair-operations.js",
+          "./spec-gate-targets.js",
           "./spec-gate-repair-sources.js"
         ],
         "exports": [
@@ -17436,21 +17450,22 @@
           "src/flow/lib/spec-gate-repair-input.js"
         ],
         "id": "46f160bf",
-        "summary": "Builds bounded canonical context for Spec Gate repair prompts.",
-        "detail": "Represents repair ranges, findings, units, selections, source identities, and digests, then groups them into prompt batches. It validates typed read-only sources, enforces canonical range ownership, tracks writable permissions, and supports location-specific context expansion.",
+        "summary": "Models typed Spec Gate repair context, findings, ranges, selections, prompt envelopes, and repair batches.",
+        "detail": "This module defines immutable repair evidence structures for Spec Gate processing. It represents source ranges, findings, repair units, selected writable ranges, and base revisions, then serializes them into constrained prompt envelopes and batch plans. It validates typed read-only sources, rejects stale or foreign canonical ranges, preserves finding identity, and resolves location batches against the selected repair context.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-27T02:37:34.845Z",
+          "processedAt": "2026-09-28T00:06:01.176Z",
           "attempts": 1
         },
         "keywords": [
-          "Spec Gate repair",
+          "Spec Gate",
           "repair context",
-          "repair ranges",
-          "finding identity",
-          "prompt batching",
-          "guardrails"
+          "source ranges",
+          "findings",
+          "selections",
+          "prompt envelopes",
+          "revision validation"
         ]
       },
       {
@@ -17505,9 +17520,9 @@
       },
       {
         "file": "src/flow/lib/spec-gate-repair-input.js",
-        "hash": "c71028d0045ee66d9ee942b958b8b81e",
-        "lines": 142,
-        "mtime": "2026-09-27T02:33:49.115Z",
+        "hash": "5a3fb8aa5e5f01a3751e68ec9a950f98",
+        "lines": 122,
+        "mtime": "2026-09-28T00:00:14.117Z",
         "className": "spec-gate-repair-input",
         "methods": [
           "SpecGateRepairRuleSet",
@@ -17524,7 +17539,7 @@
           "./flow-findings.js",
           "./plan-gate-repair.js",
           "./spec-gate-repair-context.js",
-          "./spec-repair-operations.js",
+          "./spec-gate-targets.js",
           "./spec-gate-repair-sources.js"
         ],
         "exports": [
@@ -17538,20 +17553,22 @@
           "src/flow/lib/spec-gate-repair-worker-facts.js"
         ],
         "id": "1150bb98",
-        "summary": "Reads the canonical inputs required for Spec Gate repair.",
-        "detail": "Combines active Attempt data, Spec content, guardrails, canonical findings, repair operations, prior command results, acknowledged rationale, and repair sources into a typed input. It verifies publication stability and rejects permissions outside the canonical Spec inventory.",
+        "summary": "Builds and validates the canonical input package used for Spec Gate repair evaluation.",
+        "detail": "This module reads the active Attempt and specification, loads phase-filtered guardrails and canonical findings, and combines repair observations with a SpecGateRepairContext. It hashes source bytes and serialized values, verifies that source publication, observations, target revision, and target authority still match canonical data, and returns a SpecGateRepairInput containing the validated repair state and context.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-27T02:37:34.845Z",
+          "processedAt": "2026-09-28T00:06:01.176Z",
           "attempts": 1
         },
         "keywords": [
           "repair input",
+          "Spec Gate",
           "canonical findings",
           "guardrails",
-          "repair permissions",
-          "Spec inventory"
+          "source digest",
+          "target revision",
+          "authority validation"
         ]
       },
       {
@@ -17733,10 +17750,55 @@
         ]
       },
       {
+        "file": "src/flow/lib/spec-gate-targets.js",
+        "hash": "491f58c9b7b6219ead47e2c8909c73ed",
+        "lines": 137,
+        "mtime": "2026-09-28T00:00:14.117Z",
+        "className": "spec-gate-targets",
+        "methods": [
+          "SpecGateDocumentTarget",
+          "SpecGateTargetSelection",
+          "key",
+          "targetSchema"
+        ],
+        "imports": [
+          "./spec-repair-operations.js"
+        ],
+        "exports": [
+          "SpecGateDocumentTarget",
+          "SpecGateTargetSelection"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/lib/observation.js",
+          "src/flow/lib/plan-gate-repair.js",
+          "src/flow/lib/run-gate.js",
+          "src/flow/lib/spec-gate-repair-context.js",
+          "src/flow/lib/spec-gate-repair-input.js"
+        ],
+        "id": "1d36353f",
+        "summary": "Defines Spec Gate document targets, target selections, and schemas for allowed repair targets.",
+        "detail": "This module provides the SpecGateDocumentTarget and SpecGateTargetSelection abstractions and generates validation schemas from specification repair targets. It recognizes SHA-256 revision identifiers, requires explicit allowed target permissions, rejects absent or ambiguous observation targets, ensures allowed targets belong to the declared target set, and supports both document-level and entity-level target schemas.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-09-28T00:06:01.176Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "document targets",
+          "target selection",
+          "repair schema",
+          "allowed targets",
+          "SHA-256 revision",
+          "Spec Gate"
+        ]
+      },
+      {
         "file": "src/flow/lib/spec-repair-operations.js",
-        "hash": "2ea9039c147c1ca900838bdae789876c",
-        "lines": 983,
-        "mtime": "2026-09-24T16:04:26.258Z",
+        "hash": "0b80ee73c3d7df70f9f4703edffa9b76",
+        "lines": 992,
+        "mtime": "2026-09-28T00:00:14.118Z",
         "className": "spec-repair-operations",
         "methods": [
           "specRepairProposalDigest",
@@ -17761,6 +17823,8 @@
           "SpecRepairOperationBatch",
           "SpecRepairTargetEntry",
           "specRepairTargetEntries",
+          "validateSpecGateRepairPermissions",
+          "parseSpecGateRepairPermissions",
           "SpecRepairAuthority",
           "SpecReviewRepairAuthority",
           "validateSpecRepairTriageTargets",
@@ -17831,6 +17895,8 @@
           "SpecRepairOperationBatch",
           "SpecRepairTargetEntry",
           "specRepairTargetEntries",
+          "validateSpecGateRepairPermissions",
+          "parseSpecGateRepairPermissions",
           "SpecRepairAuthority",
           "SpecReviewRepairAuthority",
           "validateSpecRepairTriageTargets",
@@ -17843,28 +17909,31 @@
         ],
         "extends": "Error",
         "usedBy": [
+          "src/flow/lib/observation.js",
+          "src/flow/lib/plan-gate-repair.js",
           "src/flow/lib/spec-gate-repair-context.js",
-          "src/flow/lib/spec-gate-repair-input.js",
           "src/flow/lib/spec-gate-repair-review.js",
+          "src/flow/lib/spec-gate-targets.js",
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "4f196bfc",
-        "summary": "Validates, authorizes, audits, and applies Spec repair operations.",
-        "detail": "Defines repair targets, field and text edits, array operations, operation batches, authority permissions, finding-based authorization, canonical digests, audit records, and immutable-revision application for ordinary and Spec Gate repairs.",
+        "summary": "Implements typed specification repair operations, authorization, auditing, conflict handling, and replay.",
+        "detail": "This module defines bounded operation types for replacing, editing, adding, and deleting specification roots, fields, and collection entries. It validates exact keys, values, text edits, target existence, immutable revisions, finding identifiers, permissions, and canonical ordering. It also groups gate operations, detects conflicts, records accepted and rejected audits, enforces repair authority, and applies operations only against the immutable base specification.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-24T16:07:53.231Z",
+          "processedAt": "2026-09-28T00:06:01.176Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "Spec repair operations",
-          "operation validation",
-          "repair authority",
+          "repair operations",
+          "specification mutation",
+          "permissions",
+          "audit trail",
+          "conflict detection",
           "immutable revision",
-          "audit records",
-          "array edits"
+          "operation validation",
+          "replay"
         ]
       },
       {
@@ -29050,10 +29119,10 @@
       }
     ],
     "summary": {
-      "total": 511,
-      "totalMethods": 5225
+      "total": 512,
+      "totalMethods": 5236
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-27T10:56:00.358Z"
+  "enrichedAt": "2026-09-28T00:06:01.176Z"
 }
