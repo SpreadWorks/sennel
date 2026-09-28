@@ -74,7 +74,13 @@ test("real model preserves cross-range violations, justified exceptions and Spec
     measurement.result = await variant.evaluate(root, source, "spec", undefined, [], {
       agent, loadGuardrails: () => rules, sharedGuardrailEvidence: variant.shared,
       recordPromptMetric: (entry) => measurement.phaseMetrics.push(entry),
-      ...(variant.shared ? { structuredSource: JSON.parse(source) } : {}),
+      ...(variant.shared ? {
+        structuredSource: JSON.parse(source),
+        specTargetScope: {
+          spec: JSON.parse(source),
+          specRevision: `sha256:${createHash("sha256").update(source).digest("hex")}`,
+        },
+      } : {}),
     });
     measurement.durationMs = Date.now() - start;
     measurement.inputCharacters = measurement.calls.reduce((sum, call) => sum + call.inputCharacters, 0);
@@ -86,6 +92,11 @@ test("real model preserves cross-range violations, justified exceptions and Spec
     const actual = [...new Set((measurement.result.evaluations ?? []).filter((entry) => entry.result === "fail").map((entry) => entry.guardrail_id))].sort();
     if (measurement.name === "shared") {
       assert.deepEqual(actual, expectedViolations, JSON.stringify(measurement.result));
+      for (const observation of measurement.result.evaluations.flatMap((entry) => entry.observations ?? [])) {
+        assert(observation.targets.length > 0);
+        assert(observation.allowedTargets.length > 0);
+        assert.equal(observation.specRevision, `sha256:${createHash("sha256").update(source).digest("hex")}`);
+      }
       const threshold = measurement.result.evaluations.filter((entry) => entry.guardrail_id === "planned-threshold");
       assert.match(JSON.stringify(threshold), /R1|requirements\/0/);
       const timeout = measurement.result.evaluations.filter((entry) => entry.guardrail_id === "consistent-timeout");

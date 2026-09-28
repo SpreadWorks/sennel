@@ -525,7 +525,9 @@ function immutableFieldReference(spec, target) {
   if (target instanceof SpecRepairIdEntityTarget) {
     const entries = spec[target.domain];
     const matches = Array.isArray(entries) ? entries.filter((entry) => entry?.id === target.id) : [];
-    return matches.length === 1 ? { object: matches[0], key: target.field, value: matches[0][target.field] } : null;
+    return matches.length === 1 && Object.hasOwn(matches[0], target.field)
+      ? { object: matches[0], key: target.field, value: matches[0][target.field] }
+      : null;
   }
   return null;
 }
@@ -595,10 +597,11 @@ export function specRepairTargetEntries(spec) {
   }
   return Object.freeze(entries);
 }
-function permissionSet(allowedTargets, spec, field, operationTypes = OPERATION_TYPES, PermissionType = SpecRepairPermission) {
+function permissionSet(allowedTargets, spec, field, operationTypes = OPERATION_TYPES,
+  PermissionType = SpecRepairPermission, exactTargets = PermissionType === SpecGateRepairPermission) {
   if (!Array.isArray(allowedTargets) || allowedTargets.length === 0) throw new Error("must declare allowedTargets");
   const permissions = allowedTargets.map((permission, index) => new PermissionType(permission, `${field}.allowedTargets[${index}]`, operationTypes, spec));
-  if (!unique(permissions.map((permission) => PermissionType === SpecGateRepairPermission
+  if (!unique(permissions.map((permission) => exactTargets
     ? JSON.stringify(permission.target.toJSON()) : permission.target.permissionKey()))) throw new Error("has duplicate allowed target permissions");
   if (spec != null && permissions.some((permission) => permission.operationKinds.some((kind) => (
     kind === "add-entity-field" ? !addFieldTargetExists(spec, permission.target) : !targetExists(spec, permission.target)
@@ -606,6 +609,12 @@ function permissionSet(allowedTargets, spec, field, operationTypes = OPERATION_T
     throw new Error("declares impossible targets");
   }
   return Object.freeze(permissions);
+}
+export function validateSpecGateRepairPermissions(allowedTargets, spec, field = "Spec Gate observation") {
+  return permissionSet(allowedTargets, spec, field, GATE_OPERATION_TYPES, SpecGateRepairPermission);
+}
+export function parseSpecGateRepairPermissions(allowedTargets, field = "Spec Gate observation") {
+  return permissionSet(allowedTargets, null, field, GATE_OPERATION_TYPES, SpecRepairPermission, true);
 }
 /** Both producers grant the same typed target/kind capability. */
 export class SpecRepairAuthority {
@@ -764,7 +773,7 @@ export class SpecGateRepairAuthority extends SpecRepairAuthority {
       const identity = new FlowFindingSourceIdentity(finding.identity);
       const key = identity.toString();
       if (entries.has(key)) throw new Error("Spec Gate repair authority has duplicate finding identities");
-      entries.set(key, permissionSet(finding.allowedTargets, spec, `Spec Gate repair finding ${index}`, GATE_OPERATION_TYPES, SpecGateRepairPermission));
+      entries.set(key, validateSpecGateRepairPermissions(finding.allowedTargets, spec, `Spec Gate repair finding ${index}`));
     }
     super(entries);
     const assigned = new Set();

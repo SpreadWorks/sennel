@@ -7,6 +7,7 @@ import {
 } from "../../lib/prompt-batching.js";
 import { FlowFindingSourceIdentity } from "./flow-findings.js";
 import { SpecRepairTarget, specRepairTargetEntries } from "./spec-repair-operations.js";
+import { SpecGateDocumentTarget } from "./spec-gate-targets.js";
 import { SpecGateRepairSource } from "./spec-gate-repair-sources.js";
 
 function hash(value) { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
@@ -52,13 +53,15 @@ export class SpecGateRepairFinding {
     this.where = freeze(structuredClone(value.where ?? null));
     this.targets = freeze(structuredClone(value.targets ?? []));
     this.allowedTargets = freeze(structuredClone(value.allowedTargets ?? []));
+    this.specRevision = value.specRevision ?? null;
     this.rangeIds = Object.freeze([...rangeIds].sort());
     Object.freeze(this);
   }
   toJSON() {
     return { identity: this.identity.toJSON(), requirementRef: this.requirementRef,
       observed: this.observed, where: this.where, targets: this.targets,
-      allowedTargets: this.allowedTargets, rangeIds: this.rangeIds };
+      allowedTargets: this.allowedTargets, ...(this.specRevision === null ? {} : { specRevision: this.specRevision }),
+      rangeIds: this.rangeIds };
   }
 }
 
@@ -134,6 +137,7 @@ export class SpecGateRepairContext {
   }
   #ranges = new Map();
   #ordinalRanges = new Map();
+  #explicitAliases = new Map();
   #targets = new Map();
   #findings;
   #spec;
@@ -160,6 +164,10 @@ export class SpecGateRepairContext {
         : json.entity ? `${json.entity}s[${json.id}].${json.field}`
           : json.position == null ? json.collection : `${json.collection}[${json.position}]`;
       byPath.set(path, entry);
+      if (entry.exists && ["requirement", "task"].includes(json.entity)) {
+        const alias = `${json.entity}s.${json.id}.${json.field}`;
+        this.#explicitAliases.set(alias, this.#explicitAliases.has(alias) ? null : path);
+      }
     }
     const add = (path, value, entity = null, collectionAnchor = false, ordinalPath = path) => {
       const entry = byPath.get(path);
@@ -192,6 +200,9 @@ export class SpecGateRepairContext {
       }
     }
     this.#findings = Object.freeze(findings.map((finding) => {
+      if (finding.specRevision != null && finding.specRevision !== baseRevision) {
+        throw new Error("Stale Spec Gate finding target revision");
+      }
       const ids = [...new Set([...(finding.rangeIds ?? this.#initialRanges(finding)),
         ...(finding.allowedTargets ?? []).map((permission) => this.#targetRange(permission.target)),
       ])];
@@ -211,11 +222,15 @@ export class SpecGateRepairContext {
   }
 
   #initialRanges(finding) {
-    if (finding.targets?.length) return finding.targets.map((target) => this.#targetRange(target));
+    if (finding.targets?.length) return [...new Set(finding.targets.flatMap((target) =>
+      Object.hasOwn(target, "document")
+        ? (new SpecGateDocumentTarget(target), [...this.#ranges.keys()])
+        : [this.#targetRange(target)]))];
     const locator = finding.where?.locator;
     if (typeof locator !== "string") return [];
     const path = locator.startsWith("$.") ? locator.slice(2) : locator;
-    const id = this.#ordinalRanges.get(path) ?? (this.#ranges.has(path) ? path : null);
+    const id = this.#ordinalRanges.get(path) ?? this.#explicitAliases.get(path)
+      ?? (this.#ranges.has(path) ? path : null);
     return id === null ? [] : [id];
   }
   #targetRange(target) {

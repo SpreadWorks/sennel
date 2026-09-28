@@ -89,7 +89,8 @@ export class GateObservationAuthority {
 
 /** Canonical semantic fields used to identify one Gate observation across Attempts. */
 export class GateObservationIdentity {
-  constructor({ phase, scope, taskId = null, authority, failureMode, file = null, locator = null, cause } = {}) {
+  constructor({ phase, scope, taskId = null, authority, failureMode, file = null, locator = null, cause,
+    targetBinding = null } = {}) {
     const normalizedPhase = requiredText(phase, "Gate observation phase");
     if (!GATE_PHASES.has(normalizedPhase)) throw new Error("Gate observation phase is invalid");
     const normalizedScope = requiredText(scope, "Gate observation scope");
@@ -111,10 +112,12 @@ export class GateObservationIdentity {
       file,
       locator,
       cause: requiredText(cause, "Gate observation cause"),
+      ...(targetBinding === null ? {} : { targetBinding: requiredText(targetBinding, "Gate observation target binding") }),
     }, {
       caseFoldedFields: [],
       casePreservingFields: [
         "phase", "scope", "taskId", "authorityKind", "authorityId", "failureMode", "locator", "cause",
+        ...(targetBinding === null ? [] : ["targetBinding"]),
       ],
       pathFields: ["file"],
     });
@@ -125,6 +128,7 @@ export class GateObservationIdentity {
     this.file = this.canonical.fields.file;
     this.locator = this.canonical.fields.locator;
     this.cause = this.canonical.fields.cause;
+    this.targetBinding = this.canonical.fields.targetBinding ?? null;
     Object.freeze(this);
   }
 
@@ -147,6 +151,7 @@ export class GateObservationIdentity {
       file: source.file ?? null,
       locator: source.locator ?? null,
       cause: rootCause ?? observed,
+      targetBinding: source.targetBinding ?? null,
     });
   }
 
@@ -160,6 +165,7 @@ export class GateObservationIdentity {
       file: this.file,
       locator: this.locator,
       cause: this.cause,
+      ...(this.targetBinding === null ? {} : { targetBinding: this.targetBinding }),
     };
   }
 }
@@ -194,7 +200,7 @@ export class GateObservationFingerprint {
 export class GateObservation {
   constructor({
     phase, scope, taskId = null, authority, failureMode, file = null, locator = null,
-    rootCause = null, observed = null, title = null,
+    rootCause = null, observed = null, title = null, targetBinding = null,
   } = {}) {
     this.phase = requiredText(phase, "Gate observation phase");
     this.scope = requiredText(scope, "Gate observation scope");
@@ -208,6 +214,7 @@ export class GateObservation {
     this.rootCause = optionalText(rootCause, "Gate observation rootCause");
     this.observed = optionalText(observed, "Gate observation observed");
     this.title = optionalText(title, "Gate observation title");
+    this.targetBinding = optionalText(targetBinding, "Gate observation target binding");
     this.identity = GateObservationIdentity.fromObservation(this);
     this.fingerprint = GateObservationFingerprint.fromIdentity(this.identity);
     Object.freeze(this);
@@ -225,6 +232,7 @@ export class GateObservation {
       rootCause: this.rootCause,
       observed: this.observed,
       title: this.title,
+      ...(this.targetBinding === null ? {} : { targetBinding: this.targetBinding }),
     };
   }
 }

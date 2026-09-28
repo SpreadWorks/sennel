@@ -151,6 +151,14 @@ export function taskGateSettlementMetricActivityId({ publicationActivityId, node
  * bytes from FlowManager; only this boundary parses the established JSON
  * contracts and never derives a Version directory.
  */
+export class CanonicalSpecGateRecord {
+  constructor(bytes) {
+    this.spec = jsonObject(JSON.parse(bytes.toString("utf8")), "canonical spec.json");
+    this.revision = `sha256:${crypto.createHash("sha256").update(bytes).digest("hex")}`;
+    Object.freeze(this);
+  }
+}
+
 export class CanonicalGateInputStore {
   constructor({ flowManager, state, nodeId } = {}) {
     if (!flowManager || typeof flowManager.readArtifact !== "function") {
@@ -178,7 +186,13 @@ export class CanonicalGateInputStore {
     }
   }
 
-  spec() { return jsonObject(this.readJson("spec.record"), "canonical spec.json"); }
+  specRecord() {
+    const resolved = this.flowManager.readArtifact({
+      specId: this.state.specId, logicalKey: "spec.record", consumerNodeId: this.nodeId,
+    });
+    return new CanonicalSpecGateRecord(resolved.bytes);
+  }
+  spec() { return this.specRecord().spec; }
   issueLog() {
     // A fresh Flow has no issue facts until the first producer records one.
     // Treat that catalog absence as the canonical empty log, not as a reason

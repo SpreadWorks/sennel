@@ -131,6 +131,35 @@ describe("canonical flow finding source identity", () => {
     })), null);
   });
 
+  it("binds exact Spec Gate source identity to structured target authority and revision", () => {
+    const target = { entity: "requirement", id: "R10", field: "desc" };
+    const second = { entity: "task", id: "T1", field: "goal" };
+    const base = {
+      kind: "violation", failureMode: "guardrail-violation", requirementRef: "G1",
+      where: { file: "spec.json", locator: "requirements.R10.desc" },
+      observed: "The planned check is incomplete.", severity: "blocking", refs: ["G1"],
+      targets: [target, second],
+      allowedTargets: [
+        { target, operationKinds: ["replace-entity-field", "edit-text-field"] },
+        { target: second, operationKinds: ["edit-text-field"] },
+      ],
+      specRevision: `sha256:${"a".repeat(64)}`,
+    };
+    const fingerprint = (finding) => canonicalSourceFindings({
+      artifact: { artifacts: { nextAction: { diagnosis: { observations: [finding] } } } },
+      sourceStep: "spec-gate", sourceArtifact: SOURCE_PATH,
+    })[0].identity.fingerprint;
+    const original = fingerprint(base);
+    assert.equal(fingerprint(JSON.parse(JSON.stringify(base))), original);
+    assert.equal(fingerprint({ ...base, targets: [second, target],
+      allowedTargets: [...base.allowedTargets].reverse().map((permission) => ({
+        ...permission, operationKinds: [...permission.operationKinds].reverse(),
+      })) }), original);
+    assert.notEqual(fingerprint({ ...base, targets: [target] }), original);
+    assert.notEqual(fingerprint({ ...base, allowedTargets: [base.allowedTargets[0]] }), original);
+    assert.notEqual(fingerprint({ ...base, specRevision: `sha256:${"b".repeat(64)}` }), original);
+  });
+
   it("publishes observations with one producer id and distinct fingerprints as separate exact identities", () => {
     const publication = buildDeferredSemanticFindingsPublication({
       flowManager: manager(),

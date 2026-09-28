@@ -85,6 +85,7 @@ import {
   NextAction,
   legacyEvaluationsToNextAction,
 } from "./observation.js";
+import { SpecGateTargetSelection } from "./spec-gate-targets.js";
 import {
   assertAuditedBroadMode,
   evaluateTaskScope,
@@ -769,6 +770,29 @@ export const GUARDRAIL_ARTICLE_EVAL_SCHEMA = {
   additionalProperties: false,
 };
 
+function specArticleEvaluationSchema(spec) {
+  const observation = GUARDRAIL_ARTICLE_EVAL_SCHEMA.properties.observations.items;
+  return {
+    ...GUARDRAIL_ARTICLE_EVAL_SCHEMA,
+    properties: { observations: {
+      ...GUARDRAIL_ARTICLE_EVAL_SCHEMA.properties.observations,
+      items: { ...observation,
+        properties: { ...observation.properties,
+          where: { ...observation.properties.where, type: "object", properties: {
+            ...observation.properties.where.properties,
+            file: { type: "string", enum: ["spec.json"] },
+          } },
+          targets: { type: "array", minItems: 1,
+            items: SpecGateTargetSelection.schema(spec) },
+          allowedTargets: { type: "array", minItems: 1,
+            items: SpecGateTargetSelection.permissionSchema(spec) },
+        },
+        required: [...observation.required, "targets", "allowedTargets"],
+      },
+    } },
+  };
+}
+
 const DRAFT_FILE_EVAL_SCHEMA = {
   type: "object",
   properties: {
@@ -911,7 +935,9 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
     "- Omit observations for passing, skipped, inapplicable, or runtime-dependent guardrails.",
     "- Matched Spec Acknowledgment Rationale is context only. Exception permission comes from the guardrail article clause, not from the rationale section alone.",
     "- To acknowledge a guardrail exception in a spec, write the target guardrail_id directly in constraints, clarifications, or alternatives_considered.",
-    "- For each FAIL, describe the actionable Observation using these AI-owned fields: failureMode, requirementRef, where, observed. The system derives kind, severity, and refs.",
+    options.specTargetScope
+      ? "- For each FAIL, include non-empty `targets` for observed locations and `allowedTargets` for specific permitted edits, both selected from the canonical Spec target inventory. Use {\"document\":\"spec\"} in targets for a whole-document violation; it grants no edits by itself. Use a parent collection target with add-array-element for an addition and the absent field target with add-entity-field for a missing optional field. `where` explains the finding; it does not select the repair location."
+      : "- For each FAIL, describe the actionable Observation using these AI-owned fields: failureMode, requirementRef, where, observed. The system derives kind, severity, and refs.",
     ...(phase === "spec" && options.sharedGuardrailEvidence ? [
       "- At the Spec stage, check that confirmation methods and acceptance conditions are stated. Later implementation and test execution are owned by later steps unless explicit execution evidence is supplied.",
       "- A planned later check is not executed evidence. Do not report missing later execution as a present Spec violation unless the article explicitly requires it now.",
@@ -920,7 +946,8 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
   pb.setRules(rules);
   const knownIds = filtered.map((guardrail) => guardrail.id);
   pb.setJsonSchema(exactIdSchema(
-    options.draftFileInput ? DRAFT_FILE_EVAL_SCHEMA : GUARDRAIL_ARTICLE_EVAL_SCHEMA,
+    options.draftFileInput ? DRAFT_FILE_EVAL_SCHEMA : options.specTargetScope
+      ? specArticleEvaluationSchema(options.specTargetScope.spec) : GUARDRAIL_ARTICLE_EVAL_SCHEMA,
     "observations",
     "requirementRef",
     knownIds,
@@ -930,7 +957,9 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
     'For a complete evaluation return {"observations":[],"evaluationUnavailable":null}, adding concrete observations as needed.',
     'If the complete file cannot be read or evaluated, return {"observations":null,"evaluationUnavailable":{"reason":"<specific reason>"}}.',
     'Never return observations and an unavailable reason together. Output JSON only.',
-  ].join("\n") : GUARDRAIL_FMT_FALLBACK, "<guardrail id>", knownIds));
+  ].join("\n") : options.specTargetScope
+    ? GUARDRAIL_FMT_FALLBACK.replace('"observed":"<concrete violation>"', '"observed":"<concrete violation>","targets":[<exact target from schema>],"allowedTargets":[{"target":<exact target from schema>,"operationKinds":["<permitted operation>"]}]')
+    : GUARDRAIL_FMT_FALLBACK, "<guardrail id>", knownIds));
 
   if (Array.isArray(previouslyPassedIds) && previouslyPassedIds.length > 0) {
     pb.addUserPrompt(
@@ -947,7 +976,9 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
 
   pb.addUserPrompt(
     "## Observation Output Fields",
-    "For each FAIL, emit only these AI-owned Observation fields: failureMode, requirementRef, where, observed.",
+    options.specTargetScope
+      ? "For each FAIL, emit only these AI-owned Observation fields: failureMode, requirementRef, where, observed, targets, allowedTargets."
+      : "For each FAIL, emit only these AI-owned Observation fields: failureMode, requirementRef, where, observed.",
   );
 
   pb.addUserPrompt("## Guardrail Articles", articleList);
@@ -1206,15 +1237,19 @@ function buildPassEvaluationsForObservedGuardrails(guardrails) {
  * @returns {Array<Object>} Observation JSON entries
  * @throws {EvaluationSchemaError}
  */
-export function parseGuardrailArticleEvaluation(rawResponse, knownIds) {
+export function parseGuardrailArticleEvaluation(rawResponse, knownIds, specTargetScope = null) {
   const rawObject = parseJsonObject(rawResponse);
+  if (specTargetScope && (Object.keys(rawObject).length !== 1 || !Object.hasOwn(rawObject, "observations"))) {
+    throw new EvaluationSchemaError("Spec Gate response must contain only observations");
+  }
   if (Array.isArray(rawObject.observations)) {
     const known = new Set(knownIds);
     return rawObject.observations.map((entry, idx) => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
         throw new EvaluationSchemaError(`observations[${idx}] is not an object`);
       }
-      checkExtraKeys(entry, idx, AI_OBSERVATION_KEYS, "observations");
+      checkExtraKeys(entry, idx, specTargetScope
+        ? new Set([...AI_OBSERVATION_KEYS, "targets", "allowedTargets"]) : AI_OBSERVATION_KEYS, "observations");
       for (const key of AI_OBSERVATION_KEYS) {
         if (!Object.prototype.hasOwnProperty.call(entry, key)) {
           throw new EvaluationSchemaError(`observations[${idx}]: missing required "${key}"`);
@@ -1229,16 +1264,44 @@ export function parseGuardrailArticleEvaluation(rawResponse, knownIds) {
           },
         );
       }
-      return new Observation({
-        kind: "violation",
-        failureMode: entry.failureMode,
-        requirementRef: entry.requirementRef,
-        where: entry.where ?? null,
-        observed: entry.observed,
-        severity: "blocking",
-        refs: [entry.requirementRef],
-      }).toJSON();
+      if (specTargetScope && entry.where?.file !== "spec.json") {
+        throw new EvaluationSchemaError(`observations[${idx}].where.file must be spec.json`,
+          { locator: `observations[${idx}].where.file`, invalidValue: entry.where?.file });
+      }
+      if (specTargetScope && entry.failureMode !== "guardrail-violation") {
+        throw new EvaluationSchemaError(`observations[${idx}].failureMode is invalid`,
+          { locator: `observations[${idx}].failureMode`, invalidValue: entry.failureMode });
+      }
+      let selection = null;
+      if (specTargetScope) {
+        try {
+          selection = new SpecGateTargetSelection({ targets: entry.targets, allowedTargets: entry.allowedTargets,
+            spec: specTargetScope.spec, specRevision: specTargetScope.specRevision });
+        } catch (error) {
+          throw new EvaluationSchemaError(`observations[${idx}]: ${error.message}`,
+            { locator: `observations[${idx}].targets`, invalidValue: entry.targets });
+        }
+      }
+      try {
+        return new Observation({
+          kind: "violation",
+          failureMode: entry.failureMode,
+          requirementRef: entry.requirementRef,
+          where: entry.where ?? null,
+          observed: entry.observed,
+          severity: "blocking",
+          refs: [entry.requirementRef],
+          ...(selection === null ? {} : { targets: selection.toJSON(),
+            allowedTargets: selection.allowedTargets, specRevision: selection.specRevision }),
+        }).toJSON();
+      } catch (error) {
+        if (specTargetScope) throw new EvaluationSchemaError(`observations[${idx}]: ${error.message}`);
+        throw error;
+      }
     });
+  }
+  if (specTargetScope) {
+    throw new EvaluationSchemaError('Spec Gate response requires the structured "observations" array');
   }
   if (!Array.isArray(rawObject.evaluations)) {
     throw new EvaluationSchemaError('AI evaluation response missing "evaluations" or "observations" array');
@@ -1650,7 +1713,7 @@ function requiredGateEvaluationFailure(error) {
   );
 }
 
-async function executeGuardrailJudgments({ plans, projectInvocation, executionBudget, callAgent, phase, draftFileInput }) {
+async function executeGuardrailJudgments({ plans, projectInvocation, executionBudget, callAgent, phase, draftFileInput, specTargetScope = null }) {
   const observations = [];
   for (const plan of plans) {
     const result = await executeGatePlan({
@@ -1661,7 +1724,7 @@ async function executeGuardrailJudgments({ plans, projectInvocation, executionBu
           const knownIds = batch.request.jsonSchema.properties.observations.items.properties.requirementRef.enum;
           return draftFileInput
             ? parseDraftFileEvaluation(raw, knownIds)
-            : parseGuardrailArticleEvaluation(raw, knownIds);
+            : parseGuardrailArticleEvaluation(raw, knownIds, specTargetScope);
         },
       }),
       parseResponse: (response) => response,
@@ -1758,7 +1821,8 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
       for (const article of filtered) {
         const minimumJudgment = buildGuardrailArticleEvalPrompt(
           "", [article], phase, role, promptPreviouslyPassedIds,
-          { completeEvidence: true, sharedGuardrailEvidence: true },
+          { completeEvidence: true, sharedGuardrailEvidence: true,
+            specTargetScope: options.specTargetScope },
         ).build();
         if (!gatePromptFits(minimumJudgment, limit)) {
           throw new PromptBatchingError("PROMPT_FIXED_CONTEXT_TOO_LARGE",
@@ -1838,7 +1902,8 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
         });
         const fullRuleFits = gatePromptFits(buildGuardrailArticleEvalPrompt(
           "", [article], phase, role, promptPreviouslyPassedIds,
-          { completeEvidence: true, sharedGuardrailEvidence: options.sharedGuardrailEvidence },
+          { completeEvidence: true, sharedGuardrailEvidence: options.sharedGuardrailEvidence,
+            specTargetScope: options.specTargetScope },
         ).build(), limit);
         let facts = null;
         await reduceRequirementEvidence({
@@ -1852,7 +1917,8 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
               "Complete evidence collected from all canonical ranges:\n" + text,
               [article], phase, role, promptPreviouslyPassedIds,
               { completeEvidence: true, omitArticleBody: !fullRuleFits,
-                sharedGuardrailEvidence: options.sharedGuardrailEvidence },
+                sharedGuardrailEvidence: options.sharedGuardrailEvidence,
+                specTargetScope: options.specTargetScope },
             ).build();
           },
         });
@@ -1868,6 +1934,7 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
         }),
         group.map((input) => input.article), phase, role, promptPreviouslyPassedIds,
         { completeEvidence: true, sharedGuardrailEvidence: options.sharedGuardrailEvidence,
+          specTargetScope: options.specTargetScope,
           omitArticleIds: group.filter((input) => input.omitArticleBody).map((input) => input.article.id) },
       ).build(),
     }).plans;
@@ -1877,11 +1944,16 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
     }
     parsed = await executeGuardrailJudgments({
       plans: judgmentPlans, projectInvocation, executionBudget, phase,
+      specTargetScope: options.specTargetScope ?? null,
       callAgent: callAgentFor("judgment"),
     });
     }
     parsed = [...new Map(parsed.map((entry) => [JSON.stringify([
       entry.requirementRef ?? entry.guardrail_id, entry.where ?? entry.violations, entry.observed ?? entry.reason,
+      ...(entry.targets ? [entry.targets.map((target) => JSON.stringify(stableGateEvaluationValue(target))).sort(),
+        entry.allowedTargets.map((permission) => JSON.stringify(stableGateEvaluationValue({
+          ...permission, operationKinds: [...permission.operationKinds].sort(),
+        }))).sort()] : []),
     ]), entry])).values()];
   } catch (error) {
     if (error?.code === "FLOW_GATE_EVALUATION_ADMISSION_DENIED") throw error;
@@ -3967,6 +4039,7 @@ export class RunGateCommand extends FlowCommand {
       throw new Error(`canonical gate requires active ${nodeId}, found ${state.current?.at(-1) ?? "none"}`);
     }
     let admittedTaskSourceFingerprint = null;
+    let admittedSpecRevision = null;
     if (phase === "task-impl" && activeTaskId !== null) {
       try {
         admittedTaskSourceFingerprint = CanonicalTaskContext.capture({
@@ -4052,6 +4125,13 @@ export class RunGateCommand extends FlowCommand {
         error.code = "FLOW_GATE_EVALUATION_ADMISSION_DENIED";
         throw error;
       }
+      if (admittedSpecRevision !== null
+        && new CanonicalGateInputStore({ flowManager, state: currentState, nodeId })
+          .specRecord().revision !== admittedSpecRevision) {
+        const error = new Error("Gate provider admission detected changed Spec evidence");
+        error.code = "FLOW_GATE_EVALUATION_ADMISSION_DENIED";
+        throw error;
+      }
       const facts = readCurrentGateTransitionFacts({
         flowManager,
         flowState: flowManager.loadReadOnly(state.specId),
@@ -4105,7 +4185,8 @@ export class RunGateCommand extends FlowCommand {
         ctx: canonicalCtx,
       });
     } else if (phase === "spec") {
-      const spec = inputs.spec();
+      const { spec, revision: specRevision } = inputs.specRecord();
+      admittedSpecRevision = specRevision;
       let loadError = null;
       try {
         validateSpecJsonObject(spec);
@@ -4133,6 +4214,7 @@ export class RunGateCommand extends FlowCommand {
           acknowledgedRationale: buildAcknowledgedRationaleSection({ spec, guardrails }),
           sharedGuardrailEvidence: true,
           structuredSource: spec,
+          specTargetScope: { spec, specRevision },
         },
         authoritativeEvaluations,
       });
@@ -4180,6 +4262,7 @@ export class RunGateCommand extends FlowCommand {
     // No filesystem result/source writer is permitted here.  The registry
     // confirms a pass with its lifecycle Activity; a non-pass is published
     // before the retry lifecycle keeps the Attempt active.
+    if (admittedSpecRevision !== null) canonicalCtx.gateProviderCallGuard();
     attachGateEvaluationScope(result, canonicalCtx.evaluationScope);
     if (result?.result === "pass" || result?.result === "fail" || result?.result === "recovered") {
       new CanonicalGatePromotion({

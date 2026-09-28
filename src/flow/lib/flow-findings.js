@@ -743,6 +743,15 @@ function sourceFindingFingerprint(sourceStep, finding) {
     category: String(finding?.category || finding?.failureMode || finding?.failureKind || "").trim(),
     file: String(finding?.file || finding?.where?.file || finding?.location?.file || "").trim().replace(/\\/g, "/"),
     issue: String(finding?.issue || finding?.observed || finding?.reason || finding?.title || "").trim(),
+    ...(sourceStep === "spec-gate" && Array.isArray(finding?.targets) ? {
+      specTarget: {
+        targets: finding.targets.map((target) => JSON.stringify(target)).sort(),
+        allowedTargets: (finding.allowedTargets ?? []).map((permission) => JSON.stringify({
+          target: permission.target, operationKinds: [...permission.operationKinds].sort(),
+        })).sort(),
+        specRevision: finding.specRevision,
+      },
+    } : {}),
   });
   return crypto.createHash("sha256").update(canonical).digest("hex");
 }

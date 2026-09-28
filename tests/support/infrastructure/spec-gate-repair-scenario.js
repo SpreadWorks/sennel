@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { CanonicalFlowFixture } from "./flow-setup.js";
@@ -15,11 +16,15 @@ import { SpecGateRepairStep } from "../../../src/flow/steps/spec/spec-gate-repai
 import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { workerArtifactJson } from "./worker-artifact.js";
+import { parseGuardrailArticleEvaluation } from "../../../src/flow/lib/run-gate.js";
 
 /** A real failed Gate route, leaving one active bounded repair Attempt. */
 export async function createSpecGateRepairScenario({
   specId = "500-spec-gate-repair-scenario", specRecord = validWorkerHandoffSpec(),
   locator = "requirements[R1].desc", requirementRef = "R1", beforeGate = null,
+  target = { entity: "requirement", id: "R1", field: "desc" },
+  operationKinds = ["edit-text-field"],
+  mutateGateObservations = (observations) => observations,
   additionalObservations = [],
   issue = null, issueSnapshot = null, request = "Repair the bounded Spec Gate finding.",
   taskTestStrategy = null,
@@ -40,10 +45,17 @@ export async function createSpecGateRepairScenario({
     if (beforeGate) await beforeGate({ root, specId, flowManager, flow });
     if (flowManager.canonicalState(specId).current?.at(-1) !== "spec-gate") flow.activate("spec-gate");
     const binding = new SpecGateEvaluationBinding({ flowManager, specId });
-    const observations = [{ kind: "violation", failureMode: "guardrail-violation",
+    const record = flowManager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec-gate" });
+    const spec = JSON.parse(record.bytes.toString("utf8"));
+    const specRevision = `sha256:${createHash("sha256").update(record.bytes).digest("hex")}`;
+    const rawObservations = [{ failureMode: "guardrail-violation",
       requirementRef, where: { file: "spec.json", locator },
       observed: "The selected Spec field needs a bounded correction.",
-      severity: "blocking", refs: [requirementRef] }, ...additionalObservations];
+      targets: [target], allowedTargets: [{ target, operationKinds }] },
+    ...additionalObservations];
+    const observations = mutateGateObservations(parseGuardrailArticleEvaluation(JSON.stringify({ observations: rawObservations }),
+      [...new Set(rawObservations.map((observation) => observation.requirementRef))],
+      { spec, specRevision }));
     const commandResult = new CanonicalGatePromotion({
       state: flowManager.canonicalState(specId), phase: "spec", nodeId: "spec-gate",
     }).promote({ result: "fail", artifacts: { phase: "spec", failureKind: "ai_semantic_fail",

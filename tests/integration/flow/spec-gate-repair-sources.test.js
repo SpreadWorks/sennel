@@ -60,3 +60,49 @@ test("repair handoff reads the linked Issue, prior Draft and referenced working-
     assert(["spec-review", "spec-gate"].includes(outcome.service.workerOutcome.receipt.targetStepId));
   } finally { removeTmpDir(value.root); }
 });
+
+for (const { name, scenario, expectedError } of [
+  {
+    name: "a stale Spec revision",
+    scenario: {
+      mutateGateObservations: (observations) => observations.map((observation) => ({
+        ...observation, specRevision: `sha256:${"b".repeat(64)}`,
+      })),
+    },
+    expectedError: /revision is stale or absent/,
+  },
+  {
+    name: "replacement authority for an absent task field",
+    scenario: {
+      target: { entity: "task", id: "T1", field: "acceptance" },
+      operationKinds: ["add-entity-field"],
+      mutateGateObservations: (observations) => observations.map((observation) => ({
+        ...observation,
+        allowedTargets: observation.allowedTargets.map((permission) => ({
+          ...permission, operationKinds: ["replace-entity-field"],
+        })),
+      })),
+    },
+    expectedError: /impossible targets/,
+  },
+]) {
+  test(`repair readback refuses persisted Gate target with ${name} without mutation`, async () => {
+    const value = await createSpecGateRepairScenario(scenario);
+    try {
+      const reloaded = new FlowManager({ root: value.root, mainRoot: value.root,
+        inWorktree: false, specId: value.specId });
+      const before = {
+        state: reloaded.canonicalState(value.specId).toJSON(),
+        catalog: reloaded.artifactCatalog(value.specId).toJSON(),
+        activities: reloaded.activityLedger(value.specId),
+      };
+      assert.throws(() => readSpecGateRepairInput({ flowManager: reloaded,
+        state: reloaded.canonicalState(value.specId), executionRoot: value.root }), expectedError);
+      assert.deepEqual({
+        state: reloaded.canonicalState(value.specId).toJSON(),
+        catalog: reloaded.artifactCatalog(value.specId).toJSON(),
+        activities: reloaded.activityLedger(value.specId),
+      }, before);
+    } finally { removeTmpDir(value.root); }
+  });
+}

@@ -2,64 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
-import { validWorkerHandoffSpec } from "../../support/infrastructure/worker-artifact.js";
-import { completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
-import { SpecGateEvaluationBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
-import { SpecGateService } from "../../../src/flow/services/spec-gate-service.js";
-import { SpecGateStep } from "../../../src/flow/steps/spec/spec-gate.js";
+import { removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { createSpecGateRepairScenario, completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import { SpecGateRepairService } from "../../../src/flow/services/spec-gate-repair-service.js";
-import { SpecGateIssuePublication } from "../../../src/flow/lib/gate-issue-publication.js";
-import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
 
 const now = () => new Date("2026-08-04T00:00:00.000Z");
 
 async function gateRepairFixture() {
-  const root = createTmpDir("spec-gate-repair-durability-");
-  try {
-    const specId = "500-spec-gate-repair-durability";
-    const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
-    const flow = new CanonicalFlowFixture({
-      flowManager, specId, runId: "run-spec-gate-repair-durability",
-      request: "Repair the bounded Spec Gate finding.", specRecord: validWorkerHandoffSpec(),
-    }).create().registerActive();
-    flow.addTask({ id: "T1", title: "Publish guarded Spec", goal: "Exercise the repair route.",
-      origin: "plan", added_round: 0, status: "pending" });
-    flow.activate("spec-gate");
-    const binding = new SpecGateEvaluationBinding({ flowManager, specId });
-    const observations = [{
-      kind: "violation", failureMode: "guardrail-violation", requirementRef: "R1",
-      where: { file: "spec.json", locator: "requirements[R1].desc" },
-      observed: "The requirement description needs a precise validation target.",
-      severity: "blocking", refs: ["R1"],
-    }];
-    const commandResult = new CanonicalGatePromotion({
-      state: flowManager.canonicalState(specId), phase: "spec", nodeId: "spec-gate",
-    }).promote({ result: "fail", artifacts: {
-      phase: "spec", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
-      nextAction: { diagnosis: { observations } },
-    } });
-    const issuePublication = new SpecGateIssuePublication({
-      binding, entry: { step: "spec-gate", phase: "spec", observations,
-        reason: "The requirement needs a bounded correction.",
-        trigger: "gate post hook (auto)", timestamp: binding.assertCurrent().attempt.startedAt },
-    });
-    const gate = await new SpecGateStep(new SpecGateService({
-      flowManager, binding, commandResult, issuePublication,
-    })).execute();
-    assert.equal(gate.kind, "spec-gate-repair-required");
-    assert.equal(flowManager.canonicalState(specId).current?.at(-1), "spec-gate-repair");
-    const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager };
-    const invocation = { id: "dispatch-spec-gate-repair", target: { digest: "b".repeat(64) },
-      action: { digest: "a".repeat(64), nextAction: { step: "spec-gate-repair" } } };
-    const coordinator = new WorkerArtifactHandoffCoordinator({ now });
-    return { root, specId, flowManager, ctx, invocation, coordinator };
-  } catch (error) {
-    removeTmpDir(root);
-    throw error;
-  }
+  return createSpecGateRepairScenario({ specId: "500-spec-gate-repair-durability" });
 }
 
 function requestFor(value) {

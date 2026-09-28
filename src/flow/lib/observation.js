@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import { SpecRepairTarget } from "./spec-repair-operations.js";
+import { SpecGateDocumentTarget } from "./spec-gate-targets.js";
 
 const OBSERVATION_KEYS = new Set([
   "kind",
@@ -8,6 +10,9 @@ const OBSERVATION_KEYS = new Set([
   "observed",
   "severity",
   "refs",
+  "targets",
+  "allowedTargets",
+  "specRevision",
 ]);
 const WHERE_KEYS = new Set(["file", "locator"]);
 const FAILURE_MODES = new Set([
@@ -108,6 +113,21 @@ export class Observation {
     this.observed = normalized.observed;
     this.severity = normalized.severity;
     this.refs = normalized.refs;
+    if (Object.hasOwn(input, "specRevision")) {
+      if (typeof input.specRevision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(input.specRevision)) {
+        throw new Error("specRevision must be a canonical Spec digest");
+      }
+      if (!Array.isArray(input.targets) || input.targets.length === 0
+        || !Array.isArray(input.allowedTargets) || input.allowedTargets.length === 0) {
+        throw new Error("Spec Gate observation requires targets and allowedTargets");
+      }
+      this.targets = Object.freeze(input.targets.map((value) => (Object.hasOwn(value ?? {}, "document")
+        ? new SpecGateDocumentTarget(value) : SpecRepairTarget.fromJSON(value, "observation target")).toJSON()));
+      this.allowedTargets = Object.freeze(structuredClone(input.allowedTargets));
+      this.specRevision = input.specRevision;
+    } else if (Object.hasOwn(input, "targets") || Object.hasOwn(input, "allowedTargets")) {
+      throw new Error("Spec Gate targets require specRevision");
+    }
   }
 
   static fromJSON(input) {
@@ -140,6 +160,11 @@ export class Observation {
       observed: this.observed,
       severity: this.severity,
       refs: this.refs,
+      ...(this.specRevision === undefined ? {} : {
+        targets: this.targets,
+        allowedTargets: this.allowedTargets,
+        specRevision: this.specRevision,
+      }),
     };
   }
 

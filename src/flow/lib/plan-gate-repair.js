@@ -1,5 +1,7 @@
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import crypto from "node:crypto";
+import { SpecRepairTarget, parseSpecGateRepairPermissions } from "./spec-repair-operations.js";
+import { SpecGateDocumentTarget } from "./spec-gate-targets.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { CanonicalGateInputStore } from "./canonical-gate-artifacts.js";
 import { canonicalRepairAttemptOwner } from "./repair-attempt-lineage.js";
@@ -115,6 +117,27 @@ export class PlanGateRepairObservation {
     this.refs = Object.freeze(refs.map((ref, index) => (
       requiredString(ref, `plan gate repair observation refs[${index}]`, 500)
     )));
+    if (Object.hasOwn(input, "specRevision") || Object.hasOwn(input, "targets")
+      || Object.hasOwn(input, "allowedTargets")) {
+      if (this.where?.file !== "spec.json") throw new Error("plan gate repair Spec observation must cite spec.json");
+      if (!/^sha256:[a-f0-9]{64}$/.test(input.specRevision)
+        || !Array.isArray(input.targets) || input.targets.length === 0
+        || !Array.isArray(input.allowedTargets) || input.allowedTargets.length === 0) {
+        throw new Error("plan gate repair Spec observation requires revision, targets and allowedTargets");
+      }
+      this.specRevision = input.specRevision;
+      this.targets = Object.freeze(input.targets.map((target) => Object.freeze((Object.hasOwn(target ?? {}, "document")
+        ? new SpecGateDocumentTarget(target) : SpecRepairTarget.fromJSON(target, "plan gate repair target")).toJSON())));
+      this.allowedTargets = Object.freeze(parseSpecGateRepairPermissions(input.allowedTargets,
+        "plan gate repair allowed target").map((permission) => Object.freeze({
+        target: Object.freeze(permission.target.toJSON()),
+        operationKinds: Object.freeze([...permission.operationKinds]),
+      })));
+    } else {
+      this.specRevision = null;
+      this.targets = null;
+      this.allowedTargets = null;
+    }
     this.authority = Object.freeze({
       kind: requiredString(input.authority?.kind ?? "requirement", "plan gate repair observation authority kind", 100),
       id: requiredString(input.authority?.id ?? this.requirementRef, "plan gate repair observation authority id", 500),
@@ -129,10 +152,13 @@ export class PlanGateRepairObservation {
       authority: this.authority,
       failureMode: this.failureMode,
       file: this.where?.file ?? null,
-      locator: this.where?.locator ?? null,
+      locator: this.targets === null ? this.where?.locator ?? null : null,
       rootCause: this.rootCause,
       observed: this.observed,
       title: input.title ?? null,
+      ...(this.targets === null ? {} : { targetBinding: crypto.createHash("sha256")
+        .update(stableStringify([...this.targets].sort((a, b) =>
+          stableStringify(a).localeCompare(stableStringify(b))))).digest("hex") }),
     });
     this.fingerprint = this.canonical.fingerprint;
     if (input.fingerprint !== undefined && input.fingerprint !== this.fingerprint.toString()) {
@@ -150,6 +176,8 @@ export class PlanGateRepairObservation {
       observed: this.observed,
       severity: this.severity,
       refs: [...this.refs],
+      ...(this.targets === null ? {} : { targets: this.targets,
+        allowedTargets: this.allowedTargets, specRevision: this.specRevision }),
       authority: this.authority,
       rootCause: this.rootCause,
       fingerprint: this.fingerprint.toString(),

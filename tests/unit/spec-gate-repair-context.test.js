@@ -168,6 +168,18 @@ test("collection anchors disclose omitted content and missing fields disclose ac
   assert(ctx.tableOfContents().some((range) => range.id === "requirements[R1].priority" && range.exists === false));
 });
 
+test("whole-document findings select canonical context while preserving explicit field permissions", () => {
+  const source = finding("F1");
+  source.targets = [{ document: "spec" }];
+  const ctx = context([source]);
+  assert.equal(ctx.unresolvedFindings().length, 0);
+  const selected = ctx.select(ctx.units()[0].id).toJSON();
+  assert.deepEqual(selected.unit.rangeIds, ctx.tableOfContents().map(({ id }) => id).sort());
+  assert.deepEqual(selected.ranges.filter(({ writable }) => writable).map(({ target }) => target), [target()]);
+  assert.equal(selected.ranges.find(({ id }) => id === "background").value, "UNRELATED_BACKGROUND");
+  assert.equal(selected.ranges.find(({ id }) => id === "tasks[T2].goal").writable, false);
+});
+
 test("oversized repair units are read in ranges without splitting their mutation unit", () => {
   const document = spec(); document.requirements[0].desc = "Long planned check. ".repeat(3000);
   const ctx = context([finding("F1")], document);

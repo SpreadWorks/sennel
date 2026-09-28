@@ -1,0 +1,60 @@
+{
+  "provenance": {
+    "runId": "1919b249-ebda-4365-aade-03002d57bf03",
+    "specId": "1919b249-flow-help-contract-521",
+    "source": "retained runtime log 1919b249-flow-help-contract-521.log",
+    "sourceSha256": "5884f7c0f69f324a6573c33760f645841496b1ceb3a6ffba91f5d9b6a5ac7d17",
+    "observationSequence": 29,
+    "requirementReadbackSequence": 30,
+    "sourceAttemptId": "attempt-spec-gate-9391b569-d0a4-4e62-91dc-bb315b50db1b",
+    "limitation": "Original Spec artifact was removed by flow abort. This fixture retains the exact R10 requirement slice returned by status and the exact Gate observations; it does not reconstruct unrelated Spec fields."
+  },
+  "spec": {
+    "requirements": [
+      {
+        "id": "R10",
+        "desc": "registry・component test は歴史的件数を固定せず live FLOW_COMMANDS から shared leaf inventory と complete option contract を導出し、public CLI test は代表的な input dimension、long-name boundary、runtime precedence、query isolation を接続して検証する。",
+        "task_ids": [
+          "T-6",
+          "T-7",
+          "T-8",
+          "T-10"
+        ],
+        "priority": "must",
+        "testable": true,
+        "preimplementation_test_expectation": "fail"
+      }
+    ]
+  },
+  "observations": [
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "unambiguous-requirements",
+      "where": {
+        "file": "spec.json",
+        "locator": "requirements.R10.desc"
+      },
+      "observed": "「代表的な input dimension」が何を指すか、対象となる入力次元や選定条件が定義されていない。",
+      "severity": "blocking",
+      "refs": [
+        "unambiguous-requirements"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "complete-context",
+      "where": {
+        "file": "spec.json",
+        "locator": "requirements.R10.desc"
+      },
+      "observed": "public CLI test で検証すべき「代表的な input dimension」の範囲と判定基準がなく、独立したレビュアーが同じ対象を選べない。",
+      "severity": "blocking",
+      "refs": [
+        "complete-context"
+      ]
+    }
+  ],
+  "expectedRangeId": "requirements[R10].desc"
+}

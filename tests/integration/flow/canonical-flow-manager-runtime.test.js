@@ -95,7 +95,8 @@ import { attachedCanonicalReviewWorkUnit } from "../../../src/flow/lib/canonical
 import SetReviewEvidenceCommand from "../../../src/flow/lib/set-review-evidence.js";
 import RunRecoverReviewPassCommand from "../../../src/flow/lib/run-recover-review-pass.js";
 import RunUpdateOverviewCommand from "../../../src/flow/lib/run-update-overview.js";
-import RunGateCommand, { appendIssueLogFromGateResult, GateIssueLogEntry } from "../../../src/flow/lib/run-gate.js";
+import RunGateCommand, { appendIssueLogFromGateResult, GateIssueLogEntry,
+  parseGuardrailArticleEvaluation } from "../../../src/flow/lib/run-gate.js";
 import { computeGitState } from "../../../src/lib/git-state.js";
 import { CanonicalGatePromotion, canonicalGateRevision } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import {
@@ -1500,16 +1501,19 @@ describe("FlowManager canonical Version-1 runtime", () => {
       flowManager: manager,
       flowState: manager.load(created.specId),
     });
-    const runCurrentCycle = async (cycle, { observation = `spec-cycle-${cycle}`, blocking = true } = {}) => {
-      const observations = blocking ? [{
-        kind: "violation",
-        failureMode: observation,
-        requirementRef: "R-1",
+    const runCurrentCycle = async (cycle, { blocking = true } = {}) => {
+      const record = manager.readArtifact({ specId: created.specId,
+        logicalKey: "spec.record", consumerNodeId: "spec-gate" });
+      const spec = JSON.parse(record.bytes.toString("utf8"));
+      const specRevision = `sha256:${crypto.createHash("sha256").update(record.bytes).digest("hex")}`;
+      const observations = parseGuardrailArticleEvaluation(JSON.stringify({ observations: blocking ? [{
+        failureMode: "guardrail-violation", requirementRef: "R-1",
         where: { file: "spec.json", locator: "requirements[R-1].desc" },
         observed: `Spec cycle ${cycle} requires a distinct correction.`,
-        severity: "blocking",
-        refs: ["R-1"],
-      }] : [];
+        targets: [{ entity: "requirement", id: "R-1", field: "desc" }],
+        allowedTargets: [{ target: { entity: "requirement", id: "R-1", field: "desc" },
+          operationKinds: ["edit-text-field"] }],
+      }] : [] }), ["R-1"], { spec, specRevision });
       const binding = new SpecGateEvaluationBinding({ flowManager: manager, specId: created.specId });
       const commandResult = new CanonicalGatePromotion({
         state: manager.canonicalState(created.specId), phase: "spec", nodeId: "spec-gate",
@@ -1538,10 +1542,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       return { facts, stepResult };
     };
 
-    const retry = await runCurrentCycle(1, {
-      blocking: false,
-      observation: "spec-cycle-1-retry-probe",
-    });
+    const retry = await runCurrentCycle(1, { blocking: false });
     assert.equal(retry.stepResult.kind, "spec-gate-retry-required");
     assert.equal(retry.facts.cycle, 1);
     assert.equal(manager.activityLedger(created.specId).at(-1).transition.operation, "settle_spec_gate_retry");

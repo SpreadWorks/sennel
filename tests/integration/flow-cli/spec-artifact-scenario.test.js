@@ -78,6 +78,8 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       const findingId = "spec-review-requirement";
       const approvedGoal = "Publish the required behavior in the Spec.";
       const reviewedRequirement = "Retain the repaired Spec requirement in every downstream consumer.";
+      const gateRequirement = "R10 must retain its original planned verification wording.";
+      const gateTarget = { entity: "requirement", id: "R10", field: "desc" };
       gateAgentLookup = installGateProviderFake((_prompt, options) => {
         const observationSchema = options.jsonSchema?.properties?.observations?.items;
         const evidenceIds = observationSchema?.properties?.requirementId?.enum ?? [];
@@ -90,12 +92,14 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         attempts.add(state.attempt.id);
         const fail = retainGateFindings || attempts.size === 1;
         const selected = [{
-          failureMode: retainGateFindings ? `unresolved-behavior-${attempts.size}` : "guardrail-violation",
+          failureMode: "guardrail-violation",
           requirementRef: sharedGuardrail,
-          where: { file: "spec.json", locator: "background" },
+          where: { file: "spec.json", locator: "requirements.R10.desc" },
           observed: retainGateFindings
             ? `Spec behavior ${attempts.size} needs a separate clarification.`
-            : "The Spec background needs the Gate clarification.",
+            : "Requirement R10 needs the Gate clarification.",
+          targets: [gateTarget],
+          allowedTargets: [{ target: gateTarget, operationKinds: ["edit-text-field"] }],
         }];
         if (evidenceIds.length > 0) {
           return JSON.stringify({ observations: evidenceIds.flatMap((requirementId) => sourceRefs.map((sourceRef) => ({
@@ -106,8 +110,8 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         }
         return JSON.stringify({
           observations: fail && knownIds.includes(sharedGuardrail)
-            ? selected.map(({ failureMode, requirementRef, where, observed }) => ({
-              failureMode, requirementRef: sharedGuardrail, where, observed,
+            ? selected.map(({ failureMode, requirementRef, where, observed, targets, allowedTargets }) => ({
+              failureMode, requirementRef: sharedGuardrail, where, observed, targets, allowedTargets,
             }))
             : [],
         });
@@ -136,6 +140,8 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
             fs.writeFileSync(requestPayloadPath(request, "spec.json"), workerArtifactJson({
               ...validWorkerHandoffTaskSpec(),
               goal: approvedGoal,
+              requirements: [...validWorkerHandoffTaskSpec().requirements,
+                { id: "R10", desc: gateRequirement, testable: false, task_ids: ["T1"] }],
               tasks: validWorkerHandoffTaskSpec().tasks.map((task) => ({
                 ...task,
                 test_strategy: "Verify the retained behavior through the focused Flow scenario.",
@@ -148,8 +154,14 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
             const context = requestInput(request, "spec-gate-repair-context.json").document;
             assert.equal(context.mode, "repair");
             const selection = context.selections[0];
-            const range = selection.ranges.find((entry) => entry.path === "background" && entry.writable);
+            const range = selection.ranges.find((entry) => entry.path === "requirements[R10].desc" && entry.writable);
             assert.ok(range);
+            assert.deepEqual(selection.unit.findings[0].targets, [gateTarget]);
+            assert.equal(selection.unit.findings[0].observed,
+              retainGateFindings ? `Spec behavior ${gateRepairWorkerRuns} needs a separate clarification.`
+                : "Requirement R10 needs the Gate clarification.");
+            assert.equal(context.baseRevision, selection.baseRevision);
+            assert.equal(selection.unit.findings[0].specRevision, context.baseRevision);
             fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson({
               version: 1, stage: "spec-gate-repair", baseRevision: context.baseRevision,
               groups: [{ findingIdentities: selection.unit.findings.map((finding) => finding.identity),
@@ -158,7 +170,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
                   edits: [{ startByte: Buffer.byteLength(range.value, "utf8"),
                     endByte: Buffer.byteLength(range.value, "utf8"),
                     replacement: " The Spec Gate observation is addressed." }],
-                  reason: "Address the exact Spec Gate background observation.",
+                  reason: "Address the exact Spec Gate R10 observation.",
                 }] }],
             }));
             return true;
@@ -432,7 +444,8 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       }).bytes.toString("utf8"));
       assert.equal(spec.goal, approvedGoal);
       assert.equal(spec.requirements[0].desc, reviewedRequirement);
-      assert.match(spec.background, /Spec Gate observation is addressed/);
+      assert.match(spec.requirements.find((entry) => entry.id === "R10").desc,
+        /Spec Gate observation is addressed/);
       const testSpec = new CanonicalTestArtifactStore({
         flowManager: reloaded, state: reloaded.loadReadOnly(specId),
       }).readSpec("test-generate");
@@ -441,7 +454,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       const acceptance = await new CanonicalAcceptanceArtifactStore({
         state: reloaded.loadReadOnly(specId), flowManager: reloaded,
       }).buildContext({ executionRoot: root });
-      assert.deepEqual(acceptance.requirementIds, ["R1"]);
+      assert.deepEqual(acceptance.requirementIds, ["R1", "R10"]);
       assert.equal(acceptance.evidence.requirements[0].desc, reviewedRequirement);
       assert.deepEqual(acceptance.evidence.requirements, spec.requirements);
       assert.equal(acceptance.mechanicalBlockers.some((entry) => entry.kind === "invalid_spec"), false);

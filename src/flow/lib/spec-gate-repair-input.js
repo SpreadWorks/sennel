@@ -5,7 +5,7 @@ import { buildAcknowledgedRationaleSection } from "./acknowledged-rationale.js";
 import { canonicalSourceFindings } from "./flow-findings.js";
 import { canonicalPlanGateRepairForTarget, PlanGateRepairObservation } from "./plan-gate-repair.js";
 import { SpecGateRepairContext } from "./spec-gate-repair-context.js";
-import { specRepairTargetEntries } from "./spec-repair-operations.js";
+import { SpecGateTargetSelection } from "./spec-gate-targets.js";
 import { readSpecGateRepairSources } from "./spec-gate-repair-sources.js";
 
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
@@ -80,13 +80,29 @@ export function readSpecGateRepairInput({ flowManager, state, executionRoot, loc
   const findings = repair.observations.map((observation) => {
     const matches = byGateFingerprint.get(observation.fingerprint.toString()) ?? [];
     if (matches.length !== 1) throw new Error("Gate repair observation has no unique canonical source finding");
+    const sourceFinding = matches[0].finding;
+    if (sourceFinding.requirementRef !== observation.requirementRef
+      || sourceFinding.observed !== observation.observed
+      || key(sourceFinding.where ?? null) !== key(observation.where?.toJSON() ?? null)) {
+      throw new Error("Spec Gate repair observation differs from its canonical source");
+    }
+    if (sourceFinding.specRevision !== baseRevision || observation.specRevision !== baseRevision) {
+      throw new Error("Spec Gate repair target revision is stale or absent");
+    }
+    const selection = new SpecGateTargetSelection({ targets: sourceFinding.targets,
+      allowedTargets: sourceFinding.allowedTargets, spec, specRevision: baseRevision });
+    if (key(selection.toJSON()) !== key(observation.targets)
+      || key(selection.allowedTargets) !== key(observation.allowedTargets)) {
+      throw new Error("Spec Gate repair target authority differs from its canonical source");
+    }
     return {
       identity: matches[0].identity.toJSON(),
       requirementRef: observation.requirementRef,
       observed: observation.observed,
       where: observation.where?.toJSON() ?? null,
-      targets: matches[0].finding.targets ?? [],
-      allowedTargets: matches[0].finding.allowedTargets ?? [],
+      targets: selection.toJSON(),
+      allowedTargets: selection.allowedTargets,
+      specRevision: selection.specRevision,
     };
   });
   const ruleSet = new SpecGateRepairRuleSet({ executionRoot, spec });
@@ -96,42 +112,6 @@ export function readSpecGateRepairInput({ flowManager, state, executionRoot, loc
     acknowledgedRationale: ruleSet.acknowledgedRationale,
   });
   if (locations !== null) context = context.resolveLocations({ baseRevision, locations });
-  if (context.unresolvedFindings().length === 0) {
-    const inventory = new Map(specRepairTargetEntries(spec).map((entry) => [key(entry.target.toJSON()), entry]));
-    const permissions = new Map();
-    for (const unit of context.units()) {
-      const selected = context.select(unit.id);
-      for (const finding of unit.findings) {
-        const grants = new Map();
-        for (const permission of finding.allowedTargets) {
-          const entry = inventory.get(key(permission.target));
-          if (entry === undefined || !Array.isArray(permission.operationKinds)
-            || permission.operationKinds.some((kind) => !entry.operationKinds.includes(kind))) {
-            throw new Error("Spec Gate explicit repair permission is outside canonical Spec inventory");
-          }
-          grants.set(key(permission.target), { target: permission.target,
-            operationKinds: [...permission.operationKinds] });
-        }
-        const textTargets = selected.ranges.filter((range) => (
-          finding.rangeIds.includes(range.id) && range.target !== null
-          && inventory.get(key(range.target))?.operationKinds.includes("edit-text-field")
-        ));
-        for (const range of textTargets) {
-          const existing = grants.get(key(range.target));
-          grants.set(key(range.target), { target: range.target,
-            operationKinds: [...new Set([...(existing?.operationKinds ?? []), "edit-text-field"])] });
-        }
-        permissions.set(finding.identity.toString(), [...grants.values()]);
-      }
-    }
-    context = new SpecGateRepairContext({
-      spec, baseRevision, guardrails: ruleSet.guardrails, sources,
-      acknowledgedRationale: ruleSet.acknowledgedRationale,
-      findings: context.units().flatMap((unit) => unit.findings.map((finding) => ({
-        ...finding.toJSON(), allowedTargets: permissions.get(finding.identity.toString()) ?? [],
-      }))),
-    });
-  }
   const review = flowManager.readLatestSpecReview({
     specId: state.specId, consumerNodeId: "spec-gate-repair",
   });

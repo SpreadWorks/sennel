@@ -350,6 +350,24 @@ describe("revision-scoped spec repair operations", () => {
       valueDigest(spec.requirements[0].testable),
     )]), (error) => error.code === "FLOW_SPEC_REPAIR_TRIAGE_TARGETS_INVALID");
   });
+
+  it("rejects replacement authority for an absent optional field while retaining an existing false value", () => {
+    const spec = sourceSpec();
+    const absent = { entity: "task", id: "T1", field: "acceptance" };
+    assert.equal(Object.hasOwn(spec.tasks[0], "acceptance"), false);
+    assert.throws(() => apply(spec, [
+      applyFinding("F-absent", [permission(absent, ["replace-entity-field"])]),
+    ], []), (error) => error.code === "FLOW_SPEC_REPAIR_TRIAGE_TARGETS_INVALID");
+    assert.equal(Object.hasOwn(spec.tasks[0], "acceptance"), false);
+
+    const existing = { entity: "requirement", id: "R1", field: "testable" };
+    assert.equal(spec.requirements[0].testable, false);
+    const accepted = apply(spec, [applyFinding("F-existing", [permission(existing, ["replace-entity-field"])])], [
+      replace(["F-existing"], existing, false, valueDigest(false)),
+    ]);
+    assert.equal(accepted.spec.requirements[0].testable, false);
+    assert.deepEqual(accepted.audit.appliedFindings, ["F-existing"]);
+  });
 });
 
 const GATE_REVISION = `sha256:${INPUT_DIGEST}`;
@@ -654,6 +672,24 @@ describe("Gate-authorized atomic Spec repair groups", () => {
     assert.equal(result.spec.requirements[0].testable, true);
     assert.equal(result.spec.requirements[0].preimplementation_test_expectation, "fail");
     assert.equal(result.audit.acceptedGroups.length, 1);
+  });
+
+  it("rejects absent-field replacement and deletion before Gate repair while applying an explicit add", () => {
+    const spec = sourceSpec();
+    const identity = gateIdentity("task-acceptance");
+    const target = { entity: "task", id: "T1", field: "acceptance" };
+    for (const kind of ["replace-entity-field", "delete-entity-field"]) {
+      assert.throws(() => gateAuthority(spec, [[identity, [permission(target, [kind])]]]), /impossible targets/);
+    }
+    const authority = gateAuthority(spec, [[identity, [permission(target, ["add-entity-field"])]]]);
+    const result = gateApply(spec, authority, [{ findingIdentities: [identity], operations: [
+      { kind: "add-entity-field", target, expectedDigest: null, replacement: ["Verify the CLI output."],
+        reason: "Add the missing acceptance criterion." },
+    ] }]);
+    assert.deepEqual(result.spec.tasks[0].acceptance, ["Verify the CLI output."]);
+    assert.equal(Object.hasOwn(spec.tasks[0], "acceptance"), false);
+    assert.equal(result.audit.acceptedGroups.length, 1);
+    assert.deepEqual(result.audit.discardedGroups, []);
   });
 
   it("enumerates typed edit targets, including absent optional fields and array add anchors", () => {
