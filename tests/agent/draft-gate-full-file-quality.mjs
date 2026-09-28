@@ -1,11 +1,11 @@
 // Run directly: node tests/agent/draft-gate-full-file-quality.mjs [--limit=1]
 // This expensive real-provider comparison is intentionally outside npm test:agent.
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { AtomicFile } from "../../src/lib/atomic-file.js";
+import { ensureBaselineArchive, runGateTrial, sha256 } from "./gate-quality-comparison.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const baselineRevision = "aea1f13cf1a3556444aa50d7a8b6afc1bc3a168a";
@@ -19,7 +19,6 @@ const configured = JSON.parse(fs.readFileSync(path.join(projectRoot, ".sennel/co
 const config = { agent: configured.agent };
 const expectedProvider = "codex/gpt-6-sol-medium";
 const original = fs.readFileSync(originalPath, "utf8");
-const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const canonicalSourceDigest = "2e54559096c0047638189df1cd643e4354216db81df4ce596bf951394218da6d";
 assert.equal(sha256(original), canonicalSourceDigest, "Historical Draft seed changed; review expected outcomes before rerunning");
 
@@ -125,34 +124,6 @@ function materializeFixtures() {
   return metadata;
 }
 
-function ensureBaseline() {
-  const marker = path.join(baselineRoot, "src/flow/lib/run-gate.js");
-  if (fs.existsSync(marker)) return;
-  fs.mkdirSync(baselineRoot, { recursive: true });
-  const archive = spawnSync("git", ["archive", baselineRevision, "--", "src", "package.json"],
-    { cwd: projectRoot, maxBuffer: 100 * 1024 * 1024 });
-  assert.equal(archive.status, 0, archive.stderr?.toString());
-  const extract = spawnSync("tar", ["-x", "-C", baselineRoot], { input: archive.stdout });
-  assert.equal(extract.status, 0, extract.stderr?.toString());
-  assert.equal(fs.existsSync(path.join(baselineRoot, ".git")), false);
-}
-
-class ProviderOutputMeter {
-  constructor() { this.buffer = ""; this.launches = 0; this.usages = []; }
-  add(chunk) {
-    this.buffer += chunk;
-    let end;
-    while ((end = this.buffer.indexOf("\n")) >= 0) {
-      const line = this.buffer.slice(0, end); this.buffer = this.buffer.slice(end + 1);
-      try {
-        const event = JSON.parse(line);
-        if (event.type === "thread.started") this.launches++;
-        if (event.type === "turn.completed" && event.usage) this.usages.push(event.usage);
-      } catch { /* Codex may emit non-JSON diagnostics; the gate owns response parsing. */ }
-    }
-  }
-}
-
 function classify(scenario, result) {
   if (result.failureCode || result.failureKind) return { category: "error", reason: result.failureReason ?? result.failureCode };
   const findings = (result.evaluations ?? []).filter((item) => item.result === "fail").map((item) => ({
@@ -189,7 +160,7 @@ function classify(scenario, result) {
 
 async function main() {
   materializeFixtures();
-  ensureBaseline();
+  ensureBaselineArchive({ projectRoot, baselineRoot, revision: baselineRevision });
   const [currentGate, baselineGate, currentAgentModule, baselineAgentModule, currentProviderModule,
     baselineProviderModule, currentLogModule, baselineLogModule] = await Promise.all([
     import(pathToFileURL(path.join(projectRoot, "src/flow/lib/run-gate.js"))),
@@ -221,50 +192,17 @@ async function main() {
         if (report.trials.some((entry) => entry.id === id)) continue;
         if (executed >= limit) return;
         const trialRoot = path.join(runRoot, "trials", id.replaceAll("/", "-"));
-        fs.mkdirSync(trialRoot, { recursive: true });
         const impl = versions[version];
-        const real = new impl.Agent({ config, paths: { root: trialRoot, agentWorkDir: path.join(trialRoot, "agent-work") },
-          registry: new impl.ProviderRegistry(config.agent.providers ?? {}),
-          logger: new impl.Logger({ logDir: path.join(trialRoot, "logs"), enabled: false }) });
-        const resolved = real.resolve("flow.spec.gate");
-        assert.equal(resolved.profileKey, expectedProvider);
-        const metering = new ProviderOutputMeter();
-        const promptMetrics = [];
-        const calls = [];
-        const agent = {
-          promptCharacterLimit: real.promptCharacterLimit,
-          resolve: (...args) => real.resolve(...args),
-          projectInvocation: (...args) => real.projectInvocation(...args),
-          call: async (prompt, options) => {
-            const start = performance.now();
-            const entry = { durationMs: null, outcome: null, launches: 0, usage: [] };
-            calls.push(entry);
-            const meter = new ProviderOutputMeter();
-            try {
-              const response = await real.call(prompt, { ...options, cacheMode: "bypass", flowAttribution: "none",
-                onStdout: (chunk) => { meter.add(chunk); metering.add(chunk); } });
-              entry.outcome = "complete";
-              return response;
-            } catch (error) { entry.outcome = error.code ?? error.message; throw error; }
-            finally { entry.durationMs = Math.round(performance.now() - start); entry.launches = meter.launches; entry.usage = meter.usages; }
-          },
-        };
-        const start = performance.now();
-        let result;
-        try { result = await impl.gate.checkGuardrail(trialRoot, scenario.source, "draft", undefined, [],
-          { agent, loadGuardrails: () => rules, recordPromptMetric: (metric) => promptMetrics.push(metric) }); }
-        catch (error) { result = { failureCode: error.code ?? "THREW", failureKind: "exception", failureReason: error.message }; }
+        const measured = await runGateTrial({ impl, config, trialRoot, source: scenario.source,
+          phase: "draft", rules, expectedProvider });
         const gateSourcePath = path.join(version === "file" ? projectRoot : baselineRoot, "src/flow/lib/run-gate.js");
         const planSourcePath = path.join(version === "file" ? projectRoot : baselineRoot, "src/flow/lib/gate-prompt-plan.js");
         const trial = { id, scenario: scenario.id, pair, version, sourceSha256: sha256(scenario.source),
           productSha256: { runGate: sha256(fs.readFileSync(gateSourcePath)), promptPlan: sha256(fs.readFileSync(planSourcePath)) },
-          durationMs: Math.round(performance.now() - start), calls, cliLaunchCount: metering.launches,
-          cliLaunchAuthority: "gate recordPromptMetric.callCount", promptMetrics,
-          observedThreadCount: metering.launches, usage: metering.usages, result, assessment: classify(scenario, result),
+          ...measured, assessment: classify(scenario, measured.result),
           manualReview: "pending" };
-        trial.cliLaunchCount = promptMetrics.reduce((total, metric) => total + (metric.callCount ?? 0), 0);
         report.trials.push(trial);
-        fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+        new AtomicFile(reportPath).write(`${JSON.stringify(report, null, 2)}\n`);
         process.stdout.write(`${id}: ${trial.assessment.category} ${trial.durationMs}ms ${trial.cliLaunchCount} CLI launches\n`);
         executed++;
       }

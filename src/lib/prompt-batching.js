@@ -1240,7 +1240,9 @@ export class PromptExecutionLimit {
   } = {}) {
     this.maxRequestCharacters = safeInteger(maxRequestCharacters, "Execution request character limit", { minimum: 1 });
     if (this.maxRequestCharacters > GLOBAL_PROMPT_ELEMENT_HARD_MAX) throw new RangeError("Execution request character limit exceeds the global hard maximum");
-    this.maxResponseCharacters = safeInteger(maxResponseCharacters, "Execution response character limit", { minimum: 1 });
+    this.maxResponseCharacters = maxResponseCharacters === null
+      ? null
+      : safeInteger(maxResponseCharacters, "Execution response character limit", { minimum: 1 });
     this.maxBatchCount = safeInteger(maxBatchCount, "Execution batch count limit", { minimum: 1 });
     this.maxProviderCallCount = safeInteger(maxProviderCallCount, "Execution provider call limit", { minimum: 1 });
     this.maxProtocolRetryCount = safeInteger(maxProtocolRetryCount, "Execution protocol retry limit");
@@ -1558,7 +1560,8 @@ export class PromptBatchExecutor {
           if (!providerCallAdmission.settled) providerCallAdmission.settle();
         }
         const rawCallCharacters = responseCharacterCount(rawCallResponse);
-        if (rawCallCharacters > this.executionLimit.maxResponseCharacters) {
+        if (this.executionLimit.maxResponseCharacters !== null
+          && rawCallCharacters > this.executionLimit.maxResponseCharacters) {
           throw new PromptResponseTooLargeFailure("Prompt provider response exceeds its character limit", {
             batchDigest: batch.digest,
             responseCharacters: rawCallCharacters,
@@ -1569,7 +1572,8 @@ export class PromptBatchExecutor {
       };
       const raw = await protocolPolicy.execute({ batch, request: batch.request, call });
       const rawCharacters = responseCharacterCount(raw);
-      if (rawCharacters > this.executionLimit.maxResponseCharacters) {
+      if (this.executionLimit.maxResponseCharacters !== null
+        && rawCharacters > this.executionLimit.maxResponseCharacters) {
         throw new PromptResponseTooLargeFailure("Prompt response exceeds its character limit", {
           batchDigest: batch.digest,
           responseCharacters: rawCharacters,

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { Agent } from "../../src/lib/agent.js";
@@ -38,7 +37,9 @@ const source = JSON.stringify({
 const expectedViolations = ["consistent-timeout", "planned-threshold"];
 
 test("real model preserves cross-range violations, justified exceptions and Spec-stage semantics", { timeout: 1_800_000 }, async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-spec-gate-quality-"));
+  const temporaryParent = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.tmp");
+  fs.mkdirSync(temporaryParent, { recursive: true });
+  const root = fs.mkdtempSync(path.join(temporaryParent, "spec-gate-quality-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const model = process.env.SENNEL_GATE_QUALITY_MODEL || "gpt-6-luna";
   const profile = "quality-frozen";
@@ -52,9 +53,9 @@ test("real model preserves cross-range violations, justified exceptions and Spec
   const variants = [];
   if (process.env.SENNEL_GATE_QUALITY_BASELINE) {
     const baseline = await import(pathToFileURL(path.join(process.env.SENNEL_GATE_QUALITY_BASELINE, "src/flow/lib/run-gate.js")));
-    variants.push({ name: "baseline", evaluate: baseline.checkGuardrail, shared: false });
+    variants.push({ name: "baseline", evaluate: baseline.checkGuardrail, shared: true });
   }
-  variants.push({ name: "shared", evaluate: checkGuardrail, shared: true });
+  variants.push({ name: "file", evaluate: checkGuardrail, shared: false });
   for (const variant of variants) {
     const measurement = { name: variant.name, calls: [], phaseMetrics: [], result: null };
     report.runs.push(measurement);
@@ -65,6 +66,8 @@ test("real model preserves cross-range violations, justified exceptions and Spec
       call: async (prompt, options) => {
         const call = { inputCharacters: PromptLogicalFootprint.measure({ userPrompt: prompt, ...options }).total, durationMs: null };
         measurement.calls.push(call);
+        const file = /^Absolute file path: (.+)$/m.exec(prompt)?.[1];
+        if (file) assert.equal(fs.readFileSync(file, "utf8"), source, "provider must receive the saved complete Spec");
         const start = Date.now();
         try { return await real.call(prompt, { ...options, cacheMode: "bypass" }); }
         finally { call.durationMs = Date.now() - start; }
@@ -72,15 +75,13 @@ test("real model preserves cross-range violations, justified exceptions and Spec
     };
     const start = Date.now();
     measurement.result = await variant.evaluate(root, source, "spec", undefined, [], {
-      agent, loadGuardrails: () => rules, sharedGuardrailEvidence: variant.shared,
+      agent, loadGuardrails: () => rules,
       recordPromptMetric: (entry) => measurement.phaseMetrics.push(entry),
-      ...(variant.shared ? {
-        structuredSource: JSON.parse(source),
-        specTargetScope: {
-          spec: JSON.parse(source),
-          specRevision: `sha256:${createHash("sha256").update(source).digest("hex")}`,
-        },
-      } : {}),
+      specTargetScope: {
+        spec: JSON.parse(source),
+        specRevision: `sha256:${createHash("sha256").update(source).digest("hex")}`,
+      },
+      ...(variant.shared ? { sharedGuardrailEvidence: true, structuredSource: JSON.parse(source) } : {}),
     });
     measurement.durationMs = Date.now() - start;
     measurement.inputCharacters = measurement.calls.reduce((sum, call) => sum + call.inputCharacters, 0);
@@ -90,7 +91,7 @@ test("real model preserves cross-range violations, justified exceptions and Spec
   for (const measurement of report.runs) {
     t.diagnostic(JSON.stringify({ name: measurement.name, callCount: measurement.callCount, inputCharacters: measurement.inputCharacters, durationMs: measurement.durationMs }));
     const actual = [...new Set((measurement.result.evaluations ?? []).filter((entry) => entry.result === "fail").map((entry) => entry.guardrail_id))].sort();
-    if (measurement.name === "shared") {
+    if (measurement.name === "file") {
       assert.deepEqual(actual, expectedViolations, JSON.stringify(measurement.result));
       for (const observation of measurement.result.evaluations.flatMap((entry) => entry.observations ?? [])) {
         assert(observation.targets.length > 0);

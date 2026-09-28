@@ -34,12 +34,16 @@ import {
 } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 describe("Spec artifact lifecycle and downstream consumption", { concurrency: false }, () => {
-  for (const { retainGateFindings, advisoryRepair } of [
+  for (const { retainGateFindings, advisoryRepair, largeGateResponse = false, largeSpecFile = false } of [
     { retainGateFindings: false, advisoryRepair: false },
     { retainGateFindings: true, advisoryRepair: false },
     { retainGateFindings: false, advisoryRepair: true },
+    { retainGateFindings: false, advisoryRepair: false, largeGateResponse: true, largeSpecFile: false },
+    { retainGateFindings: false, advisoryRepair: false, largeGateResponse: true, largeSpecFile: true },
   ]) {
-  it(advisoryRepair
+  it(largeGateResponse
+    ? `retains complete large ${largeSpecFile ? "file" : "inline"} Spec Gate findings through repair and reload`
+    : advisoryRepair
     ? "saves an advisory Spec repair, runs its worker, then gates the changed Spec"
     : retainGateFindings
       ? "retains unresolved Spec Gate findings for Acceptance after a durable strict stop"
@@ -75,11 +79,16 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       let specReviewRuns = 0;
       let specWorkerRuns = 0;
       let gateRepairWorkerRuns = 0;
+      const repairedFindingIdentities = new Set();
       const findingId = "spec-review-requirement";
       const approvedGoal = "Publish the required behavior in the Spec.";
       const reviewedRequirement = "Retain the repaired Spec requirement in every downstream consumer.";
       const gateRequirement = "R10 must retain its original planned verification wording.";
       const gateTarget = { entity: "requirement", id: "R10", field: "desc" };
+      const largeFindingIds = Array.from({ length: 8 }, (_, index) => `R${index + 10}`);
+      const largeFindingReason = (id, occurrence) => `The planned verification for ${id}, gap ${occurrence + 1}, omits the required cross-section rationale. `
+        + Array.from({ length: 47 }, (_, index) => `Evidence ${index + 1} for ${id} compares the stated behavior with its planned check.`).join(" ");
+      let largeFirstResponse = null;
       gateAgentLookup = installGateProviderFake((_prompt, options) => {
         const observationSchema = options.jsonSchema?.properties?.observations?.items;
         const evidenceIds = observationSchema?.properties?.requirementId?.enum ?? [];
@@ -91,16 +100,19 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         const attempts = specGateAttempts;
         attempts.add(state.attempt.id);
         const fail = retainGateFindings || attempts.size === 1;
-        const selected = [{
+        const findingSources = largeGateResponse
+          ? largeFindingIds.flatMap((id) => Array.from({ length: 5 }, (_, occurrence) => ({ id, occurrence })))
+          : [{ id: "R10", occurrence: 0 }];
+        const selected = findingSources.map(({ id, occurrence }) => ({
           failureMode: "guardrail-violation",
           requirementRef: sharedGuardrail,
-          where: { file: "spec.json", locator: "requirements.R10.desc" },
-          observed: retainGateFindings
+          where: { file: "spec.json", locator: `requirements.${id}.desc` },
+          observed: largeGateResponse ? largeFindingReason(id, occurrence) : retainGateFindings
             ? `Spec behavior ${attempts.size} needs a separate clarification.`
             : "Requirement R10 needs the Gate clarification.",
-          targets: [gateTarget],
-          allowedTargets: [{ target: gateTarget, operationKinds: ["edit-text-field"] }],
-        }];
+          targets: [{ ...gateTarget, id }],
+          allowedTargets: [{ target: { ...gateTarget, id }, operationKinds: ["edit-text-field"] }],
+        }));
         if (evidenceIds.length > 0) {
           return JSON.stringify({ observations: evidenceIds.flatMap((requirementId) => sourceRefs.map((sourceRef) => ({
             requirementId, sourceRef, support: [],
@@ -108,13 +120,19 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
               ? [selected[0].observed] : [], unresolved: [],
           }))) });
         }
-        return JSON.stringify({
+        const response = JSON.stringify({
           observations: fail && knownIds.includes(sharedGuardrail)
             ? selected.map(({ failureMode, requirementRef, where, observed, targets, allowedTargets }) => ({
               failureMode, requirementRef: sharedGuardrail, where, observed, targets, allowedTargets,
             }))
             : [],
+          ...(options.jsonSchema?.required?.includes("evaluationUnavailable") ? { evaluationUnavailable: null } : {}),
         });
+        if (largeGateResponse && fail) {
+          largeFirstResponse = response;
+          assert.ok(response.length > 120_000 && response.length < 160_000, response.length);
+        }
+        return response;
       });
       const agent = {
         async call(_prompt, options) {
@@ -140,8 +158,15 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
             fs.writeFileSync(requestPayloadPath(request, "spec.json"), workerArtifactJson({
               ...validWorkerHandoffTaskSpec(),
               goal: approvedGoal,
-              requirements: [...validWorkerHandoffTaskSpec().requirements,
-                { id: "R10", desc: gateRequirement, testable: false, task_ids: ["T1"] }],
+              ...(largeSpecFile ? { background: `Full canonical background: ${"x".repeat(125_000)}` } : {}),
+              requirements: [...validWorkerHandoffTaskSpec().requirements.map((requirement) => ({
+                ...requirement, ...(largeGateResponse ? { priority: "must" } : {}),
+              })),
+                ...((largeGateResponse ? largeFindingIds : ["R10"]).map((id) => ({
+                  id, desc: id === "R10" ? gateRequirement : `Plan verification for ${id}.`,
+                  ...(largeGateResponse ? { priority: "must" } : {}),
+                  testable: false, task_ids: ["T1"],
+                })))],
               tasks: validWorkerHandoffTaskSpec().tasks.map((task) => ({
                 ...task,
                 test_strategy: "Verify the retained behavior through the focused Flow scenario.",
@@ -153,25 +178,48 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
             gateRepairWorkerRuns += 1;
             const context = requestInput(request, "spec-gate-repair-context.json").document;
             assert.equal(context.mode, "repair");
-            const selection = context.selections[0];
-            const range = selection.ranges.find((entry) => entry.path === "requirements[R10].desc" && entry.writable);
-            assert.ok(range);
-            assert.deepEqual(selection.unit.findings[0].targets, [gateTarget]);
-            assert.equal(selection.unit.findings[0].observed,
-              retainGateFindings ? `Spec behavior ${gateRepairWorkerRuns} needs a separate clarification.`
-                : "Requirement R10 needs the Gate clarification.");
-            assert.equal(context.baseRevision, selection.baseRevision);
-            assert.equal(selection.unit.findings[0].specRevision, context.baseRevision);
-            fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson({
-              version: 1, stage: "spec-gate-repair", baseRevision: context.baseRevision,
-              groups: [{ findingIdentities: selection.unit.findings.map((finding) => finding.identity),
+            const groups = context.selections.map((selection) => {
+              const finding = selection.unit.findings[0];
+              const target = finding.targets[0];
+              const range = selection.ranges.find((entry) => entry.path === `requirements[${target.id}].desc` && entry.writable);
+              assert.ok(range);
+              if (largeGateResponse) {
+                assert.ok(largeFindingIds.includes(target.id));
+                assert.deepEqual(finding.targets, [{ entity: "requirement", id: target.id, field: "desc" }]);
+                assert.equal(selection.unit.findings.length, 5);
+                assert.deepEqual(new Set(selection.unit.findings.map((entry) => entry.observed)),
+                  new Set(Array.from({ length: 5 }, (_, occurrence) => largeFindingReason(target.id, occurrence))));
+                for (const entry of selection.unit.findings) {
+                  assert.deepEqual(entry.targets, [target]);
+                  assert.deepEqual(entry.allowedTargets, [{ target,
+                    operationKinds: ["edit-text-field"] }]);
+                  assert.equal(entry.specRevision, context.baseRevision);
+                  const key = JSON.stringify(entry.identity);
+                  assert.equal(repairedFindingIdentities.has(key), false);
+                  repairedFindingIdentities.add(key);
+                }
+              } else {
+                assert.deepEqual(finding.targets, [gateTarget]);
+                assert.deepEqual(finding.allowedTargets, [{ target: gateTarget,
+                  operationKinds: ["edit-text-field"] }]);
+                assert.equal(finding.observed, retainGateFindings
+                  ? `Spec behavior ${gateRepairWorkerRuns} needs a separate clarification.`
+                  : "Requirement R10 needs the Gate clarification.");
+              }
+              assert.equal(context.baseRevision, selection.baseRevision);
+              assert.equal(finding.specRevision, context.baseRevision);
+              return { findingIdentities: selection.unit.findings.map((entry) => entry.identity),
                 operations: [{ kind: "edit-text-field", target: range.target,
                   expectedDigest: range.digest,
                   edits: [{ startByte: Buffer.byteLength(range.value, "utf8"),
                     endByte: Buffer.byteLength(range.value, "utf8"),
                     replacement: " The Spec Gate observation is addressed." }],
-                  reason: "Address the exact Spec Gate R10 observation.",
-                }] }],
+                  reason: `Address the exact Spec Gate ${target.id} observation.`,
+                }] };
+            });
+            fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson({
+              version: 1, stage: "spec-gate-repair", baseRevision: context.baseRevision,
+              groups,
             }));
             return true;
           }
@@ -312,6 +360,33 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
           }).serialize(),
           _envelopeType: "run", _envelopeKey: "dispatch",
         });
+      } else if (largeGateResponse) {
+        let savedGate = null;
+        for (let index = 0; index < 16; index += 1) {
+          savedGate = flowManager.activityLedger(specId).find((entry) => entry.nodeId === "spec-gate"
+            && entry.result?.stepResult?.kind === "spec-gate-repair-required");
+          if (savedGate) break;
+          const partial = await dispatch(1);
+          assert.equal(partial.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(partial));
+        }
+        assert.equal(savedGate?.result.stepResult.kind, "spec-gate-repair-required");
+        const restored = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+        const savedHistory = JSON.parse(restored.readArtifact({
+          specId, logicalKey: "spec.gate", consumerNodeId: "spec-gate-repair",
+        }).bytes.toString("utf8"));
+        const savedFindings = savedHistory.attempts[0].artifact.payload.artifacts.nextAction.diagnosis.observations;
+        assert.equal(savedFindings.length, 40);
+        assert.equal(new Set(savedFindings.map((finding) => JSON.stringify(finding.targets))).size, 8);
+        const continuation = new RunDispatchCommand({ agent, maxDispatches: 64 });
+        continuation.container = dispatchContainer({ root, flowManager: restored, agent });
+        result = await continuation.execute({
+          root, mainRoot: root, executionRoot: root, specId, flowManager: restored,
+          flowState: restored.loadReadOnly(specId),
+          expectBinding: FlowTargetBinding.capture({
+            flowState: restored.loadReadOnly(specId), mainRoot: root, authorityRoot: root,
+          }).serialize(),
+          _envelopeType: "run", _envelopeKey: "dispatch",
+        });
       } else {
         result = await dispatch();
       }
@@ -388,10 +463,19 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       }, null, 2));
       const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
       const cycles = retainGateFindings ? 4 : 2;
-      assert.deepEqual(requests.map((request) => request.stepId),
-        ["spec", "spec-triage", "spec-repair",
-          ...Array.from({ length: cycles - 1 }, () => ["spec-gate-repair", "spec-triage", "spec-repair"]).flat()]);
-      assert.equal(gateRepairWorkerRuns, cycles - 1);
+      assert.deepEqual(requests.map((request) => request.stepId), [
+        "spec", "spec-triage", "spec-repair",
+        ...Array.from({ length: cycles - 1 }, () => [
+          ...Array.from({ length: largeGateResponse ? gateRepairWorkerRuns : 1 }, () => "spec-gate-repair"),
+          "spec-triage", "spec-repair",
+        ]).flat(),
+      ]);
+      if (largeGateResponse) {
+        assert.ok(gateRepairWorkerRuns > 1);
+        assert.equal(repairedFindingIdentities.size, 40);
+      } else {
+        assert.equal(gateRepairWorkerRuns, cycles - 1);
+      }
       assert.equal(specGateAttempts.size, cycles);
       assert.equal(specReviewRuns, cycles);
       const activities = reloaded.activityLedger(specId);
@@ -433,6 +517,10 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       ]), retainGateFindings
         ? Array.from({ length: cycles }, () => ["fail", "ai_semantic_fail"])
         : [["fail", "ai_semantic_fail"], ["pass", null]]);
+      if (largeGateResponse) {
+        assert.ok(largeFirstResponse.length > 120_000);
+        assert.equal(specGateHistory.attempts[0].artifact.payload.artifacts.nextAction.diagnosis.observations.length, 40);
+      }
       assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "approval");
       const projected = await new GetNextActionCommand().execute({
         root, mainRoot: root, executionRoot: root, specId,
@@ -446,6 +534,12 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       assert.equal(spec.requirements[0].desc, reviewedRequirement);
       assert.match(spec.requirements.find((entry) => entry.id === "R10").desc,
         /Spec Gate observation is addressed/);
+      if (largeGateResponse) {
+        for (const id of largeFindingIds) {
+          assert.match(spec.requirements.find((entry) => entry.id === id).desc,
+            /Spec Gate observation is addressed/);
+        }
+      }
       const testSpec = new CanonicalTestArtifactStore({
         flowManager: reloaded, state: reloaded.loadReadOnly(specId),
       }).readSpec("test-generate");
@@ -454,7 +548,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       const acceptance = await new CanonicalAcceptanceArtifactStore({
         state: reloaded.loadReadOnly(specId), flowManager: reloaded,
       }).buildContext({ executionRoot: root });
-      assert.deepEqual(acceptance.requirementIds, ["R1", "R10"]);
+      assert.deepEqual(acceptance.requirementIds, ["R1", ...(largeGateResponse ? largeFindingIds : ["R10"])]);
       assert.equal(acceptance.evidence.requirements[0].desc, reviewedRequirement);
       assert.deepEqual(acceptance.evidence.requirements, spec.requirements);
       assert.equal(acceptance.mechanicalBlockers.some((entry) => entry.kind === "invalid_spec"), false);

@@ -145,7 +145,10 @@ export function readProspectiveSpecGateFacts({ flowManager, binding, commandResu
   try { failure = GateFailureCategory.fromObservedGateResult(payload); }
   catch (cause) { throw new SpecGateAdmissionRefusal("prospective Spec Gate failure facts are invalid", cause); }
   if (failure.category === "tooling") {
-    const error = new Error("Spec Gate evaluator did not return accepted semantic facts");
+    const reason = payload.artifacts.issues?.join("; ") || null;
+    const error = new Error(reason
+      ? `Spec Gate evaluator did not return accepted semantic facts: ${reason}`
+      : "Spec Gate evaluator did not return accepted semantic facts");
     error.code = "GATE_OUTPUT_TOOLING_FAILURE";
     error.data = { failureCode: failure.code };
     throw error;

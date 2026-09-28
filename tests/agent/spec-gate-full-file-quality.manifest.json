@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "baselineRevision": "4651be1e23b9ada1c978c6b89cf3137892083b8b",
+  "savedSpec": "specs/256-draft-review-goal-achievability/001/spec.json",
+  "savedSpecBytesSha256": "53882485e76829365d41a60682f280d103cd3f295435578790ec415e6957b783",
+  "savedSpecBytes": 126446,
+  "canonicalGateInputSha256": "53882485e76829365d41a60682f280d103cd3f295435578790ec415e6957b783",
+  "canonicalGateInputCharacters": 126402,
+  "syntheticChanges": [
+    "large-derived-violation retains the saved Spec; scope.in names task T-K7 as the authority, and the new task defines 14 seconds",
+    "requirements[20] and requirements[100] add separated K7 values conflicting with task T-K7",
+    "requirements[70] rejects K7 bulk-bypass without a local reason",
+    "requirements[120] references the explicit K7-EX-1 rationale added in overview.decisions",
+    "small-normal is synthetic and follows the current Spec shape"
+  ],
+  "configuredSource": "supplied --config-root .sennel/config.json plus .sennel/config.local.json",
+  "configuredBaseSha256": "975d54ea383f1d173ffeede63b4e39158d76280c087a9c809bcb621b864187d2",
+  "configuredLocalSha256": "ab1c471d31fde8cb1e840a840467f4e9abe256d89a32f7fee241c66d666cddd6",
+  "configuredAgent": {
+    "default": "codex/gpt-5.6-luna",
+    "workDir": ".tmp",
+    "retryCount": 2,
+    "useProfile": "all-53-luna",
+    "promptCharacterLimit": 60000,
+    "profiles": {
+      "all-53-luna": {
+        "check": "codex/gpt-5.6-luna",
+        "docs": "codex/gpt-5.6-luna",
+        "flow": "codex/gpt-5.6-luna",
+        "plugin": "codex/gpt-5.6-luna",
+        "spec": "codex/gpt-5.6-luna",
+        "setup": "codex/gpt-5.6-luna",
+        "workflow": "codex/gpt-5.6-luna"
+      }
+    },
+    "providers": {
+      "codex/gpt-5.6-luna": {
+        "command": "codex",
+        "args": [
+          "exec",
+          "--json",
+          "--sandbox",
+          "workspace-write",
+          "-m",
+          "gpt-5.6-luna",
+          "-C",
+          ".tmp",
+          "{{PROMPT}}"
+        ],
+        "jsonOutputFlag": "--json",
+        "jsonSchemaFlag": "--output-schema",
+        "jsonSchemaMode": "file"
+      }
+    }
+  },
+  "configuredCommand": "flow.spec.gate",
+  "expectedProvider": "codex/gpt-5.6-luna",
+  "cacheMode": "bypass",
+  "rules": [
+    {
+      "id": "k7-timeout",
+      "title": "K7 checkpoint timeout consistency",
+      "body": "If scope.in identifies task T-K7 as the authority for the K7 checkpoint timeout, read that task's normative timeout and compare every normative K7 checkpoint timeout decision in requirements against it. Report one separate observation at each conflicting requirement, explaining the requirement value and the task value. Only K7 checkpoint timeout decisions count; other timing values do not.",
+      "meta": {
+        "phase": [
+          "spec"
+        ],
+        "category": "testing"
+      }
+    },
+    {
+      "id": "k7-bypass-reason",
+      "title": "K7 bypass rejection reason",
+      "body": "If a requirement rejects the K7 bulk-bypass option, that same requirement must give a concrete reason. A reason elsewhere cannot cure its omission. Report one observation at each offending requirement. This rule applies only to K7 bulk-bypass decisions.",
+      "meta": {
+        "phase": [
+          "spec"
+        ],
+        "category": "testing"
+      }
+    },
+    {
+      "id": "k7-justified-exception",
+      "title": "K7 non-testable exception",
+      "body": "If a K7 glossary-only requirement declares a verification exception, accept an exact reference to an overview decision only when that decision explicitly explains why no runtime behavior, observable output, or API can be tested. Do not report a missing justification when that condition is met. A bare decision ID without the explanation is insufficient.",
+      "meta": {
+        "phase": [
+          "spec"
+        ],
+        "category": "testing"
+      }
+    },
+    {
+      "id": "spec-stage-planning",
+      "title": "Spec stage planning evidence",
+      "body": "For these K7 decisions, planned checks and passing conditions stated in the Spec suffice at Spec stage. Executed test results belong to later implementation and acceptance stages; their absence is never a violation of this rule.",
+      "meta": {
+        "phase": [
+          "spec"
+        ],
+        "category": "testing"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "large-real-normal",
+      "sourceKind": "unchanged saved Spec",
+      "sha256": "53882485e76829365d41a60682f280d103cd3f295435578790ec415e6957b783",
+      "characters": 126402,
+      "expected": []
+    },
+    {
+      "id": "large-derived-violation",
+      "sourceKind": "saved Spec with controlled additions",
+      "sha256": "ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe",
+      "characters": 127990,
+      "expected": [
+        {
+          "rule": "k7-timeout",
+          "requirementIndex": 20,
+          "marker": "29 seconds",
+          "baseline": "14 seconds"
+        },
+        {
+          "rule": "k7-bypass-reason",
+          "requirementIndex": 70,
+          "marker": "bulk-bypass",
+          "baseline": "reason"
+        },
+        {
+          "rule": "k7-timeout",
+          "requirementIndex": 100,
+          "marker": "41 seconds",
+          "baseline": "14 seconds"
+        }
+      ]
+    },
+    {
+      "id": "small-normal",
+      "sourceKind": "synthetic current-shape Spec",
+      "sha256": "d3e98def636b17b12a515b58597ff81a3c34de2eb7de761ba2119430d20d778a",
+      "characters": 1846,
+      "expected": []
+    }
+  ]
+}

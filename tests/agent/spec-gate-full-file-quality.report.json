@@ -1,0 +1,5150 @@
+{
+  "version": 1,
+  "manifestSha256": "2a0c8b691662955f47adaf5c187c84cb87c9e4dfd524f997453a9c1df88244dd",
+  "baselineRevision": "4651be1e23b9ada1c978c6b89cf3137892083b8b",
+  "configuredProvider": "codex/gpt-5.6-luna",
+  "configuredAgent": {
+    "default": "codex/gpt-5.6-luna",
+    "workDir": ".tmp",
+    "retryCount": 2,
+    "useProfile": "all-53-luna",
+    "promptCharacterLimit": 60000,
+    "profiles": {
+      "all-53-luna": {
+        "check": "codex/gpt-5.6-luna",
+        "docs": "codex/gpt-5.6-luna",
+        "flow": "codex/gpt-5.6-luna",
+        "plugin": "codex/gpt-5.6-luna",
+        "spec": "codex/gpt-5.6-luna",
+        "setup": "codex/gpt-5.6-luna",
+        "workflow": "codex/gpt-5.6-luna"
+      }
+    },
+    "providers": {
+      "codex/gpt-5.6-luna": {
+        "command": "codex",
+        "args": [
+          "exec",
+          "--json",
+          "--sandbox",
+          "workspace-write",
+          "-m",
+          "gpt-5.6-luna",
+          "-C",
+          ".tmp",
+          "{{PROMPT}}"
+        ],
+        "jsonOutputFlag": "--json",
+        "jsonSchemaFlag": "--output-schema",
+        "jsonSchemaMode": "file"
+      }
+    }
+  },
+  "cacheMode": "bypass",
+  "productSha256": {
+    "file": {
+      "src/flow/lib/run-gate.js": "459f01d1d241a24eb2a0665c4d12167d126ca04befcfd6541448b3a06ac47c51",
+      "src/flow/lib/gate-prompt-plan.js": "838401c9e75877cf091494ba6659c8791233d832d94a3e38240b07243345c7ca",
+      "src/lib/prompt-batching.js": "79dcf3cc9a6422cc868bc953411687fa250b938d3b82b02783821ca18753a254"
+    },
+    "baseline": {
+      "src/flow/lib/run-gate.js": "e2e7f742f382df334c8915c1bfb54c0c1a6c58aa2ad7672c8002cb58c6a901f5",
+      "src/flow/lib/gate-prompt-plan.js": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5",
+      "src/lib/prompt-batching.js": "f4a1b50473ddf4cbb52c7c185e48506ad6f11b702a13c311bc1662550eb037bc"
+    }
+  },
+  "timingBoundary": "checkGuardrail entry through return, including file creation, provider read, retries and cleanup; excluding canonical fetch and Flow transitions",
+  "trials": [
+    {
+      "id": "large-real-normal/1/file",
+      "scenario": "large-real-normal",
+      "pair": 1,
+      "version": "file",
+      "sourceSha256": "53882485e76829365d41a60682f280d103cd3f295435578790ec415e6957b783",
+      "durationMs": 136773,
+      "calls": [
+        {
+          "durationMs": 136625,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 742283,
+              "cached_input_tokens": 661248,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 5041,
+              "reasoning_output_tokens": 2223
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 24804,
+          "callCount": 1,
+          "durationMs": 136626
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 742283,
+          "cached_input_tokens": 661248,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 5041,
+          "reasoning_output_tokens": 2223
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "All four frozen K7 rules pass with no observations; authentic saved Spec contains none of the controlled K7 conflicts."
+      }
+    },
+    {
+      "id": "large-real-normal/1/baseline",
+      "scenario": "large-real-normal",
+      "pair": 1,
+      "version": "baseline",
+      "sourceSha256": "53882485e76829365d41a60682f280d103cd3f295435578790ec415e6957b783",
+      "durationMs": 867473,
+      "calls": [
+        {
+          "durationMs": 85163,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 32501,
+              "cached_input_tokens": 15104,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 4444,
+              "reasoning_output_tokens": 1846
+            }
+          ]
+        },
+        {
+          "durationMs": 33547,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28306,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1620,
+              "reasoning_output_tokens": 1034
+            }
+          ]
+        },
+        {
+          "durationMs": 168908,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 32703,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 9147,
+              "reasoning_output_tokens": 2163
+            }
+          ]
+        },
+        {
+          "durationMs": 578806,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33924,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 31887,
+              "reasoning_output_tokens": 4033
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 309
+        },
+        {
+          "stage": "rule-group",
+          "count": 1
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 52418,
+          "callCount": 1,
+          "durationMs": 85164
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 48554,
+          "callCount": 1,
+          "durationMs": 33547
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59720,
+          "callCount": 1,
+          "durationMs": 168908
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59598,
+          "callCount": 1,
+          "durationMs": 578806
+        }
+      ],
+      "cliLaunchCount": 4,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 4,
+      "usage": [
+        {
+          "input_tokens": 32501,
+          "cached_input_tokens": 15104,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4444,
+          "reasoning_output_tokens": 1846
+        },
+        {
+          "input_tokens": 28306,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1620,
+          "reasoning_output_tokens": 1034
+        },
+        {
+          "input_tokens": 32703,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 9147,
+          "reasoning_output_tokens": 2163
+        },
+        {
+          "input_tokens": 33924,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 31887,
+          "reasoning_output_tokens": 4033
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [],
+        "failureKind": "input",
+        "failureCode": "PROMPT_RESPONSE_TOO_LARGE",
+        "failureReason": "Prompt provider response exceeds its character limit",
+        "retryable": false,
+        "recoveryHint": "Inspect the named prompt input, coverage, or execution limit before retrying."
+      },
+      "assessment": {
+        "category": "error",
+        "reason": "Prompt provider response exceeds its character limit"
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "error",
+        "note": "Confirmed PROMPT_RESPONSE_TOO_LARGE provider response cap error; excluded from quality-matched timing."
+      }
+    },
+    {
+      "id": "large-derived-violation/1/file",
+      "scenario": "large-derived-violation",
+      "pair": 1,
+      "version": "file",
+      "sourceSha256": "ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe",
+      "durationMs": 114131,
+      "calls": [
+        {
+          "durationMs": 113981,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 477232,
+              "cached_input_tokens": 415744,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 4074,
+              "reasoning_output_tokens": 1795
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 24846,
+          "callCount": 1,
+          "durationMs": 113981
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 477232,
+          "cached_input_tokens": 415744,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4074,
+          "reasoning_output_tokens": 1795
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "fail",
+            "reason": "R21 normatively sets the K7 checkpoint timeout to 29 seconds, but task T-K7 sets the normative timeout to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-timeout",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "requirements[id=\"R21\"].desc"
+                },
+                "observed": "R21 normatively sets the K7 checkpoint timeout to 29 seconds, but task T-K7 sets the normative timeout to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-timeout"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R21",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "fail",
+            "reason": "R101 normatively sets the K7 checkpoint timeout to 41 seconds, but task T-K7 sets the normative timeout to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-timeout",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "requirements[id=\"R101\"].desc"
+                },
+                "observed": "R101 normatively sets the K7 checkpoint timeout to 41 seconds, but task T-K7 sets the normative timeout to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-timeout"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R101",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "fail",
+            "reason": "R71 rejects the K7 bulk-bypass option but provides no concrete reason for that rejection.",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-bypass-reason",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "requirements[id=\"R71\"].desc"
+                },
+                "observed": "R71 rejects the K7 bulk-bypass option but provides no concrete reason for that rejection.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-bypass-reason"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R71",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R71",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": [
+          {
+            "rule": "k7-timeout",
+            "observed": "R21 normatively sets the K7 checkpoint timeout to 29 seconds, but task T-K7 sets the normative timeout to 14 seconds.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-timeout",
+              "where": {
+                "file": "spec.json",
+                "locator": "requirements[id=\"R21\"].desc"
+              },
+              "observed": "R21 normatively sets the K7 checkpoint timeout to 29 seconds, but task T-K7 sets the normative timeout to 14 seconds.",
+              "severity": "blocking",
+              "refs": [
+                "k7-timeout"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R21",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "k7-timeout",
+            "observed": "R101 normatively sets the K7 checkpoint timeout to 41 seconds, but task T-K7 sets the normative timeout to 14 seconds.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-timeout",
+              "where": {
+                "file": "spec.json",
+                "locator": "requirements[id=\"R101\"].desc"
+              },
+              "observed": "R101 normatively sets the K7 checkpoint timeout to 41 seconds, but task T-K7 sets the normative timeout to 14 seconds.",
+              "severity": "blocking",
+              "refs": [
+                "k7-timeout"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R101",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "k7-bypass-reason",
+            "observed": "R71 rejects the K7 bulk-bypass option but provides no concrete reason for that rejection.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-bypass-reason",
+              "where": {
+                "file": "spec.json",
+                "locator": "requirements[id=\"R71\"].desc"
+              },
+              "observed": "R71 rejects the K7 bulk-bypass option but provides no concrete reason for that rejection.",
+              "severity": "blocking",
+              "refs": [
+                "k7-bypass-reason"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R71",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R71",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "Exactly R21 29s and R101 41s conflict with task T-K7 14s, plus R71 lacks a concrete bypass rejection reason; no exception or stage false positive; targets and revision match."
+      }
+    },
+    {
+      "id": "large-derived-violation/1/baseline",
+      "scenario": "large-derived-violation",
+      "pair": 1,
+      "version": "baseline",
+      "sourceSha256": "ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe",
+      "durationMs": 1772625,
+      "calls": [
+        {
+          "durationMs": 131029,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33065,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 6924,
+              "reasoning_output_tokens": 3901
+            }
+          ]
+        },
+        {
+          "durationMs": 55876,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28764,
+              "cached_input_tokens": 9984,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2731,
+              "reasoning_output_tokens": 2212
+            }
+          ]
+        },
+        {
+          "durationMs": 220845,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33667,
+              "cached_input_tokens": 9984,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 11862,
+              "reasoning_output_tokens": 4562
+            }
+          ]
+        },
+        {
+          "durationMs": 280401,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 35140,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 15264,
+              "reasoning_output_tokens": 2346
+            }
+          ]
+        },
+        {
+          "durationMs": 184828,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28105,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 9866,
+              "reasoning_output_tokens": 689
+            }
+          ]
+        },
+        {
+          "durationMs": 202901,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 36077,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 10750,
+              "reasoning_output_tokens": 2657
+            }
+          ]
+        },
+        {
+          "durationMs": 31241,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 19847,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1432,
+              "reasoning_output_tokens": 516
+            }
+          ]
+        },
+        {
+          "durationMs": 65544,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30335,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3332,
+              "reasoning_output_tokens": 327
+            }
+          ]
+        },
+        {
+          "durationMs": 48039,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30595,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3511,
+              "reasoning_output_tokens": 798
+            }
+          ]
+        },
+        {
+          "durationMs": 69557,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 31035,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3591,
+              "reasoning_output_tokens": 708
+            }
+          ]
+        },
+        {
+          "durationMs": 93805,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30447,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 4946,
+              "reasoning_output_tokens": 1640
+            }
+          ]
+        },
+        {
+          "durationMs": 31076,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 35679,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1379,
+              "reasoning_output_tokens": 928
+            }
+          ]
+        },
+        {
+          "durationMs": 18365,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 32304,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 727,
+              "reasoning_output_tokens": 358
+            }
+          ]
+        },
+        {
+          "durationMs": 12467,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30469,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 265,
+              "reasoning_output_tokens": 248
+            }
+          ]
+        },
+        {
+          "durationMs": 186220,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 120591,
+              "cached_input_tokens": 55808,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 9658,
+              "reasoning_output_tokens": 8703
+            }
+          ]
+        },
+        {
+          "durationMs": 139047,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30879,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 7226,
+              "reasoning_output_tokens": 6732
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 309
+        },
+        {
+          "stage": "rule-group",
+          "count": 1
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 52990,
+          "callCount": 1,
+          "durationMs": 131029
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 48650,
+          "callCount": 1,
+          "durationMs": 55876
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 60000,
+          "callCount": 1,
+          "durationMs": 220845
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59598,
+          "callCount": 1,
+          "durationMs": 280401
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 36591,
+          "callCount": 1,
+          "durationMs": 184828
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59681,
+          "callCount": 1,
+          "durationMs": 202901
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 4011,
+          "callCount": 1,
+          "durationMs": 31241
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 53926,
+          "callCount": 1,
+          "durationMs": 65544
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 54138,
+          "callCount": 1,
+          "durationMs": 48040
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 56701,
+          "callCount": 1,
+          "durationMs": 69556
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 57632,
+          "callCount": 1,
+          "durationMs": 93805
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 3
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 59056,
+          "callCount": 1,
+          "durationMs": 31076
+        },
+        {
+          "stage": "format-repair",
+          "inputCharacters": 59056,
+          "callCount": 1,
+          "durationMs": 18366
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 41183,
+          "callCount": 1,
+          "durationMs": 12467
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 43138,
+          "callCount": 1,
+          "durationMs": 186220
+        },
+        {
+          "stage": "format-repair",
+          "inputCharacters": 43138,
+          "callCount": 1,
+          "durationMs": 139047
+        }
+      ],
+      "cliLaunchCount": 16,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 16,
+      "usage": [
+        {
+          "input_tokens": 33065,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 6924,
+          "reasoning_output_tokens": 3901
+        },
+        {
+          "input_tokens": 28764,
+          "cached_input_tokens": 9984,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2731,
+          "reasoning_output_tokens": 2212
+        },
+        {
+          "input_tokens": 33667,
+          "cached_input_tokens": 9984,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 11862,
+          "reasoning_output_tokens": 4562
+        },
+        {
+          "input_tokens": 35140,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 15264,
+          "reasoning_output_tokens": 2346
+        },
+        {
+          "input_tokens": 28105,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 9866,
+          "reasoning_output_tokens": 689
+        },
+        {
+          "input_tokens": 36077,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 10750,
+          "reasoning_output_tokens": 2657
+        },
+        {
+          "input_tokens": 19847,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1432,
+          "reasoning_output_tokens": 516
+        },
+        {
+          "input_tokens": 30335,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3332,
+          "reasoning_output_tokens": 327
+        },
+        {
+          "input_tokens": 30595,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3511,
+          "reasoning_output_tokens": 798
+        },
+        {
+          "input_tokens": 31035,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3591,
+          "reasoning_output_tokens": 708
+        },
+        {
+          "input_tokens": 30447,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4946,
+          "reasoning_output_tokens": 1640
+        },
+        {
+          "input_tokens": 35679,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1379,
+          "reasoning_output_tokens": 928
+        },
+        {
+          "input_tokens": 32304,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 727,
+          "reasoning_output_tokens": 358
+        },
+        {
+          "input_tokens": 30469,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 265,
+          "reasoning_output_tokens": 248
+        },
+        {
+          "input_tokens": 120591,
+          "cached_input_tokens": 55808,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 9658,
+          "reasoning_output_tokens": 8703
+        },
+        {
+          "input_tokens": 30879,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 7226,
+          "reasoning_output_tokens": 6732
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [],
+        "failureKind": "schema",
+        "failureCode": "GATE_REQUIRED_SCHEMA",
+        "failureReason": "observations[1]: Spec Gate observation allowedTargets must be among its targets",
+        "retryable": false,
+        "recoveryHint": "Correct the gate response protocol before starting a new attempt."
+      },
+      "assessment": {
+        "category": "error",
+        "reason": "observations[1]: Spec Gate observation allowedTargets must be among its targets"
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "error",
+        "note": "Confirmed output contract error: observation allowedTargets is outside targets; excluded from quality-matched timing."
+      }
+    },
+    {
+      "id": "small-normal/1/file",
+      "scenario": "small-normal",
+      "pair": 1,
+      "version": "file",
+      "sourceSha256": "d3e98def636b17b12a515b58597ff81a3c34de2eb7de761ba2119430d20d778a",
+      "durationMs": 8979,
+      "calls": [
+        {
+          "durationMs": 8967,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 18043,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 188,
+              "reasoning_output_tokens": 171
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 13660,
+          "callCount": 1,
+          "durationMs": 8967
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 18043,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 188,
+          "reasoning_output_tokens": 171
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "All four frozen rules pass with no observations; task and requirement both specify 14s, bypass reason and exception valid."
+      }
+    },
+    {
+      "id": "small-normal/1/baseline",
+      "scenario": "small-normal",
+      "pair": 1,
+      "version": "baseline",
+      "sourceSha256": "d3e98def636b17b12a515b58597ff81a3c34de2eb7de761ba2119430d20d778a",
+      "durationMs": 7960,
+      "calls": [
+        {
+          "durationMs": 7953,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 18051,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 143,
+              "reasoning_output_tokens": 126
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 13660,
+          "callCount": 1,
+          "durationMs": 7954
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 18051,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 143,
+          "reasoning_output_tokens": 126
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "All four frozen rules pass with no observations; same expected small-input result."
+      }
+    },
+    {
+      "id": "large-real-normal/2/baseline",
+      "scenario": "large-real-normal",
+      "pair": 2,
+      "version": "baseline",
+      "sourceSha256": "53882485e76829365d41a60682f280d103cd3f295435578790ec415e6957b783",
+      "durationMs": 1414332,
+      "calls": [
+        {
+          "durationMs": 70040,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 29126,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3632,
+              "reasoning_output_tokens": 1034
+            }
+          ]
+        },
+        {
+          "durationMs": 35823,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 31681,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1631,
+              "reasoning_output_tokens": 1034
+            }
+          ]
+        },
+        {
+          "durationMs": 167539,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 32703,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 9054,
+              "reasoning_output_tokens": 2070
+            }
+          ]
+        },
+        {
+          "durationMs": 262369,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 37299,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 14195,
+              "reasoning_output_tokens": 1277
+            }
+          ]
+        },
+        {
+          "durationMs": 352288,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30612,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 19245,
+              "reasoning_output_tokens": 888
+            }
+          ]
+        },
+        {
+          "durationMs": 206232,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 31939,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 11097,
+              "reasoning_output_tokens": 2835
+            }
+          ]
+        },
+        {
+          "durationMs": 65468,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33077,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3223,
+              "reasoning_output_tokens": 690
+            }
+          ]
+        },
+        {
+          "durationMs": 61466,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33705,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3023,
+              "reasoning_output_tokens": 487
+            }
+          ]
+        },
+        {
+          "durationMs": 61501,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30708,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2990,
+              "reasoning_output_tokens": 406
+            }
+          ]
+        },
+        {
+          "durationMs": 67523,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33069,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3373,
+              "reasoning_output_tokens": 849
+            }
+          ]
+        },
+        {
+          "durationMs": 36128,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 133469,
+              "cached_input_tokens": 93440,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 959,
+              "reasoning_output_tokens": 581
+            }
+          ]
+        },
+        {
+          "durationMs": 26583,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 95643,
+              "cached_input_tokens": 61952,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 757,
+              "reasoning_output_tokens": 487
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 309
+        },
+        {
+          "stage": "rule-group",
+          "count": 1
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 52418,
+          "callCount": 1,
+          "durationMs": 70040
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 48554,
+          "callCount": 1,
+          "durationMs": 35823
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59720,
+          "callCount": 1,
+          "durationMs": 167539
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59598,
+          "callCount": 1,
+          "durationMs": 262369
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 36491,
+          "callCount": 1,
+          "durationMs": 352288
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59493,
+          "callCount": 1,
+          "durationMs": 206232
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 51493,
+          "callCount": 1,
+          "durationMs": 65467
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 53331,
+          "callCount": 1,
+          "durationMs": 61465
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 55553,
+          "callCount": 1,
+          "durationMs": 61501
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 54448,
+          "callCount": 1,
+          "durationMs": 67524
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 2
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 56068,
+          "callCount": 1,
+          "durationMs": 36129
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 56512,
+          "callCount": 1,
+          "durationMs": 26584
+        }
+      ],
+      "cliLaunchCount": 12,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 12,
+      "usage": [
+        {
+          "input_tokens": 29126,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3632,
+          "reasoning_output_tokens": 1034
+        },
+        {
+          "input_tokens": 31681,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1631,
+          "reasoning_output_tokens": 1034
+        },
+        {
+          "input_tokens": 32703,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 9054,
+          "reasoning_output_tokens": 2070
+        },
+        {
+          "input_tokens": 37299,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 14195,
+          "reasoning_output_tokens": 1277
+        },
+        {
+          "input_tokens": 30612,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 19245,
+          "reasoning_output_tokens": 888
+        },
+        {
+          "input_tokens": 31939,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 11097,
+          "reasoning_output_tokens": 2835
+        },
+        {
+          "input_tokens": 33077,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3223,
+          "reasoning_output_tokens": 690
+        },
+        {
+          "input_tokens": 33705,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3023,
+          "reasoning_output_tokens": 487
+        },
+        {
+          "input_tokens": 30708,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2990,
+          "reasoning_output_tokens": 406
+        },
+        {
+          "input_tokens": 33069,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3373,
+          "reasoning_output_tokens": 849
+        },
+        {
+          "input_tokens": 133469,
+          "cached_input_tokens": 93440,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 959,
+          "reasoning_output_tokens": 581
+        },
+        {
+          "input_tokens": 95643,
+          "cached_input_tokens": 61952,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 757,
+          "reasoning_output_tokens": 487
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "Parent confirmed all four rules pass with no observations, matching the frozen normal-case expectation."
+      }
+    },
+    {
+      "id": "large-real-normal/2/file",
+      "scenario": "large-real-normal",
+      "pair": 2,
+      "version": "file",
+      "sourceSha256": "53882485e76829365d41a60682f280d103cd3f295435578790ec415e6957b783",
+      "durationMs": 109453,
+      "calls": [
+        {
+          "durationMs": 109312,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 612736,
+              "cached_input_tokens": 540928,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3473,
+              "reasoning_output_tokens": 1318
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 24804,
+          "callCount": 1,
+          "durationMs": 109312
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 612736,
+          "cached_input_tokens": 540928,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3473,
+          "reasoning_output_tokens": 1318
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "Parent confirmed all four rules pass with no observations, matching the frozen normal-case expectation."
+      }
+    },
+    {
+      "id": "large-derived-violation/2/baseline",
+      "scenario": "large-derived-violation",
+      "pair": 2,
+      "version": "baseline",
+      "sourceSha256": "ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe",
+      "durationMs": 2747269,
+      "calls": [
+        {
+          "durationMs": 123934,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33065,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 6552,
+              "reasoning_output_tokens": 3492
+            }
+          ]
+        },
+        {
+          "durationMs": 58388,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28764,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2995,
+              "reasoning_output_tokens": 2588
+            }
+          ]
+        },
+        {
+          "durationMs": 328721,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 37042,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 17981,
+              "reasoning_output_tokens": 3422
+            }
+          ]
+        },
+        {
+          "durationMs": 271330,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 35140,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 14740,
+              "reasoning_output_tokens": 1822
+            }
+          ]
+        },
+        {
+          "durationMs": 815554,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28105,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 44990,
+              "reasoning_output_tokens": 1034
+            }
+          ]
+        },
+        {
+          "durationMs": 201774,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 36077,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 10822,
+              "reasoning_output_tokens": 2776
+            }
+          ]
+        },
+        {
+          "durationMs": 41128,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 19847,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1929,
+              "reasoning_output_tokens": 934
+            }
+          ]
+        },
+        {
+          "durationMs": 136327,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33460,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 7116,
+              "reasoning_output_tokens": 3468
+            }
+          ]
+        },
+        {
+          "durationMs": 40132,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22538,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1949,
+              "reasoning_output_tokens": 1179
+            }
+          ]
+        },
+        {
+          "durationMs": 93295,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30068,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 4913,
+              "reasoning_output_tokens": 1258
+            }
+          ]
+        },
+        {
+          "durationMs": 28100,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22596,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1163,
+              "reasoning_output_tokens": 477
+            }
+          ]
+        },
+        {
+          "durationMs": 125854,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 34000,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 6693,
+              "reasoning_output_tokens": 1292
+            }
+          ]
+        },
+        {
+          "durationMs": 30283,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 19309,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1367,
+              "reasoning_output_tokens": 660
+            }
+          ]
+        },
+        {
+          "durationMs": 58090,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 24244,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2932,
+              "reasoning_output_tokens": 1009
+            }
+          ]
+        },
+        {
+          "durationMs": 107104,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28769,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 5413,
+              "reasoning_output_tokens": 2762
+            }
+          ]
+        },
+        {
+          "durationMs": 22583,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28629,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 754,
+              "reasoning_output_tokens": 492
+            }
+          ]
+        },
+        {
+          "durationMs": 11974,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28525,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 337,
+              "reasoning_output_tokens": 205
+            }
+          ]
+        },
+        {
+          "durationMs": 10672,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33827,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 224,
+              "reasoning_output_tokens": 207
+            }
+          ]
+        },
+        {
+          "durationMs": 76425,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 32148,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3732,
+              "reasoning_output_tokens": 3001
+            }
+          ]
+        },
+        {
+          "durationMs": 164002,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28773,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 7951,
+              "reasoning_output_tokens": 7157
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 309
+        },
+        {
+          "stage": "rule-group",
+          "count": 1
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 52990,
+          "callCount": 1,
+          "durationMs": 123935
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 48650,
+          "callCount": 1,
+          "durationMs": 58388
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 60000,
+          "callCount": 1,
+          "durationMs": 328721
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59598,
+          "callCount": 1,
+          "durationMs": 271330
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 36591,
+          "callCount": 1,
+          "durationMs": 815554
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59681,
+          "callCount": 1,
+          "durationMs": 201774
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 4011,
+          "callCount": 1,
+          "durationMs": 41128
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 56401,
+          "callCount": 1,
+          "durationMs": 136327
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 13953,
+          "callCount": 1,
+          "durationMs": 40131
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 54482,
+          "callCount": 1,
+          "durationMs": 93296
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 14040,
+          "callCount": 1,
+          "durationMs": 28100
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 59097,
+          "callCount": 1,
+          "durationMs": 125854
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 14614,
+          "callCount": 1,
+          "durationMs": 30283
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 33944,
+          "callCount": 1,
+          "durationMs": 58090
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 42771,
+          "callCount": 1,
+          "durationMs": 107104
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 4
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 46586,
+          "callCount": 1,
+          "durationMs": 22584
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 45668,
+          "callCount": 1,
+          "durationMs": 11974
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 56860,
+          "callCount": 1,
+          "durationMs": 10673
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 47393,
+          "callCount": 1,
+          "durationMs": 76424
+        },
+        {
+          "stage": "format-repair",
+          "inputCharacters": 47393,
+          "callCount": 1,
+          "durationMs": 164002
+        }
+      ],
+      "cliLaunchCount": 20,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 20,
+      "usage": [
+        {
+          "input_tokens": 33065,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 6552,
+          "reasoning_output_tokens": 3492
+        },
+        {
+          "input_tokens": 28764,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2995,
+          "reasoning_output_tokens": 2588
+        },
+        {
+          "input_tokens": 37042,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 17981,
+          "reasoning_output_tokens": 3422
+        },
+        {
+          "input_tokens": 35140,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 14740,
+          "reasoning_output_tokens": 1822
+        },
+        {
+          "input_tokens": 28105,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 44990,
+          "reasoning_output_tokens": 1034
+        },
+        {
+          "input_tokens": 36077,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 10822,
+          "reasoning_output_tokens": 2776
+        },
+        {
+          "input_tokens": 19847,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1929,
+          "reasoning_output_tokens": 934
+        },
+        {
+          "input_tokens": 33460,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 7116,
+          "reasoning_output_tokens": 3468
+        },
+        {
+          "input_tokens": 22538,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1949,
+          "reasoning_output_tokens": 1179
+        },
+        {
+          "input_tokens": 30068,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4913,
+          "reasoning_output_tokens": 1258
+        },
+        {
+          "input_tokens": 22596,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1163,
+          "reasoning_output_tokens": 477
+        },
+        {
+          "input_tokens": 34000,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 6693,
+          "reasoning_output_tokens": 1292
+        },
+        {
+          "input_tokens": 19309,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1367,
+          "reasoning_output_tokens": 660
+        },
+        {
+          "input_tokens": 24244,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2932,
+          "reasoning_output_tokens": 1009
+        },
+        {
+          "input_tokens": 28769,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 5413,
+          "reasoning_output_tokens": 2762
+        },
+        {
+          "input_tokens": 28629,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 754,
+          "reasoning_output_tokens": 492
+        },
+        {
+          "input_tokens": 28525,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 337,
+          "reasoning_output_tokens": 205
+        },
+        {
+          "input_tokens": 33827,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 224,
+          "reasoning_output_tokens": 207
+        },
+        {
+          "input_tokens": 32148,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3732,
+          "reasoning_output_tokens": 3001
+        },
+        {
+          "input_tokens": 28773,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 7951,
+          "reasoning_output_tokens": 7157
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [],
+        "failureKind": "schema",
+        "failureCode": "GATE_REQUIRED_SCHEMA",
+        "failureReason": "observations[1]: Spec Gate observation allowedTargets must be among its targets",
+        "retryable": false,
+        "recoveryHint": "Correct the gate response protocol before starting a new attempt."
+      },
+      "assessment": {
+        "category": "error",
+        "reason": "observations[1]: Spec Gate observation allowedTargets must be among its targets"
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "error",
+        "note": "Parent confirmed the recorded failure and exclusion from quality-matched timing."
+      }
+    },
+    {
+      "id": "large-derived-violation/2/file",
+      "scenario": "large-derived-violation",
+      "pair": 2,
+      "version": "file",
+      "sourceSha256": "ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe",
+      "durationMs": 115782,
+      "calls": [
+        {
+          "durationMs": 115655,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 493278,
+              "cached_input_tokens": 397568,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 4034,
+              "reasoning_output_tokens": 1539
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 24846,
+          "callCount": 1,
+          "durationMs": 115655
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 493278,
+          "cached_input_tokens": 397568,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4034,
+          "reasoning_output_tokens": 1539
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "fail",
+            "reason": "R21 normatively sets the K7 checkpoint timeout to 29 seconds, but task T-K7 sets it to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-timeout",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "requirements[id=R21].desc"
+                },
+                "observed": "R21 normatively sets the K7 checkpoint timeout to 29 seconds, but task T-K7 sets it to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-timeout"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R21",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "fail",
+            "reason": "R101 normatively sets the K7 checkpoint timeout to 41 seconds, but task T-K7 sets it to 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-timeout",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "requirements[id=R101].desc"
+                },
+                "observed": "R101 normatively sets the K7 checkpoint timeout to 41 seconds, but task T-K7 sets it to 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-timeout"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R101",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "fail",
+            "reason": "R71 rejects the K7 bulk-bypass option but gives no concrete reason within the same requirement.",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-bypass-reason",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "requirements[id=R71].desc"
+                },
+                "observed": "R71 rejects the K7 bulk-bypass option but gives no concrete reason within the same requirement.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-bypass-reason"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R71",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R71",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": [
+          {
+            "rule": "k7-timeout",
+            "observed": "R21 normatively sets the K7 checkpoint timeout to 29 seconds, but task T-K7 sets it to 14 seconds.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-timeout",
+              "where": {
+                "file": "spec.json",
+                "locator": "requirements[id=R21].desc"
+              },
+              "observed": "R21 normatively sets the K7 checkpoint timeout to 29 seconds, but task T-K7 sets it to 14 seconds.",
+              "severity": "blocking",
+              "refs": [
+                "k7-timeout"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R21",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "k7-timeout",
+            "observed": "R101 normatively sets the K7 checkpoint timeout to 41 seconds, but task T-K7 sets it to 14 seconds.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-timeout",
+              "where": {
+                "file": "spec.json",
+                "locator": "requirements[id=R101].desc"
+              },
+              "observed": "R101 normatively sets the K7 checkpoint timeout to 41 seconds, but task T-K7 sets it to 14 seconds.",
+              "severity": "blocking",
+              "refs": [
+                "k7-timeout"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R101",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "k7-bypass-reason",
+            "observed": "R71 rejects the K7 bulk-bypass option but gives no concrete reason within the same requirement.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-bypass-reason",
+              "where": {
+                "file": "spec.json",
+                "locator": "requirements[id=R71].desc"
+              },
+              "observed": "R71 rejects the K7 bulk-bypass option but gives no concrete reason within the same requirement.",
+              "severity": "blocking",
+              "refs": [
+                "k7-bypass-reason"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R71",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R71",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "Parent confirmed exactly the three frozen expected findings, task/requirement timeout relationship, repair targets, allowed operations and revision, without exception or stage false positives."
+      }
+    },
+    {
+      "id": "small-normal/2/baseline",
+      "scenario": "small-normal",
+      "pair": 2,
+      "version": "baseline",
+      "sourceSha256": "d3e98def636b17b12a515b58597ff81a3c34de2eb7de761ba2119430d20d778a",
+      "durationMs": 8101,
+      "calls": [
+        {
+          "durationMs": 8094,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 21426,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 152,
+              "reasoning_output_tokens": 135
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 13660,
+          "callCount": 1,
+          "durationMs": 8094
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 21426,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 152,
+          "reasoning_output_tokens": 135
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "Parent confirmed all four rules pass with no observations, matching the frozen normal-case expectation."
+      }
+    },
+    {
+      "id": "small-normal/2/file",
+      "scenario": "small-normal",
+      "pair": 2,
+      "version": "file",
+      "sourceSha256": "d3e98def636b17b12a515b58597ff81a3c34de2eb7de761ba2119430d20d778a",
+      "durationMs": 7856,
+      "calls": [
+        {
+          "durationMs": 7847,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 18043,
+              "cached_input_tokens": 11008,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 183,
+              "reasoning_output_tokens": 166
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 13660,
+          "callCount": 1,
+          "durationMs": 7847
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 18043,
+          "cached_input_tokens": 11008,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 183,
+          "reasoning_output_tokens": 166
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "Parent confirmed all four rules pass with no observations, matching the frozen normal-case expectation."
+      }
+    },
+    {
+      "id": "large-real-normal/3/file",
+      "scenario": "large-real-normal",
+      "pair": 3,
+      "version": "file",
+      "sourceSha256": "53882485e76829365d41a60682f280d103cd3f295435578790ec415e6957b783",
+      "durationMs": 87449,
+      "calls": [
+        {
+          "durationMs": 87359,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 344961,
+              "cached_input_tokens": 286464,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2483,
+              "reasoning_output_tokens": 958
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 24804,
+          "callCount": 1,
+          "durationMs": 87360
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 344961,
+          "cached_input_tokens": 286464,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2483,
+          "reasoning_output_tokens": 958
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "Parent confirmed all four rules pass with no observations, matching the frozen normal-case expectation."
+      }
+    },
+    {
+      "id": "large-real-normal/3/baseline",
+      "scenario": "large-real-normal",
+      "pair": 3,
+      "version": "baseline",
+      "sourceSha256": "53882485e76829365d41a60682f280d103cd3f295435578790ec415e6957b783",
+      "durationMs": 1571377,
+      "calls": [
+        {
+          "durationMs": 80628,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 32501,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 4141,
+              "reasoning_output_tokens": 1543
+            }
+          ]
+        },
+        {
+          "durationMs": 54902,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 31681,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2719,
+              "reasoning_output_tokens": 1945
+            }
+          ]
+        },
+        {
+          "durationMs": 364360,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 32703,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 19935,
+              "reasoning_output_tokens": 1916
+            }
+          ]
+        },
+        {
+          "durationMs": 262033,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 37299,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 14235,
+              "reasoning_output_tokens": 1317
+            }
+          ]
+        },
+        {
+          "durationMs": 359562,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30612,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 19664,
+              "reasoning_output_tokens": 1309
+            }
+          ]
+        },
+        {
+          "durationMs": 181367,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 35314,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 9814,
+              "reasoning_output_tokens": 1552
+            }
+          ]
+        },
+        {
+          "durationMs": 66515,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33109,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3324,
+              "reasoning_output_tokens": 759
+            }
+          ]
+        },
+        {
+          "durationMs": 58708,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33751,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2974,
+              "reasoning_output_tokens": 409
+            }
+          ]
+        },
+        {
+          "durationMs": 70869,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30806,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3676,
+              "reasoning_output_tokens": 967
+            }
+          ]
+        },
+        {
+          "durationMs": 54664,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 29700,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2760,
+              "reasoning_output_tokens": 228
+            }
+          ]
+        },
+        {
+          "durationMs": 8637,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 31480,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 177,
+              "reasoning_output_tokens": 160
+            }
+          ]
+        },
+        {
+          "durationMs": 7571,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 31720,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 167,
+              "reasoning_output_tokens": 150
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 309
+        },
+        {
+          "stage": "rule-group",
+          "count": 1
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 52418,
+          "callCount": 1,
+          "durationMs": 80627
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 48554,
+          "callCount": 1,
+          "durationMs": 54902
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59720,
+          "callCount": 1,
+          "durationMs": 364359
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59598,
+          "callCount": 1,
+          "durationMs": 262033
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 36491,
+          "callCount": 1,
+          "durationMs": 359563
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59493,
+          "callCount": 1,
+          "durationMs": 181367
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 51677,
+          "callCount": 1,
+          "durationMs": 66515
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 53621,
+          "callCount": 1,
+          "durationMs": 58709
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 55929,
+          "callCount": 1,
+          "durationMs": 70869
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 54514,
+          "callCount": 1,
+          "durationMs": 54663
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 2
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 56498,
+          "callCount": 1,
+          "durationMs": 8637
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 57042,
+          "callCount": 1,
+          "durationMs": 7572
+        }
+      ],
+      "cliLaunchCount": 12,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 12,
+      "usage": [
+        {
+          "input_tokens": 32501,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4141,
+          "reasoning_output_tokens": 1543
+        },
+        {
+          "input_tokens": 31681,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2719,
+          "reasoning_output_tokens": 1945
+        },
+        {
+          "input_tokens": 32703,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 19935,
+          "reasoning_output_tokens": 1916
+        },
+        {
+          "input_tokens": 37299,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 14235,
+          "reasoning_output_tokens": 1317
+        },
+        {
+          "input_tokens": 30612,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 19664,
+          "reasoning_output_tokens": 1309
+        },
+        {
+          "input_tokens": 35314,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 9814,
+          "reasoning_output_tokens": 1552
+        },
+        {
+          "input_tokens": 33109,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3324,
+          "reasoning_output_tokens": 759
+        },
+        {
+          "input_tokens": 33751,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2974,
+          "reasoning_output_tokens": 409
+        },
+        {
+          "input_tokens": 30806,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3676,
+          "reasoning_output_tokens": 967
+        },
+        {
+          "input_tokens": 29700,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2760,
+          "reasoning_output_tokens": 228
+        },
+        {
+          "input_tokens": 31480,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 177,
+          "reasoning_output_tokens": 160
+        },
+        {
+          "input_tokens": 31720,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 167,
+          "reasoning_output_tokens": 150
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "Parent confirmed all four rules pass with no observations, matching the frozen normal-case expectation."
+      }
+    },
+    {
+      "id": "large-derived-violation/3/file",
+      "scenario": "large-derived-violation",
+      "pair": 3,
+      "version": "file",
+      "sourceSha256": "ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe",
+      "durationMs": 98899,
+      "calls": [
+        {
+          "durationMs": 98767,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 366751,
+              "cached_input_tokens": 302848,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 4064,
+              "reasoning_output_tokens": 2136
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 24846,
+          "callCount": 1,
+          "durationMs": 98766
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 366751,
+          "cached_input_tokens": 302848,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4064,
+          "reasoning_output_tokens": 2136
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "fail",
+            "reason": "R21 specifies a 29-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-timeout",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "requirements[id=R21].desc"
+                },
+                "observed": "R21 specifies a 29-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-timeout"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R21",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "fail",
+            "reason": "R101 specifies a 41-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-timeout",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "requirements[id=R101].desc"
+                },
+                "observed": "R101 specifies a 41-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-timeout"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R101",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "fail",
+            "reason": "R71 rejects the K7 bulk-bypass option but gives no concrete reason within the same requirement.",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-bypass-reason",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "requirements[id=R71].desc"
+                },
+                "observed": "R71 rejects the K7 bulk-bypass option but gives no concrete reason within the same requirement.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-bypass-reason"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R71",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R71",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "miss",
+        "miss": [
+          {
+            "rule": "k7-timeout",
+            "requirementIndex": 20,
+            "marker": "29 seconds",
+            "baseline": "14 seconds"
+          },
+          {
+            "rule": "k7-timeout",
+            "requirementIndex": 100,
+            "marker": "41 seconds",
+            "baseline": "14 seconds"
+          }
+        ],
+        "extras": [
+          {
+            "rule": "k7-timeout",
+            "observed": "R21 specifies a 29-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-timeout",
+              "where": {
+                "file": "spec.json",
+                "locator": "requirements[id=R21].desc"
+              },
+              "observed": "R21 specifies a 29-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+              "severity": "blocking",
+              "refs": [
+                "k7-timeout"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R21",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "k7-timeout",
+            "observed": "R101 specifies a 41-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-timeout",
+              "where": {
+                "file": "spec.json",
+                "locator": "requirements[id=R101].desc"
+              },
+              "observed": "R101 specifies a 41-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+              "severity": "blocking",
+              "refs": [
+                "k7-timeout"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R101",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          }
+        ],
+        "observations": [
+          {
+            "rule": "k7-timeout",
+            "observed": "R21 specifies a 29-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-timeout",
+              "where": {
+                "file": "spec.json",
+                "locator": "requirements[id=R21].desc"
+              },
+              "observed": "R21 specifies a 29-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+              "severity": "blocking",
+              "refs": [
+                "k7-timeout"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R21",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "k7-timeout",
+            "observed": "R101 specifies a 41-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-timeout",
+              "where": {
+                "file": "spec.json",
+                "locator": "requirements[id=R101].desc"
+              },
+              "observed": "R101 specifies a 41-second timeout, conflicting with task T-K7's normative 14-second timeout.",
+              "severity": "blocking",
+              "refs": [
+                "k7-timeout"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R101",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "k7-bypass-reason",
+            "observed": "R71 rejects the K7 bulk-bypass option but gives no concrete reason within the same requirement.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-bypass-reason",
+              "where": {
+                "file": "spec.json",
+                "locator": "requirements[id=R71].desc"
+              },
+              "observed": "R71 rejects the K7 bulk-bypass option but gives no concrete reason within the same requirement.",
+              "severity": "blocking",
+              "refs": [
+                "k7-bypass-reason"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R71",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R71",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "Parent inspected all three observations: R21 29-second and R101 41-second conflict with task T-K7 14-second; R71 lacks a rejection reason. Targets, allowed operations and revision match. Frozen lexical scorer expects plural seconds and falsely marks the hyphenated forms as misses/extras. Original automatic assessment is preserved; expectations and scorer are unchanged."
+      }
+    },
+    {
+      "id": "large-derived-violation/3/baseline",
+      "scenario": "large-derived-violation",
+      "pair": 3,
+      "version": "baseline",
+      "sourceSha256": "ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe",
+      "durationMs": 1583832,
+      "calls": [
+        {
+          "durationMs": 148032,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33065,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 7927,
+              "reasoning_output_tokens": 2026
+            }
+          ]
+        },
+        {
+          "durationMs": 42038,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 32139,
+              "cached_input_tokens": 14080,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 2060,
+              "reasoning_output_tokens": 899
+            }
+          ]
+        },
+        {
+          "durationMs": 204837,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 37042,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 10719,
+              "reasoning_output_tokens": 3367
+            }
+          ]
+        },
+        {
+          "durationMs": 262009,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 38515,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 14223,
+              "reasoning_output_tokens": 1305
+            }
+          ]
+        },
+        {
+          "durationMs": 194873,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 73273,
+              "cached_input_tokens": 30464,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 10445,
+              "reasoning_output_tokens": 1145
+            }
+          ]
+        },
+        {
+          "durationMs": 218427,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 36077,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 11634,
+              "reasoning_output_tokens": 3483
+            }
+          ]
+        },
+        {
+          "durationMs": 39191,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 19847,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 1728,
+              "reasoning_output_tokens": 858
+            }
+          ]
+        },
+        {
+          "durationMs": 103751,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33669,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 5470,
+              "reasoning_output_tokens": 2334
+            }
+          ]
+        },
+        {
+          "durationMs": 71870,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30605,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3743,
+              "reasoning_output_tokens": 984
+            }
+          ]
+        },
+        {
+          "durationMs": 72057,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 34404,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3618,
+              "reasoning_output_tokens": 720
+            }
+          ]
+        },
+        {
+          "durationMs": 94525,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 33799,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 4913,
+              "reasoning_output_tokens": 1686
+            }
+          ]
+        },
+        {
+          "durationMs": 18052,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 32489,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 728,
+              "reasoning_output_tokens": 364
+            }
+          ]
+        },
+        {
+          "durationMs": 12665,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 30484,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 415,
+              "reasoning_output_tokens": 398
+            }
+          ]
+        },
+        {
+          "durationMs": 24327,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 27417,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 919,
+              "reasoning_output_tokens": 618
+            }
+          ]
+        },
+        {
+          "durationMs": 75597,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 27417,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3847,
+              "reasoning_output_tokens": 3372
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 309
+        },
+        {
+          "stage": "rule-group",
+          "count": 1
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 52990,
+          "callCount": 1,
+          "durationMs": 148031
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 48650,
+          "callCount": 1,
+          "durationMs": 42038
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 60000,
+          "callCount": 1,
+          "durationMs": 204837
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59598,
+          "callCount": 1,
+          "durationMs": 262009
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 36591,
+          "callCount": 1,
+          "durationMs": 194873
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59681,
+          "callCount": 1,
+          "durationMs": 218427
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 4011,
+          "callCount": 1,
+          "durationMs": 39191
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 53749,
+          "callCount": 1,
+          "durationMs": 103751
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 54201,
+          "callCount": 1,
+          "durationMs": 71870
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 56695,
+          "callCount": 1,
+          "durationMs": 72058
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 57519,
+          "callCount": 1,
+          "durationMs": 94525
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 3
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 59669,
+          "callCount": 1,
+          "durationMs": 18053
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 41200,
+          "callCount": 1,
+          "durationMs": 12665
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 42824,
+          "callCount": 1,
+          "durationMs": 24327
+        },
+        {
+          "stage": "format-repair",
+          "inputCharacters": 42824,
+          "callCount": 1,
+          "durationMs": 75597
+        }
+      ],
+      "cliLaunchCount": 15,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 15,
+      "usage": [
+        {
+          "input_tokens": 33065,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 7927,
+          "reasoning_output_tokens": 2026
+        },
+        {
+          "input_tokens": 32139,
+          "cached_input_tokens": 14080,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2060,
+          "reasoning_output_tokens": 899
+        },
+        {
+          "input_tokens": 37042,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 10719,
+          "reasoning_output_tokens": 3367
+        },
+        {
+          "input_tokens": 38515,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 14223,
+          "reasoning_output_tokens": 1305
+        },
+        {
+          "input_tokens": 73273,
+          "cached_input_tokens": 30464,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 10445,
+          "reasoning_output_tokens": 1145
+        },
+        {
+          "input_tokens": 36077,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 11634,
+          "reasoning_output_tokens": 3483
+        },
+        {
+          "input_tokens": 19847,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1728,
+          "reasoning_output_tokens": 858
+        },
+        {
+          "input_tokens": 33669,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 5470,
+          "reasoning_output_tokens": 2334
+        },
+        {
+          "input_tokens": 30605,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3743,
+          "reasoning_output_tokens": 984
+        },
+        {
+          "input_tokens": 34404,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3618,
+          "reasoning_output_tokens": 720
+        },
+        {
+          "input_tokens": 33799,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4913,
+          "reasoning_output_tokens": 1686
+        },
+        {
+          "input_tokens": 32489,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 728,
+          "reasoning_output_tokens": 364
+        },
+        {
+          "input_tokens": 30484,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 415,
+          "reasoning_output_tokens": 398
+        },
+        {
+          "input_tokens": 27417,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 919,
+          "reasoning_output_tokens": 618
+        },
+        {
+          "input_tokens": 27417,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3847,
+          "reasoning_output_tokens": 3372
+        }
+      ],
+      "result": {
+        "passed": false,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "fail",
+            "reason": "R21 specifies a normative K7 checkpoint timeout of exactly 29 seconds, conflicting with the authoritative T-K7 timeout of exactly 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-timeout",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "/requirements/20"
+                },
+                "observed": "R21 specifies a normative K7 checkpoint timeout of exactly 29 seconds, conflicting with the authoritative T-K7 timeout of exactly 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-timeout"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R21",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "fail",
+            "reason": "R101 specifies a normative K7 checkpoint timeout of exactly 41 seconds, conflicting with the authoritative T-K7 timeout of exactly 14 seconds.",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-timeout",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "/requirements/100"
+                },
+                "observed": "R101 specifies a normative K7 checkpoint timeout of exactly 41 seconds, conflicting with the authoritative T-K7 timeout of exactly 14 seconds.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-timeout"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R101",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "fail",
+            "reason": "R71 rejects the K7 bulk-bypass option but gives no concrete reason for that rejection.",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "k7-bypass-reason",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "/requirements/71"
+                },
+                "observed": "R71 rejects the K7 bulk-bypass option but gives no concrete reason for that rejection.",
+                "severity": "blocking",
+                "refs": [
+                  "k7-bypass-reason"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R71",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R71",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "fail",
+            "reason": "R21 states the K7 timeout is exactly 29 seconds but does not state a concrete confirmation method or observable acceptance condition.",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "spec-stage-planning",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "/requirements/20"
+                },
+                "observed": "R21 states the K7 timeout is exactly 29 seconds but does not state a concrete confirmation method or observable acceptance condition.",
+                "severity": "blocking",
+                "refs": [
+                  "spec-stage-planning"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R21",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "fail",
+            "reason": "R71 plans rejection of bulk bypass in favor of the ordinary checkpoint path but does not state a concrete confirmation method or observable acceptance condition.",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "spec-stage-planning",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "/requirements/71"
+                },
+                "observed": "R71 plans rejection of bulk bypass in favor of the ordinary checkpoint path but does not state a concrete confirmation method or observable acceptance condition.",
+                "severity": "blocking",
+                "refs": [
+                  "spec-stage-planning"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R71",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R71",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "fail",
+            "reason": "R101 states that the K7 timeout must be exactly 41 seconds but does not state a concrete confirmation method.",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "spec-stage-planning",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "/requirements/100"
+                },
+                "observed": "R101 states that the K7 timeout must be exactly 41 seconds but does not state a concrete confirmation method.",
+                "severity": "blocking",
+                "refs": [
+                  "spec-stage-planning"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R101",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "fail",
+            "reason": "R121 records a glossary-only verification exception but does not state a concrete confirmation method or observable acceptance condition for that K7 decision.",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "spec-stage-planning",
+                "where": {
+                  "file": "spec.json",
+                  "locator": "/requirements/120"
+                },
+                "observed": "R121 records a glossary-only verification exception but does not state a concrete confirmation method or observable acceptance condition for that K7 decision.",
+                "severity": "blocking",
+                "refs": [
+                  "spec-stage-planning"
+                ],
+                "targets": [
+                  {
+                    "entity": "requirement",
+                    "id": "R121",
+                    "field": "desc"
+                  }
+                ],
+                "allowedTargets": [
+                  {
+                    "target": {
+                      "entity": "requirement",
+                      "id": "R121",
+                      "field": "desc"
+                    },
+                    "operationKinds": [
+                      "edit-text-field",
+                      "replace-entity-field"
+                    ]
+                  }
+                ],
+                "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+              }
+            ]
+          }
+        ]
+      },
+      "assessment": {
+        "category": "false-positive",
+        "miss": [],
+        "extras": [
+          {
+            "rule": "spec-stage-planning",
+            "observed": "R21 states the K7 timeout is exactly 29 seconds but does not state a concrete confirmation method or observable acceptance condition.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "spec-stage-planning",
+              "where": {
+                "file": "spec.json",
+                "locator": "/requirements/20"
+              },
+              "observed": "R21 states the K7 timeout is exactly 29 seconds but does not state a concrete confirmation method or observable acceptance condition.",
+              "severity": "blocking",
+              "refs": [
+                "spec-stage-planning"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R21",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "spec-stage-planning",
+            "observed": "R71 plans rejection of bulk bypass in favor of the ordinary checkpoint path but does not state a concrete confirmation method or observable acceptance condition.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "spec-stage-planning",
+              "where": {
+                "file": "spec.json",
+                "locator": "/requirements/71"
+              },
+              "observed": "R71 plans rejection of bulk bypass in favor of the ordinary checkpoint path but does not state a concrete confirmation method or observable acceptance condition.",
+              "severity": "blocking",
+              "refs": [
+                "spec-stage-planning"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R71",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R71",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "spec-stage-planning",
+            "observed": "R101 states that the K7 timeout must be exactly 41 seconds but does not state a concrete confirmation method.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "spec-stage-planning",
+              "where": {
+                "file": "spec.json",
+                "locator": "/requirements/100"
+              },
+              "observed": "R101 states that the K7 timeout must be exactly 41 seconds but does not state a concrete confirmation method.",
+              "severity": "blocking",
+              "refs": [
+                "spec-stage-planning"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R101",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "spec-stage-planning",
+            "observed": "R121 records a glossary-only verification exception but does not state a concrete confirmation method or observable acceptance condition for that K7 decision.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "spec-stage-planning",
+              "where": {
+                "file": "spec.json",
+                "locator": "/requirements/120"
+              },
+              "observed": "R121 records a glossary-only verification exception but does not state a concrete confirmation method or observable acceptance condition for that K7 decision.",
+              "severity": "blocking",
+              "refs": [
+                "spec-stage-planning"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R121",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R121",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          }
+        ],
+        "observations": [
+          {
+            "rule": "k7-timeout",
+            "observed": "R21 specifies a normative K7 checkpoint timeout of exactly 29 seconds, conflicting with the authoritative T-K7 timeout of exactly 14 seconds.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-timeout",
+              "where": {
+                "file": "spec.json",
+                "locator": "/requirements/20"
+              },
+              "observed": "R21 specifies a normative K7 checkpoint timeout of exactly 29 seconds, conflicting with the authoritative T-K7 timeout of exactly 14 seconds.",
+              "severity": "blocking",
+              "refs": [
+                "k7-timeout"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R21",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "k7-timeout",
+            "observed": "R101 specifies a normative K7 checkpoint timeout of exactly 41 seconds, conflicting with the authoritative T-K7 timeout of exactly 14 seconds.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-timeout",
+              "where": {
+                "file": "spec.json",
+                "locator": "/requirements/100"
+              },
+              "observed": "R101 specifies a normative K7 checkpoint timeout of exactly 41 seconds, conflicting with the authoritative T-K7 timeout of exactly 14 seconds.",
+              "severity": "blocking",
+              "refs": [
+                "k7-timeout"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R101",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "k7-bypass-reason",
+            "observed": "R71 rejects the K7 bulk-bypass option but gives no concrete reason for that rejection.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "k7-bypass-reason",
+              "where": {
+                "file": "spec.json",
+                "locator": "/requirements/71"
+              },
+              "observed": "R71 rejects the K7 bulk-bypass option but gives no concrete reason for that rejection.",
+              "severity": "blocking",
+              "refs": [
+                "k7-bypass-reason"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R71",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R71",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "spec-stage-planning",
+            "observed": "R21 states the K7 timeout is exactly 29 seconds but does not state a concrete confirmation method or observable acceptance condition.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "spec-stage-planning",
+              "where": {
+                "file": "spec.json",
+                "locator": "/requirements/20"
+              },
+              "observed": "R21 states the K7 timeout is exactly 29 seconds but does not state a concrete confirmation method or observable acceptance condition.",
+              "severity": "blocking",
+              "refs": [
+                "spec-stage-planning"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R21",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R21",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "spec-stage-planning",
+            "observed": "R71 plans rejection of bulk bypass in favor of the ordinary checkpoint path but does not state a concrete confirmation method or observable acceptance condition.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "spec-stage-planning",
+              "where": {
+                "file": "spec.json",
+                "locator": "/requirements/71"
+              },
+              "observed": "R71 plans rejection of bulk bypass in favor of the ordinary checkpoint path but does not state a concrete confirmation method or observable acceptance condition.",
+              "severity": "blocking",
+              "refs": [
+                "spec-stage-planning"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R71",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R71",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "spec-stage-planning",
+            "observed": "R101 states that the K7 timeout must be exactly 41 seconds but does not state a concrete confirmation method.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "spec-stage-planning",
+              "where": {
+                "file": "spec.json",
+                "locator": "/requirements/100"
+              },
+              "observed": "R101 states that the K7 timeout must be exactly 41 seconds but does not state a concrete confirmation method.",
+              "severity": "blocking",
+              "refs": [
+                "spec-stage-planning"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R101",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R101",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          },
+          {
+            "rule": "spec-stage-planning",
+            "observed": "R121 records a glossary-only verification exception but does not state a concrete confirmation method or observable acceptance condition for that K7 decision.",
+            "observation": {
+              "kind": "violation",
+              "failureMode": "guardrail-violation",
+              "requirementRef": "spec-stage-planning",
+              "where": {
+                "file": "spec.json",
+                "locator": "/requirements/120"
+              },
+              "observed": "R121 records a glossary-only verification exception but does not state a concrete confirmation method or observable acceptance condition for that K7 decision.",
+              "severity": "blocking",
+              "refs": [
+                "spec-stage-planning"
+              ],
+              "targets": [
+                {
+                  "entity": "requirement",
+                  "id": "R121",
+                  "field": "desc"
+                }
+              ],
+              "allowedTargets": [
+                {
+                  "target": {
+                    "entity": "requirement",
+                    "id": "R121",
+                    "field": "desc"
+                  },
+                  "operationKinds": [
+                    "edit-text-field",
+                    "replace-entity-field"
+                  ]
+                }
+              ],
+              "specRevision": "sha256:ac6239858e0dc237e02a1002e8ff02e79167e1afeef129f3e26fe05dcc7e57fe"
+            }
+          }
+        ]
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "false-positive",
+        "note": "Parent confirmed the expected three findings plus four extra Spec-stage findings at R21/R71/R101/R121. The frozen rule accepts planned checks elsewhere in the Spec and the justified glossary exception. This pair is excluded from quality-matched timing. R71 locator /requirements/71 also differs from its zero-based index 70, although its structured target identifies R71."
+      }
+    },
+    {
+      "id": "small-normal/3/file",
+      "scenario": "small-normal",
+      "pair": 3,
+      "version": "file",
+      "sourceSha256": "d3e98def636b17b12a515b58597ff81a3c34de2eb7de761ba2119430d20d778a",
+      "durationMs": 11282,
+      "calls": [
+        {
+          "durationMs": 11273,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 21418,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 282,
+              "reasoning_output_tokens": 265
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 13660,
+          "callCount": 1,
+          "durationMs": 11273
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 21418,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 282,
+          "reasoning_output_tokens": 265
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "Parent confirmed all four rules pass with no observations, matching the frozen normal-case expectation."
+      }
+    },
+    {
+      "id": "small-normal/3/baseline",
+      "scenario": "small-normal",
+      "pair": 3,
+      "version": "baseline",
+      "sourceSha256": "d3e98def636b17b12a515b58597ff81a3c34de2eb7de761ba2119430d20d778a",
+      "durationMs": 9463,
+      "calls": [
+        {
+          "durationMs": 9457,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 18051,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 170,
+              "reasoning_output_tokens": 153
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment",
+          "inputCharacters": 13660,
+          "callCount": 1,
+          "durationMs": 9458
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 18051,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 170,
+          "reasoning_output_tokens": 153
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": {
+        "status": "confirmed",
+        "category": "correct",
+        "note": "Parent confirmed all four rules pass with no observations, matching the frozen normal-case expectation."
+      }
+    }
+  ],
+  "comparisonStatus": {
+    "status": "stopped-at-user-request",
+    "plannedTrials": 30,
+    "completedTrials": 18,
+    "interruptedTrial": "large-real-normal/4/baseline",
+    "remainingComparison": "waived by user after implementation and functional verification",
+    "fullComparisonAcceptance": "not evaluated",
+    "note": "The in-flight trial was terminated and is not counted as a complete result or a performance improvement. No further trials will run for this request."
+  }
+}

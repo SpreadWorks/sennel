@@ -1,0 +1,630 @@
+{
+  "version": 1,
+  "manifestSha256": "d27ab6a5f55c1b190f6059f481b0a2438611680ce808c66fd374988c9356693e",
+  "baselineRevision": "4651be1e23b9ada1c978c6b89cf3137892083b8b",
+  "configuredProvider": "codex/gpt-5.6-luna",
+  "configuredAgent": {
+    "default": "codex/gpt-5.6-luna",
+    "workDir": ".tmp",
+    "retryCount": 2,
+    "useProfile": "all-53-luna",
+    "promptCharacterLimit": 60000,
+    "profiles": {
+      "all-53-luna": {
+        "check": "codex/gpt-5.6-luna",
+        "docs": "codex/gpt-5.6-luna",
+        "flow": "codex/gpt-5.6-luna",
+        "plugin": "codex/gpt-5.6-luna",
+        "spec": "codex/gpt-5.6-luna",
+        "setup": "codex/gpt-5.6-luna",
+        "workflow": "codex/gpt-5.6-luna"
+      }
+    },
+    "providers": {
+      "codex/gpt-5.6-luna": {
+        "command": "codex",
+        "args": [
+          "exec",
+          "--json",
+          "--sandbox",
+          "workspace-write",
+          "-m",
+          "gpt-5.6-luna",
+          "-C",
+          ".tmp",
+          "{{PROMPT}}"
+        ],
+        "jsonOutputFlag": "--json",
+        "jsonSchemaFlag": "--output-schema",
+        "jsonSchemaMode": "file"
+      }
+    }
+  },
+  "cacheMode": "bypass",
+  "productSha256": {
+    "file": {
+      "src/flow/lib/run-gate.js": "459f01d1d241a24eb2a0665c4d12167d126ca04befcfd6541448b3a06ac47c51",
+      "src/flow/lib/gate-prompt-plan.js": "a89d802c994d61f886ee7915b6cd329be06b4c01a42871434131f72d2a805aef",
+      "src/lib/prompt-batching.js": "79dcf3cc9a6422cc868bc953411687fa250b938d3b82b02783821ca18753a254"
+    },
+    "baseline": {
+      "src/flow/lib/run-gate.js": "e2e7f742f382df334c8915c1bfb54c0c1a6c58aa2ad7672c8002cb58c6a901f5",
+      "src/flow/lib/gate-prompt-plan.js": "88897c390e5f7d8cd5e81c50fbd466155eaba8c7ef59bc01eaea634511f27ab5",
+      "src/lib/prompt-batching.js": "f4a1b50473ddf4cbb52c7c185e48506ad6f11b702a13c311bc1662550eb037bc"
+    }
+  },
+  "timingBoundary": "checkGuardrail entry through return, including file creation, provider read, retries and cleanup; excluding canonical fetch and Flow transitions",
+  "trials": [
+    {
+      "id": "large-real-normal/1/file",
+      "scenario": "large-real-normal",
+      "pair": 1,
+      "version": "file",
+      "sourceSha256": "53882485e76829365d41a60682f280d103cd3f295435578790ec415e6957b783",
+      "durationMs": 92876,
+      "calls": [
+        {
+          "durationMs": 92697,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 483396,
+              "cached_input_tokens": 418816,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3261,
+              "reasoning_output_tokens": 1287
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "judgment-rule-group",
+          "count": 1
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 24697,
+          "callCount": 1,
+          "durationMs": 92697
+        }
+      ],
+      "cliLaunchCount": 1,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 1,
+      "usage": [
+        {
+          "input_tokens": 483396,
+          "cached_input_tokens": 418816,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3261,
+          "reasoning_output_tokens": 1287
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": "confirmed: original saved Spec contains no K7/checkpoint/bulk-bypass text, so frozen K7 rules require no findings"
+    },
+    {
+      "id": "large-real-normal/1/baseline",
+      "scenario": "large-real-normal",
+      "pair": 1,
+      "version": "baseline",
+      "sourceSha256": "53882485e76829365d41a60682f280d103cd3f295435578790ec415e6957b783",
+      "durationMs": 2345036,
+      "calls": [
+        {
+          "durationMs": 118443,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 32483,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 6213,
+              "reasoning_output_tokens": 3615
+            }
+          ]
+        },
+        {
+          "durationMs": 111469,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28288,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 5875,
+              "reasoning_output_tokens": 4716
+            }
+          ]
+        },
+        {
+          "durationMs": 494954,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 36060,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 27168,
+              "reasoning_output_tokens": 2363
+            }
+          ]
+        },
+        {
+          "durationMs": 492943,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 34056,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 27029,
+              "reasoning_output_tokens": 934
+            }
+          ]
+        },
+        {
+          "durationMs": 187938,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 27069,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 10082,
+              "reasoning_output_tokens": 1034
+            }
+          ]
+        },
+        {
+          "durationMs": 202911,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 31921,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 10997,
+              "reasoning_output_tokens": 2735
+            }
+          ]
+        },
+        {
+          "durationMs": 103411,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 34658,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 5480,
+              "reasoning_output_tokens": 1982
+            }
+          ]
+        },
+        {
+          "durationMs": 85126,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 31294,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 4342,
+              "reasoning_output_tokens": 1332
+            }
+          ]
+        },
+        {
+          "durationMs": 70952,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28708,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3656,
+              "reasoning_output_tokens": 1034
+            }
+          ]
+        },
+        {
+          "durationMs": 17949,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 22406,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 699,
+              "reasoning_output_tokens": 189
+            }
+          ]
+        },
+        {
+          "durationMs": 70445,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 28286,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 3606,
+              "reasoning_output_tokens": 1347
+            }
+          ]
+        },
+        {
+          "durationMs": 18846,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 18827,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 610,
+              "reasoning_output_tokens": 106
+            }
+          ]
+        },
+        {
+          "durationMs": 10726,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 27626,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 329,
+              "reasoning_output_tokens": 312
+            }
+          ]
+        },
+        {
+          "durationMs": 338585,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 132594,
+              "cached_input_tokens": 81408,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 18177,
+              "reasoning_output_tokens": 1265
+            }
+          ]
+        },
+        {
+          "durationMs": 18884,
+          "outcome": "complete",
+          "launches": 1,
+          "usage": [
+            {
+              "input_tokens": 26870,
+              "cached_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "output_tokens": 715,
+              "reasoning_output_tokens": 698
+            }
+          ]
+        }
+      ],
+      "promptMetrics": [
+        {
+          "stage": "source-partition",
+          "count": 309
+        },
+        {
+          "stage": "rule-group",
+          "count": 1
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 52311,
+          "callCount": 1,
+          "durationMs": 118442
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 48447,
+          "callCount": 1,
+          "durationMs": 111469
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59613,
+          "callCount": 1,
+          "durationMs": 494954
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59937,
+          "callCount": 1,
+          "durationMs": 492943
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 35938,
+          "callCount": 1,
+          "durationMs": 187938
+        },
+        {
+          "stage": "collection",
+          "inputCharacters": 59386,
+          "callCount": 1,
+          "durationMs": 202911
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 58657,
+          "callCount": 1,
+          "durationMs": 103411
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 57710,
+          "callCount": 1,
+          "durationMs": 85126
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 49735,
+          "callCount": 1,
+          "durationMs": 70953
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 13632,
+          "callCount": 1,
+          "durationMs": 17949
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 51379,
+          "callCount": 1,
+          "durationMs": 70446
+        },
+        {
+          "stage": "reduction",
+          "inputCharacters": 13428,
+          "callCount": 1,
+          "durationMs": 18846
+        },
+        {
+          "stage": "judgment-rule-group",
+          "count": 3
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 42364,
+          "callCount": 1,
+          "durationMs": 10726
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 59685,
+          "callCount": 1,
+          "durationMs": 338586
+        },
+        {
+          "stage": "judgment",
+          "inputCharacters": 40484,
+          "callCount": 1,
+          "durationMs": 18884
+        }
+      ],
+      "cliLaunchCount": 15,
+      "cliLaunchAuthority": "gate recordPromptMetric.callCount",
+      "observedThreadCount": 15,
+      "usage": [
+        {
+          "input_tokens": 32483,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 6213,
+          "reasoning_output_tokens": 3615
+        },
+        {
+          "input_tokens": 28288,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 5875,
+          "reasoning_output_tokens": 4716
+        },
+        {
+          "input_tokens": 36060,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 27168,
+          "reasoning_output_tokens": 2363
+        },
+        {
+          "input_tokens": 34056,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 27029,
+          "reasoning_output_tokens": 934
+        },
+        {
+          "input_tokens": 27069,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 10082,
+          "reasoning_output_tokens": 1034
+        },
+        {
+          "input_tokens": 31921,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 10997,
+          "reasoning_output_tokens": 2735
+        },
+        {
+          "input_tokens": 34658,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 5480,
+          "reasoning_output_tokens": 1982
+        },
+        {
+          "input_tokens": 31294,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4342,
+          "reasoning_output_tokens": 1332
+        },
+        {
+          "input_tokens": 28708,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3656,
+          "reasoning_output_tokens": 1034
+        },
+        {
+          "input_tokens": 22406,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 699,
+          "reasoning_output_tokens": 189
+        },
+        {
+          "input_tokens": 28286,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 3606,
+          "reasoning_output_tokens": 1347
+        },
+        {
+          "input_tokens": 18827,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 610,
+          "reasoning_output_tokens": 106
+        },
+        {
+          "input_tokens": 27626,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 329,
+          "reasoning_output_tokens": 312
+        },
+        {
+          "input_tokens": 132594,
+          "cached_input_tokens": 81408,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 18177,
+          "reasoning_output_tokens": 1265
+        },
+        {
+          "input_tokens": 26870,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 715,
+          "reasoning_output_tokens": 698
+        }
+      ],
+      "result": {
+        "passed": true,
+        "evaluations": [
+          {
+            "guardrail_id": "k7-timeout",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 checkpoint timeout consistency",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-bypass-reason",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 bypass rejection reason",
+            "observations": []
+          },
+          {
+            "guardrail_id": "k7-justified-exception",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "K7 non-testable exception",
+            "observations": []
+          },
+          {
+            "guardrail_id": "spec-stage-planning",
+            "result": "pass",
+            "reason": "no observations emitted",
+            "category": "testing",
+            "title": "Spec stage planning evidence",
+            "observations": []
+          }
+        ]
+      },
+      "assessment": {
+        "category": "correct",
+        "miss": [],
+        "extras": [],
+        "observations": []
+      },
+      "manualReview": "confirmed: original saved Spec contains no K7/checkpoint/bulk-bypass text, so frozen K7 rules require no findings"
+    }
+  ],
+  "probeNote": "Exploratory pair before the shared planner null fix; the mandatory agent suite overlapped the late baseline calls. Excluded from the adopted five-pair quality and timing comparison."
+}

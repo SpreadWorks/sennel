@@ -47,12 +47,13 @@ export function requestPayloadPath(request, logicalName) {
 }
 
 /** Fake external Gate responses while preserving real provider admission accounting. */
-export function installGateProviderFake(respond) {
+export function installGateProviderFake(respond, { projectInvocation = null } = {}) {
   const originalGet = container.get.bind(container);
   return mock.method(container, "get", (name) => {
     if (name !== "agent") return originalGet(name);
     return {
       resolve() { return { providerKey: "fixture", profileKey: "fixture" }; },
+      ...(projectInvocation === null ? {} : { projectInvocation }),
       async call(prompt, options) {
         const admission = options.providerCallAdmission;
         admission?.claim();

@@ -73,6 +73,16 @@ function buildPlan({ elements, envelope = new TextEnvelope(), maxCharacters = 80
 }
 
 describe("prompt batching values", () => {
+  it("keeps a finite default and accepts only null as an explicit unlimited response limit", () => {
+    assert.equal(new PromptExecutionLimit().maxResponseCharacters, GLOBAL_PROMPT_ELEMENT_HARD_MAX);
+    assert.equal(new PromptExecutionLimit({ maxResponseCharacters: 12 }).maxResponseCharacters, 12);
+    assert.equal(new PromptExecutionLimit({ maxResponseCharacters: null }).maxResponseCharacters, null);
+    for (const invalid of [0, -1, 1.5, Number.NaN, Infinity, "unlimited", false]) {
+      assert.throws(() => new PromptExecutionLimit({ maxResponseCharacters: invalid }), TypeError);
+    }
+    assert.throws(() => new PromptExecutionLimit({ maxResponseCharacters: null, maxRequestCharacters: null }), TypeError);
+  });
+
   it("accounts for every logical request component using actual JSON serialization", () => {
     const request = {
       systemPrompt: "system",
@@ -265,6 +275,102 @@ describe("prompt batch planning", () => {
 });
 
 describe("prompt batch execution", () => {
+  it("accepts a complete 145k-character JSON response only with an unlimited response limit", async () => {
+    const plan = buildPlan({ elements: [element("one", 0, "payload")], maxCharacters: 40 });
+    const response = JSON.stringify({ observations: Array.from({ length: 40 }, (_, index) => ({
+      rule: `rule-${index}`,
+      reason: `Evidence for rule ${index}: ${"x".repeat(3600)}`,
+    })) });
+    assert.ok(response.length > GLOBAL_PROMPT_ELEMENT_HARD_MAX);
+    assert.ok(response.length < 150_000);
+    const responseContract = { parse: (raw) => JSON.parse(raw) };
+    const reducer = new ResultReducer();
+    await assert.rejects(
+      () => new PromptBatchExecutor().execute({ plan, callAgent: async () => response, responseContract, reducer }),
+      (error) => error instanceof PromptBatchExecutionIncompleteFailure
+        && error.cause instanceof PromptResponseTooLargeFailure
+        && error.cause.details.maxResponseCharacters === GLOBAL_PROMPT_ELEMENT_HARD_MAX,
+    );
+    const budget = new PromptExecutionBudget(new PromptExecutionLimit({ maxResponseCharacters: null }));
+    const result = await new PromptBatchExecutor({
+      executionLimit: new PromptExecutionLimit({ maxResponseCharacters: 3 }),
+      executionBudget: budget,
+    }).execute({ plan, callAgent: async () => response, responseContract, reducer });
+    assert.equal(result[0].observations.length, 40);
+    assert.equal(result[0].observations[39].rule, "rule-39");
+    assert.equal(budget.snapshot().aggregateCharacters, JSON.stringify(result[0]).length);
+    assert.equal(budget.snapshot().providerCallCount, 1);
+  });
+
+  it("preserves finite shared limits, aggregate limits, and input limits with unlimited responses", async () => {
+    const plan = buildPlan({ elements: [element("one", 0, "payload")], maxCharacters: 40 });
+    const responseContract = { parse: (raw) => raw };
+    const reducer = new ResultReducer();
+    await assert.rejects(
+      () => new PromptBatchExecutor({
+        executionLimit: new PromptExecutionLimit({ maxResponseCharacters: null }),
+        executionBudget: new PromptExecutionBudget(new PromptExecutionLimit({ maxResponseCharacters: 3 })),
+      }).execute({ plan, callAgent: async () => "four", responseContract, reducer }),
+      (error) => error instanceof PromptBatchExecutionIncompleteFailure
+        && error.cause instanceof PromptResponseTooLargeFailure,
+    );
+    await assert.rejects(
+      () => new PromptBatchExecutor({ executionLimit: new PromptExecutionLimit({
+        maxResponseCharacters: null, maxAggregateCharacters: 3,
+      }) }).execute({ plan, callAgent: async () => "four", responseContract, reducer }),
+      (error) => error instanceof PromptBatchExecutionIncompleteFailure
+        && error.cause instanceof PromptResponseTooLargeFailure,
+    );
+    let calls = 0;
+    await assert.rejects(
+      () => new PromptBatchExecutor({ executionLimit: new PromptExecutionLimit({ maxResponseCharacters: null }) }).execute({
+        plan,
+        callAgent: async () => { calls += 1; return "ok"; },
+        protocolPolicy: { execute: ({ call }) => call({ userPrompt: "x".repeat(41) }) },
+        responseContract,
+        reducer,
+      }),
+      (error) => error instanceof PromptBatchExecutionIncompleteFailure && error.cause.code === "PROMPT_BATCH_OVERFLOW",
+    );
+    assert.equal(calls, 0);
+  });
+
+  it("checks each protocol retry and its final response under the active response limit", async () => {
+    const plan = buildPlan({ elements: [element("one", 0, "payload")], maxCharacters: 40 });
+    const largeResponse = "result:" + "x".repeat(GLOBAL_PROMPT_ELEMENT_HARD_MAX);
+    const responseContract = { parse: (raw) => raw };
+    const reducer = new ResultReducer();
+    let calls = 0;
+    const protocolPolicy = { async execute({ call }) {
+      await call();
+      return call();
+    } };
+    const result = await new PromptBatchExecutor({ executionLimit: new PromptExecutionLimit({
+      maxResponseCharacters: null, maxProtocolRetryCount: 1,
+    }) }).execute({
+      plan,
+      callAgent: async () => { calls += 1; return calls === 1 ? "invalid" : largeResponse; },
+      protocolPolicy,
+      responseContract,
+      reducer,
+    });
+    assert.deepEqual(result, [largeResponse]);
+    assert.equal(calls, 2);
+
+    await assert.rejects(
+      () => new PromptBatchExecutor({ executionLimit: new PromptExecutionLimit({ maxResponseCharacters: 3 }) }).execute({
+        plan,
+        callAgent: async () => "ok",
+        protocolPolicy: { async execute({ call }) { await call(); return "four"; } },
+        responseContract,
+        reducer,
+      }),
+      (error) => error instanceof PromptBatchExecutionIncompleteFailure
+        && error.cause instanceof PromptResponseTooLargeFailure
+        && error.cause.message === "Prompt response exceeds its character limit",
+    );
+  });
+
   it("preflights every projection before the first provider call", async () => {
     const plan = buildPlan({ elements: [element("one", 0, "x".repeat(30)), element("two", 1, "y".repeat(30))], maxCharacters: 45 });
     let calls = 0;
