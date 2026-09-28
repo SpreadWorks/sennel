@@ -26,6 +26,7 @@ describe("buildSearchDirs", () => {
     assert.ok(dirs.some((d) => d.endsWith("/tests/integration")));
     assert.ok(dirs.some((d) => d.endsWith("/tests/e2e")));
     assert.ok(dirs.some((d) => d.endsWith("/tests/acceptance")));
+    assert.ok(dirs.some((d) => d.endsWith("/tests/structure")));
     assert.ok(dirs.some((d) => d.endsWith("/src/presets")));
     assert.ok(!dirs.some((d) => d.endsWith("/tests/agent")));
   });
@@ -42,6 +43,7 @@ describe("buildSearchDirs", () => {
     assert.ok(dirs.some((d) => d.endsWith("/tests/e2e")));
     assert.ok(dirs.some((d) => d.endsWith("/tests/integration")));
     assert.ok(dirs.some((d) => d.endsWith("/tests/acceptance")));
+    assert.ok(dirs.some((d) => d.endsWith("/tests/structure")));
     assert.ok(dirs.some((d) => d.endsWith("/src/presets")));
     assert.ok(dirs.some((d) => d.endsWith("/tests/agent")));
   });
@@ -56,6 +58,10 @@ describe("buildSearchDirs", () => {
     assert.ok(dirs.some((d) => d.endsWith("/tests/unit")));
     assert.ok(!dirs.some((d) => d.endsWith("/tests/e2e")));
     assert.ok(!dirs.some((d) => d.endsWith("/tests/agent")));
+  });
+
+  it("--scope structure returns the structure suite only", () => {
+    assert.deepEqual(buildSearchDirs({ root: ROOT }, { scope: "structure" }), [resolve(ROOT, "tests", "structure")]);
   });
 });
 

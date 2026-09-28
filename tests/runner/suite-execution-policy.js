@@ -1,4 +1,6 @@
-const DEFAULTS = Object.freeze({ unit: 4, integration: 2, e2e: 2, acceptance: 1, agent: 1 });
+import { TEST_SUITES } from "./suite-definitions.js";
+
+const DEFAULTS = Object.freeze(Object.fromEntries(TEST_SUITES.map(({ name, concurrency }) => [name, concurrency])));
 
 export class TestSuiteExecutionPolicy {
   constructor({ jobs = null } = {}) {

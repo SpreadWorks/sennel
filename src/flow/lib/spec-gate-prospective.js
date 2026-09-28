@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { SpecGateIssuePublication } from "./gate-issue-publication.js";
-import { CurrentAttemptIdentity, CurrentFlowStateConflictError } from "./current-flow-state.js";
+import { CurrentAttemptIdentity } from "./current-flow-state.js";
+import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 import {
   attachedCanonicalCommandResultArtifact,
   attachedCanonicalCommandResultPublications,

@@ -1,5 +1,6 @@
 import { groupTestFilesByCategory } from "./test-runner-labels.js";
 import { TestSelection, renderTestList, validateResolvedFiles } from "./test-selection.js";
+import { TEST_SUITE_NAMES } from "./suite-definitions.js";
 
 export class TestRunner {
   constructor({ presetNames = [], resolveFiles, executeFiles, maxDepth = 32, maxFiles = 10000, maxRelativePath = 4096, maxJsonBytes = 16 * 1024 * 1024 }) {
@@ -27,11 +28,7 @@ export class TestRunner {
 function groupsFor(files) {
   const grouped = groupTestFilesByCategory(files.map((file) => `/${file}`));
   return [
-    { category: "unit", files: grouped.unit.map(stripRoot) },
-    { category: "integration", files: grouped.integration.map(stripRoot) },
-    { category: "e2e", files: grouped.e2e.map(stripRoot) },
-    { category: "acceptance", files: grouped.acceptance.map(stripRoot) },
-    { category: "agent", files: grouped.agent.map(stripRoot) },
+    ...TEST_SUITE_NAMES.map((category) => ({ category, files: grouped[category].map(stripRoot) })),
   ];
 }
 
@@ -40,5 +37,5 @@ function stripRoot(file) {
 }
 
 function usage() {
-  return `Usage: node tests/run.js [--preset <name> | --scope <unit|integration|e2e|acceptance|agent> | --agent | --all | --jobs <1|2> | --file <path> | --pattern <glob> | <path>...] [--list --json]\n`;
+  return `Usage: node tests/run.js [--preset <name> | --scope <${TEST_SUITE_NAMES.join("|")}> | --agent | --all | --jobs <1|2> | --file <path> | --pattern <glob> | <path>...] [--list --json]\n`;
 }

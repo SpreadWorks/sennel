@@ -92,6 +92,7 @@ import {
 } from "./nonblocking.js";
 import { StepFactory } from "../engine/step-factory.js";
 import { DraftService } from "../services/draft-service.js";
+import { draftWorkerStepRegistration } from "../engine/composition/draft.js";
 import {
   DraftWorkerExecutionStepBinding,
   DraftWorkerStepBinding,
@@ -135,52 +136,6 @@ function conditionalDraftAdmissionError(classification, code, message, resumeIns
       ...(resumeInstruction === null ? {} : { resumeInstruction }),
     },
   });
-}
-
-export async function draftWorkerStepDefinition(stepId) {
-  switch (stepId) {
-    case "draft": {
-      const [{ DraftEntryConnector: Connector }, { DraftStep: StepClass }] = await Promise.all([
-        import("../engine/connectors/draft/draft-entry-connector.js"), import("../steps/draft/draft.js"),
-      ]);
-      return { Connector, StepClass };
-    }
-    case "draft-refine": {
-      const [{ DraftRefineConnector: Connector }, { DraftRefineStep: StepClass }] = await Promise.all([
-        import("../engine/connectors/draft/draft-refine-connector.js"), import("../steps/draft/draft-refine.js"),
-      ]);
-      return { Connector, StepClass };
-    }
-    case "draft-questions-triage":
-    case "draft-coverage-triage": {
-      const [{ DraftTriageConnector: Connector }, steps] = await Promise.all([
-        import("../engine/connectors/draft/draft-triage-connector.js"),
-        stepId === "draft-questions-triage"
-          ? import("../steps/draft/draft-questions-triage.js")
-          : import("../steps/draft/draft-coverage-triage.js"),
-      ]);
-      return { Connector, StepClass: stepId === "draft-questions-triage" ? steps.DraftQuestionsTriageStep : steps.DraftCoverageTriageStep };
-    }
-    case "draft-questions-repair":
-    case "draft-coverage-repair":
-    case "draft-gate-repair": {
-      const [{ DraftRepairConnector: Connector }, steps] = await Promise.all([
-        import("../engine/connectors/draft/draft-repair-connector.js"),
-        stepId === "draft-questions-repair"
-          ? import("../steps/draft/draft-questions-repair.js")
-          : stepId === "draft-coverage-repair"
-            ? import("../steps/draft/draft-coverage-repair.js")
-            : import("../steps/draft/draft-gate-repair.js"),
-      ]);
-      return {
-        Connector,
-        StepClass: stepId === "draft-questions-repair"
-          ? steps.DraftQuestionsRepairStep
-          : stepId === "draft-coverage-repair" ? steps.DraftCoverageRepairStep : steps.DraftGateRepairStep,
-      };
-    }
-    default: return null;
-  }
 }
 
 export async function specWorkerStepDefinition(stepId) {
@@ -1675,15 +1630,11 @@ export default class RunDispatchCommand extends FlowCommand {
       );
     }
     if (!reusePrior) {
-      const draftService = new DraftService({
-        flowManager: ctx.flowManager,
-        binding: stepBinding,
-        executionBinding,
+      const preparedStep = await definition.create({
+        flowManager: ctx.flowManager, binding: stepBinding, executionBinding,
       });
-      const result = await new StepFactory()
-        .provide(DraftService, draftService)
-        .create(definition.StepClass)
-        .execute();
+      const draftService = preparedStep.dependency(DraftService);
+      const result = await preparedStep.step.execute();
       if (result.stepId !== stepId) {
         throw new Error("conditional Draft pre-execution Step selected a different Step");
       }
@@ -1763,7 +1714,7 @@ export default class RunDispatchCommand extends FlowCommand {
         );
         const { workerRequestGuidance = null, ...providerOptions } = workerOptions;
         agentOptions = providerOptions;
-        draftDefinition = await draftWorkerStepDefinition(action.nextAction.step);
+        draftDefinition = draftWorkerStepRegistration(action.nextAction.step);
         specDefinition = await specWorkerStepDefinition(action.nextAction.step);
         const conditionalDraftExecution = isConditionalDraftWorkerStep(action.nextAction.step);
         const workerInstructions = new WorkerArtifactWorkerInstructions({
@@ -2129,14 +2080,11 @@ export default class RunDispatchCommand extends FlowCommand {
     if (prepared?.facts === null || prepared?.facts === undefined) {
       throw new Error("Draft Step requires prepared worker facts");
     }
-    const draftService = await DraftService.prepare({
-      ctx, request, Connector: definition.Connector,
-      preparation: prepared, handoffCoordinator: this.handoffCoordinator,
+    const preparedStep = await definition.create({
+      ctx, request, preparation: prepared, handoffCoordinator: this.handoffCoordinator,
     });
-    const step = new StepFactory()
-      .provide(DraftService, draftService)
-      .create(definition.StepClass);
-    const output = await step.execute();
+    const draftService = preparedStep.dependency(DraftService);
+    const output = await preparedStep.step.execute();
     const attempt = draftService.workerOutcome;
     if (attempt === null) throw new Error("Draft Step did not execute its bound worker handoff");
     if ((attempt.error === null && attempt.stepResult !== output)

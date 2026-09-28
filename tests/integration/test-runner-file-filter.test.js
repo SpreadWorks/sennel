@@ -204,6 +204,38 @@ describe("tests/run.js default selection unchanged (spec 229 AC9)", () => {
   it("no suite selector keeps the default selection", () => {
     const res = run("--list", "--json");
     assert.equal(res.status, 0, `stderr: ${res.stderr}`);
-    assert.equal(JSON.parse(res.stdout).selection.mode, "default");
+    const listing = JSON.parse(res.stdout);
+    assert.equal(listing.selection.mode, "default");
+    assert.ok(listing.suites.find(({ category }) => category === "structure").count > 0);
+  });
+
+  it("--scope structure lists only the structure suite", () => {
+    const res = run("--scope", "structure", "--list", "--json");
+    assert.equal(res.status, 0, `stderr: ${res.stderr}`);
+    const listing = JSON.parse(res.stdout);
+    assert.equal(listing.selection.scope, "structure");
+    assert.ok(listing.suites.find(({ category }) => category === "structure").count > 0);
+    assert.equal(listing.suites.filter(({ count }) => count > 0).length, 1);
+  });
+
+  it("--all lists structure and agent as distinct suites", () => {
+    const res = run("--all", "--list", "--json", "--jobs", "1");
+    assert.equal(res.status, 0, `stderr: ${res.stderr}`);
+    const listing = JSON.parse(res.stdout);
+    assert.ok(listing.suites.find(({ category }) => category === "structure").count > 0);
+    assert.ok(listing.suites.find(({ category }) => category === "agent").count > 0);
+  });
+});
+
+describe("structure suite file selectors", () => {
+  it("--file and --pattern listings classify structure tests consistently", () => {
+    const file = "tests/structure/draft.test.js";
+    const fileResult = run("--file", file, "--list", "--json");
+    assert.equal(fileResult.status, 0, `stderr: ${fileResult.stderr}`);
+    assert.deepEqual(JSON.parse(fileResult.stdout).suites.find(({ category }) => category === "structure").files, [file]);
+
+    const patternResult = run("--pattern", "tests/structure/*.test.js", "--list", "--json");
+    assert.equal(patternResult.status, 0, `stderr: ${patternResult.stderr}`);
+    assert.ok(JSON.parse(patternResult.stdout).suites.find(({ category }) => category === "structure").count > 0);
   });
 });

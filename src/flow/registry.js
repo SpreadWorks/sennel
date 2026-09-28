@@ -64,7 +64,8 @@ import {
   attachedCanonicalCommandResultArtifact,
   attachedCanonicalCommandResultPublications,
 } from "./lib/canonical-command-result.js";
-import { CanonicalFlowArtifactWrite, CurrentFlowStateConflictError } from "./lib/current-flow-state.js";
+import { CanonicalFlowArtifactWrite } from "./lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "./lib/current-flow-state-conflict-error.js";
 import { TaskStepIdentity } from "./lib/task-step-identity.js";
 import { DefinitionFailureOwnership } from "./lib/definition-failure-ownership.js";
 import { RepositoryFlowOperationLock } from "../lib/repository-maintenance-lock.js";
@@ -78,6 +79,8 @@ import {
   STEP_RESULT_TYPE,
 } from "./engine/step-result.js";
 import { StepFactory } from "./engine/step-factory.js";
+import { draftStepRegistration } from "./engine/composition/draft.js";
+import { ReviewService } from "./services/review-service.js";
 import { isStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
 import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./lib/step-admission-refusal.js";
 
@@ -120,50 +123,28 @@ async function executePublishedDraftReviewStep(ctx, result) {
   const draftResult = logicalRoute !== null;
   if (!draftResult) return null;
   if (route === null) throw new Error("Draft Review command result does not contain a valid route");
-  const [{ CanonicalDraftReviewSource }, { DraftReviewConnector }, { ReviewService }, steps] = await Promise.all([
-    import("./lib/canonical-review-artifacts.js"),
-    import("./engine/connectors/draft/draft-review-connector.js"),
-    import("./services/review-service.js"),
-    import(route.key === "questions" ? "./steps/draft/draft-questions-review.js" : "./steps/draft/draft-coverage-review.js"),
-  ]);
-  const source = new CanonicalDraftReviewSource({
-    flowManager: ctx.flowManager,
-    state: ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId),
-    phase: route.retryPhase,
-  });
-  let binding;
+  const registration = draftStepRegistration(route.reviewStepId);
+  const publicationResult = route.key === "questions"
+    ? new DraftQuestionsReviewExecutionRequiredResult()
+    : new DraftCoverageReviewExecutionRequiredResult();
+  let publicationStep;
   try {
-    binding = await new DraftReviewConnector(source).connect();
+    publicationStep = await registration.create({ ctx, publicationResult: result });
   } catch (error) {
     throw fatalDraftReviewFailure(error instanceof CurrentFlowStateConflictError
       ? new StepAdmissionRefusal(error.message, error) : error);
   }
-  const publicationResult = route.key === "questions"
-    ? new DraftQuestionsReviewExecutionRequiredResult()
-    : new DraftCoverageReviewExecutionRequiredResult();
-  const publicationStep = new StepFactory()
-    .provideArguments(ReviewService, {
-      flowManager: ctx.flowManager,
-      binding,
-      publicationResult: result,
-    })
-    .create(route.key === "questions" ? steps.DraftQuestionsReviewStep : steps.DraftCoverageReviewStep);
   let published;
   try {
-    published = await publicationStep.execute();
+    published = await publicationStep.step.execute();
   } catch (error) {
     throw fatalDraftReviewFailure(error);
   }
   if (published.kind !== publicationResult.kind) {
     throw new Error("Draft review publication Step selected an invalid Result");
   }
-  const step = new StepFactory()
-    .provideArguments(ReviewService, {
-      flowManager: ctx.flowManager,
-      binding,
-      commandResult: result,
-    })
-    .create(route.key === "questions" ? steps.DraftQuestionsReviewStep : steps.DraftCoverageReviewStep);
+  const binding = publicationStep.dependency(ReviewService).stepBinding();
+  const step = (await registration.create({ ctx, binding, commandResult: result })).step;
   let output;
   try {
     output = await step.execute();
@@ -179,43 +160,7 @@ async function executePublishedDraftReviewStep(ctx, result) {
 }
 
 async function executePublishedDraftGateStep(ctx, result) {
-  const [
-    { DraftGateEvaluationBinding },
-    { GateService },
-    { DraftGateStep },
-    { GateIssueLogEntry },
-    { DraftGateIssuePublication },
-  ] = await Promise.all([
-    import("./engine/connectors/draft/draft-step-binding.js"),
-    import("./services/review-service.js"),
-    import("./steps/draft/draft-gate.js"),
-    import("./lib/run-gate.js"),
-    import("./lib/draft-gate-prospective.js"),
-  ]);
-  const binding = new DraftGateEvaluationBinding({
-    flowManager: ctx.flowManager,
-    specId: ctx.specId ?? ctx.flowState.specId,
-  });
-  const state = binding.assertCurrent();
-  const attached = attachedCanonicalCommandResultArtifact(result);
-  const issuePublication = attached?.payload?.result === "fail"
-    ? new DraftGateIssuePublication({
-        binding,
-        entry: new GateIssueLogEntry({
-          ctx,
-          result,
-          timestamp: state.attempt.startedAt,
-        }).toJSON(),
-      })
-    : null;
-  const step = new StepFactory()
-    .provideArguments(GateService, {
-      flowManager: ctx.flowManager,
-      binding,
-      commandResult: result,
-      issuePublication,
-    })
-    .create(DraftGateStep);
+  const step = (await draftStepRegistration("draft-gate").create({ ctx, result })).step;
   let output;
   try {
     output = await step.execute();

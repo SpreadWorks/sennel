@@ -1,7 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-
-const SUITES = ["unit", "integration", "e2e", "acceptance", "agent"];
+import { TEST_SUITE_NAMES } from "./suite-definitions.js";
 
 export class TestSuiteManifest {
   constructor({ root, files, readSource = (file) => readFileSync(join(root, file), "utf8") }) {
@@ -15,14 +14,14 @@ export class TestSuiteManifest {
 
   #suiteFor(file) {
     const normalized = file.replaceAll("\\", "/");
-    const matches = SUITES.filter((suite) => new RegExp(`^tests/${suite}/`).test(normalized));
+    const matches = TEST_SUITE_NAMES.filter((suite) => new RegExp(`^tests/${suite}/`).test(normalized));
     if (/^src\/presets\/[^/]+\/tests\/acceptance\/.*\.acceptance\.test\.js$/.test(normalized) && matches.length === 0) matches.push("acceptance");
     if (matches.length !== 1) throw new Error(`test must have exactly one suite: ${file}`);
     return matches[0];
   }
 
   suiteFiles(suite) {
-    if (!SUITES.includes(suite)) throw new Error(`unknown suite: ${suite}`);
+    if (!TEST_SUITE_NAMES.includes(suite)) throw new Error(`unknown suite: ${suite}`);
     return this.files.filter((file) => this.#suiteFor(file) === suite);
   }
 

@@ -37,6 +37,10 @@ describe("categorizeTestFile", () => {
     );
   });
 
+  it("maps structure suite paths to structure", () => {
+    assert.equal(categorizeTestFile("/repo/tests/structure/draft.test.js"), "structure");
+  });
+
   it("returns null for paths that match no category", () => {
     assert.equal(categorizeTestFile("/repo/misc/foo.js"), null);
   });
@@ -45,17 +49,17 @@ describe("categorizeTestFile", () => {
 describe("formatLabelSummary", () => {
   it("always emits all suite lines in canonical order", () => {
     const out = formatLabelSummary({ unit: 3, integration: 5, e2e: 1, acceptance: 2, agent: 4 });
-    assert.equal(out, "unit: 3\nintegration: 5\ne2e: 1\nacceptance: 2\nagent: 4");
+    assert.equal(out, "unit: 3\nintegration: 5\ne2e: 1\nacceptance: 2\nstructure: 0\nagent: 4");
   });
 
   it("emits 0 explicitly for categories with no tests", () => {
     const out = formatLabelSummary({ unit: 1, integration: 0, acceptance: 0 });
-    assert.equal(out, "unit: 1\nintegration: 0\ne2e: 0\nacceptance: 0\nagent: 0");
+    assert.equal(out, "unit: 1\nintegration: 0\ne2e: 0\nacceptance: 0\nstructure: 0\nagent: 0");
   });
 
   it("treats missing keys as 0 (never omits lines)", () => {
     const out = formatLabelSummary({ unit: 4 });
-    assert.equal(out, "unit: 4\nintegration: 0\ne2e: 0\nacceptance: 0\nagent: 0");
+    assert.equal(out, "unit: 4\nintegration: 0\ne2e: 0\nacceptance: 0\nstructure: 0\nagent: 0");
   });
 });
 

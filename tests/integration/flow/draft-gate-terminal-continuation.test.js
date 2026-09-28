@@ -7,6 +7,7 @@ import { DraftGateStep } from "../../../src/flow/steps/draft/draft-gate.js";
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { GateService } from "../../../src/flow/services/review-service.js";
+import { assertServiceBoundary } from "../../support/structure/service-boundary.js";
 import { CanonicalGateObservationCycle } from "../../../src/flow/lib/canonical-gate-observation-cycle.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import {
@@ -224,6 +225,7 @@ it("uses the evaluated Gate result once when the Draft Gate Step settles it", as
       state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
     }).promote({ result: "pass", artifacts: { phase: "draft", evaluations: [] } });
     const binding = new DraftGateEvaluationBinding({ flowManager: manager, specId });
+    assertServiceBoundary(new GateService({ flowManager: manager, binding, commandResult: result }));
     const step = new StepFactory()
       .provideArguments(GateService, {
         flowManager: manager, binding, commandResult: result,

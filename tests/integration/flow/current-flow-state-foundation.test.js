@@ -32,7 +32,6 @@ import {
   CurrentFlowDefinition,
   CurrentFlowState,
   CurrentFlowStateAdoptionBoundary,
-  CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
   CurrentFlowStateSnapshot,
   CurrentFlowStateStore,
@@ -46,6 +45,7 @@ import {
   NodeResult,
   TaskNode,
 } from "../../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import {
   DraftQuestionsRepairChangedResult,

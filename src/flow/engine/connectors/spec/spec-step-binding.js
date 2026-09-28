@@ -2,7 +2,7 @@ import { requiresWorkerArtifactHandoff } from "../../../lib/flow-artifact-author
 import { WorkerArtifactHandoffRequest } from "../../../lib/worker-artifact-handoff.js";
 import { StepBinding, canonicalStepState } from "../../step-binding.js";
 import { SpecRevisionIdentity } from "../../../lib/spec-review-artifacts.js";
-import { CurrentFlowStateConflictError } from "../../../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../../lib/current-flow-state-conflict-error.js";
 import { createHash } from "node:crypto";
 
 /** Binds a Spec worker publication to its exact active Attempt. */

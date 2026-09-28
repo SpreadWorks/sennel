@@ -2,7 +2,7 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
 import { Envelope } from "../../lib/flow-envelope.js";
 import { FlowCommand } from "./base-command.js";
 import { DraftWorkerRecoveryRefusal } from "../definition.js";
-import { CurrentFlowStateConflictError } from "./current-flow-state.js";
+import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 import { FlowDispatchTarget } from "./dispatch-invocation.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff.js";
 

@@ -2,7 +2,7 @@ import { StepResult } from "../engine/step-result.js";
 import { SpecWorkerStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
 import { settleSpecStepResult, StepErrorDecision, StepRoute } from "../definition.js";
 import { StepPersistenceFailure, recoverStepSettlementReceipt } from "../lib/definition-lifecycle-failure.js";
-import { CurrentFlowStateConflictError } from "../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../lib/current-flow-state-conflict-error.js";
 import {
   SpecReviewSettlementApplication,
   SpecWorkerCompletionFacts,

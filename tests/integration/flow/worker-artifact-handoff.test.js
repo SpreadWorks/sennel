@@ -32,6 +32,7 @@ import {
   FlowArtifactAttemptRecord,
 } from "../../../src/lib/flow-artifact-contract.js";
 import RunDispatchCommand, * as runDispatchModule from "../../../src/flow/lib/run-dispatch.js";
+import { draftWorkerStepRegistration } from "../../../src/flow/engine/composition/draft.js";
 import {
   FlowDispatchInvocation,
   FlowDispatchSession,
@@ -114,9 +115,9 @@ import {
   ApprovalTaskAdmission,
   CanonicalFlowArtifactBaseline,
   CanonicalWorkerSpecPublication,
-  CurrentFlowStateConflictError,
   CurrentFlowSpecRecord,
 } from "../../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 import { CanonicalSpecApproval } from "../../../src/flow/lib/canonical-spec-approval.js";
 import { applySpecRepairOperations } from "../../../src/flow/lib/spec-repair-operations.js";
 import {
@@ -3624,7 +3625,7 @@ describe("worker artifact handoff", () => {
         .runDraftWorkerStep(
           value.ctx,
           request,
-          { Connector: DraftEntryConnector, StepClass: DraftStep },
+          draftWorkerStepRegistration(request.stepId),
           preparation,
         );
 

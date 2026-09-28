@@ -5,15 +5,24 @@ process invocation. `tests/support/` contains fixture builders, stubs and
 assertion support; it contains no runner policy.
 
 Every `*.test.js` belongs to exactly one directory suite: `unit`,
-`integration`, `e2e`, `acceptance`, or `agent`. Preset-local acceptance tests
+`integration`, `e2e`, `acceptance`, `structure`, or `agent`. Preset-local acceptance tests
 live at `src/presets/<preset>/tests/acceptance/*.acceptance.test.js`.
+
+The `structure` suite checks source architecture contracts such as placement,
+dependencies, and public boundaries. Keep each phase-specific scope limited to
+its entrypoint and production registration selection; share the inspection and
+rule implementation. Trace indirect dependencies, and treat an unparseable
+target or reverse-reference index as an incomplete check that fails. Do not hide
+valid violations with per-file exclusions, violation baselines, or skips.
 
 Unit tests do not spawn child processes, initialise Git repositories, or run
 Flow scenarios. Integration tests own cross-module, filesystem, Git and Flow
 fixtures. E2E tests are a small set of public CLI entrypoint scenarios.
 Acceptance tests are deterministic and use stubs. Tests which execute an AI
 provider or agent CLI live only in `tests/agent/` and are excluded from `npm
-test`.
+test`; they run through `npm run test:agent` or `npm run test:all`. The
+deterministic structure suite runs in `npm test` and `npm run test:all`, and can
+be selected with `npm run test:structure`.
 
 Fixtures are immutable seeds. Each test creates a unique temporary work root,
 sets only test-local environment, and removes it in teardown. Never write to

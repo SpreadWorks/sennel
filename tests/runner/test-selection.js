@@ -1,4 +1,5 @@
 import { join, relative, resolve, sep } from "node:path";
+import { TEST_SUITE_NAMES } from "./suite-definitions.js";
 
 const SUITE_FLAGS = new Set(["--preset", "--scope", "--agent", "--all"]);
 const VALUE_FLAGS = new Set(["--preset", "--scope", "--file", "--pattern", "--jobs"]);
@@ -57,7 +58,7 @@ export class TestSelection {
 
     const preset = values.get("--preset") || null;
     const scope = values.get("--scope") || null;
-    if (scope && !["unit", "integration", "e2e", "acceptance", "agent"].includes(scope)) throw new Error("--scope must name a test suite");
+    if (scope && !TEST_SUITE_NAMES.includes(scope)) throw new Error("--scope must name a test suite");
     const jobs = values.has("--jobs") ? Number(values.get("--jobs")) : null;
     if (jobs !== null && (!Number.isInteger(jobs) || ![1, 2].includes(jobs))) throw new Error("--jobs must be 1 or 2");
 
@@ -135,7 +136,7 @@ export function validateResolvedFiles(files, { maxDepth = 32, maxFiles = 10000, 
 }
 
 export function renderTestList(selection, groups, limits = {}) {
-  const categories = ["unit", "integration", "e2e", "acceptance", "agent"];
+  const categories = TEST_SUITE_NAMES;
   const suiteByCategory = new Map(groups.map((group) => [group.category, group.files]));
   const suites = categories.map((category) => {
     const files = validateResolvedFiles(suiteByCategory.get(category) || [], limits);

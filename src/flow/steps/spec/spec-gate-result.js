@@ -7,7 +7,7 @@ import {
 } from "../../engine/step-result.js";
 import { SPEC_GATE_MAXIMUM_CYCLE } from "../../definition.js";
 import { SpecGateProspectiveFacts, SpecGatePublicationIntent } from "../../lib/spec-gate-prospective.js";
-import { CurrentFlowStateConflictError } from "../../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../lib/current-flow-state-conflict-error.js";
 
 const RESULT_CLASSES = Object.freeze({
   spec: Object.freeze({

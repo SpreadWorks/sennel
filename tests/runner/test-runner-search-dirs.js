@@ -15,6 +15,7 @@
  */
 
 import { join } from "node:path";
+import { DEFAULT_TEST_SUITES } from "./suite-definitions.js";
 
 export function buildSearchDirs({ root, presetsSubdir = "tests/presets" }, opts = {}) {
   const {
@@ -30,10 +31,7 @@ export function buildSearchDirs({ root, presetsSubdir = "tests/presets" }, opts 
   if (agent) return [AGENT_DIR];
 
   const defaults = () => [
-    join(root, "tests", "unit"),
-    join(root, "tests", "integration"),
-    join(root, "tests", "e2e"),
-    join(root, "tests", "acceptance"),
+    ...DEFAULT_TEST_SUITES.map(({ directory }) => join(root, "tests", directory)),
     join(root, "src", "presets"),
   ];
 

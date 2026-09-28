@@ -43,7 +43,7 @@ import {
   projectGateTransitionDecision,
 } from "../../../src/flow/lib/gate-transition-application.js";
 import { TaskGateSettlementAdmission } from "../../../src/flow/lib/canonical-flow-manager-store.js";
-import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 
 const phases = ["draft", "spec", "task-spec", "task-impl", "integration"];
 

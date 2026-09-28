@@ -1,4 +1,5 @@
-import { CurrentAttemptIdentity, CurrentFlowStateConflictError } from "../lib/current-flow-state.js";
+import { CurrentAttemptIdentity } from "../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../lib/current-flow-state-conflict-error.js";
 
 export function canonicalStepState(flowManager, specId) {
   if (!flowManager || typeof flowManager.canonicalState !== "function") {

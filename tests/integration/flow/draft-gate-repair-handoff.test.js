@@ -1,6 +1,7 @@
 import { writeUncheckedWorkerSubmission } from "../../support/infrastructure/worker-artifact.js";
 import assert from "node:assert/strict";
-import { CurrentFlowStateConflictError, CurrentFlowStateInvariantError } from "../../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowStateInvariantError } from "../../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 import { DraftRepairCandidate } from "../../../src/flow/steps/draft/draft-repair-candidate.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -32,6 +33,7 @@ import { DraftGateRepairStep } from "../../../src/flow/steps/draft/draft-gate-re
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { DraftRepairConnector } from "../../../src/flow/engine/connectors/draft/draft-repair-connector.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import { draftWorkerStepRegistration } from "../../../src/flow/engine/composition/draft.js";
 import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
@@ -125,7 +127,7 @@ describe("dedicated draft Gate repair handoff", () => {
       const wrongResult = new DraftGateRepairCarryForwardResult();
       await assert.rejects(wrongResult.persist(service), CurrentFlowStateConflictError);
       assert.throws(() => coordinator.commitDraftWorker({
-        ctx, request, preparation: service.preparation, binding, stepResult: wrongResult,
+        ctx, request, preparation: preparation.adoptRepairCandidate(candidate), binding, stepResult: wrongResult,
         settlement: settleDraftStepResult(request.stepId, wrongResult),
       }), CurrentFlowStateConflictError);
       // The candidate's nested document is a real public boundary. Changing it
@@ -388,7 +390,7 @@ describe("dedicated draft Gate repair handoff", () => {
         .runDraftWorkerStep(
           value.scenario.ctx,
           request,
-          { Connector: DraftRepairConnector, StepClass: DraftGateRepairStep },
+          draftWorkerStepRegistration(request.stepId),
           preparation,
         );
 
@@ -423,7 +425,7 @@ describe("dedicated draft Gate repair handoff", () => {
         .runDraftWorkerStep(
           value.scenario.ctx,
           request,
-          { Connector: DraftRepairConnector, StepClass: DraftGateRepairStep },
+          draftWorkerStepRegistration(request.stepId),
           preparation,
         );
 

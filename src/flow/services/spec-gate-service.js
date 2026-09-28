@@ -4,7 +4,7 @@ import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
 import { SpecGatePublicationIntent, SpecGatePublicationVersion } from "../lib/spec-gate-prospective.js";
 import { readProspectiveSpecGateFacts, SpecGateAdmissionRefusal } from "../lib/gate-transition-facts.js";
 import { SpecGateIssuePublication } from "../lib/gate-issue-publication.js";
-import { CurrentFlowStateConflictError } from "../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../lib/current-flow-state-conflict-error.js";
 import { SpecGateResultSelection } from "../steps/spec/spec-gate-result.js";
 
 /** Owns evaluation evidence and the canonical Spec Gate settlement boundary. */

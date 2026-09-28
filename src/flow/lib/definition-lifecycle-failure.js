@@ -11,9 +11,9 @@
 
 import {
   CurrentAttemptIdentity,
-  CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
 } from "./current-flow-state.js";
+import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 import { DefinitionFailureOwnership } from "./definition-failure-ownership.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskStepIdentity } from "./task-step-identity.js";

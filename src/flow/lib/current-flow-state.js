@@ -12,6 +12,7 @@ import { DraftWorkerRejection, DraftWorkerCorrectionBudget } from "./draft-worke
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { DraftGateRepairSelection } from "../steps/draft/draft-gate-repair-selection.js";
 import {
@@ -1032,14 +1033,6 @@ export class CurrentFlowStateInvariantError extends Error {
     super(message);
     this.name = "CurrentFlowStateInvariantError";
     this.code = "CURRENT_FLOW_STATE_INVARIANT_INVALID";
-  }
-}
-
-export class CurrentFlowStateConflictError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "CurrentFlowStateConflictError";
-    this.code = "CURRENT_FLOW_STATE_CONFLICT";
   }
 }
 

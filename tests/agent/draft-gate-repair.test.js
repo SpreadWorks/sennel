@@ -11,6 +11,7 @@ import { ProviderRegistry } from "../../src/lib/provider.js";
 import { findStepById } from "../../src/flow/lib/step-tree.js";
 import RunClaimNextActionCommand from "../../src/flow/lib/run-claim-next-action.js";
 import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
+import { draftWorkerStepRegistration } from "../../src/flow/engine/composition/draft.js";
 import RunGateCommand from "../../src/flow/lib/run-gate.js";
 import { FLOW_COMMANDS } from "../../src/flow/registry.js";
 import { DraftRepairConnector } from "../../src/flow/engine/connectors/draft/draft-repair-connector.js";
@@ -132,7 +133,7 @@ it("real agent completes a synthetic bounded draft Gate repair through canonical
       .runDraftWorkerStep(
         scenario.ctx,
         request,
-        { Connector: DraftRepairConnector, StepClass: DraftGateRepairStep },
+        draftWorkerStepRegistration(request.stepId),
         preparation,
       );
     assert.equal(reconciled.completed, true, JSON.stringify(reconciled));

@@ -7,9 +7,10 @@ import { it } from "node:test";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
 import { DraftRepairCandidate } from "../../../src/flow/steps/draft/draft-repair-candidate.js";
 import { DraftQuestionsRepairUnchangedResult } from "../../../src/flow/engine/step-result.js";
-import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import { draftWorkerStepRegistration } from "../../../src/flow/engine/composition/draft.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
@@ -76,7 +77,7 @@ async function worker(ctx, coordinator, StepClass, Connector, payload, refusedRe
     assert.deepEqual(restart.activityLedger(ctx.specId), before.activities);
   }
   return new RunDispatchCommand({ handoffCoordinator: coordinator })
-    .runDraftWorkerStep(ctx, request, { Connector, StepClass }, preparation);
+    .runDraftWorkerStep(ctx, request, draftWorkerStepRegistration(stepId), preparation);
 }
 
 for (const phase of ["questions", "coverage"]) {

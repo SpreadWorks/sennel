@@ -4,7 +4,8 @@ import fs from "node:fs";
 import { describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { CanonicalFlowArtifactBaseline, CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state.js";
+import { CanonicalFlowArtifactBaseline } from "../../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
 import { SpecGateRepairService } from "../../../src/flow/services/spec-gate-repair-service.js";
 import { SpecGateRepairStep } from "../../../src/flow/steps/spec/spec-gate-repair.js";

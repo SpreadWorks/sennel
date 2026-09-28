@@ -10,7 +10,8 @@ import {
   SourceWorkerHandoffIdentity,
   sourceHandoffCanonicalGeneration,
 } from "./worker-artifact-handoff.js";
-import { CurrentAttemptIdentity, CurrentFlowStateConflictError, CurrentFlowStateInvariantError } from "./current-flow-state.js";
+import { CurrentAttemptIdentity, CurrentFlowStateInvariantError } from "./current-flow-state.js";
+import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 
 const CHECKPOINT_KEY = "source.handoff.checkpoint";
 const EVENT_KEY = "source.handoff.event";

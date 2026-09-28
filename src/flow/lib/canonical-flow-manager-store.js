@@ -132,7 +132,6 @@ import {
   CurrentFlowNonBlockingPolicy,
   CurrentFlowContext,
   CurrentFlowState,
-  CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
   CurrentFlowTransitionSnapshot,
   assertDraftSettlementReceiptTransition,
@@ -140,6 +139,7 @@ import {
   FlowActivity,
   TaskNode,
 } from "./current-flow-state.js";
+import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 import { CanonicalFlowRuntime } from "./canonical-flow-runtime.js";
 import {
   attachedCanonicalCommandResultArtifact,

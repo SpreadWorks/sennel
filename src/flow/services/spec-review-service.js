@@ -20,12 +20,12 @@ import { StepAdmissionRefusal } from "../lib/step-admission-refusal.js";
 import { ReviewService } from "./review-service.js";
 import { ReviewWorkUnitManifest } from "../lib/review-work-unit.js";
 import {
-  CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
   ActivityReviewPublication,
   NodeResult,
   assertDraftSettlementReceiptTransition,
 } from "../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../lib/current-flow-state-conflict-error.js";
 
 export class SpecReviewExecutionAdmission {
   constructor({ request, recoveredClaim }) {

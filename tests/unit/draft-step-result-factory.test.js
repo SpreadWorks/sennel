@@ -14,6 +14,7 @@ import { draftQuestionsRepairResult } from "../../src/flow/steps/draft/draft-rep
 import { draftCoverageRepairResult } from "../../src/flow/steps/draft/draft-repair-result.js";
 import { draftGateRepairResult } from "../../src/flow/steps/draft/draft-repair-result.js";
 import { PlanGateRepairObservation, PlanGateRepairRecord } from "../../src/flow/lib/plan-gate-repair.js";
+import { DraftGateRepairBinding } from "../../src/flow/lib/draft-gate-repair-binding.js";
 import {
   ArtifactGateRepairLineage,
   ArtifactGateRepairObservationResult,
@@ -60,8 +61,8 @@ function planGateRepairFacts(disposition = null, { phase = "draft" } = {}) {
     : {
       resultLogicalKey: "spec.gate",
       sourceGateStepId: "spec-gate",
-      targetStepId: "spec",
-      resetStepIds: ["spec", "spec-review", "spec-triage", "spec-repair", "spec-gate"],
+      targetStepId: "spec-gate-repair",
+      resetStepIds: ["spec-gate-repair", "spec-gate"],
     };
   const sourceAttempt = { id: "gate-attempt", sequence: 1 };
   const evidenceIdentity = new GateEvidenceIdentity({
@@ -116,7 +117,7 @@ function planGateRepairFacts(disposition = null, { phase = "draft" } = {}) {
     observationRequests: [request],
     requestedAt: "2026-09-20T00:00:00.000Z",
   });
-  if (disposition === null) return record;
+  if (disposition === null) return new DraftGateRepairBinding(record);
   const repair = new GateObservationRepair({
     repairId: record.idempotencyKey,
     sourceEvidence: evidenceIdentity,

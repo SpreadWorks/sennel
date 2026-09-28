@@ -5,7 +5,7 @@ import {
   DraftGateRepairWorkerRequiredResult, StepErrorResult,
 } from "../../engine/step-result.js";
 import { PlanGateRepairOutcomeDraft } from "../../lib/gate-observation-convergence.js";
-import { PlanGateRepairRecord } from "../../lib/plan-gate-repair.js";
+import { DraftGateRepairBinding } from "../../lib/draft-gate-repair-binding.js";
 
 export class DraftRepairResultFacts {
   constructor({ stepId, draftChanged }) {
@@ -46,10 +46,7 @@ export function draftCoverageRepairResult(facts) {
 /** Pure mapping from a canonical repair binding or sealed outcome to this Step's Result. */
 export function draftGateRepairResult(facts) {
   if (facts instanceof Error) return new StepErrorResult("draft-gate-repair", facts);
-  if (facts instanceof PlanGateRepairRecord) {
-    if (facts.phase !== "draft" || facts.targetStepId !== "draft-gate-repair") {
-      throw new TypeError("draft Gate Repair binding does not target its Step");
-    }
+  if (facts instanceof DraftGateRepairBinding) {
     return new DraftGateRepairWorkerRequiredResult();
   }
   if (!(facts instanceof PlanGateRepairOutcomeDraft)) {

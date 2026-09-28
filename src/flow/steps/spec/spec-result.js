@@ -4,7 +4,7 @@ import {
   stepResultDigest,
 } from "../../engine/step-result.js";
 import { SpecWorkerCompletionFacts } from "../../lib/spec-step-connection.js";
-import { CurrentFlowStateConflictError } from "../../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../lib/current-flow-state-conflict-error.js";
 
 /** Select the meaning of one validated Spec worker candidate. */
 export function specResult(facts) {

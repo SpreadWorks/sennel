@@ -16,7 +16,7 @@ import {
   recoverStepSettlementReceipt,
 } from "../lib/definition-lifecycle-failure.js";
 import { StepAdmissionRefusal } from "../lib/step-admission-refusal.js";
-import { CurrentFlowStateConflictError } from "../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../lib/current-flow-state-conflict-error.js";
 import {
   DraftGateIssuePublication,
   DraftGatePublicationIntent,
@@ -27,7 +27,15 @@ import {
 
 /** Validate a Draft Review observation and settle it in one canonical transaction. */
 export class ReviewService {
+  #flowManager;
+  #binding;
+  #route;
+  #commandResult;
+  #executionBinding;
+  #publicationResult;
   #reviewDocument = null;
+
+  stepBinding() { return this.#binding; }
 
   #rethrowAdmissionRead(error) {
     if (error instanceof CurrentFlowStateConflictError) {
@@ -54,7 +62,7 @@ export class ReviewService {
 
   #assertCurrent() {
     try {
-      return this.binding.assertCurrent();
+      return this.#binding.assertCurrent();
     } catch (error) {
       this.#rethrowAdmissionRead(error);
     }
@@ -87,25 +95,25 @@ export class ReviewService {
       && attachedCanonicalCommandResultArtifact(publicationResult)?.logicalKey !== route.reviewLogicalKey) {
       throw new TypeError("ReviewService publication requires its canonical review result");
     }
-    this.flowManager = flowManager;
-    this.binding = binding;
-    this.route = route;
-    this.commandResult = commandResult;
-    this.executionBinding = executionBinding;
-    this.publicationResult = publicationResult;
+    this.#flowManager = flowManager;
+    this.#binding = binding;
+    this.#route = route;
+    this.#commandResult = commandResult;
+    this.#executionBinding = executionBinding;
+    this.#publicationResult = publicationResult;
     Object.freeze(this);
   }
 
   requiresReviewExecution() {
     this.#assertCurrent();
-    return this.executionBinding !== null || this.publicationResult !== null;
+    return this.#executionBinding !== null || this.#publicationResult !== null;
   }
 
-  inspectReviewResult(result = this.commandResult) {
-    if (result === this.commandResult && this.#reviewDocument !== null) return this.#reviewDocument;
+  inspectReviewResult(result = this.#commandResult) {
+    if (result === this.#commandResult && this.#reviewDocument !== null) return this.#reviewDocument;
     const state = this.#assertCurrent();
     const artifact = attachedCanonicalCommandResultArtifact(result);
-    if (artifact?.logicalKey !== this.route.reviewLogicalKey) {
+    if (artifact?.logicalKey !== this.#route.reviewLogicalKey) {
       throw new StepAdmissionRefusal("draft review command result does not match the bound review route");
     }
     let document;
@@ -114,82 +122,86 @@ export class ReviewService {
     } catch (error) {
       throw new StepAdmissionRefusal(error.message || String(error), error);
     }
-    if (JSON.stringify(document.sourceDraftRevision) !== JSON.stringify(this.binding.revision)) {
+    if (JSON.stringify(document.sourceDraftRevision) !== JSON.stringify(this.#binding.revision)) {
       throw new StepAdmissionRefusal("draft review command result does not match the bound canonical Draft revision");
     }
     const issues = new DraftReviewEvidenceSet({
-      route: this.route,
+      route: this.#route,
       state,
       reviewFile: { document: document.toJSON() },
     }).validateReview({ validateBinding: false });
     if (issues.length > 0) throw new StepAdmissionRefusal(issues.join("; "));
-    if (result === this.commandResult) this.#reviewDocument = document;
+    if (result === this.#commandResult) this.#reviewDocument = document;
     return document;
   }
 
   async persistStepResult(stepResult) {
-    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
+    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.#binding.stepId) {
       throw new TypeError("ReviewService requires its bound Step's concrete Result");
     }
-    const settlement = settleDraftStepResult(this.binding.stepId, stepResult);
+    const settlement = settleDraftStepResult(this.#binding.stepId, stepResult);
     let draftCompletionApplication = null;
     if (settlement.connector === DraftCompletionConnector) {
       let facts;
       try {
-        facts = this.flowManager.readProspectiveDraftCoveragePassFacts({
-          binding: this.binding,
-          commandResult: this.commandResult,
+        facts = this.#flowManager.readProspectiveDraftCoveragePassFacts({
+          binding: this.#binding,
+          commandResult: this.#commandResult,
         });
       } catch (error) {
         this.#rethrowAdmissionRead(error);
       }
       draftCompletionApplication = createDraftCompletionSettlementApplication(facts);
     }
-    if (this.executionBinding !== null || this.publicationResult !== null) {
+    if (this.#executionBinding !== null || this.#publicationResult !== null) {
       if (!(settlement instanceof DraftExecutionSettlement)) {
         throw new StepPersistenceFailure(new Error("Draft review pre-execution Step must select an Execution settlement"));
       }
       const input = {
-        binding: this.binding,
+        binding: this.#binding,
         stepResult,
         settlement,
-        commandResult: this.publicationResult ?? undefined,
-        ...(this.executionBinding === null ? {} : {
-          executionLifecycle: DraftStepExecutionLifecycle.checkpoint(this.executionBinding),
+        commandResult: this.#publicationResult ?? undefined,
+        ...(this.#executionBinding === null ? {} : {
+          executionLifecycle: DraftStepExecutionLifecycle.checkpoint(this.#executionBinding),
         }),
       };
       try {
-        const committed = this.executionBinding === null
-          ? this.flowManager.settleDraftStepResult(input)
-          : this.flowManager.checkpointDraftStepExecution({
-              binding: this.binding, stepResult, settlement, executionBinding: this.executionBinding,
+        const committed = this.#executionBinding === null
+          ? this.#flowManager.settleDraftStepResult(input)
+          : this.#flowManager.checkpointDraftStepExecution({
+              binding: this.#binding, stepResult, settlement, executionBinding: this.#executionBinding,
             });
         return committed.receipt;
       } catch (error) {
-        return recoverStepSettlementReceipt(this.flowManager, input, error);
+        return recoverStepSettlementReceipt(this.#flowManager, input, error);
       }
     }
     if (stepResult.error === null && this.#reviewDocument === null) this.inspectReviewResult();
     const input = {
-      binding: this.binding,
+      binding: this.#binding,
       stepResult,
       settlement,
       draftCompletionApplication,
       // Terminal routing still supplies the exact already-published bytes so
       // producer-readiness can bind the downstream confirmation to them.
-      commandResult: stepResult.error === null ? this.commandResult : undefined,
+      commandResult: stepResult.error === null ? this.#commandResult : undefined,
     };
     try {
-      const committed = await this.flowManager.settleDraftStepResult(input);
+      const committed = await this.#flowManager.settleDraftStepResult(input);
       return committed.receipt;
     } catch (error) {
-      return recoverStepSettlementReceipt(this.flowManager, input, error);
+      return recoverStepSettlementReceipt(this.#flowManager, input, error);
     }
   }
 }
 
 /** Validate a prospective Draft Gate observation without publishing it. */
 export class GateService {
+  #flowManager;
+  #binding;
+  #commandResult;
+  #issuePublication;
   #facts = null;
 
   constructor({ flowManager, binding, commandResult, issuePublication = null }) {
@@ -209,19 +221,19 @@ export class GateService {
     )) {
       throw new Error("GateService received an invalid Draft Gate issue publication");
     }
-    this.flowManager = flowManager;
-    this.binding = binding;
-    this.commandResult = commandResult;
-    this.issuePublication = issuePublication;
+    this.#flowManager = flowManager;
+    this.#binding = binding;
+    this.#commandResult = commandResult;
+    this.#issuePublication = issuePublication;
     Object.freeze(this);
   }
 
   #readGateFacts() {
     if (this.#facts !== null) return this.#facts;
     this.#facts = readProspectiveDraftGateFacts({
-      flowManager: this.flowManager,
-      binding: this.binding,
-      commandResult: this.commandResult,
+      flowManager: this.#flowManager,
+      binding: this.#binding,
+      commandResult: this.#commandResult,
     });
     return this.#facts;
   }
@@ -236,28 +248,28 @@ export class GateService {
   }
 
   async persistStepResult(stepResult) {
-    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
+    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.#binding.stepId) {
       throw new TypeError("GateService requires its bound Step's concrete Result");
     }
-    const settlement = settleDraftStepResult(this.binding.stepId, stepResult);
+    const settlement = settleDraftStepResult(this.#binding.stepId, stepResult);
     if (stepResult.error === null && this.#facts === null) {
       throw new Error("Draft Gate Result requires the facts observed by its Step");
     }
     const gatePublication = stepResult.error === null
-      ? new DraftGatePublicationIntent({ facts: this.#facts, issue: this.issuePublication })
+      ? new DraftGatePublicationIntent({ facts: this.#facts, issue: this.#issuePublication })
       : null;
     const input = {
-      binding: this.binding,
+      binding: this.#binding,
       stepResult,
       settlement,
-      commandResult: this.commandResult,
+      commandResult: this.#commandResult,
       gatePublication,
     };
     try {
-      const committed = await this.flowManager.settleDraftStepResult(input);
+      const committed = await this.#flowManager.settleDraftStepResult(input);
       return committed.receipt;
     } catch (error) {
-      const replay = findCommittedStepSettlementReceipt(this.flowManager, input);
+      const replay = findCommittedStepSettlementReceipt(this.#flowManager, input);
       if (replay !== null) return replay;
       throw new StepPersistenceFailure(error);
     }

@@ -1,5 +1,6 @@
 import { CanonicalDraftReviewSource } from "../../../lib/canonical-review-artifacts.js";
-import { CurrentAttemptIdentity, CurrentFlowStateConflictError } from "../../../lib/current-flow-state.js";
+import { CurrentAttemptIdentity } from "../../../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../../lib/current-flow-state-conflict-error.js";
 import { StepBinding, canonicalStepState } from "../../step-binding.js";
 import { GateTransitionFacts } from "../../../lib/gate-transition.js";
 import { readCurrentGateTransitionFacts } from "../../../lib/gate-transition-facts.js";

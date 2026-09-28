@@ -65,9 +65,9 @@ import {
   CurrentFlowSpecRecord,
   CurrentFlowState,
   CurrentFlowStateStore,
-  CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
 } from "../../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunFilterTaskReviewCommand from "../../../src/flow/lib/run-filter-task-review.js";
 import RunClaimNextActionCommand from "../../../src/flow/lib/run-claim-next-action.js";

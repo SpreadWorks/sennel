@@ -5,6 +5,7 @@ import { afterEach, describe, it } from "node:test";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { DraftWorkerExecutionStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { assertServiceBoundary } from "../../support/structure/service-boundary.js";
 import { createDraftRefineResult, DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
 import {
   DraftQuestionsReviewExecutionRequiredResult,
@@ -22,7 +23,7 @@ import {
 } from "../../../src/flow/definition.js";
 import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
 import { AwaitingUserAnswer, CandidateQuestion } from "../../../src/flow/lib/draft-question-ledger.js";
-import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 import { CanonicalFlowFixture, canonicalDraftDocument, FlowAtStepFixture } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
@@ -68,6 +69,7 @@ describe("Draft Step Result settlement", () => {
     }).create();
     const binding = new DraftWorkerExecutionStepBinding({ flowManager: manager, specId, stepId: "draft-refine" });
     const service = new DraftService({ flowManager: manager, binding });
+    assertServiceBoundary(service);
     manager.confirmCurrentAttempt({ specId });
     manager.rewindTo("draft-refine", { specId });
     const before = {

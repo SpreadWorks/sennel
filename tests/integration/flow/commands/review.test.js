@@ -42,6 +42,7 @@ import {
 } from "../../../../src/lib/prompt-batching.js";
 import { FLOW_COMMANDS } from "../../../../src/flow/registry.js";
 import { ReviewService } from "../../../../src/flow/services/review-service.js";
+import { assertServiceBoundary } from "../../../support/structure/service-boundary.js";
 import { CanonicalDraftReviewSource } from "../../../../src/flow/lib/canonical-review-artifacts.js";
 import { DraftReviewConnector } from "../../../../src/flow/engine/connectors/draft/draft-review-connector.js";
 import {
@@ -1073,9 +1074,11 @@ it("recovers a committed Draft review checkpoint after a lost response, then cla
       checkpoint(input);
       throw new Error("checkpoint response was lost after durable write");
     };
-    const receipt = await new ReviewService({
+    const service = new ReviewService({
       flowManager: value.manager, binding: stepBinding, executionBinding,
-    }).persistStepResult(executionResult);
+    });
+    assertServiceBoundary(service);
+    const receipt = await service.persistStepResult(executionResult);
     assert.equal(receipt.executionLifecycle.phase, "checkpoint");
     assert.equal(value.manager.activityLedger(specId).filter((entry) => (
       entry.nodeId === "draft-questions-review"

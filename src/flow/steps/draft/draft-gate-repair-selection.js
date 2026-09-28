@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { CurrentFlowStateConflictError } from "../../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../lib/current-flow-state-conflict-error.js";
 import { StepResult, DraftGateRepairAppliedResult, DraftGateRepairCarryForwardResult, stepResultDigest } from "../../engine/step-result.js";
 import { GateObservationRepair, PlanGateRepairOutcomeDraft } from "../../lib/gate-observation-convergence.js";
 

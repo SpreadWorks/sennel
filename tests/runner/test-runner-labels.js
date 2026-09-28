@@ -1,3 +1,5 @@
+import { TEST_SUITES, TEST_SUITE_NAMES } from "./suite-definitions.js";
+
 /**
  * tests/runner/test-runner-labels.js
  *
@@ -11,14 +13,10 @@
  *   .../tests/acceptance/...  → acceptance
  */
 
-const CATEGORY_PATTERNS = [
-  { re: /\/tests\/unit\//, type: "unit" },
-  { re: /\/tests\/integration\//, type: "integration" },
-  { re: /\/tests\/e2e\//, type: "e2e" },
-  { re: /\/tests\/acceptance\//, type: "acceptance" },
-  { re: /\/tests\/agent\//, type: "agent" },
-  { re: /\/src\/presets\/[^/]+\/tests\/acceptance\//, type: "acceptance" },
-];
+const CATEGORY_PATTERNS = TEST_SUITES.map(({ name, directory }) => ({
+  re: new RegExp(`/tests/${directory}/`),
+  type: name,
+}));
 
 export function categorizeTestFile(filePath) {
   const normalized = filePath.replace(/\\/g, "/");
@@ -29,12 +27,7 @@ export function categorizeTestFile(filePath) {
 }
 
 export function formatLabelSummary(counts) {
-  const u = Number(counts?.unit ?? 0);
-  const i = Number(counts?.integration ?? 0);
-  const e = Number(counts?.e2e ?? 0);
-  const a = Number(counts?.acceptance ?? 0);
-  const agent = Number(counts?.agent ?? 0);
-  return `unit: ${u}\nintegration: ${i}\ne2e: ${e}\nacceptance: ${a}\nagent: ${agent}`;
+  return [...TEST_SUITE_NAMES].map((name) => `${name}: ${Number(counts?.[name] ?? 0)}`).join("\n");
 }
 
 export function parsePassCount(output) {
@@ -43,7 +36,7 @@ export function parsePassCount(output) {
 }
 
 export function groupTestFilesByCategory(files) {
-  const groups = { unit: [], integration: [], e2e: [], acceptance: [], agent: [], other: [] };
+  const groups = Object.fromEntries([...TEST_SUITE_NAMES, "other"].map((name) => [name, []]));
   for (const f of files) {
     const t = categorizeTestFile(f) || "other";
     groups[t].push(f);

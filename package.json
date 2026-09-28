@@ -42,6 +42,7 @@
     "test:integration": "node tests/run.js --scope integration",
     "test:e2e": "node tests/run.js --scope e2e",
     "test:acceptance": "node tests/run.js --scope acceptance",
+    "test:structure": "node tests/run.js --scope structure",
     "test:agent": "node tests/run.js --scope agent",
     "test:all": "node tests/run.js --all"
   },

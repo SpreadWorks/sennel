@@ -14,6 +14,7 @@ import { resolveTestFiles } from "./runner/test-selection.js";
 import { TestRunner } from "./runner/test-runner.js";
 import { TestSuiteManifest } from "./runner/manifest.js";
 import { TestSuiteExecutionPolicy } from "./runner/suite-execution-policy.js";
+import { TEST_SUITE_NAMES } from "./runner/suite-definitions.js";
 import {
   MINIMUM_TEST_TMPFS_BYTES,
   TestTemporaryRoot,
@@ -69,7 +70,7 @@ function resolveFiles(selection) {
 
 function formatExecutionSummary(counts, incompleteCategories) {
   if (incompleteCategories.size === 0) return formatLabelSummary(counts);
-  return ["unit", "integration", "e2e", "acceptance", "agent"]
+  return TEST_SUITE_NAMES
     .map((category) => incompleteCategories.has(category) ? `${category}: not completed` : `${category}: ${counts[category]}`)
     .join("\n");
 }
@@ -81,12 +82,12 @@ export async function executeFiles(files, {
   jobs = null,
 } = {}) {
   const groups = groupTestFilesByCategory(files.map((file) => resolve(root, file)));
-  const counts = { unit: 0, integration: 0, e2e: 0, acceptance: 0, agent: 0 };
+  const counts = Object.fromEntries(TEST_SUITE_NAMES.map((name) => [name, 0]));
   const incompleteCategories = new Set();
   let sawFailure = false;
   let firstNumericFailure = null;
   const policy = new TestSuiteExecutionPolicy({ jobs });
-  const suites = ["unit", "integration", "e2e", "acceptance", "agent", "other"].filter((category) => groups[category].length > 0);
+  const suites = [...TEST_SUITE_NAMES, "other"].filter((category) => groups[category].length > 0);
   const runSuite = async (category) => {
     const concurrency = category === "other" ? (jobs ?? 1) : policy.concurrencyFor(category);
     const command = ["node", "--test", "--test-concurrency", String(concurrency), ...groups[category]];

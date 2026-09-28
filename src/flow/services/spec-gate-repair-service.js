@@ -1,4 +1,5 @@
-import { CanonicalFlowArtifactBaseline, CurrentFlowStateConflictError } from "../lib/current-flow-state.js";
+import { CanonicalFlowArtifactBaseline } from "../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../lib/current-flow-state-conflict-error.js";
 import { StepResult, StepErrorResult, SpecGateRepairNoProgressResult } from "../engine/step-result.js";
 import { SpecWorkerStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
 import { settleSpecStepResult, StepErrorDecision, StepRoute } from "../definition.js";

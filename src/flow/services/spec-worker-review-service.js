@@ -3,7 +3,7 @@ import { CanonicalSpecReview, SpecReviewDelta } from "../lib/spec-review-artifac
 import { SpecWorkerStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
 import { StepResult, StepErrorResult, SpecTriageCompletedResult, SpecRepairChangedResult, SpecRepairUnchangedResult } from "../engine/step-result.js";
 import { settleSpecStepResult, StepRoute, StepErrorDecision } from "../definition.js";
-import { CurrentFlowStateConflictError } from "../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../lib/current-flow-state-conflict-error.js";
 import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
 
 /** Immutable, validated inputs captured from one sealed Review worker handoff. */

@@ -4,6 +4,7 @@ import { DraftAwaitQuestionIdentity, DraftAwaitUserDecision, DraftCompletionConn
 import { StepPersistenceFailure, recoverStepSettlementReceipt, rethrowStepSettlementFailure } from "../lib/definition-lifecycle-failure.js";
 import { DraftTransitionFacts, readDraftTransitionFacts } from "../lib/draft-transition-facts.js";
 import { canonicalPlanGateRepairForTarget, PlanGateRepairRecord } from "../lib/plan-gate-repair.js";
+import { DraftGateRepairBinding } from "../lib/draft-gate-repair-binding.js";
 import {
   createDraftCompletionSettlementApplication,
 } from "../lib/draft-completion-connector.js";
@@ -30,6 +31,13 @@ export class DraftWorkerCompletionFacts {
 
 /** Access the sealed worker request for one Connector-bound Draft Step. */
 export class DraftService {
+  #binding;
+  #ctx;
+  #request;
+  #preparation;
+  #handoffCoordinator;
+  #workerFacts;
+  #executionBinding;
   #workerOutcome = null;
   #draftTransition = null;
   #repairCandidate = null;
@@ -62,7 +70,7 @@ export class DraftService {
       || typeof flowManager.findDraftAwaitSettlementReceipt !== "function") {
       throw new TypeError("DraftService requires canonical Result settlement and receipt readers");
     }
-    this.binding = binding;
+    this.#binding = binding;
     const workerFacts = preparation?.facts ?? null;
     if (executionBinding !== null && !(executionBinding instanceof DraftWorkerExecutionBinding)) {
       throw new TypeError("DraftService requires a typed worker execution binding");
@@ -82,30 +90,30 @@ export class DraftService {
     if (executionBinding !== null && preparation !== null) {
       throw new TypeError("DraftService execution checkpoint cannot carry post-worker state");
     }
-    this.ctx = ctx;
-    this.request = request;
-    this.preparation = preparation;
-    this.handoffCoordinator = handoffCoordinator;
-    this.workerFacts = workerFacts;
-    this.executionBinding = executionBinding;
+    this.#ctx = ctx;
+    this.#request = request;
+    this.#preparation = preparation;
+    this.#handoffCoordinator = handoffCoordinator;
+    this.#workerFacts = workerFacts;
+    this.#executionBinding = executionBinding;
   }
 
   /** Whether this bound Step must be admitted before its worker request is materialized. */
   requiresWorkerExecution() {
-    this.binding.assertCurrent();
-    return this.executionBinding !== null;
+    this.#binding.assertCurrent();
+    return this.#executionBinding !== null;
   }
 
   /** Read the immutable facts sealed for this worker handoff. */
   inspectWorkerFacts() {
-    if (this.workerFacts === null) throw new Error("Draft worker has no prepared facts");
-    this.binding.assertCurrent();
-    return this.workerFacts;
+    if (this.#workerFacts === null) throw new Error("Draft worker has no prepared facts");
+    this.#binding.assertCurrent();
+    return this.#workerFacts;
   }
 
   adoptRepairCandidate(candidate) {
-    this.binding.assertCurrent();
-    this.preparation = this.preparation.adoptRepairCandidate(candidate);
+    this.#binding.assertCurrent();
+    this.#preparation = this.#preparation.adoptRepairCandidate(candidate);
     this.#repairCandidate = candidate;
   }
 
@@ -113,76 +121,76 @@ export class DraftService {
   rejectInvalidRepair(error) {
     if (!(error instanceof DraftRepairOperationsError)) return;
     throw new WorkerArtifactHandoffError("invalid", error.code,
-      `worker artifact payload failed ${this.binding.stepId} validation: ${error.message}`, {
+      `worker artifact payload failed ${this.#binding.stepId} validation: ${error.message}`, {
         cause: error, retryable: false,
-        data: { stepId: this.binding.stepId, draftRepairAudit: error.audit },
+        data: { stepId: this.#binding.stepId, draftRepairAudit: error.audit },
       });
   }
 
   /** Read the typed completion fact created only after worker payload validation. */
   inspectWorkerCompletion() {
     const facts = this.inspectWorkerFacts();
-    if (!COMPLETED_WORKER_STEP_IDS.includes(this.binding.stepId)
-      || facts.stepId !== this.binding.stepId) {
+    if (!COMPLETED_WORKER_STEP_IDS.includes(this.#binding.stepId)
+      || facts.stepId !== this.#binding.stepId) {
       throw new Error("Draft worker completion does not match the bound Step");
     }
-    return new DraftWorkerCompletionFacts(this.binding.stepId);
+    return new DraftWorkerCompletionFacts(this.#binding.stepId);
   }
 
   /** Read the canonical repair binding selected for the active pre-worker Step. */
   inspectPlanGateRepair() {
-    const state = this.binding.assertCurrent();
-    if (this.binding.stepId !== "draft-gate-repair") {
+    const state = this.#binding.assertCurrent();
+    if (this.#binding.stepId !== "draft-gate-repair") {
       throw new Error("Plan Gate repair facts belong only to draft-gate-repair");
     }
     const repair = canonicalPlanGateRepairForTarget({
-      flowManager: this.binding.flowManager,
+      flowManager: this.#binding.flowManager,
       state,
-      targetStepId: this.binding.stepId,
+      targetStepId: this.#binding.stepId,
     });
     if (!(repair instanceof PlanGateRepairRecord)) {
       throw new Error("draft-gate-repair has no canonical repair binding");
     }
-    return repair;
+    return new DraftGateRepairBinding(repair);
   }
 
   inspectDraftTransition() {
-    const state = this.binding.assertCurrent();
+    const state = this.#binding.assertCurrent();
     if (this.#draftTransition !== null) return this.#draftTransition;
-    const facts = this.workerFacts?.draftTransitionFacts
+    const facts = this.#workerFacts?.draftTransitionFacts
       ?? readDraftTransitionFacts({
-        flowManager: this.binding.flowManager,
-        flowState: this.binding.flowManager.loadReadOnly(this.binding.specId),
+        flowManager: this.#binding.flowManager,
+        flowState: this.#binding.flowManager.loadReadOnly(this.#binding.specId),
       });
     if (!(facts instanceof DraftTransitionFacts)) {
       throw new Error("Draft refine has no canonical transition facts");
     }
     this.#draftTransition = Object.freeze({
       facts,
-      autoApprove: this.workerFacts?.autoApprove ?? state.policy.autoApprove,
+      autoApprove: this.#workerFacts?.autoApprove ?? state.policy.autoApprove,
     });
     return this.#draftTransition;
   }
 
   async persistStepResult(stepResult) {
-    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
+    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.#binding.stepId) {
       throw new TypeError("DraftService requires its bound Step's concrete Result");
     }
-    if (stepResult.type !== STEP_RESULT_TYPE.ERROR && this.workerFacts?.repairInput != null) {
+    if (stepResult.type !== STEP_RESULT_TYPE.ERROR && this.#workerFacts?.repairInput != null) {
       if (this.#repairCandidate === null) throw new TypeError("Draft repair publication requires the Step-adopted candidate");
       this.#repairCandidate.assertResult(stepResult);
     }
-    if (stepResult.type !== STEP_RESULT_TYPE.ERROR) this.workerFacts?.repairSelection?.assertResult(stepResult);
-    const settlement = settleDraftStepResult(this.binding.stepId, stepResult);
+    if (stepResult.type !== STEP_RESULT_TYPE.ERROR) this.#workerFacts?.repairSelection?.assertResult(stepResult);
+    const settlement = settleDraftStepResult(this.#binding.stepId, stepResult);
     const draftCompletionApplication = settlement.connector === DraftCompletionConnector
-      ? createDraftCompletionSettlementApplication(this.preparation?.publications?.draftCoverageRepairFacts
-        ?? this.workerFacts?.draftCompletionFacts ?? null)
+      ? createDraftCompletionSettlementApplication(this.#preparation?.publications?.draftCoverageRepairFacts
+        ?? this.#workerFacts?.draftCompletionFacts ?? null)
       : null;
     if (stepResult.type === STEP_RESULT_TYPE.ERROR) {
       return this.#commitWorkerError(stepResult, settlement);
     }
     let awaitQuestion = null;
-    if (this.binding.stepId === "draft-refine" && settlement instanceof DraftAwaitUserDecision) {
+    if (this.#binding.stepId === "draft-refine" && settlement instanceof DraftAwaitUserDecision) {
       const transition = this.#draftTransition ?? this.inspectDraftTransition();
       if (transition.facts.nextQuestion !== null) {
         awaitQuestion = new DraftAwaitQuestionIdentity({
@@ -193,49 +201,49 @@ export class DraftService {
         });
       }
     }
-    if (this.executionBinding !== null && settlement instanceof DraftExecutionSettlement) {
+    if (this.#executionBinding !== null && settlement instanceof DraftExecutionSettlement) {
       const input = {
-        binding: this.binding, stepResult, settlement, executionBinding: this.executionBinding,
-        executionLifecycle: DraftStepExecutionLifecycle.checkpoint(this.executionBinding),
+        binding: this.#binding, stepResult, settlement, executionBinding: this.#executionBinding,
+        executionLifecycle: DraftStepExecutionLifecycle.checkpoint(this.#executionBinding),
       };
       let receipt;
       try {
-        receipt = this.binding.flowManager.checkpointDraftStepExecution(input).receipt;
+        receipt = this.#binding.flowManager.checkpointDraftStepExecution(input).receipt;
       } catch (error) {
-        receipt = recoverStepSettlementReceipt(this.binding.flowManager, input, error);
+        receipt = recoverStepSettlementReceipt(this.#binding.flowManager, input, error);
       }
       this.#executionSelection = settlement;
       return receipt;
     }
-    if (this.preparation === null) {
+    if (this.#preparation === null) {
       const input = {
-        binding: this.binding, stepResult, settlement, draftCompletionApplication, awaitQuestion,
+        binding: this.#binding, stepResult, settlement, draftCompletionApplication, awaitQuestion,
       };
       try {
         if (settlement instanceof DraftAwaitUserDecision) {
-          const replay = this.binding.flowManager.findDraftAwaitSettlementReceipt(input);
+          const replay = this.#binding.flowManager.findDraftAwaitSettlementReceipt(input);
           if (replay !== null) return replay;
         }
-        return (await this.binding.flowManager.settleDraftStepResult(input)).receipt;
+        return (await this.#binding.flowManager.settleDraftStepResult(input)).receipt;
       } catch (error) {
-        return recoverStepSettlementReceipt(this.binding.flowManager, input, error);
+        return recoverStepSettlementReceipt(this.#binding.flowManager, input, error);
       }
     }
     return this.#persistPreparedWorker(stepResult, settlement, draftCompletionApplication);
   }
 
   async #commitWorkerError(stepResult, settlement) {
-    if (this.preparation === null) {
+    if (this.#preparation === null) {
       const input = {
-        binding: this.binding,
+        binding: this.#binding,
         stepResult,
         settlement,
       };
       try {
-        const committed = await this.binding.flowManager.settleDraftStepResult(input);
+        const committed = await this.#binding.flowManager.settleDraftStepResult(input);
         return committed.receipt;
       } catch (error) {
-        return recoverStepSettlementReceipt(this.binding.flowManager, input, error);
+        return recoverStepSettlementReceipt(this.#binding.flowManager, input, error);
       }
     }
     return this.#persistPreparedWorker(stepResult, settlement);
@@ -259,19 +267,19 @@ export class DraftService {
 
   #commitPreparedWorker(stepResult, settlement, draftCompletionApplication = null) {
     const input = {
-      ctx: this.ctx, request: this.request, preparation: this.preparation,
-      binding: this.binding, stepResult, settlement, draftCompletionApplication,
+      ctx: this.#ctx, request: this.#request, preparation: this.#preparation,
+      binding: this.#binding, stepResult, settlement, draftCompletionApplication,
     };
     const failed = stepResult.type === STEP_RESULT_TYPE.ERROR;
-    if (failed && isConditionalDraftWorkerStep(this.binding.stepId)) {
-      const execution = this.binding.flowManager.draftStepExecutionState({ binding: this.binding });
+    if (failed && isConditionalDraftWorkerStep(this.#binding.stepId)) {
+      const execution = this.#binding.flowManager.draftStepExecutionState({ binding: this.#binding });
       if (execution.lifecycle?.phase === "publication") {
-        return { error: null, ...this.handoffCoordinator.completePublishedDraftWorker(input) };
+        return { error: null, ...this.#handoffCoordinator.completePublishedDraftWorker(input) };
       }
     }
     return { error: null, ...(failed
-      ? this.handoffCoordinator.commitDraftWorkerError(input)
-      : this.handoffCoordinator.commitDraftWorker(input)) };
+      ? this.#handoffCoordinator.commitDraftWorkerError(input)
+      : this.#handoffCoordinator.commitDraftWorker(input)) };
   }
 
   get workerOutcome() {

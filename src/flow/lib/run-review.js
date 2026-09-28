@@ -22,11 +22,11 @@ import { AgentFailure } from "../../lib/agent-failure.js";
 import { FlowCommand } from "./base-command.js";
 import {
   CurrentAttemptIdentity,
-  CurrentFlowStateConflictError,
   CurrentFlowStateInvariantError,
   ReviewProviderCompletionFailure,
   ReviewProviderTimeoutFailure,
 } from "./current-flow-state.js";
+import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import {
   DraftReviewExecutionBinding,
@@ -68,12 +68,9 @@ import {
   CanonicalReviewWorkUnit,
   canonicalReviewNodeId,
 } from "./canonical-review-artifacts.js";
-import { DraftReviewConnector } from "../engine/connectors/draft/draft-review-connector.js";
-import { StepFactory } from "../engine/step-factory.js";
 import { ReviewService } from "../services/review-service.js";
 import { SpecReviewService } from "../services/spec-review-service.js";
-import { DraftQuestionsReviewStep } from "../steps/draft/draft-questions-review.js";
-import { DraftCoverageReviewStep } from "../steps/draft/draft-coverage-review.js";
+import { draftStepRegistration } from "../engine/composition/draft.js";
 import {
   REVIEW_WORK_UNIT_MANIFEST_ENV,
   ReviewWorkUnit,
@@ -296,28 +293,21 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
       target,
     });
   }
-  const source = new CanonicalDraftReviewSource({ flowManager, state, phase });
   let stepBinding;
+  let selected = stepResult;
+  let preparedStep;
   try {
-    stepBinding = await new DraftReviewConnector(source).connect();
+    preparedStep = await draftStepRegistration(stepResult.stepId).create({
+      flowManager, state, executionBinding,
+    });
+    stepBinding = preparedStep.dependency(ReviewService).stepBinding();
   } catch (error) {
     if (error instanceof CurrentFlowStateConflictError) {
       throw new StepAdmissionRefusal(error.message, error);
     }
     throw error;
   }
-  let selected = stepResult;
-  if (checkpointRequired) {
-    const service = new ReviewService({
-      flowManager,
-      binding: stepBinding,
-      executionBinding,
-    });
-    selected = await new StepFactory()
-      .provide(ReviewService, service)
-      .create(phase === "draft-questions" ? DraftQuestionsReviewStep : DraftCoverageReviewStep)
-      .execute();
-  }
+  if (checkpointRequired) selected = await preparedStep.step.execute();
   const selection = flowManager.draftStepExecutionState({ binding: stepBinding }).executionIdentity();
   const selectedStepResult = selection?.stepResult ?? null;
   const selectedSettlement = selection?.settlement ?? null;

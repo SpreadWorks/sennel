@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { DraftGateRepairSelection } from "./draft-gate-repair-selection.js";
 import { stepResultDigest } from "../../engine/step-result.js";
-import { CurrentFlowStateConflictError } from "../../lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../lib/current-flow-state-conflict-error.js";
 import { DraftRepairResultFacts, draftQuestionsRepairResult, draftCoverageRepairResult, draftGateRepairResult } from "./draft-repair-result.js";
 import { applyDraftRepairOperations, DraftGateRepairAuthority, DraftRepairOperationsError } from "../../lib/draft-repair-operations.js";
 import { PlanGateRepairOutcomeDraft } from "../../lib/gate-observation-convergence.js";
