@@ -54,6 +54,32 @@ test("lexical bindings shadow prohibited globals only within their own scope", (
   assert.deepEqual(module.globals.map((token) => [token.value, token.line]), [["process", 6], ["fetch", 7], ["process", 8]]);
 });
 
+test("binding collection excludes initializer references", () => {
+  const module = new SourceModule("example.js", "const value = process.pid, { local = fetch('/api') } = {}; process.cwd(); fetch('/api');\n");
+  assert.deepEqual(module.globals.map((token) => token.value), ["process", "fetch", "process", "fetch"]);
+  const computed = new SourceModule("example.js", "function value({ [process.pid]: local }) { return local; }\n");
+  assert.deepEqual(computed.globals.map((token) => token.value), ["process"]);
+});
+
+test("scope analysis rejects var declarations instead of treating them as block bindings", () => {
+  for (const source of [
+    "if (true) { var Error = Base; } class Hidden extends Error {}",
+    "function value() { if (true) { var process = local; } return process; }",
+    "const value = () => { var { Error } = source; return Error; };",
+    "for (var [Error] of source) {}",
+  ]) {
+    assert.throws(() => new SourceModule("example.js", source),
+      (error) => error instanceof SourceReadError && error.message.includes("unsupported var declaration"));
+  }
+});
+
+test("var rejection leaves block bindings and lexical reference indexing intact", () => {
+  const module = new SourceModule("example.js", "{ let process = local; const fetch = local; } process.cwd(); fetch('/api'); const value = object.var[key]; const other = { var: 1 };\n");
+  assert.deepEqual(module.globals.map((token) => token.value), ["process", "fetch"]);
+  const indexed = new SourceModule("example.js", "var steps = import('./steps.js');", { lexicalOnly: true });
+  assert.deepEqual(indexed.references.map((reference) => reference.specifier), ["./steps.js"]);
+});
+
 test("regex after a control block does not create a false global reference", () => {
   const module = new SourceModule("example.js", "if (true) {} /process/.test('text'); export const Value = 1;\n");
   assert.deepEqual(module.globals, []);

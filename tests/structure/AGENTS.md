@@ -15,10 +15,16 @@ parse failure, unresolved dependency, or unreadable reverse-reference index
 means the check is incomplete and must fail. Do not make valid violations pass
 through per-file exclusions, violation baselines, or skips.
 
+Scope analysis supports `let` and `const` bindings. It rejects `var` declarations
+as unsupported rather than treating them as block-scoped. The lexical-only A06
+reference index can still read files containing `var` outside the inspected closure.
+
 Meaningful checker values use dedicated classes with constructor invariants.
 Keep source inspection static; do not evaluate source code to extract
 dependencies. Structure tests cover side-effect-free inspection and construction.
-Checks requiring live state belong in integration or phase scenario tests.
+Checks requiring live state belong in integration or phase scenario tests. A07
+coverage compares production-registered Service dependencies with actual instances
+inspected there; the structure suite itself does not construct live Services.
 
 The shared checker lives under `tests/support/structure/`; phase suite
 entrypoints live under `tests/structure/`. Keep dependency extraction and graph

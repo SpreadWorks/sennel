@@ -30,9 +30,10 @@ export class SourceReference {
 }
 
 export class SourceClass {
-  constructor(name, parent, token, dependencies, exported) {
+  constructor(name, parent, parentToken, token, dependencies, exported) {
     this.name = name;
     this.parent = parent;
+    this.parentToken = parentToken;
     this.token = token;
     this.dependencies = dependencies;
     this.exported = exported;
@@ -214,7 +215,7 @@ class SourceLexicalScope {
 
 const watchedGlobals = new Set(["require", "createRequire", "eval", "Function", "fetch", "process", "globalThis", "global"]);
 
-function unboundGlobals(tokens, references, file) {
+function unboundGlobals(tokens, references, file, watched = watchedGlobals) {
   const root = new SourceLexicalScope(null, 0, tokens.length);
   const scopes = Array(tokens.length).fill(root);
   const stack = [root];
@@ -232,21 +233,59 @@ function unboundGlobals(tokens, references, file) {
     for (const local of reference.bindings.keys()) root.bindings.add(local);
   }
   const declarations = new Set();
+  const bindingIndexes = (start, end) => {
+    const indexes = [];
+    for (let j = start; j < end; j++) {
+      if (tokens[j].value === "[") {
+        const close = matching(tokens, j, "[", "]");
+        if (tokens[close + 1]?.value === ":") { j = close; continue; }
+      }
+      if (tokens[j].value === "=") {
+        while (++j < end && tokens[j].value !== ",") {
+          if (["(", "[", "{"].includes(tokens[j].value)) j = matching(tokens, j, tokens[j].value, { "(": ")", "[": "]", "{": "}" }[tokens[j].value]);
+        }
+        continue;
+      }
+      if (tokens[j].kind === "identifier" && tokens[j + 1]?.value !== ":") indexes.push(j);
+    }
+    return indexes;
+  };
   const bindParameters = (open, close, scope) => {
-    for (let j = open + 1; j < close; j++) {
-      if (tokens[j].kind !== "identifier") continue;
-      if (tokens[j - 1]?.value === "." || tokens[j + 1]?.value === ":") continue;
-      if (tokens[j - 1]?.value === "=" || tokens[j - 1]?.value === "...") continue;
-      if (j !== open + 1 && tokens[j - 1]?.value !== ",") continue;
+    for (const j of bindingIndexes(open + 1, close)) {
       scope.bindings.add(tokens[j].value);
       declarations.add(j);
     }
   };
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
-    if (token.kind === "identifier" && ["const", "let", "var"].includes(token.value) && tokens[i + 1]?.kind === "identifier") {
-      scopes[i].bindings.add(tokens[i + 1].value);
-      declarations.add(i + 1);
+    if (token.kind === "identifier" && ["const", "let", "var"].includes(token.value)
+      && tokens[i - 1]?.value !== "."
+      && (tokens[i + 1]?.kind === "identifier" || ["{", "["].includes(tokens[i + 1]?.value))) {
+      // This reader models block bindings, not var's function/static-block scope.
+      if (token.value === "var") throw new SourceReadError(file, token.offset, "unsupported var declaration");
+      let cursor = i + 1;
+      while (cursor < tokens.length) {
+        let bindings;
+        if (tokens[cursor].kind === "identifier") bindings = [cursor++];
+        else if (["{", "["].includes(tokens[cursor].value)) {
+          const close = matching(tokens, cursor, tokens[cursor].value, tokens[cursor].value === "{" ? "}" : "]");
+          bindings = bindingIndexes(cursor + 1, close);
+          cursor = close + 1;
+        } else break;
+        for (const j of bindings) {
+          scopes[i].bindings.add(tokens[j].value);
+          declarations.add(j);
+        }
+        if (tokens[cursor]?.value === "=") {
+          cursor++;
+          while (cursor < tokens.length && ![",", ";"].includes(tokens[cursor].value)) {
+            if (["(", "[", "{"].includes(tokens[cursor].value)) cursor = matching(tokens, cursor, tokens[cursor].value, { "(": ")", "[": "]", "{": "}" }[tokens[cursor].value]);
+            cursor++;
+          }
+        }
+        if (tokens[cursor]?.value !== ",") break;
+        cursor++;
+      }
     }
     if (token.kind === "identifier" && token.value === "class" && tokens[i + 1]?.kind === "identifier") {
       const name = tokens[i + 1].value;
@@ -321,7 +360,7 @@ function unboundGlobals(tokens, references, file) {
       declarationEnd = matching(tokens, i + 1);
     }
     if (i <= declarationEnd) continue;
-    if (token.kind !== "identifier" || !watchedGlobals.has(token.value) || declarations.has(i)) continue;
+    if (token.kind !== "identifier" || !watched.has(token.value) || declarations.has(i)) continue;
     const previous = tokens[i - 1]?.value;
     if (previous === "." || previous === "#" || tokens[i + 1]?.value === ":") continue;
     const call = tokens[i + 1]?.value === "(";
@@ -340,6 +379,7 @@ export class SourceModule {
     this.classes = [];
     this.dynamic = [];
     this.globals = [];
+    this.unboundNames = new Map();
     try { this.#read(lexicalOnly); }
     catch (error) {
       if (error instanceof SourceReadError) {
@@ -349,6 +389,14 @@ export class SourceModule {
       }
       throw error;
     }
+  }
+
+  isUnbound(name, token) {
+    if (!this.unboundNames.has(name)) {
+      this.unboundNames.set(name, new Set(unboundGlobals(this.tokens, this.references, this.file, new Set([name]))
+        .map((entry) => entry.offset)));
+    }
+    return this.unboundNames.get(name).has(token.offset);
   }
 
   #read(lexicalOnly) {
@@ -422,7 +470,7 @@ export class SourceModule {
           }
         }
         const exported = t[i - 1]?.value === "export" || (t[i - 2]?.value === "export" && t[i - 1]?.value === "default");
-        this.classes.push(new SourceClass(name, parent, token, dependencies, exported));
+        this.classes.push(new SourceClass(name, parent, hasParent ? t[cursor + 1] : null, token, dependencies, exported));
         if (exported) this.exports.push(new SourceExport(t[i - 1]?.value === "default" ? "default" : name, name));
       }
     }

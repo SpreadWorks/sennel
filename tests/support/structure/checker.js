@@ -3,6 +3,8 @@ import { SourceModule, SourceReadError } from "./source-reader.js";
 import { FlowStructureRules } from "./flow-rules.js";
 import { SourceRepository } from "./source-repository.js";
 
+const nativeClassBases = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "AggregateError", "Array", "Map", "Set"]);
+
 export class StructureScope {
   constructor(root, entry, registrations, registrationModule = `src/flow/engine/composition/${entry.split("/").at(-1)}.js`) {
     if (typeof root !== "string" || typeof entry !== "string" || !Array.isArray(registrations)) throw new TypeError("invalid structure scope");
@@ -148,8 +150,8 @@ export class StructureChecker {
     seen.add(key);
     const parent = this.#resolveLocal(file, module, entry.parent, new Set(), "A01");
     if (!parent) {
-      if (module.references.some((reference) => reference.kind === "import" && reference.bindings.has(entry.parent))
-        && !this.unresolvedHeritage.has(key)) {
+      if (nativeClassBases.has(entry.parent) && module.isUnbound(entry.parent, entry.parentToken)) return false;
+      if (!this.unresolvedHeritage.has(key)) {
         this.unresolvedHeritage.add(key);
         this.#diagnose("A01", file, entry.token, [file], `cannot resolve class heritage ${entry.parent}`);
       }
@@ -377,7 +379,8 @@ export class StructureChecker {
         const indirect = [...reference.bindings.values()].some((name) => {
           const resolved = this.#resolveExport(target.file, name, new Set(), "A06");
           return resolved && stepFiles.has(resolved.file) && this.#isStepClass(resolved.file, resolved.module, resolved.classEntry, new Set());
-        }) || (reference.kind === "reexport" && (reference.bindings.size === 0 || [...reference.bindings.values()].includes("*"))
+        }) || ((reference.kind === "dynamic" || (reference.kind === "reexport" && reference.bindings.size === 0)
+          || [...reference.bindings.values()].includes("*"))
           && this.#exportsScopedStep(target.file, stepFiles, new Set()));
         if ((direct || indirect) && !this.rules.isComposition(file)) this.#diagnose("A06", file, reference.token, [file, target.file], "Step is referenced outside composition");
       }

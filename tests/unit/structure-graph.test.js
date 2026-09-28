@@ -43,6 +43,55 @@ test("Step inherited through a reexport is registered and reverse indexed", () =
   assert.ok(report.diagnostics.some((entry) => entry.rule === "A06" && entry.file === "src/other.js"));
 });
 
+test("an unresolved local parent in a scoped class fails closed", () => {
+  const files = new SyntheticStructureSeed("alpha", "AlphaStep").files();
+  files.set("src/flow/steps/alpha/hidden.js", "import { Step } from '../../engine/step.js'; const Base = Step; export class Hidden extends Base {}\n");
+  const report = graph(files);
+  assert.ok(report.diagnostics.some((entry) => entry.rule === "A01" && entry.file === "src/flow/steps/alpha/hidden.js"
+    && entry.message.includes("cannot resolve class heritage Base")), report.diagnostics.map((entry) => entry.toString()).join("\n"));
+});
+
+test("a locally shadowed native parent cannot conceal Step ancestry", () => {
+  const files = new SyntheticStructureSeed("alpha", "AlphaStep").files();
+  files.set("src/flow/steps/alpha/hidden.js", "import { Step } from '../../engine/step.js'; const Error = Step; export class Hidden extends Error {}\n");
+  const report = graph(files);
+  assert.ok(report.diagnostics.some((entry) => entry.rule === "A01" && entry.file === "src/flow/steps/alpha/hidden.js"
+    && entry.message.includes("cannot resolve class heritage Error")), report.diagnostics.map((entry) => entry.toString()).join("\n"));
+});
+
+test("a destructured native-name binding cannot conceal Step ancestry", () => {
+  const files = new SyntheticStructureSeed("alpha", "AlphaStep").files();
+  files.set("src/flow/steps/alpha/hidden.js", "import { Step } from '../../engine/step.js'; const { Error } = { Error: Step }; export class Hidden extends Error {}\n");
+  const report = graph(files);
+  assert.ok(report.diagnostics.some((entry) => entry.rule === "A01" && entry.file === "src/flow/steps/alpha/hidden.js"
+    && entry.message.includes("cannot resolve class heritage Error")), report.diagnostics.map((entry) => entry.toString()).join("\n"));
+});
+
+test("a later declarator cannot conceal Step ancestry with a native name", () => {
+  const files = new SyntheticStructureSeed("alpha", "AlphaStep").files();
+  files.set("src/flow/steps/alpha/hidden.js", "import { Step } from '../../engine/step.js'; const value = 1, Error = Step; export class Hidden extends Error {}\n");
+  const report = graph(files);
+  assert.ok(report.diagnostics.some((entry) => entry.rule === "A01" && entry.file === "src/flow/steps/alpha/hidden.js"
+    && entry.message.includes("cannot resolve class heritage Error")), report.diagnostics.map((entry) => entry.toString()).join("\n"));
+});
+
+test("an unshadowed native Error parent remains a non-Step class", () => {
+  const files = new SyntheticStructureSeed("alpha", "AlphaStep").files();
+  files.set("src/flow/steps/alpha/native-error.js", "export class NativeError extends Error {}\n");
+  const report = graph(files);
+  assert.equal(report.ok, true, report.diagnostics.map((entry) => entry.toString()).join("\n"));
+});
+
+test("block var cannot conceal an unregistered Step behind a native name", () => {
+  const files = new SyntheticStructureSeed("alpha", "AlphaStep").files();
+  files.set("src/flow/steps/alpha/hidden.js", "import { Step } from '../../engine/step.js'; if (true) { var Error = Step; } export class Hidden extends Error {}\n");
+  const report = graph(files);
+  assert.equal(report.ok, false);
+  assert.ok(report.diagnostics.some((entry) => entry.rule === "A03"
+    && entry.file === "src/flow/steps/alpha/hidden.js"
+    && entry.message.includes("unsupported var declaration")));
+});
+
 test("named aliases, local exports, and export stars resolve registered Step identity", () => {
   const files = new SyntheticStructureSeed("alpha", "AlphaStep").files();
   files.set("src/flow/steps/alpha/base.js", "export { Step as Base } from '../../engine/step.js';\n");
@@ -91,6 +140,28 @@ test("external imports through a composition reexport still index the scoped Ste
   files.set("src/other.js", "import { Selected } from './flow/engine/composition/barrel.js';\n");
   const report = graph(files);
   assert.ok(report.diagnostics.some((entry) => entry.rule === "A06" && entry.file === "src/other.js"));
+});
+
+for (const [form, statement] of [
+  ["namespace import", "import * as steps from './flow/engine/composition/barrel.js';\n"],
+  ["literal dynamic import", "await import('./flow/engine/composition/barrel.js');\n"],
+]) {
+  test(`external ${form} of a Step barrel is rejected`, () => {
+    const files = new SyntheticStructureSeed("alpha", "AlphaStep").files();
+    files.set("src/flow/engine/composition/barrel.js", "export { AlphaStep } from '../../steps/alpha/step.js';\n");
+    files.set("src/other.js", statement);
+    const report = graph(files);
+    assert.ok(report.diagnostics.some((entry) => entry.rule === "A06" && entry.file === "src/other.js"),
+      report.diagnostics.map((entry) => entry.toString()).join("\n"));
+  });
+}
+
+test("namespace and literal dynamic imports of a non-Step barrel are allowed", () => {
+  const files = new SyntheticStructureSeed("alpha", "AlphaStep").files();
+  files.set("src/flow/engine/composition/value-barrel.js", "export { Value } from '../../steps/alpha/value.js';\n");
+  files.set("src/other.js", "import * as values from './flow/engine/composition/value-barrel.js'; await import('./flow/engine/composition/value-barrel.js');\n");
+  const report = graph(files);
+  assert.equal(report.ok, true, report.diagnostics.map((entry) => entry.toString()).join("\n"));
 });
 
 for (const [form, statement] of [
