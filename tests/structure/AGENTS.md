@@ -29,9 +29,10 @@ dependencies. Structure tests cover side-effect-free inspection and construction
 Checks requiring live state belong in integration or phase scenario tests. A07
 coverage compares production-registered Service dependencies with actual instances
 inspected there; the structure suite itself does not construct live Services.
-The Spec integration scope prepares the initial Spec handoff through canonical
-Flow state and `SpecService.prepare`, then inspects `PreparedStep.dependencies`.
-It must fail when any production-declared Service type lacks a prepared instance.
+The Spec integration scope prepares every registered Spec Step through canonical
+Flow state and its production Service preparation API, then inspects each
+`PreparedStep.dependencies`. It must fail when any production-declared Service
+type lacks a prepared instance.
 
 The shared checker lives under `tests/support/structure/`; phase suite
 entrypoints live under `tests/structure/`. Keep dependency extraction and graph

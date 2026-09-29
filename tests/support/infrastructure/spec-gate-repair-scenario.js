@@ -85,7 +85,7 @@ export async function createSpecGateRepairScenario({
 }
 
 /** Produce and durably publish one bounded worker response before Step selection. */
-export async function prepareSpecGateRepairHandoff({
+export function prepareSpecGateRepairHandoffInput({
   ctx, invocation, replacement,
   coordinator = new WorkerArtifactHandoffCoordinator({
     now: () => new Date("2026-08-04T00:00:00.000Z"),
@@ -113,10 +113,16 @@ export async function prepareSpecGateRepairHandoff({
     requestPath: request.requestPath, invocationId: request.dispatchInvocationId,
     now: () => new Date("2026-08-04T00:00:01.000Z"),
   });
-  const service = await SpecGateRepairService.prepare({
-    ctx, request, Connector: SpecEntryConnector, handoffCoordinator: coordinator,
-  });
-  return { request, service, selected, range };
+  return {
+    request, selected, range,
+    input: { ctx, request, Connector: SpecEntryConnector, handoffCoordinator: coordinator },
+  };
+}
+
+export async function prepareSpecGateRepairHandoff(options = {}) {
+  const prepared = prepareSpecGateRepairHandoffInput(options);
+  const service = await SpecGateRepairService.prepare(prepared.input);
+  return { ...prepared, service };
 }
 
 /** Exercise the production bounded repair handoff from an active repair Attempt. */
