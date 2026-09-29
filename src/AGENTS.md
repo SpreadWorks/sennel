@@ -119,7 +119,15 @@ flow commands automatically append visible stdout/stderr to `.tmp/logs/<flowId>.
 
 ### Flow 状態遷移の責務境界
 
-**MUST:** `src/flow/`、Flow の状態遷移に関係する `src/lib/`（`flow-manager.js`、`flow-version.js` 等）、または対応するテストを変更する場合は、Flow 状態遷移規約の正本である [`flow/AGENTS.md`](flow/AGENTS.md) を読み、その責務境界、不変条件、検証要件に従うこと。
+**MUST:** `src/flow/`、Flow の状態遷移に関係する `src/lib/`（`flow-manager.js`、`flow-version.js` 等）、または対応するテストを設計・レビュー・変更する場合は、Flow 状態遷移規約の正本である [`flow/AGENTS.md`](flow/AGENTS.md) を読み、その責務境界、不変条件、検証要件に従うこと。
+
+### Service の入力と DI
+
+- **MUST: Service が処理に使う外部情報は、外側で取得済みの型付き入力として DI すること。** Service 自身によるファイル・環境変数・global・singleton・外部 API からの情報取得は禁止する。static な準備メソッドや helper 経由の取得も同じ扱いとする。
+- `FlowManager`、汎用的な `ctx`、DI container、状態読取り関数を注入して、Service 内で自由に情報を取得させてはならない。依存オブジェクトを DI しただけでは、取得済み入力の DI とはみなさない。
+- 情報の取得・再読込みは Service の外側で既存の読取り API を利用し、本番の組立処理で必要な入力を注入する。取得処理を Step や DI Factory に移してはならない。
+- Service は注入された入力を使った共通処理と、選択済み処理の実行・保存手順を担う。保存等の副作用が必要な場合は、その操作に限定した依存を注入する。読取りや実行方針の再判断をその依存に隠してはならない。保存結果・receipt の返却と Store 内の整合性検証は維持する。
+- 値クラス・純粋関数の import は外部情報の取得とは区別する。Flow の実行可否・retry・route は Definition、工程内容の意味判断は Step が所有し、Service に重複実装しない。
 
 ### flow step 命名規則
 

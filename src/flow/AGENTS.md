@@ -5,14 +5,14 @@
 ## 状態遷移方針の所有者
 
 - **MUST:** definition layer は、永続化された現在状態からFlow全体の実行方針を決める責務を所有する。StepはServiceから受け取ったtyped factsを具体的な`StepResult`へ確定し、Definitionは`stepId + StepResult`だけからSettlementと次の遷移先を選ぶ。Definitionがfactsを別途受け取り、StepResultの意味を再判定してはならない。意味のあるfacts、disposition、transition planは専用クラスで表現する。
-- Definitionに工程固有の入力解釈、修復候補の計算・採用、成果物の読み書きを置かない。工程の意味判断はStep、構造化入力の取得とIOはServiceが担い、Definitionは確定済みResultから遷移を選ぶ。
+- Definitionに工程固有の入力解釈、修復候補の計算・採用、成果物の読み書きを置かない。工程の意味判断はStep、外部情報の取得はServiceの外側の既存読取り層、取得済み入力の注入は本番の組立処理が担う。Definitionは確定済みResultから遷移を選ぶ。Serviceの入力と依存は親の「Service の入力と DI」に従う。
 - **MUST:** retry、retry exhaustion、repair、defer、block、external block、Step status、次の route の選択を、実行コマンド、registry、状態読取り、`get-next-action` に重複実装しない。
 - command の返却値に含まれる `next` や成果物内の `nextAction` は、必要であれば互換用の投影値として保持できるが、遷移判断の権限として使用してはならない。
 
 ## Dispatcher の責務
 
 - Dispatcher は Definition が選んだ Action の実行と、Service が返す型付き worker 実行指示の投影だけを担う。Spec Gate repair の公開済み応答、予算、世代、追加文脈、残作業を dispatcher 内で解釈しない。
-- 中断後は Service が canonical Attempt、実行 claim、進捗 artifact、Step receipt を読み戻して、sealed 応答の再処理、canonical 公開応答の再処理、または次世代の worker 実行を選ぶ。公開だけで Step 完了とは扱わない。
+- 中断後は Service の外側で canonical Attempt、実行 claim、進捗 artifact、Step receipt を読み戻す。Definition がその事実から sealed 応答の再処理、canonical 公開応答の再処理、次世代の worker 実行、または停止を選ぶ。Service は取得済み入力と選択済み操作を注入され、その具体的な手順を実行する。公開だけで Step 完了とは扱わない。
 - Step が確定した中間 Result と完了 receipt は Store が同一 transaction で保存する。Dispatcher は保存済み Result と次 Action を再取得し、独自の route や semantic retry を選ばない。
 
 ## 実行と永続化
@@ -21,9 +21,9 @@
 - transport、protocol、tooling failure の限定的な再試行は実行責務に含めてよい。ただし semantic retry budget と Flow の遷移方針は definition layer が所有する。
 - registry、hook、永続化層は、definition layer が選んだ transition plan の原子的な適用と監査記録を担う。未選択の fallback route を決めてはならない。
 - Step の境界は `facts -> concrete StepResult`、Definition の境界は `stepId + StepResult -> concrete Settlement` とする。Service は Definition を一度だけ呼び、Store は選択済み Settlement を再解決せずに適用する。
-- Stepは工程固有の入力の意味を判断し、修復候補が必要なら計算・採用してResultを確定する。同じ候補やResultを後続層で再計算しない。工程固有の処理は可能な限り該当Step配下で保守し、JSONの選択、パスの決定、保存手順はServiceに委ねる。StepはServiceを利用し、dispatcherから保存処理や業務判断のcallbackを受け取らない。
-- ServiceはStepに渡す構造化入力の取得、成果物の読み書き、共通処理、保存手順の調整を担う。Storeへ渡す採用候補・Result・bindingの対応を保ち、Storeは保存する候補とResultの整合性を検証する。判断を一元化してもこの検証を省略しない。
-- Step と Step の間をつなぐ副作用は Definition-owned `StepConnector` として表現し、独立した Flow Step にしない。Draftでは、Definitionが`stepId + StepResult`からSettlementとConnector種別を選択し、Serviceが選択済みSettlementに必要なConnectorをcanonical factsから組み立てる。Storeは選択済みConnectorをsource Attemptの確認・成果物publication・次Stepへのpromotionと同一transactionで適用し、遷移先を再判断しない。
+- Stepは工程固有の入力の意味を判断し、修復候補が必要なら計算・採用してResultを確定する。同じ候補やResultを後続層で再計算しない。工程固有の処理は可能な限り該当Step配下で保守する。入力JSONと保存先の解決は外側で行って注入し、Serviceはその入力に基づく保存手順を担う。StepはServiceを利用し、dispatcherから保存処理や業務判断のcallbackを受け取らない。
+- Serviceは取得済み入力の提供・共通処理・保存手順の調整を担い、状態や成果物を自ら読み取らない。Storeへ渡す採用候補・Result・bindingの対応を保ち、保存に限定した注入依存を使用する。Storeは保存する候補とResultの整合性を検証する。判断を一元化してもこの検証を省略しない。
+- Step と Step の間をつなぐ副作用は Definition-owned `StepConnector` として表現し、独立した Flow Step にしない。Draftでは、Definitionが`stepId + StepResult`からSettlementとConnector種別を選択し、Serviceが選択済みSettlementに必要なConnectorを注入されたcanonical factsから組み立てる。追加の読取りは外側で行う。Storeは選択済みConnectorをsource Attemptの確認・成果物publication・次Stepへのpromotionと同一transactionで適用し、遷移先を再判断しない。
 - Result、Result 固有の Activity／artifact、Settlement effect、exact binding を含む durable receipt、target activation／Await／Failure は同一 Store transaction で保存する。target connection だけが durable connector receipt を持ち、完全一致 replay 以外は binding、Result kind、Settlement kind、target、publication の差を conflict とする。
 - 直接 CLI 実行にも admission check を設け、最新の永続状態で definition layer が別の Action を選んでいる場合は worker 起動と状態変更の前に拒否する。
 - staleな入力や権限不足による実行前提の拒否、工程ロジック上のError Result、永続化失敗を別経路で扱う。入力確認や保存処理を広いcatchで工程上の失敗へ変換しない。拒否・停止時はcanonical状態とsemantic retry budgetに不要な変更を加えない。

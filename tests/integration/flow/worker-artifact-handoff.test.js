@@ -6628,6 +6628,10 @@ describe("worker artifact handoff", () => {
         const failed = value.flowManager.canonicalState(value.specId);
         assert.equal(failed.attempt.failure.code, scenario.expectedCode, scenario.name);
         assert.equal(failed.attempt.failure.retryable, false, scenario.name);
+        const diagnostic = readCatalogJson(value, "issue.log", "spec-triage").entries.at(-1);
+        assert.match(diagnostic.resolution, /terminal failure/, scenario.name);
+        assert.match(diagnostic.resolution, /sennel flow get next-action/, scenario.name);
+        assert.doesNotMatch(diagnostic.resolution, /dispatching this step again|dispatch the current action again/, scenario.name);
         assert.equal(failed.attempt.failure.retryKind, null, scenario.name);
         assert.equal(failed.attempt.consumption.semantic, 0, scenario.name);
         const reloaded = new FlowManager({
@@ -7987,6 +7991,9 @@ describe("worker artifact handoff", () => {
           `worker-handoff-${result.data.dispatchInvocationId}-${result.data.actionDigest}-invalid`
         ));
         assert.equal(diagnostic?.diagnostic?.attempts, 2, stepId);
+        assert.match(diagnostic.resolution, /terminal failure/);
+        assert.match(diagnostic.resolution, /sennel flow get next-action/);
+        assert.doesNotMatch(diagnostic.resolution, /dispatching this step again|dispatch the current action again/);
         assert.equal(diagnostic.diagnostic.first.code, result.data.first.code, stepId);
         assert.equal(diagnostic.diagnostic.second.code, result.data.second.code, stepId);
         const activitiesBeforeReapply = value.flowManager.activityLedger(value.specId);
@@ -8030,48 +8037,62 @@ describe("worker artifact handoff", () => {
     });
   }
 
-  it("retains the external Agent failure and its recovery guidance on the failed Spec Attempt", async () => {
-    const value = fixture("spec", {
-      beforeActivate(candidate) { publishDraftBeforeTarget(candidate, draftDocument("Create the specification.")); },
-    });
-    try {
-      let workerCalls = 0;
-      const nextAction = new GetNextActionCommand();
-      const dispatcher = new RunDispatchCommand({
-        nextAction: { run: () => nextAction.execute({
+  for (const missingResponses of [0, 1]) {
+    it(`retains the external Agent failure and its recovery guidance after ${missingResponses} missing responses`, async () => {
+      const value = fixture("spec", {
+        beforeActivate(candidate) { publishDraftBeforeTarget(candidate, draftDocument("Create the specification.")); },
+      });
+      try {
+        let workerCalls = 0;
+        const nextAction = new GetNextActionCommand();
+        const dispatcher = new RunDispatchCommand({
+          nextAction: { run: () => nextAction.execute({
+            ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+          }) },
+          agent: { async call() {
+            workerCalls += 1;
+            if (workerCalls <= missingResponses) return;
+            throw new AgentAuthenticationFailure({ message: "provider credentials were rejected" });
+          } },
+          repositoryFingerprint: () => "stable-fixture",
+          leaseFactory: () => ({ acquire() {}, release() {} }),
+        });
+        dispatcher.container = {};
+        const result = await dispatcher.execute({
           ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
-        }) },
-        agent: { async call() {
-          workerCalls += 1;
-          throw new AgentAuthenticationFailure({ message: "provider credentials were rejected" });
-        } },
-        repositoryFingerprint: () => "stable-fixture",
-        leaseFactory: () => ({ acquire() {}, release() {} }),
-      });
-      dispatcher.container = {};
-      const result = await dispatcher.execute({
-        ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
-        expectRunId: value.flowManager.loadReadOnly(value.specId).runId,
-        expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
-      });
-      assert.equal(workerCalls, 1);
-      assert.equal(result.errors[0].code, "AGENT_AUTHENTICATION_FAILED");
-      const reloaded = new FlowManager({
-        root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
-      });
-      const failure = reloaded.canonicalState(value.specId).attempt.failure;
-      assert.equal(failure.code, "AGENT_AUTHENTICATION_FAILED");
-      assert.equal(failure.message, "provider credentials were rejected");
-      assert.equal(failure.recoveryHint,
-        "Repair or refresh provider authentication before starting a new attempt.");
-      assert.equal(failure.retryable, false);
-      assert.equal((await nextAction.execute({
-        ...value.ctx, flowManager: reloaded, flowState: reloaded.loadReadOnly(value.specId),
-      })).directive.kind, "blocked");
-    } finally {
-      removeTmpDir(value.mainRoot);
-    }
-  });
+          expectRunId: value.flowManager.loadReadOnly(value.specId).runId,
+          expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
+        });
+        assert.equal(workerCalls, missingResponses + 1);
+        assert.equal(result.data.retryable, false);
+        assert.notEqual(result.data.retryExhausted, true);
+        assert.equal(result.data.recoveryPossible, false);
+        assert.equal(result.data.agentFailure.code, result.errors[0].code);
+        assert.equal(result.data.classification, result.data.agentFailure.kind);
+        assert.equal(result.data.dispatch.message, result.data.agentFailure.message);
+        assert.equal(result.errors[0].code, "AGENT_AUTHENTICATION_FAILED");
+        const reloaded = new FlowManager({
+          root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+        });
+        const failure = reloaded.canonicalState(value.specId).attempt.failure;
+        assert.equal(failure.code, "AGENT_AUTHENTICATION_FAILED");
+        assert.equal(failure.message, "provider credentials were rejected");
+        assert.equal(failure.recoveryHint,
+          "Repair or refresh provider authentication before starting a new attempt.");
+        assert.equal(failure.retryable, false);
+        assert.equal(result.data.recoveryHint, failure.recoveryHint);
+        if (missingResponses > 0) {
+          assert.equal(result.data.first.code, "FLOW_ARTIFACT_HANDOFF_MISSING");
+          assert.equal(result.data.second.code, "FLOW_ARTIFACT_HANDOFF_MISSING");
+        }
+        assert.equal((await nextAction.execute({
+          ...value.ctx, flowManager: reloaded, flowState: reloaded.loadReadOnly(value.specId),
+        })).directive.kind, "blocked");
+      } finally {
+        removeTmpDir(value.mainRoot);
+      }
+    });
+  }
 
   it("does not retry or terminalize an unclassified Spec provider exception", async () => {
     const value = fixture("spec", {

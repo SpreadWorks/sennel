@@ -1168,7 +1168,9 @@ function appendWorkerHandoffDiagnostic(ctx, error, request, { stepId: invocation
         step: stepId,
         reason: `Worker artifact handoff ${error.classification || "invalid"}: ${error.message}`,
         trigger: "Parent dispatcher rejected or could not complete a worker artifact handoff.",
-        resolution: externalFailure?.recoveryHint ?? (error instanceof WorkerArtifactRetryExhaustedError
+        resolution: externalFailure?.recoveryHint ?? (failedState !== null
+          ? "This Attempt has a saved terminal failure. Correct the artifact producer and check sennel flow get next-action for the current Flow decision."
+          : error instanceof WorkerArtifactRetryExhaustedError
           ? "One fresh worker handoff retry was consumed; correct the artifact producer before dispatching this step again."
           : error.recoveryPossible
           ? "Resume the guarded dispatcher to replay the pending publication journal."
@@ -1203,7 +1205,7 @@ function appendWorkerHandoffDiagnostic(ctx, error, request, { stepId: invocation
 }
 
 function workerHandoffFailureData(ctx, target, error, request, dispatchCount, agentError = null,
-  issueLogError = null) {
+  issueLogError = null, externalFailure = null) {
   const state = readFlowState(ctx);
   const stepId = request?.stepId || error.data?.stepId || state?.currentStep || "flow-dispatch";
   const actionDigest = request?.actionDigest || error.data?.actionDigest || null;
@@ -1213,9 +1215,9 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
       target,
       nextAction: null,
       dispatchCount,
-      message: error.recoveryPossible
+      message: externalFailure?.message ?? (error.recoveryPossible
         ? "Canonical publication is journaled and requires deterministic dispatcher recovery."
-        : "The parent dispatcher rejected the worker artifact before completing the Flow step.",
+        : "The parent dispatcher rejected the worker artifact before completing the Flow step."),
     }),
     classification: error.classification || "invalid",
     retryBudgetConsumed: false,
@@ -1225,6 +1227,14 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
     actionDigest,
     dispatchInvocationId,
     ...(error.data || {}),
+    // Handoff observations remain available, but do not override the stopping cause.
+    ...(externalFailure && {
+      classification: externalFailure.kind,
+      retryable: externalFailure.retryable,
+      retryExhausted: false,
+      recoveryPossible: false,
+      recoveryHint: externalFailure.recoveryHint,
+    }),
     ...(request && {
       payload: {
         directory: request.payloadDirectory,
@@ -1377,6 +1387,7 @@ export default class RunDispatchCommand extends FlowCommand {
           failedState: recorded ? workerState : null,
           agentError: attempt.agentError,
         }),
+        external,
       ),
     );
   }
