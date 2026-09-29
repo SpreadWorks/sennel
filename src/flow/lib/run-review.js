@@ -70,9 +70,11 @@ import {
 } from "./canonical-review-artifacts.js";
 import { ReviewService } from "../services/review-service.js";
 import { SpecReviewService } from "../services/spec-review-service.js";
+import { claimSpecReviewExecution, completeSpecReviewPublication } from "../engine/composition/spec.js";
 import { draftStepRegistration, prepareDraftReviewBinding } from "../engine/composition/draft.js";
 import {
   REVIEW_WORK_UNIT_MANIFEST_ENV,
+  assertReviewWorkUnitInputSnapshot,
   ReviewWorkUnit,
   TaskReviewUnsealedWorkUnitSet,
 } from "./review-work-unit.js";
@@ -1071,7 +1073,7 @@ class TaskReviewPersistedSourceBaseline {
     if (input === null) throw new Error(`Task Review work unit is missing its ${key} baseline`);
     let bytes;
     try {
-      bytes = input.assertSnapshot(workUnit.root).bytes;
+      bytes = assertReviewWorkUnitInputSnapshot(input, workUnit.root).bytes;
       this.baseline = SourceMutationBaseline.fromStored(
         JSON.parse(bytes.toString("utf8")),
         { root: executionRoot, runtimeLocks },
@@ -1119,7 +1121,7 @@ class TaskReviewPersistedCanonicalObservation {
     const input = workUnit.manifestDocument.inputs.find((entry) => entry.logicalKey === "task.canonical-observation") ?? null;
     if (input === null) throw new Error("Task Review work unit is missing its canonical observation");
     let document;
-    try { document = JSON.parse(input.assertSnapshot(workUnit.root).bytes.toString("utf8")); }
+    try { document = JSON.parse(assertReviewWorkUnitInputSnapshot(input, workUnit.root).bytes.toString("utf8")); }
     catch (cause) { throw new Error(`Task Review canonical observation is unreadable: ${cause.message}`); }
     try {
       this.observation = SourceWorkerCanonicalObservationAdvance.fromStored(document, {
@@ -1131,7 +1133,7 @@ class TaskReviewPersistedCanonicalObservation {
     this.input = {
       logicalKey: input.logicalKey,
       logicalPath: input.logicalPath,
-      bytes: input.assertSnapshot(workUnit.root).bytes,
+      bytes: assertReviewWorkUnitInputSnapshot(input, workUnit.root).bytes,
       mediaType: "application/json",
     };
     Object.freeze(this);
@@ -1160,7 +1162,7 @@ class TaskReviewPersistedSourceSnapshot {
     if (input === null) throw new Error("unsealed Task Review work unit is missing its task source checkpoint");
     let document;
     try {
-      document = JSON.parse(input.assertSnapshot(workUnit.root).bytes.toString("utf8"));
+      document = JSON.parse(assertReviewWorkUnitInputSnapshot(input, workUnit.root).bytes.toString("utf8"));
     } catch (cause) {
       throw new Error(`unsealed Task Review source checkpoint is unreadable: ${cause.message}`);
     }
@@ -1678,7 +1680,7 @@ export class RunReviewCommand extends FlowCommand {
       );
     }
     if (persistedPhase === "spec" && !dryRun) {
-      const published = await SpecReviewService.completePublication({ flowManager: ctx.flowManager, state });
+      const published = await completeSpecReviewPublication({ flowManager: ctx.flowManager, state });
       if (published !== null) return published;
     }
     const taskReviewExecution = taskId === null
@@ -1838,7 +1840,7 @@ export class RunReviewCommand extends FlowCommand {
       }
       if (persistedPhase === "spec" && !dryRun) {
         try {
-          specReviewProviderRequest = await SpecReviewService.claimExecution({
+          specReviewProviderRequest = await claimSpecReviewExecution({
             flowManager: ctx.flowManager,
             state,
             manifest: workUnit.workUnit.manifest(),
@@ -2067,7 +2069,7 @@ export class RunReviewCommand extends FlowCommand {
       if (persistedPhase === "spec") {
         SpecReviewService.publish({ flowManager: ctx.flowManager, specId: state.specId, commandResult: result });
         try {
-          const settled = await SpecReviewService.completePublication({
+          const settled = await completeSpecReviewPublication({
             flowManager: ctx.flowManager,
             state: ctx.flowManager.canonicalState(state.specId),
           });
@@ -2292,7 +2294,7 @@ export class RunReviewCommand extends FlowCommand {
     const publishedDraftReview = rehydratePublishedDraftReview(ctx, { state, phase: persistedPhase });
     if (publishedDraftReview !== null) return publishedDraftReview;
     if (persistedPhase === "spec" && !dryRun) {
-      const publishedSpecReview = await SpecReviewService.completePublication({ flowManager: ctx.flowManager, state });
+      const publishedSpecReview = await completeSpecReviewPublication({ flowManager: ctx.flowManager, state });
       if (publishedSpecReview !== null) return publishedSpecReview;
     }
     const admissionFailure = reviewExecutionAdmission(ctx, { persistedPhase, executionRoot });
@@ -2340,7 +2342,7 @@ export class RunReviewCommand extends FlowCommand {
         });
         if (recovered !== null) return recovered;
         if (refreshedPhase === "spec" && !dryRun) {
-          const publishedSpecReview = await SpecReviewService.completePublication({
+          const publishedSpecReview = await completeSpecReviewPublication({
             flowManager: ctx.flowManager,
             state: refreshedState,
           });

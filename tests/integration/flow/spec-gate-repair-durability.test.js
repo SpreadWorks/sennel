@@ -52,7 +52,7 @@ describe("Spec Gate repair durable handoff", () => {
         "Publish a precisely validated artifact.");
       const audit = JSON.parse(restored.readArtifact({ specId: value.specId,
         logicalKey: "spec.gate.repair.audit", consumerNodeId: "spec-gate",
-        parameters: { attemptId: service.binding.attempt.id },
+        parameters: { attemptId: service.workerOutcome.receipt.binding.attemptId },
       }).bytes.toString("utf8"));
       assert.equal(audit.acceptedGroups.length, 1);
       assert.equal(audit.reviewFacts.requiresReview, true);

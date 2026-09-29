@@ -12,13 +12,8 @@ import {
   canonicalReviewArtifactFilename,
 } from "../../../src/flow/lib/canonical-review-artifacts.js";
 import { CanonicalReviewInputDescriptor } from "../../../src/flow/lib/review-work-unit-input.js";
-import {
-  REVIEW_WORK_UNIT_MANIFEST_ENV,
-  ReviewWorkUnit,
-  ReviewWorkUnitOutput,
-  TaskReviewUnsealedWorkUnitSet,
-  reconcileCompletedReviewWorkUnits,
-} from "../../../src/flow/lib/review-work-unit.js";
+import { REVIEW_WORK_UNIT_MANIFEST_ENV, ReviewWorkUnit, TaskReviewUnsealedWorkUnitSet, reconcileCompletedReviewWorkUnits } from "../../../src/flow/lib/review-work-unit.js";
+import { ReviewWorkUnitOutput } from "../../../src/flow/lib/review-work-unit-values.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import {

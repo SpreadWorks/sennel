@@ -3,23 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { runGit } from "../../lib/git-helpers.js";
 import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
-
-/** Read-only evidence. Its identity never grants a Spec edit target. */
-export class SpecGateRepairSource {
-  constructor({ id, origin, revision, content }) {
-    if (typeof id !== "string" || !id || typeof origin !== "string" || !origin
-      || typeof revision !== "string" || !revision || typeof content !== "string") {
-      throw new TypeError("Repair source requires an identity, origin, revision and text");
-    }
-    this.id = `evidence:${id}`;
-    this.origin = origin;
-    this.revision = revision;
-    this.content = content;
-    this.digest = createHash("sha256").update(JSON.stringify(this.toJSON())).digest("hex");
-    Object.freeze(this);
-  }
-  toJSON() { return { origin: this.origin, revision: this.revision, content: this.content }; }
-}
+import { SpecGateRepairSource } from "./spec-gate-repair-values.js";
 
 /** Use existing catalog and regular-file readers; never execute a research worker. */
 export function readSpecGateRepairSources({ flowManager, state, executionRoot, spec }) {

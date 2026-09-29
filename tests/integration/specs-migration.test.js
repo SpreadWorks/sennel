@@ -13,7 +13,7 @@ import { FLOW_ARTIFACT_CONTRACTS } from "../../src/lib/flow-artifact-contract.js
 import { CanonicalGateObservationCycle } from "../../src/flow/lib/canonical-gate-observation-cycle.js";
 import { GateEvidenceIdentity, GateObservationCycleReader, GateObservationOccurrence } from "../../src/flow/lib/gate-observation-convergence.js";
 import { PlanGateRepairObservation, PlanGateRepairRecord } from "../../src/flow/lib/plan-gate-repair.js";
-import { SpecGateProspectiveFacts } from "../../src/flow/lib/spec-gate-prospective.js";
+import { SpecGateProspectiveFacts } from "../../src/flow/lib/spec-gate-prospective-facts.js";
 import { specGateResult } from "../../src/flow/steps/spec/spec-gate-result.js";
 import { CurrentFlowVersionStore, CurrentFlowState, FlowActivity } from "../../src/flow/lib/current-flow-state.js";
 import { initialCanonicalSpecReview, SpecReviewDelta, mergeSpecReviewDelta } from "../../src/flow/lib/spec-review-artifacts.js";

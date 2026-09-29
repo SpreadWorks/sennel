@@ -38,16 +38,15 @@ import {
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { SpecGateEvaluationBinding, SpecReviewStepBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
+import { specWorkerStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import { SpecGateService } from "../../../src/flow/services/spec-gate-service.js";
-import { SpecService } from "../../../src/flow/services/spec-service.js";
 import { SpecGateStep } from "../../../src/flow/steps/spec/spec-gate.js";
-import { SpecStep } from "../../../src/flow/steps/spec/spec.js";
 import { SpecGateIssuePublication } from "../../../src/flow/lib/gate-issue-publication.js";
 import { specReviewResult } from "../../../src/flow/steps/spec/spec-review.js";
-import { SpecTriageStep } from "../../../src/flow/steps/spec/spec-triage.js";
-import { SpecRepairStep } from "../../../src/flow/steps/spec/spec-repair.js";
 import { SpecReviewService } from "../../../src/flow/services/spec-review-service.js";
 import { SpecReviewWorkerService } from "../../../src/flow/services/spec-worker-review-service.js";
+import { SpecReviewWorkerFacts, SpecReviewWorkerSelection, SpecReviewWorkerCandidate } from "../../../src/flow/lib/spec-review-worker-facts.js";
+import { readSpecJsonValidator } from "../../../src/lib/spec-json.js";
 import { Agent } from "../../../src/lib/agent.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
@@ -84,13 +83,8 @@ import RunReviewCommand, {
 } from "../../../src/flow/lib/run-review.js";
 import GetStatusCommand from "../../../src/flow/lib/get-status.js";
 import FlowReviewCommand from "../../../src/flow/commands/review.js";
-import {
-  REVIEW_WORK_UNIT_MANIFEST_ENV,
-  reconcileCompletedReviewWorkUnits,
-  ReviewWorkUnit,
-  ReviewWorkUnitManifest,
-  ReviewWorkUnitOutput,
-} from "../../../src/flow/lib/review-work-unit.js";
+import { REVIEW_WORK_UNIT_MANIFEST_ENV, assertReviewWorkUnitInputSnapshot, reconcileCompletedReviewWorkUnits, ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
+import { ReviewWorkUnitManifest, ReviewWorkUnitOutput } from "../../../src/flow/lib/review-work-unit-values.js";
 import { attachedCanonicalReviewWorkUnit } from "../../../src/flow/lib/canonical-review-artifacts.js";
 import SetReviewEvidenceCommand from "../../../src/flow/lib/set-review-evidence.js";
 import RunRecoverReviewPassCommand from "../../../src/flow/lib/run-recover-review-pass.js";
@@ -382,8 +376,8 @@ async function settleSealedSpecReviewWorker({ ctx, coordinator, stepId, payload 
     ctx, request, Connector: SpecEntryConnector, handoffCoordinator: coordinator,
   });
   assert.ok(service instanceof SpecReviewWorkerService);
-  const StepClass = stepId === "spec-triage" ? SpecTriageStep : SpecRepairStep;
-  return new RunDispatchCommand().runSpecWorkerStep({ StepClass }, service);
+  const prepared = await specWorkerStepRegistration(stepId).create({ service });
+  return new RunDispatchCommand().runSpecWorkerStep(prepared);
 }
 
 function reviewPublicationWrite(review, stage) {
@@ -397,6 +391,7 @@ function reviewPublicationWrite(review, stage) {
   });
   const next = mergeSpecReviewDelta({ review, delta });
   return {
+    delta,
     next,
     write: {
       logicalKey: "spec.review",
@@ -414,11 +409,26 @@ function settleFixtureSpecReviewWorker(manager, specId, stepResult, { specRecord
   };
   const current = manager.readCurrentSpecReview({ specId, consumerNodeId: stepResult.stepId });
   const publication = reviewPublicationWrite(current.review, stepResult.stepId);
+  const spec = manager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: stepResult.stepId });
+  // This Store-focused fixture supplies the same typed selected-output contract
+  // as the worker Service; phase scenarios separately exercise its real producer.
+  const facts = new SpecReviewWorkerFacts({
+    stepId: stepResult.stepId,
+    spec: JSON.parse(spec.bytes.toString("utf8")),
+    review: current.review, delta: publication.delta,
+    reviewDigest: current.descriptor.hash, reviewByteLength: current.descriptor.size,
+    validator: readSpecJsonValidator(),
+  });
+  const selection = new SpecReviewWorkerSelection({
+    facts, result: stepResult, review: publication.next,
+    candidate: specRecord === undefined ? undefined : new SpecReviewWorkerCandidate(specRecord.document),
+  });
   manager.settleSpecStepResult({
     binding,
     stepResult,
     settlement: settleSpecStepResult(stepResult.stepId, stepResult),
     specRecord,
+    specReviewWorkerSelection: selection,
     artifactWrites: [publication.write],
     artifactBaselines: [new CanonicalFlowArtifactBaseline({
       logicalKey: "spec.review",
@@ -1567,7 +1577,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       assert.equal(manager.canonicalState(created.specId).nextAction().nodeId, "spec-review");
       const audit = manager.readArtifact({
         specId: created.specId, logicalKey: "spec.gate.repair.audit",
-        parameters: { attemptId: repaired.service.binding.attempt.id }, consumerNodeId: "spec-gate",
+        parameters: { attemptId: repaired.service.workerOutcome.receipt.binding.attemptId }, consumerNodeId: "spec-gate",
       });
       assert.equal(JSON.parse(audit.bytes).acceptedGroups.length, 1);
       assert.equal(manager.activityLedger(created.specId).filter((activity) => (
@@ -3610,7 +3620,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       if (changed.output.basename === "other-review.json") {
         assert.throws(() => specReviewResult(changed), /canonical inputs and delta output/);
       }
-      await assert.rejects(SpecReviewService.claimExecution({
+      assert.throws(() => SpecReviewService.prepareExecutionClaim({
         flowManager: manager,
         state: manager.canonicalState(created.specId),
         manifest: changed,
@@ -5058,7 +5068,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const confirmedOutput = sealed.readSealedOutput().bytes;
     const confirmedInputs = confirmedManifest.inputs.map((input) => ({
       input,
-      bytes: input.assertSnapshot(sealed.directory).bytes,
+      bytes: assertReviewWorkUnitInputSnapshot(input, sealed.directory).bytes,
     }));
     assert.equal(fs.existsSync(outputDirectory), true);
     assert.equal(reconcileCompletedReviewWorkUnits({

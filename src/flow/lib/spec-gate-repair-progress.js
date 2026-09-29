@@ -1,6 +1,6 @@
 /** Canonical publication history for bounded Gate repair worker batches. */
 import { readSpecGateRepairInput } from "./spec-gate-repair-input.js";
-import { FlowFindingSourceIdentity } from "./flow-findings.js";
+import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
 import { SpecGateRepairContextExpansion } from "./spec-gate-repair-evidence.js";
 import { PromptRequestLimit, PromptExecutionLimit, PromptExecutionBudget } from "../../lib/prompt-batching.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";

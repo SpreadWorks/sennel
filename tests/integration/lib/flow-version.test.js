@@ -21,7 +21,6 @@ import {
   FlowArtifactCatalogStore,
   FlowArtifactDescriptor,
   FlowActivityId,
-  FlowSpecRevision,
   FlowVersion,
   FlowVersionAuthorityScope,
   FlowVersionLocation,
@@ -35,6 +34,7 @@ import {
   FlowVersionMigrationPlan,
   FlowVersionMigrationSourcePolicy,
 } from "../../../src/lib/flow-version.js";
+import { FlowSpecRevision } from "../../../src/lib/flow-spec-revision.js";
 import { buildCurrentFlowDefinition } from "../../../src/flow/definition.js";
 const REVIEW_DIGEST_A = "a".repeat(64);
 const REVIEW_DIGEST_B = "b".repeat(64);

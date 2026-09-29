@@ -7,7 +7,7 @@ import {
   StepErrorResult,
 } from "../../engine/step-result.js";
 import { CanonicalSpecReview } from "../../lib/spec-review-artifacts.js";
-import { ReviewWorkUnitManifest, ReviewWorkUnitOutput } from "../../lib/review-work-unit.js";
+import { ReviewWorkUnitManifest, ReviewWorkUnitOutput } from "../../lib/review-work-unit-values.js";
 import { SpecReviewService } from "../../services/spec-review-service.js";
 
 /** Select the execution or accepted-review meaning from canonical typed facts. */

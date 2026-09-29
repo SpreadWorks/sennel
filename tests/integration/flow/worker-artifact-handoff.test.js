@@ -1,3 +1,4 @@
+import { readSpecJsonValidator } from "../../../src/lib/spec-json.js";
 import { rewriteWorkerSubmission as rewriteSubmission } from "../../support/infrastructure/worker-artifact.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -60,7 +61,8 @@ import { SpecService } from "../../../src/flow/services/spec-service.js";
 import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
 import { SpecReviewWorkerService } from "../../../src/flow/services/spec-worker-review-service.js";
 import { SpecStep } from "../../../src/flow/steps/spec/spec.js";
-import { SpecWorkerResultSelection } from "../../../src/flow/steps/spec/spec-result.js";
+import { SpecWorkerResultSelection } from "../../../src/flow/lib/spec-worker-result-selection.js";
+import { specResult } from "../../../src/flow/steps/spec/spec-result.js";
 import { SpecTriageStep } from "../../../src/flow/steps/spec/spec-triage.js";
 import { SpecRepairStep } from "../../../src/flow/steps/spec/spec-repair.js";
 import { DraftStep } from "../../../src/flow/steps/draft/draft.js";
@@ -836,7 +838,7 @@ describe("worker artifact handoff", () => {
       assert.equal(state.nextAction().nodeId, "spec-review");
       const audit = JSON.parse(value.flowManager.readArtifact({
         specId: value.specId, logicalKey: "spec.gate.repair.audit",
-        consumerNodeId: "spec-gate", parameters: { attemptId: service.binding.attempt.id },
+        consumerNodeId: "spec-gate", parameters: { attemptId: service.workerOutcome.receipt.binding.attemptId },
       }).bytes.toString("utf8"));
       assert.equal(audit.acceptedGroups.length, 1);
       const receipt = service.workerOutcome.receipt;
@@ -3838,6 +3840,110 @@ describe("worker artifact handoff", () => {
       assert.equal(readbackSpec.requirements.find((requirement) => requirement.id === "R1").desc, "Publish a canonical artifact.");
       assert.equal(readback.audit.at(-1).acceptedOperations[0].kind, "edit-text-field");
       assert.equal(readback.audit.filter((entry) => entry.stage === "spec-repair").length, 1);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("rejects a Review worker settlement that differs from its Step-selected Result, Spec, Review or baseline", async () => {
+    const value = prepareSpecRepairFixture({ operationKinds: ["edit-text-field"] });
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: {
+          ...value.invocation,
+          action: { ...value.invocation.action, nextAction: { step: "spec-repair" } },
+        },
+      });
+      fs.writeFileSync(request.payloadPath("review.delta.json"), json(specRepairTextEditPayload(request)));
+      seal(request);
+      const settle = value.flowManager.settleSpecStepResult.bind(value.flowManager);
+      let challenged = false;
+      value.flowManager.settleSpecStepResult = (input) => {
+        challenged = true;
+        const unchanged = () => ({
+          state: value.flowManager.canonicalState(value.specId).toJSON(),
+          catalog: value.flowManager.artifactCatalog(value.specId).toJSON(),
+          activities: value.flowManager.activityLedger(value.specId).length,
+        });
+        const before = unchanged();
+        const review = JSON.parse(input.artifactWrites[0].bytes.toString("utf8"));
+        const altered = [
+          { ...input, specRecord: new CanonicalWorkerSpecPublication({
+            ...input.specRecord.document, goal: "Different selected Spec",
+          }) },
+          { ...input, artifactWrites: [{ ...input.artifactWrites[0],
+            bytes: Buffer.from(json({ ...review, generation: review.generation + 1 })) }] },
+          { ...input, artifactBaselines: [new CanonicalFlowArtifactBaseline({
+            logicalKey: "spec.review", parameters: input.artifactWrites[0].parameters,
+            digest: "0".repeat(64), byteLength: input.artifactBaselines[0].byteLength,
+          })] },
+          { ...input, stepResult: new SpecRepairUnchangedResult() },
+        ];
+        for (const candidate of altered) {
+          assert.throws(() => settle(candidate), CurrentFlowStateConflictError);
+          assert.deepEqual(unchanged(), before);
+        }
+        return settle(input);
+      };
+      const completed = await completeSpecReviewWorkerThroughStep(value, request);
+      assert.equal(challenged, true);
+      assert.equal(completed.stepResult.kind, "spec-repair-changed");
+      assert.equal(completed.receipt.targetStepId, "spec-gate");
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("rejects a Triage settlement with an unselected Result or Spec publication", async () => {
+    const value = prepareSpecTriageFixture();
+    try {
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx,
+        state: value.flowManager.load(),
+        invocation: {
+          ...value.invocation,
+          action: { ...value.invocation.action, nextAction: { step: "spec-triage" } },
+        },
+      });
+      const review = new CanonicalSpecReview(request.inputs.find((entry) => entry.name === "review.json").document);
+      fs.writeFileSync(request.payloadPath("review.delta.json"), json({
+        version: 2, stage: "spec-triage", identity: review.identity.toJSON(),
+        baseReviewDigest: review.digest, operations: [], findings: [],
+      }));
+      seal(request);
+      const settle = value.flowManager.settleSpecStepResult.bind(value.flowManager);
+      let challenged = false;
+      value.flowManager.settleSpecStepResult = (input) => {
+        challenged = true;
+        const unchanged = () => ({
+          state: value.flowManager.canonicalState(value.specId).toJSON(),
+          catalog: value.flowManager.artifactCatalog(value.specId).toJSON(),
+          activities: value.flowManager.activityLedger(value.specId).length,
+        });
+        const before = unchanged();
+        const reviewBytes = JSON.parse(input.artifactWrites[0].bytes.toString("utf8"));
+        const altered = [
+          { ...input, artifactWrites: [{ ...input.artifactWrites[0],
+            bytes: Buffer.from(json({ ...reviewBytes, generation: reviewBytes.generation + 1 })) }] },
+          { ...input, artifactBaselines: [new CanonicalFlowArtifactBaseline({
+            logicalKey: "spec.review", parameters: input.artifactWrites[0].parameters,
+            digest: "0".repeat(64), byteLength: input.artifactBaselines[0].byteLength,
+          })] },
+          { ...input, specRecord: new CanonicalWorkerSpecPublication(request.inputs.find((entry) => entry.name === "spec.json").document) },
+          { ...input, stepResult: new SpecRepairUnchangedResult() },
+        ];
+        for (const candidate of altered) {
+          assert.throws(() => settle(candidate), CurrentFlowStateConflictError);
+          assert.deepEqual(unchanged(), before);
+        }
+        return settle(input);
+      };
+      const completed = await completeSpecReviewWorkerThroughStep(value, request);
+      assert.equal(challenged, true);
+      assert.equal(completed.stepResult.kind, "spec-triage-completed");
+      assert.equal(completed.receipt.targetStepId, "spec-repair");
     } finally {
       removeTmpDir(value.mainRoot);
     }
@@ -7381,7 +7487,7 @@ describe("worker artifact handoff", () => {
         changed.facts.publication.document,
       );
 
-      const binding = service.binding;
+      const binding = await new SpecEntryConnector(request).connect();
       const changedApplication = await new SpecReviewConnector({
         binding,
         facts: changed.facts,
@@ -7491,7 +7597,7 @@ describe("worker artifact handoff", () => {
         handoffCoordinator: value.coordinator,
       });
       assert.ok(service instanceof SpecService);
-      const binding = service.binding;
+      const binding = await new SpecEntryConnector(request).connect();
       const stepResult = new StepErrorResult("spec", new Error("Spec worker failed"));
       const settlement = settleSpecStepResult("spec", stepResult);
       const receipt = await stepResult.persist(service);
@@ -7539,6 +7645,7 @@ describe("worker artifact handoff", () => {
         handoffCoordinator: value.coordinator,
       });
       assert.ok(service instanceof SpecService);
+      const binding = await new SpecEntryConnector(request).connect();
       const previousRevision = value.flowManager.readCurrentSpecReviewInput({
         specId: value.specId,
         consumerNodeId: "spec-review",
@@ -7546,9 +7653,10 @@ describe("worker artifact handoff", () => {
       const before = value.flowManager.canonicalState(value.specId).toJSON();
       await assert.rejects(() => new SpecCreatedResult().persist(service), TypeError);
       assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), before);
-      const selection = new SpecWorkerResultSelection(service.inspectWorkerCompletion());
+      const facts = service.inspectWorkerCompletion();
+      const selection = new SpecWorkerResultSelection({ facts, result: specResult(facts) });
       const settlementReceipt = new DraftStepSettlementReceipt({
-        binding: service.binding,
+        binding,
         result: selection.result,
         settlement: settleSpecStepResult("spec", selection.result),
         publication: new DraftStepSettlementPublication({}),
@@ -7573,8 +7681,8 @@ describe("worker artifact handoff", () => {
         specId: value.specId,
         consumerNodeId: "spec-review",
       }).revision, previousRevision + 1);
-      assert.equal(receipt.binding.attemptId, service.binding.attempt.id);
-      assert.equal(receipt.binding.attemptSequence, service.binding.attempt.sequence);
+      assert.equal(receipt.binding.attemptId, binding.attempt.id);
+      assert.equal(receipt.binding.attemptSequence, binding.attempt.sequence);
       assert.equal(receipt.resultDigest, stepResultDigest(result));
       assert.equal(service.workerOutcome.receipt.id, receipt.id);
       const replayReceipt = await result.persist(service);
@@ -8351,7 +8459,7 @@ describe("spec-repair worker V2 delta contract", () => {
       replacement: "The requirement was repaired through a bounded canonical delta.",
     })]);
 
-    const result = applySpecRepairOperations({
+    const result = applySpecRepairOperations({ validator: readSpecJsonValidator(),
       spec: canonicalRepairSpec(),
       triage,
       repair: proposal,
@@ -8373,7 +8481,7 @@ describe("spec-repair worker V2 delta contract", () => {
     const triage = triageDelta([
       applyFinding("F-invalid-envelope", [repairTargetPermission(target, ["replace-entity-field"])]),
     ]);
-    const apply = (repair) => applySpecRepairOperations({
+    const apply = (repair) => applySpecRepairOperations({ validator: readSpecJsonValidator(),
       spec: canonicalRepairSpec(), triage, repair, inputRevision: revision,
     });
     assert.throws(
@@ -8402,7 +8510,7 @@ describe("spec-repair worker V2 delta contract", () => {
         ],
       ),
     ]);
-    const result = applySpecRepairOperations({
+    const result = applySpecRepairOperations({ validator: readSpecJsonValidator(),
       spec: canonicalRepairSpec(),
       triage,
       repair: repairDelta(revision, [
@@ -8443,7 +8551,7 @@ describe("spec-repair worker V2 delta contract", () => {
         ],
       ),
     ]);
-    const result = applySpecRepairOperations({
+    const result = applySpecRepairOperations({ validator: readSpecJsonValidator(),
         spec: canonicalRepairSpec(),
         triage,
         repair: repairDelta(revision, [
@@ -8466,7 +8574,7 @@ describe("spec-repair worker V2 delta contract", () => {
     const triage = triageDelta([
       applyFinding("F-position", [repairTargetPermission(target, ["replace-array-element"])]),
     ]);
-    const result = applySpecRepairOperations({
+    const result = applySpecRepairOperations({ validator: readSpecJsonValidator(),
       spec: canonicalRepairSpec(),
       triage,
       repair: repairDelta(revision, [repairOperation({

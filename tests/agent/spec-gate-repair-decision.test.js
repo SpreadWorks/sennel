@@ -7,7 +7,8 @@ import { Agent } from "../../src/lib/agent.js";
 import { ProviderRegistry } from "../../src/lib/provider.js";
 import { Logger } from "../../src/lib/log.js";
 import { SpecGateRepairContext } from "../../src/flow/lib/spec-gate-repair-context.js";
-import { SpecGateRepairSource } from "../../src/flow/lib/spec-gate-repair-sources.js";
+import { SpecGateRepairSource } from "../../src/flow/lib/spec-gate-repair-values.js";
+import { readSpecJsonValidator } from "../../src/lib/spec-json.js";
 import { applySpecGateRepairOperations, SpecGateRepairAuthority } from "../../src/flow/lib/spec-repair-operations.js";
 import { validWorkerHandoffTaskSpec } from "../support/infrastructure/worker-artifact.js";
 
@@ -48,7 +49,7 @@ test("real repair model resolves existing evidence and returns only missing choi
       assert.equal(response.stage, "spec-gate-repair", JSON.stringify(response));
       const authority = new SpecGateRepairAuthority({ spec, baseRevision, findings: [finding],
         expectedUnits: [{ findingIdentities: [finding.identity] }] });
-      const applied = applySpecGateRepairOperations({ spec, authority, repair: response,
+      const applied = applySpecGateRepairOperations({ validator: readSpecJsonValidator(), spec, authority, repair: response,
         inputRevision: baseRevision.slice(7) });
       assert.equal(applied.audit.acceptedGroups.length, 1, JSON.stringify({ response, audit: applied.audit }));
       assert.match(applied.spec.requirements[0].desc, /regression/i);

@@ -270,10 +270,10 @@ test("pre-enabled Spec Gate advisory observation is atomic with its Await Result
   });
   assert.equal(decision.action, "repair");
   const repaired = input.manager.canonicalState(input.flow.specId);
-  assert.equal(repaired.current.at(-1), "spec");
-  assert.equal(repaired.findNode("spec-gate").status, "invalidated");
+  assert.equal(repaired.current.at(-1), "spec-gate-repair");
+  assert.equal(repaired.findNode("spec-gate").status, "failed");
   assert.equal(input.manager.activityLedger(input.flow.specId).filter((entry) => (
-    entry.nodeId === "spec" && entry.transition.operation === "plan_gate_repair"
+    entry.nodeId === "spec-gate-repair" && entry.transition.operation === "plan_gate_repair"
       && entry.transition.nonblocking?.action === "repair"
   )).length, 1);
 });

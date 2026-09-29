@@ -1,4 +1,4 @@
-import { CanonicalFlowArtifactBaseline } from "../lib/current-flow-state.js";
+import { CanonicalFlowArtifactBaseline, CanonicalWorkerSpecPublication } from "../lib/current-flow-state.js";
 import { CurrentFlowStateConflictError } from "../lib/current-flow-state-conflict-error.js";
 import { StepResult, StepErrorResult, SpecGateRepairNoProgressResult } from "../engine/step-result.js";
 import { SpecWorkerStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
@@ -65,6 +65,14 @@ export class SpecGateRepairWorkerExecution {
 
 /** Parent-owned bounded proposal publication; the worker never writes canonical Spec bytes. */
 export class SpecGateRepairService {
+  #ctx;
+  #request;
+  #binding;
+  #preparation;
+  #facts;
+  #handoffCoordinator;
+  #continuation;
+  #publicationReceipt;
   #selection = null;
   #outcome = null;
   #publication = null;
@@ -361,25 +369,27 @@ export class SpecGateRepairService {
       || typeof handoffCoordinator?.completeSpecWorkerHandoff !== "function") {
       throw new TypeError("Spec Gate repair service requires its exact sealed handoff");
     }
-    this.ctx = ctx;
-    this.request = request;
-    this.binding = binding;
-    this.preparation = preparation;
-    this.facts = facts;
-    this.handoffCoordinator = handoffCoordinator;
-    this.continuation = continuation;
-    this.publicationReceipt = publicationReceipt;
+    this.#ctx = ctx;
+    this.#request = request;
+    this.#binding = binding;
+    this.#preparation = preparation;
+    this.#facts = facts;
+    this.#handoffCoordinator = handoffCoordinator;
+    this.#continuation = continuation;
+    this.#publicationReceipt = publicationReceipt;
   }
 
+  inspectContinuation() { return this.#continuation; }
+
   inspectWorkerCompletion() {
-    this.binding.assertCurrent();
-    return this.facts;
+    this.#binding.assertCurrent();
+    return this.#facts;
   }
 
   adoptWorkerSelection(facts, selection) {
-    if (facts !== this.facts || !(selection instanceof SpecGateRepairSelection)
+    if (facts !== this.#facts || !(selection instanceof SpecGateRepairSelection)
       || selection.facts !== facts) throw new TypeError("Spec Gate repair selection changed after handoff");
-    this.binding.assertCurrent();
+    this.#binding.assertCurrent();
     this.#selection = selection;
   }
 
@@ -391,8 +401,8 @@ export class SpecGateRepairService {
         && this.#selection?.result !== stepResult)) {
       throw new TypeError("Spec Gate repair settlement requires its Step-selected Result");
     }
-    const settlement = settleSpecStepResult(this.binding.stepId, stepResult);
-    if (this.continuation !== null && !(stepResult instanceof StepErrorResult)) {
+    const settlement = settleSpecStepResult(this.#binding.stepId, stepResult);
+    if (this.#continuation !== null && !(stepResult instanceof StepErrorResult)) {
       if (!(stepResult instanceof SpecGateRepairContextRequiredResult
         || stepResult instanceof SpecGateRepairDraftReturnRequiredResult)) {
         throw new TypeError("Gate repair continuation requires a Step-selected Result");
@@ -403,41 +413,41 @@ export class SpecGateRepairService {
           || await new settlement.connector().connect() !== "draft") {
           throw new TypeError("Spec Gate repair Draft return requires its Definition route");
         }
-        committed = this.ctx.flowManager.settleSpecStepResult({ binding: this.binding,
+        committed = this.#ctx.flowManager.settleSpecStepResult({ binding: this.#binding,
           stepResult, settlement,
           artifactBaselines: [new CanonicalFlowArtifactBaseline({
             logicalKey: "spec.record",
-            digest: this.facts.input.baseRevision.slice("sha256:".length),
-            byteLength: this.facts.input.specByteLength,
+            digest: this.#facts.input.baseRevision.slice("sha256:".length),
+            byteLength: this.#facts.input.specByteLength,
           })],
           draftReturn: new DraftReopenContext({
             route: "preimplementation",
-            reason: this.facts.proposal.decision,
-            source: { stepId: this.binding.stepId, attemptId: this.binding.attempt.id,
-              attemptSequence: this.binding.attempt.sequence,
-              baseRevision: this.facts.input.baseRevision,
-              specByteLength: this.facts.input.specByteLength,
-              repairId: this.facts.input.repair.idempotencyKey,
-              selectedUnitIds: this.facts.input.context.units().map((unit) => unit.id),
-              findingIdentities: this.facts.input.context.units().flatMap((unit) => (
+            reason: this.#facts.proposal.decision,
+            source: { stepId: this.#binding.stepId, attemptId: this.#binding.attempt.id,
+              attemptSequence: this.#binding.attempt.sequence,
+              baseRevision: this.#facts.input.baseRevision,
+              specByteLength: this.#facts.input.specByteLength,
+              repairId: this.#facts.input.repair.idempotencyKey,
+              selectedUnitIds: this.#facts.input.context.units().map((unit) => unit.id),
+              findingIdentities: this.#facts.input.context.units().flatMap((unit) => (
                 unit.findings.map((finding) => finding.identity.toJSON())
               )),
-              evidence: this.facts.proposal.evidence,
-              unresolvedBecause: this.facts.proposal.unresolvedBecause,
+              evidence: this.#facts.proposal.evidence,
+              unresolvedBecause: this.#facts.proposal.unresolvedBecause,
             },
           }) });
       } else {
-        committed = this.ctx.flowManager.completeSpecGateRepairProgress({ binding: this.binding,
-          stepResult, settlement, publicationReceipt: this.publicationReceipt });
+        committed = this.#ctx.flowManager.completeSpecGateRepairProgress({ binding: this.#binding,
+          stepResult, settlement, publicationReceipt: this.#publicationReceipt });
       }
       const receipt = committed.receipt;
-      const outcome = this.request === null ? { completed: true, replayed: true,
-        stepId: this.binding.stepId, stepResult, receipt, settlementReceipt: receipt }
-        : this.handoffCoordinator.completeSpecWorkerHandoff({
-          request: this.request, preparation: this.preparation, stepResult, receipt,
+      const outcome = this.#request === null ? { completed: true, replayed: true,
+        stepId: this.#binding.stepId, stepResult, receipt, settlementReceipt: receipt }
+        : this.#handoffCoordinator.completeSpecWorkerHandoff({
+          request: this.#request, preparation: this.#preparation, stepResult, receipt,
         });
-      if (this.request === null) this.handoffCoordinator.cleanupCompletedSpecGateRepairHandoff({
-        ctx: this.ctx, receipt,
+      if (this.#request === null) this.#handoffCoordinator.cleanupCompletedSpecGateRepairHandoff({
+        ctx: this.#ctx, receipt,
       });
       this.#outcome = { ...outcome, partialProgressReceipt: committed.newlyCompleted ? receipt : null };
       return this.#outcome.receipt;
@@ -447,15 +457,15 @@ export class SpecGateRepairService {
     if (!error && await new settlement.connector().connect() !== settlement.targetStepId) {
       throw new TypeError("Spec Gate repair connector disagrees with its route");
     }
-    const input = this.facts.input;
+    const input = this.#facts.input;
     this.#publication ??= error ? {
       lifecycleResult: null, references: undefined, artifactWrites: [], artifactBaselines: [],
     } : {
-      ...(this.preparation?.settlementPublication(this.handoffCoordinator.now) ?? {}),
-      specRecord: this.#selection.publication,
+      ...(this.#preparation?.settlementPublication(this.#handoffCoordinator.now) ?? {}),
+      specRecord: new CanonicalWorkerSpecPublication(this.#selection.candidate.spec),
       artifactWrites: [{
         logicalKey: "spec.gate.repair.audit",
-        parameters: { attemptId: this.binding.attempt.id },
+        parameters: { attemptId: this.#binding.attempt.id },
         mediaType: "application/json",
         bytes: Buffer.from(`${JSON.stringify(this.#selection.audit, null, 2)}\n`, "utf8"),
       }],
@@ -466,32 +476,32 @@ export class SpecGateRepairService {
       })],
     };
     const settlementInput = {
-      binding: this.binding, stepResult, settlement,
+      binding: this.#binding, stepResult, settlement,
       specGateRepairSelection: this.#selection,
       ...this.#publication,
     };
     const replayed = this.#outcome !== null;
     let committed;
     try {
-      if (!replayed) this.handoffCoordinator.faultInjector({
+      if (!replayed) this.#handoffCoordinator.faultInjector({
         phase: "before-worker-handoff-publication", stepId: "spec-gate-repair",
       });
-      committed = this.ctx.flowManager.settleSpecStepResult(settlementInput);
+      committed = this.#ctx.flowManager.settleSpecStepResult(settlementInput);
     } catch (cause) {
       if (cause instanceof CurrentFlowStateConflictError) throw cause;
-      const receipt = this.ctx.flowManager.findStepSettlementReceipt(settlementInput);
+      const receipt = this.#ctx.flowManager.findStepSettlementReceipt(settlementInput);
       if (receipt === null) throw new StepPersistenceFailure(cause);
       committed = { receipt };
     }
-    this.#outcome = this.request === null ? { completed: true, replayed: true,
-      stepId: this.binding.stepId, stepResult, receipt: committed.receipt,
+    this.#outcome = this.#request === null ? { completed: true, replayed: true,
+      stepId: this.#binding.stepId, stepResult, receipt: committed.receipt,
       settlementReceipt: committed.receipt }
-      : this.handoffCoordinator.completeSpecWorkerHandoff({
-        request: this.request, preparation: this.preparation,
+      : this.#handoffCoordinator.completeSpecWorkerHandoff({
+        request: this.#request, preparation: this.#preparation,
         stepResult, receipt: committed.receipt, replayed,
       });
-    if (this.request === null) this.handoffCoordinator.cleanupCompletedSpecGateRepairHandoff({
-      ctx: this.ctx, receipt: committed.receipt,
+    if (this.#request === null) this.#handoffCoordinator.cleanupCompletedSpecGateRepairHandoff({
+      ctx: this.#ctx, receipt: committed.receipt,
     });
     return this.#outcome.receipt;
   }

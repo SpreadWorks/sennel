@@ -1,5 +1,5 @@
-import { CanonicalWorkerSpecPublication } from "./current-flow-state.js";
-import { SpecGateRepairInput } from "./spec-gate-repair-input.js";
+import { SpecGateRepairInput } from "./spec-gate-repair-values.js";
+import { createHash } from "node:crypto";
 import {
   SpecGateRepairReviewRequiredResult, SpecGateRepairReadyForGateResult,
 } from "../engine/step-result.js";
@@ -37,17 +37,32 @@ export class SpecGateRepairWorkerFacts {
 }
 
 /** The accepted groups, Result and version-linked audit are one Step decision. */
+export class SpecGateRepairCandidate {
+  constructor(spec, resultRevision) {
+    const bytes = JSON.stringify(spec);
+    if (resultRevision?.digest !== createHash("sha256").update(bytes).digest("hex")
+      || resultRevision.byteLength !== Buffer.byteLength(bytes)) {
+      throw new TypeError("Spec Gate repair candidate differs from its audit revision");
+    }
+    this.spec = Object.freeze(structuredClone(spec));
+    this.resultRevision = Object.freeze({ ...resultRevision });
+    Object.freeze(this);
+  }
+}
+
 export class SpecGateRepairSelection {
-  constructor({ result, publication, audit, facts }) {
+  constructor({ result, candidate, audit, facts }) {
     if (!(facts instanceof SpecGateRepairWorkerFacts)
       || !(result instanceof SpecGateRepairReviewRequiredResult
         || result instanceof SpecGateRepairReadyForGateResult)
-      || !(publication instanceof CanonicalWorkerSpecPublication)
+      || !(candidate instanceof SpecGateRepairCandidate)
+      || audit?.resultRevision?.digest !== candidate.resultRevision.digest
+      || audit?.resultRevision?.byteLength !== candidate.resultRevision.byteLength
       || audit?.phase !== "spec-gate-repair") {
       throw new TypeError("Spec Gate repair selection requires a typed Result and publication");
     }
     this.result = result;
-    this.publication = publication;
+    this.candidate = candidate;
     this.audit = Object.freeze(structuredClone(audit));
     this.facts = facts;
     Object.freeze(this);

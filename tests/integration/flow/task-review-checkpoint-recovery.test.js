@@ -11,7 +11,8 @@ import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { readTaskReviewRecoveryAuthorization, readTaskReviewUnsealedCheckpoint } from "../../../src/flow/lib/task-review-recovery-checkpoint.js";
 import { ReviewTargetAuthority } from "../../../src/flow/lib/review-target-authority.js";
-import { ReviewWorkUnit, ReviewWorkUnitOutput } from "../../../src/flow/lib/review-work-unit.js";
+import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
+import { ReviewWorkUnitOutput } from "../../../src/flow/lib/review-work-unit-values.js";
 import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
 import { SourceMutationBaseline } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";

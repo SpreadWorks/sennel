@@ -1,7 +1,7 @@
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
-import path from "node:path";
-import crypto from "node:crypto";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
+import { FlowFindingSourceIdentity, normalizeSourceArtifactPath, canonicalSourceFindings,
+  findSourceFinding, requireSourceString, requireFindingFingerprint } from "./flow-finding-source.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 import { RequirementTestFailureArtifact } from "./requirement-test-artifacts.js";
@@ -12,7 +12,6 @@ import {
 
 export const FLOW_FINDINGS_LOGICAL_KEY = "flow.findings";
 export const MAX_FLOW_FINDINGS = 200;
-export const MAX_SOURCE_REF_CHARS = 300;
 export const MAX_MIRROR_FIELD_CHARS = 1000;
 export const MAX_SOURCE_ARTIFACT_READ_BYTES = 1024 * 1024;
 export const ACCEPTANCE_FINAL_DISPOSITIONS = Object.freeze([
@@ -27,15 +26,6 @@ export const ACCEPTANCE_FINAL_DISPOSITIONS = Object.freeze([
 const ACCEPTANCE_FINAL_DISPOSITION_SET = new Set(ACCEPTANCE_FINAL_DISPOSITIONS);
 const FORBIDDEN_DETAIL_FIELDS = Object.freeze(["summary", "reason", "details", "detail", "body", "message"]);
 
-function requireString(value, field) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`${field} must be a non-empty string`);
-  }
-  if (value.length > MAX_SOURCE_REF_CHARS) {
-    throw new Error(`${field} exceeds ${MAX_SOURCE_REF_CHARS} characters`);
-  }
-  return value;
-}
 
 function requireMirrorString(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -47,25 +37,6 @@ function requireMirrorString(value, field) {
   return value.trim();
 }
 
-function requireFindingFingerprint(value, field = "fingerprint") {
-  const fingerprint = requireString(value, field).toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(fingerprint)) {
-    throw new Error(`${field} must be a lowercase SHA-256 string`);
-  }
-  return fingerprint;
-}
-
-export function normalizeSourceArtifactPath(value, field = "sourceArtifact") {
-  const source = requireString(value, field).split("\\").join("/");
-  if (path.posix.isAbsolute(source) || path.win32.isAbsolute(source)) {
-    throw new Error(`${field} must be relative to the spec directory`);
-  }
-  const normalized = path.posix.normalize(source);
-  if (normalized === "." || normalized === ".." || normalized.startsWith("../")) {
-    throw new Error(`${field} must stay inside the spec directory`);
-  }
-  return normalized;
-}
 
 function requireInteger(value, field) {
   if (!Number.isInteger(value) || value < 0) throw new Error(`${field} must be a non-negative integer`);
@@ -97,26 +68,26 @@ function rejectCopiedDetail(input = {}) {
 export class FlowFinding {
   constructor(input = {}) {
     rejectCopiedDetail(input);
-    this.findingId = requireString(input.findingId, "findingId");
-    this.sourceStep = requireString(input.sourceStep, "sourceStep");
+    this.findingId = requireSourceString(input.findingId, "findingId");
+    this.sourceStep = requireSourceString(input.sourceStep, "sourceStep");
     this.sourceArtifact = normalizeSourceArtifactPath(input.sourceArtifact, "sourceArtifact");
-    this.sourceFindingId = requireString(input.sourceFindingId, "sourceFindingId");
-    this.runId = input.runId == null ? null : requireString(input.runId, "runId");
+    this.sourceFindingId = requireSourceString(input.sourceFindingId, "sourceFindingId");
+    this.runId = input.runId == null ? null : requireSourceString(input.runId, "runId");
     this.fingerprint = requireFindingFingerprint(input.fingerprint);
-    this.disposition = requireString(input.disposition, "disposition");
+    this.disposition = requireSourceString(input.disposition, "disposition");
     if (this.disposition !== "deferred") throw new Error("disposition must be deferred");
     this.rationale = requireMirrorString(input.rationale, "rationale");
     this.retryExhausted = requireBoolean(input.retryExhausted, "retryExhausted");
     this.attempts = requireInteger(input.attempts, "attempts");
     this.round = requireInteger(input.round, "round");
-    this.completionKind = requireString(input.completionKind, "completionKind");
+    this.completionKind = requireSourceString(input.completionKind, "completionKind");
     if (this.completionKind !== "deferred") throw new Error("completionKind must be deferred");
     this.finalDisposition = validateFinalDisposition(
       Object.prototype.hasOwnProperty.call(input, "finalDisposition") ? input.finalDisposition : null,
     );
     this.planRewindAt = input.planRewindAt == null
       ? null
-      : requireString(input.planRewindAt, "planRewindAt");
+      : requireSourceString(input.planRewindAt, "planRewindAt");
     Object.freeze(this);
   }
 
@@ -144,42 +115,6 @@ export class FlowFinding {
   }
 }
 
-/** Exact identity of one finding within one canonical source artifact. */
-export class FlowFindingSourceIdentity {
-  constructor({ sourceArtifact, sourceStep, sourceFindingId, fingerprint } = {}) {
-    this.sourceArtifact = normalizeSourceArtifactPath(sourceArtifact, "finding source identity sourceArtifact");
-    this.sourceStep = requireString(sourceStep, "finding source identity sourceStep");
-    this.sourceFindingId = requireString(sourceFindingId, "finding source identity sourceFindingId");
-    this.fingerprint = requireFindingFingerprint(fingerprint, "finding source identity fingerprint");
-    Object.freeze(this);
-  }
-
-  equals(other) {
-    return other instanceof FlowFindingSourceIdentity
-      && other.sourceArtifact === this.sourceArtifact
-      && other.sourceStep === this.sourceStep
-      && other.sourceFindingId === this.sourceFindingId
-      && other.fingerprint === this.fingerprint;
-  }
-
-  toString() {
-    return JSON.stringify([
-      this.sourceArtifact,
-      this.sourceStep,
-      this.sourceFindingId,
-      this.fingerprint,
-    ]);
-  }
-
-  toJSON() {
-    return {
-      sourceArtifact: this.sourceArtifact,
-      sourceStep: this.sourceStep,
-      sourceFindingId: this.sourceFindingId,
-      fingerprint: this.fingerprint,
-    };
-  }
-}
 
 export class FlowFindingsArtifact {
   constructor(input = {}) {
@@ -324,7 +259,7 @@ function sourcePayloads({ logicalKey, bytes }) {
 /** Cataloged finding source retaining every immutable producer Attempt. */
 export class CanonicalFlowFindingSourceArtifact {
   constructor({ logicalKey, relativePath, descriptor, bytes, payloads } = {}) {
-    this.logicalKey = requireString(logicalKey, "finding source logicalKey");
+    this.logicalKey = requireSourceString(logicalKey, "finding source logicalKey");
     this.relativePath = normalizeSourceArtifactPath(relativePath, "finding source relativePath");
     if (!Buffer.isBuffer(bytes)) throw new Error("finding source bytes must be a Buffer");
     if (!Array.isArray(payloads) || payloads.length === 0) {
@@ -547,7 +482,7 @@ function appendDeferredFindingToArtifact({
     sourceFindingId,
     fingerprint,
   });
-  const runId = flowState?.runId == null ? null : requireString(flowState.runId, "flowState.runId");
+  const runId = flowState?.runId == null ? null : requireSourceString(flowState.runId, "flowState.runId");
   const existingIndex = existing.entries.findIndex((entry) => (
     entry.sourceIdentity().equals(sourceIdentity)
       && entry.runId === runId
@@ -658,130 +593,6 @@ export function buildDeferredFindingsSummary({ flowManager, flowState, nodeId })
   };
 }
 
-function failedEvaluations(artifact) {
-  return Array.isArray(artifact?.evaluations)
-    ? artifact.evaluations.filter((entry) => entry?.result === "fail")
-    : [];
-}
-
-function blockingObservations(artifact) {
-  const observations = artifact?.nextAction?.diagnosis?.observations || artifact?.observations || [];
-  return Array.isArray(observations)
-    ? observations.filter((entry) => entry?.severity === "blocking" || entry?.severity == null)
-    : [];
-}
-
-function reviewBlockingFindings(artifact, sourceStep) {
-  const candidates = [
-    ...(sourceStep === "spec-review" ? [artifact?.blocking] : []),
-    artifact?.blockingFindings,
-    artifact?.findings,
-    artifact?.comments,
-    artifact?.proposals,
-    artifact?.advisoryFindings,
-  ];
-  return candidates.find((candidate) => Array.isArray(candidate) && candidate.length > 0) || [];
-}
-
-function evaluatedSource(artifact) {
-  // Command-result artifacts retain the producer payload under `artifacts`.
-  // Findings always inspect the evaluated payload, never the envelope.
-  return artifact?.artifacts && typeof artifact.artifacts === "object" && !Array.isArray(artifact.artifacts)
-    ? artifact.artifacts
-    : artifact;
-}
-
-function sourceFindingsForArtifact(artifact, sourceStep) {
-  const source = evaluatedSource(artifact);
-  if (sourceStep === "spec-gate") {
-    const observations = blockingObservations(source);
-    if (observations.length > 0) return observations;
-  }
-  const evaluations = failedEvaluations(source);
-  if (evaluations.length > 0) return evaluations;
-  const review = reviewBlockingFindings(source, sourceStep);
-  if (review.length > 0) return review;
-  return blockingObservations(source);
-}
-
-function findSourceFinding(artifact, identity) {
-  if (!(identity instanceof FlowFindingSourceIdentity)) {
-    throw new Error("source finding resolution requires a FlowFindingSourceIdentity");
-  }
-  const source = evaluatedSource(artifact);
-  const facets = [
-    failedEvaluations(source),
-    reviewBlockingFindings(source, identity.sourceStep),
-    blockingObservations(source),
-  ];
-  for (const findings of facets) {
-    const match = findings.find((finding, index) => (
-      stableSourceFindingId(identity.sourceStep, finding, index) === identity.sourceFindingId
-        && sourceFindingFingerprint(identity.sourceStep, finding) === identity.fingerprint
-    ));
-    if (match !== undefined) return match;
-  }
-  return null;
-}
-
-function stableSourceFindingId(sourceStep, finding, index) {
-  return finding?.sourceFindingId
-    || finding?.findingId
-    || finding?.id
-    || finding?.proposalId
-    || finding?.guardrail_id
-    || `${sourceStep}:${index + 1}`;
-}
-
-function sourceFindingFingerprint(sourceStep, finding) {
-  if (typeof finding?.fingerprint === "string" && /^[a-f0-9]{64}$/.test(finding.fingerprint)) {
-    return finding.fingerprint;
-  }
-  const canonical = JSON.stringify({
-    sourceStep,
-    requirementId: String(finding?.requirementId || finding?.requirementRef || finding?.guardrail_id || "").trim(),
-    category: String(finding?.category || finding?.failureMode || finding?.failureKind || "").trim(),
-    file: String(finding?.file || finding?.where?.file || finding?.location?.file || "").trim().replace(/\\/g, "/"),
-    issue: String(finding?.issue || finding?.observed || finding?.reason || finding?.title || "").trim(),
-    ...(sourceStep === "spec-gate" && Array.isArray(finding?.targets) ? {
-      specTarget: {
-        targets: finding.targets.map((target) => JSON.stringify(target)).sort(),
-        allowedTargets: (finding.allowedTargets ?? []).map((permission) => JSON.stringify({
-          target: permission.target, operationKinds: [...permission.operationKinds].sort(),
-        })).sort(),
-        specRevision: finding.specRevision,
-      },
-    } : {}),
-  });
-  return crypto.createHash("sha256").update(canonical).digest("hex");
-}
-
-/** Canonical source finding and its complete identity for exact consumers. */
-export class CanonicalSourceFinding {
-  constructor({ identity, finding }) {
-    if (!(identity instanceof FlowFindingSourceIdentity) || finding === null
-      || typeof finding !== "object" || Array.isArray(finding)) {
-      throw new TypeError("canonical source finding requires an exact identity and source value");
-    }
-    this.identity = identity;
-    this.finding = Object.freeze(structuredClone(finding));
-    Object.freeze(this);
-  }
-}
-
-export function canonicalSourceFindings({ artifact, sourceStep, sourceArtifact } = {}) {
-  return Object.freeze(sourceFindingsForArtifact(artifact, sourceStep).map((finding, index) => (
-    new CanonicalSourceFinding({
-      identity: new FlowFindingSourceIdentity({
-        sourceArtifact,
-        sourceStep,
-        sourceFindingId: stableSourceFindingId(sourceStep, finding, index),
-        fingerprint: sourceFindingFingerprint(sourceStep, finding),
-      }),
-      finding,
-    })
-  )));
-}
 
 function sourceFindingRationale(finding) {
   return String(

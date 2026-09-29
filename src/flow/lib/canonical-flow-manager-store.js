@@ -167,10 +167,7 @@ import { TaskReviewReconciliationAdmission } from "./task-review-reconciliation.
 import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
 import { readTaskExecutionOverrunFacts, TaskExecutionOverrunAdmission } from "./task-execution-overrun.js";
 import { CanonicalImplementationRepairRecord } from "./review-recurrence.js";
-import {
-  buildDeferredSemanticFindingsPublication,
-  DeferredFlowFindingsPublication,
-} from "./flow-findings.js";
+import { buildDeferredSemanticFindingsPublication, DeferredFlowFindingsPublication } from "./flow-findings.js";
 import { IssueLogDocument } from "./issue-log-store.js";
 import { finalizationOutboxIdentity } from "./flow-outbox.js";
 import { FinalizeSyncInterruptedError } from "./finalize-sync-diagnostics.js";
@@ -215,9 +212,10 @@ import {
   readProspectiveCoveragePassDraftCompletionFacts,
 } from "./draft-completion-connector.js";
 import { DraftGateIssuePublication, DraftGatePublicationIntent } from "./draft-gate-prospective.js";
-import { SpecGateResultSelection } from "../steps/spec/spec-gate-result.js";
-import { SpecWorkerResultSelection } from "../steps/spec/spec-result.js";
+import { SpecGateSettlementPublication } from "./spec-gate-prospective.js";
+import { SpecWorkerResultSelection } from "./spec-worker-result-selection.js";
 import { SpecGateRepairSelection } from "./spec-gate-repair-worker-facts.js";
+import { SpecReviewWorkerSelection } from "./spec-review-worker-facts.js";
 import { ExternalBlockedOutcome, StepAttempt } from "./step-outcome.js";
 import { CanonicalSpecReview } from "./spec-review-artifacts.js";
 import { TaskCollection } from "../../spec/lib/render-contract.js";
@@ -4680,7 +4678,7 @@ export class CanonicalFlowManagerStore {
       draftReturn, artifactWrites, artifactRemovals, artifactBaselines, references, specRecord });
     if (reopened !== null) return Object.freeze({ state: this.runtime.load(resolved), receipt: reopened });
     if (binding.stepId === "spec-gate") {
-      if (!(gatePublication instanceof SpecGateResultSelection)) {
+      if (!(gatePublication instanceof SpecGateSettlementPublication)) {
         throw new CurrentFlowStateInvariantError("Spec Gate settlement requires its sealed Step Result selection");
       }
       gatePublication.assertPublication({ binding, commandResult, stepResult });
@@ -5128,6 +5126,7 @@ export class CanonicalFlowManagerStore {
     gatePublication = null,
     specSelection = null,
     specGateRepairSelection = null,
+    specReviewWorkerSelection = null,
     executionLifecycle = undefined,
     draftReturn = null,
   } = {}) {
@@ -5157,14 +5156,18 @@ export class CanonicalFlowManagerStore {
       }
       if (completed) {
         specGateRepairSelection.assertResult(stepResult);
-        if (specGateRepairSelection.publication !== specRecord
+        const baseline = artifactBaselines.length === 1
+          ? CanonicalFlowArtifactBaseline.from(artifactBaselines[0]) : null;
+        const source = specGateRepairSelection.facts.input;
+        if (JSON.stringify(specGateRepairSelection.candidate.spec) !== JSON.stringify(specRecord?.document)
           || artifactWrites.length !== 1
           || artifactWrites[0].logicalKey !== "spec.gate.repair.audit"
           || artifactWrites[0].parameters?.attemptId !== binding.attempt.id
           || JSON.stringify(JSON.parse(artifactWrites[0].bytes.toString("utf8")))
             !== JSON.stringify(specGateRepairSelection.audit)
-          || artifactBaselines.length !== 1
-          || CanonicalFlowArtifactBaseline.from(artifactBaselines[0]).artifact.logicalKey !== "spec.record") {
+          || baseline?.artifact.logicalKey !== "spec.record"
+          || baseline.digest !== source.baseRevision.slice("sha256:".length)
+          || baseline.byteLength !== source.specByteLength) {
           throw new CurrentFlowStateConflictError("Spec Gate repair publication does not match its Step selection");
         }
       } else if (!(settlement instanceof StepErrorDecision)
@@ -5212,6 +5215,33 @@ export class CanonicalFlowManagerStore {
       && artifactWrites.length === 1 && artifactWrites[0].logicalKey === "spec.review"
       && artifactBaselines.length === 1
       && CanonicalFlowArtifactBaseline.from(artifactBaselines[0]).artifact.logicalKey === "spec.review";
+    if (["spec-triage", "spec-repair"].includes(binding?.stepId)) {
+      const selected = specReviewWorkerSelection instanceof SpecReviewWorkerSelection;
+      if (selected !== reviewWorkerRoute) {
+        throw new CurrentFlowStateConflictError("Spec Review worker publication differs from its Step selection");
+      }
+      if (selected) {
+        const facts = specReviewWorkerSelection.facts;
+        const baseline = CanonicalFlowArtifactBaseline.from(artifactBaselines[0]);
+        if (specReviewWorkerSelection.result !== stepResult
+          || facts.stepId !== binding.stepId
+          || (specReviewWorkerSelection.candidate === undefined
+            ? specRecord !== undefined
+            : JSON.stringify(specReviewWorkerSelection.candidate.spec) !== JSON.stringify(specRecord?.document))
+          || JSON.stringify(specReviewWorkerSelection.review.toJSON())
+            !== JSON.stringify(JSON.parse(artifactWrites[0].bytes.toString("utf8")))
+          || baseline.digest !== facts.reviewDigest
+          || baseline.byteLength !== facts.reviewByteLength
+          || baseline.artifact.relativePath !== new CanonicalFlowArtifactBaseline({
+            logicalKey: "spec.review",
+            parameters: { revision: facts.review.identity.revision.toString() },
+            digest: facts.reviewDigest,
+            byteLength: facts.reviewByteLength,
+          }).artifact.relativePath) {
+          throw new CurrentFlowStateConflictError("Spec Review worker candidate, Review or baseline changed after selection");
+        }
+      }
+    }
     const routedSettlement = initialRoute || reviewWorkerRoute;
     if (!(stepResult instanceof StepResult)
       || !["spec", "spec-triage", "spec-repair"].includes(binding?.stepId)

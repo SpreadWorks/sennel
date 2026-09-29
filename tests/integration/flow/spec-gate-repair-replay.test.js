@@ -189,7 +189,7 @@ describe("Spec Gate repair terminal durability", () => {
       assert.equal(terminal[0].result.draftSettlementReceipt.id, service.workerOutcome.receipt.id);
       const audit = restored.readArtifact({ specId: value.specId,
         logicalKey: "spec.gate.repair.audit", consumerNodeId: "spec-gate",
-        parameters: { attemptId: service.binding.attempt.id } });
+        parameters: { attemptId: service.workerOutcome.receipt.binding.attemptId } });
       assert.equal(JSON.parse(audit.bytes.toString("utf8")).acceptedGroups.length, 1);
       assert.equal(JSON.parse(beforeReplay.spec).requirements[0].desc, replacement);
       assert.equal(settle(selectedInput).receipt.id, service.workerOutcome.receipt.id);
@@ -212,7 +212,7 @@ describe("Spec Gate repair terminal durability", () => {
       assert.equal(restored.canonicalState(value.specId).nextAction().nodeId, "spec-gate");
       const audit = JSON.parse(restored.readArtifact({ specId: value.specId,
         logicalKey: "spec.gate.repair.audit", consumerNodeId: "spec-gate",
-        parameters: { attemptId: service.binding.attempt.id },
+        parameters: { attemptId: service.workerOutcome.receipt.binding.attemptId },
       }).bytes.toString("utf8"));
       assert.equal(audit.reviewFacts.reviewInputPreserved, true);
       assert.equal(audit.reviewFacts.requiresReview, false);

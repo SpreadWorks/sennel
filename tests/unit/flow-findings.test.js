@@ -2,13 +2,8 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../src/lib/flow-schema-revision
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import {
-  buildDeferredSemanticFindingsPublication,
-  CanonicalFlowFindingSourceArtifact,
-  CanonicalFlowFindingsStore,
-  FlowFindingSourceIdentity,
-  canonicalSourceFindings,
-} from "../../src/flow/lib/flow-findings.js";
+import { buildDeferredSemanticFindingsPublication, CanonicalFlowFindingSourceArtifact, CanonicalFlowFindingsStore } from "../../src/flow/lib/flow-findings.js";
+import { FlowFindingSourceIdentity, canonicalSourceFindings } from "../../src/flow/lib/flow-finding-source.js";
 import { FLOW_ARTIFACT_VIEW_REGISTRY } from "../../src/flow/lib/artifact-view-registry.js";
 
 const SOURCE_PATH = "steps/draft/gate/result.json";

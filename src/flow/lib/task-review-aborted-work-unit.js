@@ -7,10 +7,10 @@ import { CanonicalFlowArtifactWrite, CurrentAttemptIdentity } from "./current-fl
 import {
   REVIEW_WORK_UNIT_MANIFEST_ENV,
   ReviewWorkUnit,
-  ReviewWorkUnitManifest,
-  ReviewWorkUnitSeal,
+  assertReviewWorkUnitInputSnapshot,
   reviewWorkUnitNamespace,
 } from "./review-work-unit.js";
+import { ReviewWorkUnitManifest, ReviewWorkUnitSeal } from "./review-work-unit-values.js";
 
 export const TASK_REVIEW_ABORTED_WORK_UNIT_KEY = "task.review.aborted.work-unit";
 
@@ -133,7 +133,7 @@ export class TaskReviewAbortedWorkUnit {
       seal: sealed.seal.toJSON(),
       inputs: manifest.inputs.map((input) => ({
         relativePath: input.relativePath,
-        bytes: input.assertSnapshot(worker.root).bytes.toString("base64"),
+        bytes: assertReviewWorkUnitInputSnapshot(input, worker.root).bytes.toString("base64"),
       })),
       output: {
         mediaType: manifest.output.mediaType,

@@ -12,6 +12,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { SPEC_GATE_MAXIMUM_CYCLE } from "./lib/spec-gate-policy.js";
 import { DraftWorkerRejection } from "./lib/draft-worker-rejection.js";
 export { resolveDraftWorkerCorrection } from "./lib/draft-worker-rejection.js";
 export { resolveDraftWorkerRecovery, DraftWorkerRecoveryRefusal } from "./lib/draft-worker-recovery.js";
@@ -1125,7 +1126,6 @@ const GATE_DISPOSITIONS = new Set([
   "pass", "retry", "repair", "defer", "external-blocked", "blocked", "recovery", "reconcile", "nonblocking", "advance",
 ]);
 const GATE_TRANSITION_TOKEN = Symbol("definition-gate-transition");
-export const SPEC_GATE_MAXIMUM_CYCLE = 4;
 
 const SPEC_GATE_POST_FAILURE_TOKEN = Symbol("spec-gate-post-failure");
 

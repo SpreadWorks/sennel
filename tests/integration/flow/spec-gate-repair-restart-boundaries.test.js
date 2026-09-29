@@ -117,9 +117,12 @@ async function completeWorkerResponse(value, request, proposal) {
   const service = await SpecGateRepairService.prepare({ ctx: value.ctx, request: restored,
     Connector: SpecEntryConnector, handoffCoordinator: coordinator });
   assert.deepEqual(durableSnapshot(value.ctx.flowManager, value.specId), beforeReplay);
+  const publicationReceipt = value.ctx.flowManager.readCurrentStepSettlement({
+    specId: value.specId, stepId: "spec-gate-repair",
+  }).receipt;
   const result = await new StepFactory().provide(SpecGateRepairService, service)
     .create(SpecGateRepairStep).execute();
-  return { service, result };
+  return { service, result, publicationReceipt };
 }
 
 describe("Spec Gate repair restart boundaries", () => {
@@ -582,29 +585,30 @@ describe("Spec Gate repair restart boundaries", () => {
         prompt: JSON.stringify(request.toPromptReference()) });
       sealWorkerArtifactHandoff({ requestPath: request.requestPath,
         invocationId: request.dispatchInvocationId });
+      const binding = await new SpecEntryConnector(request).connect();
       const service = await SpecGateRepairService.prepare({ ctx: value.ctx, request,
         Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
       const before = durableSnapshot(value.flowManager, value.specId);
       const result = value.flowManager.readCurrentStepSettlement({ specId: value.specId,
         stepId: "spec-gate-repair" }).result;
       assert.throws(() => value.flowManager.settleDraftStepResult({
-        binding: service.binding, stepResult: result,
+        binding: binding, stepResult: result,
         settlement: settleSpecStepResult("spec-gate-repair", result),
       }), /completion must publish one exact generation receipt/);
       const publication = value.flowManager.readCurrentStepSettlement({ specId: value.specId,
         stepId: "spec-gate-repair" }).receipt;
       const generation = publication.executionLifecycle.binding.executionGeneration;
-      const malformed = { version: 0, phase: "completed", runId: service.binding.runId,
-        specId: value.specId, attemptId: service.binding.attempt.id,
-        attemptSequence: service.binding.attempt.sequence, generation,
+      const malformed = { version: 0, phase: "completed", runId: binding.runId,
+        specId: value.specId, attemptId: binding.attempt.id,
+        attemptSequence: binding.attempt.sequence, generation,
         publicationReceiptId: publication.id,
         requestDigest: publication.executionLifecycle.claim.requestDigest,
         resultKind: result.kind };
       assert.throws(() => value.flowManager.settleDraftStepResult({
-        binding: service.binding, stepResult: result,
+        binding: binding, stepResult: result,
         settlement: settleSpecStepResult("spec-gate-repair", result),
         artifactWrites: [{ logicalKey: "spec.gate.repair.progress",
-          parameters: { attemptId: service.binding.attempt.id, generation: String(generation),
+          parameters: { attemptId: binding.attempt.id, generation: String(generation),
             phase: "completed" }, mediaType: "application/json",
           bytes: Buffer.from(JSON.stringify(malformed)) }],
       }), /completion must publish one exact generation receipt/);
@@ -617,6 +621,7 @@ describe("Spec Gate repair restart boundaries", () => {
     try {
       const request = nextRequest(value, "changed-completion-replay");
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
+      const binding = await new SpecEntryConnector(request).connect();
       const completed = await completeWorkerResponse(value, request, {
         version: 1, stage: "spec-gate-repair-context-request",
         baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
@@ -627,23 +632,23 @@ describe("Spec Gate repair restart boundaries", () => {
         stepId: "spec-gate-repair" }).receipt.executionLifecycle.binding.executionGeneration;
       const marker = manager.readArtifact({ specId: value.specId,
         logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
-        parameters: { attemptId: completed.service.binding.attempt.id,
+        parameters: { attemptId: binding.attempt.id,
           generation: String(generation), phase: "completed" } });
       const before = durableSnapshot(manager, value.specId);
       const repeated = manager.completeSpecGateRepairProgress({
-        binding: completed.service.binding, stepResult: completed.result,
+        binding: binding, stepResult: completed.result,
         settlement: settleSpecStepResult("spec-gate-repair", completed.result),
-        publicationReceipt: completed.service.publicationReceipt,
+        publicationReceipt: completed.publicationReceipt,
       });
       assert.equal(repeated.newlyCompleted, false);
       assert.equal(repeated.receipt.id, manager.readCurrentStepSettlement({ specId: value.specId,
         stepId: "spec-gate-repair" }).receipt.id);
       assert.deepEqual(durableSnapshot(manager, value.specId), before);
       const replay = manager.settleDraftStepResult({
-        binding: completed.service.binding, stepResult: completed.result,
+        binding: binding, stepResult: completed.result,
         settlement: settleSpecStepResult("spec-gate-repair", completed.result),
         artifactWrites: [{ logicalKey: "spec.gate.repair.progress",
-          parameters: { attemptId: completed.service.binding.attempt.id,
+          parameters: { attemptId: binding.attempt.id,
             generation: String(generation), phase: "completed" },
           mediaType: "application/json", bytes: marker.bytes }],
       });
@@ -651,11 +656,11 @@ describe("Spec Gate repair restart boundaries", () => {
         stepId: "spec-gate-repair" }).receipt.id);
       assert.deepEqual(durableSnapshot(manager, value.specId), before);
       assert.throws(() => manager.settleDraftStepResult({
-        binding: completed.service.binding, stepResult: completed.result,
+        binding: binding, stepResult: completed.result,
         settlement: settleSpecStepResult("spec-gate-repair", completed.result),
         specRecord: { changed: "This is not the completed publication" },
         artifactWrites: [{ logicalKey: "spec.gate.repair.progress",
-          parameters: { attemptId: completed.service.binding.attempt.id,
+          parameters: { attemptId: binding.attempt.id,
             generation: String(generation), phase: "completed" },
           mediaType: "application/json", bytes: marker.bytes }],
       }), /completion must publish one exact generation receipt/);
@@ -1050,7 +1055,7 @@ describe("Spec Gate repair restart boundaries", () => {
         assert.equal(retried.kind, "spec-gate-repair-review-required");
         const { budget: savedBudget } = latestRepairBudget({ flowManager: restarted,
           specId: value.specId, attemptId: state.attempt.id,
-          baseRevision: service.preparation.facts.input.baseRevision,
+          baseRevision: restoredRequest.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document.baseRevision,
           consumerNodeId: "spec-gate-repair" });
         assert.equal(savedBudget.providerCallCount, 1);
       }

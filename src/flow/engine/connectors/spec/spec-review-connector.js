@@ -1,4 +1,5 @@
 import { StepConnector } from "../../step-connector.js";
+import { SpecWorkerCompletionFacts } from "../../../lib/spec-worker-completion-facts.js";
 
 /** Connects a validated initial Spec publication to its first review. */
 export class SpecReviewConnector extends StepConnector {
@@ -11,7 +12,6 @@ export class SpecReviewConnector extends StepConnector {
   async connect() {
     const [{ SpecWorkerStepBinding }, {
       SpecReviewSettlementApplication,
-      SpecWorkerCompletionFacts,
     }] = await Promise.all([
       import("./spec-step-binding.js"),
       import("../../../lib/spec-step-connection.js"),

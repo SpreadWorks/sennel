@@ -1,6 +1,7 @@
 import { Step } from "../../engine/step.js";
 import { SpecTriageCompletedResult, StepErrorResult } from "../../engine/step-result.js";
-import { SpecReviewWorkerFacts, SpecReviewWorkerSelection, SpecReviewWorkerService } from "../../services/spec-worker-review-service.js";
+import { SpecReviewWorkerService } from "../../services/spec-worker-review-service.js";
+import { SpecReviewWorkerFacts, SpecReviewWorkerSelection } from "../../lib/spec-review-worker-facts.js";
 import { mergeSpecReviewDelta } from "../../lib/spec-review-artifacts.js";
 import { validateSpecRepairTriageFinding } from "../../lib/spec-repair-operations.js";
 
@@ -23,6 +24,7 @@ export function specTriageSelection(facts) {
   return new SpecReviewWorkerSelection({
     result: new SpecTriageCompletedResult(),
     review: mergeSpecReviewDelta({ review: facts.review, delta: permitted, discardedOperations }),
+    facts,
   });
 }
 

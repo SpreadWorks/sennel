@@ -5,10 +5,10 @@ import {
   PromptInputBuilder, PromptBatchPlan, PromptRequestLimit,
   PromptBatchGroup, GroupedPromptBatchTopology,
 } from "../../lib/prompt-batching.js";
-import { FlowFindingSourceIdentity } from "./flow-findings.js";
+import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
 import { SpecRepairTarget, specRepairTargetEntries } from "./spec-repair-operations.js";
 import { SpecGateDocumentTarget } from "./spec-gate-targets.js";
-import { SpecGateRepairSource } from "./spec-gate-repair-sources.js";
+import { SpecGateRepairSource } from "./spec-gate-repair-values.js";
 
 function hash(value) { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function freeze(value) {

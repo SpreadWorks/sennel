@@ -90,9 +90,14 @@ import {
   decisionEvidenceForActiveFlow,
   recordNonBlockingDecision,
 } from "./nonblocking.js";
-import { StepFactory } from "../engine/step-factory.js";
 import { DraftService } from "../services/draft-service.js";
 import { draftWorkerStepRegistration } from "../engine/composition/draft.js";
+import { PreparedStep } from "../engine/composition/step-registration.js";
+import {
+  prepareSpecWorkerStep,
+  resumeSpecWorkerStep,
+  specWorkerStepRegistration,
+} from "../engine/composition/spec.js";
 import {
   DraftWorkerExecutionStepBinding,
   DraftWorkerStepBinding,
@@ -136,32 +141,6 @@ function conditionalDraftAdmissionError(classification, code, message, resumeIns
       ...(resumeInstruction === null ? {} : { resumeInstruction }),
     },
   });
-}
-
-export async function specWorkerStepDefinition(stepId) {
-  switch (stepId) {
-    case "spec": {
-      const [{ SpecEntryConnector: Connector }, { SpecStep: StepClass }] = await Promise.all([
-        import("../engine/connectors/spec/spec-entry-connector.js"),
-        import("../steps/spec/spec.js"),
-      ]);
-      return { Connector, StepClass };
-    }
-    case "spec-triage":
-    case "spec-repair":
-    case "spec-gate-repair": {
-      const [{ SpecEntryConnector: Connector }, steps] = await Promise.all([
-        import("../engine/connectors/spec/spec-entry-connector.js"),
-        stepId === "spec-triage"
-          ? import("../steps/spec/spec-triage.js")
-          : stepId === "spec-repair" ? import("../steps/spec/spec-repair.js")
-            : import("../steps/spec/spec-gate-repair.js"),
-      ]);
-      return { Connector, StepClass: stepId === "spec-triage" ? steps.SpecTriageStep
-        : stepId === "spec-repair" ? steps.SpecRepairStep : steps.SpecGateRepairStep };
-    }
-    default: return null;
-  }
 }
 
 function agentFailuresFor(error, agentError = null) {
@@ -1715,7 +1694,7 @@ export default class RunDispatchCommand extends FlowCommand {
         const { workerRequestGuidance = null, ...providerOptions } = workerOptions;
         agentOptions = providerOptions;
         draftDefinition = draftWorkerStepRegistration(action.nextAction.step);
-        specDefinition = await specWorkerStepDefinition(action.nextAction.step);
+        specDefinition = specWorkerStepRegistration(action.nextAction.step);
         const conditionalDraftExecution = isConditionalDraftWorkerStep(action.nextAction.step);
         const workerInstructions = new WorkerArtifactWorkerInstructions({
           // Reconstruct producer feedback from the canonical checkpoint, including
@@ -1766,7 +1745,9 @@ export default class RunDispatchCommand extends FlowCommand {
               const service = await SpecGateRepairService.resumePublished({
                 ctx, state, handoffCoordinator: this.handoffCoordinator,
               });
-              const result = await this.runSpecWorkerStep(specDefinition, service);
+              const result = await this.runSpecWorkerStep(
+                await resumeSpecWorkerStep(specDefinition, service),
+              );
               return { error: null, handoffRequest: null, agentError: null,
                 partialProgressReceipt: service.partialProgressReceipt,
                 stepResult: result.stepResult, supervisorEvents: [], deferredMetric: null };
@@ -1958,18 +1939,11 @@ export default class RunDispatchCommand extends FlowCommand {
             ? { error: null, ...prepared }
             : await this.runDraftWorkerStep(ctx, handoffRequest, draftDefinition, prepared);
         } else if (specDefinition !== null) {
-          const { SpecService } = await import("../services/spec-service.js");
-          const { SpecReviewWorkerService } = await import("../services/spec-worker-review-service.js");
-          const { SpecGateRepairService } = await import("../services/spec-gate-repair-service.js");
-          const Service = handoffRequest.stepId === "spec" ? SpecService
-            : handoffRequest.stepId === "spec-gate-repair" ? SpecGateRepairService : SpecReviewWorkerService;
-          const prepared = await Service.prepare({
-            ctx, request: handoffRequest,
-            Connector: specDefinition.Connector,
-            handoffCoordinator: this.handoffCoordinator,
+          const prepared = await prepareSpecWorkerStep(specDefinition, {
+            ctx, request: handoffRequest, handoffCoordinator: this.handoffCoordinator,
           });
-          reconciliation = prepared instanceof Service
-            ? await this.runSpecWorkerStep(specDefinition, prepared)
+          reconciliation = prepared instanceof PreparedStep
+            ? await this.runSpecWorkerStep(prepared)
             : { error: null, ...prepared };
         } else {
           reconciliation = this.handoffCoordinator.reconcile({
@@ -2095,19 +2069,11 @@ export default class RunDispatchCommand extends FlowCommand {
   }
 
   /** Execute the initial Spec worker through its Step and selected connection. */
-  async runSpecWorkerStep(definition, service) {
-    const { SpecService } = await import("../services/spec-service.js");
-    const { SpecReviewWorkerService } = await import("../services/spec-worker-review-service.js");
-    const { SpecGateRepairService } = await import("../services/spec-gate-repair-service.js");
-    if (definition === null || !(service instanceof SpecService || service instanceof SpecReviewWorkerService
-      || service instanceof SpecGateRepairService)) {
-      throw new Error("Spec Step definition is missing");
-    }
-    const step = new StepFactory()
-      .provide(service instanceof SpecService ? SpecService
-        : service instanceof SpecGateRepairService ? SpecGateRepairService : SpecReviewWorkerService, service)
-      .create(definition.StepClass);
-    const stepResult = await step.execute();
+  async runSpecWorkerStep(prepared) {
+    if (!(prepared instanceof PreparedStep)) throw new Error("Spec Step preparation is missing");
+    const [Service] = prepared.step.constructor.dependencies;
+    const service = prepared.dependency(Service);
+    const stepResult = await prepared.step.execute();
     return { ...service.workerOutcome, stepResult };
   }
 

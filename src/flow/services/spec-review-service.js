@@ -18,7 +18,7 @@ import { SpecReviewStepBinding } from "../engine/connectors/spec/spec-step-bindi
 import { recoverStepSettlementReceipt } from "../lib/definition-lifecycle-failure.js";
 import { StepAdmissionRefusal } from "../lib/step-admission-refusal.js";
 import { ReviewService } from "./review-service.js";
-import { ReviewWorkUnitManifest } from "../lib/review-work-unit.js";
+import { ReviewWorkUnitManifest } from "../lib/review-work-unit-values.js";
 import {
   CurrentFlowStateInvariantError,
   ActivityReviewPublication,
@@ -38,9 +38,50 @@ export class SpecReviewExecutionAdmission {
   }
 }
 
+export class SpecReviewExecutionClaimPreparation {
+  constructor({ flowManager, binding, executionBinding, request, recoveredClaim, needsCheckpoint }) {
+    if (!(binding instanceof SpecReviewStepBinding) || binding.flowManager !== flowManager
+      || !(executionBinding instanceof DraftReviewExecutionBinding)
+      || !(request instanceof ReviewProviderRequestIdentity)
+      || typeof recoveredClaim !== "boolean" || typeof needsCheckpoint !== "boolean"
+      || (recoveredClaim && needsCheckpoint)) {
+      throw new TypeError("Spec Review claim preparation requires its exact binding and request");
+    }
+    this.flowManager = flowManager;
+    this.binding = binding;
+    this.executionBinding = executionBinding;
+    this.request = request;
+    this.recoveredClaim = recoveredClaim;
+    this.needsCheckpoint = needsCheckpoint;
+    Object.freeze(this);
+  }
+}
+
+export class SpecReviewPublicationPreparation {
+  constructor({ binding = null, reviewDigest = null, result = null }) {
+    if (result === null
+      ? !(binding instanceof SpecReviewStepBinding) || typeof reviewDigest !== "string" || reviewDigest.length === 0
+      : binding !== null || reviewDigest !== null || result?.result !== "ok"
+        || result.artifacts?.phase !== "spec" || typeof result.artifacts.reviewDigest !== "string") {
+      throw new TypeError("Spec Review publication preparation requires a binding or an exact replay");
+    }
+    this.binding = binding;
+    this.reviewDigest = reviewDigest;
+    this.result = result;
+    Object.freeze(this);
+  }
+
+  get completed() { return this.result !== null; }
+}
+
 /** Canonical I/O and settlement for one revision-bound Spec Review Attempt. */
 export class SpecReviewService {
-  static async claimExecution({ flowManager, state, manifest, skipConfirm }) {
+  #flowManager;
+  #binding;
+  #executionBinding;
+  #manifest;
+
+  static prepareExecutionClaim({ flowManager, state, manifest, skipConfirm }) {
     if (!(manifest instanceof ReviewWorkUnitManifest)
       || manifest.runId !== state.runId || manifest.specId !== state.specId
       || manifest.attemptId !== state.attempt?.id) {
@@ -68,17 +109,20 @@ export class SpecReviewService {
     if (current?.phase === "claimed" && !current.claim.request?.equals(request)) {
       throw new StepAdmissionRefusal("the Spec Review provider request differs from its durable claim");
     }
-    let identity = executionState.executionIdentity();
-    if (current === null) {
-      const { StepFactory } = await import("../engine/step-factory.js");
-      const { SpecReviewStep } = await import("../steps/spec/spec-review.js");
-      const service = new this({ flowManager, binding, executionBinding, manifest });
-      const selected = await new StepFactory()
-        .provide(SpecReviewService, service).create(SpecReviewStep).execute();
-      if (!(selected instanceof SpecReviewExecutionRequiredResult)) {
-        throw new Error("Spec Review Step did not select execution");
-      }
-      identity = flowManager.draftStepExecutionState({ binding }).executionIdentity();
+    return new SpecReviewExecutionClaimPreparation({
+      flowManager, binding, executionBinding, request,
+      recoveredClaim: current?.phase === "claimed", needsCheckpoint: current === null,
+    });
+  }
+
+  static commitExecutionClaim(preparation) {
+    if (!(preparation instanceof SpecReviewExecutionClaimPreparation)) {
+      throw new TypeError("Spec Review claim requires its prepared execution identity");
+    }
+    const { flowManager, binding, executionBinding, request, recoveredClaim } = preparation;
+    const identity = flowManager.draftStepExecutionState({ binding }).executionIdentity();
+    if (!(identity?.stepResult instanceof SpecReviewExecutionRequiredResult)) {
+      throw new Error("Spec Review execution lacks its persisted Step selection");
     }
     ReviewService.claimExecution({
       flowManager,
@@ -91,17 +135,20 @@ export class SpecReviewService {
     const persistedClaim = flowManager.draftStepExecutionState({ binding }).lifecycle.claim;
     return new SpecReviewExecutionAdmission({
       request: persistedClaim.request,
-      recoveredClaim: current?.phase === "claimed",
+      recoveredClaim,
     });
   }
 
   static publish({ flowManager, specId, commandResult }) {
     const binding = new SpecReviewStepBinding({ flowManager, specId });
-    const stepResult = new SpecReviewExecutionRequiredResult();
+    const identity = flowManager.draftStepExecutionState({ binding }).executionIdentity();
+    if (!(identity?.stepResult instanceof SpecReviewExecutionRequiredResult)) {
+      throw new StepAdmissionRefusal("Spec Review publication requires its persisted execution selection");
+    }
     const input = {
       binding,
-      stepResult,
-      settlement: settleSpecStepResult(binding.stepId, stepResult),
+      stepResult: identity.stepResult,
+      settlement: identity.settlement,
       commandResult,
     };
     try {
@@ -114,10 +161,11 @@ export class SpecReviewService {
     }
   }
 
-  static async completePublication({ flowManager, state }) {
+  static async preparePublication({ flowManager, state }) {
     const latest = flowManager.canonicalState(state.specId);
     if (latest.current?.at(-1) !== "spec-review") {
-      return this.terminalReplay({ flowManager, state: latest });
+      const result = await this.terminalReplay({ flowManager, state: latest });
+      return result === null ? null : new SpecReviewPublicationPreparation({ result });
     }
     const binding = new SpecReviewStepBinding({ flowManager, specId: state.specId });
     const execution = flowManager.draftStepExecutionState({ binding });
@@ -132,21 +180,7 @@ export class SpecReviewService {
     if (activity === undefined || !read.persisted || read.review.audit.at(-1)?.stage !== "spec-review") {
       throw new Error("Spec Review publication does not match its execution receipt");
     }
-    const { StepFactory } = await import("../engine/step-factory.js");
-    const { SpecReviewStep } = await import("../steps/spec/spec-review.js");
-    const service = new this({ flowManager, binding });
-    let stepResult;
-    try {
-      stepResult = await new StepFactory()
-        .provide(SpecReviewService, service).create(SpecReviewStep).execute();
-    } catch (error) {
-      const replay = await this.terminalReplay({
-        flowManager, state: flowManager.canonicalState(state.specId),
-      });
-      if (replay !== null) return replay;
-      throw error;
-    }
-    return this.resultFromStepResult(stepResult, read.review.digest);
+    return new SpecReviewPublicationPreparation({ binding, reviewDigest: read.review.digest });
   }
 
   static resultFromStepResult(stepResult, reviewDigest) {
@@ -235,19 +269,19 @@ export class SpecReviewService {
         || manifest.inputDigest !== executionBinding.inputDigest))) {
       throw new TypeError("SpecReviewService execution requires its exact typed work unit");
     }
-    this.flowManager = flowManager;
-    this.binding = binding;
-    this.executionBinding = executionBinding;
-    this.manifest = manifest;
+    this.#flowManager = flowManager;
+    this.#binding = binding;
+    this.#executionBinding = executionBinding;
+    this.#manifest = manifest;
     Object.freeze(this);
   }
 
   inspectReview() {
-    this.binding.assertCurrent();
-    if (this.executionBinding !== null) return this.manifest;
-    const read = this.flowManager.readCurrentSpecReviewInput({
-      specId: this.binding.specId,
-      consumerNodeId: this.binding.stepId,
+    this.#binding.assertCurrent();
+    if (this.#executionBinding !== null) return this.#manifest;
+    const read = this.#flowManager.readCurrentSpecReviewInput({
+      specId: this.#binding.specId,
+      consumerNodeId: this.#binding.stepId,
     });
     if (!read.persisted || read.review.audit.at(-1)?.stage !== "spec-review") {
       throw new Error("Spec Review settlement requires its durable accepted publication");
@@ -256,33 +290,33 @@ export class SpecReviewService {
   }
 
   async persistStepResult(stepResult) {
-    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.binding.stepId) {
+    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.#binding.stepId) {
       throw new TypeError("SpecReviewService requires its Step Result");
     }
-    const settlement = settleSpecStepResult(this.binding.stepId, stepResult);
-    if (this.executionBinding !== null && !(settlement instanceof DraftExecutionSettlement)) {
+    const settlement = settleSpecStepResult(this.#binding.stepId, stepResult);
+    if (this.#executionBinding !== null && !(settlement instanceof DraftExecutionSettlement)) {
       throw new TypeError("Spec Review execution requires its Execution settlement");
     }
     const input = {
-      binding: this.binding,
+      binding: this.#binding,
       stepResult,
       settlement,
-      ...(this.executionBinding === null ? {} : {
-        executionLifecycle: DraftStepExecutionLifecycle.checkpoint(this.executionBinding),
+      ...(this.#executionBinding === null ? {} : {
+        executionLifecycle: DraftStepExecutionLifecycle.checkpoint(this.#executionBinding),
       }),
     };
     try {
-      const committed = this.executionBinding === null
-        ? this.flowManager.settleSpecStepResult(input)
-        : this.flowManager.checkpointDraftStepExecution({
-          binding: this.binding,
+      const committed = this.#executionBinding === null
+        ? this.#flowManager.settleSpecStepResult(input)
+        : this.#flowManager.checkpointDraftStepExecution({
+          binding: this.#binding,
           stepResult,
           settlement,
-          executionBinding: this.executionBinding,
+          executionBinding: this.#executionBinding,
         });
       return committed.receipt;
     } catch (error) {
-      return recoverStepSettlementReceipt(this.flowManager, input, error);
+      return recoverStepSettlementReceipt(this.#flowManager, input, error);
     }
   }
 }

@@ -1,3 +1,4 @@
+import { readSpecJsonValidator } from "../../../src/lib/spec-json.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { describe, it } from "node:test";
@@ -62,7 +63,7 @@ function byteOffset(text, fragment) {
   return offset;
 }
 function apply(spec, findings, operations, scopeExpansions = []) {
-  return applySpecRepairOperations({
+  return applySpecRepairOperations({ validator: readSpecJsonValidator(),
     spec,
     triage: triage(findings),
     repair: repair(operations, scopeExpansions),
@@ -161,7 +162,7 @@ describe("revision-scoped spec repair operations", () => {
 
   it("fails closed for a stale immutable revision before mutating the candidate", () => {
     const spec = sourceSpec();
-    assert.throws(() => applySpecRepairOperations({
+    assert.throws(() => applySpecRepairOperations({ validator: readSpecJsonValidator(),
       spec,
       triage: triage([]),
       repair: { ...repair([]), identity: { ...IDENTITY, digest: "d".repeat(64) } },
@@ -384,7 +385,7 @@ function gateAuthority(spec, findings, expectedUnits = findings.map(([identity])
 }
 function gateOperation(operation) { const { findingIds, ...value } = operation; return value; }
 function gateApply(spec, authority, groups, baseRevision = GATE_REVISION) {
-  return applySpecGateRepairOperations({
+  return applySpecGateRepairOperations({ validator: readSpecJsonValidator(),
     spec, authority, inputRevision: INPUT_DIGEST,
     repair: { version: 1, stage: "spec-gate-repair", baseRevision, groups },
   });

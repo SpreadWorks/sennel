@@ -1,9 +1,10 @@
+import { readSpecJsonValidator } from "../../src/lib/spec-json.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { validWorkerHandoffTaskSpec } from "../support/infrastructure/worker-artifact.js";
 import { CanonicalSpecReview, SpecReviewDelta, mergeSpecReviewDelta } from "../../src/flow/lib/spec-review-artifacts.js";
-import { SpecReviewWorkerFacts } from "../../src/flow/services/spec-worker-review-service.js";
+import { SpecReviewWorkerFacts } from "../../src/flow/lib/spec-review-worker-facts.js";
 import { specTriageSelection } from "../../src/flow/steps/spec/spec-triage.js";
 import { specRepairSelection } from "../../src/flow/steps/spec/spec-repair.js";
 
@@ -29,7 +30,7 @@ function facts(stepId, spec, review, findings = [], operations = []) {
     baseReviewDigest: review.digest, findings, operations,
   });
   return new SpecReviewWorkerFacts({
-    stepId, spec, review, delta, reviewDigest: "b".repeat(64), reviewByteLength: 123,
+    validator: readSpecJsonValidator(), stepId, spec, review, delta, reviewDigest: "b".repeat(64), reviewByteLength: 123,
   });
 }
 
@@ -63,13 +64,13 @@ test("repair selects changed or unchanged Result from canonical permissions and 
     expectedDigest: valueDigest(spec.requirements[0].desc), replacement: "Ignored.", reason: "Unpermitted.",
   }]));
   assert.equal(unchanged.result.kind, "spec-repair-unchanged");
-  assert.equal(unchanged.specRecord, undefined);
+  assert.equal(unchanged.candidate, undefined);
   assert.equal(unchanged.review.audit.at(-1).discardedOperations[0].reason, "unauthorized operation");
   const changed = specRepairSelection(facts("spec-repair", spec, review, [], [{
     findingIds: ["F-1"], kind: "replace-entity-field", target,
     expectedDigest: valueDigest(spec.requirements[0].desc), replacement: "Corrected.", reason: "Permitted.",
   }]));
   assert.equal(changed.result.kind, "spec-repair-changed");
-  assert.equal(changed.specRecord.document.requirements[0].desc, "Corrected.");
+  assert.equal(changed.candidate.spec.requirements[0].desc, "Corrected.");
   assert.deepEqual(changed.review.audit.at(-1).appliedFindings, ["F-1"]);
 });

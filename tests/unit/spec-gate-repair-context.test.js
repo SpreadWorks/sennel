@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SpecGateRepairContext } from "../../src/flow/lib/spec-gate-repair-context.js";
 import { PromptRequestLimit } from "../../src/lib/prompt-batching.js";
-import { SpecGateRepairSource } from "../../src/flow/lib/spec-gate-repair-sources.js";
+import { SpecGateRepairSource } from "../../src/flow/lib/spec-gate-repair-values.js";
 
 const revision = `sha256:${"a".repeat(64)}`;
 const rule = { id: "planned-check", title: "Planned checks", body: "State a check and its passing condition. Exception: a justified non-testable item needs no executable check." };

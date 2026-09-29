@@ -2,7 +2,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { resolveTaskReviewReconciliation } from "../definition.js";
 import { CurrentAttemptIdentity } from "./current-flow-state.js";
-import { TaskReviewUnsealedWorkUnitSet } from "./review-work-unit.js";
+import { TaskReviewUnsealedWorkUnitSet, assertReviewWorkUnitInputSnapshot } from "./review-work-unit.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { SourceMutationBaseline, WorkerArtifactRepositoryMutationSnapshot } from "./worker-artifact-handoff.js";
 import { ReviewExecutionLease } from "./review-execution-lease.js";
@@ -31,7 +31,7 @@ function archive(worker) {
   const manifest = worker.manifestDocument;
   return {
     manifest: manifest.toJSON(), manifestDigest: manifest.digest,
-    inputs: manifest.inputs.map(input => ({ relativePath: input.relativePath, bytes: input.assertSnapshot(worker.root).bytes.toString("base64") })),
+    inputs: manifest.inputs.map(input => ({ relativePath: input.relativePath, bytes: assertReviewWorkUnitInputSnapshot(input, worker.root).bytes.toString("base64") })),
   };
 }
 

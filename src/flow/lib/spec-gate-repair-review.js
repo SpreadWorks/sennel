@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { CanonicalSpecReview, canonicalSpecReviewJson } from "./spec-review-artifacts.js";
-import { canonicalSourceFindings, FlowFindingSourceIdentity } from "./flow-findings.js";
+import { canonicalSourceFindings, FlowFindingSourceIdentity } from "./flow-finding-source.js";
 import { SpecRepairTarget } from "./spec-repair-operations.js";
 
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }

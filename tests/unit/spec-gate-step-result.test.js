@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { settleSpecStepResult, specGateNonblockingEligibilityForResult } from "../../src/flow/definition.js";
 import { StepResult } from "../../src/flow/engine/step-result.js";
-import { SpecGateProspectiveFacts } from "../../src/flow/lib/spec-gate-prospective.js";
+import { SpecGateProspectiveFacts } from "../../src/flow/lib/spec-gate-prospective-facts.js";
 import { specGateResult } from "../../src/flow/steps/spec/spec-gate.js";
 
 const resultFingerprint = "a".repeat(64);
@@ -18,7 +18,7 @@ test("Spec Gate chooses phase-specific Result and Settlement for each semantic o
   const cases = [
     ["spec", { result: "pass", failureCategory: null }, "spec-gate-passed", "target-connection", "approval"],
     ["task-spec", { result: "pass", failureCategory: null }, "task-spec-gate-passed", "target-connection", "approval"],
-    ["spec", { repairAvailable: true }, "spec-gate-repair-required", "target-connection", "spec"],
+    ["spec", { repairAvailable: true }, "spec-gate-repair-required", "target-connection", "spec-gate-repair"],
     ["task-spec", { repairAvailable: true }, "task-spec-gate-repair-required", "execution", null],
     ["spec", {}, "spec-gate-retry-required", "execution", null],
     ["task-spec", { retryExhausted: true }, "task-spec-gate-deferred", "target-connection", "approval"],

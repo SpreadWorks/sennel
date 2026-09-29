@@ -32,14 +32,15 @@ import { CanonicalSpecTestTopology } from "./canonical-worker-artifacts.js";
 import { CanonicalReviewInputDescriptor } from "./review-work-unit-input.js";
 import { draftReviewSourceStepIds } from "./draft-review-routes.js";
 import { isDraftExecutionPublicationActivity } from "./producer-artifact-readiness.js";
-import { ReviewWorkUnit, ReviewWorkUnitOutput, ReviewWorkUnitOutputReceipt } from "./review-work-unit.js";
+import { ReviewWorkUnit } from "./review-work-unit.js";
+import { ReviewWorkUnitOutput, ReviewWorkUnitOutputReceipt } from "./review-work-unit-values.js";
 import { renderTaskMarkdown } from "../../spec/commands/render.js";
 import {
   CanonicalSpecReview,
-  SpecRevision,
   SpecReviewDelta,
   mergeSpecReviewDelta,
 } from "./spec-review-artifacts.js";
+import { FlowSpecRevision as SpecRevision } from "../../lib/flow-spec-revision.js";
 import { CanonicalTaskContext } from "./task-canonical-context.js";
 import { CurrentTaskSourceSnapshot, captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";

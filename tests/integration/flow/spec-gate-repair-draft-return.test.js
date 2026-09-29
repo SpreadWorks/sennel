@@ -48,6 +48,7 @@ test("a published Spec Gate decision gap reopens Draft with durable worker input
     assert.equal(plan.request, null);
     const service = await SpecGateRepairService.resumePublished({ ctx: replayContext,
       state: restarted.canonicalState(value.specId), handoffCoordinator: value.coordinator });
+    const binding = await new SpecEntryConnector(request).connect();
     const result = await new StepFactory().provide(SpecGateRepairService, service)
       .create(SpecGateRepairStep).execute();
     assert.equal(result.kind, "spec-gate-repair-draft-return-required");
@@ -78,7 +79,6 @@ test("a published Spec Gate decision gap reopens Draft with durable worker input
     const carried = draftRequest.contextSnapshot.entries.find((entry) => entry.kind === "reopen");
     assert.equal(carried.document.reason, proposal.decision);
     assert.equal(carried.document.draftAttemptId, current.attempt.id);
-    const binding = service.binding;
     const settlement = settleSpecStepResult(binding.stepId, result);
     const spec = loaded.readArtifact({ specId: value.specId, logicalKey: "spec.record",
       consumerNodeId: "spec-gate-repair" });

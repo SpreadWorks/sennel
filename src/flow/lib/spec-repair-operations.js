@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import { validateSpecJsonObject } from "../../lib/spec-json.js";
-import { FlowFindingSourceIdentity } from "./flow-findings.js";
+import { SpecJsonValidator } from "../../lib/spec-json-validator.js";
+import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const SHA256_REVISION = /^sha256:([a-f0-9]{64})$/;
@@ -680,7 +680,8 @@ function currentAttemptConflictKeys(operations, keyFor = (operation) => operatio
     .map(([key]) => key));
 }
 
-export function applySpecRepairOperations({ spec, triage, repair, inputRevision }) {
+export function applySpecRepairOperations({ spec, triage, repair, inputRevision, validator }) {
+  if (!(validator instanceof SpecJsonValidator)) throw new TypeError("Spec repair requires its canonical Spec validator");
   const batch = repair instanceof SpecRepairOperationBatch ? repair : new SpecRepairOperationBatch(repair);
   if (batch.baseRevision !== revisionFor(inputRevision)) throw new SpecRepairOperationsError("FLOW_SPEC_REPAIR_BASE_REVISION_MISMATCH", "spec-repair operations do not match the immutable handoff revision", { retryable: false, audit: commandOwnedAudit(batch, [], []) });
   const permissions = triageMap(triage, spec);
@@ -741,7 +742,7 @@ export function applySpecRepairOperations({ spec, triage, repair, inputRevision 
       discarded.push(discardedOperation(operation.toJSON(), reason)); continue;
     }
     try {
-      validateSpecJsonObject(candidate);
+      validator.validate(candidate);
     } catch {
       // Array lineages carry immutable-base positions. Replaying accepted work
       // rebuilds that lineage; cloning only the candidate would reinterpret
@@ -868,7 +869,8 @@ export class SpecGateRepairOperationBatch {
 
 /** Applies every Gate group against one immutable baseline. One bad operation
  * rejects its entire group, while independent groups can still be adopted. */
-export function applySpecGateRepairOperations({ spec, authority, repair, inputRevision }) {
+export function applySpecGateRepairOperations({ spec, authority, repair, inputRevision, validator }) {
+  if (!(validator instanceof SpecJsonValidator)) throw new TypeError("Spec Gate repair requires its canonical Spec validator");
   if (!(authority instanceof SpecGateRepairAuthority)) throw new Error("Spec Gate repair requires typed Gate authority");
   const batch = repair instanceof SpecGateRepairOperationBatch ? repair : new SpecGateRepairOperationBatch(repair);
   const revision = revisionFor(inputRevision);
@@ -969,7 +971,7 @@ export function applySpecGateRepairOperations({ spec, authority, repair, inputRe
       }
     }
     if (failure === null) {
-      try { validateSpecJsonObject(staged); }
+      try { validator.validate(staged); }
       catch { failure = "group produces an invalid Spec schema"; }
     }
     if (failure !== null) {

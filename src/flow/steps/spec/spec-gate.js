@@ -1,6 +1,7 @@
 import { Step } from "../../engine/step.js";
 import { SpecGateService } from "../../services/spec-gate-service.js";
-import { SpecGateResultSelection } from "./spec-gate-result.js";
+import { specGateResult } from "./spec-gate-result.js";
+import { SpecGateResultSelection } from "../../lib/spec-gate-result-selection.js";
 export { specGateResult } from "./spec-gate-result.js";
 
 export class SpecGateStep extends Step {
@@ -15,7 +16,8 @@ export class SpecGateStep extends Step {
 
   selectResult() {
     this.#service.assertGateResultAdmission();
-    const selection = new SpecGateResultSelection(this.#service.inspectGatePublication());
+    const facts = this.#service.inspectGateFacts();
+    const selection = new SpecGateResultSelection({ facts, result: specGateResult(facts) });
     this.#service.acceptGateResultSelection(selection);
     return selection.result;
   }

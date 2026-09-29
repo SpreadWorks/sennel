@@ -41,7 +41,7 @@ import {
   RequirementTestStepObservation,
   resolveRequirementTestLifecycle,
 } from "./definition.js";
-import { readCurrentGateTransitionFacts, SpecGateAdmissionRefusal } from "./lib/gate-transition-facts.js";
+import { readCurrentGateTransitionFacts } from "./lib/gate-transition-facts.js";
 import { applyGatePublicOutcomeProjection } from "./lib/gate-transition-application.js";
 import { findStepById, flattenSteps } from "./lib/step-tree.js";
 import { DRAFT_REVIEW_ROUTES, draftReviewRouteForRetryPhase } from "./lib/draft-review-routes.js";
@@ -78,8 +78,8 @@ import {
   DraftQuestionsReviewExecutionRequiredResult,
   STEP_RESULT_TYPE,
 } from "./engine/step-result.js";
-import { StepFactory } from "./engine/step-factory.js";
 import { draftStepRegistration, prepareDraftReviewBinding } from "./engine/composition/draft.js";
+import { specStepRegistration } from "./engine/composition/spec.js";
 import { isStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
 import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./lib/step-admission-refusal.js";
 
@@ -181,46 +181,8 @@ async function executePublishedDraftGateStep(ctx, result) {
 }
 
 async function executeProspectiveSpecGateStep(ctx, result) {
-  const [
-    { SpecGateEvaluationBinding },
-    { SpecGateService },
-    { SpecGateStep },
-    { GateIssueLogEntry },
-    { SpecGateIssuePublication },
-  ] = await Promise.all([
-    import("./engine/connectors/spec/spec-step-binding.js"),
-    import("./services/spec-gate-service.js"),
-    import("./steps/spec/spec-gate.js"),
-    import("./lib/run-gate.js"),
-    import("./lib/gate-issue-publication.js"),
-  ]);
-  const binding = new SpecGateEvaluationBinding({
-    flowManager: ctx.flowManager,
-    specId: ctx.specId ?? ctx.flowState.specId,
-  });
-  let state;
-  try { state = binding.assertCurrent(); }
-  catch (cause) { throw new SpecGateAdmissionRefusal("Spec Gate binding is stale", cause); }
-  const attached = attachedCanonicalCommandResultArtifact(result);
-  let issuePublication = null;
-  if (attached?.payload?.result === "fail") {
-    try {
-      issuePublication = new SpecGateIssuePublication({
-        binding,
-        entry: new GateIssueLogEntry({
-          ctx, result, timestamp: state.attempt.startedAt,
-        }).toJSON(),
-      });
-    } catch (cause) {
-      throw new SpecGateAdmissionRefusal("Spec Gate issue evidence is invalid", cause);
-    }
-  }
-  const step = new StepFactory()
-    .provideArguments(SpecGateService, {
-      flowManager: ctx.flowManager, binding, commandResult: result, issuePublication,
-    })
-    .create(SpecGateStep);
-  return step.execute();
+  const prepared = await specStepRegistration("spec-gate").create({ ctx, result });
+  return prepared.step.execute();
 }
 
 /**

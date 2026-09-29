@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { FlowSpecRevision } from "../../lib/flow-version.js";
+import { FlowSpecRevision } from "../../lib/flow-spec-revision.js";
 import { SpecRevisionIdentity } from "./spec-revision-identity.js";
 
 const TRIAGE_DISPOSITIONS = new Set(["apply", "invalid", "already_resolved", "downgraded_to_non_blocking"]);
@@ -118,7 +118,6 @@ function optionalKeys(value, required, optional, field) {
   if (!value || typeof value !== "object" || Array.isArray(value) || required.some((key) => !Object.hasOwn(value, key)) || Object.keys(value).some((key) => !required.includes(key) && !optional.includes(key))) throw artifactError([`${field} has an invalid schema`]);
 }
 
-export { FlowSpecRevision as SpecRevision };
 export { SpecRevisionIdentity } from "./spec-revision-identity.js";
 
 /**

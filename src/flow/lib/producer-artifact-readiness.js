@@ -10,7 +10,7 @@ import {
   FLOW_ARTIFACT_SWITCH_TARGETS,
 } from "../../lib/flow-artifact-contract.js";
 import { flowArtifactAuthorityForStep } from "./flow-artifact-authority.js";
-import { FlowSpecRevision } from "../../lib/flow-version.js";
+import { FlowSpecRevision } from "../../lib/flow-spec-revision.js";
 import { CurrentFlowStateInvariantError } from "./current-flow-state.js";
 import { validateAcceptanceReviewArtifact } from "./acceptance-review-artifacts.js";
 import { TaskStepIdentity } from "./task-step-identity.js";

@@ -1,24 +1,5 @@
-import {
-  CanonicalFlowArtifactBaseline,
-  CanonicalWorkerSpecPublication,
-} from "./current-flow-state.js";
+import { SpecWorkerCompletionFacts } from "./spec-worker-completion-facts.js";
 import { SpecWorkerStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
-
-/** Validated, side-effect-free output facts produced by the Spec worker. */
-export class SpecWorkerCompletionFacts {
-  constructor({ publication, baseline } = {}) {
-    if (!(publication instanceof CanonicalWorkerSpecPublication)) {
-      throw new TypeError("Spec worker facts require a typed Spec publication");
-    }
-    if (!(baseline instanceof CanonicalFlowArtifactBaseline)
-      || baseline.artifact.logicalKey !== "spec.record") {
-      throw new TypeError("Spec worker facts require the canonical Spec baseline");
-    }
-    this.publication = publication;
-    this.baseline = baseline;
-    Object.freeze(this);
-  }
-}
 
 /** Exact publication and successor connection selected after Definition settles the Result. */
 export class SpecReviewSettlementApplication {

@@ -24,11 +24,8 @@ import { CanonicalReviewWorkUnit } from "../../../../src/flow/lib/canonical-revi
 import { CanonicalSourceRequirementAuthority } from "../../../../src/flow/lib/canonical-file-map.js";
 import { CanonicalSpecTestTopology } from "../../../../src/flow/lib/canonical-worker-artifacts.js";
 import { CanonicalSpecReview } from "../../../../src/flow/lib/spec-review-artifacts.js";
-import {
-  REVIEW_WORK_UNIT_MANIFEST_ENV,
-  ReviewWorkUnit,
-  ReviewWorkUnitOutput,
-} from "../../../../src/flow/lib/review-work-unit.js";
+import { REVIEW_WORK_UNIT_MANIFEST_ENV, ReviewWorkUnit } from "../../../../src/flow/lib/review-work-unit.js";
+import { ReviewWorkUnitOutput } from "../../../../src/flow/lib/review-work-unit-values.js";
 import { ReviewFindingCycle } from "../../../../src/flow/lib/finding-disposition-policy.js";
 import { Agent } from "../../../../src/lib/agent.js";
 import { ProviderRegistry } from "../../../../src/lib/provider.js";

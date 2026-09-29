@@ -8,9 +8,7 @@ import {
   resolveLifecycle,
   resolveReviewTransition,
 } from "../definition.js";
-import {
-  buildDeferredSemanticFindingsPublication,
-} from "./flow-findings.js";
+import { buildDeferredSemanticFindingsPublication } from "./flow-findings.js";
 import { createLifecycleStepTransition } from "./lifecycle-step-transition.js";
 import {
   ReviewTransitionFacts,

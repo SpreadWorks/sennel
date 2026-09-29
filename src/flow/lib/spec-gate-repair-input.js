@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
+import { readSpecJsonValidator } from "../../lib/spec-json.js";
 import { loadMergedGuardrails, filterByPhase } from "../../lib/guardrail.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { buildAcknowledgedRationaleSection } from "./acknowledged-rationale.js";
-import { canonicalSourceFindings } from "./flow-findings.js";
+import { canonicalSourceFindings } from "./flow-finding-source.js";
 import { canonicalPlanGateRepairForTarget, PlanGateRepairObservation } from "./plan-gate-repair.js";
 import { SpecGateRepairContext } from "./spec-gate-repair-context.js";
 import { SpecGateTargetSelection } from "./spec-gate-targets.js";
 import { readSpecGateRepairSources } from "./spec-gate-repair-sources.js";
+import { SpecGateRepairInput } from "./spec-gate-repair-values.js";
 
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 function key(value) { return JSON.stringify(value); }
@@ -21,23 +23,6 @@ export class SpecGateRepairRuleSet {
     }
     this.guardrails = Object.freeze([...byRule.values()]);
     this.acknowledgedRationale = buildAcknowledgedRationaleSection({ spec, guardrails: rules });
-    Object.freeze(this);
-  }
-}
-
-/** One version-bound, permission-limited parent input for Gate repair. */
-export class SpecGateRepairInput {
-  constructor({ repair, spec, baseRevision, specByteLength, context, sourceDescriptor, review, attempt,
-    observationIdentities }) {
-    this.repair = repair;
-    this.spec = Object.freeze(structuredClone(spec));
-    this.baseRevision = baseRevision;
-    this.specByteLength = specByteLength;
-    this.context = context;
-    this.sourceDescriptor = Object.freeze(structuredClone(sourceDescriptor));
-    this.review = review;
-    this.attempt = Object.freeze({ id: attempt.id, sequence: attempt.sequence });
-    this.observationIdentities = Object.freeze(observationIdentities.map((identity) => Object.freeze(identity)));
     Object.freeze(this);
   }
 }
@@ -117,5 +102,5 @@ export function readSpecGateRepairInput({ flowManager, state, executionRoot, loc
   });
   return new SpecGateRepairInput({ repair, spec, baseRevision, specByteLength: specRead.bytes.length, context,
     sourceDescriptor: gateRead.descriptor, review, attempt: state.attempt,
-    observationIdentities: findings.map((finding) => finding.identity) });
+    observationIdentities: findings.map((finding) => finding.identity), validator: readSpecJsonValidator() });
 }

@@ -11,6 +11,7 @@ import { PRODUCT } from "../../lib/product.js";
 import {
   normalizeGeneratedSpecRequirementIds,
   validateSpecJsonObject,
+  readSpecJsonValidator,
 } from "../../lib/spec-json.js";
 import { validateSchema } from "../../lib/schema-validate.js";
 import {
@@ -49,10 +50,8 @@ import { DraftTransitionFacts } from "./draft-transition-facts.js";
 import { STEP_RESULT_TYPE, StepResult } from "../engine/step-result.js";
 import { DraftWorkerExecutionStepBinding } from "../engine/connectors/draft/draft-step-binding.js";
 import { StepPersistenceFailure } from "./definition-lifecycle-failure.js";
-import {
-  SpecWorkerCompletionFacts,
-} from "./spec-step-connection.js";
-import { SpecReviewWorkerFacts } from "../services/spec-worker-review-service.js";
+import { SpecWorkerCompletionFacts } from "./spec-worker-completion-facts.js";
+import { SpecReviewWorkerFacts } from "./spec-review-worker-facts.js";
 import { SpecGateRepairWorkerFacts } from "./spec-gate-repair-worker-facts.js";
 import { readProgressBoundSpecGateRepairInput, SPEC_GATE_REPAIR_REQUEST_LIMIT,
   latestRepairBudget } from "./spec-gate-repair-progress.js";
@@ -7221,6 +7220,7 @@ function prepareSpecWorkerCanonical({ request, state, submission }) {
       stepId: request.stepId, spec: specInput.document,
       review: new CanonicalSpecReview(reviewInput.document), delta,
       reviewDigest: reviewInput.digest, reviewByteLength: reviewInput.byteLength,
+      validator: readSpecJsonValidator(),
     });
     return new SpecWorkerPreparation({ request, state, submission, publications: null, facts });
   }
@@ -7250,6 +7250,10 @@ function prepareSpecWorkerCanonical({ request, state, submission }) {
   const baseline = publications.artifactBaselines.find((entry) => (
     entry.artifact.logicalKey === "spec.record"
   )) ?? null;
+  if (!(publications.specRecord instanceof CanonicalWorkerSpecPublication)
+    || !(baseline instanceof CanonicalFlowArtifactBaseline)) {
+    throw new TypeError("Spec worker facts require a typed publication and canonical Spec baseline");
+  }
   const facts = new SpecWorkerCompletionFacts({
     publication: publications.specRecord, baseline,
   });

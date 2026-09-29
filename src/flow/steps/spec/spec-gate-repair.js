@@ -6,9 +6,8 @@ import {
   SpecGateRepairNoProgressResult, StepErrorResult,
   SpecGateRepairContextRequiredResult, SpecGateRepairDraftReturnRequiredResult,
 } from "../../engine/step-result.js";
-import { CanonicalWorkerSpecPublication } from "../../lib/current-flow-state.js";
 import { SpecGateRepairAuthority, applySpecGateRepairOperations } from "../../lib/spec-repair-operations.js";
-import { SpecGateRepairWorkerFacts, SpecGateRepairSelection } from "../../lib/spec-gate-repair-worker-facts.js";
+import { SpecGateRepairWorkerFacts, SpecGateRepairSelection, SpecGateRepairCandidate } from "../../lib/spec-gate-repair-worker-facts.js";
 import { SpecGateRepairService } from "../../services/spec-gate-repair-service.js";
 import { SpecGateRepairReviewFacts } from "../../lib/spec-gate-repair-review.js";
 import { specGateRepairObservationResult } from "../../lib/gate-observation-convergence.js";
@@ -28,6 +27,7 @@ export function selectSpecGateRepair(facts) {
     authority,
     repair: facts.proposal,
     inputRevision: facts.input.baseRevision.slice("sha256:".length),
+    validator: facts.input.validator,
   });
   if (applied.audit.acceptedGroups.length === 0 || isDeepStrictEqual(applied.spec, facts.input.spec)) {
     return new SpecGateRepairNoProgressResult(new Error("Spec Gate repair made no accepted change"));
@@ -55,7 +55,7 @@ export function selectSpecGateRepair(facts) {
   });
   return new SpecGateRepairSelection({
     result,
-    publication: new CanonicalWorkerSpecPublication(applied.spec),
+    candidate: new SpecGateRepairCandidate(applied.spec, applied.audit.resultRevision),
     audit: {
       ...applied.audit,
       sourceReviewIdentity: facts.input.review?.review.identity.toJSON() ?? null,
@@ -84,7 +84,7 @@ export class SpecGateRepairStep extends Step {
     const facts = this.#service.inspectWorkerCompletion();
     let selection;
     try {
-      const continuation = this.#service.continuation;
+      const continuation = this.#service.inspectContinuation();
       selection = continuation === null ? selectSpecGateRepair(facts)
         : continuation.draftReturnRequired
           ? new SpecGateRepairDraftReturnRequiredResult()

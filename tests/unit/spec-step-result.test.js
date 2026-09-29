@@ -24,7 +24,7 @@ import {
   CanonicalFlowArtifactBaseline,
   CanonicalWorkerSpecPublication,
 } from "../../src/flow/lib/current-flow-state.js";
-import { SpecWorkerCompletionFacts } from "../../src/flow/lib/spec-step-connection.js";
+import { SpecWorkerCompletionFacts } from "../../src/flow/lib/spec-worker-completion-facts.js";
 import { specResult } from "../../src/flow/steps/spec/spec-result.js";
 
 test("initial Spec facts produce the semantic Result without I/O", () => {

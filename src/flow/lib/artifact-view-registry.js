@@ -6,7 +6,7 @@
  * explicitly reviewed singleton and its renderer-declared dependencies.
  */
 
-import { FlowFindingSourceIdentity } from "./flow-findings.js";
+import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
 
 const IDENTIFIER = /^[A-Za-z][A-Za-z0-9_-]*$/;
 

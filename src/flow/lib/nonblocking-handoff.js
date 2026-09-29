@@ -8,14 +8,8 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
  */
 
 import crypto from "node:crypto";
-import {
-  buildDeferredFlowFindingPublication,
-  DeferredFlowFindingsPublication,
-  FlowFindingSourceIdentity,
-  MAX_SOURCE_ARTIFACT_READ_BYTES,
-  normalizeSourceArtifactPath,
-  readCatalogedSourceArtifact,
-} from "./flow-findings.js";
+import { buildDeferredFlowFindingPublication, DeferredFlowFindingsPublication, MAX_SOURCE_ARTIFACT_READ_BYTES, readCatalogedSourceArtifact } from "./flow-findings.js";
+import { FlowFindingSourceIdentity, normalizeSourceArtifactPath } from "./flow-finding-source.js";
 import {
   CanonicalFlowArtifactBaseline,
   CanonicalFlowArtifactWrite,

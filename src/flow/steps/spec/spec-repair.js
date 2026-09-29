@@ -1,10 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { Step } from "../../engine/step.js";
 import { SpecRepairChangedResult, SpecRepairUnchangedResult, StepErrorResult } from "../../engine/step-result.js";
-import { SpecReviewWorkerFacts, SpecReviewWorkerSelection, SpecReviewWorkerService } from "../../services/spec-worker-review-service.js";
+import { SpecReviewWorkerService } from "../../services/spec-worker-review-service.js";
+import { SpecReviewWorkerFacts, SpecReviewWorkerSelection, SpecReviewWorkerCandidate } from "../../lib/spec-review-worker-facts.js";
 import { mergeSpecReviewDelta } from "../../lib/spec-review-artifacts.js";
 import { applySpecRepairOperations, specRepairProposalDigest } from "../../lib/spec-repair-operations.js";
-import { CanonicalWorkerSpecPublication } from "../../lib/current-flow-state.js";
 
 /** Apply only canonical Review permissions, preserving each rejected proposal in the audit. */
 export function specRepairSelection(facts) {
@@ -16,6 +16,7 @@ export function specRepairSelection(facts) {
     triage: facts.review.toJSON(),
     repair: facts.delta.toJSON(),
     inputRevision: facts.delta.identity.digest,
+    validator: facts.validator,
   });
   const acceptedOperations = repairResult.audit.acceptedOperations.map((entry) => entry.operation ?? entry);
   const discardedOperations = [
@@ -32,7 +33,8 @@ export function specRepairSelection(facts) {
     review: mergeSpecReviewDelta({
       review: facts.review, delta: facts.delta, acceptedOperations, discardedOperations,
     }),
-    specRecord: changed ? new CanonicalWorkerSpecPublication(repairResult.spec) : undefined,
+    candidate: changed ? new SpecReviewWorkerCandidate(repairResult.spec) : undefined,
+    facts,
   });
 }
 

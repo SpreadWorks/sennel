@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { CurrentAttemptIdentity, CanonicalFlowArtifactWrite } from "./current-flow-state.js";
-import { ReviewWorkUnitManifest } from "./review-work-unit.js";
+import { ReviewWorkUnitManifest } from "./review-work-unit-values.js";
 
 export const TASK_REVIEW_RECONCILIATION_KEY = "task.review.reconciliation";
 export function reconciliationDigest(value) {

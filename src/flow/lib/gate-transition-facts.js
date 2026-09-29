@@ -37,12 +37,11 @@ import { assertGateSettlementPublication } from "./gate-settlement-publication.j
 import { PlanGateRepairObservation } from "./plan-gate-repair.js";
 import { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
 import { SpecGateIssuePublication } from "./gate-issue-publication.js";
-import { SpecGateProspectiveFacts } from "./spec-gate-prospective.js";
+import { SpecGateProspectiveFacts } from "./spec-gate-prospective-facts.js";
 import { nonblockingRouteFor } from "./nonblocking-route.js";
 import { createHash } from "node:crypto";
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 export { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
-export { SpecGateProspectiveFacts } from "./spec-gate-prospective.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 

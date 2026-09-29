@@ -3,11 +3,10 @@ import {
   SpecGateDeferredResult, SpecGateAwaitingDecisionResult, SpecGateRecoveredResult,
   TaskSpecGatePassedResult, TaskSpecGateRepairRequiredResult, TaskSpecGateRetryRequiredResult,
   TaskSpecGateDeferredResult, TaskSpecGateAwaitingDecisionResult, TaskSpecGateRecoveredResult,
-  SpecGateBlockedResult, TaskSpecGateBlockedResult, stepResultDigest,
+  SpecGateBlockedResult, TaskSpecGateBlockedResult,
 } from "../../engine/step-result.js";
-import { SPEC_GATE_MAXIMUM_CYCLE } from "../../definition.js";
-import { SpecGateProspectiveFacts, SpecGatePublicationIntent } from "../../lib/spec-gate-prospective.js";
-import { CurrentFlowStateConflictError } from "../../lib/current-flow-state-conflict-error.js";
+import { SPEC_GATE_MAXIMUM_CYCLE } from "../../lib/spec-gate-policy.js";
+import { SpecGateProspectiveFacts } from "../../lib/spec-gate-prospective-facts.js";
 
 const RESULT_CLASSES = Object.freeze({
   spec: Object.freeze({
@@ -62,43 +61,4 @@ export function specGateResult(facts) {
   if (facts.repairAvailable) return new classes.repair();
   if (!facts.retryExhausted) return new classes.retry();
   return new classes.defer();
-}
-
-/** The Step-owned semantic choice sealed to its exact prospective publication. */
-export class SpecGateResultSelection {
-  constructor(publication) {
-    if (!(publication instanceof SpecGatePublicationIntent)) {
-      throw new TypeError("Spec Gate Result selection requires its prospective publication");
-    }
-    this.publication = publication;
-    this.result = specGateResult(publication.facts);
-    this.resultKind = this.result.kind;
-    this.resultDigest = stepResultDigest(this.result);
-    Object.freeze(this);
-  }
-
-  get facts() { return this.publication.facts; }
-  get issue() { return this.publication.issue; }
-
-  assertResult(stepResult) {
-    if (stepResult?.stepId !== "spec-gate" || stepResult?.kind !== this.resultKind
-      || stepResultDigest(stepResult) !== this.resultDigest) {
-      throw new CurrentFlowStateConflictError("Spec Gate Result differs from its sealed Step selection");
-    }
-  }
-
-  assertPublication({ binding, commandResult, stepResult }) {
-    this.assertResult(stepResult);
-    this.publication.assertPublication({ binding, commandResult });
-  }
-
-  assert(view) { this.publication.assert(view); }
-
-  toJSON() {
-    return {
-      ...this.publication.toJSON(),
-      resultKind: this.resultKind,
-      resultDigest: this.resultDigest,
-    };
-  }
 }

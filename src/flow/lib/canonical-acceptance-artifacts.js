@@ -27,10 +27,7 @@ import {
   attachCanonicalCommandResultArtifact,
   attachCanonicalCommandResultPublications,
 } from "./canonical-command-result.js";
-import {
-  CanonicalFlowFindingsStore,
-  FlowFindingsArtifact,
-} from "./flow-findings.js";
+import { CanonicalFlowFindingsStore, FlowFindingsArtifact } from "./flow-findings.js";
 import { collectUntrackedDiff } from "./run-gate.js";
 import { matchUpgradeRequiredSourcePaths, validateCanonicalUpgradeEvidence } from "./test-artifacts.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";

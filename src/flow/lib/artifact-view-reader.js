@@ -21,12 +21,8 @@ import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { validateSchema } from "../../lib/schema-validate.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { validateAcceptanceReviewArtifact } from "./acceptance-review-artifacts.js";
-import {
-  CanonicalFlowFindingSourceArtifact,
-  FlowFindingSourceIdentity,
-  FlowFindingsArtifact,
-  normalizeSourceArtifactPath,
-} from "./flow-findings.js";
+import { CanonicalFlowFindingSourceArtifact, FlowFindingsArtifact } from "./flow-findings.js";
+import { FlowFindingSourceIdentity, normalizeSourceArtifactPath } from "./flow-finding-source.js";
 import { FLOW_ARTIFACT_VIEW_REGISTRY } from "./artifact-view-registry.js";
 import { artifactViewSha256 } from "./artifact-view-fingerprint.js";
 import { buildCurrentFlowDefinition } from "../definition.js";
