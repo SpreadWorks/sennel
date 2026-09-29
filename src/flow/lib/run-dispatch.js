@@ -1,3 +1,7 @@
+import { assertCurrentWorkerExecutionSelection } from "./worker-execution-admission.js";
+import { workerStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
+import { reserveSpecGateRepairWorkerCall } from "../engine/composition/spec-gate-repair.js";
+import { planSpecGateRepairWorkerExecution } from "./spec-gate-repair-execution.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Agent-independent Flow continuation dispatcher.
@@ -93,11 +97,7 @@ import {
 import { DraftService } from "../services/draft-service.js";
 import { draftWorkerStepRegistration } from "../engine/composition/draft.js";
 import { PreparedStep } from "../engine/composition/step-registration.js";
-import {
-  prepareSpecWorkerStep,
-  resumeSpecWorkerStep,
-  specWorkerStepRegistration,
-} from "../engine/composition/spec.js";
+import { specWorkerStepRegistration } from "../engine/composition/spec.js";
 import {
   DraftWorkerExecutionStepBinding,
   DraftWorkerStepBinding,
@@ -1664,6 +1664,26 @@ export default class RunDispatchCommand extends FlowCommand {
   }
 
   async runWorkerAttempt(ctx, invocation, retryFeedback = null, agentOverride = null) {
+    const stepId = invocation.action.nextAction.step;
+    const registration = workerStepExecutionRegistration(stepId);
+    if (registration === null) return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);
+    const selection = registration.executionContract.select({ ctx, stepId });
+    return registration.executionContract.execute(selection, {
+      command: this, ctx, invocation, retryFeedback, agentOverride,
+    });
+  }
+
+  async executeSelectedWorker(selection, input) {
+    const { ctx, invocation, retryFeedback = null, agentOverride = null } = input;
+    const stepId = invocation.action.nextAction.step;
+    const registration = workerStepExecutionRegistration(stepId);
+    if (registration === null) throw new TypeError("selected worker requires its production registration");
+    const current = registration.executionContract.select({ ctx, stepId });
+    assertCurrentWorkerExecutionSelection(selection, current);
+    return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);
+  }
+
+  async #executeSelectedWorker(ctx, invocation, retryFeedback = null, agentOverride = null) {
     const action = new FlowDispatchAction(invocation.action.nextAction);
     let handoffRequest = null;
     let handoffAuthority = null;
@@ -1737,17 +1757,15 @@ export default class RunDispatchCommand extends FlowCommand {
           publicationRecovery = prepared.publicationRecovery;
         } else {
           if (action.nextAction.step === "spec-gate-repair") {
-            const { SpecGateRepairService } = await import("../services/spec-gate-repair-service.js");
-            repairExecution = SpecGateRepairService.planWorkerExecution({
+            repairExecution = planSpecGateRepairWorkerExecution({
               ctx, state, invocation, workerInstructions, handoffCoordinator: this.handoffCoordinator,
             });
             if (repairExecution.canonicalReplay) {
-              const service = await SpecGateRepairService.resumePublished({
+              const prepared = await specDefinition.create({
                 ctx, state, handoffCoordinator: this.handoffCoordinator,
               });
-              const result = await this.runSpecWorkerStep(
-                await resumeSpecWorkerStep(specDefinition, service),
-              );
+              const service = prepared.dependency(specDefinition.ServiceClass);
+              const result = await this.runSpecWorkerStep(prepared);
               return { error: null, handoffRequest: null, agentError: null,
                 partialProgressReceipt: service.partialProgressReceipt,
                 stepResult: result.stepResult, supervisorEvents: [], deferredMetric: null };
@@ -1827,8 +1845,7 @@ export default class RunDispatchCommand extends FlowCommand {
             const workerInvocation = work.workerInvocation();
             const prompt = work.prompt(workerInvocation);
             if (handoffRequest?.stepId === "spec-gate-repair") {
-              const { SpecGateRepairService } = await import("../services/spec-gate-repair-service.js");
-              SpecGateRepairService.reserveWorkerCall({ ctx, request: handoffRequest, prompt });
+              reserveSpecGateRepairWorkerCall({ ctx, request: handoffRequest, prompt });
             }
             if (handoffRequest?.policy.kind === "source") {
               this.handoffCoordinator.startSourceWorker({ ctx, request: handoffRequest, invocation });
@@ -1939,7 +1956,7 @@ export default class RunDispatchCommand extends FlowCommand {
             ? { error: null, ...prepared }
             : await this.runDraftWorkerStep(ctx, handoffRequest, draftDefinition, prepared);
         } else if (specDefinition !== null) {
-          const prepared = await prepareSpecWorkerStep(specDefinition, {
+          const prepared = await specDefinition.create({
             ctx, request: handoffRequest, handoffCoordinator: this.handoffCoordinator,
           });
           reconciliation = prepared instanceof PreparedStep

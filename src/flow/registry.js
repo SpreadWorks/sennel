@@ -42,6 +42,7 @@ import {
   resolveRequirementTestLifecycle,
 } from "./definition.js";
 import { readCurrentGateTransitionFacts } from "./lib/gate-transition-facts.js";
+import { selectGateExecutionAdmission } from "./lib/execution-admission.js";
 import { applyGatePublicOutcomeProjection } from "./lib/gate-transition-application.js";
 import { findStepById, flattenSteps } from "./lib/step-tree.js";
 import { DRAFT_REVIEW_ROUTES, draftReviewRouteForRetryPhase } from "./lib/draft-review-routes.js";
@@ -80,6 +81,7 @@ import {
 } from "./engine/step-result.js";
 import { draftStepRegistration, prepareDraftReviewBinding } from "./engine/composition/draft.js";
 import { specStepRegistration } from "./engine/composition/spec.js";
+import { gateStepExecutionRegistration } from "./engine/composition/registered-step-execution.js";
 import { isStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
 import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./lib/step-admission-refusal.js";
 
@@ -1134,6 +1136,11 @@ function pluginCommandName(command) {
   return String(command || "").startsWith("run-") ? String(command).slice(4) : command;
 }
 
+function loadGetNextActionCommand() { return import("./lib/get-next-action.js"); }
+function loadDispatchCommand() { return import("./lib/run-dispatch.js"); }
+function loadGateCommand() { return import("./lib/run-gate.js"); }
+function loadReviewCommand() { return import("./lib/run-review.js"); }
+
 
 export const FLOW_COMMANDS = {
   query: {
@@ -1319,7 +1326,7 @@ export const FLOW_COMMANDS = {
       helpKey: "flow.get.next-action",
       requiresFlow: false,
       explicitTargetResolution: true,
-      command: () => import("./lib/get-next-action.js"),
+      command: loadGetNextActionCommand,
       args: { flags: FLOW_TARGET_GUARD_FLAGS, options: FLOW_TARGET_GUARD_OPTIONS },
       help: [
         "Usage: sennel flow get next-action [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]",
@@ -1606,7 +1613,7 @@ export const FLOW_COMMANDS = {
       explicitTargetResolution: true,
       targetNotFoundAsMismatch: true,
       runtimeLog: { authority: "main-repository" },
-      command: () => import("./lib/run-dispatch.js"),
+      command: loadDispatchCommand,
       args: {
         flags: FLOW_TARGET_GUARD_FLAGS,
         options: withTargetGuardOptions(["--approve", "--agent-work-dir"]),
@@ -1663,13 +1670,31 @@ export const FLOW_COMMANDS = {
           ctx.terminalGateRevalidation = true;
           return;
         }
+        const flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
+        const typedState = ctx.flowManager.canonicalState(flowState.specId);
+        if (typedState.nextAction()?.nodeId !== resolveScopedGateStepId(flowState, ctx.phase)) return;
+        const registration = gateStepExecutionRegistration(ctx.phase);
+        if (["draft", "spec", "task-spec"].includes(ctx.phase)
+          && registration?.executionContract == null) {
+          throw new Error(`Gate execution contract is missing for ${ctx.phase}`);
+        }
+        const input = {
+          flowManager: ctx.flowManager, flowState, phase: ctx.phase, typedState,
+        };
+        const selection = registration === null
+          ? selectGateExecutionAdmission(input)
+          : registration.executionContract.select(input);
+        if (selection.admission.facts !== null
+          || selection.action?.action?.action !== "run-gate"
+          || !["start", "recover", "resume"].includes(selection.action.operation)) return;
+        ctx.flowState = flowState;
         await applyLifecycleActionsFromRegistry(ctx, {
           event: "gate:pre",
           command: "run-gate",
           phase: ctx.phase,
         });
       },
-      command: () => import("./lib/run-gate.js"),
+      command: loadGateCommand,
       args: {
         options: ["--spec", "--phase", ...FLOW_RUN_OPTIONS],
         flags: FLOW_TARGET_GUARD_FLAGS,
@@ -1830,7 +1855,7 @@ export const FLOW_COMMANDS = {
       draftReviewPostHookBoundary: DRAFT_REVIEW_REGISTRY_RESPONSIBILITY_BOUNDARY,
       responsibilities: DRAFT_REVIEW_REVIEW_RESPONSIBILITIES,
       runtimeLog: { stepId: reviewRuntimeLogStepId },
-      command: () => import("./lib/run-review.js"),
+      command: loadReviewCommand,
       args: {
         flags: withTargetGuardFlags(["--dry-run", "--skip-confirm"]),
         options: ["--phase", ...FLOW_RUN_OPTIONS],

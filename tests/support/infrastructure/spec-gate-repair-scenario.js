@@ -1,3 +1,6 @@
+import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
+import { PreparedStep } from "../../../src/flow/engine/composition/step-registration.js";
+import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 
@@ -6,8 +9,6 @@ import { CanonicalFlowFixture } from "./flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../builders/tmp-dir.js";
 import { validWorkerHandoffSpec } from "./worker-artifact.js";
 import { SpecGateEvaluationBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
-import { SpecGateService } from "../../../src/flow/services/spec-gate-service.js";
-import { SpecGateStep } from "../../../src/flow/steps/spec/spec-gate.js";
 import { SpecGateIssuePublication } from "../../../src/flow/lib/gate-issue-publication.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
@@ -64,9 +65,10 @@ export async function createSpecGateRepairScenario({
       entry: { step: "spec-gate", phase: "spec", observations,
         reason: "The selected Spec field needs a correction.", trigger: "gate post hook (auto)",
         timestamp: binding.assertCurrent().attempt.startedAt } });
-    const gate = await new SpecGateStep(new SpecGateService({
+    const preparedGate = await specStepRegistration("spec-gate").create({
       flowManager, binding, commandResult, issuePublication,
-    })).execute();
+    });
+    const gate = await preparedGate.step.execute();
     if (gate.kind !== "spec-gate-repair-required"
       || flowManager.canonicalState(specId).current?.at(-1) !== "spec-gate-repair") {
       throw new Error("Spec Gate scenario did not enter its repair Attempt");
@@ -108,7 +110,7 @@ export function prepareSpecGateRepairHandoffInput({
       reason: "Correct the exact finding selected by Spec Gate.",
     }] }],
   }));
-  SpecGateRepairService.reserveWorkerCall({ ctx, request, prompt: JSON.stringify(request.toPromptReference()) });
+  reserveSpecGateRepairWorkerCall({ ctx, request, prompt: JSON.stringify(request.toPromptReference()) });
   sealWorkerArtifactHandoff({
     requestPath: request.requestPath, invocationId: request.dispatchInvocationId,
     now: () => new Date("2026-08-04T00:00:01.000Z"),
@@ -121,7 +123,7 @@ export function prepareSpecGateRepairHandoffInput({
 
 export async function prepareSpecGateRepairHandoff(options = {}) {
   const prepared = prepareSpecGateRepairHandoffInput(options);
-  const service = await SpecGateRepairService.prepare(prepared.input);
+  const service = await prepareSpecGateRepairService(prepared.input);
   return { ...prepared, service };
 }
 
@@ -131,4 +133,10 @@ export async function completeSpecGateRepairHandoff(options = {}) {
   const result = await new StepFactory().provide(SpecGateRepairService, prepared.service)
     .create(SpecGateRepairStep).execute();
   return { ...prepared, result };
+}
+
+/** Exercise production composition, including its exact completed-receipt replay. */
+export async function prepareSpecGateRepairService(input) {
+  const prepared = await specStepRegistration("spec-gate-repair").create(input);
+  return prepared instanceof PreparedStep ? prepared.dependency(SpecGateRepairService) : prepared;
 }

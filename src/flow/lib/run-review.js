@@ -68,10 +68,11 @@ import {
   CanonicalReviewWorkUnit,
   canonicalReviewNodeId,
 } from "./canonical-review-artifacts.js";
-import { ReviewService } from "../services/review-service.js";
-import { SpecReviewService } from "../services/spec-review-service.js";
+import { SpecReviewOperations } from "./spec-review-operations.js";
+import { claimDraftReviewExecution as persistDraftReviewExecutionClaim } from "./draft-review-execution-claim.js";
 import { claimSpecReviewExecution, completeSpecReviewPublication } from "../engine/composition/spec.js";
 import { draftStepRegistration, prepareDraftReviewBinding } from "../engine/composition/draft.js";
+import { reviewStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
 import {
   REVIEW_WORK_UNIT_MANIFEST_ENV,
   assertReviewWorkUnitInputSnapshot,
@@ -85,7 +86,8 @@ import {
 import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./step-admission-refusal.js";
 import { ReviewExecutionLease } from "./review-execution-lease.js";
 import { assertReconciledTaskReviewInput, readTaskReviewReconciliations, isReconciledTaskReviewWorkUnit } from "./task-review-reconciliation.js";
-import { resolveCurrentReviewTransition } from "./review-transition-persistence.js";
+import { assertCurrentReviewExecutionSelection, ReviewExecutionAdmissionSelection,
+  selectReviewExecutionAdmission } from "./execution-admission.js";
 import {
   CurrentTaskSourceSnapshot,
   TaskMutationLineageSet,
@@ -321,7 +323,7 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
   if (selectedStepResult?.kind !== selected.kind || selectedSettlement === null) {
     throw new Error("Draft review execution lacks its persisted Step selection");
   }
-  ReviewService.claimExecution({
+  persistDraftReviewExecutionClaim({
     flowManager,
     binding: stepBinding,
     stepResult: selectedStepResult,
@@ -755,8 +757,26 @@ function resolveCurrentReviewRepairFingerprint(
 }
 
 /** Definition-owned admission: this command may execute only when no other Review transition is selected. */
+function reviewExecutionRefusal(selection, persistedPhase) {
+  if (selection.disposition === null
+    && selection.action?.operation === "resume"
+    && selection.action.action?.action === "run-review") return null;
+  return Envelope.fail(
+    "run",
+    "review",
+    "REVIEW_DEFINITION_ACTION_REQUIRED",
+    "the definition selected a different transition for the current canonical evidence; refresh next-action and follow it before starting another Review worker",
+    {
+      failureKind: "step-admission",
+      phase: persistedPhase,
+      operation: selection.disposition?.operation ?? selection.action?.operation ?? "none",
+      nextActionRequired: true,
+      reviewDisposition: selection.disposition?.toJSON() ?? null,
+    },
+  );
+}
+
 function reviewExecutionAdmission(ctx, { persistedPhase, executionRoot }) {
-  if (["draft-questions", "draft-coverage"].includes(persistedPhase)) return null;
   const specId = ctx.specId ?? ctx.flowState.specId;
   const flowState = ctx.flowManager.loadReadOnly(specId);
   const currentState = ctx.flowManager.canonicalState(specId);
@@ -777,7 +797,7 @@ function reviewExecutionAdmission(ctx, { persistedPhase, executionRoot }) {
         "review",
         "TASK_CONTEXT_INVALID",
         `canonical Task context is invalid: ${error.message}`,
-        { taskId: currentTaskId },
+        { taskId: currentTaskId, failureKind: "step-admission" },
       );
     }
   }
@@ -785,26 +805,14 @@ function reviewExecutionAdmission(ctx, { persistedPhase, executionRoot }) {
   const stepId = scope === "task"
     ? "task-review"
     : canonicalReviewNodeId({ phase: persistedPhase, taskId: currentTaskId });
-  const selection = resolveCurrentReviewTransition({
+  const selection = selectReviewExecutionAdmission({
     flowManager: ctx.flowManager,
     flowState,
     typedState: currentState,
     scope,
     stepId,
   });
-  if (selection.disposition === null) return null;
-  return Envelope.fail(
-    "run",
-    "review",
-    "REVIEW_DEFINITION_ACTION_REQUIRED",
-    "the definition selected a non-review transition for the current canonical evidence; refresh next-action and follow it before starting another Review worker",
-    {
-      phase: persistedPhase,
-      operation: selection.disposition.operation,
-      nextActionRequired: true,
-      reviewDisposition: selection.disposition.toJSON(),
-    },
-  );
+  return reviewExecutionRefusal(selection, persistedPhase);
 }
 
 /** Reuse a published Draft Review Attempt without invoking the provider again. */
@@ -1624,6 +1632,8 @@ function reconcileUnsealedTaskReviewSources({ workUnit, state, flowManager, task
 }
 
 export class RunReviewCommand extends FlowCommand {
+  #admittedExecutionContexts = new WeakSet();
+
   constructor({
     resolveScope = resolveImplReviewScope,
     resolveTreeSha = resolveCurrentReviewTreeSha,
@@ -1644,7 +1654,14 @@ export class RunReviewCommand extends FlowCommand {
    * commits the result history, immutable evidence, Activity, and state in
    * one journaled operation.
    */
-  async executeCanonical(ctx, { phase, dryRun, executionRoot, admissionChecked = false }) {
+  async executeCanonical(ctx, { phase, dryRun, executionRoot } = {}) {
+    if (!this.#admittedExecutionContexts.delete(ctx)) {
+      return this.execute({ ...ctx, phase, dryRun, executionRoot });
+    }
+    return this.#executeCanonical(ctx, { phase, dryRun, executionRoot });
+  }
+
+  async #executeCanonical(ctx, { phase, dryRun, executionRoot }) {
     const persistedPhase = reviewPhaseKeyForCtx(ctx, phase);
     const state = ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId);
     if (state === null) {
@@ -1657,7 +1674,7 @@ export class RunReviewCommand extends FlowCommand {
     const expectedNodeId = canonicalReviewNodeId({ phase: persistedPhase, taskId });
     if (currentNodeId !== expectedNodeId) {
       if (persistedPhase === "spec" && !dryRun) {
-        const replay = await SpecReviewService.terminalReplay({ flowManager: ctx.flowManager, state });
+        const replay = await SpecReviewOperations.terminalReplay({ flowManager: ctx.flowManager, state });
         if (replay !== null) return replay;
       }
       throw new Error(`canonical review requires active ${expectedNodeId}, found ${currentNodeId ?? "none"}`);
@@ -1694,10 +1711,8 @@ export class RunReviewCommand extends FlowCommand {
           taskId,
         }).requireInflightReviewOrdinal(),
       });
-    if (!admissionChecked) {
-      const admissionFailure = reviewExecutionAdmission(ctx, { persistedPhase, executionRoot });
-      if (admissionFailure !== null) return admissionFailure;
-    }
+    const admissionFailure = reviewExecutionAdmission(ctx, { persistedPhase, executionRoot });
+    if (admissionFailure !== null) return admissionFailure;
     if (dryRun) {
       return Envelope.fail(
         "run",
@@ -2067,7 +2082,7 @@ export class RunReviewCommand extends FlowCommand {
       publicationStarted = true;
       promotion.promote(result);
       if (persistedPhase === "spec") {
-        SpecReviewService.publish({ flowManager: ctx.flowManager, specId: state.specId, commandResult: result });
+        SpecReviewOperations.publish({ flowManager: ctx.flowManager, specId: state.specId, commandResult: result });
         try {
           const settled = await completeSpecReviewPublication({
             flowManager: ctx.flowManager,
@@ -2253,6 +2268,52 @@ export class RunReviewCommand extends FlowCommand {
   }
 
   async execute(ctx) {
+    const phase = ctx.phase || null;
+    const persistedPhase = reviewPhaseKeyForCtx(ctx, phase);
+    const registration = reviewStepExecutionRegistration(persistedPhase);
+    if (["draft-questions", "draft-coverage", "spec"].includes(persistedPhase)
+      && registration?.executionContract == null) {
+      throw new Error(`Review execution contract is missing for ${persistedPhase}`);
+    }
+    if (registration === null || !isCanonicalFlowState(ctx.flowState)) {
+      return this.#executeReviewCommand(ctx);
+    }
+    const typedState = ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId);
+    const selection = registration.executionContract.select({
+      flowManager: ctx.flowManager,
+      flowState: ctx.flowState,
+      typedState,
+      scope: "flow",
+      stepId: registration.stepId,
+    });
+    return registration.executionContract.execute(selection, { command: this, ctx });
+  }
+
+  async executeSelectedReview(selection, { ctx }) {
+    if (!(selection instanceof ReviewExecutionAdmissionSelection)) {
+      throw new TypeError("Review execution requires its registered selection");
+    }
+    const phase = reviewPhaseKeyForCtx(ctx, ctx.phase || null);
+    const flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
+    const state = ctx.flowManager.canonicalState(flowState.specId);
+    const registration = reviewStepExecutionRegistration(phase);
+    if (registration?.executionContract == null) {
+      throw new StepAdmissionRefusal(`Review execution contract is missing for ${phase}`);
+    }
+    const current = registration.executionContract.select({
+      flowManager: ctx.flowManager, flowState, typedState: state,
+      scope: "flow", stepId: registration.stepId,
+    });
+    assertCurrentReviewExecutionSelection(selection, current);
+    const expected = canonicalReviewNodeId({ phase, taskId: null });
+    if (state.current?.at(-1) === expected && state.attempt?.failure === null) {
+      const refusal = reviewExecutionRefusal(current, phase);
+      if (refusal !== null) return refusal;
+    }
+    return this.#executeReviewCommand({ ...ctx, flowState });
+  }
+
+  async #executeReviewCommand(ctx) {
     const { root } = ctx;
     const executionRoot = ctx.executionRoot || root;
     const phase = ctx.phase || null;
@@ -2281,15 +2342,15 @@ export class RunReviewCommand extends FlowCommand {
     const expectedNodeId = canonicalReviewNodeId({ phase: persistedPhase, taskId });
     if (state?.current?.at(-1) !== expectedNodeId || state.attempt === null) {
       if (persistedPhase === "spec" && !dryRun) {
-        const replay = await SpecReviewService.terminalReplay({ flowManager: ctx.flowManager, state });
+        const replay = await SpecReviewOperations.terminalReplay({ flowManager: ctx.flowManager, state });
         if (replay !== null) return replay;
       }
       // executeCanonical returns the detailed canonical target error and
       // remains the single state-validation path.
-      return this.executeCanonical(ctx, { phase, dryRun, executionRoot });
+      return this.#executeCanonical(ctx, { phase, dryRun, executionRoot });
     }
     if (state.attempt.failure !== null) {
-      return this.executeCanonical(ctx, { phase, dryRun, executionRoot });
+      return this.#executeCanonical(ctx, { phase, dryRun, executionRoot });
     }
     const publishedDraftReview = rehydratePublishedDraftReview(ctx, { state, phase: persistedPhase });
     if (publishedDraftReview !== null) return publishedDraftReview;
@@ -2354,10 +2415,16 @@ export class RunReviewCommand extends FlowCommand {
         });
         if (refreshedAdmissionFailure !== null) return refreshedAdmissionFailure;
       }
-      return await this.executeCanonical({
+      const admittedCtx = {
         ...refreshedCtx,
         reviewExecutionLeaseIdentity: leaseIdentity,
-      }, { phase, dryRun, executionRoot, admissionChecked: true });
+      };
+      this.#admittedExecutionContexts.add(admittedCtx);
+      try {
+        return await this.executeCanonical(admittedCtx, { phase, dryRun, executionRoot });
+      } finally {
+        this.#admittedExecutionContexts.delete(admittedCtx);
+      }
     } finally {
       lease.release();
     }

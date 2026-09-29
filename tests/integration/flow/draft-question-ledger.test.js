@@ -20,7 +20,9 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { createDraftRefineResult, DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
 import { DraftQuestionResolutionIdentity } from "../../../src/flow/lib/draft-question-resume-receipt.js";
 import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
-import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { draftWorkerStepRegistration } from "../../../src/flow/engine/composition/draft.js";
+import { prepareDraftService } from "../../support/infrastructure/draft-service.js";
+import { ServiceBoundaryCoverage } from "../../support/structure/service-boundary.js";
 import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
 import { DraftRefineAwaitingAnswerResult } from "../../../src/flow/engine/step-result.js";
 import { DraftStepSettlementReceiptValue, settleDraftStepResult } from "../../../src/flow/definition.js";
@@ -165,7 +167,7 @@ test("DraftRefineStep rejects a fact-read failure without selecting or persistin
       readAttempts += 1;
       throw readFailure;
     };
-    const service = new DraftService({
+    const service = await prepareDraftService({
       flowManager: manager,
       binding,
     });
@@ -219,7 +221,7 @@ test("answer and resume receipt commit atomically, replay exactly, and re-enter 
     flow.settle("draft").activate("draft-refine");
     const attempt = manager.canonicalState(specId).attempt;
     const binding = await new DraftRefineConnector({ flowManager: manager, specId }).connect();
-    assert.equal((await new DraftRefineStep(new DraftService({ flowManager: manager, binding })).execute()).kind,
+    assert.equal((await new DraftRefineStep(await prepareDraftService({ flowManager: manager, binding })).execute()).kind,
       "draft-refine-awaiting-answer");
     const beforeAnswer = manager.activityLedger(specId).length;
     const command = new SetDraftAnswerCommand();
@@ -379,8 +381,12 @@ test("answer and resume receipt commit atomically, replay exactly, and re-enter 
       /no authorized draft-coverage producer Activity/,
     );
 
-    const resumedBinding = await new DraftRefineConnector({ flowManager: manager, specId }).connect();
-    assert.equal((await new DraftRefineStep(new DraftService({ flowManager: manager, binding: resumedBinding })).execute()).kind,
+    const resumedManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const resumedBinding = await new DraftRefineConnector({ flowManager: resumedManager, specId }).connect();
+    const registration = draftWorkerStepRegistration("draft-refine");
+    const resumed = await registration.create({ flowManager: resumedManager, binding: resumedBinding });
+    new ServiceBoundaryCoverage([registration]).inspectPrepared(registration, resumed);
+    assert.equal((await resumed.step.execute()).kind,
       "draft-refine-completed");
     const canonical = manager.canonicalState(specId);
     assert.equal(attempt.id, canonical.findNode("draft-refine").result.draftSettlementReceipt.binding.attemptId);

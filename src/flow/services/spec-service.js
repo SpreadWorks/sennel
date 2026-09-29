@@ -1,114 +1,50 @@
 import { StepResult } from "../engine/step-result.js";
-import { SpecWorkerStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
 import { settleSpecStepResult, StepErrorDecision, StepRoute } from "../definition.js";
-import { StepPersistenceFailure, recoverStepSettlementReceipt } from "../lib/definition-lifecycle-failure.js";
-import { CurrentFlowStateConflictError } from "../lib/current-flow-state-conflict-error.js";
-import { SpecReviewSettlementApplication } from "../lib/spec-step-connection.js";
 import { SpecWorkerCompletionFacts } from "../lib/spec-worker-completion-facts.js";
 import { SpecWorkerResultSelection } from "../lib/spec-worker-result-selection.js";
+import { SpecWorkerInput } from "./spec-worker-input.js";
+import { SpecSettlementWriter } from "./spec-settlement-writer.js";
 
-/** Owns Spec candidate access, adoption, and canonical persistence. */
+/** Adopt a prepared Spec candidate and save its selected Result. */
 export class SpecService {
-  #ctx;
-  #request;
-  #binding;
-  #preparation;
-  #handoffCoordinator;
+  static argumentTypes = [SpecWorkerInput, SpecSettlementWriter];
+  #input;
+  #writer;
   #outcome = null;
   #adoption = null;
-  #application = null;
-  #publication = null;
 
-  static async prepare({ ctx, request, Connector, handoffCoordinator } = {}) {
-    const preparation = handoffCoordinator.prepareSpecWorker({ ctx, request });
-    if (preparation.completed) return preparation;
-    const binding = await new Connector(request).connect();
-    return new SpecService({ ctx, request, binding, preparation, handoffCoordinator });
-  }
-
-  constructor({ ctx, request, binding, preparation, handoffCoordinator } = {}) {
-    if (!(binding instanceof SpecWorkerStepBinding)
-      || binding.flowManager !== ctx?.flowManager
-      || !(preparation?.facts instanceof SpecWorkerCompletionFacts)
-      || preparation.request !== request
-      || typeof handoffCoordinator?.completeSpecWorkerHandoff !== "function") {
-      throw new TypeError("SpecService requires its bound prepared handoff");
+  constructor(input, writer) {
+    if (!(input instanceof SpecWorkerInput) || input.stepId !== "spec"
+      || !(input.facts instanceof SpecWorkerCompletionFacts)
+      || !(writer instanceof SpecSettlementWriter)) {
+      throw new TypeError("SpecService requires its typed worker input and settlement writer");
     }
-    this.#ctx = ctx;
-    this.#request = request;
-    this.#binding = binding;
-    this.#preparation = preparation;
-    this.#handoffCoordinator = handoffCoordinator;
+    this.#input = input;
+    this.#writer = writer;
   }
 
-  inspectWorkerCompletion() {
-    this.#binding.assertCurrent();
-    return this.#preparation.facts;
-  }
+  inspectWorkerCompletion() { return this.#input.facts; }
 
   adoptWorkerCandidate(selection) {
     if (!(selection instanceof SpecWorkerResultSelection)
-      || selection.facts !== this.#preparation.facts) {
+      || selection.facts !== this.#input.facts) {
       throw new TypeError("SpecService requires the Step selection for its prepared Spec candidate");
     }
-    this.#binding.assertCurrent();
     this.#adoption = selection;
   }
 
   async persistStepResult(stepResult) {
-    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.#binding.stepId) {
+    if (!(stepResult instanceof StepResult) || stepResult.stepId !== this.#input.stepId) {
       throw new TypeError("SpecService requires its bound Step's concrete Result");
     }
-    const settlement = settleSpecStepResult(this.#binding.stepId, stepResult);
+    const settlement = settleSpecStepResult(this.#input.stepId, stepResult);
     const errorSettlement = settlement instanceof StepErrorDecision;
     if (this.#adoption !== null) this.#adoption.assertResult(stepResult);
     if (!errorSettlement && (!(settlement instanceof StepRoute) || this.#adoption === null)) {
       throw new TypeError("Spec publication requires the Step-adopted candidate and Result");
     }
-    const application = errorSettlement ? null : (this.#application ?? await new settlement.connector({
-      binding: this.#binding, facts: this.#adoption.facts,
-    }).connect());
-    if (!errorSettlement && !(application instanceof SpecReviewSettlementApplication)) {
-      throw new TypeError("Spec route connector did not return its typed application");
-    }
-    this.#application = application;
-    this.#publication ??= this.#preparation.settlementPublication(this.#handoffCoordinator.now);
-    const input = {
-      binding: this.#binding,
-      stepResult,
-      settlement,
-      specSelection: this.#adoption,
-      application,
-      ...this.#publication,
-      lifecycleResult: errorSettlement ? null : this.#publication.lifecycleResult,
-    };
-    const replayed = this.#outcome !== null;
-    let committed;
-    try {
-      if (!replayed) {
-        this.#handoffCoordinator.faultInjector({
-          phase: "before-worker-handoff-publication", stepId: this.#binding.stepId,
-        });
-      }
-      committed = this.#ctx.flowManager.settleSpecStepResult(input);
-    } catch (cause) {
-      if (cause instanceof CurrentFlowStateConflictError) throw cause;
-      const receipt = recoverStepSettlementReceipt(this.#ctx.flowManager, {
-        ...input,
-        specRecord: application?.publication,
-      }, cause);
-      committed = { receipt };
-    }
-    this.#outcome = this.#handoffCoordinator.completeSpecWorkerHandoff({
-      request: this.#request,
-      preparation: this.#preparation,
-      stepResult,
-      receipt: committed.receipt,
-      replayed,
-    });
-    if (this.#outcome?.receipt === null || this.#outcome?.receipt === undefined) {
-      throw new StepPersistenceFailure(new Error("Spec worker did not return its durable settlement receipt"));
-    }
+    this.#outcome = await this.#writer.settleInitial({ stepResult, settlement,
+      selection: this.#adoption });
     return this.#outcome.receipt;
   }
 

@@ -6,7 +6,7 @@ import {
 } from "../../support/infrastructure/flow-setup.js";
 import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
 import { DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
-import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { prepareDraftService } from "../../support/infrastructure/draft-service.js";
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
@@ -134,7 +134,7 @@ describe("flow set auto", () => {
     scenario.draftSavedBeforeGate(`${JSON.stringify(source, null, 2)}\n`);
     scenario.flow.activate("draft-refine");
     const manualBinding = await new DraftRefineConnector({ flowManager: manager, specId }).connect();
-    const awaiting = await new DraftRefineStep(new DraftService({
+    const awaiting = await new DraftRefineStep(await prepareDraftService({
       flowManager: manager,
       binding: manualBinding,
     })).execute();
@@ -169,7 +169,7 @@ describe("flow set auto", () => {
       inputDigest: "b".repeat(64),
       inputRevision: "c".repeat(64),
     });
-    const selected = await new DraftRefineStep(new DraftService({
+    const selected = await new DraftRefineStep(await prepareDraftService({
       flowManager: reloaded,
       binding,
       executionBinding,

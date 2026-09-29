@@ -1,3 +1,4 @@
+import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -6,10 +7,8 @@ import { describe, it } from "node:test";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { CanonicalFlowArtifactBaseline } from "../../../src/flow/lib/current-flow-state.js";
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
-import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
 import { SpecGateRepairService } from "../../../src/flow/services/spec-gate-repair-service.js";
 import { SpecGateRepairStep } from "../../../src/flow/steps/spec/spec-gate-repair.js";
-import { SpecReviewWorkerService } from "../../../src/flow/services/spec-worker-review-service.js";
 import { SpecTriageStep } from "../../../src/flow/steps/spec/spec-triage.js";
 import { SpecRepairStep } from "../../../src/flow/steps/spec/spec-repair.js";
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
@@ -79,9 +78,10 @@ async function reviewAndChangeSpec({ root, specId, flowManager, flow }) {
   const complete = async (handoff, StepClass) => {
     sealWorkerArtifactHandoff({ requestPath: handoff.requestPath,
       invocationId: handoff.dispatchInvocationId, now });
-    const service = await SpecReviewWorkerService.prepare({ ctx, request: handoff,
-      Connector: SpecEntryConnector, handoffCoordinator: coordinator });
-    return new StepFactory().provide(SpecReviewWorkerService, service).create(StepClass).execute();
+    const prepared = await specStepRegistration(handoff.stepId).create({ ctx, request: handoff,
+      handoffCoordinator: coordinator });
+    assert.ok(prepared.step instanceof StepClass);
+    return prepared.step.execute();
   };
 
   flow.activate("spec-triage");

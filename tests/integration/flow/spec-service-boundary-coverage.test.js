@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
+import { specStepRegistrations } from "../../../src/flow/engine/composition/spec.js";
+import { workerStepExecutionContract } from "../../../src/flow/lib/worker-execution-admission.js";
 import { Step } from "../../../src/flow/engine/step.js";
 import { SpecGateRepairService } from "../../../src/flow/services/spec-gate-repair-service.js";
 import { SpecGateService } from "../../../src/flow/services/spec-gate-service.js";
@@ -31,7 +33,7 @@ async function inspectPreparedDependencies(registrations, fixture) {
     const { request, input } = await fixture.createInput(registration.stepId);
     assert.equal(request.stepId, registration.stepId);
     const prepared = await registration.create(input);
-    for (const [Dependency, instance] of prepared.dependencies) coverage.inspect(Dependency, instance);
+    coverage.inspectPrepared(registration, prepared);
     preparedSteps.set(registration.stepId, prepared);
   }
   const required = new Set(registrations.flatMap((candidate) => candidate.StepClass.dependencies));
@@ -48,35 +50,24 @@ test("every registered Spec Step Service has a prepared instance inspected for A
   await inspectPreparedDependencies(registrations, fixture);
 });
 
-test("canonical Spec preparation produces every declared Service in a PreparedStep", async (t) => {
+test("canonical Spec preparation passes declared typed arguments into every Service", async (t) => {
   const root = createTmpDir("spec-boundary-fixture-");
   t.after(() => removeTmpDir(root));
   const fixture = new SpecStepPreparationFixture(root);
   t.after(() => fixture.dispose());
-  const serviceByStep = new Map([
-    ["spec", [SpecStep, SpecService, (input) => SpecService.prepare(input)]],
-    ["spec-review", [SpecReviewStep, SpecReviewService, (input) => new SpecReviewService(input)]],
-    ["spec-triage", [SpecTriageStep, SpecReviewWorkerService, (input) => SpecReviewWorkerService.prepare(input)]],
-    ["spec-repair", [SpecRepairStep, SpecReviewWorkerService, (input) => SpecReviewWorkerService.prepare(input)]],
-    ["spec-gate", [SpecGateStep, SpecGateService, (input) => new SpecGateService(input)]],
-    ["spec-gate-repair", [SpecGateRepairStep, SpecGateRepairService, (input) => SpecGateRepairService.prepare(input)]],
-  ]);
-  const registrations = [...serviceByStep].map(([stepId, [StepClass, ServiceClass, prepare]]) => (
-    new StepRegistration({ stepId, StepClass,
-      async prepareDependencies(input) { return new Map([[ServiceClass, await prepare(input)]]); } })
-  ));
-  for (const registration of registrations) {
+  for (const registration of specStepRegistrations) {
     const { input } = await fixture.createInput(registration.stepId);
     const prepared = await registration.create(input);
-    const ServiceClass = registration.StepClass.dependencies[0];
-    assert.ok(prepared.dependency(ServiceClass) instanceof ServiceClass);
+    const ServiceClass = registration.ServiceClass;
+    new ServiceBoundaryCoverage(specStepRegistrations).inspectPrepared(registration, prepared);
     assert.equal(prepared.step.constructor, registration.StepClass);
+    assert.ok(prepared.dependency(ServiceClass) instanceof ServiceClass);
   }
 });
 
 test("A07 inspects every prepared Service and accepts healthy registrations", async () => {
-  class CurrentService {}
-  class NewService {}
+  class CurrentService { static argumentTypes = []; }
+  class NewService { static argumentTypes = []; }
   class CurrentStep extends Step {
     static dependencies = [CurrentService];
     constructor(service) { super(); this.service = service; }
@@ -86,10 +77,10 @@ test("A07 inspects every prepared Service and accepts healthy registrations", as
     constructor(service) { super(); this.service = service; }
   }
   const registrations = [
-    new StepRegistration({ stepId: "current", StepClass: CurrentStep,
-      prepareDependencies: () => new Map([[CurrentService, new CurrentService()]]) }),
-    new StepRegistration({ stepId: "new", StepClass: NewStep,
-      prepareDependencies: () => new Map([[NewService, new NewService()]]) }),
+    new StepRegistration({ stepId: "current", StepClass: CurrentStep, ServiceClass: CurrentService,
+      prepareServiceArguments: () => [], executionContract: workerStepExecutionContract }),
+    new StepRegistration({ stepId: "new", StepClass: NewStep, ServiceClass: NewService,
+      prepareServiceArguments: () => [], executionContract: workerStepExecutionContract }),
   ];
   class PreparationFixture {
     createInput(stepId = "current") { return { request: { stepId }, input: {} }; }
@@ -101,8 +92,8 @@ test("A07 inspects every prepared Service and accepts healthy registrations", as
 });
 
 test("A07 rejects a violating Service in a later registered Step", async () => {
-  class HealthyService {}
-  class ExposedService { constructor() { this.exposed = true; } }
+  class HealthyService { static argumentTypes = []; }
+  class ExposedService { static argumentTypes = []; constructor() { this.exposed = true; } }
   class HealthyStep extends Step {
     static dependencies = [HealthyService];
     constructor(service) { super(); this.service = service; }
@@ -112,10 +103,10 @@ test("A07 rejects a violating Service in a later registered Step", async () => {
     constructor(service) { super(); this.service = service; }
   }
   const registrations = [
-    new StepRegistration({ stepId: "healthy", StepClass: HealthyStep,
-      prepareDependencies: () => new Map([[HealthyService, new HealthyService()]]) }),
-    new StepRegistration({ stepId: "exposed", StepClass: ExposedStep,
-      prepareDependencies: () => new Map([[ExposedService, new ExposedService()]]) }),
+    new StepRegistration({ stepId: "healthy", StepClass: HealthyStep, ServiceClass: HealthyService,
+      prepareServiceArguments: () => [], executionContract: workerStepExecutionContract }),
+    new StepRegistration({ stepId: "exposed", StepClass: ExposedStep, ServiceClass: ExposedService,
+      prepareServiceArguments: () => [], executionContract: workerStepExecutionContract }),
   ];
   class PreparationFixture {
     createInput(stepId = "healthy") { return { request: { stepId }, input: {} }; }

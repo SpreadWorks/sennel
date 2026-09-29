@@ -6,6 +6,7 @@ import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infr
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { SpecGateEvaluationBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
 import { SpecGateService } from "../../../src/flow/services/spec-gate-service.js";
+import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import { SpecGatePassedResult } from "../../../src/flow/engine/step-result.js";
 import { SpecGateIssuePublication } from "../../../src/flow/lib/gate-issue-publication.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
@@ -39,7 +40,7 @@ function setup() {
   }) };
 }
 
-function prepare({ manager, flow, binding }, { phase = "spec", result, failureKind = null,
+async function prepare({ manager, flow, binding }, { phase = "spec", result, failureKind = null,
   observations = [] } = {}) {
   const commandResult = new CanonicalGatePromotion({
     state: manager.canonicalState(flow.specId), phase, nodeId: "spec-gate",
@@ -59,13 +60,15 @@ function prepare({ manager, flow, binding }, { phase = "spec", result, failureKi
       timestamp: binding.assertCurrent().attempt.startedAt,
     },
   }) : null;
-  const service = new SpecGateService({ flowManager: manager, binding, commandResult, issuePublication });
-  return { commandResult, service };
+  const prepared = await specStepRegistration("spec-gate").create({
+    flowManager: manager, binding, commandResult, issuePublication,
+  });
+  return { commandResult, service: prepared.dependency(SpecGateService), step: prepared.step };
 }
 
 async function settle(input, options) {
-  const { commandResult, service } = prepare(input, options);
-  const stepResult = await new SpecGateStep(service).execute();
+  const { commandResult, service, step } = await prepare(input, options);
+  const stepResult = await step.execute();
   const receipt = await stepResult.persist(service);
   return { commandResult, service, stepResult, receipt };
 }
@@ -128,7 +131,7 @@ test("Spec Gate semantic retry and exact replay persist one Result, metric, issu
 
 test("Spec Gate rejects a stale selected Result after a legal policy version change", async () => {
   const input = setup();
-  const selected = prepare(input, { result: "fail", failureKind: "ai_semantic_fail" });
+  const selected = await prepare(input, { result: "fail", failureKind: "ai_semantic_fail" });
   const stepResult = new SpecGateStep(selected.service).selectResult();
   assert.equal(stepResult.kind, "spec-gate-retry-required");
   const attemptId = input.manager.canonicalState(input.flow.specId).attempt.id;
@@ -156,7 +159,7 @@ test("Spec Gate rejects a stale selected Result after a legal policy version cha
 
 test("Spec Gate refuses a PASS Result for accepted failure evidence without publication", async () => {
   const input = setup();
-  const selected = prepare(input, { result: "fail", failureKind: "ai_semantic_fail" });
+  const selected = await prepare(input, { result: "fail", failureKind: "ai_semantic_fail" });
   assert.equal(new SpecGateStep(selected.service).selectResult().kind, "spec-gate-retry-required");
   const before = {
     state: input.manager.canonicalState(input.flow.specId).toJSON(),
@@ -192,7 +195,7 @@ test("stale Spec Gate payload refuses publication without canonical mutation", a
   attachCanonicalCommandResultArtifact(bad, new CanonicalCommandResultArtifact({
     logicalKey: "spec.gate", payload: bad,
   }));
-  assert.throws(() => new SpecGateService({
+  await assert.rejects(() => specStepRegistration("spec-gate").create({
     flowManager: input.manager, binding: input.binding, commandResult: bad,
   }), /stale phase, Attempt, or lineage/);
   assert.deepEqual(input.manager.canonicalState(input.flow.specId).toJSON(), before.state);
@@ -323,10 +326,11 @@ test("accepted contradictory Gate classification blocks even a provider PASS", a
     result: "pass",
     artifacts: { phase: "spec", gateTransitionFailureCategory: { category: "semantic", code: "GATE_REJECTED" } },
   });
-  const service = new SpecGateService({
+  const prepared = await specStepRegistration("spec-gate").create({
     flowManager: input.manager, binding: input.binding, commandResult,
   });
-  const result = await new SpecGateStep(service).execute();
+  const service = prepared.dependency(SpecGateService);
+  const result = await prepared.step.execute();
   assert.equal(result.kind, "spec-gate-blocked");
   const receipt = await result.persist(service);
   assert.equal(receipt.settlementKind, "failure");

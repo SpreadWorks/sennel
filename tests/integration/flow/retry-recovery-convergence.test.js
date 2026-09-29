@@ -6,6 +6,8 @@ import { emptySpecStub } from "../../../src/lib/spec-json.js";
 import { CanonicalFlowCreateRequest } from "../../../src/flow/lib/canonical-flow-manager-store.js";
 import { CurrentFlowSpecRecord } from "../../../src/flow/lib/current-flow-state.js";
 import { ReviewRecoveryIdentity } from "../../../src/flow/lib/review-convergence.js";
+import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import { workerStepExecutionRegistration } from "../../../src/flow/engine/composition/registered-step-execution.js";
 import { flattenSteps } from "../../../src/flow/lib/step-tree.js";
 import { canonicalFixtureProducerResult } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -157,6 +159,44 @@ describe("retry recovery authority convergence", () => {
     const retried = fixture.manager.canonicalState(fixture.created.specId);
     assert.equal(retried.attempt.nodeId, failed.attempt.nodeId);
     assert.deepEqual(retried.attempt.operationClaims, failed.attempt.operationClaims);
+  });
+
+  it("refuses a worker selection from a different admitted run before effects", async () => {
+    const original = createFlow("001-original-worker-selection");
+    const current = createFlow("001-current-worker-selection");
+    advanceTo(original, "draft");
+    advanceTo(current, "draft");
+    const originalCtx = {
+      root: original.repository, mainRoot: original.repository,
+      executionRoot: original.repository, specId: original.created.specId,
+      flowManager: original.manager,
+      flowState: original.manager.loadReadOnly(original.created.specId),
+    };
+    const contract = workerStepExecutionRegistration("draft").executionContract;
+    const selected = contract.select({ ctx: originalCtx, stepId: "draft" });
+    const currentCtx = {
+      root: current.repository, mainRoot: current.repository,
+      executionRoot: current.repository, specId: current.created.specId,
+      flowManager: current.manager,
+      flowState: current.manager.loadReadOnly(current.created.specId),
+    };
+    assert.equal(contract.project(selected).kind, "execute_step");
+    assert.equal(contract.project(contract.select({ ctx: currentCtx, stepId: "draft" })).kind,
+      "execute_step");
+    const before = {
+      state: current.manager.canonicalState(current.created.specId).toJSON(),
+      activities: current.manager.activityLedger(current.created.specId),
+      catalog: current.manager.artifactCatalog(current.created.specId).toJSON(),
+    };
+    let providerCalls = 0;
+    const dispatcher = new RunDispatchCommand({ agent: { async call() { providerCalls += 1; } } });
+    await assert.rejects(() => dispatcher.executeSelectedWorker(selected, {
+      ctx: currentCtx, invocation: { action: { nextAction: { step: "draft" } } },
+    }), { code: "FLOW_WORKER_EXECUTION_SELECTION_CHANGED" });
+    assert.equal(providerCalls, 0);
+    assert.deepEqual(current.manager.canonicalState(current.created.specId).toJSON(), before.state);
+    assert.deepEqual(current.manager.activityLedger(current.created.specId), before.activities);
+    assert.deepEqual(current.manager.artifactCatalog(current.created.specId).toJSON(), before.catalog);
   });
 
   it("does not persist legacy mutable retry or review-convergence fields", () => {

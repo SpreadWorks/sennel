@@ -6636,3 +6636,8 @@ export class TaskReviewReconciliationDecision {
 export function resolveTaskReviewReconciliation(facts) {
   return new TaskReviewReconciliationDecision(facts);
 }
+
+export { resolveSpecGateRepairExecution, SpecGateRepairExecutionFacts,
+  SpecGateRepairNewWorker, SpecGateRepairSealedReplay,
+  SpecGateRepairPublicationReplay, SpecGateRepairExecutionStop,
+} from "./lib/spec-gate-repair-execution-decision.js";

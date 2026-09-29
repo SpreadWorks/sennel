@@ -116,6 +116,10 @@ import {
 } from "./canonical-command-result.js";
 import { isCanonicalFlowState } from "./canonical-test-artifacts.js";
 import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
+import { assertCurrentGateExecutionSelection, assertGateProviderExecutionAdmission, executeGateSelection,
+  selectGateExecutionAdmission } from "./execution-admission.js";
+import { gateStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
+import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 import { checkSpecGateReadiness } from "./spec-gate-readiness.js";
 import { CanonicalTaskContext } from "./task-canonical-context.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
@@ -1969,7 +1973,6 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
 
 import {
   gateReportPrescription,
-  resolveGateEvaluationAdmission,
 } from "../definition.js";
 
 const GATE_OBSERVATION_PHASES = VALID_GATE_PHASES;
@@ -3988,12 +3991,24 @@ export class RunGateCommand extends FlowCommand {
     if (!isCanonicalFlowState(ctx.flowState)) {
       throw new Error("gate requires an active canonical Flow state");
     }
-    const result = await this.executeCanonical(ctx, {
+    const input = {
       phase,
       level,
       skipGuardrail: ctx.skipGuardrail === true,
       executionRoot,
-    });
+      flowManager: ctx.flowManager,
+      flowState: ctx.flowState,
+      typedState: ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId),
+    };
+    const targeted = phase === "draft" || phase === "spec" || phase === "task-spec";
+    const registration = gateStepExecutionRegistration(phase);
+    const contract = registration?.executionContract ?? null;
+    if (targeted && contract === null) throw new Error(`Gate execution contract is missing for ${phase}`);
+    const selection = contract === null ? selectGateExecutionAdmission(input) : contract.select(input);
+    const execution = { command: this, ctx, phase, level, skipGuardrail: input.skipGuardrail, executionRoot };
+    const result = await (contract === null
+      ? executeGateSelection(selection, execution)
+      : contract.execute(selection, execution));
     return result;
   }
 
@@ -4002,8 +4017,27 @@ export class RunGateCommand extends FlowCommand {
    * prompts retain their existing target text and phase; only persistence is
    * replaced by the Store-attached result returned at the end of this method.
    */
-  async executeCanonical(ctx, { phase, level, skipGuardrail, executionRoot }) {
-    ctx.promptExecutionBudget = createGateExecutionBudget(phase);
+  async executeCanonical(ctx, { phase } = {}) {
+    return this.execute({ ...ctx, ...(phase === undefined ? {} : { phase }) });
+  }
+
+  async executeSelectedGate(selection, { ctx, phase, level, skipGuardrail, executionRoot }) {
+    const flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
+    const typedState = ctx.flowManager.canonicalState(flowState.specId);
+    const registration = gateStepExecutionRegistration(phase);
+    if (["draft", "spec", "task-spec"].includes(phase)
+      && registration?.executionContract == null) {
+      throw new StepAdmissionRefusal(`Gate execution contract is missing for ${phase}`);
+    }
+    const input = { flowManager: ctx.flowManager, flowState, typedState, phase };
+    const current = registration === null
+      ? selectGateExecutionAdmission(input) : registration.executionContract.select(input);
+    assertCurrentGateExecutionSelection(selection, current);
+    return this.#executeCanonical({ ...ctx, flowState },
+      { phase, level, skipGuardrail, executionRoot }, current);
+  }
+
+  async #executeCanonical(ctx, { phase, level, skipGuardrail, executionRoot }, gateSelection) {
     const flowManager = ctx.flowManager;
     if (!flowManager || typeof flowManager.canonicalState !== "function") {
       throw new Error("canonical gate requires FlowManager.canonicalState");
@@ -4013,7 +4047,7 @@ export class RunGateCommand extends FlowCommand {
     const activeTaskId = ctx.flowState.currentTaskId ?? null;
     const nodeId = canonicalGateNodeId({ phase, taskId: activeTaskId });
     if (state.current?.at(-1) !== nodeId || state.attempt?.nodeId !== nodeId) {
-      throw new Error(`canonical gate requires active ${nodeId}, found ${state.current?.at(-1) ?? "none"}`);
+      throw new StepAdmissionRefusal(`canonical gate requires active ${nodeId}, found ${state.current?.at(-1) ?? "none"}`);
     }
     let admittedTaskSourceFingerprint = null;
     let admittedSpecRevision = null;
@@ -4031,23 +4065,19 @@ export class RunGateCommand extends FlowCommand {
           "gate",
           "TASK_CONTEXT_INVALID",
           `canonical Task context is invalid: ${error.message}`,
-          { taskId: activeTaskId },
+          { taskId: activeTaskId, failureKind: "step-admission" },
         );
       }
     }
-    const existingFacts = readCurrentGateTransitionFacts({
-      flowManager,
-      flowState: ctx.flowState,
-      phase,
-    });
+    const existingFacts = gateSelection.admission.facts;
     if (existingFacts !== null) {
       if (phase === "draft") {
-        const error = new Error("Draft Gate publication must be settled by its bound Draft StepResult");
+        const error = new StepAdmissionRefusal("Draft Gate publication must be settled by its bound Draft StepResult");
         error.code = "FLOW_DRAFT_GATE_RESULT_ALREADY_PUBLISHED";
         throw error;
       }
       if (phase === "spec" || phase === "task-spec") {
-        const error = new Error(
+        const error = new StepAdmissionRefusal(
           "canonical gate admission rejected evaluation; Spec Gate result is already settled for the active Attempt",
         );
         error.code = "FLOW_SPEC_GATE_RESULT_ALREADY_SETTLED";
@@ -4056,12 +4086,12 @@ export class RunGateCommand extends FlowCommand {
       // Task settlement is considered before the generic publication
       // recovery so a saved Task Gate result is reconciled without invoking
       // its worker again.
-      const admission = resolveGateEvaluationAdmission(existingFacts);
+      const admission = gateSelection.admission;
       if (admission.recoveryDecision !== null) {
-        const selected = state.nextAction();
+        const selected = gateSelection.action;
         if (existingFacts.scope !== "task"
           && (selected?.operation !== "resume" || selected.action?.action !== "run-gate")) {
-          throw new Error(
+          throw new StepAdmissionRefusal(
             `canonical Gate publication recovery rejected; state selected ${selected?.operation ?? "no action"}`,
           );
         }
@@ -4076,16 +4106,17 @@ export class RunGateCommand extends FlowCommand {
         }).rehydrate();
       }
       const decision = admission.transitionDecision;
-      throw new Error(
+      throw new StepAdmissionRefusal(
         `canonical gate admission rejected evaluation; definition selected ${decision.disposition.operation}`,
       );
     }
-    const selected = state.nextAction();
+    const selected = gateSelection.action;
     if (selected?.operation !== "resume" || selected.action?.action !== "run-gate") {
-      throw new Error(
+      throw new StepAdmissionRefusal(
         `canonical gate admission rejected evaluation; state selected ${selected?.operation ?? "no action"}`,
       );
     }
+    ctx.promptExecutionBudget = createGateExecutionBudget(phase);
     const inputs = new CanonicalGateInputStore({ flowManager, state: ctx.flowState, nodeId });
     const specPath = flowManager.specLocation(ctx.flowState.specId).relativeSpecFile;
     const issueLog = inputs.issueLog();
@@ -4109,26 +4140,22 @@ export class RunGateCommand extends FlowCommand {
         error.code = "FLOW_GATE_EVALUATION_ADMISSION_DENIED";
         throw error;
       }
-      const facts = readCurrentGateTransitionFacts({
+      const providerInput = {
         flowManager,
         flowState: flowManager.loadReadOnly(state.specId),
         phase,
+        typedState: currentState,
         root: executionRoot,
-      });
-      if (facts !== null) {
-        if (phase === "draft") {
-          const error = new Error("Draft Gate provider admission found an already-published bound result");
-          error.code = "FLOW_GATE_EVALUATION_ADMISSION_DENIED";
-          throw error;
-        }
-        const admission = resolveGateEvaluationAdmission(facts);
-        const decision = admission.selectedDecision;
-        const error = new Error(
-          `Gate provider admission denied evaluation; Definition selected ${decision.disposition.operation}`,
-        );
-        error.code = "FLOW_GATE_EVALUATION_ADMISSION_DENIED";
-        throw error;
+      };
+      const registration = gateStepExecutionRegistration(phase);
+      if (["draft", "spec", "task-spec"].includes(phase)
+        && registration?.executionContract == null) {
+        throw new StepAdmissionRefusal(`Gate execution contract is missing for ${phase}`);
       }
+      const providerAdmission = registration === null
+        ? selectGateExecutionAdmission(providerInput)
+        : registration.executionContract.select(providerInput);
+      assertGateProviderExecutionAdmission(providerAdmission, phase);
       if (admittedTaskSourceFingerprint !== null) {
         const currentSource = captureCurrentTaskSource({
           root: executionRoot,

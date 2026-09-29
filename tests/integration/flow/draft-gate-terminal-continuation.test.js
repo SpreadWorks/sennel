@@ -4,7 +4,7 @@ import { it, mock } from "node:test";
 
 import { DraftGateEvaluationBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { DraftGateStep } from "../../../src/flow/steps/draft/draft-gate.js";
-import { StepFactory } from "../../../src/flow/engine/step-factory.js";
+import { draftStepRegistration } from "../../../src/flow/engine/composition/draft.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { GateService } from "../../../src/flow/services/review-service.js";
 import { assertServiceBoundary } from "../../support/structure/service-boundary.js";
@@ -224,13 +224,11 @@ it("uses the evaluated Gate result once when the Draft Gate Step settles it", as
     const result = new CanonicalGatePromotion({
       state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
     }).promote({ result: "pass", artifacts: { phase: "draft", evaluations: [] } });
-    const binding = new DraftGateEvaluationBinding({ flowManager: manager, specId });
-    assertServiceBoundary(new GateService({ flowManager: manager, binding, commandResult: result }));
-    const step = new StepFactory()
-      .provideArguments(GateService, {
-        flowManager: manager, binding, commandResult: result,
-      })
-      .create(DraftGateStep);
+    const prepared = await draftStepRegistration("draft-gate").create({
+      ctx: { flowManager: manager, specId }, result,
+    });
+    assertServiceBoundary(prepared.dependency(GateService));
+    const step = prepared.step;
 
     assert.deepEqual((await step.execute()).toJSON(), {
       kind: "draft-gate-passed",
@@ -279,16 +277,12 @@ it("rejects stale Draft Gate admission without persisting an Error Result", asyn
       logicalKey: artifact.logicalKey,
       payload: stalePayload,
     });
-    const binding = new DraftGateEvaluationBinding({ flowManager: manager, specId });
-    const step = new StepFactory()
-      .provideArguments(GateService, {
-        flowManager: manager, binding, commandResult: stale,
-      })
-      .create(DraftGateStep);
     const before = manager.canonicalState(specId).toJSON();
     const activities = manager.activityLedger(specId).length;
 
-    await assert.rejects(() => step.execute(), /stale binding or lineage/);
+    await assert.rejects(() => draftStepRegistration("draft-gate").create({
+      ctx: { flowManager: manager, specId }, result: stale,
+    }), /stale binding or lineage/);
 
     assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
     assert.equal(manager.activityLedger(specId).length, activities);

@@ -1,3 +1,7 @@
+import { ServiceBoundaryCoverage } from "../../support/structure/service-boundary.js";
+import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
+import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
+import { prepareSpecGateRepairService } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -96,12 +100,12 @@ function historicalRepairSeed(name) {
 
 async function completeWorkerResponse(value, request, proposal) {
   fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(proposal));
-  SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+  reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
     prompt: JSON.stringify(request.toPromptReference()) });
   sealWorkerArtifactHandoff({ requestPath: request.requestPath,
     invocationId: request.dispatchInvocationId,
     now: () => new Date("2026-08-04T00:00:01.000Z") });
-  await SpecGateRepairService.prepare({ ctx: value.ctx, request,
+  await prepareSpecGateRepairService({ ctx: value.ctx, request,
     Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
   // Lose every in-memory preparation after response publication, before Step execution.
   value.ctx.flowManager = new FlowManager({ root: value.root, mainRoot: value.root,
@@ -114,14 +118,17 @@ async function completeWorkerResponse(value, request, proposal) {
   const restored = coordinator.restoreClaimedDraftRequest({ ctx: value.ctx,
     state: value.ctx.flowManager.load(value.specId), lifecycle });
   const beforeReplay = durableSnapshot(value.ctx.flowManager, value.specId);
-  const service = await SpecGateRepairService.prepare({ ctx: value.ctx, request: restored,
-    Connector: SpecEntryConnector, handoffCoordinator: coordinator });
+  const registration = specStepRegistration("spec-gate-repair");
+  const prepared = await registration.create({ ctx: value.ctx, request: restored,
+    handoffCoordinator: coordinator });
+  const coverage = new ServiceBoundaryCoverage([registration]);
+  const service = coverage.inspectPrepared(registration, prepared);
+  assert.equal(coverage.assertComplete(), 1);
   assert.deepEqual(durableSnapshot(value.ctx.flowManager, value.specId), beforeReplay);
   const publicationReceipt = value.ctx.flowManager.readCurrentStepSettlement({
     specId: value.specId, stepId: "spec-gate-repair",
   }).receipt;
-  const result = await new StepFactory().provide(SpecGateRepairService, service)
-    .create(SpecGateRepairStep).execute();
+  const result = await prepared.step.execute();
   return { service, result, publicationReceipt };
 }
 
@@ -160,11 +167,11 @@ describe("Spec Gate repair restart boundaries", () => {
       }
       const final = nextContextRequest(15);
       fs.writeFileSync(final.request.payloadPath("spec-gate-repair.json"), workerArtifactJson(final.proposal));
-      SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request: final.request,
+      reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request: final.request,
         prompt: JSON.stringify(final.request.toPromptReference()) });
       sealWorkerArtifactHandoff({ requestPath: final.request.requestPath,
         invocationId: final.request.dispatchInvocationId });
-      await SpecGateRepairService.prepare({ ctx: value.ctx, request: final.request,
+      await prepareSpecGateRepairService({ ctx: value.ctx, request: final.request,
         Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
       const budgetInput = { specId: value.specId,
         attemptId: value.ctx.flowManager.canonicalState(value.specId).attempt.id,
@@ -173,7 +180,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
         inWorktree: false, specId: value.specId });
       const restartedCtx = { ...value.ctx, flowManager: restarted };
-      const replay = await SpecGateRepairService.resumePublished({ ctx: restartedCtx,
+      const replay = await prepareSpecGateRepairService({ ctx: restartedCtx,
         state: restarted.canonicalState(value.specId), handoffCoordinator: value.coordinator });
       const recovered = await new StepFactory().provide(SpecGateRepairService, replay)
         .create(SpecGateRepairStep).execute();
@@ -185,7 +192,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const following = value.coordinator.createRequest({ ctx: restartedCtx,
         state: restarted.load(value.specId),
         invocation: { ...value.invocation, id: "budget-recovery-next-call" } });
-      assert.throws(() => SpecGateRepairService.reserveWorkerCall({ ctx: restartedCtx,
+      assert.throws(() => reserveSpecGateRepairWorkerCall({ ctx: restartedCtx,
         request: following, prompt: JSON.stringify(following.toPromptReference()) }),
       { code: "PROMPT_CALL_LIMIT_EXCEEDED" });
       assert.deepEqual(durableSnapshot(restarted, value.specId), before);
@@ -218,12 +225,12 @@ describe("Spec Gate repair restart boundaries", () => {
         state: value.flowManager.load(value.specId), invocation: value.invocation });
       const selected = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       assert.equal(selected.mode, "repair");
-      SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+      reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
         prompt: JSON.stringify(request.toPromptReference()) });
       const stale = new WorkerArtifactHandoffError("stale", "FLOW_ARTIFACT_HANDOFF_STALE",
         "worker artifact handoff input digest or revision is stale", { recoveryPossible: false });
       const before = durableSnapshot(value.flowManager, value.specId);
-      await assert.rejects(() => SpecGateRepairService.prepare({ ctx: value.ctx, request,
+      await assert.rejects(() => prepareSpecGateRepairService({ ctx: value.ctx, request,
         Connector: SpecEntryConnector,
         handoffCoordinator: { prepareSpecWorker() { throw stale; } },
       }), (error) => error === stale);
@@ -394,11 +401,11 @@ describe("Spec Gate repair restart boundaries", () => {
         baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
         additionalRangeIds: ["background"],
       }));
-      SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+      reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
         prompt: JSON.stringify(request.toPromptReference()) });
       sealWorkerArtifactHandoff({ requestPath: request.requestPath,
         invocationId: request.dispatchInvocationId });
-      await SpecGateRepairService.prepare({ ctx: value.ctx, request,
+      await prepareSpecGateRepairService({ ctx: value.ctx, request,
         Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
       const published = value.flowManager.readCurrentStepSettlement({
         specId: value.specId, stepId: "spec-gate-repair" });
@@ -453,7 +460,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(
         draftReturnProposal(context, "Which target should the repair use?")));
-      SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+      reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
         prompt: JSON.stringify(request.toPromptReference()) });
       sealWorkerArtifactHandoff({ requestPath: request.requestPath,
         invocationId: request.dispatchInvocationId });
@@ -512,22 +519,39 @@ describe("Spec Gate repair restart boundaries", () => {
       initGitRepo(value.root);
       fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
       commitAll(value.root, "Create isolated claimed response repository");
+      const preview = await new GetNextActionCommand().execute({ ...value.ctx,
+        flowState: value.flowManager.loadReadOnly(value.specId) });
+      assert.equal(preview.directive.kind, "execute_step");
+      const selectedBeforeClaim = specStepRegistration("spec-gate-repair").executionContract.select({
+        ctx: value.ctx, stepId: "spec-gate-repair" });
       const request = nextRequest(value, "unsealed-claim");
-      SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+      reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
         prompt: JSON.stringify(request.toPromptReference()) });
       const before = durableSnapshot(value.flowManager, value.specId);
       const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
         inWorktree: false, specId: value.specId });
+      const projected = await new GetNextActionCommand().execute({ ...value.ctx,
+        flowManager: restarted, flowState: restarted.loadReadOnly(value.specId) });
+      assert.equal(projected.directive.kind, "blocked");
+      assert.equal(projected.directive.code, "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE");
+      assert.deepEqual(durableSnapshot(restarted, value.specId), before);
       let workerCalls = 0;
       const agent = { async call() { workerCalls += 1; throw new Error("claimed response must not re-execute"); } };
       const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1 });
+      await assert.rejects(() => dispatcher.runWorkerAttempt({ ...value.ctx, flowManager: restarted },
+        value.invocation), { code: "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE" });
+      await assert.rejects(() => dispatcher.executeSelectedWorker(selectedBeforeClaim, {
+        ctx: { ...value.ctx, flowManager: restarted }, invocation: value.invocation,
+      }), { code: "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE" });
+      assert.deepEqual(durableSnapshot(restarted, value.specId), before);
       dispatcher.container = dispatchContainer({ root: value.root, flowManager: restarted, agent });
       const result = await dispatcher.execute({ ...value.ctx, flowManager: restarted,
         flowState: restarted.loadReadOnly(value.specId),
         expectBinding: FlowTargetBinding.capture({ flowState: restarted.loadReadOnly(value.specId),
           mainRoot: value.root, authorityRoot: value.root }).serialize(),
         _envelopeType: "run", _envelopeKey: "dispatch" });
-      assert.equal(result.errors?.[0]?.code, "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE");
+      assert.equal(result.dispatch.boundary, "blocked");
+      assert.equal(result.nextAction.directive.code, "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE");
       assert.equal(workerCalls, 0);
       assert.deepEqual(durableSnapshot(restarted, value.specId), before);
     } finally { removeTmpDir(value.root); }
@@ -543,7 +567,7 @@ describe("Spec Gate repair restart boundaries", () => {
       sealWorkerArtifactHandoff({ requestPath: request.requestPath,
         invocationId: request.dispatchInvocationId });
       const before = durableSnapshot(value.flowManager, value.specId);
-      await assert.rejects(SpecGateRepairService.prepare({ ctx: value.ctx, request,
+      await assert.rejects(prepareSpecGateRepairService({ ctx: value.ctx, request,
         Connector: SpecEntryConnector, handoffCoordinator: value.coordinator }),
       /exact durable worker claim/);
       assert.deepEqual(durableSnapshot(value.flowManager, value.specId), before);
@@ -557,14 +581,14 @@ describe("Spec Gate repair restart boundaries", () => {
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(
         draftReturnProposal(context, "Which target is intended?")));
-      SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+      reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
         prompt: JSON.stringify(request.toPromptReference()) });
       sealWorkerArtifactHandoff({ requestPath: request.requestPath,
         invocationId: request.dispatchInvocationId });
       const before = durableSnapshot(value.flowManager, value.specId);
       fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(
         draftReturnProposal(context, "A different target?")));
-      await assert.rejects(SpecGateRepairService.prepare({ ctx: value.ctx, request,
+      await assert.rejects(prepareSpecGateRepairService({ ctx: value.ctx, request,
         Connector: SpecEntryConnector, handoffCoordinator: value.coordinator }),
       /handoff|payload|sealed/i);
       assert.deepEqual(durableSnapshot(value.flowManager, value.specId), before);
@@ -581,12 +605,12 @@ describe("Spec Gate repair restart boundaries", () => {
         baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
         additionalRangeIds: ["background"],
       }));
-      SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+      reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
         prompt: JSON.stringify(request.toPromptReference()) });
       sealWorkerArtifactHandoff({ requestPath: request.requestPath,
         invocationId: request.dispatchInvocationId });
       const binding = await new SpecEntryConnector(request).connect();
-      const service = await SpecGateRepairService.prepare({ ctx: value.ctx, request,
+      const service = await prepareSpecGateRepairService({ ctx: value.ctx, request,
         Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
       const before = durableSnapshot(value.flowManager, value.specId);
       const result = value.flowManager.readCurrentStepSettlement({ specId: value.specId,
@@ -910,10 +934,10 @@ describe("Spec Gate repair restart boundaries", () => {
                       replacement: "Publish a precisely validated artifact." }], reason: "Clarify the exact finding." }] }] };
         }
         fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(proposal));
-        SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+        reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
           prompt: JSON.stringify(request.toPromptReference()) });
         sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
-        await SpecGateRepairService.prepare({ ctx: value.ctx, request,
+        await prepareSpecGateRepairService({ ctx: value.ctx, request,
           Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
         const before = durableSnapshot(value.flowManager, value.specId);
         const attemptId = value.flowManager.canonicalState(value.specId).attempt.id;
@@ -1046,7 +1070,7 @@ describe("Spec Gate repair restart boundaries", () => {
           state: restarted.load(value.specId), lifecycle,
         });
         assert.ok(restoredRequest);
-        const resumed = await SpecGateRepairService.prepare({
+        const resumed = await prepareSpecGateRepairService({
           ctx: { ...value.ctx, flowManager: restarted }, request: restoredRequest,
           Connector: SpecEntryConnector, handoffCoordinator: value.coordinator,
         });

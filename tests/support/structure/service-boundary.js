@@ -35,6 +35,24 @@ export class ServiceBoundaryCoverage {
     return instance;
   }
 
+  inspectPrepared(registration, prepared) {
+    if (!(registration instanceof StepRegistration) || !(prepared instanceof PreparedStep)
+      || prepared.step.constructor !== registration.StepClass) {
+      throw new TypeError("A07 requires the registered production Step preparation");
+    }
+    const { ServiceClass } = registration;
+    const types = ServiceClass.argumentTypes;
+    const args = prepared.serviceArguments;
+    if (!Array.isArray(types) || args.length !== types.length
+      || args.some((value, index) => !(value instanceof types[index]))) {
+      throw new TypeError(`A07 ${registration.stepId} did not inject its declared Service arguments`);
+    }
+    if (prepared.dependencies.size !== 1 || prepared.dependency(ServiceClass) === undefined) {
+      throw new TypeError(`A07 ${registration.stepId} did not inject its declared Service`);
+    }
+    return this.inspect(ServiceClass, prepared.dependency(ServiceClass));
+  }
+
   assertComplete() {
     const missing = [...this.#required].filter((Dependency) => !this.#checked.has(Dependency));
     if (missing.length > 0) {
@@ -43,3 +61,4 @@ export class ServiceBoundaryCoverage {
     return this.#checked.size;
   }
 }
+import { PreparedStep, StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";

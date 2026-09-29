@@ -11,6 +11,8 @@ export class FlowStructureRules {
   get sourceRoot() { return "src"; }
   isComposition(file) { return file.startsWith("src/flow/engine/composition/"); }
   isService(file) { return file.startsWith("src/flow/services/"); }
+  isDefinitionBoundary(file) { return file === "src/flow/definition.js" || file === "src/flow/engine/step-result.js"; }
+  isSettlementWriter(file) { return /^src\/flow\/services\/[a-z-]+-settlement-writer\.js$/.test(file); }
   isStepBase(file, exportName) { return file === "src/flow/engine/step.js" && exportName === "Step"; }
   isWithinEntry(file, entry) { return file.startsWith(`${entry}/`); }
   isClosureRole(role) { return role === "step" || role === "helper" || role === "contract"; }

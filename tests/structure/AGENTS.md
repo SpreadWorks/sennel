@@ -28,7 +28,8 @@ Keep source inspection static; do not evaluate source code to extract
 dependencies. Structure tests cover side-effect-free inspection and construction.
 Checks requiring live state belong in integration or phase scenario tests. A07
 coverage compares production-registered Service dependencies with actual instances
-inspected there; the structure suite itself does not construct live Services.
+and prepared constructor arguments inspected there; the structure suite itself
+does not construct live Services.
 The Spec integration scope prepares every registered Spec Step through canonical
 Flow state and its production Service preparation API, then inspects each
 `PreparedStep.dependencies`. It must fail when any production-declared Service
@@ -47,22 +48,44 @@ traversal separate from the shared Flow rules:
 | A05 | Reject dynamic loading and direct prohibited globals in the Step/value closure. Normalize builtin names and permit only path, util, and crypto. |
 | A06 | Index all source JavaScript for static imports, re-exports, and literal dynamic imports of scoped Steps. Only composition may reference them. Production construction must use declared dependency types. |
 | A07 | Assert that actual Service instances have no public own data properties, including non-enumerable and Symbol properties. Keep state in private fields. |
+| A08 | Traverse registered Service, typed input, helper instances, getters, aliases, and writer reachability; reject IO, global/environment reads, dynamic loading, broad manager dependencies, and operations outside the settlement save contract. Include module initialization side effects. |
+| A09 | Reverse-index registered Service construction and static preparation through imports, aliases, namespaces, and re-exports; only StepRegistration constructs the Service. |
+| A10 | Match registration execution contracts to named shared select/project/execute adapters. Verify the closed routing structure from every registered Step through lookup, selection, and consumption on the same registration; reject Step exclusions, early bypasses, discarded or overwritten selections, and unknown routing shapes. |
+| A11 | Reject adapter bypasses, require all targeted Definition leaves to have one registration, reject missing targeted registrations, and bind display/dispatch/gate/review CLI commands to one named loader each. |
+| A12 | Match Service constructor type checks, static argumentTypes, and each statically resolvable preparation result `[TypedInput, SettlementWriter]`; reject broad-source values hidden inside typed inputs. |
 
 Common base contracts are `src/flow/engine/step.js`, `step-result.js`, and
 `flow-execution-error.js`; inspect their dependencies too. Composition belongs
 under `src/flow/engine/composition/`, Services under `src/flow/services/`, and
 Steps under `src/flow/steps/<phase>/`. A Step moved into a helper or Service
-directory is still a misplaced Step. Stop dependency traversal only at a
-properly declared Step-to-Service boundary; Service internals are outside this
-inspection scope.
+directory is still a misplaced Step. Follow Service dependencies from the
+properly declared Step-to-Service boundary while keeping Step Result to
+Settlement/Store verification at its existing boundary.
 
 Diagnostics include a rule ID, source location, and dependency path. Report the
 inspected closure and Service boundaries even on success. A06 distinguishes
 computed imports (outside its reference contract) from lexical failures (an
 incomplete index that must fail).
 
+Routing checks accept statically declared entry shapes and their explicit
+receipt-replay paths. They do not infer execution authorization from arbitrary
+conditions. Display prose string contents are not routing contracts; keep Step IDs,
+action IDs, calls, branches, and selection consumption constrained. Extract settlement
+manager member accesses through the shared source reader, normalize ordinary and
+optional access/calls, and apply one save-operation allowlist. Reject unresolved
+members (including computed access) and method escapes; use the same extraction
+for tracked aliases and helper parameters. Account for every manager reference:
+only recognized bindings, save calls, and statically inspected delegation consume
+references. Reject remaining uses, including destructuring, returns, captures,
+and argument escapes. A helper's filename does not establish a save contract.
+Preserve the canonical Store's internal consistency checks behind
+the settlement save boundary; method-name read prefixes alone do not establish
+that a Writer is save-only.
+
 Use synthetic source graphs, including a renamed second phase, to test rules
-without tying expectations to known production files. Integration tests apply
-the same checker to isolated copies with injected violations and exercise real
-production registration and Service construction. Run `npm run test:structure`;
+without tying expectations to known production files. Inject each violation
+alone, verify its rule and location, and remove it to verify recovery.
+Integration tests apply the same checker to isolated copies with injected
+violations and exercise real production registration and Service construction.
+Run `npm run test:structure`;
 the suite also runs through default `npm test` and `npm run test:all`.

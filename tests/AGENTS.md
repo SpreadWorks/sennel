@@ -17,8 +17,17 @@ valid violations with per-file exclusions, violation baselines, or skips.
 Draft and Spec scopes must load their own production registrations. Isolated
 registration fixtures demonstrate checker wiring but never satisfy the production
 scope. A07 coverage derives required Service types from registrations and inspects
-actual dependencies of prepared Steps; missing production preparation remains a
-failure.
+actual dependencies and constructor arguments of prepared Steps; missing
+production preparation remains a failure. A08-A12 extend the same shared checker
+through Service and typed input dependencies, actual preparation, named shared
+judgment contracts, execution routes, and reverse references. Give each negative
+fixture one violation with a rule and location assertion, then restore the source
+and assert success. Unknown static shapes fail closed.
+Route coverage must account for every registered Step, not merely one shared
+call per execution kind. Include a single-Step exclusion and an early execution
+branch in regression coverage. Trace instance helper methods and getters as
+well as static calls; settlement dependencies permit declared save operations,
+not arbitrary methods whose names happen to avoid read prefixes.
 
 Unit tests do not spawn child processes, initialise Git repositories, or run
 Flow scenarios. Integration tests own cross-module, filesystem, Git and Flow

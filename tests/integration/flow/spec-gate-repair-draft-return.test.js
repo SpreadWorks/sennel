@@ -1,3 +1,6 @@
+import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
+import { planSpecGateRepairWorkerExecution } from "../../../src/flow/lib/spec-gate-repair-execution.js";
+import { prepareSpecGateRepairService } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -31,22 +34,22 @@ test("a published Spec Gate decision gap reopens Draft with durable worker input
       evidence: "The current Issue and Spec identify the requirement but leave its target open.",
       unresolvedBecause: "Neither source selects one validation target." };
     fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(proposal));
-    SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+    reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
       prompt: JSON.stringify(request.toPromptReference()) });
     sealWorkerArtifactHandoff({ requestPath: request.requestPath,
       invocationId: request.dispatchInvocationId });
-    await SpecGateRepairService.prepare({ ctx: value.ctx, request,
+    await prepareSpecGateRepairService({ ctx: value.ctx, request,
       Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
 
     const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
       inWorktree: false, specId: value.specId });
     const replayContext = { ...value.ctx, flowManager: restarted };
-    const plan = SpecGateRepairService.planWorkerExecution({ ctx: replayContext,
+    const plan = planSpecGateRepairWorkerExecution({ ctx: replayContext,
       state: restarted.load(value.specId), invocation: value.invocation,
       handoffCoordinator: value.coordinator });
     assert.equal(plan.canonicalReplay, true);
     assert.equal(plan.request, null);
-    const service = await SpecGateRepairService.resumePublished({ ctx: replayContext,
+    const service = await prepareSpecGateRepairService({ ctx: replayContext,
       state: restarted.canonicalState(value.specId), handoffCoordinator: value.coordinator });
     const binding = await new SpecEntryConnector(request).connect();
     const result = await new StepFactory().provide(SpecGateRepairService, service)
@@ -118,17 +121,17 @@ test("a published Draft return refuses changed source evidence after restart", a
       evidence: "The project rules leave the target open.",
       unresolvedBecause: "No supplied source selects a target.",
     }));
-    SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+    reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
       prompt: JSON.stringify(request.toPromptReference()) });
     sealWorkerArtifactHandoff({ requestPath: request.requestPath,
       invocationId: request.dispatchInvocationId });
-    await SpecGateRepairService.prepare({ ctx: value.ctx, request,
+    await prepareSpecGateRepairService({ ctx: value.ctx, request,
       Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
     const before = value.flowManager.activityLedger(value.specId).length;
     fs.writeFileSync(`${value.root}/AGENTS.md`, "The validation target is now specified.\n");
     const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
       inWorktree: false, specId: value.specId });
-    await assert.rejects(SpecGateRepairService.resumePublished({ ctx: { ...value.ctx,
+    await assert.rejects(prepareSpecGateRepairService({ ctx: { ...value.ctx,
       flowManager: restarted }, state: restarted.canonicalState(value.specId),
       handoffCoordinator: value.coordinator }), (error) =>
       error.code === "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED");
@@ -158,11 +161,11 @@ test("a published Draft return refuses changed Spec guardrails after restart wit
       evidence: "The canonical sources leave the target open.",
       unresolvedBecause: "The project must choose one target.",
     }));
-    SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+    reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
       prompt: JSON.stringify(request.toPromptReference()) });
     sealWorkerArtifactHandoff({ requestPath: request.requestPath,
       invocationId: request.dispatchInvocationId });
-    await SpecGateRepairService.prepare({ ctx: value.ctx, request,
+    await prepareSpecGateRepairService({ ctx: value.ctx, request,
       Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
     const beforeActivities = value.flowManager.activityLedger(value.specId);
     const beforeState = value.flowManager.canonicalState(value.specId);
@@ -170,7 +173,7 @@ test("a published Draft return refuses changed Spec guardrails after restart wit
     setRule("The validation target must be the production endpoint.");
     const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
       inWorktree: false, specId: value.specId });
-    await assert.rejects(SpecGateRepairService.resumePublished({ ctx: { ...value.ctx,
+    await assert.rejects(prepareSpecGateRepairService({ ctx: { ...value.ctx,
       flowManager: restarted }, state: restarted.canonicalState(value.specId),
       handoffCoordinator: value.coordinator }), (error) =>
       error.code === "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED");
@@ -196,11 +199,11 @@ test("completed context expansion cannot authorize another repair call after its
       baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
       additionalRangeIds: ["background"],
     }));
-    SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+    reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
       prompt: JSON.stringify(request.toPromptReference()) });
     sealWorkerArtifactHandoff({ requestPath: request.requestPath,
       invocationId: request.dispatchInvocationId });
-    const service = await SpecGateRepairService.prepare({ ctx: value.ctx, request,
+    const service = await prepareSpecGateRepairService({ ctx: value.ctx, request,
       Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
     const result = await new StepFactory().provide(SpecGateRepairService, service)
       .create(SpecGateRepairStep).execute();
@@ -245,14 +248,14 @@ test("an interrupted Draft return keeps its reason and state in one transaction"
       evidence: "The saved sources leave the validation target open.",
       unresolvedBecause: "The target requires a user choice." };
     fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(proposal));
-    SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+    reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
       prompt: JSON.stringify(request.toPromptReference()) });
     sealWorkerArtifactHandoff({ requestPath: request.requestPath,
       invocationId: request.dispatchInvocationId });
-    await SpecGateRepairService.prepare({ ctx: value.ctx, request,
+    await prepareSpecGateRepairService({ ctx: value.ctx, request,
       Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
     const before = value.flowManager.activityLedger(value.specId).length;
-    const service = await SpecGateRepairService.resumePublished({ ctx: value.ctx,
+    const service = await prepareSpecGateRepairService({ ctx: value.ctx,
       state: value.flowManager.canonicalState(value.specId),
       handoffCoordinator: value.coordinator });
     assert.throws(() => value.flowManager.reopenDraft({ specId: value.specId,
@@ -271,7 +274,7 @@ test("an interrupted Draft return keeps its reason and state in one transaction"
       consumerNodeId: "spec-gate-repair" });
     assert.equal(JSON.parse(issue.bytes.toString("utf8")).entries.some((entry) => entry.draftReopen), false);
     interrupt = false;
-    const resumed = await SpecGateRepairService.resumePublished({ ctx: { ...value.ctx,
+    const resumed = await prepareSpecGateRepairService({ ctx: { ...value.ctx,
       flowManager: interrupted }, state: interrupted.canonicalState(value.specId),
       handoffCoordinator: value.coordinator });
     const settled = await new StepFactory().provide(SpecGateRepairService, resumed)
@@ -296,11 +299,11 @@ test("the retired direct user input worker stage is rejected", async () => {
       baseRevision: context.baseRevision,
       question: "Which target is intended?",
     }));
-    SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+    reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
       prompt: JSON.stringify(request.toPromptReference()) });
     sealWorkerArtifactHandoff({ requestPath: request.requestPath,
       invocationId: request.dispatchInvocationId });
-    await assert.rejects(SpecGateRepairService.prepare({ ctx: value.ctx, request,
+    await assert.rejects(prepareSpecGateRepairService({ ctx: value.ctx, request,
       Connector: SpecEntryConnector, handoffCoordinator: value.coordinator }),
     /typed repair disposition/);
     assert.equal(value.flowManager.canonicalState(value.specId).current.at(-1), "spec-gate-repair");

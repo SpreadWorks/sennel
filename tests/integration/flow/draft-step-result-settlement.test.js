@@ -4,7 +4,7 @@ import { afterEach, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { DraftWorkerExecutionStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
-import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { prepareDraftService } from "../../support/infrastructure/draft-service.js";
 import { assertServiceBoundary } from "../../support/structure/service-boundary.js";
 import { createDraftRefineResult, DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
 import {
@@ -68,7 +68,7 @@ describe("Draft Step Result settlement", () => {
       request: "Preserve admission refusal independently from semantic failure.", targetStep: "draft-refine",
     }).create();
     const binding = new DraftWorkerExecutionStepBinding({ flowManager: manager, specId, stepId: "draft-refine" });
-    const service = new DraftService({ flowManager: manager, binding });
+    const service = await prepareDraftService({ flowManager: manager, binding });
     assertServiceBoundary(service);
     manager.confirmCurrentAttempt({ specId });
     manager.rewindTo("draft-refine", { specId });
@@ -111,7 +111,7 @@ describe("Draft Step Result settlement", () => {
       const executionBinding = boundary === "checkpoint" ? manager.draftStepExecutionState({ binding }).workerBinding({
         inputDigest: "a".repeat(64), inputRevision: "b".repeat(64),
       }) : null;
-      const service = new DraftService({ flowManager: manager, binding, executionBinding });
+      const service = await prepareDraftService({ flowManager: manager, binding, executionBinding });
       const result = createDraftRefineResult(service.inspectDraftTransition());
       assert.equal(result.kind, boundary === "checkpoint" ? "draft-refine-worker-required" : "draft-refine-awaiting-answer");
       // A second canonical caller replaces the Attempt after this caller selected its Result.
@@ -149,7 +149,7 @@ describe("Draft Step Result settlement", () => {
     const executionBinding = manager.draftStepExecutionState({ binding }).workerBinding({
       inputDigest: "a".repeat(64), inputRevision: "b".repeat(64),
     });
-    const service = new DraftService({ flowManager: manager, binding, executionBinding });
+    const service = await prepareDraftService({ flowManager: manager, binding, executionBinding });
     const persist = manager.checkpointDraftStepExecution.bind(manager);
     let committed;
     t.mock.method(manager, "checkpointDraftStepExecution", (input) => {
@@ -326,7 +326,7 @@ describe("Draft Step Result settlement", () => {
     const generation0 = manager.draftStepExecutionState({ binding }).workerBinding({
       inputDigest: "1".repeat(64), inputRevision: "2".repeat(64),
     });
-    const service = new DraftService({
+    const service = await prepareDraftService({
       flowManager: manager,
       binding: new DraftWorkerExecutionStepBinding({ flowManager: manager, specId, stepId: "draft-refine" }),
       executionBinding: generation0,

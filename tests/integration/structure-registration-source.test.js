@@ -13,7 +13,7 @@ class RegistrationFixture {
   constructor(t) {
     this.root = createTmpDir("structure-registration-");
     t.after(() => removeTmpDir(this.root));
-    for (const [file, content] of new SyntheticStructureSeed("spec", "FixtureStep").files()) {
+    for (const [file, content] of new SyntheticStructureSeed("spec", "FixtureStep", "value", "spec").files()) {
       const destination = path.join(this.root, file);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       fs.writeFileSync(destination, content);
@@ -52,12 +52,15 @@ test("valid loaded registration reaches the shared checker and rejects a violati
   const fixture = new RegistrationFixture(t);
   const stepUrl = new URL("../../src/flow/engine/step.js", import.meta.url);
   const registrationUrl = new URL("../../src/flow/engine/composition/step-registration.js", import.meta.url);
+  const executionUrl = new URL("../fixtures/structure/execution.js", import.meta.url);
   fixture.write([
     `import { Step } from ${JSON.stringify(stepUrl.href)};`,
     `import { StepRegistration } from ${JSON.stringify(registrationUrl.href)};`,
-    "class ServiceClass {}",
+    `import { workerStepExecutionContract } from ${JSON.stringify(executionUrl.href)};`,
+    "class Input {} class Writer {} class ServiceClass { static argumentTypes = [Input, Writer]; }",
     "class FixtureStep extends Step { static dependencies = [ServiceClass]; constructor(service) { super(); this.service = service; } }",
-    "export const specStepRegistrations = [new StepRegistration({ stepId: 'spec', StepClass: FixtureStep, prepareDependencies: () => new Map([[ServiceClass, new ServiceClass()]]) })];",
+    "function prepareServiceArguments() { return [new Input(), new Writer()]; }",
+    "export const specStepRegistrations = [new StepRegistration({ stepId: 'spec', StepClass: FixtureStep, ServiceClass, prepareServiceArguments, executionContract: workerStepExecutionContract })];",
   ].join("\n"));
   const registrations = await fixture.source().load();
   const scope = { root: fixture.root, entry: "src/flow/steps/spec", registrations };

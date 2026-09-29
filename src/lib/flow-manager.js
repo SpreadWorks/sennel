@@ -10,6 +10,8 @@
  * resolved by Container — no `workRoot` argument is needed on any method.
  */
 
+import { recoverStepSettlementReceipt } from "../flow/lib/definition-lifecycle-failure.js";
+import { DraftStepExecutionLifecycle } from "../flow/definition.js";
 import fs from "fs";
 import path from "path";
 import { managedDir } from "./config.js";
@@ -481,6 +483,27 @@ export class FlowManager {
       ...input,
       specId: input.specId ?? this._boundSpecId,
     });
+  }
+  /** Save and recover the exact durable acknowledgement at one persistence boundary. */
+  commitDraftStepResult(input) {
+    return this.#commitStepSettlement(this.settleDraftStepResult, input);
+  }
+  commitSpecStepResult(input) {
+    return this.#commitStepSettlement(this.settleSpecStepResult, input);
+  }
+  commitDraftStepCheckpoint(input) {
+    return this.#commitStepSettlement(this.checkpointDraftStepExecution, {
+      ...input,
+      executionLifecycle: DraftStepExecutionLifecycle.checkpoint(input.executionBinding, input.rejection ?? null),
+    });
+  }
+  #commitStepSettlement(save, input) {
+    const selected = { ...input, specId: input.specId ?? this._boundSpecId };
+    try {
+      return save.call(this, selected);
+    } catch (error) {
+      return { receipt: recoverStepSettlementReceipt(this, selected, error) };
+    }
   }
   completeSpecGateRepairProgress(input = {}) {
     return this._store.completeSpecGateRepairProgress(input);

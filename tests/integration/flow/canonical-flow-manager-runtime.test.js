@@ -37,13 +37,11 @@ import {
   DraftWorkerStepBinding,
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { SpecGateEvaluationBinding, SpecReviewStepBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
-import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
-import { specWorkerStepRegistration } from "../../../src/flow/engine/composition/spec.js";
+import { specStepRegistration, specWorkerStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import { SpecGateService } from "../../../src/flow/services/spec-gate-service.js";
-import { SpecGateStep } from "../../../src/flow/steps/spec/spec-gate.js";
 import { SpecGateIssuePublication } from "../../../src/flow/lib/gate-issue-publication.js";
 import { specReviewResult } from "../../../src/flow/steps/spec/spec-review.js";
-import { SpecReviewService } from "../../../src/flow/services/spec-review-service.js";
+import { SpecReviewOperations } from "../../../src/flow/lib/spec-review-operations.js";
 import { SpecReviewWorkerService } from "../../../src/flow/services/spec-worker-review-service.js";
 import { SpecReviewWorkerFacts, SpecReviewWorkerSelection, SpecReviewWorkerCandidate } from "../../../src/flow/lib/spec-review-worker-facts.js";
 import { readSpecJsonValidator } from "../../../src/lib/spec-json.js";
@@ -372,11 +370,10 @@ async function settleSealedSpecReviewWorker({ ctx, coordinator, stepId, payload 
   });
   fs.writeFileSync(request.payloadPath("review.delta.json"), `${JSON.stringify(payload(request), null, 2)}\n`);
   sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
-  const service = await SpecReviewWorkerService.prepare({
-    ctx, request, Connector: SpecEntryConnector, handoffCoordinator: coordinator,
+  const prepared = await specWorkerStepRegistration(stepId).create({
+    ctx, request, handoffCoordinator: coordinator,
   });
-  assert.ok(service instanceof SpecReviewWorkerService);
-  const prepared = await specWorkerStepRegistration(stepId).create({ service });
+  assert.ok(prepared.dependency(SpecReviewWorkerService) instanceof SpecReviewWorkerService);
   return new RunDispatchCommand().runSpecWorkerStep(prepared);
 }
 
@@ -1544,11 +1541,12 @@ describe("FlowManager canonical Version-1 runtime", () => {
           trigger: "gate post hook (auto)", timestamp: binding.assertCurrent().attempt.startedAt,
         },
       });
-      const service = new SpecGateService({
+      const prepared = await specStepRegistration("spec-gate").create({
         flowManager: manager, binding, commandResult, issuePublication,
       });
+      const service = prepared.dependency(SpecGateService);
       const facts = service.inspectGateFacts();
-      const stepResult = await new SpecGateStep(service).execute();
+      const stepResult = await prepared.step.execute();
       return { facts, stepResult };
     };
 
@@ -3509,7 +3507,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const terminalIndex = activities.findIndex((entry) => entry.nodeId === "spec-review"
       && entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "terminal");
     assert.ok(publicationIndex >= 0 && terminalIndex > publicationIndex);
-    const canonicalReplay = await SpecReviewService.terminalReplay({ flowManager: reloaded, state });
+    const canonicalReplay = await SpecReviewOperations.terminalReplay({ flowManager: reloaded, state });
     assert.equal(canonicalReplay.artifacts.verdict, "PASS");
     const before = activities.length;
     const publishedResult = StepResult.fromStored("spec-review", activities[publicationIndex].result.stepResult);
@@ -3562,7 +3560,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
         readCurrentSpecReview: (input) => reloaded.readCurrentSpecReview(input),
       };
       await assert.rejects(
-        SpecReviewService.terminalReplay({ flowManager: boundary, state }),
+        SpecReviewOperations.terminalReplay({ flowManager: boundary, state }),
         expected,
         name,
       );
@@ -3620,7 +3618,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       if (changed.output.basename === "other-review.json") {
         assert.throws(() => specReviewResult(changed), /canonical inputs and delta output/);
       }
-      assert.throws(() => SpecReviewService.prepareExecutionClaim({
+      assert.throws(() => SpecReviewOperations.prepareExecutionClaim({
         flowManager: manager,
         state: manager.canonicalState(created.specId),
         manifest: changed,
@@ -3790,10 +3788,10 @@ describe("FlowManager canonical Version-1 runtime", () => {
 
   it("classifies a late Spec Review publication conflict without failing its Attempt", async () => {
     const { repository, manager, created } = activeSpecReviewFixture("001-spec-review-publication-conflict");
-    const publish = SpecReviewService.publish;
+    const publish = SpecReviewOperations.publish;
     let providerCalls = 0;
     try {
-      SpecReviewService.publish = () => {
+      SpecReviewOperations.publish = () => {
         throw new CurrentFlowStateConflictError("the Spec Review publication binding became stale");
       };
       const review = new RunReviewCommand({
@@ -3821,7 +3819,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
         && activity.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication"
       )), false);
     } finally {
-      SpecReviewService.publish = publish;
+      SpecReviewOperations.publish = publish;
     }
   });
 

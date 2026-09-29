@@ -1,3 +1,5 @@
+import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
+import { prepareSpecGateRepairService } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import fs from "node:fs";
@@ -69,15 +71,15 @@ test("Spec Gate decision gap returns through Draft answer to regenerated Spec Ga
       evidence: "The saved Draft answers and Issue do not identify the validation target.",
       unresolvedBecause: "A user choice is required to name one target.",
     }));
-    SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request: repairRequest,
+    reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request: repairRequest,
       prompt: JSON.stringify(repairRequest.toPromptReference()) });
     sealWorkerArtifactHandoff({ requestPath: repairRequest.requestPath,
       invocationId: repairRequest.dispatchInvocationId });
-    await SpecGateRepairService.prepare({ ctx: value.ctx, request: repairRequest,
+    await prepareSpecGateRepairService({ ctx: value.ctx, request: repairRequest,
       Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
     const resumed = new FlowManager({ root: value.root, mainRoot: value.root,
       inWorktree: false, specId: value.specId });
-    const repairService = await SpecGateRepairService.resumePublished({ ctx: { ...value.ctx,
+    const repairService = await prepareSpecGateRepairService({ ctx: { ...value.ctx,
       flowManager: resumed }, state: resumed.canonicalState(value.specId),
       handoffCoordinator: value.coordinator });
     const repairResult = await new StepFactory().provide(SpecGateRepairService, repairService)

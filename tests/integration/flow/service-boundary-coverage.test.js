@@ -76,9 +76,11 @@ test("every registered Draft Step Service has a real instance inspected for A07"
   const gate = await draftStepRegistration("draft-gate").create({
     ctx: { flowManager: gateManager, specId: gateSpecId }, result,
   });
-  for (const prepared of [draft, review, gate]) {
-    for (const [Dependency, instance] of prepared.dependencies) coverage.inspect(Dependency, instance);
-  }
+  for (const [stepId, prepared] of [
+    ["draft-refine", draft],
+    ["draft-questions-review", review],
+    ["draft-gate", gate],
+  ]) coverage.inspectPrepared(draftStepRegistration(stepId), prepared);
   const required = new Set(draftStepRegistrations.flatMap((registration) => registration.StepClass.dependencies));
   assert.equal(coverage.assertComplete(), required.size);
 });

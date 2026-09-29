@@ -1,3 +1,4 @@
+import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
@@ -70,7 +71,7 @@ describe("Spec Gate repair durable handoff", () => {
     const value = await gateRepairFixture();
     try {
       const request = requestFor(value);
-      SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request, prompt: JSON.stringify(request.toPromptReference()) });
+      reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request, prompt: JSON.stringify(request.toPromptReference()) });
       const claimed = currentProgress(value.flowManager, value.specId, request, "claimed");
       assert.equal(claimed.phase, "claimed");
       assert.equal(claimed.budget.providerCallCount, 1);
@@ -88,7 +89,7 @@ describe("Spec Gate repair durable handoff", () => {
         ctx: restartedCtx, state: restored.load(value.specId),
         invocation: { ...value.invocation, id: "dispatch-spec-gate-repair-after-crash" },
       });
-      SpecGateRepairService.reserveWorkerCall({ ctx: restartedCtx, request: nextRequest, prompt: JSON.stringify(nextRequest.toPromptReference()) });
+      reserveSpecGateRepairWorkerCall({ ctx: restartedCtx, request: nextRequest, prompt: JSON.stringify(nextRequest.toPromptReference()) });
       const resumed = currentProgress(restored, value.specId, nextRequest, "claimed", "1");
       assert.equal(resumed.budget.providerCallCount, 2);
       assert.deepEqual(currentProgress(restored, value.specId, request, "claimed"), claimed);
@@ -103,7 +104,7 @@ describe("Spec Gate repair durable handoff", () => {
           ctx: value.ctx, state: value.ctx.flowManager.load(value.specId),
           invocation: { ...value.invocation, id: `dispatch-spec-gate-repair-budget-${index}` },
         });
-        SpecGateRepairService.reserveWorkerCall({ ctx: value.ctx, request,
+        reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
           prompt: JSON.stringify(request.toPromptReference()) });
       }
       const restored = new FlowManager({ root: value.root, mainRoot: value.root,
@@ -118,7 +119,7 @@ describe("Spec Gate repair durable handoff", () => {
         state: restored.load(value.specId),
         invocation: { ...value.invocation, id: "dispatch-spec-gate-repair-budget-exhausted" },
       });
-      assert.throws(() => SpecGateRepairService.reserveWorkerCall({ ctx: context, request,
+      assert.throws(() => reserveSpecGateRepairWorkerCall({ ctx: context, request,
         prompt: JSON.stringify(request.toPromptReference()) }), /budget|limit|exhaust/i);
       assert.deepEqual({ state: restored.canonicalState(value.specId).toJSON(),
         activities: restored.activityLedger(value.specId),

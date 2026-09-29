@@ -1,6 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SourceModule, SourceReadError } from "../support/structure/source-reader.js";
+import { SourceModule, SourceReadError, SourceOriginUsage, readMemberAccess, readTokens } from "../support/structure/source-reader.js";
+
+test("route initializers must be unconditional declarations in the enclosing function", () => {
+  const direct = new SourceModule("route.js", "function route(input = {}) { const registration = lookup(input.stepId); return registration; }");
+  assert.equal(direct.declaration("route").topLevelInitializer("registration")
+    .matches("lookup( input.stepId )"), true);
+  const guarded = new SourceModule("route.js", "function route(input) { if (input.allowed) { const registration = lookup(input.stepId); return registration; } }");
+  assert.equal(guarded.declaration("route").topLevelInitializer("registration"), null);
+});
+
+test("closed route matching distinguishes identifiers from equal literal text", () => {
+  const module = new SourceModule("route.js", "function route(target) { const registration = target.scope; return registration; }");
+  const declaration = module.declaration("route");
+  const initializer = declaration.topLevelInitializer("registration");
+  assert.equal(initializer.matches("target.scope"), true);
+  assert.equal(initializer.matches('"target".scope'), false);
+  assert.equal(declaration.matchesBody("const registration = target.scope; return registration;"), true);
+  assert.equal(declaration.matchesBody('const registration = "target".scope; return registration;'), false);
+});
 
 test("source reader distinguishes imports from comments, strings, regexes, and template text", () => {
   const module = new SourceModule("example.js", [
@@ -91,4 +109,67 @@ test("regex after a control block does not create a false global reference", () 
 test("division after an object or expression still exposes real globals", () => {
   const module = new SourceModule("example.js", "const value = {} / process.pid;\n");
   assert.deepEqual(module.globals.map((token) => token.value), ["process"]);
+});
+
+test("route prose placeholders accept only string literals and preserve surrounding contracts", () => {
+  const pattern = 'new Directive({ actionId: "CLAIM", instruction: $STRING_LITERAL })';
+  for (const [expression, expected] of [
+    ['new Directive({ actionId: "CLAIM", instruction: "Updated wording" })', true],
+    ['new Directive({ actionId: "OTHER", instruction: "Updated wording" })', false],
+    ['new Directive({ actionId: "CLAIM", instruction: bypass() })', false],
+    ['new Directive({ actionId: "CLAIM", instruction: message })', false],
+  ]) {
+    const declaration = new SourceModule("route.js", `function route() { const result = ${expression}; }`).declaration("route");
+    assert.equal(declaration.topLevelInitializer("result").matches(pattern), expected);
+    assert.equal(declaration.containsBodySequence(`const result = ${pattern};`), expected);
+  }
+});
+
+test("member extraction normalizes access and call syntax without granting permission", () => {
+  for (const source of [
+    'manager.save({})', 'manager?.save({})', 'manager.save?.({})',
+    'manager?.save?.({})', 'return ((manager))?.save({})',
+    'return (this.manager).save({})', 'return (this?.manager)?.save({})',
+  ]) {
+    const tokens = readTokens(source);
+    const access = readMemberAccess(tokens, tokens.findIndex((token) => token.value === "manager"));
+    assert.equal(access.name, "save", source);
+    assert.equal(access.isCallTo(new Set(["save"])), true, source);
+    assert.equal(access.isCallTo(new Set(["other"])), false, source);
+  }
+  for (const source of ['manager["save"]({})', 'manager?.[key]({})', 'manager()',
+    'manager.save', 'manager?.save.call(null)', 'manager.save = other']) {
+    const tokens = readTokens(source);
+    const access = readMemberAccess(tokens, 0);
+    assert.notEqual(access, null, source);
+    assert.equal(access.isCallTo(new Set(["save"])), false, source);
+  }
+  for (const source of ['helper(manager).receipt', 'const alias = manager;', 'manager;']) {
+    const tokens = readTokens(source);
+    assert.equal(readMemberAccess(tokens, tokens.findIndex((token) => token.value === "manager")), null, source);
+  }
+});
+
+test("origin accounting leaves escapes unclassified after tracking private and local bindings", () => {
+  const declaration = new SourceModule("writer.js", `class Writer {
+    #manager;
+    constructor(manager) { this.#manager = manager; }
+    settle() { const alias = this.#manager; return alias; }
+  }`).declaration("Writer");
+  const usage = new SourceOriginUsage(declaration, ["#manager"]);
+  assert.deepEqual(usage.unresolved().map((token) => token.value), ["alias"]);
+});
+
+test("origin accounting never treats destructuring, captures, or defaults as checked transfers", () => {
+  for (const body of [
+    'const { operation } = manager;',
+    'const box = { manager };',
+    'const alias = (manager);',
+    'let alias; alias = manager;',
+  ]) {
+    const declaration = new SourceModule("writer.js", `function settle(manager) { ${body} }`).declaration("settle");
+    assert.equal(new SourceOriginUsage(declaration, ["manager"]).unresolved().length, 1, body);
+  }
+  const declaration = new SourceModule("writer.js", 'function settle(value = manager) {}').declaration("settle");
+  assert.deepEqual(new SourceOriginUsage(declaration, ["manager"]).unresolved().map((token) => token.value), ["manager"]);
 });

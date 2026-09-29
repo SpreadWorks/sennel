@@ -34,6 +34,8 @@ import {
 } from "../../../src/lib/flow-artifact-contract.js";
 import RunDispatchCommand, * as runDispatchModule from "../../../src/flow/lib/run-dispatch.js";
 import { draftWorkerStepRegistration } from "../../../src/flow/engine/composition/draft.js";
+import { specWorkerStepRegistration } from "../../../src/flow/engine/composition/spec.js";
+import { PreparedStep } from "../../../src/flow/engine/composition/step-registration.js";
 import {
   FlowDispatchInvocation,
   FlowDispatchSession,
@@ -46,16 +48,17 @@ import { DraftEntryConnector } from "../../../src/flow/engine/connectors/draft/d
 import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
 import { SpecReviewConnector } from "../../../src/flow/engine/connectors/spec/spec-review-connector.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
-import { SpecGateRepairService } from "../../../src/flow/services/spec-gate-repair-service.js";
+import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
 import { SpecGateRepairStep } from "../../../src/flow/steps/spec/spec-gate-repair.js";
 import {
-  createSpecGateRepairScenario, completeSpecGateRepairHandoff,
+  createSpecGateRepairScenario, completeSpecGateRepairHandoff, prepareSpecGateRepairService,
 } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import {
   DraftWorkerExecutionStepBinding,
   DraftWorkerStepBinding,
 } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { prepareDraftService } from "../../support/infrastructure/draft-service.js";
 import { DraftRepairCandidate } from "../../../src/flow/steps/draft/draft-repair-candidate.js";
 import { SpecService } from "../../../src/flow/services/spec-service.js";
 import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
@@ -549,7 +552,7 @@ function loadWorkerArtifactHandoffSchema() {
 }
 
 async function completeSpecReviewWorkerThroughStep(value, request) {
-  const service = await SpecReviewWorkerService.prepare({
+  const service = await prepareSpecReviewWorkerService({
     ctx: value.ctx, request, Connector: SpecEntryConnector,
     handoffCoordinator: value.coordinator,
   });
@@ -560,6 +563,16 @@ async function completeSpecReviewWorkerThroughStep(value, request) {
     .create(StepClass)
     .execute();
   return { ...service.workerOutcome, stepResult };
+}
+
+async function prepareSpecService(input) {
+  const prepared = await specWorkerStepRegistration("spec").create(input);
+  return prepared instanceof PreparedStep ? prepared.dependency(SpecService) : prepared;
+}
+
+async function prepareSpecReviewWorkerService(input) {
+  const prepared = await specWorkerStepRegistration(input.request.stepId).create(input);
+  return prepared instanceof PreparedStep ? prepared.dependency(SpecReviewWorkerService) : prepared;
 }
 
 async function prepareTaskProposalRepair(value, taskIds) {
@@ -890,14 +903,14 @@ describe("worker artifact handoff", () => {
         groups: [{ findingIdentities: [{ ...selected.unit.findings[0].identity,
           sourceFindingId: "foreign" }], operations: [] }],
       }));
-      SpecGateRepairService.reserveWorkerCall({
+      reserveSpecGateRepairWorkerCall({
         ctx: value.ctx, request, prompt: JSON.stringify(request.toPromptReference()),
       });
       seal(request);
       const beforeSpec = value.flowManager.readArtifact({
         specId: value.specId, logicalKey: "spec.record", consumerNodeId: "spec-gate-repair",
       }).bytes;
-      await assert.rejects(() => SpecGateRepairService.prepare({
+      await assert.rejects(() => prepareSpecGateRepairService({
         ctx: value.ctx, request, Connector: SpecEntryConnector,
         handoffCoordinator: value.coordinator,
       }), /finding|identity|group|atomic/i);
@@ -4199,7 +4212,7 @@ describe("worker artifact handoff", () => {
         baseReviewDigest: review.digest, findings: [], operations: [],
       }));
       seal(request);
-      const service = await SpecReviewWorkerService.prepare({
+      const service = await prepareSpecReviewWorkerService({
         ctx: value.ctx, request, Connector: SpecEntryConnector,
         handoffCoordinator: value.coordinator,
       });
@@ -5035,7 +5048,7 @@ describe("worker artifact handoff", () => {
       assert.equal(reloaded.canonicalState(value.specId).current.at(-1), "draft-refine");
       const binding = await new DraftRefineConnector({ flowManager: value.flowManager, specId: value.specId }).connect();
       const waitingStep = new StepFactory()
-        .provideArguments(DraftService, { flowManager: value.flowManager, binding })
+        .provide(DraftService, await prepareDraftService({ flowManager: value.flowManager, binding }))
         .create(DraftRefineStep);
       const waitingActivities = value.flowManager.activityLedger(value.specId).length;
       assert.equal((await waitingStep.execute()).type, STEP_RESULT_TYPE.USER_INPUT_REQUIRED);
@@ -5080,7 +5093,7 @@ describe("worker artifact handoff", () => {
         specId: value.specId,
       }).connect();
       const step = new StepFactory()
-        .provideArguments(DraftService, { flowManager: value.flowManager, binding })
+        .provide(DraftService, await prepareDraftService({ flowManager: value.flowManager, binding }))
         .create(DraftRefineStep);
       const before = value.flowManager.activityLedger(value.specId).length;
 
@@ -5203,7 +5216,7 @@ describe("worker artifact handoff", () => {
         inputRevision: request.inputRevision,
         contentDigest: request.checkpointContentDigest(),
       });
-      const service = new DraftService({
+      const service = await prepareDraftService({
         flowManager: value.flowManager,
         binding,
         executionBinding,
@@ -5619,7 +5632,7 @@ describe("worker artifact handoff", () => {
     try {
       const executeSelectedWorker = async (request, preparation) => {
         const binding = new DraftWorkerStepBinding({ request });
-        const service = new DraftService({
+        const service = await prepareDraftService({
           flowManager: value.flowManager,
           binding,
           ctx: value.ctx, request, preparation, handoffCoordinator: value.coordinator,
@@ -7410,7 +7423,7 @@ describe("worker artifact handoff", () => {
       });
       fs.writeFileSync(request.payloadPath("spec.json"), json(validWorkerHandoffTaskSpec()));
       seal(request);
-      const service = await SpecService.prepare({
+      const service = await prepareSpecService({
         ctx: value.ctx, request, Connector: SpecEntryConnector,
         handoffCoordinator: value.coordinator,
       });
@@ -7467,7 +7480,7 @@ describe("worker artifact handoff", () => {
       fs.writeFileSync(request.payloadPath("spec.json"), json(validWorkerHandoffTaskSpec()));
       seal(request);
       const original = value.coordinator.prepareSpecWorker({ ctx: value.ctx, request });
-      const service = await SpecService.prepare({
+      const service = await prepareSpecService({
         ctx: value.ctx,
         request,
         Connector: SpecEntryConnector,
@@ -7590,7 +7603,7 @@ describe("worker artifact handoff", () => {
       });
       fs.writeFileSync(request.payloadPath("spec.json"), json(validWorkerHandoffTaskSpec()));
       seal(request);
-      const service = await SpecService.prepare({
+      const service = await prepareSpecService({
         ctx: value.ctx,
         request,
         Connector: SpecEntryConnector,
@@ -7638,7 +7651,7 @@ describe("worker artifact handoff", () => {
       const candidate = validWorkerHandoffTaskSpec();
       fs.writeFileSync(request.payloadPath("spec.json"), json(candidate));
       seal(request);
-      const service = await SpecService.prepare({
+      const service = await prepareSpecService({
         ctx: value.ctx,
         request,
         Connector: SpecEntryConnector,
@@ -7714,7 +7727,7 @@ describe("worker artifact handoff", () => {
       const candidate = validWorkerHandoffTaskSpec();
       fs.writeFileSync(request.payloadPath("spec.json"), json(candidate));
       seal(request);
-      const service = await SpecService.prepare({
+      const service = await prepareSpecService({
         ctx: value.ctx,
         request,
         Connector: SpecEntryConnector,

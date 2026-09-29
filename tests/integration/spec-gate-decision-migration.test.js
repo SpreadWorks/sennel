@@ -1,3 +1,5 @@
+import { planSpecGateRepairWorkerExecution } from "../../src/flow/lib/spec-gate-repair-execution.js";
+import { prepareSpecGateRepairService } from "../support/infrastructure/spec-gate-repair-scenario.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -277,12 +279,12 @@ describe("migrate specs --to 4", () => {
     const ctx = { root: worktreePath, mainRoot: root, executionRoot: worktreePath,
       specId: SPEC_ID, flowManager };
     const coordinator = new WorkerArtifactHandoffCoordinator();
-    const plan = SpecGateRepairService.planWorkerExecution({ ctx, state,
+    const plan = planSpecGateRepairWorkerExecution({ ctx, state,
       handoffCoordinator: coordinator });
     assert.equal(plan.canonicalReplay, true);
     assert.equal(plan.sealedReplay, false);
     assert.equal(plan.request, null);
-    const service = await SpecGateRepairService.resumePublished({
+    const service = await prepareSpecGateRepairService({
       ctx, state, handoffCoordinator: coordinator,
     });
     const result = await new StepFactory().provide(SpecGateRepairService, service)

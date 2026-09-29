@@ -6,17 +6,22 @@ import { test } from "node:test";
 import { Step } from "../../src/flow/engine/step.js";
 import { StepRegistration } from "../../src/flow/engine/composition/step-registration.js";
 import { SyntheticStructureSeed } from "../fixtures/structure/synthetic.js";
+import { workerStepExecutionContract } from "../fixtures/structure/execution.js";
 import { checkStructure } from "../support/structure/checker.js";
 
-class ServiceClass {}
+class Input {}
+class Writer {}
+class ServiceClass { static argumentTypes = [Input, Writer]; }
 class AlphaStep extends Step { static dependencies = [ServiceClass]; }
 class BetaStep extends Step { static dependencies = [ServiceClass]; }
+function prepareServiceArguments() { return []; }
 
 class StructureFixture {
   constructor(t, phase = "alpha", StepClass = AlphaStep) {
     this.root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-structure-"));
     this.entry = `src/flow/steps/${phase}`;
-    this.registration = new StepRegistration({ stepId: "entry", StepClass, prepareDependencies: () => new Map([[ServiceClass, new ServiceClass()]]) });
+    this.registration = new StepRegistration({ stepId: "entry", StepClass, ServiceClass, prepareServiceArguments,
+      executionContract: workerStepExecutionContract });
     t.after(() => fs.rmSync(this.root, { recursive: true, force: true }));
     const seed = new SyntheticStructureSeed(phase, StepClass.name, phase === "beta" ? "token" : "value");
     for (const [file, content] of seed.files()) this.write(file, content);
@@ -45,7 +50,7 @@ test("Step may use a value and its declared Service in either phase", (t) => {
 
 test("Step may import facts separately from its declared Service module", (t) => {
   const sample = fixture(t);
-  sample.write("src/flow/services/service.js", "export class ServiceClass {} export class Facts {}\n");
+  sample.write("src/flow/services/service.js", "import { Input } from './input.js'; import { Writer } from './alpha-settlement-writer.js'; export class ServiceClass { static argumentTypes = [Input, Writer]; constructor(input, writer) { if (!(input instanceof Input) || !(writer instanceof Writer)) throw new TypeError(); } } export class Facts {}\n");
   sample.write("src/flow/steps/alpha/step.js", [
     "import { Step } from '../../engine/step.js';",
     "import { ServiceClass } from '../../services/service.js';",

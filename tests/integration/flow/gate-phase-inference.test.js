@@ -10,6 +10,9 @@ import {
 import { VALID_GATE_PHASES } from "../../../src/lib/constants.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { DefinitionLifecycleTransition } from "../../../src/flow/lib/step-transition-policy.js";
+import { RunGateCommand } from "../../../src/flow/lib/run-gate.js";
+import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
+import { draftStepRegistration } from "../../../src/flow/engine/composition/draft.js";
 
 // -----------------------------------------------------------------------------
 // AC6 (R5): resolveGateStepId / STEP_TO_PHASE round-trip consistency
@@ -293,6 +296,64 @@ describe("resolveGatePhaseFromState: task-level takes precedence (AC4/R3)", () =
       assert.equal(resolveGateStepId("integration"), "impl-gate");
       assert.equal(updated.currentNodeId, "impl-gate");
       assert.equal(updated.currentTaskId, null);
+    } finally {
+      removeTmpDir(root);
+    }
+  });
+
+  it("does not write a Gate pre transition when Definition selected another Step", async () => {
+    const root = createTmpDir("gate-pre-other-action-");
+    try {
+      const specId = "001-test";
+      const flowManager = makeFlowManager(root);
+      new CanonicalFlowFixture({
+        flowManager, specId, runId: "run-gate-pre-other-action",
+      }).create().registerActive().activate("draft-gate");
+      const before = flowManager.loadReadOnly(specId);
+      const activities = flowManager.activityLedger(specId);
+
+      const ctx = {
+        phase: "spec",
+        flowState: before,
+        flowManager,
+        root,
+        mainRoot: root,
+        executionRoot: root,
+      };
+      await FLOW_COMMANDS.run.gate.pre(ctx);
+      await assert.rejects(() => new RunGateCommand().execute(ctx), StepAdmissionRefusal);
+
+      assert.deepEqual(flowManager.loadReadOnly(specId), before);
+      assert.deepEqual(flowManager.activityLedger(specId), activities);
+    } finally {
+      removeTmpDir(root);
+    }
+  });
+
+  it("refuses a selected Gate execution after its Attempt has advanced", async () => {
+    const root = createTmpDir("gate-selected-stale-");
+    try {
+      const specId = "001-test";
+      const flowManager = makeFlowManager(root);
+      const fixture = new CanonicalFlowFixture({
+        flowManager, specId, runId: "run-gate-selected-stale",
+      }).create().registerActive().activate("draft-gate");
+      const oldState = flowManager.loadReadOnly(specId);
+      const selection = draftStepRegistration("draft-gate").executionContract.select({
+        flowManager, flowState: oldState, typedState: flowManager.canonicalState(specId), phase: "draft",
+      });
+      fixture.settle("draft-gate");
+      const before = flowManager.loadReadOnly(specId);
+      const activities = flowManager.activityLedger(specId);
+
+      await assert.rejects(() => new RunGateCommand().executeSelectedGate(selection, {
+        ctx: { root, mainRoot: root, executionRoot: root, flowManager,
+          flowState: before, specId, phase: "draft" },
+        phase: "draft", level: "parent", skipGuardrail: false, executionRoot: root,
+      }), StepAdmissionRefusal);
+
+      assert.deepEqual(flowManager.loadReadOnly(specId), before);
+      assert.deepEqual(flowManager.activityLedger(specId), activities);
     } finally {
       removeTmpDir(root);
     }

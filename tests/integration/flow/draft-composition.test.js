@@ -5,6 +5,8 @@ import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { DraftWorkerExecutionStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { draftStepRegistration, prepareDraftReviewBinding } from "../../../src/flow/engine/composition/draft.js";
 import { StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
+import { workerStepExecutionContract } from "../../../src/flow/lib/worker-execution-admission.js";
+import { DraftReviewExecutionTargetIdentity } from "../../../src/flow/definition.js";
 import { DraftReviewConnector } from "../../../src/flow/engine/connectors/draft/draft-review-connector.js";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
 import { ReviewService } from "../../../src/flow/services/review-service.js";
@@ -32,15 +34,14 @@ test("Draft production registration creates the declared Step with its exact Ser
     assert.equal(prepared.dependencies.size, 1);
     assertServiceBoundary(prepared.dependency(DraftService));
 
-    const registration = (prepareDependencies) => new StepRegistration({
-      stepId: "draft-refine", StepClass: DraftRefineStep, prepareDependencies,
+    const registration = (prepareServiceArguments) => new StepRegistration({
+      stepId: "draft-refine", StepClass: DraftRefineStep, ServiceClass: DraftService,
+      prepareServiceArguments, executionContract: workerStepExecutionContract,
     });
-    await assert.rejects(registration(() => new Map()).create(), /exactly its declared dependencies/);
-    await assert.rejects(registration(() => new Map([
-      [DraftService, prepared.dependency(DraftService)], [Date, new Date()],
-    ])).create(), /exactly its declared dependencies/);
-    await assert.rejects(registration(() => new Map([[DraftService, {}]])).create(),
-      /instance of Dependency/);
+    await assert.rejects(registration(() => []).create(), /exactly its declared Service arguments/);
+    await assert.rejects(registration(() => [{}]).create(), /exactly its declared Service arguments/);
+    await assert.rejects(registration(() => [new Date(), new Date()]).create(),
+      /exactly its declared Service arguments/);
   } finally {
     removeTmpDir(root);
   }
@@ -66,16 +67,22 @@ for (const phase of ["draft-questions", "draft-coverage"]) {
       flow.activate(stepId);
       const state = flowManager.canonicalState(specId);
       const binding = await prepareDraftReviewBinding({ flowManager, state, phase });
+      const executionBinding = flowManager.draftStepExecutionState({ binding }).reviewBinding({
+        manifestDigest: "1".repeat(64), inputDigest: "2".repeat(64),
+        target: new DraftReviewExecutionTargetIdentity({
+          treeSha: "3".repeat(40), targetStateDigest: "4".repeat(64),
+        }),
+      });
       DraftReviewConnector.prototype.connect = () => {
         throw new Error("supplied Review binding must not reconnect");
       };
       const prepared = await draftStepRegistration(stepId).create({
-        flowManager, binding, commandResult: {},
+        flowManager, binding, executionBinding,
       });
       DraftReviewConnector.prototype.connect = originalConnect;
       const service = prepared.dependency(ReviewService);
       assert.ok(service instanceof ReviewService);
-      assert.equal(service.requiresReviewExecution(), false);
+      assert.equal(service.requiresReviewExecution(), true);
 
       flowManager.failCurrentAttempt({
         specId,
@@ -89,7 +96,9 @@ for (const phase of ["draft-questions", "draft-coverage"]) {
         },
       });
       const stopped = flowManager.canonicalState(specId).toJSON();
-      assert.throws(() => service.requiresReviewExecution(), StepAdmissionRefusal);
+      await assert.rejects(draftStepRegistration(stepId).create({
+        flowManager, binding, executionBinding,
+      }), StepAdmissionRefusal);
       assert.deepEqual(flowManager.canonicalState(specId).toJSON(), stopped);
     } finally {
       DraftReviewConnector.prototype.connect = originalConnect;

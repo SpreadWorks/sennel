@@ -52,7 +52,7 @@ import GetPromptCommand from "../../../src/flow/lib/get-prompt.js";
 import { createDraftRefineResult } from "../../../src/flow/steps/draft/draft-refine.js";
 import { DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
 import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
-import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { prepareDraftService } from "../../support/infrastructure/draft-service.js";
 
 const CLI = path.join(process.cwd(), "src/sennel.js");
 const SPEC_ID = "001-test";
@@ -135,7 +135,7 @@ function publishDraft(scenario, draft) {
 async function executeDraftRefineStep(scenario) {
   const manager = managerFor(scenario);
   const binding = await new DraftRefineConnector({ flowManager: manager, specId: SPEC_ID }).connect();
-  return new DraftRefineStep(new DraftService({ flowManager: manager, binding })).execute();
+  return new DraftRefineStep(await prepareDraftService({ flowManager: manager, binding })).execute();
 }
 
 describe("flow get next-action", () => {

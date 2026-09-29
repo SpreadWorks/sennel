@@ -29,6 +29,7 @@ import {
   settleDraftStepResult,
 } from "../../../src/flow/definition.js";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { prepareDraftService } from "../../support/infrastructure/draft-service.js";
 import { DraftGateRepairStep } from "../../../src/flow/steps/draft/draft-gate-repair.js";
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { DraftRepairConnector } from "../../../src/flow/engine/connectors/draft/draft-repair-connector.js";
@@ -116,7 +117,7 @@ describe("dedicated draft Gate repair handoff", () => {
       seal(request, value.scenario.replacement("goal", "Retain the selected candidate."));
       const preparation = coordinator.prepareDraftWorker({ ctx, request });
       const binding = new DraftWorkerExecutionStepBinding({ flowManager: value.flowManager, specId, stepId: request.stepId });
-      const service = new DraftService({ flowManager: value.flowManager, binding, ctx, request, preparation, handoffCoordinator: coordinator });
+      const service = await prepareDraftService({ flowManager: value.flowManager, binding, ctx, request, preparation, handoffCoordinator: coordinator });
       const candidate = new DraftRepairCandidate(service.inspectWorkerFacts().repairInput);
       service.adoptRepairCandidate(candidate);
       const before = {
@@ -152,7 +153,7 @@ describe("dedicated draft Gate repair handoff", () => {
       seal(request, value.scenario.replacement("goal", "Retain the selected candidate."));
       const preparation = coordinator.prepareDraftWorker({ ctx, request });
       const binding = new DraftWorkerExecutionStepBinding({ flowManager: value.flowManager, specId, stepId: request.stepId });
-      const service = new DraftService({ flowManager: value.flowManager, binding, ctx, request, preparation, handoffCoordinator: coordinator });
+      const service = await prepareDraftService({ flowManager: value.flowManager, binding, ctx, request, preparation, handoffCoordinator: coordinator });
       const candidate = new DraftRepairCandidate(service.inspectWorkerFacts().repairInput);
       service.adoptRepairCandidate(candidate);
       const before = {
@@ -203,7 +204,7 @@ describe("dedicated draft Gate repair handoff", () => {
         inputRevision: request.inputRevision,
         contentDigest: request.checkpointContentDigest(),
       });
-      const service = new DraftService({
+      const service = await prepareDraftService({
         flowManager: value.flowManager,
         binding,
         executionBinding,
@@ -476,7 +477,7 @@ describe("dedicated draft Gate repair handoff", () => {
       const integrityError = Object.assign(new Error("accepted repair outcome failed its semantic integrity check"), {
         code: "DRAFT_GATE_REPAIR_INTEGRITY",
       });
-      const service = new DraftService({
+      const service = await prepareDraftService({
         flowManager: value.flowManager,
         binding: terminalBinding,
         ctx: value.scenario.ctx, request, preparation,

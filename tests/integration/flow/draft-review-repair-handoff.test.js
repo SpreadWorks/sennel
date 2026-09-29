@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { it } from "node:test";
 
-import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { prepareDraftService } from "../../support/infrastructure/draft-service.js";
 import { DraftRepairCandidate } from "../../../src/flow/steps/draft/draft-repair-candidate.js";
 import { DraftQuestionsRepairUnchangedResult } from "../../../src/flow/engine/step-result.js";
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
@@ -63,7 +63,7 @@ async function worker(ctx, coordinator, StepClass, Connector, payload, refusedRe
   sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
   const preparation = coordinator.prepareDraftWorker({ ctx, request });
   if (refusedResult !== null) {
-    const service = await DraftService.prepare({ ctx, request, Connector, handoffCoordinator: coordinator, preparation });
+    const service = await prepareDraftService({ ctx, request, Connector, handoffCoordinator: coordinator, preparation });
     service.adoptRepairCandidate(new DraftRepairCandidate(service.inspectWorkerFacts().repairInput));
     const before = {
       state: ctx.flowManager.canonicalState(ctx.specId).toJSON(),

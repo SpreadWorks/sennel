@@ -1,3 +1,7 @@
+import { draftStepRegistration, draftWorkerStepRegistration } from "../engine/composition/draft.js";
+import { specStepRegistration, specWorkerStepRegistration } from "../engine/composition/spec.js";
+import { gateStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
+import { NextActionPlanError } from "./next-action-plan-error.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/get-next-action.js
@@ -12,17 +16,13 @@ import { readFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { FlowCommand } from "./base-command.js";
-import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import { getStepInstructions } from "./get-step-instructions.js";
 import {
   AwaitAcceptanceDecision,
   AwaitApproval,
   ConfirmAndAdvance,
   deriveNextAction,
-  DraftWorkerRecoveryRefusal,
   resolveDefinitionRoute,
-  resolveDraftWorkerRecovery,
-  resolveDraftWorkerCorrection,
   resolveSpecGatePostFailure,
   SpecGatePostFailureFacts,
   resolveTaskExecutionOverrun,
@@ -35,7 +35,6 @@ import { PRODUCT } from "../../lib/product.js";
 import {
   AbortedDirective,
   BlockedDirective,
-  AwaitDraftQuestionDirective,
   AwaitUserDecisionDirective,
   AwaitTaskReviewFilterDirective,
   CompletedDirective,
@@ -46,7 +45,6 @@ import {
   NextActionDirectiveResolver,
 } from "./next-action-directive.js";
 import { TaskNode } from "./current-flow-state.js";
-import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
 import {
   UserActionChoice,
   UserActionImpact,
@@ -79,7 +77,6 @@ import {
 } from "./test-review-repair.js";
 import { inspectRetryRecoveryPlan, retryEvidenceRouteForNode } from "./retry-recovery.js";
 import { resolveCurrentReviewTransition } from "./review-transition-persistence.js";
-import { DraftLifecycle } from "./draft-lifecycle.js";
 import {
   acceptanceDecisionRouteFacts,
   approvalRouteFacts,
@@ -295,7 +292,7 @@ class SavedSpecGateSelection {
 
 /** Definition-owned Gate routing is projected only from its canonical typed facts. */
 function definitionOwnedGateSelection(ctx, state, target) {
-  const phase = target.stepId === "spec-gate"
+  const phase = target.stepId === "draft-gate" ? "draft" : target.stepId === "spec-gate"
       ? "spec"
       : target.scope === "task" && target.stepId === "task-gate"
         ? "task-impl"
@@ -308,12 +305,17 @@ function definitionOwnedGateSelection(ctx, state, target) {
       specId: state.specId, stepId: "spec-gate",
     });
     if (saved !== null) return new SavedSpecGateSelection(saved);
-    const facts = readCurrentGateTransitionFacts({
+  }
+  const registration = gateStepExecutionRegistration(phase);
+  if (registration !== null) {
+    const selection = registration.executionContract.select({
       flowManager: ctx.flowManager, flowState: state, phase,
+      typedState: ctx.flowManager.canonicalState(state.specId),
     });
-    if (facts !== null) {
+    if (phase === "spec" && selection.admission.facts !== null) {
       throw new Error("Spec Gate publication lacks its atomic Step Result and Settlement");
     }
+    return registration.executionContract.project(selection);
   }
   return resolveGateNextAction({
     flowManager: ctx.flowManager,
@@ -465,13 +467,7 @@ function dormantHistoricalNextAction(binding = null) {
   }, binding);
 }
 
-export class NextActionPlanError extends Error {
-  constructor(code, message) {
-    super(message);
-    this.name = "NextActionPlanError";
-    this.code = code;
-  }
-}
+export { NextActionPlanError } from "./next-action-plan-error.js";
 
 /**
  * Definition-facing identity for a Version-1 next action.
@@ -661,78 +657,6 @@ function acceptanceDecisionMessages({ root, config }) {
   ] });
 }
 
-function draftQuestionDirective(disposition) {
-  if (disposition?.operation !== "await-user-answer") return null;
-  return new AwaitDraftQuestionDirective({
-    questionId: disposition.questionId,
-    question: disposition.question,
-    questionRevision: disposition.questionRevision,
-  });
-}
-
-function persistedDraftRefineDisposition({ flowManager, typedState }) {
-  // A pending Draft Step has no Result or Settlement to project yet. Its
-  // ordinary claim must create the Attempt before the Step selects either an
-  // execution or Await receipt.
-  if (typedState.attempt === null) return null;
-  const binding = {
-    runId: typedState.runId,
-    specId: typedState.specId,
-    stepId: "draft-refine",
-    attempt: typedState.attempt,
-  };
-  const projected = flowManager.draftRefineStepState({ binding });
-  if (projected.requiresStepSelection) return null;
-  const identity = projected.awaitQuestionIdentity();
-  if (identity === null) return projected.dispositionForQuestion();
-  const source = flowManager.readArtifact({
-    specId: typedState.specId,
-    logicalKey: "draft",
-    consumerNodeId: "draft-refine",
-  });
-  if (source.descriptor.hash !== identity.sourceDigest
-    || source.descriptor.size !== identity.sourceByteLength) {
-    throw new NextActionPlanError(
-      "DRAFT_AWAIT_RECEIPT_STALE",
-      "persisted Draft Await receipt does not bind the canonical Draft revision",
-    );
-  }
-  let draft;
-  try {
-    draft = new DraftLifecycle(JSON.parse(source.bytes.toString("utf8")));
-  } catch (cause) {
-    throw new NextActionPlanError("DRAFT_SCHEMA_INVALID", `canonical Draft is invalid: ${cause.message}`);
-  }
-  const question = draft.questionLedger.nextAwaiting();
-  if (question?.id !== identity.questionId || question.revision !== identity.questionRevision) {
-    throw new NextActionPlanError(
-      "DRAFT_AWAIT_RECEIPT_STALE",
-      "persisted Draft Await receipt does not select the canonical pending question",
-    );
-  }
-  return projected.dispositionForQuestion(question);
-}
-
-function conditionalWorkerDirective(disposition, { state, binding }) {
-  if (disposition === null || disposition.operation === "execute-worker" || disposition.operation === "await-user-answer") return null;
-  if (disposition.operation === "blocked") {
-    return new BlockedDirective({
-      code: "CONDITIONAL_WORKER_NOT_ADMITTED",
-      reason: `Definition did not find the canonical input required by ${disposition.stepId}.`,
-      resumeInstruction: "Restore the canonical conditional-worker input before retrying this action.",
-    });
-  }
-  return new ExecuteCommandDirective({
-    actionId: disposition.operation === "skip-worker"
-      ? "SKIP_CONDITIONAL_WORKER"
-      : "COMPLETE_CONDITIONAL_WORKER",
-    nextAction: guardedCommand("sennel flow run claim-next-action", state, binding),
-    instruction: disposition.operation === "skip-worker"
-      ? `Settle ${disposition.stepId} as skipped without starting its worker.`
-      : `Settle ${disposition.stepId} from its canonical completed input.`,
-    reason: "Definition selected the conditional worker lifecycle from canonical persisted facts.",
-  });
-}
 
 /**
  * An ordinary Flow approval remains dispatcher-authorized, but it has a
@@ -850,6 +774,8 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   // before a stale repair revision can be observed.
   const reviewStep = new Set([
     "spec-review",
+    "draft-questions-review",
+    "draft-coverage-review",
     "test-review",
     "impl-review",
     "task-review",
@@ -857,28 +783,23 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const strictReviewState = state.policy?.nonblocking?.enabled === true
     ? { ...state, policy: { ...state.policy, nonblocking: null } }
     : state;
+  const reviewRegistration = target.scope === "flow"
+    ? draftStepRegistration(target.stepId) ?? specStepRegistration(target.stepId) : null;
+  const reviewInput = { flowManager: ctx.flowManager, flowState: strictReviewState,
+    typedState, scope: target.scope, stepId: target.stepId };
   const reviewSelection = reviewStep && ["resume", "retry", "record", "blocked"].includes(descriptor.operation)
-    ? resolveCurrentReviewTransition({
-        flowManager: ctx.flowManager,
-        flowState: strictReviewState,
-        typedState,
-        scope: target.scope,
-        stepId: target.stepId,
-      })
+    ? reviewRegistration === null ? resolveCurrentReviewTransition(reviewInput)
+      : reviewRegistration.executionContract.select(reviewInput)
     : { facts: null, disposition: null };
-  let conditionalWorkerDisposition = null;
-  if (
-    target.scope === "flow"
-    && target.stepId === "draft-refine"
-    && ["start", "recover", "resume", "retry"].includes(descriptor.operation)
-  ) {
-    conditionalWorkerDisposition = persistedDraftRefineDisposition({
-      flowManager: ctx.flowManager,
-      typedState,
-    });
-  }
+  const reviewDisposition = reviewStep && reviewRegistration !== null
+    && ["resume", "retry", "record", "blocked"].includes(descriptor.operation)
+    ? reviewRegistration.executionContract.project(reviewSelection) : reviewSelection.disposition;
+  const workerRegistration = target.scope === "flow"
+    ? draftWorkerStepRegistration(target.stepId) ?? specWorkerStepRegistration(target.stepId) : null;
+  const workerSelection = workerRegistration?.executionContract.select({ ctx, stepId: target.stepId });
+  const conditionalWorkerDisposition = workerSelection?.conditionalDisposition ?? null;
   const definitionDescriptor = descriptor
-    .withReviewDisposition(reviewSelection.disposition)
+    .withReviewDisposition(reviewDisposition)
     .withConditionalWorkerDisposition(conditionalWorkerDisposition);
   let specSettlementStatus = "missing";
   let specSettlementDetail = null;
@@ -946,11 +867,6 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     config: ctx.config,
     plan: routePlan,
   });
-  const draftDecisionDirective = draftQuestionDirective(definitionDescriptor.conditionalWorkerDisposition);
-  const conditionalDirective = conditionalWorkerDirective(
-    definitionDescriptor.conditionalWorkerDisposition,
-    { state, binding },
-  );
   const recoveryPlan = retryRecoveryPlanFor({ ctx, state, descriptor, target });
   const recoveryCommand = retryRecoveryCommandFor({
     state,
@@ -985,42 +901,18 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
           : null,
       });
   const workerContext = canonicalWorkerContext(ctx, derived, target, state, typedState);
+  const workerDirective = workerSelection === undefined ? null
+    : workerRegistration.executionContract.project(workerSelection, {
+        binding, recoveryCommand, retryRecoveryPlan: recoveryPlan,
+        missingProducerArtifactRoute: missingRoute,
+      });
   let selectedDirective = specPostFailure === null ? null : new BlockedDirective({
     code: specPostFailure.code,
     reason: specPostFailure.reason,
     resumeInstruction: specPostFailure.resumeInstruction,
   });
-  selectedDirective ??= userDecisionDirective ?? draftDecisionDirective ?? conditionalDirective ?? approvalDirective ?? activationDirective
+  selectedDirective ??= userDecisionDirective ?? (workerDirective instanceof ExecuteStepDirective ? null : workerDirective) ?? approvalDirective ?? activationDirective
     ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
-  if (isConditionalDraftWorkerStep(typedState.current?.at(-1))) {
-    let draftRecovery = null;
-    try {
-      draftRecovery = resolveDraftWorkerRecovery({
-        state: typedState,
-        activities: ctx.flowManager.activityLedger(typedState.specId),
-      });
-    } catch (error) {
-      if (!(error instanceof DraftWorkerRecoveryRefusal)) throw error;
-    }
-    if (draftRecovery !== null) {
-      selectedDirective = new ExecuteCommandDirective({
-        actionId: "RECOVER_DRAFT_EXECUTION",
-        nextAction: guardedCommand("sennel flow run recover-draft-execution", state, binding),
-        instruction: `Verify inputs and recover the retained legacy ${draftRecovery.stepId} checkpoint before resuming dispatch.`,
-        reason: "Definition selected the retained unpublished worker claim and its checkpoint on this Attempt.",
-      });
-    }
-  }
-  const correction = resolveDraftWorkerCorrection({
-    state: typedState, activities: ctx.flowManager.activityLedger(typedState.specId),
-  });
-  if (correction.exhausted) {
-    selectedDirective = new BlockedDirective({
-      code: "FLOW_DRAFT_WORKER_CORRECTION_EXHAUSTED",
-      reason: `Draft producer correction exhausted after ${correction.used} rejected submissions. Latest diagnostic: ${correction.feedback.code}.`,
-      resumeInstruction: "Correct the artifact producer using the retained diagnostics before starting a new authorized Attempt. Do not reset the checkpoint or bypass validation.",
-    });
-  }
   if (target.scope === "task" && target.stepId === "task-triage" && typedState.attempt?.failure === null) {
     const filter = workerContext.taskReviewFilter;
     const quoted = (value) => `'${String(value).replaceAll("'", "'\"'\"'")}'`;

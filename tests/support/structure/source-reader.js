@@ -30,12 +30,13 @@ export class SourceReference {
 }
 
 export class SourceClass {
-  constructor(name, parent, parentToken, token, dependencies, exported) {
+  constructor(name, parent, parentToken, token, dependencies, argumentTypes, exported) {
     this.name = name;
     this.parent = parent;
     this.parentToken = parentToken;
     this.token = token;
     this.dependencies = dependencies;
+    this.argumentTypes = argumentTypes;
     this.exported = exported;
   }
 }
@@ -46,6 +47,118 @@ export class SourceExport {
     this.local = local;
     this.reference = reference;
   }
+}
+
+export class SourceInvocation {
+  constructor(name, token, arguments_) {
+    if (!name || !token || !Array.isArray(arguments_)) throw new TypeError("invalid source invocation");
+    this.name = name;
+    this.token = token;
+    this.arguments = arguments_;
+  }
+  identifiers() {
+    return new Set(this.arguments.flat().filter((token) => token.kind === "identifier").map((token) => token.value));
+  }
+  literals() {
+    return new Set(this.arguments.flat().filter((token) => token.kind === "string").map((token) => token.value));
+  }
+}
+
+export class SourceDeclaration {
+  constructor(name, tokens) {
+    if (!name || !Array.isArray(tokens) || tokens.length === 0) throw new TypeError("invalid source declaration");
+    this.name = name;
+    this.tokens = tokens;
+    this.token = tokens[0];
+  }
+  uses(name) { return this.tokens.some((token) => token.kind === "identifier" && token.value === name); }
+  matchesDeclaration(source) { return sameTokens(this.tokens, readTokens(source)); }
+  bodyTokens() {
+    const open = this.tokens.findIndex((token) => token.value === "(");
+    if (open < 0) return null;
+    const close = matching(this.tokens, open, "(", ")");
+    return this.tokens[close + 1]?.value === "{" ? this.tokens.slice(close + 2, -1) : null;
+  }
+  topLevelInitializer(name) {
+    const body = this.bodyTokens();
+    if (body === null) return null;
+    let depth = 0;
+    let found = null;
+    for (let index = 0; index < body.length - 2; index++) {
+      if (body[index].value === "{") depth++;
+      if (body[index].value === "}") depth--;
+      if (depth !== 0 || !["const", "let"].includes(body[index].value)
+        || body[index + 1]?.value !== name || body[index + 2]?.value !== "=") continue;
+      if (found !== null) return null;
+      const start = index + 3;
+      let nested = 0;
+      let end = start;
+      for (; end < body.length; end++) {
+        if (["(", "[", "{"].includes(body[end].value)) nested++;
+        if ([")", "]", "}"].includes(body[end].value)) nested--;
+        if (nested === 0 && body[end].value === ";") break;
+      }
+      if (end === body.length) return null;
+      found = new SourceInitializer(body[index], index, body.slice(start, end));
+    }
+    return found;
+  }
+  matchesBody(source) { return sameTokens(this.bodyTokens(), readTokens(source)); }
+  bodyStartsWith(source) {
+    const body = this.bodyTokens();
+    const expected = readTokens(source);
+    return body !== null && sameTokens(body.slice(0, expected.length), expected);
+  }
+  bodyEndsWith(source) {
+    const body = this.bodyTokens();
+    const expected = readTokens(source);
+    return body !== null && sameTokens(body.slice(-expected.length), expected);
+  }
+  containsBodySequence(source) {
+    const body = this.bodyTokens();
+    const expected = readTokens(source);
+    return body !== null && body.some((_, index) => sameTokens(body.slice(index, index + expected.length), expected));
+  }
+  returns() {
+    const body = this.bodyTokens();
+    if (body === null) return [];
+    const result = [];
+    for (let index = 0; index < body.length; index++) {
+      if (body[index].value !== "return") continue;
+      let depth = 0;
+      let end = index + 1;
+      for (; end < body.length; end++) {
+        if (["(", "[", "{"].includes(body[end].value)) depth++;
+        if ([")", "]", "}"].includes(body[end].value)) depth--;
+        if (depth === 0 && body[end].value === ";") break;
+      }
+      if (end === body.length) return [];
+      result.push(new SourceReturn(body[index], index, body.slice(index + 1, end)));
+      index = end;
+    }
+    return result;
+  }
+}
+
+export class SourceInitializer {
+  constructor(token, index, tokens) {
+    if (!token || !Number.isInteger(index) || !Array.isArray(tokens)) throw new TypeError("invalid source initializer");
+    this.token = token;
+    this.index = index;
+    this.tokens = tokens;
+  }
+  matches(source) { return sameTokens(this.tokens, readTokens(source)); }
+}
+
+export class SourceReturn extends SourceInitializer {}
+
+function sameTokens(actual, expected) {
+  return actual !== null && actual.length === expected.length
+    // Patterns may explicitly leave prose unconstrained, but never expressions,
+    // calls, identifiers, or control literals such as Step IDs and action IDs.
+    && actual.every((token, index) => expected[index].kind === "identifier" && expected[index].value === "$STRING_LITERAL"
+      ? token.kind === "string"
+      : token.value === expected[index].value && token.kind === expected[index].kind);
 }
 
 const identifierStart = /[A-Za-z_$]/;
@@ -180,6 +293,223 @@ function matching(tokens, open, left = "{", right = "}") {
     if (tokens[i].kind === "punctuation" && tokens[i].value === right && --depth === 0) return i;
   }
   throw new SourceReadError("<source>", tokens[open].offset, `unclosed ${left}`);
+}
+
+/** Account for every reference to a capability; unclassified uses remain errors. */
+export class SourceOriginUsage {
+  constructor(declaration, origins) {
+    if (!(declaration instanceof SourceDeclaration)) throw new TypeError("source declaration required");
+    this.tokens = declaration.tokens;
+    this.origins = new Set(origins);
+    this.accepted = new Set();
+    const transfers = [];
+    for (let index = 0; index < this.tokens.length; index++) {
+      const tokens = this.tokens;
+      let target;
+      let start;
+      if (tokens[index].value === "const" && tokens[index + 1]?.kind === "identifier"
+        && tokens[index + 2]?.value === "=") {
+        target = tokens[index + 1]; start = index + 3;
+      } else if (tokens[index].value === "this" && tokens[index + 1]?.value === "."
+        && tokens[index + 2]?.value.startsWith("#") && tokens[index + 3]?.value === "=") {
+        target = tokens[index + 2]; start = index + 4;
+      } else continue;
+      let end = start;
+      while (end < tokens.length && tokens[end].value !== ";") end++;
+      const source = tokens.slice(start, end);
+      if (!SourceOriginUsage.isReference(source)) continue;
+      transfers.push([target, source]);
+    }
+    let changed;
+    do {
+      changed = false;
+      for (const [target, source] of transfers) {
+        const origin = source.at(-1);
+        if (!this.origins.has(target.value) && !this.origins.has(origin.value)) continue;
+        for (const token of [target, origin]) if (!this.origins.has(token.value)) {
+          this.origins.add(token.value); changed = true;
+        }
+        this.accept([target, ...source]);
+      }
+    } while (changed);
+    // Only binding positions are declarations. Defaults and destructured values
+    // are not silently accepted as uses of the capability.
+    const constructor = this.tokens.findIndex((token) => token.value === "constructor");
+    const parameters = readParameters(constructor < 0 ? this.tokens : this.tokens.slice(constructor));
+    for (const parameter of parameters) {
+      if (parameter.length === 1 && parameter[0].kind === "identifier") this.accept(parameter);
+      else if (parameter[0]?.value === "{" && parameter.at(-1)?.value === "}") {
+        for (let index = 1; index < parameter.length - 1; index++) {
+          if (["{", ","].includes(parameter[index - 1]?.value)
+            && [",", "}"].includes(parameter[index + 1]?.value)) this.accept([parameter[index]]);
+        }
+      }
+    }
+    let depth = 0;
+    const isClass = this.tokens.slice(0, 3).some((token) => token.value === "class");
+    for (let index = 0; index < this.tokens.length; index++) {
+      const token = this.tokens[index];
+      if (token.value === "{") depth++;
+      if (token.value === "}") depth--;
+      if (isClass && depth === 1 && token.value.startsWith("#")
+        && this.tokens[index + 1]?.value === ";") this.accept([token]);
+    }
+  }
+  static isReference(tokens) {
+    return tokens.length > 0 && tokens.length % 2 === 1
+      && tokens.every((token, index) => index % 2 === 0 ? token.kind === "identifier" : token.value === ".");
+  }
+  isOrigin(token) { return token.kind === "identifier" && this.origins.has(token.value); }
+  isReference(tokens) { return SourceOriginUsage.isReference(tokens) && this.isOrigin(tokens.at(-1)); }
+  accept(tokens) { for (const token of tokens) this.accepted.add(token.offset); }
+  unresolved() { return this.tokens.filter((token) => this.isOrigin(token) && !this.accepted.has(token.offset)); }
+}
+
+/** Read constructor/function parameters without executing a declaration. */
+export function readParameters(tokens) {
+  const open = tokens.findIndex((token) => token.value === "(");
+  if (open < 0) return [];
+  const close = matching(tokens, open, "(", ")");
+  return readCommaSeparated(tokens, open + 1, close);
+}
+
+function readCommaSeparated(tokens, start, end) {
+  const parts = [];
+  let depth = 0;
+  for (let index = start; index < end; index++) {
+    if (["(", "[", "{"].includes(tokens[index].value)) depth++;
+    else if ([")", "]", "}"].includes(tokens[index].value)) depth--;
+    else if (tokens[index].value === "," && depth === 0) {
+      parts.push(tokens.slice(start, index)); start = index + 1;
+    }
+  }
+  if (start < end) parts.push(tokens.slice(start, end));
+  return parts;
+}
+
+/** One member access after a known receiver; a null name is unresolved. */
+export class SourceMemberAccess {
+  constructor(token, name, called) {
+    if (!(token instanceof SourceToken) || (name !== null && typeof name !== "string")
+      || typeof called !== "boolean") throw new TypeError("invalid source member access");
+    this.token = token;
+    this.name = name;
+    this.called = called;
+  }
+  isCallTo(methods) { return this.called && this.name !== null && methods.has(this.name); }
+}
+
+/** Normalize ordinary/optional member and call syntax before applying any policy.
+ * Computed members deliberately remain unresolved, even for literal keys.
+ * Parentheses wrapping the receiver are transparent, unlike a surrounding call.
+ */
+export function readMemberAccess(tokens, receiverIndex) {
+  let start = receiverIndex;
+  while (start >= 2 && tokens[start - 1].value === ".") {
+    const receiver = tokens[start - 2].value === "?" ? start - 3 : start - 2;
+    if (tokens[receiver]?.kind !== "identifier") break;
+    start = receiver;
+  }
+  let cursor = receiverIndex + 1;
+  while (tokens[start - 1]?.value === "(" && tokens[cursor]?.value === ")"
+    && matching(tokens, start - 1, "(", ")") === cursor
+    && (!(tokens[start - 2]?.kind === "identifier")
+      || ["return", "await", "yield", "throw"].includes(tokens[start - 2]?.value))
+    && tokens[start - 2]?.kind !== "string"
+    && ![")", "]"].includes(tokens[start - 2]?.value)) {
+    start--;
+    cursor++;
+  }
+  const skipOptional = (index) => tokens[index]?.value === "?" && tokens[index + 1]?.value === "."
+    ? index + 2 : index;
+  const optionalEnd = skipOptional(cursor);
+  if (optionalEnd !== cursor) cursor = optionalEnd;
+  else if (tokens[cursor]?.value === ".") cursor++;
+  else if (!["[", "("].includes(tokens[cursor]?.value)) return null;
+  const token = tokens[cursor];
+  if (!token) return new SourceMemberAccess(tokens[receiverIndex], null, false);
+  if (token.kind !== "identifier") return new SourceMemberAccess(token, null, false);
+  const call = skipOptional(cursor + 1);
+  return new SourceMemberAccess(token, token.value, tokens[call]?.value === "(");
+}
+
+/** Read named calls without executing the composition module. */
+export function readInvocations(module) {
+  const tokens = module.tokens;
+  const result = [];
+  for (let index = 0; index < tokens.length - 1; index++) {
+    const token = tokens[index];
+    if (token.kind !== "identifier" || tokens[index + 1].value !== "(" || [".", "function"].includes(tokens[index - 1]?.value)) continue;
+    const close = matching(tokens, index + 1, "(", ")");
+    if (tokens[close + 1]?.value === "{" && tokens[index - 1]?.value !== "new") continue;
+    const arguments_ = readCommaSeparated(tokens, index + 2, close);
+    result.push(new SourceInvocation(token.value, token, arguments_));
+  }
+  return result;
+}
+
+/** Resolve a static local class, function, or value declaration by name. */
+export function readDeclaration(module, name) {
+  const tokens = module.tokens;
+  let depth = 0;
+  for (let index = 0; index < tokens.length - 1; index++) {
+    if (tokens[index].value === "{") depth++;
+    if (tokens[index].value === "}") depth--;
+    if (depth !== 0) continue;
+    if (!["class", "function", "const", "let"].includes(tokens[index].value) || tokens[index + 1]?.value !== name) continue;
+    if (tokens[index].value === "class" || tokens[index].value === "function") {
+      let open = index + 2;
+      if (tokens[index].value === "function") {
+        while (open < tokens.length && tokens[open].value !== "(") open++;
+        if (open === tokens.length) throw new SourceReadError(module.file, tokens[index].offset, `unsupported ${name} declaration`);
+        open = matching(tokens, open, "(", ")") + 1;
+      }
+      while (open < tokens.length && tokens[open].value !== "{") open++;
+      if (open === tokens.length) throw new SourceReadError(module.file, tokens[index].offset, `unclosed ${name} declaration`);
+      const close = matching(tokens, open);
+      return new SourceDeclaration(name, tokens.slice(index, close + 1));
+    }
+    let end = index + 2;
+    const stack = [];
+    for (; end < tokens.length; end++) {
+      const value = tokens[end].value;
+      if (value === ";" && stack.length === 0) break;
+      if (["(", "[", "{"].includes(value)) stack.push(value);
+      else if ([")", "]", "}"].includes(value)) stack.pop();
+    }
+    if (end === tokens.length) throw new SourceReadError(module.file, tokens[index].offset, `unterminated ${name} declaration`);
+    return new SourceDeclaration(name, tokens.slice(index, end + 1));
+  }
+  return null;
+}
+
+export function readClassMember(module, className, memberName) {
+  let parent = module.declaration(className);
+  if (!parent) {
+    const classEntry = module.classes.find((entry) => entry.name === className);
+    const start = module.tokens.findIndex((token) => token.offset === classEntry?.token.offset);
+    if (start >= 0) {
+      let open = start + 2;
+      while (open < module.tokens.length && module.tokens[open].value !== "{") open++;
+      if (open < module.tokens.length) {
+        const close = matching(module.tokens, open);
+        parent = new SourceDeclaration(className, module.tokens.slice(start, close + 1));
+      }
+    }
+  }
+  if (!parent) return null;
+  const tokens = parent.tokens;
+  let depth = 0;
+  for (let index = 0; index < tokens.length - 1; index++) {
+    if (tokens[index].value === "{") depth++;
+    if (tokens[index].value === "}") depth--;
+    if (depth !== 1 || tokens[index].value !== memberName || tokens[index + 1]?.value !== "(") continue;
+    const close = matching(tokens, index + 1, "(", ")");
+    if (tokens[close + 1]?.value !== "{") continue;
+    const end = matching(tokens, close + 1);
+    return new SourceDeclaration(`${className}.${memberName}`, tokens.slice(index, end + 1));
+  }
+  return null;
 }
 
 function bindingsOf(tokens, start, end) {
@@ -380,6 +710,7 @@ export class SourceModule {
     this.dynamic = [];
     this.globals = [];
     this.unboundNames = new Map();
+    this.declarations = new Map();
     try { this.#read(lexicalOnly); }
     catch (error) {
       if (error instanceof SourceReadError) {
@@ -397,6 +728,11 @@ export class SourceModule {
         .map((entry) => entry.offset)));
     }
     return this.unboundNames.get(name).has(token.offset);
+  }
+
+  declaration(name) {
+    if (!this.declarations.has(name)) this.declarations.set(name, readDeclaration(this, name));
+    return this.declarations.get(name);
   }
 
   #read(lexicalOnly) {
@@ -455,22 +791,24 @@ export class SourceModule {
         if (t[open]?.value !== "{") throw new SourceReadError(this.file, token.offset, "unsupported class declaration");
         const close = matching(t, open);
         const dependencies = [];
+        const argumentTypes = [];
         let depth = 1;
         for (let j = open + 1; j < close; j++) {
           if (t[j].kind === "punctuation" && t[j].value === "{") { depth++; continue; }
           if (t[j].kind === "punctuation" && t[j].value === "}") { depth--; continue; }
           if (depth !== 1) continue;
-          if (t[j].value !== "static" || t[j + 1]?.value !== "dependencies") continue;
-          if (t[j + 2]?.value !== "=" || t[j + 3]?.value !== "[") throw new SourceReadError(this.file, t[j].offset, "unsupported dependencies declaration");
+          if (t[j].value !== "static" || !["dependencies", "argumentTypes"].includes(t[j + 1]?.value)) continue;
+          const target = t[j + 1].value === "dependencies" ? dependencies : argumentTypes;
+          if (t[j + 2]?.value !== "=" || t[j + 3]?.value !== "[") throw new SourceReadError(this.file, t[j].offset, `unsupported ${t[j + 1].value} declaration`);
           const end = matching(t, j + 3, "[", "]");
           for (let k = j + 4; k < end; k++) {
             if (t[k].value === ",") continue;
-            if (t[k].kind !== "identifier") throw new SourceReadError(this.file, t[k].offset, "dependencies must be static identifiers");
-            dependencies.push(t[k].value);
+            if (t[k].kind !== "identifier") throw new SourceReadError(this.file, t[k].offset, `${t[j + 1].value} must be static identifiers`);
+            target.push(t[k].value);
           }
         }
         const exported = t[i - 1]?.value === "export" || (t[i - 2]?.value === "export" && t[i - 1]?.value === "default");
-        this.classes.push(new SourceClass(name, parent, hasParent ? t[cursor + 1] : null, token, dependencies, exported));
+        this.classes.push(new SourceClass(name, parent, hasParent ? t[cursor + 1] : null, token, dependencies, argumentTypes, exported));
         if (exported) this.exports.push(new SourceExport(t[i - 1]?.value === "default" ? "default" : name, name));
       }
     }

@@ -11,6 +11,8 @@ import { createSpecGateRepairScenario, prepareSpecGateRepairHandoffInput } from 
 import { FlowAtStepFixture } from "./flow-setup.js";
 import { validWorkerHandoffSpec, validWorkerHandoffTaskSpec, workerArtifactJson } from "./worker-artifact.js";
 import { removeTmpDir } from "../builders/tmp-dir.js";
+import { ReviewWorkUnitManifest, ReviewWorkUnitOutput } from "../../../src/flow/lib/review-work-unit-values.js";
+import { DraftReviewExecutionTargetIdentity } from "../../../src/flow/definition.js";
 
 /** Canonical inputs for every registered Spec Step preparation contract. */
 export class SpecStepPreparationFixture {
@@ -47,8 +49,20 @@ export class SpecStepPreparationFixture {
     const ctx = { root, executionRoot: root, mainRoot: root, specId, flowManager };
 
     if (stepId === "spec-review") {
+      const state = flowManager.canonicalState(specId);
+      const binding = new SpecReviewStepBinding({ flowManager, specId });
+      const manifest = new ReviewWorkUnitManifest({
+        version: 1, runId: state.runId, specId, phase: "spec", taskId: null,
+        nodeId: stepId, attemptId: state.attempt.id,
+        target: { treeSha: "a".repeat(40), targetStateDigest: "b".repeat(64) },
+        inputs: [], output: ReviewWorkUnitOutput.forReview({ phase: "spec" }).toJSON(),
+      });
+      const executionBinding = flowManager.draftStepExecutionState({ binding }).reviewBinding({
+        manifestDigest: manifest.digest, inputDigest: manifest.inputDigest,
+        target: new DraftReviewExecutionTargetIdentity(manifest.target.toJSON()),
+      });
       return { request: { stepId }, input: {
-        flowManager, binding: new SpecReviewStepBinding({ flowManager, specId }),
+        flowManager, binding, executionBinding, manifest,
       } };
     }
     if (stepId === "spec-gate") {

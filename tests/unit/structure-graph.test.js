@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Step } from "../../src/flow/engine/step.js";
-import { StepRegistration } from "../../src/flow/engine/composition/step-registration.js";
 import { SyntheticStructureSeed } from "../fixtures/structure/synthetic.js";
 import { StructureChecker, StructureScope } from "../support/structure/checker.js";
 import { MemorySourceRepository } from "../support/structure/source-repository.js";
 
 class ServiceClass {}
 class AlphaStep extends Step { static dependencies = [ServiceClass]; }
-const registration = new StepRegistration({ stepId: "entry", StepClass: AlphaStep, prepareDependencies: () => new Map() });
+const registration = { stepId: "entry", StepClass: AlphaStep };
 
 function graph(files) {
   return new StructureChecker(new StructureScope("/virtual", "src/flow/steps/alpha", [registration]), new MemorySourceRepository(files)).check();
