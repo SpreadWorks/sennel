@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import { Container } from "../../../src/lib/container.js";
-import { AgentProcessStopEvidence, AgentTimeoutFailure } from "../../../src/lib/agent-failure.js";
+import { AgentAuthenticationFailure, AgentProcessStopEvidence, AgentTimeoutFailure } from "../../../src/lib/agent-failure.js";
 import { Agent, AgentTimeoutError } from "../../../src/lib/agent.js";
 import { dispatch } from "../../../src/lib/dispatcher.js";
 import { flowCommands } from "../../../src/lib/command-registry.js";
@@ -6524,6 +6524,17 @@ describe("worker artifact handoff", () => {
           assert.equal(result.data.retryable, false, scenario.name);
         }
         assert.equal(findStepById(value.flowManager.load().steps, "spec-repair").status, "in_progress", scenario.name);
+        const failed = value.flowManager.canonicalState(value.specId);
+        assert.equal(failed.attempt.failure.code, scenario.expectedCode, scenario.name);
+        assert.equal(failed.attempt.failure.retryable, false, scenario.name);
+        assert.equal(failed.attempt.failure.retryKind, null, scenario.name);
+        assert.equal(failed.attempt.consumption.semantic, 0, scenario.name);
+        const reloaded = new FlowManager({
+          root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+        });
+        assert.equal((await new GetNextActionCommand().execute({
+          ...value.ctx, flowManager: reloaded, flowState: reloaded.loadReadOnly(value.specId),
+        })).directive.kind, "blocked", scenario.name);
         assert.equal(
           value.flowManager.readCurrentSpecReview({ specId: value.specId, consumerNodeId: "spec-repair" })
             .review.audit.length,
@@ -6614,6 +6625,17 @@ describe("worker artifact handoff", () => {
           assert.equal(result.data.retryable, false, scenario.name);
         }
         assert.equal(findStepById(value.flowManager.load().steps, "spec-triage").status, "in_progress", scenario.name);
+        const failed = value.flowManager.canonicalState(value.specId);
+        assert.equal(failed.attempt.failure.code, scenario.expectedCode, scenario.name);
+        assert.equal(failed.attempt.failure.retryable, false, scenario.name);
+        assert.equal(failed.attempt.failure.retryKind, null, scenario.name);
+        assert.equal(failed.attempt.consumption.semantic, 0, scenario.name);
+        const reloaded = new FlowManager({
+          root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+        });
+        assert.equal((await new GetNextActionCommand().execute({
+          ...value.ctx, flowManager: reloaded, flowState: reloaded.loadReadOnly(value.specId),
+        })).directive.kind, "blocked", scenario.name);
         assert.equal(
           value.flowManager.readCurrentSpecReview({ specId: value.specId, consumerNodeId: "spec-triage" })
             .review.audit.length,
@@ -7896,6 +7918,481 @@ describe("worker artifact handoff", () => {
       assert.equal(entry.diagnostic, undefined);
       assert.match(entry.resolution, /Correct the worker artifact payload/);
       assert.equal(handoffDirectories.length, 1);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  for (const { stepId, prepare } of [
+      { stepId: "spec", prepare: () => fixture("spec", {
+        beforeActivate(value) { publishDraftBeforeTarget(value, draftDocument("Create the specification.")); },
+      }) },
+      { stepId: "spec-triage", prepare: prepareSpecTriageFixture },
+      { stepId: "spec-repair", prepare: prepareSpecRepairFixture },
+    ]) {
+    it(`persists terminal ${stepId} handoff failure across next-action readback`, async () => {
+      const value = prepare();
+      try {
+        const protectedArtifacts = value.flowManager.artifactCatalog(value.specId).toJSON().artifacts
+          .filter((entry) => ["spec.record", "spec.review"].includes(entry.logicalKey));
+        const startingState = value.flowManager.canonicalState(value.specId);
+        let workerCalls = 0;
+        let activeManager = value.flowManager;
+        let savedInvocation = null;
+        const nextAction = new GetNextActionCommand();
+        const dispatcher = new RunDispatchCommand({
+          nextAction: { run: () => nextAction.execute({
+            ...value.ctx, flowManager: activeManager,
+            flowState: activeManager.loadReadOnly(value.specId),
+          }) },
+          agent: { async call(_prompt, options) {
+            workerCalls += 1;
+            const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+            const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+            const payload = request.payloads[0];
+            fs.writeFileSync(payload.payloadPath, "[]\n");
+            sealWorkerArtifactHandoff({
+              requestPath,
+              invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+            });
+          } },
+          repositoryFingerprint: () => "stable-fixture",
+          leaseFactory: () => ({ acquire() {}, release() {} }),
+        });
+        dispatcher.container = {};
+        const runWorkerAttempt = dispatcher.runWorkerAttempt.bind(dispatcher);
+        dispatcher.runWorkerAttempt = async (ctx, invocation, ...rest) => {
+          savedInvocation ??= invocation;
+          return runWorkerAttempt(ctx, invocation, ...rest);
+        };
+        const result = await dispatcher.execute({
+          ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+          expectRunId: value.flowManager.loadReadOnly(value.specId).runId,
+          expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
+        });
+
+        assert.equal(result.ok, false, stepId);
+        assert.equal(workerCalls, 2, stepId);
+        const failed = value.flowManager.canonicalState(value.specId);
+        assert.equal(failed.attempt.failure?.retryable, false, stepId);
+        assert.equal(failed.attempt.failure?.retryKind, null, stepId);
+        assert.equal(failed.attempt.consumption.semantic, 0, stepId);
+        assert.equal(value.flowManager.activityLedger(value.specId).filter((activity) => (
+          activity.transition.operation === "fail_attempt" && activity.nodeId === stepId
+        )).length, 1, stepId);
+        assert.deepEqual(value.flowManager.artifactCatalog(value.specId).toJSON().artifacts
+          .filter((entry) => ["spec.record", "spec.review"].includes(entry.logicalKey)), protectedArtifacts, stepId);
+        const issueLog = readCatalogJson(value, "issue.log", stepId);
+        const diagnostic = issueLog.entries.find((entry) => entry.issueLogId === (
+          `worker-handoff-${result.data.dispatchInvocationId}-${result.data.actionDigest}-invalid`
+        ));
+        assert.equal(diagnostic?.diagnostic?.attempts, 2, stepId);
+        assert.equal(diagnostic.diagnostic.first.code, result.data.first.code, stepId);
+        assert.equal(diagnostic.diagnostic.second.code, result.data.second.code, stepId);
+        const activitiesBeforeReapply = value.flowManager.activityLedger(value.specId);
+        assert.equal(value.flowManager.failCurrentAttemptIfCurrent({
+          specId: value.specId,
+          expectedRunId: startingState.runId,
+          expectedAttempt: startingState.attempt,
+          failure: {
+            category: "tooling", code: failed.attempt.failure.code,
+            message: failed.attempt.failure.message, retryable: false, retryKind: null,
+          },
+        }), false, `${stepId}: failed Attempt cannot be reapplied`);
+        assert.deepEqual(value.flowManager.activityLedger(value.specId), activitiesBeforeReapply, stepId);
+        assert.deepEqual(readCatalogJson(value, "issue.log", stepId), issueLog, stepId);
+        assert.equal((await nextAction.execute({
+          ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+        })).directive.kind, "blocked", stepId);
+        const reloaded = new FlowManager({
+          root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+        });
+        activeManager = reloaded;
+        const next = await nextAction.execute({
+          ...value.ctx, flowManager: reloaded, flowState: reloaded.loadReadOnly(value.specId),
+        });
+        assert.equal(next.directive.kind, "blocked", stepId);
+        assert.equal(next.step, stepId);
+        await dispatcher.execute({
+          ...value.ctx, flowManager: reloaded, flowState: reloaded.loadReadOnly(value.specId),
+          expectRunId: reloaded.loadReadOnly(value.specId).runId,
+          expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
+        });
+        assert.equal(workerCalls, 2, `${stepId}: blocked dispatch must not call provider`);
+        await assert.rejects(() => dispatcher.runWorkerAttempt({
+          ...value.ctx, flowManager: reloaded, flowState: reloaded.loadReadOnly(value.specId),
+        }, savedInvocation), (error) => error instanceof WorkerArtifactHandoffError
+          && error.code === next.directive.code);
+        assert.equal(workerCalls, 2, `${stepId}: direct worker must not call provider`);
+      } finally {
+        removeTmpDir(value.mainRoot);
+      }
+    });
+  }
+
+  it("retains the external Agent failure and its recovery guidance on the failed Spec Attempt", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) { publishDraftBeforeTarget(candidate, draftDocument("Create the specification.")); },
+    });
+    try {
+      let workerCalls = 0;
+      const nextAction = new GetNextActionCommand();
+      const dispatcher = new RunDispatchCommand({
+        nextAction: { run: () => nextAction.execute({
+          ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+        }) },
+        agent: { async call() {
+          workerCalls += 1;
+          throw new AgentAuthenticationFailure({ message: "provider credentials were rejected" });
+        } },
+        repositoryFingerprint: () => "stable-fixture",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+      });
+      dispatcher.container = {};
+      const result = await dispatcher.execute({
+        ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+        expectRunId: value.flowManager.loadReadOnly(value.specId).runId,
+        expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
+      });
+      assert.equal(workerCalls, 1);
+      assert.equal(result.errors[0].code, "AGENT_AUTHENTICATION_FAILED");
+      const reloaded = new FlowManager({
+        root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+      });
+      const failure = reloaded.canonicalState(value.specId).attempt.failure;
+      assert.equal(failure.code, "AGENT_AUTHENTICATION_FAILED");
+      assert.equal(failure.message, "provider credentials were rejected");
+      assert.equal(failure.recoveryHint,
+        "Repair or refresh provider authentication before starting a new attempt.");
+      assert.equal(failure.retryable, false);
+      assert.equal((await nextAction.execute({
+        ...value.ctx, flowManager: reloaded, flowState: reloaded.loadReadOnly(value.specId),
+      })).directive.kind, "blocked");
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("does not retry or terminalize an unclassified Spec provider exception", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) { publishDraftBeforeTarget(candidate, draftDocument("Create the specification.")); },
+    });
+    try {
+      let workerCalls = 0;
+      const nextAction = new GetNextActionCommand();
+      const dispatcher = new RunDispatchCommand({
+        nextAction: { run: () => nextAction.execute({
+          ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+        }) },
+        agent: { async call() {
+          workerCalls += 1;
+          throw new Error("unclassified provider failure");
+        } },
+        repositoryFingerprint: () => "stable-fixture",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+      });
+      dispatcher.container = {};
+      const result = await dispatcher.execute({
+        ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+        expectRunId: value.flowManager.loadReadOnly(value.specId).runId,
+        expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
+      });
+      assert.equal(result.ok, false);
+      assert.equal(workerCalls, 1);
+      assert.equal(value.flowManager.canonicalState(value.specId).attempt.failure, null);
+      assert.equal((await nextAction.execute({
+        ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+      })).directive.kind, "execute_step");
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("keeps a failed Spec Attempt blocked when its diagnostic append fails", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) { publishDraftBeforeTarget(candidate, draftDocument("Create the specification.")); },
+    });
+    try {
+      const manager = value.flowManager;
+      let appendCalls = 0;
+      manager.appendIssueLog = () => {
+        appendCalls += 1;
+        throw new Error("simulated diagnostic storage failure");
+      };
+      const nextAction = new GetNextActionCommand();
+      const dispatcher = new RunDispatchCommand({
+        nextAction: { run: () => nextAction.execute({
+          ...value.ctx, flowState: manager.loadReadOnly(value.specId),
+        }) },
+        agent: { async call(_prompt, options) {
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          fs.writeFileSync(request.payloads[0].payloadPath, "[]\n");
+          sealWorkerArtifactHandoff({
+            requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+          });
+        } },
+        repositoryFingerprint: () => "stable-fixture",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+      });
+      dispatcher.container = {};
+      const result = await dispatcher.execute({
+        ...value.ctx, flowState: manager.loadReadOnly(value.specId),
+        expectRunId: manager.loadReadOnly(value.specId).runId,
+        expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
+      });
+      assert.equal(appendCalls, 1);
+      assert.equal(result.data.issueLogError, "simulated diagnostic storage failure");
+      const reloaded = new FlowManager({
+        root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+      });
+      assert.equal(reloaded.canonicalState(value.specId).attempt.failure.code,
+        "FLOW_ARTIFACT_HANDOFF_RETRY_EXHAUSTED");
+      assert.equal((await nextAction.execute({
+        ...value.ctx, flowManager: reloaded, flowState: reloaded.loadReadOnly(value.specId),
+      })).directive.kind, "blocked");
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("does not attach a rejected Spec handoff after a new Draft Attempt replaces it before save", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) { publishDraftBeforeTarget(candidate, draftDocument("Create the specification.")); },
+    });
+    try {
+      const manager = value.flowManager;
+      let appendCalls = 0;
+      manager.appendIssueLog = () => { appendCalls += 1; throw new Error("unexpected diagnostic"); };
+      const dispatcher = new RunDispatchCommand({
+        nextAction: { run: () => new GetNextActionCommand().execute({
+          ...value.ctx, flowState: manager.loadReadOnly(value.specId),
+        }) },
+        agent: { async call(_prompt, options) {
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          fs.writeFileSync(request.payloads[0].payloadPath, "[]\n");
+          sealWorkerArtifactHandoff({
+            requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+          });
+        } },
+        repositoryFingerprint: () => "stable-fixture",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+      });
+      dispatcher.container = {};
+      const runWorkerAttempt = dispatcher.runWorkerAttempt.bind(dispatcher);
+      let workerAttempts = 0;
+      dispatcher.runWorkerAttempt = async (...args) => {
+        const attempt = await runWorkerAttempt(...args);
+        workerAttempts += 1;
+        if (workerAttempts === 2) manager.reopenDraft({ specId: value.specId, route: "preimplementation" });
+        return attempt;
+      };
+      const result = await dispatcher.execute({
+        ...value.ctx, flowState: manager.loadReadOnly(value.specId),
+        expectRunId: manager.loadReadOnly(value.specId).runId,
+        expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
+      });
+      assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_RETRY_EXHAUSTED");
+      assert.equal(workerAttempts, 2);
+      assert.equal(appendCalls, 0);
+      const reloaded = new FlowManager({
+        root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+      });
+      assert.equal(reloaded.canonicalState(value.specId).current.at(-1), "draft");
+      assert.equal(reloaded.canonicalState(value.specId).attempt.failure, null);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("rejects a Spec diagnostic after a new Draft Attempt replaces the saved failure", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) { publishDraftBeforeTarget(candidate, draftDocument("Create the specification.")); },
+    });
+    try {
+      const manager = value.flowManager;
+      const append = manager.appendIssueLog.bind(manager);
+      let appendCalls = 0;
+      manager.appendIssueLog = (input) => {
+        appendCalls += 1;
+        manager.reopenDraft({ specId: value.specId, route: "preimplementation" });
+        return append(input);
+      };
+      const dispatcher = new RunDispatchCommand({
+        nextAction: { run: () => new GetNextActionCommand().execute({
+          ...value.ctx, flowState: manager.loadReadOnly(value.specId),
+        }) },
+        agent: { async call(_prompt, options) {
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          fs.writeFileSync(request.payloads[0].payloadPath, "[]\n");
+          sealWorkerArtifactHandoff({
+            requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+          });
+        } },
+        repositoryFingerprint: () => "stable-fixture",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+      });
+      dispatcher.container = {};
+      const result = await dispatcher.execute({
+        ...value.ctx, flowState: manager.loadReadOnly(value.specId),
+        expectRunId: manager.loadReadOnly(value.specId).runId,
+        expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
+      });
+      assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_RETRY_EXHAUSTED");
+      assert.equal(appendCalls, 1);
+      assert.match(result.data.issueLogError, /changed failed Attempt/);
+      const reloaded = new FlowManager({
+        root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+      });
+      assert.equal(reloaded.canonicalState(value.specId).current.at(-1), "draft");
+      assert.equal(reloaded.canonicalState(value.specId).attempt.failure, null);
+      const issueLog = readCatalogJson({ ...value, flowManager: reloaded }, "issue.log", "draft");
+      assert.equal(issueLog.entries.some((entry) => entry.issueLogId === (
+        `worker-handoff-${result.data.dispatchInvocationId}-${result.data.actionDigest}-invalid`
+      )), false);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("preserves a Spec failure Store exception without writing diagnostics", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) { publishDraftBeforeTarget(candidate, draftDocument("Create the specification.")); },
+      versionStoreFaultInjector({ phase, activity }) {
+        if (phase === "activity-ready-to-append" && activity.transition.operation === "fail_attempt") {
+          throw new Error("simulated canonical Store failure");
+        }
+      },
+    });
+    try {
+      const manager = value.flowManager;
+      let appendCalls = 0;
+      manager.appendIssueLog = () => { appendCalls += 1; throw new Error("unexpected diagnostic"); };
+      const dispatcher = new RunDispatchCommand({
+        nextAction: { run: () => new GetNextActionCommand().execute({
+          ...value.ctx, flowState: manager.loadReadOnly(value.specId),
+        }) },
+        agent: { async call(_prompt, options) {
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          fs.writeFileSync(request.payloads[0].payloadPath, "[]\n");
+          sealWorkerArtifactHandoff({
+            requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+          });
+        } },
+        repositoryFingerprint: () => "stable-fixture",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+      });
+      dispatcher.container = {};
+      await assert.rejects(() => dispatcher.execute({
+        ...value.ctx, flowState: manager.loadReadOnly(value.specId),
+        expectRunId: manager.loadReadOnly(value.specId).runId,
+        expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
+      }), /simulated canonical Store failure/);
+      assert.equal(appendCalls, 0);
+      const reloaded = new FlowManager({
+        root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+      });
+      assert.equal(reloaded.canonicalState(value.specId).attempt.failure, null);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("leaves the Spec Attempt active when its request authority becomes unreadable", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) { publishDraftBeforeTarget(candidate, draftDocument("Create the specification.")); },
+    });
+    try {
+      let workerCalls = 0;
+      const nextAction = new GetNextActionCommand();
+      const dispatcher = new RunDispatchCommand({
+        nextAction: { run: () => nextAction.execute({
+          ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+        }) },
+        agent: { async call(_prompt, options) {
+          workerCalls += 1;
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          fs.writeFileSync(request.payloads[0].payloadPath, json(validWorkerHandoffTaskSpec()));
+          sealWorkerArtifactHandoff({
+            requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+          });
+          fs.unlinkSync(requestPath);
+        } },
+        repositoryFingerprint: () => "stable-fixture",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+      });
+      dispatcher.container = {};
+      const result = await dispatcher.execute({
+        ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+        expectRunId: value.flowManager.loadReadOnly(value.specId).runId,
+        expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
+      });
+      assert.equal(result.ok, false);
+      assert.equal(workerCalls, 1);
+      assert.equal(value.flowManager.canonicalState(value.specId).attempt.failure, null);
+      assert.equal((await nextAction.execute({
+        ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+      })).directive.kind, "execute_step");
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("leaves the Spec Attempt active when its sealed request contract changes", async () => {
+    const value = fixture("spec", {
+      beforeActivate(candidate) {
+        publishDraftBeforeTarget(candidate, draftDocument("Create the specification."));
+      },
+    });
+    try {
+      const issueLogBefore = value.flowManager.artifactCatalog(value.specId).toJSON().artifacts
+        .filter((entry) => entry.logicalKey === "issue.log");
+      const nextAction = new GetNextActionCommand();
+      const initial = await nextAction.execute({
+        ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+      });
+      assert.equal(initial.step, "spec", JSON.stringify(initial));
+      const dispatcher = new RunDispatchCommand({
+        nextAction: { run: () => nextAction.execute({
+          ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+        }) },
+        agent: { async call(_prompt, options) {
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          fs.writeFileSync(request.payloads[0].payloadPath, json(validWorkerHandoffTaskSpec()));
+          sealWorkerArtifactHandoff({
+            requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
+          });
+          const changedRequest = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          changedRequest.generatedAt = "2026-08-04T00:00:03.000Z";
+          fs.writeFileSync(requestPath, `${JSON.stringify(changedRequest, null, 2)}\n`);
+        } },
+        repositoryFingerprint: () => "stable-fixture",
+        leaseFactory: () => ({ acquire() {}, release() {} }),
+      });
+      dispatcher.container = {};
+      const result = await dispatcher.execute({
+        ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+        expectRunId: value.flowManager.loadReadOnly(value.specId).runId,
+        expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
+      });
+      assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_STALE");
+      assert.equal(value.flowManager.canonicalState(value.specId).attempt.failure, null);
+      assert.deepEqual(value.flowManager.artifactCatalog(value.specId).toJSON().artifacts
+        .filter((entry) => entry.logicalKey === "issue.log"), issueLogBefore);
+      assert.equal((await nextAction.execute({
+        ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
+      })).directive.kind, "execute_step");
     } finally {
       removeTmpDir(value.mainRoot);
     }

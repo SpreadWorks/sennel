@@ -149,7 +149,7 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     const firstDispatch = makeDispatcher(flowManager);
     const result = await firstDispatch.dispatcher.execute(firstDispatch.ctx);
     assert.equal(result.ok, false);
-    assert.deepEqual(result.errors.map((entry) => entry.code), ["FLOW_ARTIFACT_HANDOFF_MISSING"]);
+    assert.deepEqual(result.errors.map((entry) => entry.code), ["AGENT_AUTHENTICATION_FAILED"]);
     assert.equal(result.data.agentFailure.code, "AGENT_AUTHENTICATION_FAILED");
     assert.equal(result.data.retryBudgetConsumed, false);
     assert.deepEqual(requests.map((request) => request.stepId), ["draft", "draft-gate-repair", "spec"]);
@@ -256,69 +256,34 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     const issueLogAfterRetry = reloaded.readArtifact({ specId, logicalKey: "issue.log", consumerNodeId: "spec", optional: true });
     const flowStateAfterRetry = reloaded.readArtifact({ specId, logicalKey: "flow.state", consumerNodeId: "spec" });
     const flowActivitiesAfterRetry = reloaded.readArtifact({ specId, logicalKey: "flow.activities", consumerNodeId: "spec" });
-    assert.equal(retryResult.ok, false);
-    assert.deepEqual(retryResult.errors.map((entry) => entry.code), ["FLOW_ARTIFACT_HANDOFF_MISSING"]);
-    assert.equal(retryResult.data.agentFailure.code, "AGENT_AUTHENTICATION_FAILED");
-    assert.equal(retryResult.data.retryBudgetConsumed, false);
-    assert.deepEqual(requests.slice(requestCountBeforeRetry).map((request) => request.stepId), ["spec"]);
+    assert.equal(retryResult.dispatch.boundary, "blocked");
+    assert.equal(retryResult.dispatch.dispatchCount, 0);
+    assert.equal(retryResult.nextAction.directive.kind, "blocked");
+    assert.deepEqual(requests.slice(requestCountBeforeRetry), []);
     assert.equal(reviewSteps.length, reviewCountBeforeRetry);
     assert.equal(gateCalls, gateCallsBeforeRetry);
     assert.equal(gateAttempts.size, gateAttemptCountBeforeRetry);
-    assert.equal(retryActivityDelta.length, 2);
-    // A real failed Spec provider call records its invocation metric and one issue.log diagnostic.
-    assert.deepEqual(retryActivityDelta.map((entry) => [entry.nodeId, entry.type, entry.transition.operation]), [
-      ["flow", "metric_recorded", "record_metric"],
-      ["spec", "artifacts_published", "publish_artifacts"],
-    ]);
-    const [retryMetric, retryIssueLogPublication] = retryActivityDelta;
-    assert.equal(retryMetric.metric.phase, "spec");
-    assert.equal(retryMetric.metric.kind, "agent");
-    assert.equal(retryMetric.metric.callCount, 1);
-    assert.equal(retryMetric.metric.responseChars, 0);
-    assert.equal(retryIssueLogPublication.attemptId, canonicalBeforeRetry.attempt.id);
-    assert.equal(retryIssueLogPublication.sequence, canonicalBeforeRetry.attempt.sequence);
-    assert.deepEqual(retryIssueLogPublication.references.artifacts, []);
+    assert.deepEqual(retryActivityDelta, []);
     assert.ok(issueLogBeforeRetry);
     assert.ok(issueLogAfterRetry);
     assertArtifactIntegrity(flowStateAfterRetry);
     assertArtifactIntegrity(flowActivitiesAfterRetry);
-    assert.equal(flowStateAfterRetry.descriptor.activityId, retryIssueLogPublication.id);
-    assert.equal(flowActivitiesAfterRetry.descriptor.activityId, retryIssueLogPublication.id);
-    assert.equal(issueLogAfterRetry.descriptor.activityId, retryIssueLogPublication.id);
-    const expectedCanonicalAfterRetry = structuredClone(canonicalBeforeRetry);
-    expectedCanonicalAfterRetry.confirmationOrder += 2;
-    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), expectedCanonicalAfterRetry);
-    assert.deepEqual(retryActivities.slice(0, activitiesBeforeRetry.length), activitiesBeforeRetry);
-    assert.equal(retryActivities.length, activitiesBeforeRetry.length + 2);
-    assert.deepEqual(JSON.parse(flowStateAfterRetry.bytes.toString("utf8")), expectedCanonicalAfterRetry);
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), canonicalBeforeRetry);
+    assert.deepEqual(retryActivities, activitiesBeforeRetry);
+    assert.deepEqual(JSON.parse(flowStateAfterRetry.bytes.toString("utf8")), canonicalBeforeRetry);
     const activityLinesAfterRetry = flowActivitiesAfterRetry.bytes.toString("utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
     assert.deepEqual(activityLinesAfterRetry, retryActivities);
-    assert.deepEqual(activityLinesAfterRetry.slice(0, activitiesBeforeRetry.length), activitiesBeforeRetry);
-    const catalogChangedLogicalKeys = catalogAfterRetry.filter((after) => {
-      const before = catalogBeforeRetry.find((entry) => entry.relativePath === after.relativePath);
-      return before === undefined || JSON.stringify(after) !== JSON.stringify(before);
-    }).map((entry) => entry.logicalKey).sort();
-    assert.deepEqual(catalogChangedLogicalKeys, ["flow.activities", "flow.state", "issue.log"]);
-    assert.equal(catalogAfterRetry.length, catalogBeforeRetry.length);
-    assert.deepEqual(catalogAfterRetry.filter((entry) => !["flow.activities", "flow.state", "issue.log"].includes(entry.logicalKey)),
-      catalogBeforeRetry.filter((entry) => !["flow.activities", "flow.state", "issue.log"].includes(entry.logicalKey)));
+    assert.deepEqual(catalogAfterRetry, catalogBeforeRetry);
     assertArtifactIntegrity(issueLogAfterRetry);
-    assert.notEqual(issueLogAfterRetry.descriptor.hash, issueLogBeforeRetry.descriptor.hash);
-    const priorIssueEntries = JSON.parse(issueLogBeforeRetry.bytes.toString("utf8")).entries;
-    const retryIssueEntries = JSON.parse(issueLogAfterRetry.bytes.toString("utf8")).entries;
-    assert.deepEqual(retryIssueEntries.slice(0, priorIssueEntries.length), priorIssueEntries);
-    assert.equal(retryIssueEntries.length, priorIssueEntries.length + 1);
-    assert.equal(retryIssueEntries.at(-1).step, "spec");
-    assert.equal(retryIssueEntries.at(-1).issueLogId,
-      `worker-handoff-${requests.at(-1).dispatchInvocationId}-${requests.at(-1).actionDigest}-missing`);
-    assert.match(retryIssueEntries.at(-1).reason, /^Worker artifact handoff missing:/);
+    assert.deepEqual(issueLogAfterRetry.descriptor, issueLogBeforeRetry.descriptor);
+    assert.deepEqual(issueLogAfterRetry.bytes, issueLogBeforeRetry.bytes);
     assert.deepEqual(reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "spec" }).descriptor, draftBeforeRetry);
     assert.deepEqual(reloaded.readArtifact({ specId, logicalKey: "flow.findings", consumerNodeId: "spec" }).descriptor, findingsBeforeRetry);
     assert.deepEqual(reloaded.readArtifact({ specId, logicalKey: "draft.gate", consumerNodeId: "spec" }).descriptor, gateBeforeRetry);
     const specAfterRetry = reloaded.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec" });
     assert.equal(specAfterRetry.descriptor.hash, specBeforeRetry.descriptor.hash);
     assert.deepEqual(specAfterRetry.bytes, specBeforeRetry.bytes);
-    assert.equal(specRefusalSnapshots.length, 2);
+    assert.equal(specRefusalSnapshots.length, 1);
     for (const snapshot of specRefusalSnapshots) {
       assert.deepEqual(specAfterRetry.descriptor, snapshot.descriptor);
       assert.deepEqual(specAfterRetry.bytes, snapshot.bytes);

@@ -7550,6 +7550,7 @@ function testReviewRepairValidationRoot(request, submission, state) {
 }
 
 function validatePayload(request, submission, state) {
+  const specValidator = request.stepId === "spec" ? readSpecJsonValidator() : null;
   try {
     if (request.policy.kind === "source") {
       const effect = SourceWorkerEffect.fromDocument(
@@ -7629,7 +7630,7 @@ function validatePayload(request, submission, state) {
       return;
     }
     if (request.stepId === "spec") {
-      validateSpecJsonObject(payloadDocument(request, submission, "spec.json"));
+      specValidator.validate(payloadDocument(request, submission, "spec.json"));
       return;
     }
     if (request.stepId === "spec-triage") {
@@ -9440,12 +9441,7 @@ export class WorkerArtifactHandoffCoordinator {
         if (payloadError !== null) throw payloadError;
       }
       if (cause instanceof WorkerArtifactHandoffError) throw cause;
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_ARTIFACT_HANDOFF_INVALID",
-        `canonical Spec handoff preparation failed: ${cause.message}`,
-        { cause, retryable: false },
-      );
+      throw cause;
     }
   }
 

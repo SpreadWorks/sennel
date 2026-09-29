@@ -2451,6 +2451,7 @@ export class ActivityFailure {
       "agentStopEvidence",
       "agentProviderCompletionEvidence",
       "agentFailureKind",
+      "recoveryHint",
       "attemptCount",
       "maxAttempts",
     ]) {
@@ -2481,6 +2482,12 @@ export class ActivityFailure {
     this.agentFailureKind = value.agentFailureKind == null
       ? null
       : requireString(value.agentFailureKind, "activity.failure.agentFailureKind");
+    this.recoveryHint = value.recoveryHint == null
+      ? null
+      : requireString(value.recoveryHint, "activity.failure.recoveryHint");
+    if (this.recoveryHint !== null && this.agentFailureKind === null) {
+      throw new CurrentFlowStateInvariantError("agent recovery hint requires an agent failure kind");
+    }
     this.attemptCount = value.attemptCount ?? null;
     this.maxAttempts = value.maxAttempts ?? null;
     if ((this.attemptCount === null) !== (this.maxAttempts === null)
@@ -2551,6 +2558,7 @@ export class ActivityFailure {
         agentProviderCompletionEvidence: this.agentProviderCompletionEvidence.toJSON(),
       }),
       ...(this.agentFailureKind === null ? {} : { agentFailureKind: this.agentFailureKind }),
+      ...(this.recoveryHint === null ? {} : { recoveryHint: this.recoveryHint }),
       ...(this.attemptCount === null ? {} : {
         attemptCount: this.attemptCount,
         maxAttempts: this.maxAttempts,

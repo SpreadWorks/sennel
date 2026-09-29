@@ -16,6 +16,9 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
 
 import fs from "node:fs";
 import { DraftWorkerRejection } from "./draft-worker-rejection.js";
+import { isStepPersistenceFailure } from "./definition-lifecycle-failure.js";
+import { CurrentAttemptIdentity } from "./current-flow-state.js";
+import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 import path from "node:path";
 import { loadSpecJsonSchema } from "../../lib/spec-json.js";
 import { FlowCommand } from "./base-command.js";
@@ -150,6 +153,12 @@ function agentFailuresFor(error, agentError = null) {
   ]);
 }
 
+function isUnclassifiedWorkerError(error) {
+  return error != null
+    && !(error instanceof AgentFailure)
+    && !(error instanceof WorkerArtifactHandoffError);
+}
+
 function isToolingAgentFailure(failure) {
   return failure instanceof AgentFailure
     && failure.retryable === true;
@@ -280,6 +289,57 @@ function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoff
   });
   ctx.flowState = ctx.flowManager.loadReadOnly(request?.specId ?? ctx.specId);
   return null;
+}
+
+function isSpecArtifactWorkerStep(stepId) {
+  return stepId !== "spec-gate-repair" && specWorkerStepRegistration(stepId) !== null;
+}
+
+/** A pre-Step Spec failure belongs to the invocation's original Attempt. */
+function settleSpecWorkerFailure(ctx, attempt, error, expectedState, invocation) {
+  const request = attempt?.handoffRequest;
+  const stepId = invocation.action.nextAction.step;
+  const agentFailure = agentFailuresFor(error, attempt.agentError).find(isRequirementTestExternalAgentFailure);
+  if (!isSpecArtifactWorkerStep(stepId)
+    || expectedState.attempt?.nodeId !== stepId
+    || expectedState.current?.at(-1) !== stepId
+    || expectedState.runId !== invocation.target.runId
+    || (invocation.target.specId !== null && expectedState.specId !== invocation.target.specId)
+    || (request && (request.runId !== expectedState.runId
+      || request.specId !== expectedState.specId
+      || request.stepId !== stepId
+      || request.dispatchInvocationId !== invocation.id
+      || request.actionDigest !== invocation.action.digest))
+    || !(error instanceof WorkerArtifactHandoffError)
+    || isUnclassifiedWorkerError(attempt.agentError)
+    || (error.retryable === true && agentFailure === undefined)
+    || error.classification === "stale" || error.classification === "conflict"
+    || error.classification === "recovery-required" || error.recoveryPossible === true
+    || isStepAdmissionRefusal(error) || isStepPersistenceFailure(error)) return false;
+  const cause = agentFailure ?? error;
+  const recorded = ctx.flowManager.failCurrentAttemptIfCurrent({
+    specId: expectedState.specId,
+    expectedRunId: expectedState.runId,
+    expectedAttempt: expectedState.attempt,
+    failure: {
+      category: "tooling",
+      code: cause.code,
+      message: cause.message,
+      retryable: false,
+      retryKind: null,
+      ...(agentFailure && {
+        agentFailureKind: agentFailure.kind,
+        recoveryHint: agentFailure.recoveryHint,
+        attemptCount: agentFailure.attemptCount,
+        maxAttempts: agentFailure.maxAttempts,
+        ...(agentFailure.providerCompletionEvidence && {
+          agentProviderCompletionEvidence: agentFailure.providerCompletionEvidence.toJSON(),
+        }),
+      }),
+    },
+  });
+  ctx.flowState = ctx.flowManager.loadReadOnly(expectedState.specId);
+  return recorded;
 }
 
 /**
@@ -1068,12 +1128,29 @@ export class FlowDispatchWork {
   }
 }
 
-function workerHandoffFailureData(ctx, target, error, request, dispatchCount, agentError = null) {
+class WorkerHandoffFailedAttemptAdmission {
+  constructor(state) {
+    this.runId = state.runId;
+    this.specId = state.specId;
+    this.attempt = CurrentAttemptIdentity.from(state.attempt);
+    Object.freeze(this);
+  }
+
+  assert({ state }) {
+    if (state.runId !== this.runId || state.specId !== this.specId
+      || !this.attempt.matchesFailed(state)) {
+      throw new CurrentFlowStateConflictError("worker handoff diagnostic targets a changed failed Attempt");
+    }
+  }
+}
+
+function appendWorkerHandoffDiagnostic(ctx, error, request, { stepId: invocationStepId = null,
+  failedState = null, agentError = null } = {}) {
   const state = readFlowState(ctx);
-  const stepId = request?.stepId || error.data?.stepId || state?.currentStep || "flow-dispatch";
+  const stepId = invocationStepId || request?.stepId || error.data?.stepId || state?.currentStep || "flow-dispatch";
   const actionDigest = request?.actionDigest || error.data?.actionDigest || null;
   const dispatchInvocationId = request?.dispatchInvocationId || error.data?.dispatchInvocationId || null;
-  let issueLogError = null;
+  const externalFailure = agentFailuresFor(error, agentError).find(isRequirementTestExternalAgentFailure);
   // A recovery-required handoff must leave the canonical Version byte-for-byte
   // untouched so replay can inspect and recover the publication journal. The
   // diagnostic issue-log append is itself a Flow Activity/catalog mutation;
@@ -1081,7 +1158,8 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
   // alongside the interrupted handoff.
   // Source failures have their own checkpoint-bound canonical facts. An
   // unrelated diagnostic write would invalidate an unsettled checkpoint.
-  if (state?.specId && error.classification !== "recovery-required"
+  if (state?.specId && (!isSpecArtifactWorkerStep(stepId) || failedState !== null)
+    && error.classification !== "recovery-required"
     && error.recoveryPossible !== true
     && !isStepAdmissionRefusal(error)
     && (request?.policy ?? workerArtifactHandoffPolicy(stepId))?.kind !== "source") {
@@ -1090,11 +1168,11 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
         step: stepId,
         reason: `Worker artifact handoff ${error.classification || "invalid"}: ${error.message}`,
         trigger: "Parent dispatcher rejected or could not complete a worker artifact handoff.",
-        resolution: error instanceof WorkerArtifactRetryExhaustedError
+        resolution: externalFailure?.recoveryHint ?? (error instanceof WorkerArtifactRetryExhaustedError
           ? "One fresh worker handoff retry was consumed; correct the artifact producer before dispatching this step again."
           : error.recoveryPossible
           ? "Resume the guarded dispatcher to replay the pending publication journal."
-          : "Correct the worker artifact payload and dispatch the current action again.",
+          : "Correct the worker artifact payload and dispatch the current action again."),
         ...(error instanceof WorkerArtifactRetryExhaustedError && {
           diagnostic: {
             code: error.code,
@@ -1111,11 +1189,25 @@ function workerHandoffFailureData(ctx, target, error, request, dispatchCount, ag
       if (state.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowManager?.appendIssueLog !== "function") {
         throw new Error("worker handoff diagnostics require canonical FlowManager.appendIssueLog");
       }
-      ctx.flowManager.appendIssueLog({ specId: state.specId, entry, idempotencyKey });
+      ctx.flowManager.appendIssueLog({
+        specId: failedState?.specId ?? state.specId,
+        entry,
+        idempotencyKey,
+        ...(failedState === null ? {} : { admission: new WorkerHandoffFailedAttemptAdmission(failedState) }),
+      });
     } catch (logError) {
-      issueLogError = logError.message || String(logError);
+      return logError.message || String(logError);
     }
   }
+  return null;
+}
+
+function workerHandoffFailureData(ctx, target, error, request, dispatchCount, agentError = null,
+  issueLogError = null) {
+  const state = readFlowState(ctx);
+  const stepId = request?.stepId || error.data?.stepId || state?.currentStep || "flow-dispatch";
+  const actionDigest = request?.actionDigest || error.data?.actionDigest || null;
+  const dispatchInvocationId = request?.dispatchInvocationId || error.data?.dispatchInvocationId || null;
   return {
     ...blockedBoundary({
       target,
@@ -1266,6 +1358,26 @@ export default class RunDispatchCommand extends FlowCommand {
       code,
       messages,
       data,
+    );
+  }
+
+  finalWorkerFailure(ctx, target, attempt, error, invocation, workerState, dispatchCount) {
+    const stepId = invocation.action.nextAction.step;
+    const recorded = settleSpecWorkerFailure(ctx, attempt, error, workerState, invocation);
+    const external = isSpecArtifactWorkerStep(stepId)
+      ? agentFailuresFor(error, attempt.agentError).find(isRequirementTestExternalAgentFailure) : null;
+    return this.failure(
+      ctx,
+      external?.code ?? error.code,
+      external?.message ?? error.message,
+      workerHandoffFailureData(
+        ctx, target, error, attempt.handoffRequest, dispatchCount, attempt.agentError,
+        appendWorkerHandoffDiagnostic(ctx, error, attempt.handoffRequest, {
+          stepId,
+          failedState: recorded ? workerState : null,
+          agentError: attempt.agentError,
+        }),
+      ),
     );
   }
 
@@ -2177,7 +2289,8 @@ export default class RunDispatchCommand extends FlowCommand {
         ctx,
         error.code,
         error.message,
-        workerHandoffFailureData(ctx, target, error, null, dispatchCount),
+        workerHandoffFailureData(ctx, target, error, null, dispatchCount, null,
+          appendWorkerHandoffDiagnostic(ctx, error, null)),
       );
     }
     let current = await this.fetchNextAction(target);
@@ -2626,6 +2739,7 @@ export default class RunDispatchCommand extends FlowCommand {
         current = progressed.current;
         continue;
       }
+      const workerState = ctx.flowManager.canonicalState(ctx.specId);
       let attempt = await this.runWorkerAttempt(ctx, invocation);
       dispatchCount += 1;
       const deferredMetrics = attempt.deferredMetric ? [attempt.deferredMetric] : [];
@@ -2638,6 +2752,8 @@ export default class RunDispatchCommand extends FlowCommand {
         if (
           attempt.error.retryable !== true
           || !isExplicitWorkerToolingFailure(attempt.error, attempt.agentError)
+          || (isSpecArtifactWorkerStep(invocation.action.nextAction.step)
+            && isUnclassifiedWorkerError(attempt.agentError))
           || !attempt.handoffRequest
           || (attempt.handoffRequest.policy.kind === "source" && attempt.sourceRetryAllowed !== true)
         ) {
@@ -2657,19 +2773,7 @@ export default class RunDispatchCommand extends FlowCommand {
             current = await this.fetchNextAction(target);
             continue;
           }
-          return this.failure(
-            ctx,
-            attempt.error.code,
-            attempt.error.message,
-            workerHandoffFailureData(
-              ctx,
-              target,
-              attempt.error,
-              attempt.handoffRequest,
-              dispatchCount,
-              attempt.agentError,
-            ),
-          );
+          return this.finalWorkerFailure(ctx, target, attempt, attempt.error, invocation, workerState, dispatchCount);
         }
 
         // Only malformed JSON, a missing or unreadable handoff transport, or
@@ -2677,10 +2781,15 @@ export default class RunDispatchCommand extends FlowCommand {
         // once with a new dispatch invocation and handoff directory. Parsed
         // semantic, identity, authority, and publication failures are terminal.
         const retryCurrent = await this.fetchNextAction(target);
+        const retryState = ctx.flowManager.canonicalState(ctx.specId);
         if (
           retryCurrent instanceof Envelope
           || retryCurrent.step !== invocation.action.nextAction.step
           || retryCurrent.action !== invocation.action.nextAction.action
+          || retryState.runId !== workerState.runId
+          || retryState.attempt?.id !== workerState.attempt?.id
+          || retryState.attempt?.sequence !== workerState.attempt?.sequence
+          || session.captureCanonicalAction(workerFacingNextAction(retryCurrent), invocation.action).digest !== invocation.action.digest
         ) {
           discardDeferredMetrics(deferredMetrics);
           return this.failure(
@@ -2694,6 +2803,10 @@ export default class RunDispatchCommand extends FlowCommand {
               attempt.handoffRequest,
               dispatchCount,
               attempt.agentError,
+              appendWorkerHandoffDiagnostic(ctx, attempt.error, attempt.handoffRequest, {
+                stepId: invocation.action.nextAction.step,
+                agentError: attempt.agentError,
+              }),
             ),
           );
         }
@@ -2741,19 +2854,7 @@ export default class RunDispatchCommand extends FlowCommand {
             current = await this.fetchNextAction(target);
             continue;
           }
-          return this.failure(
-            ctx,
-            exhausted.code,
-            exhausted.message,
-            workerHandoffFailureData(
-              ctx,
-              target,
-              exhausted,
-              attempt.handoffRequest,
-              dispatchCount,
-              attempt.agentError,
-            ),
-          );
+          return this.finalWorkerFailure(ctx, target, attempt, exhausted, retryInvocation, workerState, dispatchCount);
         }
         invocation = retryInvocation;
       }
