@@ -27,7 +27,7 @@ import {
   settleDraftStepResult,
   resolveRequirementTestLifecycle,
 } from "../../../src/flow/definition.js";
-import { readDraftTransitionFacts } from "../../../src/flow/lib/draft-transition-facts.js";
+import { readDraftTransitionFacts } from "../../../src/flow/lib/draft-transition-facts-reader.js";
 import { createDraftRefineResult } from "../../../src/flow/steps/draft/draft-refine.js";
 import { ReviewFindingFingerprint } from "../../../src/flow/lib/finding-disposition-policy.js";
 import {

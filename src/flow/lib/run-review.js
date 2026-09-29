@@ -70,7 +70,7 @@ import {
 } from "./canonical-review-artifacts.js";
 import { ReviewService } from "../services/review-service.js";
 import { SpecReviewService } from "../services/spec-review-service.js";
-import { draftStepRegistration } from "../engine/composition/draft.js";
+import { draftStepRegistration, prepareDraftReviewBinding } from "../engine/composition/draft.js";
 import {
   REVIEW_WORK_UNIT_MANIFEST_ENV,
   ReviewWorkUnit,
@@ -297,10 +297,12 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
   let selected = stepResult;
   let preparedStep;
   try {
-    preparedStep = await draftStepRegistration(stepResult.stepId).create({
-      flowManager, state, executionBinding,
+    stepBinding = await prepareDraftReviewBinding({
+      flowManager, state, phase,
     });
-    stepBinding = preparedStep.dependency(ReviewService).stepBinding();
+    preparedStep = await draftStepRegistration(stepResult.stepId).create({
+      flowManager, state, binding: stepBinding, executionBinding,
+    });
   } catch (error) {
     if (error instanceof CurrentFlowStateConflictError) {
       throw new StepAdmissionRefusal(error.message, error);

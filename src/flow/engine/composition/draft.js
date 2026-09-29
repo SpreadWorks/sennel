@@ -36,17 +36,23 @@ function workerRegistration(stepId, StepClass, Connector) {
   });
 }
 
+export async function prepareDraftReviewBinding({ flowManager, state, phase }) {
+  const source = new CanonicalDraftReviewSource({ flowManager, state, phase });
+  return new DraftReviewConnector(source).connect();
+}
+
 function reviewRegistration(stepId, StepClass, phase) {
   return new StepRegistration({
     stepId, StepClass,
     async prepareDependencies(input) {
       const flowManager = input.flowManager ?? input.ctx.flowManager;
-      let binding = input.binding;
-      if (binding === undefined) {
-        const state = input.state ?? flowManager.canonicalState(input.ctx.specId ?? input.ctx.flowState.specId);
-        const source = new CanonicalDraftReviewSource({ flowManager, state, phase });
-        binding = await new DraftReviewConnector(source).connect();
-      }
+      const binding = input.binding === undefined
+        ? await prepareDraftReviewBinding({
+          flowManager,
+          state: input.state ?? flowManager.canonicalState(input.ctx.specId ?? input.ctx.flowState.specId),
+          phase,
+        })
+        : input.binding;
       return new Map([[ReviewService, new ReviewService({
         flowManager, binding,
         ...(input.executionBinding === undefined ? {} : { executionBinding: input.executionBinding }),

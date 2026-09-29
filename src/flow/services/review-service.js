@@ -35,8 +35,6 @@ export class ReviewService {
   #publicationResult;
   #reviewDocument = null;
 
-  stepBinding() { return this.#binding; }
-
   #rethrowAdmissionRead(error) {
     if (error instanceof CurrentFlowStateConflictError) {
       throw new StepAdmissionRefusal(error.message, error);

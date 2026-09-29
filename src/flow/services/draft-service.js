@@ -2,7 +2,8 @@ import { DraftStepBinding, DraftWorkerExecutionStepBinding } from "../engine/con
 import { STEP_RESULT_TYPE, StepResult } from "../engine/step-result.js";
 import { DraftAwaitQuestionIdentity, DraftAwaitUserDecision, DraftCompletionConnector, DraftExecutionSettlement, DraftWorkerExecutionBinding, DraftStepExecutionLifecycle, settleDraftStepResult } from "../definition.js";
 import { StepPersistenceFailure, recoverStepSettlementReceipt, rethrowStepSettlementFailure } from "../lib/definition-lifecycle-failure.js";
-import { DraftTransitionFacts, readDraftTransitionFacts } from "../lib/draft-transition-facts.js";
+import { DraftTransitionFacts } from "../lib/draft-transition-facts.js";
+import { readDraftTransitionFacts } from "../lib/draft-transition-facts-reader.js";
 import { canonicalPlanGateRepairForTarget, PlanGateRepairRecord } from "../lib/plan-gate-repair.js";
 import { DraftGateRepairBinding } from "../lib/draft-gate-repair-binding.js";
 import {

@@ -65,7 +65,7 @@ import { SpecTriageStep } from "../../../src/flow/steps/spec/spec-triage.js";
 import { SpecRepairStep } from "../../../src/flow/steps/spec/spec-repair.js";
 import { DraftStep } from "../../../src/flow/steps/draft/draft.js";
 import { createDraftRefineResult, DraftRefineStep } from "../../../src/flow/steps/draft/draft-refine.js";
-import { readDraftTransitionFacts } from "../../../src/flow/lib/draft-transition-facts.js";
+import { readDraftTransitionFacts } from "../../../src/flow/lib/draft-transition-facts-reader.js";
 import {
   DraftCreatedResult,
   DraftGateRepairWorkerRequiredResult,

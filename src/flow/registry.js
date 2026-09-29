@@ -79,8 +79,7 @@ import {
   STEP_RESULT_TYPE,
 } from "./engine/step-result.js";
 import { StepFactory } from "./engine/step-factory.js";
-import { draftStepRegistration } from "./engine/composition/draft.js";
-import { ReviewService } from "./services/review-service.js";
+import { draftStepRegistration, prepareDraftReviewBinding } from "./engine/composition/draft.js";
 import { isStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
 import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./lib/step-admission-refusal.js";
 
@@ -128,8 +127,14 @@ async function executePublishedDraftReviewStep(ctx, result) {
     ? new DraftQuestionsReviewExecutionRequiredResult()
     : new DraftCoverageReviewExecutionRequiredResult();
   let publicationStep;
+  let binding;
   try {
-    publicationStep = await registration.create({ ctx, publicationResult: result });
+    binding = await prepareDraftReviewBinding({
+      flowManager: ctx.flowManager,
+      state: ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId),
+      phase: route.retryPhase,
+    });
+    publicationStep = await registration.create({ ctx, binding, publicationResult: result });
   } catch (error) {
     throw fatalDraftReviewFailure(error instanceof CurrentFlowStateConflictError
       ? new StepAdmissionRefusal(error.message, error) : error);
@@ -143,7 +148,6 @@ async function executePublishedDraftReviewStep(ctx, result) {
   if (published.kind !== publicationResult.kind) {
     throw new Error("Draft review publication Step selected an invalid Result");
   }
-  const binding = publicationStep.dependency(ReviewService).stepBinding();
   const step = (await registration.create({ ctx, binding, commandResult: result })).step;
   let output;
   try {

@@ -8,7 +8,7 @@ import { DraftWorkerStepBinding } from "../../../src/flow/engine/connectors/draf
 import { settleDraftStepResult } from "../../../src/flow/definition.js";
 import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { readDraftTransitionFacts } from "../../../src/flow/lib/draft-transition-facts.js";
+import { readDraftTransitionFacts } from "../../../src/flow/lib/draft-transition-facts-reader.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
 import {
   canonicalDraftDocument,
