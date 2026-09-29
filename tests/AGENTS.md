@@ -14,6 +14,11 @@ its entrypoint and production registration selection; share the inspection and
 rule implementation. Trace indirect dependencies, and treat an unparseable
 target or reverse-reference index as an incomplete check that fails. Do not hide
 valid violations with per-file exclusions, violation baselines, or skips.
+Draft and Spec scopes must load their own production registrations. Isolated
+registration fixtures demonstrate checker wiring but never satisfy the production
+scope. A07 coverage derives required Service types from registrations and inspects
+actual dependencies of prepared Steps; missing production preparation remains a
+failure.
 
 Unit tests do not spawn child processes, initialise Git repositories, or run
 Flow scenarios. Integration tests own cross-module, filesystem, Git and Flow

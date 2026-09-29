@@ -2,8 +2,7 @@
 
 The structure suite checks source architecture contracts, including placement,
 dependency direction, dependency injection, and Service public boundaries. The
-first scope is Draft; other phase scopes must use the same inspection and rule
-implementation.
+Draft and Spec scopes use the same inspection and rule implementation.
 
 Keep a phase scope to its entry directory and production registration selection.
 Do not put checker callbacks, allowlists, or individual class names in a scope.
@@ -15,6 +14,11 @@ parse failure, unresolved dependency, or unreadable reverse-reference index
 means the check is incomplete and must fail. Do not make valid violations pass
 through per-file exclusions, violation baselines, or skips.
 
+The Spec scope loads `specStepRegistrations` from the production composition;
+missing, empty, and invalid exports fail before inspection. Isolated registration
+fixtures prove that a valid export reaches the shared checker. They do not replace
+the production registration check.
+
 Scope analysis supports `let` and `const` bindings. It rejects `var` declarations
 as unsupported rather than treating them as block-scoped. The lexical-only A06
 reference index can still read files containing `var` outside the inspected closure.
@@ -25,6 +29,9 @@ dependencies. Structure tests cover side-effect-free inspection and construction
 Checks requiring live state belong in integration or phase scenario tests. A07
 coverage compares production-registered Service dependencies with actual instances
 inspected there; the structure suite itself does not construct live Services.
+The Spec integration scope prepares the initial Spec handoff through canonical
+Flow state and `SpecService.prepare`, then inspects `PreparedStep.dependencies`.
+It must fail when any production-declared Service type lacks a prepared instance.
 
 The shared checker lives under `tests/support/structure/`; phase suite
 entrypoints live under `tests/structure/`. Keep dependency extraction and graph
