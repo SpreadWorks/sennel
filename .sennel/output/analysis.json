@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-28T15:47:12.124Z",
+  "analyzedAt": "2026-09-29T00:19:44.383Z",
   "package": {
     "entries": [
       {
@@ -4224,11 +4224,12 @@
       },
       {
         "file": "src/flow/engine/composition/draft.js",
-        "hash": "1819167e980521e5c00a19e66f72d7cf",
-        "lines": 108,
-        "mtime": "2026-09-28T15:01:20.795Z",
+        "hash": "bfe8fddb458aa3005674b472f9509734",
+        "lines": 114,
+        "mtime": "2026-09-29T00:18:35.415Z",
         "className": "draft",
         "methods": [
+          "prepareDraftReviewBinding",
           "draftStepRegistration",
           "draftWorkerStepRegistration",
           "workerRegistration",
@@ -4259,6 +4260,7 @@
           "../../lib/canonical-command-result.js"
         ],
         "exports": [
+          "prepareDraftReviewBinding",
           "draftStepRegistration",
           "draftWorkerStepRegistration",
           "draftStepRegistrations"
@@ -4268,23 +4270,20 @@
           "src/flow/registry.js"
         ],
         "id": "615c0f60",
-        "summary": "Composes draft workflow step registrations, services, connectors, and gate bindings.",
-        "detail": "This module assembles the draft flow from worker, refinement, triage, repair, review, and gate step classes. It pairs steps with connectors and dependency services such as DraftService, ReviewService, and GateService, creates immutable registration collections, and exposes lookup functions for all draft registrations and draft worker registrations.",
+        "summary": "Registers and composes the Draft workflow steps, connectors, and services.",
+        "detail": "Defines worker and review step registrations, prepares Draft review bindings, wires DraftService, ReviewService, and GateService, and exports lookup functions for Draft registrations and worker registrations.",
         "chapter": "internal_design",
-        "role": "controller",
+        "role": "config",
         "enrich": {
-          "processedAt": "2026-09-28T15:48:26.915Z",
+          "processedAt": "2026-09-29T00:20:05.104Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "draft workflow",
+          "Draft workflow",
           "step registration",
-          "connectors",
-          "services",
-          "gate evaluation",
-          "dependency injection",
-          "workflow composition"
+          "review binding",
+          "worker registration",
+          "gate service"
         ]
       },
       {
@@ -7970,7 +7969,8 @@
           "src/flow/lib/get-qa-count.js",
           "src/flow/lib/run-gate.js",
           "src/flow/lib/set-draft-answer.js",
-          "src/flow/lib/worker-artifact-handoff.js"
+          "src/flow/lib/worker-artifact-handoff.js",
+          "src/flow/lib/draft-transition-facts-reader.js"
         ],
         "id": "9c36c232",
         "summary": "Models and validates the lifecycle of a draft and its question ledger.",
@@ -8395,47 +8395,81 @@
         ]
       },
       {
-        "file": "src/flow/lib/draft-transition-facts.js",
-        "hash": "e1000d9947a72115a37420cabab3d8a5",
-        "lines": 53,
-        "mtime": "2026-09-20T16:55:26.097Z",
-        "className": "draft-transition-facts",
+        "file": "src/flow/lib/draft-transition-facts-reader.js",
+        "hash": "9a9af3ebe49539fd72f1cec96d1a3a94",
+        "lines": 21,
+        "mtime": "2026-09-29T00:18:35.415Z",
+        "className": "draft-transition-facts-reader",
         "methods": [
-          "DraftQuestionFact",
-          "DraftTransitionFacts",
           "DraftTransitionFactsError",
           "readDraftTransitionFacts"
         ],
         "imports": [
           "./draft-lifecycle.js",
-          "./draft-question-ledger.js",
+          "./draft-transition-facts.js",
           "./step-tree.js"
         ],
         "exports": [
-          "DraftQuestionFact",
-          "DraftTransitionFacts",
           "DraftTransitionFactsError",
           "readDraftTransitionFacts"
         ],
         "extends": "Error",
-        "usedBy": [
-          "src/flow/lib/worker-artifact-handoff.js"
-        ],
-        "id": "8e7eb5cf",
-        "summary": "Builds immutable facts describing draft transitions and questions.",
-        "detail": "The module defines DraftQuestionFact and DraftTransitionFacts, derives transition state from a DraftLifecycle and question ledger, validates source byte length, and exposes typed errors when transition facts cannot be read from the flow manager or source artifact.",
+        "usedBy": null,
+        "id": "1055e772",
+        "summary": "Reads and validates persisted Draft transition facts from Flow state.",
+        "detail": "Provides DraftTransitionFactsError and readDraftTransitionFacts, loading serialized Draft state, constructing a DraftLifecycle, locating worker status, and creating transition facts with source digest and byte length metadata.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-20T17:00:12.462Z",
+          "processedAt": "2026-09-29T00:20:05.104Z",
           "attempts": 1
         },
         "keywords": [
-          "draft transition",
-          "question ledger",
-          "lifecycle facts",
+          "Draft transition facts",
+          "Flow state",
+          "state reader",
           "source digest",
-          "transition errors"
+          "lifecycle"
+        ]
+      },
+      {
+        "file": "src/flow/lib/draft-transition-facts.js",
+        "hash": "b8c1a63e975a69ed9a421df2ceb1021e",
+        "lines": 38,
+        "mtime": "2026-09-29T00:18:35.415Z",
+        "className": "draft-transition-facts",
+        "methods": [
+          "DraftQuestionFact",
+          "DraftTransitionFacts"
+        ],
+        "imports": [
+          "./draft-lifecycle.js",
+          "./draft-question-ledger.js"
+        ],
+        "exports": [
+          "DraftQuestionFact",
+          "DraftTransitionFacts"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/lib/draft-transition-facts-reader.js",
+          "src/flow/lib/worker-artifact-handoff.js"
+        ],
+        "id": "8e7eb5cf",
+        "summary": "Models canonical facts for Draft questions and transitions.",
+        "detail": "Defines DraftQuestionFact and DraftTransitionFacts, validates source byte length, and constructs immutable transition data containing the question ledger, worker status, origin, source metadata, next question, and candidate question.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-09-29T00:20:05.104Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "Draft transition facts",
+          "question fact",
+          "question ledger",
+          "source validation",
+          "transition model"
         ]
       },
       {
@@ -15935,9 +15969,9 @@
       },
       {
         "file": "src/flow/lib/run-review.js",
-        "hash": "d61d07b0f47f9dd02c309b9c15c52476",
-        "lines": 2365,
-        "mtime": "2026-09-28T15:01:20.802Z",
+        "hash": "6f1ad582524486356b0735d015ca0500",
+        "lines": 2367,
+        "mtime": "2026-09-29T00:18:35.415Z",
         "className": "run-review",
         "methods": [
           "parseToolingOutcome",
@@ -16067,22 +16101,21 @@
         "extends": "FlowCommand",
         "usedBy": null,
         "id": "d4e97204",
-        "summary": "Executes and reconciles Spec, Draft, Test, and implementation reviews.",
-        "detail": "Implements review phase parsing, verdict and tooling-outcome normalization, retry policies, canonical finding registries, review target authority, execution leases, task-review checkpoints, source baselines, partial-effect recovery, publication reconciliation, and phase-specific failure handling. The Run Review command coordinates provider execution while protecting canonical lineage and recovery correctness.",
-        "chapter": "internal_design",
+        "summary": "Executes canonical review phases with parsing, retries, persistence, and recovery.",
+        "detail": "Implements RunReviewCommand and extensive review orchestration for draft, specification, test, and implementation phases, including tooling outcome parsing, canonical finding normalization, execution identity checks, artifact publication, retry handling, task-review checkpoints, source reconciliation, and failure envelopes.",
+        "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-28T15:48:26.915Z",
+          "processedAt": "2026-09-29T00:20:05.104Z",
           "attempts": 1
         },
         "keywords": [
-          "review execution",
+          "review command",
           "review phases",
-          "finding registry",
-          "retry",
+          "artifact publication",
+          "retry handling",
           "checkpoint recovery",
-          "publication",
-          "canonical lineage"
+          "finding normalization"
         ]
       },
       {
@@ -18613,7 +18646,8 @@
           "src/flow/lib/set-step.js",
           "src/flow/lib/task-scope.js",
           "src/flow/lib/worker-artifact-handoff.js",
-          "src/flow/registry.js"
+          "src/flow/registry.js",
+          "src/flow/lib/draft-transition-facts-reader.js"
         ],
         "id": "bc04b8b6",
         "summary": "Provides step-tree traversal and leaf-state utilities.",
@@ -21173,9 +21207,9 @@
       },
       {
         "file": "src/flow/registry.js",
-        "hash": "8e25f04517e688a56c068273c67cca0f",
-        "lines": 2918,
-        "mtime": "2026-09-28T15:01:20.804Z",
+        "hash": "f4e591898bfc54c2152051846a7dda1c",
+        "lines": 2922,
+        "mtime": "2026-09-29T00:18:35.416Z",
         "className": "registry",
         "methods": [
           "assertDraftReviewRegistryHookBoundary",
@@ -21248,7 +21282,6 @@
           "./engine/step-result.js",
           "./engine/step-factory.js",
           "./engine/composition/draft.js",
-          "./services/review-service.js",
           "./lib/definition-lifecycle-failure.js",
           "./lib/step-admission-refusal.js"
         ],
@@ -21261,29 +21294,28 @@
         "extends": null,
         "usedBy": null,
         "id": "d64f4095",
-        "summary": "Central flow registry coordinating command execution, lifecycle hooks, gate transitions, reviews, persistence, and finalization.",
-        "detail": "Defines the flow command registry and lifecycle adapter used to execute published draft reviews, draft gates, prospective specification gates, test-chain transitions, retries, runtime logging, artifact persistence, plugin hooks, and finalization. It enforces canonical flow state, step ownership, target guards, result provenance, and failure handling.",
-        "chapter": "internal_design",
+        "summary": "Coordinates Flow command lifecycle hooks, review and gate settlement, and state transitions.",
+        "detail": "Defines registry-level execution and persistence behavior for Draft reviews, Draft gates, specification gates, task reviews, test chains, retries, plugin hooks, target guards, and finalization. It enforces canonical state ownership, validates result provenance, applies lifecycle actions, and maps failures to structured errors.",
+        "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-28T15:48:26.915Z",
+          "processedAt": "2026-09-29T00:20:05.104Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "flow registry",
+          "Flow registry",
           "lifecycle hooks",
-          "gate transitions",
-          "step execution",
-          "result persistence",
-          "finalization"
+          "gate settlement",
+          "review persistence",
+          "canonical state",
+          "plugin hooks"
         ]
       },
       {
         "file": "src/flow/services/draft-service.js",
-        "hash": "9b06d83c8b34915c2e1efad8c2ee7fcd",
-        "lines": 291,
-        "mtime": "2026-09-28T15:01:20.804Z",
+        "hash": "0149fa0aad0a52e8bb4eaf5769346ba7",
+        "lines": 292,
+        "mtime": "2026-09-29T00:18:35.416Z",
         "className": "draft-service",
         "methods": [
           "DraftWorkerCompletionFacts",
@@ -21295,6 +21327,7 @@
           "../definition.js",
           "../lib/definition-lifecycle-failure.js",
           "../lib/draft-transition-facts.js",
+          "../lib/draft-transition-facts-reader.js",
           "../lib/plan-gate-repair.js",
           "../lib/draft-gate-repair-binding.js",
           "../lib/draft-completion-connector.js",
@@ -21309,29 +21342,28 @@
         "extends": null,
         "usedBy": null,
         "id": "10278908",
-        "summary": "Provides the DraftService for durable draft worker execution, settlement, handoff, and recovery.",
-        "detail": "Validates typed Draft bindings and prepared worker handoffs, coordinates worker completion and error settlement, persists canonical step results, and recovers settlement receipts after persistence failures. It also exposes completion facts and draft gate repair integration.",
+        "summary": "Provides durable execution and settlement services for Draft worker steps.",
+        "detail": "DraftService validates typed bindings and worker facts, manages prepared handoffs and execution checkpoints, commits concrete step results, recovers settlement receipts after failures, and handles worker completion, repair facts, and published worker outcomes.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-28T15:48:26.915Z",
+          "processedAt": "2026-09-29T00:20:05.104Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
           "DraftService",
-          "draft workers",
-          "settlement",
-          "handoff",
-          "receipt recovery",
-          "draft repair"
+          "worker execution",
+          "settlement receipt",
+          "artifact handoff",
+          "execution checkpoint",
+          "repair facts"
         ]
       },
       {
         "file": "src/flow/services/review-service.js",
-        "hash": "7a1ea094a597be7b4cb6d140075de25d",
-        "lines": 278,
-        "mtime": "2026-09-28T15:01:20.804Z",
+        "hash": "49f3f7eb5086eaf9c2945bb280e36117",
+        "lines": 276,
+        "mtime": "2026-09-29T00:18:35.416Z",
         "className": "review-service",
         "methods": [
           "ReviewService",
@@ -21357,25 +21389,23 @@
         ],
         "extends": null,
         "usedBy": [
-          "src/flow/registry.js",
           "src/flow/services/spec-review-service.js"
         ],
         "id": "4ea8e8c7",
-        "summary": "Implements review and draft gate services for validated execution, publication, settlement, and receipt recovery.",
-        "detail": "ReviewService validates typed review bindings, canonical review results, route identity, and Draft revisions before settling or publishing results. GateService reads prospective gate facts, validates issue publications, and persists the selected Draft Gate result with failure recovery.",
+        "summary": "Provides durable services for Draft review execution and Draft gate evaluation.",
+        "detail": "ReviewService validates typed review bindings, claims Draft step execution, verifies canonical review routes and Draft revisions, settles execution or publication results, and recovers receipts. GateService validates gate bindings and observed facts, handles gate issue publication, and persists gate results with failure handling.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-28T15:48:26.915Z",
+          "processedAt": "2026-09-29T00:20:05.104Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
           "ReviewService",
           "GateService",
-          "draft review",
+          "Draft review",
           "gate evaluation",
-          "publication",
+          "result settlement",
           "receipt recovery"
         ]
       },
@@ -29291,10 +29321,10 @@
       }
     ],
     "summary": {
-      "total": 516,
-      "totalMethods": 5231
+      "total": 517,
+      "totalMethods": 5232
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-28T15:48:26.915Z"
+  "enrichedAt": "2026-09-29T00:20:05.104Z"
 }
