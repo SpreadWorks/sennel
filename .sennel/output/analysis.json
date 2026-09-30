@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-30T16:18:51.535Z",
+  "analyzedAt": "2026-09-30T16:28:06.024Z",
   "package": {
     "entries": [
       {
@@ -6456,9 +6456,9 @@
       },
       {
         "file": "src/flow/lib/canonical-flow-manager-store.js",
-        "hash": "598fb0c8b445e8e8d00ad7c066b47321",
-        "lines": 8327,
-        "mtime": "2026-09-29T02:11:17.323Z",
+        "hash": "93680d20a131ec567a5197d247f2411d",
+        "lines": 8330,
+        "mtime": "2026-09-30T16:20:18.453Z",
         "className": "canonical-flow-manager-store",
         "methods": [
           "CanonicalRawActivityReplayOnlyError",
@@ -6618,24 +6618,23 @@
           "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "041f2538",
-        "summary": "Central controller and persistence store for canonical flow state, execution lifecycles, settlements, recovery, and artifact publication.",
-        "detail": "Defines CanonicalFlowManagerStore and supporting validation, admission, projection, and recovery logic for canonical flows. It loads and persists flow state, specifications, activities, issue logs, artifacts, outbox records, execution attempts, runtime projections and metadata, metrics, notes, policies, and artifact catalogs. The store coordinates specification approval, task execution and reviews, gates, draft completion, requirement-test lifecycles, source handoffs, retries, repair routes, interrupted-finalize recovery, failure handling, deferral, confirmation, continuation, and downstream transitions. Runtime operations are routed through typed admission checks that enforce snapshot consistency, active-attempt validity, current event heads, task lineage, source bindings, Definition decisions, exact publication contracts, producer ownership, and canonical Flow Version locations. It rejects stale or unauthorized changes, conflicting identities, unsafe paths, stale artifacts, invalid lineage or ownership, incomplete draft publications, and other violations of canonical flow invariants.",
+        "summary": "Canonical Flow manager store orchestrating validated state transitions, execution attempts, recovery, lifecycle settlement, and artifact publication.",
+        "detail": "This central controller validates requests, domain identities, typed outcomes, active-attempt bindings, stale sources, producer ownership, artifact catalog contracts, Definition-plan selections, replay identity, lineage, receipts, baselines, and publication consistency. It projects runtime state; manages executable Tasks, Steps, Attempts, and Activities; coordinates Definition-owned Gate decisions; and persists results through the runtime. It orchestrates Draft, Spec, Task Review, Requirement Test, source handoff, repair, retry, failure, recovery, nonblocking execution, issue-log, file-map, metric, outbox, notes, policy-update, runtime-metadata, flow-version-resolution, and artifact-publication workflows, including draft lifecycle data, lineage records, canonical runtime artifacts, and durable execution results, while rejecting invalid or conflicting state.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-09-30T16:29:29.037Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
           "canonical flow state",
-          "execution attempts",
-          "task reviews",
+          "lifecycle orchestration",
+          "attempt settlement",
+          "task execution",
+          "gate recovery",
           "artifact publication",
-          "state invariants",
-          "admission checks",
-          "failure recovery",
-          "runtime projections"
+          "state validation",
+          "producer ownership"
         ]
       },
       {
@@ -7352,9 +7351,9 @@
       },
       {
         "file": "src/flow/lib/current-flow-state.js",
-        "hash": "0d3637ed38e8351fb096b648c2f5f621",
-        "lines": 10285,
-        "mtime": "2026-09-29T13:48:35.436Z",
+        "hash": "19deedd679b3ca8a7837ec399a636532",
+        "lines": 10293,
+        "mtime": "2026-09-30T16:20:18.455Z",
         "className": "current-flow-state",
         "methods": [
           "CanonicalFlowArtifactWrite",
@@ -7514,6 +7513,7 @@
           "../steps/draft/draft-gate-repair-selection.js",
           "../../lib/agent-failure.js",
           "../../lib/atomic-file.js",
+          "../../lib/agent-response-protocol.js",
           "../../lib/git-snapshot.js",
           "../../lib/file-lock.js",
           "../../lib/real-directory-authority.js",
@@ -7677,26 +7677,24 @@
           "src/flow/registry.js"
         ],
         "id": "42607a0e",
-        "summary": "Defines the canonical current-flow state model, validated transitions, activity evidence, artifact authorities, persistence, versioning, and migration rules.",
-        "detail": "Implements the durable Flow, Task, and Step state machine with invariant-checked transitions for attempts, task gates, reviews, retries, recovery, draft routing, requirement tests, acceptance decisions, execution claims, node results, failures, dynamic task insertion, finalization, and migration checkpoints. Models typed Activities and their evidence, timing, usage, metrics, notes, transitions, and review publications. Provides canonical artifact and runtime-artifact read, write, and removal operations; catalog and activity evidence handling; specification and worker publication bindings; approval-task admission; lifecycle and outbox records; definitions, resource contracts, cursors, historical continuations, source handoffs, and canonical review publication. Validates serialized state, schema revisions, node lifecycles, execution frontiers, active attempts, immutable snapshots, specification descriptors, and semantic recovery invariants. Maintains append-only Activity journals with file-authority checks, persists synchronized flow snapshots, writes Spec revisions atomically, and creates atomic Current Flow Version roots with canonical specification, artifact, snapshot, and review bindings. Constructs validated migration outputs while preserving immutable state and typed authority boundaries.",
+        "summary": "Defines the durable current-flow state model, lifecycle transitions, execution recovery, artifact and Spec revision authority, journaling, persistence, and migration validation.",
+        "detail": "This typed CurrentFlowState aggregate and its value objects govern flow identity, policies, nodes, Tasks, Attempts, Gates, Reviews, requirement tests, results, failures, artifacts, approvals, outbox operations, draft execution, and historical continuation. Constructors and transitions enforce lifecycle, retry, recovery, confirmation, execution-frontier, artifact-baseline, removal, review-publication, and source-worker-upgrade invariants. The module provides typed Activities and transition payloads, canonical transition views, dynamic Task admission, canonical artifact and catalog authority checks, root and immutable Spec revision snapshots, append-only integrity-checked activity journals, SHA-256 identity validation, typed receipts, conflict detection, locked state snapshots, filesystem-atomic writes, atomic Version-store creation, and evidence-validated migration from compatible legacy state.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-09-30T16:29:29.037Z",
           "attempts": 1
         },
-        "app": "flow",
+        "app": "sennel",
         "keywords": [
           "current flow state",
-          "state machine",
-          "attempt lifecycle",
+          "lifecycle transitions",
+          "attempt recovery",
           "activity journal",
-          "artifact authority",
-          "Spec revision",
-          "recovery",
-          "validation",
-          "version store",
-          "migration"
+          "artifact integrity",
+          "Spec revision authority",
+          "atomic persistence",
+          "schema migration"
         ]
       },
       {
@@ -7747,9 +7745,9 @@
       },
       {
         "file": "src/flow/lib/definition-lifecycle-failure.js",
-        "hash": "9d45958ddb8e419fb8dd3b80b510c55e",
-        "lines": 235,
-        "mtime": "2026-09-28T15:01:20.801Z",
+        "hash": "72703ecfabab52b636998e46eb021bf8",
+        "lines": 244,
+        "mtime": "2026-09-30T16:20:18.456Z",
         "className": "definition-lifecycle-failure",
         "methods": [
           "StepPersistenceFailure",
@@ -7773,7 +7771,8 @@
           "./task-step-identity.js",
           "./canonical-review-artifacts.js",
           "./task-review-aborted-work-unit.js",
-          "./step-admission-refusal.js"
+          "./step-admission-refusal.js",
+          "../../lib/agent-response-protocol.js"
         ],
         "exports": [
           "StepPersistenceFailure",
@@ -7786,28 +7785,28 @@
         ],
         "extends": "Error",
         "usedBy": [
-          "src/flow/lib/run-review.js",
-          "src/flow/lib/worker-artifact-handoff.js",
-          "src/flow/registry.js",
           "src/flow/lib/draft-review-execution-claim.js",
           "src/flow/lib/run-dispatch.js",
-          "src/flow/lib/spec-review-operations.js"
+          "src/flow/lib/run-review.js",
+          "src/flow/lib/spec-review-operations.js",
+          "src/flow/lib/worker-artifact-handoff.js",
+          "src/flow/registry.js"
         ],
         "id": "604504fc",
-        "summary": "Handles definition lifecycle persistence failures and step settlement recovery.",
-        "detail": "Defines persistence-failure classification, step settlement receipt lookup and recovery, normalized execution-command lifecycle facts, and bindings for associating definition lifecycle attempts with Flow Manager state. Converts definitive settlement failures into admission refusals while preserving recoverable error information.",
+        "summary": "Defines failure and settlement handling for definition lifecycle attempts and step-result persistence.",
+        "detail": "Provides the StepPersistenceFailure type and helpers for detecting, recovering, and rethrowing step settlement failures. It derives lifecycle actions and failure facts, checks committed settlement receipts and published task-gate results, and binds definition lifecycle failures to the current flow attempt.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-28T15:48:26.915Z",
+          "processedAt": "2026-09-30T16:29:29.037Z",
           "attempts": 1
         },
+        "app": "sennel",
         "keywords": [
+          "step persistence failure",
           "lifecycle failure",
-          "step settlement",
-          "persistence failure",
-          "recovery",
-          "admission refusal",
+          "settlement receipt",
+          "failure facts",
           "attempt binding"
         ]
       },
@@ -8129,16 +8128,17 @@
       },
       {
         "file": "src/flow/lib/draft-gate-prospective.js",
-        "hash": "ea6030ff64dd424c525c380ac7a39103",
-        "lines": 68,
-        "mtime": "2026-09-23T03:44:31.572Z",
+        "hash": "0152bd678ec5dc2f25732adb5fbf7740",
+        "lines": 91,
+        "mtime": "2026-09-30T16:20:18.456Z",
         "className": "draft-gate-prospective",
         "methods": [
           "DraftGateProspectiveFacts",
           "DraftGatePublicationIntent"
         ],
         "imports": [
-          "./gate-issue-publication.js"
+          "./gate-issue-publication.js",
+          "../../lib/agent-response-protocol.js"
         ],
         "exports": [
           "DraftGateProspectiveFacts",
@@ -8151,22 +8151,21 @@
           "src/flow/lib/gate-transition-facts.js"
         ],
         "id": "f59944f5",
-        "summary": "Defines prospective Draft Gate facts and publication intent with typed issue evidence rules.",
-        "detail": "Re-exports DraftGateIssuePublication and provides DraftGateProspectiveFacts plus DraftGatePublicationIntent. The extract rejects invalid failure classification, convergence facts, and retry usage, requires typed facts, forbids issue evidence on passing publications, and requires typed issue evidence on failing publications.",
+        "summary": "Models prospective Draft Gate facts and publication intent with strict validation.",
+        "detail": "Validates prospective Draft Gate failure classification, convergence facts, retry usage, and required text fields. It also enforces publication rules: passing results cannot include failure diagnostics or issue evidence, while failing results require typed issue evidence, and both forms serialize to JSON.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-23T03:47:04.759Z",
+          "processedAt": "2026-09-30T16:29:29.037Z",
           "attempts": 1
         },
-        "app": "flow",
+        "app": "sennel",
         "keywords": [
           "Draft Gate",
           "prospective facts",
           "publication intent",
           "issue evidence",
-          "retry usage",
-          "convergence"
+          "retry validation"
         ]
       },
       {
@@ -10287,9 +10286,9 @@
       },
       {
         "file": "src/flow/lib/gate-prompt-plan.js",
-        "hash": "b682d58fc69994f753a3bfabc68323b0",
+        "hash": "9756c0a44d12cfe7ecf9607865568fa5",
         "lines": 435,
-        "mtime": "2026-09-28T08:40:25.232Z",
+        "mtime": "2026-09-30T16:20:18.457Z",
         "className": "gate-prompt-plan",
         "methods": [
           "planObservationBatches",
@@ -10348,22 +10347,21 @@
           "src/flow/lib/spec-gate-repair-evidence.js"
         ],
         "id": "a824bced",
-        "summary": "Plans, validates, reduces, and executes bounded prompt batches for gate observations and requirement evidence.",
-        "detail": "This module manages prompt sizing through logical footprint and execution-budget checks, creates typed observation and guardrail judgment inputs, and enforces exact source-range coverage. It provides reducers and response envelopes for requirement observations, supports digest-based reduction evidence, and executes gate plans through batch executors while rejecting oversized or structurally invalid responses.",
+        "summary": "Plans and executes prompt batches for gate observations, evidence reduction, and guardrail judgments.",
+        "detail": "Calculates prompt footprints and SHA-256 coverage digests, partitions observation ranges within execution limits, and raises typed failures when structures exceed budgets. It defines typed collections, reducers, evidence inputs, judgment plans, request envelopes, exact source-reference coverage checks, and execution paths for initial and reduced gate evidence.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-28T08:41:32.930Z",
+          "processedAt": "2026-09-30T16:29:29.037Z",
           "attempts": 1
         },
+        "app": "sennel",
         "keywords": [
           "prompt batching",
           "gate observations",
-          "requirement evidence",
-          "response validation",
-          "source coverage",
+          "evidence reduction",
           "guardrail judgments",
-          "prompt reduction"
+          "execution limits"
         ]
       },
       {
@@ -10554,9 +10552,9 @@
       },
       {
         "file": "src/flow/lib/gate-transition-facts.js",
-        "hash": "306810f5f40d94828c8647b65dbbd3e3",
-        "lines": 870,
-        "mtime": "2026-09-29T02:11:17.326Z",
+        "hash": "3ed942a4c114bad7d67b89a267b7bd0b",
+        "lines": 890,
+        "mtime": "2026-09-30T16:20:18.457Z",
         "className": "gate-transition-facts",
         "methods": [
           "SpecGateAdmissionRefusal",
@@ -10582,6 +10580,7 @@
           "./gate-transition.js",
           "./canonical-command-result.js",
           "./canonical-command-result.js",
+          "../../lib/agent-response-protocol.js",
           "./canonical-gate-artifacts.js",
           "./plan-gate-repair.js",
           "./review-finding-gate-readiness.js",
@@ -10595,7 +10594,8 @@
           "./spec-gate-prospective-facts.js",
           "./nonblocking-route.js",
           "node:crypto",
-          "./step-admission-refusal.js"
+          "./step-admission-refusal.js",
+          "../definition.js"
         ],
         "exports": [
           "SpecGateAdmissionRefusal",
@@ -10617,20 +10617,21 @@
           "src/flow/registry.js"
         ],
         "id": "16206052",
-        "summary": "Reads and validates canonical Gate transition facts and settlement progress.",
-        "detail": "Builds prospective and canonical Gate observations, validates phase, Attempt, Task, source, result, failure, and lineage bindings, and tracks classification, metrics, issue-log effects, and settlement ordering for Gate transitions.",
+        "summary": "Builds and validates canonical gate transition facts and task-gate settlement progress.",
+        "detail": "Reads prospective Draft and Spec Gate facts, verifies phase, attempt, task, source, and lineage bindings, and reconciles evaluator results with issue publications. It validates canonical gate artifacts, failure classifications, review readiness, settlement activity ordering, metric and issue-log effects, and recovery behavior for conflicting or duplicated classification evidence.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-09-30T16:29:29.037Z",
           "attempts": 1
         },
+        "app": "sennel",
         "keywords": [
-          "Gate transition",
-          "settlement facts",
-          "failure classification",
+          "gate transition facts",
+          "task gate settlement",
           "lineage validation",
-          "prospective observation"
+          "failure classification",
+          "review readiness"
         ]
       },
       {
@@ -15489,9 +15490,9 @@
       },
       {
         "file": "src/flow/lib/run-gate.js",
-        "hash": "8ca930157d9e019e293712def804055c",
-        "lines": 4787,
-        "mtime": "2026-09-29T09:32:03.539Z",
+        "hash": "2259d59373361f6a3e79d795a06b351a",
+        "lines": 4708,
+        "mtime": "2026-09-30T16:20:18.458Z",
         "className": "run-gate",
         "methods": [
           "parsePublicGateArguments",
@@ -15576,6 +15577,7 @@
           "deriveArticleFailReason",
           "buildPassEvaluationsForObservedGuardrails",
           "normalizeObservations",
+          "recordGatePromptMetric",
           "callGateAgent",
           "createGateExecutionBudget",
           "gateInvocationProjector",
@@ -15584,7 +15586,6 @@
           "requiredGateEvaluationFailure",
           "executeGuardrailJudgments",
           "checkGuardrail",
-          "gateOutputFailure",
           "evaluateGateOutputWithRepair",
           "stableGateEvaluationValue",
           "validatedGateEvaluationScopeIdentity",
@@ -15624,6 +15625,10 @@
           "path",
           "crypto",
           "../../lib/atomic-file.js",
+          "../../lib/agent-file-reference.js",
+          "../../lib/agent-file-input-failure.js",
+          "../../lib/regular-file-snapshot.js",
+          "../../lib/agent-response-protocol.js",
           "child_process",
           "util",
           "../../lib/process.js",
@@ -15751,21 +15756,20 @@
           "src/flow/lib/task-review-prompt-plan.js"
         ],
         "id": "b4aa4dad",
-        "summary": "Implements the flow gate command and its evaluation, evidence, artifact, and issue-log lifecycle.",
-        "detail": "This module orchestrates gate execution across specification, draft, task, and integration phases. It collects and scopes Git diffs, excludes generated lifecycle artifacts, builds guardrail and requirement prompts, validates structured agent evaluations, enforces prompt and execution budgets, supports retry and repair handling, checks canonical Flow state and execution admission, publishes gate results, and records canonical issue-log entries.",
+        "summary": "Orchestrates gate commands, prompt evaluation, diff scoping, canonical execution, and issue-log settlement.",
+        "detail": "Implements public gate argument parsing, phase validation, Git diff collection and filtering, guardrail and requirement prompt construction, strict evaluation-response parsing, retry and protocol handling, scope identity, evidence reuse, and requirement batching. RunGateCommand and runGateFlow coordinate canonical gate execution, task and integration contexts, result publication, recovery, and issue-log entries.",
         "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-09-30T16:29:29.037Z",
           "attempts": 1
         },
+        "app": "sennel",
         "keywords": [
-          "flow gate",
+          "gate command",
+          "runGateFlow",
+          "Git diff scoping",
           "guardrail evaluation",
-          "Git diff",
-          "prompt batching",
-          "canonical state",
-          "gate artifacts",
           "issue log"
         ]
       },
@@ -22202,9 +22206,9 @@
       },
       {
         "file": "src/flow/registry.js",
-        "hash": "45b88ced2f6a0fe7b1f32f2b1ce5dfcf",
+        "hash": "0a8b799c79f45300fb89aff004fd0755",
         "lines": 2909,
-        "mtime": "2026-09-29T09:32:03.543Z",
+        "mtime": "2026-09-30T16:20:18.459Z",
         "className": "registry",
         "methods": [
           "assertDraftReviewRegistryHookBoundary",
@@ -22295,21 +22299,23 @@
         "extends": null,
         "usedBy": null,
         "id": "d64f4095",
-        "summary": "Registers flow commands and coordinates flow lifecycle execution.",
-        "detail": "Defines command options and guards, dispatches draft, specification, gate, review, and test operations, applies lifecycle hooks, persists results, manages finalization, and handles transition failures.",
-        "chapter": "cli_commands",
+        "summary": "Central flow registry for command dispatch, step execution, lifecycle hooks, persistence, gates, reviews, and test-chain transitions.",
+        "detail": "This module coordinates the active Flow lifecycle across draft review, specification, implementation, gate, test, and acceptance phases. It defines command loaders and flow commands, validates target guards and hook boundaries, manages canonical state and finalization ownership, persists review and gate results, applies lifecycle actions, handles retries and recovery, and converts failures into typed fatal or envelope responses.",
+        "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-09-30T16:29:29.037Z",
           "attempts": 1
         },
         "keywords": [
           "flow registry",
-          "CLI commands",
           "lifecycle hooks",
           "gate execution",
-          "review execution",
-          "finalization"
+          "draft review",
+          "state persistence",
+          "command dispatch",
+          "step transitions",
+          "retry handling"
         ]
       },
       {
@@ -23272,9 +23278,9 @@
       },
       {
         "file": "src/flow/steps/draft/draft-gate.js",
-        "hash": "be27776ec820e08b82110cfab9588a89",
-        "lines": 55,
-        "mtime": "2026-09-22T08:35:02.360Z",
+        "hash": "9b0ecad9fc4a526114e3c5cb7ae1a20a",
+        "lines": 61,
+        "mtime": "2026-09-30T16:20:18.460Z",
         "className": "draft-gate",
         "methods": [
           "draftGateResult",
@@ -23293,20 +23299,21 @@
         "extends": "Step",
         "usedBy": null,
         "id": "9f8c937a",
-        "summary": "Implements Draft Gate evaluation and translates prospective facts into typed Step results.",
-        "detail": "The step validates DraftGateProspectiveFacts, emits an error result for invalid observations, requests repair when required, otherwise produces the Gate result, and persists it through GateService.",
+        "summary": "Implements the draft-gate step and its typed result construction.",
+        "detail": "The module validates that draft-gate results receive typed prospective facts, creates step-error and repair-required outcomes when appropriate, and defines DraftGateStep as a Flow Step that persists its result through the gate service before returning it.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-22T08:41:14.710Z",
+          "processedAt": "2026-09-30T16:29:29.037Z",
           "attempts": 1
         },
         "keywords": [
-          "Draft Gate",
+          "draft gate",
+          "flow step",
           "prospective facts",
-          "GateService",
-          "repair required",
-          "Step result"
+          "gate service",
+          "step result",
+          "repair required"
         ]
       },
       {
@@ -24303,6 +24310,78 @@
         ]
       },
       {
+        "file": "src/lib/agent-file-input-failure.js",
+        "hash": "afe813aac2e47cc59882bbff3bfa35b0",
+        "lines": 11,
+        "mtime": "2026-09-30T16:20:18.460Z",
+        "className": "agent-file-input-failure",
+        "methods": [
+          "AgentFileInputFailure"
+        ],
+        "imports": [],
+        "exports": [
+          "AgentFileInputFailure"
+        ],
+        "extends": "Error",
+        "usedBy": [
+          "src/lib/agent-file-reference.js",
+          "src/lib/agent-response-protocol.js"
+        ],
+        "id": "cc084097",
+        "summary": "Defines the AgentFileInputFailure error used for invalid or unavailable agent file inputs.",
+        "detail": "This module exports a dedicated Error subclass for failures involving agent file inputs. It provides a stable error type that related file-reference and file-reading code can use when validation, capture, availability, or integrity checks fail.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-30T16:29:29.037Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "agent file input",
+          "custom error",
+          "file validation",
+          "input failure"
+        ]
+      },
+      {
+        "file": "src/lib/agent-file-reference.js",
+        "hash": "56ac684d99f3534511c0a590a293bf5d",
+        "lines": 73,
+        "mtime": "2026-09-30T16:20:18.460Z",
+        "className": "agent-file-reference",
+        "methods": [
+          "AgentFileReference"
+        ],
+        "imports": [
+          "node:path",
+          "./regular-file-snapshot.js",
+          "./agent-file-input-failure.js"
+        ],
+        "exports": [
+          "AgentFileReference"
+        ],
+        "extends": null,
+        "usedBy": null,
+        "id": "4efc0b82",
+        "summary": "Provides safe, snapshot-based references to agent input files within an absolute project root.",
+        "detail": "AgentFileReference validates an absolute project root and a RegularFileSnapshot, enforces that referenced files remain inside the root, and creates references from paths or captured snapshots. It reports capture and availability failures, detects changes to referenced bytes after capture, and preserves guidance to resolve relative paths against the declared project root rather than the current working directory.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-30T16:29:29.037Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "agent file reference",
+          "project root",
+          "path containment",
+          "regular file snapshot",
+          "input integrity",
+          "absolute path",
+          "file capture"
+        ]
+      },
+      {
         "file": "src/lib/agent-invocation-metric.js",
         "hash": "2bcbdc4fd6c8c1d43115d89fe4d08655",
         "lines": 248,
@@ -24389,6 +24468,60 @@
           "unknown",
           "provider key",
           "profile"
+        ]
+      },
+      {
+        "file": "src/lib/agent-response-protocol.js",
+        "hash": "f1cc3a4233bc7704e4067cf072ca5efd",
+        "lines": 206,
+        "mtime": "2026-09-30T16:20:18.460Z",
+        "className": "agent-response-protocol",
+        "methods": [
+          "EvaluationUnavailable",
+          "FileReadUnavailable",
+          "ContextLimitUnavailable",
+          "EvaluationFailedUnavailable",
+          "AgentResponseAttemptEvidence",
+          "AgentResponseGroupEvidence",
+          "AgentResponseProtocolEvidence",
+          "AgentResponseProtocolFailure",
+          "AgentResponseProtocolResult",
+          "executeAgentResponseProtocol",
+          "count"
+        ],
+        "imports": [
+          "./agent-file-input-failure.js"
+        ],
+        "exports": [
+          "EvaluationUnavailable",
+          "FileReadUnavailable",
+          "ContextLimitUnavailable",
+          "EvaluationFailedUnavailable",
+          "AgentResponseAttemptEvidence",
+          "AgentResponseGroupEvidence",
+          "AgentResponseProtocolEvidence",
+          "AgentResponseProtocolFailure",
+          "AgentResponseProtocolResult",
+          "executeAgentResponseProtocol"
+        ],
+        "extends": "EvaluationUnavailable",
+        "usedBy": null,
+        "id": "f2dc5d6c",
+        "summary": "Defines the typed protocol for agent response attempts, evidence, failures, and execution results.",
+        "detail": "The module models unavailable evaluation conditions, individual response attempts, grouped and protocol-level evidence, and protocol failures. Its executor invokes an agent, parses responses, tracks attempt ordinals and failure reasons, and returns a successful AgentResponseProtocolResult with accepted or recovered evidence when a valid response is obtained.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-09-30T16:29:29.037Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "agent response protocol",
+          "response attempts",
+          "protocol evidence",
+          "evaluation unavailable",
+          "response parsing",
+          "recovery"
         ]
       },
       {
@@ -28597,9 +28730,9 @@
       },
       {
         "file": "src/lib/prompt-batching.js",
-        "hash": "b9adf0313256c5f7af4613e351893c3c",
-        "lines": 1734,
-        "mtime": "2026-09-28T08:40:25.238Z",
+        "hash": "75c78343cf21f899aa753eb06d69c464",
+        "lines": 1832,
+        "mtime": "2026-09-30T16:20:18.461Z",
         "className": "prompt-batching",
         "methods": [
           "normalizePromptRequest",
@@ -28628,8 +28761,12 @@
           "PromptBatch",
           "PromptBatchPlan",
           "PromptExecutionLimit",
+          "PromptProtocolRetryLimit",
+          "PromptProviderAttemptLimit",
           "PromptExecutionBudget",
           "PromptProviderCallAdmission",
+          "PromptExecutionAccountingSnapshot",
+          "PromptExecutionAccounting",
           "PromptBatchCompletion",
           "PromptBatchReducer",
           "PromptCompletionReducer",
@@ -28691,8 +28828,12 @@
           "PromptBatch",
           "PromptBatchPlan",
           "PromptExecutionLimit",
+          "PromptProtocolRetryLimit",
+          "PromptProviderAttemptLimit",
           "PromptExecutionBudget",
           "PromptProviderCallAdmission",
+          "PromptExecutionAccountingSnapshot",
+          "PromptExecutionAccounting",
           "PromptBatchCompletion",
           "PromptBatchReducer",
           "PromptCompletionReducer",
@@ -28721,26 +28862,27 @@
           "src/lib/agent.js",
           "src/lib/config.js",
           "src/lib/guardrail.js",
-          "src/lib/spec-json.js",
           "src/lib/spec-json-validator.js"
         ],
         "id": "92459e32",
-        "summary": "Implements typed prompt batching, partitioning, execution, response validation, and reduction with strict size and coverage controls.",
-        "detail": "Defines prompt request normalization, SHA-256 digests, character and byte-limit accounting, typed prompt elements, ranged partitioning, coverage entries, input collections, batch topologies, scoped Cartesian grouping, batch plans, execution budgets, provider-call admission, completion reducers, protocol execution, and multi-level reduction. The module uses dedicated error classes for oversized elements, invalid or incomplete coverage, partitioning failures, batch-count and call-limit violations, invocation projection overflow, oversized or invalid responses, incomplete execution, and non-convergent reduction. It preserves element identities and source coverage while fitting ranged payloads into request limits and validating batch and completion consistency.",
+        "summary": "Implements bounded prompt batching, partitioning, execution accounting, response coverage, and iterative reduction.",
+        "detail": "This module provides typed prompt elements, ranged partitioning, coverage validation, references, collections, batch topologies, plans, and completions. It enforces character and byte limits, supports linear, grouped, and scoped Cartesian batching, tracks shared provider and synthesis budgets, validates provider responses, executes batches with bounded concurrency, reduces completions, and supports multi-level reduction while preserving coverage digests and progress guarantees.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-28T08:41:32.930Z",
+          "processedAt": "2026-09-30T16:29:29.037Z",
           "attempts": 1
         },
         "keywords": [
           "prompt batching",
-          "request limits",
-          "range partitioning",
+          "prompt partitioning",
           "coverage validation",
-          "batch topology",
+          "request limits",
           "execution budget",
-          "response reduction"
+          "batch topology",
+          "response reduction",
+          "provider calls",
+          "prompt protocol"
         ]
       },
       {
@@ -28941,7 +29083,9 @@
           "captureRegularFile"
         ],
         "extends": null,
-        "usedBy": null,
+        "usedBy": [
+          "src/lib/agent-file-reference.js"
+        ],
         "id": "4397fc44",
         "summary": "Captures a stable snapshot of a regular real file while verifying identity and content consistency. It provides safe access to the file path, bytes, text, and permission mode.",
         "detail": "RegularFileSnapshot requires absolute paths, Buffer content, and a bounded Unix permission mode, and returns defensive byte copies. captureRegularFile validates that the target is a non-symlink regular file within the configured size limit before opening it with no-follow semantics. It compares metadata before and after reading to detect replacement or concurrent modification. The snapshot preserves the resolved path and normalized mode for later integrity-sensitive operations.",
@@ -30816,10 +30960,10 @@
       }
     ],
     "summary": {
-      "total": 553,
-      "totalMethods": 5309
+      "total": 556,
+      "totalMethods": 5326
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-29T14:15:03.829Z"
+  "enrichedAt": "2026-09-30T16:29:29.037Z"
 }
