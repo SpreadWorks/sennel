@@ -21,6 +21,7 @@ import {
   AgentProviderCompletionEvidence,
 } from "../../lib/agent-failure.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { AgentResponseProtocolEvidence } from "../../lib/agent-response-protocol.js";
 import { GitSnapshot } from "../../lib/git-snapshot.js";
 import { FileLock } from "../../lib/file-lock.js";
 import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
@@ -2454,6 +2455,7 @@ export class ActivityFailure {
       "recoveryHint",
       "attemptCount",
       "maxAttempts",
+      "responseProtocolEvidence",
     ]) {
       if (value !== null && typeof value === "object" && Object.hasOwn(value, optional)) {
         fields.add(optional);
@@ -2473,6 +2475,9 @@ export class ActivityFailure {
     }
     this.retryable = retryable;
     this.retryKind = retryKind;
+    this.responseProtocolEvidence = value.responseProtocolEvidence == null
+      ? null
+      : AgentResponseProtocolEvidence.from(value.responseProtocolEvidence);
     this.agentStopEvidence = value.agentStopEvidence == null
       ? null
       : AgentProcessStopEvidence.from(value.agentStopEvidence);
@@ -2553,6 +2558,9 @@ export class ActivityFailure {
       message: this.message,
       retryable: this.retryable,
       retryKind: this.retryKind,
+      ...(this.responseProtocolEvidence === null ? {} : {
+        responseProtocolEvidence: this.responseProtocolEvidence.toJSON(),
+      }),
       ...(this.agentStopEvidence === null ? {} : { agentStopEvidence: this.agentStopEvidence.toJSON() }),
       ...(this.agentProviderCompletionEvidence === null ? {} : {
         agentProviderCompletionEvidence: this.agentProviderCompletionEvidence.toJSON(),

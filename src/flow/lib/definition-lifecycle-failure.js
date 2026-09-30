@@ -20,6 +20,7 @@ import { TaskStepIdentity } from "./task-step-identity.js";
 import { attachedCanonicalReviewWorkUnit } from "./canonical-review-artifacts.js";
 import { TaskReviewAbortedWorkUnit } from "./task-review-aborted-work-unit.js";
 import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./step-admission-refusal.js";
+import { AgentResponseProtocolEvidence } from "../../lib/agent-response-protocol.js";
 
 export const STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE = "STEP_RESULT_ERROR_PERSISTENCE_FAILED";
 
@@ -104,6 +105,9 @@ function lifecycleActionFor(state) {
 }
 
 function failureFacts(error, fallbackCode) {
+  const responseProtocolEvidence = error?.data?.responseProtocolEvidence == null
+    ? null
+    : AgentResponseProtocolEvidence.from(error.data.responseProtocolEvidence);
   if (error?.errors && Array.isArray(error.errors)) {
     const fatal = error.errors.find((entry) => entry?.level === "fatal") || error.errors[0];
     if (fatal) {
@@ -111,12 +115,14 @@ function failureFacts(error, fallbackCode) {
       return {
         code: nonEmptyText(fatal.code || fallbackCode, "lifecycle failure code"),
         message: nonEmptyText(messages.filter((message) => typeof message === "string").join("; ") || String(error), "lifecycle failure message"),
+        responseProtocolEvidence,
       };
     }
   }
   return {
     code: nonEmptyText(error?.code || fallbackCode, "lifecycle failure code"),
     message: nonEmptyText(error?.message || String(error), "lifecycle failure message"),
+    responseProtocolEvidence,
   };
 }
 
@@ -214,6 +220,9 @@ export class DefinitionLifecycleAttemptBinding {
         message: facts.message,
         retryable,
         retryKind: retryable ? "tooling" : null,
+        ...(facts.responseProtocolEvidence === null ? {} : {
+          responseProtocolEvidence: facts.responseProtocolEvidence,
+        }),
       },
       result: {
         outcome: "failed",

@@ -1259,6 +1259,22 @@ export class PromptExecutionLimit {
   }
 }
 
+/** Response-policy retries, independently of Agent transport retries. */
+export class PromptProtocolRetryLimit {
+  constructor(maxRetryCount) {
+    this.maxRetryCount = safeInteger(maxRetryCount, "Prompt protocol retry limit");
+    Object.freeze(this);
+  }
+}
+
+/** Actual provider attempts admitted for one group during one execution. */
+export class PromptProviderAttemptLimit {
+  constructor(maxAttemptCount) {
+    this.maxAttemptCount = safeInteger(maxAttemptCount, "Prompt provider attempt limit", { minimum: 1 });
+    Object.freeze(this);
+  }
+}
+
 /** Shared mutable accounting for a bounded command spanning multiple plans. */
 export class PromptExecutionBudget {
   constructor(executionLimit = new PromptExecutionLimit()) {
@@ -1370,15 +1386,23 @@ export class PromptExecutionBudget {
  * before the injected adapter runs; Agent claims ownership before cache lookup.
  */
 export class PromptProviderCallAdmission {
-  #budget;
+  #budgets;
   #claimed = false;
   #attemptCount = 0;
   #settled = false;
 
-  constructor(executionBudget) {
+  constructor(executionBudget, scopedBudget) {
     if (!(executionBudget instanceof PromptExecutionBudget)) throw new TypeError("Provider call admission requires a shared execution budget");
-    this.#budget = executionBudget;
-    this.#budget.consumeProviderCall();
+    if (scopedBudget !== undefined && !(scopedBudget instanceof PromptExecutionBudget)) throw new TypeError("Provider call admission scope requires an execution budget");
+    this.#budgets = [...new Set([executionBudget, ...(scopedBudget ? [scopedBudget] : [])])];
+    this.#consumeProviderCall();
+  }
+
+  #consumeProviderCall() {
+    // Check every scope before mutating any of them. Admission is synchronous,
+    // so another worker cannot interleave a reservation between these steps.
+    for (const budget of this.#budgets) budget.assertCanExecute(1);
+    for (const budget of this.#budgets) budget.consumeProviderCall();
   }
 
   claim() {
@@ -1391,24 +1415,75 @@ export class PromptProviderCallAdmission {
   beforeProviderAttempt() {
     if (!this.#claimed) throw new Error("Provider call admission must be claimed before a transport attempt");
     if (this.#settled) throw new Error("Provider call admission is already settled");
-    if (this.#attemptCount > 0) this.#budget.consumeProviderCall();
+    if (this.#attemptCount > 0) this.#consumeProviderCall();
     this.#attemptCount += 1;
     return this.#attemptCount;
   }
 
   settle() {
     if (this.#settled) throw new Error("Provider call admission is already settled");
-    if (this.#claimed && this.#attemptCount === 0) this.#budget.releaseProviderCall();
+    if (this.#claimed && this.#attemptCount === 0) {
+      for (const budget of this.#budgets) budget.releaseProviderCall();
+    } else if (!this.#claimed) {
+      // Injected adapters which do not claim admission represent one provider
+      // attempt, whether they return a response or throw a startup failure.
+      this.#attemptCount = 1;
+    }
     this.#settled = true;
   }
 
   get claimed() { return this.#claimed; }
   get attemptCount() { return this.#attemptCount; }
   get settled() { return this.#settled; }
+  get reserved() { return !this.#settled && this.#attemptCount === 0; }
+}
+
+export class PromptExecutionAccountingSnapshot {
+  constructor({ responseCallCount, providerAttemptCount }) {
+    this.responseCallCount = safeInteger(responseCallCount, "Prompt response call count");
+    this.providerAttemptCount = safeInteger(providerAttemptCount, "Prompt provider attempt count");
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return { responseCallCount: this.responseCallCount, providerAttemptCount: this.providerAttemptCount };
+  }
+}
+
+/** Live group accounting; provider counts derive from the admission budget. */
+export class PromptExecutionAccounting {
+  #responseCallCount = 0;
+  #admissions = new Set();
+
+  constructor(providerBudget) {
+    if (!(providerBudget instanceof PromptExecutionBudget)) throw new TypeError("Prompt execution accounting requires a provider budget");
+    this.providerBudget = providerBudget;
+    Object.freeze(this);
+  }
+
+  recordCall(admission) {
+    if (!(admission instanceof PromptProviderCallAdmission)) throw new TypeError("Prompt execution accounting requires provider admission");
+    this.#responseCallCount += 1;
+    this.#admissions.add(admission);
+  }
+
+  get responseCallCount() { return this.#responseCallCount; }
+
+  get providerAttemptCount() {
+    const reservations = [...this.#admissions].filter((admission) => admission.reserved).length;
+    return this.providerBudget.providerCallCount - reservations;
+  }
+
+  snapshot() {
+    return new PromptExecutionAccountingSnapshot({
+      responseCallCount: this.responseCallCount,
+      providerAttemptCount: this.providerAttemptCount,
+    });
+  }
 }
 
 export class PromptBatchCompletion {
-  constructor({ batch, response, responseCharacters, responseItemCount } = {}) {
+  constructor({ batch, response, responseCharacters, responseItemCount, executionAccounting } = {}) {
     if (!(batch instanceof PromptBatch)) throw new TypeError("Prompt completion requires its typed batch");
     if (response === undefined) throw new PromptResponseInvalidFailure("Prompt completion response is undefined", { batchDigest: batch.digest });
     this.batch = batch;
@@ -1417,6 +1492,10 @@ export class PromptBatchCompletion {
     this.response = response;
     this.responseCharacters = safeInteger(responseCharacters, "Prompt completion response characters");
     this.responseItemCount = safeInteger(responseItemCount, "Prompt completion response item count");
+    if (executionAccounting !== undefined && !(executionAccounting instanceof PromptExecutionAccountingSnapshot)) {
+      throw new TypeError("Prompt completion accounting must be a typed snapshot");
+    }
+    this.executionAccounting = executionAccounting ?? null;
     Object.freeze(this);
   }
 }
@@ -1494,12 +1573,18 @@ export class PromptBatchExecutor {
     responseContract,
     projectInvocation,
     protocolPolicy = new DefaultPromptProtocolPolicy(),
+    protocolRetryLimit = new PromptProtocolRetryLimit(this.executionLimit.maxProtocolRetryCount),
+    providerAttemptLimit,
   } = {}) {
     if (!(plan instanceof PromptBatchPlan)) throw new TypeError("Prompt executor requires a typed plan");
     if (typeof callAgent !== "function") throw new TypeError("Prompt executor requires callAgent");
     if (!responseContract || typeof responseContract.parse !== "function") throw new TypeError("Prompt executor requires a response contract parser");
     if (projectInvocation !== undefined && typeof projectInvocation !== "function") throw new TypeError("Prompt invocation projector must be a function");
     if (!protocolPolicy || typeof protocolPolicy.execute !== "function") throw new TypeError("Prompt protocol policy must implement execute()");
+    if (!(protocolRetryLimit instanceof PromptProtocolRetryLimit)) throw new TypeError("Prompt executor protocol retry limit must be typed");
+    if (providerAttemptLimit !== undefined && !(providerAttemptLimit instanceof PromptProviderAttemptLimit)) {
+      throw new TypeError("Prompt executor provider attempt limit must be typed");
+    }
     this.executionBudget.assertCanExecute(plan.batches.length);
     const requestLimit = new PromptRequestLimit({
       maxCharacters: Math.min(plan.limit.maxCharacters, this.executionLimit.maxRequestCharacters),
@@ -1516,18 +1601,27 @@ export class PromptBatchExecutor {
     }
 
     const completions = new Array(plan.batches.length);
+    const groupAccounting = new Map(plan.batches.map((batch) => [batch.groupId, null]));
+    for (const groupId of groupAccounting.keys()) {
+      const providerBudget = new PromptExecutionBudget(new PromptExecutionLimit({
+        maxProviderCallCount: providerAttemptLimit?.maxAttemptCount ?? this.executionLimit.maxProviderCallCount,
+      }));
+      groupAccounting.set(groupId, new PromptExecutionAccounting(providerBudget));
+    }
     let cursor = 0;
     let firstFailure = null;
+    let firstFailureAccounting = null;
     const executeBatch = async (batch) => {
       let batchCalls = 0;
+      const accounting = groupAccounting.get(batch.groupId);
       const call = async (request = batch.request, attemptContext) => {
         const usesPreflightedRequest = request === batch.request;
         batchCalls += 1;
-        if (batchCalls > this.executionLimit.maxProtocolRetryCount + 1) {
+        if (batchCalls > protocolRetryLimit.maxRetryCount + 1) {
           throw new PromptCallLimitExceededFailure("Prompt provider call limit is exhausted", {
             batchDigest: batch.digest,
             batchCalls,
-            maxProtocolRetryCount: this.executionLimit.maxProtocolRetryCount,
+            maxProtocolRetryCount: protocolRetryLimit.maxRetryCount,
           });
         }
         const actualRequest = normalizePromptRequest(request);
@@ -1546,7 +1640,8 @@ export class PromptBatchExecutor {
             batch,
           );
         }
-        const providerCallAdmission = new PromptProviderCallAdmission(this.executionBudget);
+        const providerCallAdmission = new PromptProviderCallAdmission(this.executionBudget, accounting.providerBudget);
+        accounting.recordCall(providerCallAdmission);
         let rawCallResponse;
         try {
           rawCallResponse = await callAgent(
@@ -1570,7 +1665,7 @@ export class PromptBatchExecutor {
         }
         return rawCallResponse;
       };
-      const raw = await protocolPolicy.execute({ batch, request: batch.request, call });
+      const raw = await protocolPolicy.execute({ batch, request: batch.request, call, accounting });
       const rawCharacters = responseCharacterCount(raw);
       if (this.executionLimit.maxResponseCharacters !== null
         && rawCharacters > this.executionLimit.maxResponseCharacters) {
@@ -1604,6 +1699,7 @@ export class PromptBatchExecutor {
         response: parsed,
         responseCharacters: parsedCharacters,
         responseItemCount: parsedItems,
+        executionAccounting: accounting.snapshot(),
       });
     };
     const worker = async () => {
@@ -1615,6 +1711,7 @@ export class PromptBatchExecutor {
           completions[index] = await executeBatch(plan.batches[index]);
         } catch (error) {
           firstFailure = error;
+          firstFailureAccounting = groupAccounting.get(plan.batches[index].groupId).snapshot();
         }
       }
     };
@@ -1627,6 +1724,7 @@ export class PromptBatchExecutor {
         completedBatchDigests: completed.map((entry) => entry.batchDigest),
         expectedBatchDigests: plan.batches.map((batch) => batch.digest),
         causeCode,
+        executionAccounting: firstFailureAccounting.toJSON(),
       }, firstFailure);
     }
     const ordered = plan.assertCompletions(completions);

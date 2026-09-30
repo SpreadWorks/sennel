@@ -1,0 +1,58 @@
+{
+  "sourceHead": "c9c1e855a91ccfb74b47230aec3dfe43056e0a30",
+  "startedAt": "2026-09-30T13:46:52.799Z",
+  "temporaryRoot": "/tmp/sennel-6928-frozen-compare-kb4i0x",
+  "testPattern": "produces Draft|complete large file",
+  "testHashes": {
+    "tests/integration/flow-cli/draft-artifact-scenario.test.js": "c843668591e4df66c74f50dc68b71c37f5123fa80f5062aa654dba55224031d2",
+    "tests/integration/flow-cli/spec-artifact-scenario.test.js": "7fe299fa535de08e75304a746ef25b3134c306d88675efb4bebf4b342cb57eca"
+  },
+  "cases": [
+    {
+      "kind": "control",
+      "pid": 858788,
+      "logPath": "/tmp/sennel-6928-frozen-control.log",
+      "protocolHash": "48585e60b9d398d750f3e5f4e5d975d03a3a4af3ac1f2034c45f81d277529c97",
+      "startedAt": "2026-09-30T13:46:52.902Z",
+      "exitCode": 0,
+      "finishedAt": "2026-09-30T13:54:57.800Z"
+    },
+    {
+      "kind": "retry-disabled",
+      "pid": 871629,
+      "logPath": "/tmp/sennel-6928-frozen-retry-disabled.log",
+      "protocolHash": "ef87657de06eab31874253ce24b2298a487ec0554bd9a5b3701821dcbb17c7cf",
+      "startedAt": "2026-09-30T13:54:58.025Z",
+      "exitCode": 1,
+      "finishedAt": "2026-09-30T13:56:37.532Z"
+    }
+  ],
+  "seedProtocolHash": "48585e60b9d398d750f3e5f4e5d975d03a3a4af3ac1f2034c45f81d277529c97",
+  "exactMutation": {
+    "before": "      fileReadRetries += 1;\n      retryKind = \"file-read\";\n      continue;",
+    "after": "      fail(error, \"file_read_failure\");"
+  },
+  "finishedAt": "2026-09-30T13:56:37.974Z",
+  "sourceAudit": {
+    "sourceFileCount": 667,
+    "changedSourceFiles": [
+      "lib/agent-response-protocol.js"
+    ],
+    "exactRetryOnlyMutation": true,
+    "sourceTreeDigest": "80516351aa71bf66544065aec5c48b6c4cfa29f0222fb292ee479d775ed110c7"
+  },
+  "outcomes": [
+    {
+      "phase": "draft",
+      "control": "Pass: read-failure recovery, publication, reload, Spec/Acceptance input consumption.",
+      "fault": "Fail at Draft artifact scenario line159: DRAFT_GATE_RESULT_ERROR replaces expected downstream AGENT_AUTHENTICATION_FAILED. Draft never recovers the first explicit read failure."
+    },
+    {
+      "phase": "spec",
+      "control": "Pass: read-failure recovery, complete large finding publication, repair, reload and Approval/Test/Acceptance consumption.",
+      "fault": "Fail at Spec artifact scenario line377: dispatcher blocked with CANONICAL_ATTEMPT_RECOVERY_REQUIRED instead of advancing to the saved Gate finding repair boundary."
+    }
+  ],
+  "preliminaryComparison": "Discarded because live run-gate.js changed between initial copies. This report uses a single immutable seed for both source trees.",
+  "scope": "Known read-retry regression detection only; no completeness claim. No Git metadata or live canonical artifacts were copied; isolated trees were removed after completion."
+}

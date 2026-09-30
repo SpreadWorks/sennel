@@ -18,6 +18,7 @@ import {
 } from "./gate-transition.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { attachedCanonicalCommandResultArtifact } from "./canonical-command-result.js";
+import { AgentResponseProtocolEvidence } from "../../lib/agent-response-protocol.js";
 import {
   canonicalGateNodeId,
   taskGateSettlementIssueLogActivityId,
@@ -41,6 +42,7 @@ import { SpecGateProspectiveFacts } from "./spec-gate-prospective-facts.js";
 import { nonblockingRouteFor } from "./nonblocking-route.js";
 import { createHash } from "node:crypto";
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
+import { STEP_RESULT_ERROR_CATEGORY } from "../definition.js";
 export { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -103,6 +105,8 @@ export function readProspectiveDraftGateFacts({ flowManager, binding, commandRes
     phase: "draft",
     failureCategory: failure.category,
   });
+  const responseProtocolEvidence = payload.artifacts.responseProtocolEvidence == null
+    ? null : AgentResponseProtocolEvidence.from(payload.artifacts.responseProtocolEvidence);
   return new DraftGateProspectiveFacts({
     result: "fail",
     failureCategory: failure.category,
@@ -110,6 +114,10 @@ export function readProspectiveDraftGateFacts({ flowManager, binding, commandRes
     retryExhausted: retry.exhausted,
     retryUsed: retry.used,
     retryMaximum: retry.maximum,
+    failureCode: responseProtocolEvidence?.hasFileInput ? payload.artifacts.failureCode ?? null : null,
+    failureReason: payload.artifacts.issues?.join("; ") || null,
+    failureMode: payload.artifacts.failureMode ?? null,
+    responseProtocolEvidence,
   });
 }
 
@@ -149,7 +157,13 @@ export function readProspectiveSpecGateFacts({ flowManager, binding, commandResu
       ? `Spec Gate evaluator did not return accepted semantic facts: ${reason}`
       : "Spec Gate evaluator did not return accepted semantic facts");
     error.code = "GATE_OUTPUT_TOOLING_FAILURE";
-    error.data = { failureCode: failure.code };
+    error.data = {
+      failureCode: failure.code,
+      ...(payload.artifacts.failureMode == null ? {} : { failureMode: payload.artifacts.failureMode }),
+      ...(payload.artifacts.responseProtocolEvidence == null ? {} : {
+        responseProtocolEvidence: payload.artifacts.responseProtocolEvidence,
+      }),
+    };
     throw error;
   }
   const activities = flowManager.activityLedger(state.specId);
@@ -611,7 +625,8 @@ function taskGateSettlementProgress({ flowManager, state, nodeId, taskId, attemp
 }
 
 /**
- * Return null when the current Gate Attempt has not published a result yet.
+ * Return null when the current Gate Attempt has not published a result yet,
+ * or file evaluation returned a Step Error rather than an accepted Gate judgment.
  * All malformed, stale, or mismatched evidence throws: callers must reject
  * rather than turn an unavailable publication into a guessed transition.
  */
@@ -640,6 +655,11 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
   const nodeId = canonicalGateNodeId({ phase: required(phase, "gate phase"), taskId });
   if (state.current.at(-1) !== nodeId || state.attempt.nodeId !== nodeId) return null;
   const attempt = state.attempt;
+  // A file-evaluation Step Error retains its diagnostics in the Gate artifact.
+  // Those diagnostics are not a Gate judgment to classify again: the saved
+  // Step Result and Definition failure policy own this Attempt's stop.
+  if (attempt.failure?.category === STEP_RESULT_ERROR_CATEGORY
+    && attempt.failure.responseProtocolEvidence?.hasFileInput) return null;
   const keys = gateKeys(phase, taskId);
   const resultSource = flowManager.readProducerArtifact({
     specId: state.specId, nodeId, logicalKey: keys.result, parameters: keys.parameters, optional: true,

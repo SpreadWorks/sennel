@@ -7,6 +7,7 @@ import { flowCommands } from "../../../src/lib/command-registry.js";
 import { dispatch } from "../../../src/lib/dispatcher.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { container } from "../../../src/lib/container.js";
+import { AgentResponseProtocolEvidence } from "../../../src/lib/agent-response-protocol.js";
 import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import {
@@ -91,7 +92,7 @@ async function dispatchGate(input, result) {
         has(name) { return Object.hasOwn(values, name); },
       },
       entry, argv: [], envelopeType: "run", envelopeKey: "gate",
-      stdout: (chunk) => output.push(chunk), stderr: () => {}, setExitCode: () => {},
+      stdout: (chunk) => output.push(chunk), stderr: (chunk) => input.stderr?.(chunk), setExitCode: () => {},
       buildHookCtx: () => input.ctx,
     });
   } finally {
@@ -269,4 +270,96 @@ test("atomic Spec Gate retry projects the replacement Attempt without another Ga
     root: input.root, mainRoot: input.root, inWorktree: false, specId: input.specId,
   });
   assert.equal(reloaded.canonicalState(input.specId).attempt.sequence, before + 1);
+});
+
+async function rejectedProviderResult(input) {
+  const originalGet = container.get.bind(container);
+  let calls = 0;
+  container.get = (key) => key !== "agent" ? originalGet(key) : {
+    resolve: () => ({ provider: "fixture" }),
+    call: async () => { calls += 1; return "invalid provider JSON"; },
+  };
+  try {
+    const result = await new RunGateCommand().execute(input.ctx);
+    assert.equal(calls, 2);
+    assert.equal(result.result, "fail");
+    return result;
+  } finally {
+    container.get = originalGet;
+  }
+}
+
+test("Spec tooling evidence crosses the cloned post error and exact Attempt failure transaction", async () => {
+  const input = setup({ validSpec: true });
+  const initialAttempt = input.manager.canonicalState(input.specId).attempt;
+  const result = await rejectedProviderResult(input);
+  const evidence = AgentResponseProtocolEvidence.from(result.artifacts.responseProtocolEvidence);
+  const before = bytesAt(input.fixture.location());
+  await assert.rejects(() => flowCommands.run.gate.post(input.ctx, result), (error) => {
+    assert.equal(error.code, "GATE_OUTPUT_TOOLING_FAILURE");
+    assert.equal(error.data.responseProtocolEvidence instanceof AgentResponseProtocolEvidence, false);
+    assert.deepEqual(AgentResponseProtocolEvidence.from(error.data.responseProtocolEvidence).toJSON(), evidence.toJSON());
+    return true;
+  });
+  assert.deepEqual(bytesAt(input.fixture.location()), before, "direct tooling rejection must not publish a semantic result");
+
+  const envelope = await dispatchGate(input, result);
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.errors[0].code, "GATE_OUTPUT_TOOLING_FAILURE");
+  const restored = new FlowManager({ root: input.root, mainRoot: input.root, inWorktree: false, specId: input.specId });
+  const state = restored.canonicalState(input.specId);
+  assert.equal(state.attempt.id, initialAttempt.id);
+  assert.equal(state.attempt.sequence, initialAttempt.sequence);
+  assert.equal(state.attempt.consumption.semantic, initialAttempt.consumption.semantic);
+  assert.equal(state.attempt.failure.code, "GATE_OUTPUT_TOOLING_FAILURE");
+  assert.ok(state.attempt.failure.responseProtocolEvidence instanceof AgentResponseProtocolEvidence);
+  assert.deepEqual(state.attempt.failure.responseProtocolEvidence.toJSON(), evidence.toJSON());
+  const failure = restored.activityLedger(input.specId).findLast((entry) => entry.type === "attempt_failed");
+  assert.equal(failure.attemptId, initialAttempt.id);
+  assert.deepEqual(AgentResponseProtocolEvidence.from(failure.failure.responseProtocolEvidence).toJSON(), evidence.toJSON());
+  assert.equal(restored.readCurrentStepSettlement({ specId: input.specId, stepId: "spec-gate" }), null);
+  assert.equal(restored.readProducerArtifact({ specId: input.specId, nodeId: "spec-gate", logicalKey: "spec.gate", optional: true }), null);
+});
+
+test("a fault saving Spec protocol failure preserves canonical state and exposes the save failure", async () => {
+  let interrupt = false;
+  let catalogFile = null;
+  const input = setup({ validSpec: true, faultInjector: ({ phase, filePath }) => {
+    if (interrupt && phase === "before-json-rename" && filePath === catalogFile) {
+      throw new Error("injected protocol failure save interruption");
+    }
+  } });
+  catalogFile = input.fixture.location().catalogFile;
+  const result = await rejectedProviderResult(input);
+  const before = bytesAt(input.fixture.location());
+  const diagnostic = [];
+  input.stderr = (chunk) => diagnostic.push(chunk);
+  interrupt = true;
+  const envelope = await dispatchGate(input, result);
+  assert.equal(envelope.ok, false);
+  assert.match(diagnostic.join(""), /injected protocol failure save interruption/);
+  assert.deepEqual(bytesAt(input.fixture.location()), before);
+  const restored = new FlowManager({ root: input.root, mainRoot: input.root, inWorktree: false, specId: input.specId });
+  assert.equal(restored.canonicalState(input.specId).attempt.failure, null);
+  assert.equal(restored.activityLedger(input.specId).filter((entry) => entry.type === "attempt_failed").length, 0);
+});
+
+test("stale Spec protocol evidence cannot replace another Attempt failure", async () => {
+  const input = setup({ validSpec: true });
+  const result = await rejectedProviderResult(input);
+  const initial = input.manager.canonicalState(input.specId).attempt;
+  const priorFailure = {
+    category: "tooling", code: "EXISTING_ATTEMPT_FAILURE", message: "The Attempt is already stopped.",
+    retryable: false, retryKind: null,
+  };
+  input.manager.failCurrentAttempt({ specId: input.specId, failure: priorFailure,
+    result: { outcome: "failed", summary: priorFailure.message, confirmedAt: initial.startedAt, artifactRefs: [] },
+  });
+  const before = bytesAt(input.fixture.location());
+  const envelope = await dispatchGate(input, result);
+  assert.equal(envelope.ok, false);
+  assert.deepEqual(bytesAt(input.fixture.location()), before);
+  const restored = new FlowManager({ root: input.root, mainRoot: input.root, inWorktree: false, specId: input.specId });
+  assert.equal(restored.canonicalState(input.specId).attempt.failure.code, priorFailure.code);
+  assert.equal(restored.canonicalState(input.specId).attempt.failure.responseProtocolEvidence, null);
 });

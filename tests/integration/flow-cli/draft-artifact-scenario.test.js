@@ -53,6 +53,7 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     const specRefusalSnapshots = [];
     let activeFlowManager = flowManager;
     let gateCalls = 0;
+    let firstGroupReadFailures = 0;
     const gateAttemptIds = [];
     const gateAttempts = new Set();
     const reviewSteps = [];
@@ -69,6 +70,12 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
       assert.ok(filePath, "the oversized canonical Draft must be evaluated from a complete file");
       draftInputPaths.push(filePath);
       assert.equal(fs.readFileSync(filePath, "utf8"), `${JSON.stringify(draftDocument, null, 2)}\n`);
+      if (knownIds.includes(sharedGuardrail) && firstGroupReadFailures < 3) {
+        firstGroupReadFailures += 1;
+        return JSON.stringify({ observations: null, evaluationUnavailable: {
+          kind: "file-read-failed", reason: "The first Draft file open failed explicitly.",
+        } });
+      }
       return JSON.stringify({ observations: knownIds.includes(sharedGuardrail) ? observations : [], evaluationUnavailable: null });
     });
     const originalSpawnSync = childProcess.spawnSync;
@@ -178,6 +185,16 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     assert.deepEqual(questionsHistory.attempts.map((entry) => entry.artifact.payload.sourceDraftRevision.digest), [draft.descriptor.hash]);
     assert.deepEqual(coverageHistory.attempts.map((entry) => entry.artifact.payload.sourceDraftRevision.digest), [draft.descriptor.hash, draft.descriptor.hash]);
     assert.equal(gateHistory.attempts.length, 2);
+    assert.equal(firstGroupReadFailures, 3);
+    const recoveredEvidence = gateHistory.attempts[0].artifact.payload.artifacts.responseProtocolEvidence;
+    const recoveredGroup = recoveredEvidence.groups.find((group) => group.attempts.length === 4);
+    assert.ok(recoveredGroup, JSON.stringify(recoveredEvidence));
+    assert.deepEqual(recoveredGroup.attempts.map((attempt) => attempt.failureKind),
+      ["file-read-failed", "file-read-failed", "file-read-failed", null]);
+    assert.equal(recoveredGroup.providerAttemptCount, 4);
+    assert.equal(recoveredGroup.responseCallCount, 4);
+    assert.equal(recoveredGroup.outcome, "accepted");
+    assert.deepEqual(recoveredGroup.attempts.map((attempt) => attempt.providerAttemptCount), [1, 2, 3, 4]);
     const finalGate = gateHistory.attempts.at(-1).artifact.payload;
     const gateObservations = finalGate.artifacts.nextAction.diagnosis.observations;
     assert.deepEqual(gateObservations.map((entry) => [entry.requirementRef, entry.where.locator, entry.observed]),

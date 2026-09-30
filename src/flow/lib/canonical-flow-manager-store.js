@@ -4124,6 +4124,9 @@ export class CanonicalFlowManagerStore {
         message: stepResult.error.message,
         retryable: false,
         retryKind: null,
+        ...(stepResult.error.data?.responseProtocolEvidence == null ? {} : {
+          responseProtocolEvidence: stepResult.error.data.responseProtocolEvidence,
+        }),
       },
       result,
       stepResult,

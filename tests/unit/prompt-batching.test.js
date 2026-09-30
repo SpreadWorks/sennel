@@ -22,6 +22,8 @@ import {
   PromptLogicalFootprint,
   PromptPartitionNoProgressFailure,
   PromptProviderCallAdmission,
+  PromptProtocolRetryLimit,
+  PromptProviderAttemptLimit,
   PromptReductionDidNotConvergeFailure,
   PromptReductionLevel,
   PromptReductionPlan,
@@ -553,6 +555,139 @@ describe("prompt batch execution", () => {
       aggregateCharacters: 0,
       aggregateItemCount: 0,
     });
+  });
+
+  it("admits a provider attempt atomically across command and group budgets", () => {
+    for (const exhaustedScope of ["command", "group"]) {
+      const command = new PromptExecutionBudget(new PromptExecutionLimit({ maxProviderCallCount: 2 }));
+      const group = new PromptExecutionBudget(new PromptExecutionLimit({ maxProviderCallCount: 2 }));
+      const admission = new PromptProviderCallAdmission(command, group);
+      admission.claim();
+      admission.beforeProviderAttempt();
+      const exhausted = exhaustedScope === "command" ? command : group;
+      exhausted.consumeProviderCall();
+      const before = [command.snapshot(), group.snapshot()];
+      assert.throws(() => admission.beforeProviderAttempt(), { code: "PROMPT_CALL_LIMIT_EXCEEDED" });
+      assert.deepEqual([command.snapshot(), group.snapshot()], before);
+      assert.equal(admission.attemptCount, 1);
+      admission.settle();
+      assert.throws(() => new PromptProviderCallAdmission(command, group), { code: "PROMPT_CALL_LIMIT_EXCEEDED" });
+      assert.deepEqual([command.snapshot(), group.snapshot()], before);
+    }
+  });
+
+  it("counts unclaimed adapter failures while excluding refunded cache reservations", async () => {
+    const plan = buildPlan({ elements: [element("one", 0, "payload")], maxCharacters: 40 });
+    const budget = new PromptExecutionBudget(new PromptExecutionLimit({ maxProviderCallCount: 1 }));
+    const snapshots = [];
+    let calls = 0;
+    const completions = await new PromptBatchExecutor({ executionBudget: budget }).executeCompletions({
+      plan,
+      protocolRetryLimit: new PromptProtocolRetryLimit(2),
+      providerAttemptLimit: new PromptProviderAttemptLimit(1),
+      callAgent: async (_request, _batch, _retry, _context, admission) => {
+        calls += 1;
+        if (calls < 3) { admission.claim(); return "cached"; }
+        throw Object.assign(new Error("startup failed"), { code: "STARTUP_FAILED" });
+      },
+      protocolPolicy: { async execute({ call, accounting }) {
+        await call(); snapshots.push(accounting.snapshot().toJSON());
+        await call(); snapshots.push(accounting.snapshot().toJSON());
+        await assert.rejects(call(), (error) => {
+          assert.deepEqual(accounting.snapshot().toJSON(), { responseCallCount: 3, providerAttemptCount: 1 });
+          return error.code === "STARTUP_FAILED";
+        });
+        return "completed";
+      } },
+      responseContract: { parse: (raw) => raw },
+    });
+    assert.deepEqual(snapshots, [
+      { responseCallCount: 1, providerAttemptCount: 0 },
+      { responseCallCount: 2, providerAttemptCount: 0 },
+    ]);
+    assert.deepEqual(completions[0].executionAccounting.toJSON(), { responseCallCount: 3, providerAttemptCount: 1 });
+    assert.equal(budget.providerCallCount, 1);
+  });
+
+  it("shares the provider cap across batches in the same group and rejects the next adapter call", async () => {
+    const plan = buildPlan({ elements: [element("one", 0, "x".repeat(30)), element("two", 1, "y".repeat(30))], maxCharacters: 45 });
+    const budget = new PromptExecutionBudget(new PromptExecutionLimit({ maxProviderCallCount: 10 }));
+    let calls = 0;
+    await assert.rejects(new PromptBatchExecutor({ executionBudget: budget }).executeCompletions({
+      plan,
+      protocolRetryLimit: new PromptProtocolRetryLimit(1),
+      providerAttemptLimit: new PromptProviderAttemptLimit(1),
+      callAgent: async () => { calls += 1; return "ok"; },
+      responseContract: { parse: (raw) => raw },
+    }), (error) => {
+      assert.equal(error.cause.code, "PROMPT_CALL_LIMIT_EXCEEDED");
+      assert.deepEqual(error.details.executionAccounting, { responseCallCount: 1, providerAttemptCount: 1 });
+      assert.equal(error.details.completedBatchDigests.length, 1);
+      return error instanceof PromptBatchExecutionIncompleteFailure;
+    });
+    assert.equal(calls, 1);
+    assert.equal(budget.providerCallCount, 1);
+  });
+
+  it("preserves immutable adapter and protocol errors while recording executor failure counts", async () => {
+    const plan = buildPlan({ elements: [element("one", 0, "payload")], maxCharacters: 40 });
+    for (const boundary of ["adapter", "protocol"]) {
+      const original = Object.freeze(Object.assign(new Error(`${boundary} failed`), { code: "IMMUTABLE_FAILURE" }));
+      const originalKeys = Reflect.ownKeys(original);
+      const budget = new PromptExecutionBudget(new PromptExecutionLimit({ maxProviderCallCount: 1 }));
+      await assert.rejects(new PromptBatchExecutor({ executionBudget: budget }).executeCompletions({
+        plan,
+        callAgent: async () => {
+          if (boundary === "adapter") throw original;
+          return "valid";
+        },
+        protocolPolicy: { async execute({ call }) {
+          await call();
+          throw original;
+        } },
+        responseContract: { parse: (raw) => raw },
+      }), (error) => {
+        assert.ok(error instanceof PromptBatchExecutionIncompleteFailure);
+        assert.equal(error.cause, original);
+        assert.equal(error.details.causeCode, "IMMUTABLE_FAILURE");
+        assert.deepEqual(error.details.executionAccounting, { responseCallCount: 1, providerAttemptCount: 1 });
+        assert.equal(Object.isFrozen(original), true);
+        assert.deepEqual(Reflect.ownKeys(original), originalKeys);
+        return true;
+      });
+      assert.equal(budget.providerCallCount, 1);
+    }
+  });
+
+  it("keeps parallel group attempt limits independent under the shared command cap", async () => {
+    const envelope = new TextEnvelope();
+    const limit = new PromptRequestLimit({ maxCharacters: 80 });
+    const collection = new PromptInputBuilder({ envelope, limit })
+      .add(element("one", 0, "one")).add(element("two", 1, "two")).build();
+    const topology = new GroupedPromptBatchTopology({ groups: collection.elements.map((entry) =>
+      new PromptBatchGroup({ id: entry.id, payloadElements: [entry] })) });
+    const plan = PromptBatchPlan.create({ collection, envelope, limit, topology });
+    const budget = new PromptExecutionBudget(new PromptExecutionLimit({ maxProviderCallCount: 4, concurrency: 2 }));
+    const calls = [];
+    const executor = new PromptBatchExecutor({ executionBudget: budget });
+    const options = {
+      plan,
+      protocolRetryLimit: new PromptProtocolRetryLimit(1),
+      providerAttemptLimit: new PromptProviderAttemptLimit(2),
+      callAgent: async (_request, batch) => { calls.push(batch.groupId); return "ok"; },
+      protocolPolicy: { async execute({ call }) { await call(); return call(); } },
+      responseContract: { parse: (raw) => raw },
+    };
+    const completions = await executor.executeCompletions(options);
+    assert.equal(calls.filter((id) => id === "one").length, 2);
+    assert.equal(calls.filter((id) => id === "two").length, 2);
+    assert.deepEqual(completions.map((completion) => completion.executionAccounting.toJSON()), [
+      { responseCallCount: 2, providerAttemptCount: 2 },
+      { responseCallCount: 2, providerAttemptCount: 2 },
+    ]);
+    assert.equal(budget.providerCallCount, 4);
+    await assert.rejects(executor.executeCompletions(options), { code: "PROMPT_CALL_LIMIT_EXCEEDED" });
+    assert.equal(calls.length, 4);
   });
 
   it("restores spent and unsettled provider reservations without resetting any shared limit", () => {

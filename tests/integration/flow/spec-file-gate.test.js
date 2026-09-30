@@ -149,13 +149,18 @@ it("keeps grouped Spec file alive for each judgment and rejects a later unavaila
         assert.equal(fs.readFileSync(filePath, "utf8"), source);
         const id = options.jsonSchema.properties.observations.items.properties.requirementRef.enum[0];
         return id === "S1" ? fileResponse([observation("S1")])
-          : JSON.stringify({ observations: null, evaluationUnavailable: { reason: "Full file exceeds available context." } });
+          : JSON.stringify({ observations: null, evaluationUnavailable: { kind: "context-limit", reason: "Full file exceeds available context." } });
       },
     },
   });
   assert.equal(result.passed, false);
   assert.deepEqual(result.evaluations, []);
   assert.match(result.failureReason, /Full file exceeds available context/);
+  assert.equal(result.failureMode, "context_limit");
+  assert.deepEqual(result.responseProtocolEvidence.groups.map((group) => group.outcome), ["accepted", "failed"]);
+  assert.deepEqual(result.responseProtocolEvidence.groups.map((group) => group.providerAttemptCount), [1, 1]);
+  assert.equal(result.providerCalls, 2);
+  assert.equal(result.responseProtocolEvidence.groups[1].attempts[0].failureKind, "context-limit");
   assert.equal(calls, 2);
   assert.deepEqual(paths, [paths[0], paths[0]]);
   assert.equal(fs.existsSync(paths[0]), false);

@@ -1746,7 +1746,7 @@ export const FLOW_COMMANDS = {
               throw fatalDraftPersistenceFailure(error, "SPEC_GATE_PERSISTENCE_FAILED");
             }
             if (error?.code === "GATE_OUTPUT_TOOLING_FAILURE") {
-              throw new FatalPostHookError(error.code, error.message, { cause: error });
+              throw new FatalPostHookError(error.code, error.message, { cause: error, data: error.data });
             }
             if (isStepAdmissionRefusal(error)) {
               throw new FatalPostHookError("SPEC_GATE_ADMISSION_REFUSED", error.message, {

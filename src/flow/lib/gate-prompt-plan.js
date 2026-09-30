@@ -426,9 +426,9 @@ export function gatePromptFits(request, limit = new PromptRequestLimit(), projec
     && (!projectInvocation || projectInvocation(request).fits(limit.maxCharacters));
 }
 
-export async function executeGatePlan({ plan, callAgent, parseResponse, projectInvocation, protocolPolicy, executionBudget }) {
+export async function executeGatePlan({ plan, callAgent, parseResponse, projectInvocation, protocolPolicy, executionBudget, protocolRetryLimit, providerAttemptLimit }) {
   return new PromptBatchExecutor({ executionBudget }).execute({
-    plan, callAgent, projectInvocation, protocolPolicy,
+    plan, callAgent, projectInvocation, protocolPolicy, protocolRetryLimit, providerAttemptLimit,
     responseContract: { parse: parseResponse }, reducer: new GateResultReducer(),
   });
 }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,9 @@ import { it, mock } from "node:test";
 
 import { buildGuardrailArticleEvalPrompt, checkGuardrail } from "../../../src/flow/lib/run-gate.js";
 import { PromptLogicalFootprint, ResolvedAgentInvocationProjection } from "../../../src/lib/prompt-batching.js";
+import { Agent } from "../../../src/lib/agent.js";
+import { Logger } from "../../../src/lib/log.js";
+import { ProviderRegistry } from "../../../src/lib/provider.js";
 
 const rule = (id, body = "Report every marked violation.") => ({
   id, title: id, body, meta: { phase: ["draft"], category: "requirements" },
@@ -93,7 +97,7 @@ it("keeps the same Draft file through format repair, then rejects an unavailable
       paths.push(filePath);
       assert.equal(fs.readFileSync(filePath, "utf8"), source);
       if (calls === 1) return "not json";
-      return JSON.stringify({ observations: null, evaluationUnavailable: { reason: "The file exceeds available context." } });
+      return JSON.stringify({ observations: null, evaluationUnavailable: { kind: "context-limit", reason: "The file exceeds available context." } });
     },
   };
   const result = await checkGuardrail(root, source, "draft", undefined, [], {
@@ -111,8 +115,8 @@ it("rejects missing, ambiguous and malformed Draft file outcomes after format re
   for (const response of [
     {},
     { observations: null, evaluationUnavailable: null },
-    { observations: "invalid", evaluationUnavailable: { reason: "unread" } },
-    { observations: [], evaluationUnavailable: { reason: "unread" } },
+    { observations: "invalid", evaluationUnavailable: { kind: "evaluation-failed", reason: "unread" } },
+    { observations: [], evaluationUnavailable: { kind: "evaluation-failed", reason: "unread" } },
   ]) {
     let calls = 0;
     const result = await checkGuardrail(root, "x".repeat(130000), "draft", undefined, [], {
@@ -212,7 +216,7 @@ it("does not publish a partial pass when a later whole-rule file group is unavai
           failureMode: "guardrail-violation", requirementRef: "D1",
           where: { file: "draft.json", locator: "first" }, observed: "First rule violation",
         }], evaluationUnavailable: null })
-        : JSON.stringify({ observations: null, evaluationUnavailable: { reason: "Second rule could not be evaluated." } });
+        : JSON.stringify({ observations: null, evaluationUnavailable: { kind: "evaluation-failed", reason: "Second rule could not be evaluated." } });
     },
   };
   const result = await checkGuardrail(root, source, "draft", undefined, [], {
@@ -307,3 +311,181 @@ it("fails safely when the Draft file cannot be created", async () => withRoot(as
   assert.equal(calls, 0);
   assert.equal(fs.readFileSync(path.join(root, ".sennel", "agent-work"), "utf8"), "blocked");
 }));
+
+it("recovers a Draft read failure on the fourth provider attempt and retains every response", async () => withRoot(async (root) => {
+  const source = "あ".repeat(130000);
+  const paths = [];
+  const cacheModes = [];
+  const unavailable = JSON.stringify({ observations: null, evaluationUnavailable: {
+    kind: "file-read-failed", reason: "The absolute input path could not be opened.",
+  } });
+  const result = await checkGuardrail(root, source, "draft", undefined, [], {
+    loadGuardrails: () => [rule("D1")],
+    agent: { resolve: () => true, async call(prompt, options) {
+      paths.push(filePathFromPrompt(prompt));
+      cacheModes.push(options.cacheMode);
+      assert.equal(options.validateResponseForCache(unavailable), false);
+      assert.equal(options.validateResponseForCache("not JSON"), false);
+      const accepted = JSON.stringify({ observations: [], evaluationUnavailable: null });
+      assert.equal(options.validateResponseForCache(accepted), true);
+      return paths.length < 4 ? unavailable : accepted;
+    } },
+  });
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.equal(paths.length, 4);
+  assert.equal(new Set(paths).size, 1);
+  assert.deepEqual(cacheModes, ["default", "bypass", "bypass", "bypass"]);
+  const group = result.responseProtocolEvidence.groups[0];
+  assert.equal(group.inputDigest, crypto.createHash("sha256").update(source).digest("hex"));
+  assert.equal(group.inputByteLength, Buffer.byteLength(source));
+  assert.equal(group.providerAttemptCount, 4);
+  assert.equal(group.responseCallCount, 4);
+  assert.equal(group.outcome, "accepted");
+  assert.equal(group.stopReason, "recovered");
+  assert.deepEqual(group.attempts.map((entry) => entry.failureKind), ["file-read-failed", "file-read-failed", "file-read-failed", null]);
+  assert.equal(fs.existsSync(paths[0]), false);
+}));
+
+it("exhausts four Draft read failures without a fifth provider call or partial pass", async () => withRoot(async (root) => {
+  let calls = 0;
+  const result = await checkGuardrail(root, "x".repeat(130000), "draft", undefined, [], {
+    loadGuardrails: () => [rule("D1")],
+    agent: { resolve: () => true, async call() {
+      calls += 1;
+      return JSON.stringify({ observations: null, evaluationUnavailable: { kind: "file-read-failed", reason: "open failed" } });
+    } },
+  });
+  assert.equal(calls, 4);
+  assert.equal(result.passed, false);
+  assert.deepEqual(result.evaluations, []);
+  assert.equal(result.failureCode, "GATE_OUTPUT_TOOLING_FAILURE");
+  assert.equal(result.failureMode, "file_read_retry_exhausted");
+  assert.equal(result.responseProtocolEvidence.groups[0].providerAttemptCount, 4);
+}));
+
+it("shares Draft transport, format, and read retries under the provider limit", async () => withRoot(async (root) => {
+  let providerStarts = 0;
+  let responseCalls = 0;
+  const result = await checkGuardrail(root, "x".repeat(130000), "draft", undefined, [], {
+    loadGuardrails: () => [rule("D1")],
+    agent: { resolve: () => true, async call(_prompt, options) {
+      responseCalls += 1;
+      options.providerCallAdmission.claim();
+      await options.providerCallAdmission.beforeProviderAttempt({
+        attempt: 1, index: 0, maxAttempts: 2, providerKey: "fixture", profileKey: "local",
+      });
+      providerStarts += 1;
+      if (responseCalls === 1) {
+        await options.providerCallAdmission.beforeProviderAttempt({
+          attempt: 2, index: 1, maxAttempts: 2, providerKey: "fixture", profileKey: "local",
+        });
+        providerStarts += 1;
+        return "malformed";
+      }
+      return JSON.stringify({ observations: null, evaluationUnavailable: { kind: "file-read-failed", reason: "open failed" } });
+    } },
+  });
+  assert.equal(providerStarts, 4);
+  assert.equal(responseCalls, 3);
+  assert.equal(result.passed, false);
+  assert.equal(result.failureMode, "provider_call_limit_exhausted");
+  const group = result.responseProtocolEvidence.groups[0];
+  assert.equal(group.providerAttemptCount, 4);
+  assert.equal(group.responseCallCount, 3);
+  assert.deepEqual(group.attempts.map((entry) => entry.providerAttemptCount), [2, 3, 4]);
+  assert.deepEqual(group.attempts.map((entry) => entry.retryKind), [null, "format", "file-read"]);
+}));
+
+it("stops a Draft retry after input mutation or disappearance before another provider call", async () => withRoot(async (root) => {
+  for (const mutation of ["change", "remove"]) {
+    let calls = 0;
+    const result = await checkGuardrail(root, "x".repeat(130000), "draft", undefined, [], {
+      loadGuardrails: () => [rule("D1")],
+      agent: { resolve: () => true, async call(prompt) {
+        calls += 1;
+        const filePath = filePathFromPrompt(prompt);
+        if (mutation === "change") fs.writeFileSync(filePath, "replacement");
+        else fs.unlinkSync(filePath);
+        return JSON.stringify({ observations: null, evaluationUnavailable: { kind: "file-read-failed", reason: "read failed" } });
+      } },
+    });
+    assert.equal(calls, 1);
+    assert.equal(result.failureKind, "local-input");
+    assert.equal(result.failureMode, "local_input_failure");
+    assert.equal(result.failureCode, "GATE_OUTPUT_TOOLING_FAILURE");
+    assert.equal(result.responseProtocolEvidence.groups[0].providerAttemptCount, 1);
+    assert.deepEqual(result.evaluations, []);
+  }
+}));
+
+it("rejects the retired reason-only unavailable wire schema after exactly one format repair", async () => withRoot(async (root) => {
+  let calls = 0;
+  const result = await checkGuardrail(root, "x".repeat(130000), "draft", undefined, [], {
+    loadGuardrails: () => [rule("D1")],
+    agent: { resolve: () => true, async call() {
+      calls += 1;
+      return JSON.stringify({ observations: null, evaluationUnavailable: { reason: "open failed" } });
+    } },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.failureMode, "schema_validation_failure");
+  assert.deepEqual(result.evaluations, []);
+}));
+
+for (const mutation of ["change", "remove"]) {
+  it(`stops the actual Draft Agent transport retry after input ${mutation}`, async () => withRoot(async (root) => {
+    const source = "x".repeat(130000);
+    const config = { agent: { default: "fixture/local", timeout: 300, retryCount: 1,
+      providers: { "fixture/local": { command: "fixture", args: ["{{PROMPT}}"] } } } };
+    let providerStarts = 0;
+    let inputPath = null;
+    const guardIndexes = [];
+    const agent = new Agent({ config, paths: { root, agentWorkDir: path.join(root, ".tmp") },
+      registry: new ProviderRegistry(config.agent.providers),
+      logger: new Logger({ enabled: false, logDir: root }),
+      supervision: { spawn(_command, args) {
+        providerStarts += 1;
+        inputPath = filePathFromPrompt(args.at(-1));
+        assert.equal(fs.readFileSync(inputPath, "utf8"), source);
+        const child = new EventEmitter();
+        child.pid = null;
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        queueMicrotask(() => {
+          if (mutation === "change") fs.writeFileSync(inputPath, "replacement");
+          else fs.unlinkSync(inputPath);
+          // A successful process with empty output takes Agent's transport retry path.
+          child.emit("close", 0, null);
+        });
+        return child;
+      } },
+    });
+    const result = await checkGuardrail(root, source, "draft", undefined, [], {
+      agent, loadGuardrails: () => [rule("D1")],
+      providerCallGuard: (context) => { guardIndexes.push(context.index); },
+    });
+    assert.equal(providerStarts, 1, "the changed input must prevent the second provider start");
+    assert.deepEqual(guardIndexes, [0, 1], "the canonical guard remains active for both planned starts");
+    assert.equal(result.passed, false);
+    assert.equal(result.failureKind, "local-input");
+    assert.equal(result.failureMode, "local_input_failure");
+    assert.equal(result.failureCode, "GATE_OUTPUT_TOOLING_FAILURE");
+    assert.match(result.failureReason, mutation === "change"
+      ? /^Referenced input bytes changed after capture$/
+      : /^Referenced input is unavailable: Unable to capture draft\.json Gate input: ENOENT:/);
+    assert.deepEqual(result.evaluations, []);
+    const group = result.responseProtocolEvidence.groups[0];
+    assert.equal(group.outcome, "failed");
+    assert.equal(group.stopReason, "local_input_failure");
+    assert.equal(group.providerAttemptCount, 1);
+    assert.equal(group.responseCallCount, 1);
+    assert.equal(group.inputDigest, crypto.createHash("sha256").update(source).digest("hex"));
+    assert.equal(group.inputByteLength, Buffer.byteLength(source));
+    assert.equal(group.attempts.length, 1);
+    assert.equal(group.attempts[0].failureKind, "local-input");
+    assert.equal(group.attempts[0].providerCalled, true);
+    assert.equal(group.attempts[0].providerAttemptCount, 1);
+    assert.equal(group.attempts[0].responseCallCount, 1);
+    assert.equal(fs.existsSync(inputPath), false, "the owned input must be cleaned after stopping");
+  }));
+}

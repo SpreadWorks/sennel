@@ -89,6 +89,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       const largeFindingReason = (id, occurrence) => `The planned verification for ${id}, gap ${occurrence + 1}, omits the required cross-section rationale. `
         + Array.from({ length: 47 }, (_, index) => `Evidence ${index + 1} for ${id} compares the stated behavior with its planned check.`).join(" ");
       let largeFirstResponse = null;
+      let firstGroupReadFailures = 0;
       gateAgentLookup = installGateProviderFake((_prompt, options) => {
         const observationSchema = options.jsonSchema?.properties?.observations?.items;
         const evidenceIds = observationSchema?.properties?.requirementId?.enum ?? [];
@@ -119,6 +120,12 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
             contradictions: fail && requirementId === sharedGuardrail
               ? [selected[0].observed] : [], unresolved: [],
           }))) });
+        }
+        if (largeSpecFile && knownIds.includes(sharedGuardrail) && firstGroupReadFailures < 3) {
+          firstGroupReadFailures += 1;
+          return JSON.stringify({ observations: null, evaluationUnavailable: {
+            kind: "file-read-failed", reason: "The first Spec file open failed explicitly.",
+          } });
         }
         const response = JSON.stringify({
           observations: fail && knownIds.includes(sharedGuardrail)
@@ -517,6 +524,17 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       ]), retainGateFindings
         ? Array.from({ length: cycles }, () => ["fail", "ai_semantic_fail"])
         : [["fail", "ai_semantic_fail"], ["pass", null]]);
+      if (largeSpecFile) {
+        assert.equal(firstGroupReadFailures, 3);
+        const evidence = specGateHistory.attempts[0].artifact.payload.artifacts.responseProtocolEvidence;
+        const recovered = evidence.groups.find((group) => group.attempts.length === 4);
+        assert.ok(recovered, JSON.stringify(evidence));
+        assert.deepEqual(recovered.attempts.map((attempt) => attempt.failureKind),
+          ["file-read-failed", "file-read-failed", "file-read-failed", null]);
+        assert.equal(recovered.providerAttemptCount, 4);
+        assert.equal(recovered.responseCallCount, 4);
+        assert.equal(recovered.outcome, "accepted");
+      }
       if (largeGateResponse) {
         assert.ok(largeFirstResponse.length > 120_000);
         assert.equal(specGateHistory.attempts[0].artifact.payload.artifacts.nextAction.diagnosis.observations.length, 40);

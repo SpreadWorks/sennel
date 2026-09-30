@@ -16,10 +16,16 @@ export function draftGateResult(facts) {
   }
   if (facts.result === "pass") return new DraftGatePassedResult();
   if (facts.failureCategory !== "semantic") {
-    return new StepErrorResult(
-      "draft-gate",
-      new Error("Draft Gate observation cannot be settled as a semantic Result"),
-    );
+    const error = new Error(facts.failureReason
+      ?? "Draft Gate observation cannot be settled as a semantic Result");
+    if (facts.failureCode !== null) error.code = facts.failureCode;
+    error.data = {
+      ...(facts.failureMode === null ? {} : { failureMode: facts.failureMode }),
+      ...(facts.responseProtocolEvidence === null ? {} : {
+        responseProtocolEvidence: facts.responseProtocolEvidence.toJSON(),
+      }),
+    };
+    return new StepErrorResult("draft-gate", error);
   }
   if (facts.sameEvidence || facts.retryExhausted) return new DraftGateCarryForwardResult();
   return new DraftGateRepairRequiredResult();
