@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import { Observation } from "../../../src/flow/lib/observation.js";
-import { buildGuardrailArticleEvalPrompt, parseGuardrailArticleEvaluation } from "../../../src/flow/lib/run-gate.js";
+import { buildGuardrailArticleEvalPrompt, checkGuardrail, parseGuardrailArticleEvaluation } from "../../../src/flow/lib/run-gate.js";
 import { SpecGateTargetSelection } from "../../../src/flow/lib/spec-gate-targets.js";
 import { specRepairTargetEntries } from "../../../src/flow/lib/spec-repair-operations.js";
 import { adaptJsonSchemaForProvider } from "../../../src/lib/provider-schema.js";
@@ -61,6 +64,19 @@ function schemaAccepts(schema, value) {
   return true;
 }
 
+function assertTargetGuidance(built) {
+  const fields = built.jsonSchema.properties.observations.items.properties;
+  for (const text of [built.systemPrompt, built.fmtFallback,
+    fields.targets.items.description, fields.allowedTargets.items.description]) {
+    assert.match(text, /every allowedTargets\[\]\.target must also appear in targets/);
+    assert.match(text, /exact same structured target/);
+    assert.match(text, /parent collection target in targets/);
+    assert.match(text, /\{"document":"spec"\} target must stand alone in targets/);
+    assert.match(text, /allowedTargets must still name concrete inventory targets/);
+    assert.match(text, /permitted operationKinds/);
+  }
+}
+
 test("Spec Gate prompt offers canonical repair locations and R10 response survives Observation JSON readback", () => {
   const canonicalSpec = spec();
   const built = buildGuardrailArticleEvalPrompt(JSON.stringify(canonicalSpec), [
@@ -71,8 +87,10 @@ test("Spec Gate prompt offers canonical repair locations and R10 response surviv
   assert(fields.required.includes("targets"));
   assert(fields.required.includes("allowedTargets"));
   assert.match(built.fmtFallback, /allowedTargets/);
+  assertTargetGuidance(built);
 
   const providerSchema = adaptJsonSchemaForProvider("codex", built.jsonSchema);
+  assertTargetGuidance({ ...built, jsonSchema: providerSchema });
   for (const target of [document, requirement, task, missingOptional, collection, firstConstraint, secondConstraint]) {
     const operationKinds = target === document ? [permission(requirement, "edit-text-field")]
       : [permission(target, target === missingOptional ? "add-entity-field"
@@ -97,6 +115,78 @@ test("Spec Gate prompt offers canonical repair locations and R10 response surviv
   assert.deepEqual(parsed.allowedTargets, [permission(requirement, "edit-text-field")]);
   assert.equal(parsed.specRevision, specRevision);
   assert.deepEqual(Observation.fromJSON(JSON.parse(JSON.stringify(parsed))).toJSON(), parsed);
+});
+
+test("complete-evidence judgments retain the target relationship contract for grouped and individual rules", () => {
+  const canonicalSpec = spec();
+  const articles = ["clear-dimensions", "explicit-constraints"].map((id) => ({
+    id, title: id, body: "State observable conditions.",
+  }));
+  for (const [selected, options] of [
+    [articles, { completeEvidence: true }],
+    [[articles[0]], { completeEvidence: true, omitArticleBody: true }],
+    [articles, { completeEvidence: true, omitArticleIds: [articles[1].id] }],
+  ]) {
+    const built = buildGuardrailArticleEvalPrompt("Collected canonical evidence.", selected, "spec", null, [], {
+      ...options, specTargetScope: { spec: canonicalSpec, specRevision },
+    }).build();
+    assertTargetGuidance(built);
+    assert.deepEqual(built.jsonSchema.properties.observations.items.properties.requirementRef.enum,
+      selected.map((article) => article.id));
+  }
+});
+
+test("Spec Gate delivers target guidance through inline, grouped file, and batched file evaluation", async (t) => {
+  for (const mode of ["inline", "grouped-file", "batched-file"]) {
+    await t.test(mode, async (t) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "spec-target-guidance-"));
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+      const canonicalSpec = spec();
+      if (mode !== "inline") canonicalSpec.background += "x".repeat(130000);
+      const source = JSON.stringify(canonicalSpec);
+      const articles = ["clear-dimensions", "explicit-constraints"].map((id) => ({
+        id, title: id, body: mode === "batched-file" ? "State conditions. ".repeat(1400) : "State conditions.",
+        meta: { phase: ["spec"], category: "testing" },
+      }));
+      const targets = mode === "inline" ? [requirement, collection] : [document];
+      const allowedTargets = [permission(requirement, "edit-text-field"), permission(collection, "add-array-element")];
+      const groups = [];
+      const filePaths = [];
+      const result = await checkGuardrail(root, source, "spec", null, [], {
+        specTargetScope: { spec: canonicalSpec, specRevision }, loadGuardrails: () => articles,
+        agent: { resolve: () => true, promptCharacterLimit: 40000,
+          async call(prompt, options) {
+            assertTargetGuidance(options);
+            const ids = options.jsonSchema.properties.observations.items.properties.requirementRef.enum;
+            groups.push(ids);
+            if (mode === "inline") assert.equal(prompt.split("## Content\n")[1], source);
+            else {
+              const match = /^Absolute file path: (.+)$/m.exec(prompt);
+              assert.ok(match, "File judgments must receive their complete canonical input");
+              filePaths.push(match[1]);
+              assert.equal(fs.readFileSync(match[1], "utf8"), source);
+            }
+            const observations = ids.map((id) => ({
+              ...JSON.parse(response(targets, allowedTargets)).observations[0], requirementRef: id,
+            }));
+            return JSON.stringify({ observations, ...(mode === "inline" ? {} : { evaluationUnavailable: null }) });
+          },
+        },
+      });
+      assert.equal(result.passed, false);
+      assert.deepEqual(groups.flat(), articles.map((article) => article.id));
+      assert.equal(groups.length, mode === "batched-file" ? 2 : 1);
+      assert.equal(result.evaluations.length, articles.length);
+      for (const evaluation of result.evaluations) {
+        assert.equal(evaluation.result, "fail");
+        const [finding] = evaluation.observations;
+        assert.deepEqual(finding.targets, targets);
+        assert.deepEqual(finding.allowedTargets, allowedTargets);
+        assert.equal(finding.specRevision, specRevision);
+      }
+      for (const filePath of filePaths) assert.equal(fs.existsSync(filePath), false);
+    });
+  }
 });
 
 test("Spec Gate accepts distinct locations, missing optional fields, and collection additions with explicit operations", () => {

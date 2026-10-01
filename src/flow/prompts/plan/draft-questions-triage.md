@@ -7,15 +7,10 @@
    - For every blocking finding or repair target, add one `draft-questions-triage.json.items[]` entry with:
      - `title`: copied from the finding or target.
      - `target`: copied from the finding or target.
-     - `decision`: one of `apply`, `invalid`, `already_resolved`, `downgraded_to_non_blocking`, or `requires_user_decision`.
+     - `decision`: follow the shared accepted-decision contract in the handoff `workerInstructions.schemaGuidance`.
      - `rationale`: why that decision was made.
      - `evidence`: concrete evidence for the decision, such as a `draft.json` field path, request fact, source/code context, or the reason the finding is non-blocking.
-     - For `apply` only, `allowedFieldPaths`: the exact existing draft field paths the next worker may replace, and `requiredFieldPaths`: the subset that must be proposed to resolve this finding. Do not grant a whole object or an unrelated field. Draft completion is recorded by the Definition-owned parent connector.
-   - Use `apply` when the item is still valid and existing evidence directly supports answering or dropping the question without user input. A requirement already stated by the authoritative Issue/request is existing evidence, not a new user decision.
-   - Use `invalid` when the item concerns another gate-owned mechanical check, contradicts verified context, asks for broader scope, or is not grounded in the draft question review criteria.
-   - Use `already_resolved` when the current `draft.json` already covers the item.
-   - Use `downgraded_to_non_blocking` when the item is useful context but does not block draft refinement.
-   - Use `requires_user_decision` only when resolving the item truly requires new user input after checking every supplied authority. Preserve that QA entry as unresolved; the parent dispatcher owns the user boundary.
+   - Read and follow `workerInstructions.schemaGuidance` before classifying findings. It defines accepted decisions, repair field permissions, and the safe stop when new user input is required.
    - `draft-questions-triage.json` shape:
      ```json
      {

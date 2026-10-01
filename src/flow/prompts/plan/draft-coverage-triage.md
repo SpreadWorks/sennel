@@ -7,15 +7,10 @@
    - For every blocking finding or repair target, add one `draft-coverage-triage.json.items[]` entry with:
      - `title`: copied from the finding or target.
      - `target`: copied from the finding or target.
-     - `decision`: one of `apply`, `invalid`, `already_resolved`, `downgraded_to_non_blocking`, or `requires_user_decision`.
+     - `decision`: follow the shared accepted-decision contract in the handoff `workerInstructions.schemaGuidance`.
      - `rationale`: why that decision was made.
      - `evidence`: concrete evidence for the decision, such as a `draft.json` field path, request fact, source/code context, or the reason the finding is non-blocking.
-     - For `apply` only, `allowedFieldPaths`: the exact existing draft field paths the repair worker may replace, and `requiredFieldPaths`: the subset needed to resolve this finding. Do not grant a whole object or unrelated fields. A Definition-owned parent completion connector—not this worker—records completion after eligible canonical coverage facts are confirmed.
-   - Use `apply` only when the item is still valid and can be fixed by a small, directly supported draft change.
-   - Use `invalid` when the item concerns a mechanical check, contradicts verified context, asks for broader scope, or is not grounded in the draft coverage review criteria.
-   - Use `already_resolved` when the current `draft.json` already covers the item.
-   - Use `downgraded_to_non_blocking` when the item is useful context but does not block spec writing.
-   - Use `requires_user_decision` only when resolving the item would require new user input. This decision blocks draft-gate until draft QA is reopened or answered.
+   - Read and follow `workerInstructions.schemaGuidance` before classifying findings. It defines accepted decisions, repair field permissions, and the safe stop when new user input is required.
    - `draft-coverage-triage.json` shape:
      ```json
      {

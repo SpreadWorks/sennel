@@ -1,6 +1,7 @@
 import {
   DRAFT_REVIEW_ARTIFACT_LIMIT,
   DRAFT_TRIAGE_REPAIR_ARTIFACT_LIMIT,
+  DraftReviewRoute,
 } from "./draft-review-routes.js";
 import { DraftArtifactRevision } from "./draft-artifact-promotion.js";
 import { DraftReviewRevisionBinding } from "./draft-review-revision.js";
@@ -13,7 +14,7 @@ const DRAFT_REVIEW_CLASSIFICATION_BY_ARRAY = Object.freeze({
   advisoryFindings: "advisory",
   repairTargets: "repair_target",
 });
-const ALLOWED_DRAFT_TRIAGE_DECISIONS = new Set([
+const DRAFT_TRIAGE_DECISIONS = new Set([
   "apply",
   "invalid",
   "already_resolved",
@@ -26,6 +27,41 @@ const DRAFT_REPAIR_ITEM_FIELDS = Object.freeze(["title", "target", "rationale", 
 const DRAFT_REVIEW_CLASSIFICATIONS = Object.freeze(["blocking", "advisory", "repair_target"]);
 const DRAFT_REVIEW_FIELD_MAX_CHARS = 1000;
 const DRAFT_REVIEW_TRUNCATION_SUFFIX = " [truncated]";
+
+/** The triage decision contract shared by admission and worker authoring. */
+export class DraftTriageDecision {
+  constructor(value) {
+    if (!DRAFT_TRIAGE_DECISIONS.has(value)) throw new Error("decision is invalid");
+    this.value = value;
+    Object.freeze(this);
+  }
+
+  get acceptsCompletion() { return this.value !== "requires_user_decision"; }
+
+  assertAccepted() {
+    if (!this.acceptsCompletion) throw new Error("decision requires user decision");
+  }
+
+  workerGuidance() {
+    switch (this.value) {
+      case "apply": return "Use apply only when supplied authoritative evidence supports a bounded Draft repair without new user input. Include exact existing allowedFieldPaths and the requiredFieldPaths subset; do not grant a whole object or unrelated fields.";
+      case "invalid": return "Use invalid only for a finding outside the review criteria, contradicted by verified context, or requiring broader scope.";
+      case "already_resolved": return "Use already_resolved only when the current immutable Draft already covers the finding.";
+      case "downgraded_to_non_blocking": return "Use downgraded_to_non_blocking only for useful context that does not block the downstream Draft work.";
+      case "requires_user_decision": return "requires_user_decision is recognized but rejected by handoff validation: a genuine new user choice has no successful triage completion or QA route. Stop and report the missing decision without sealing a successful payload. Preserve existing QA entries and prior answers; never force the finding into apply, invalid, already_resolved, or downgraded_to_non_blocking to obtain completion. Do not register or answer a new question from this step.";
+    }
+  }
+
+  static triageGuidance(route) {
+    if (!(route instanceof DraftReviewRoute)) throw new TypeError("Draft triage guidance requires a DraftReviewRoute");
+    const decisions = [...DRAFT_TRIAGE_DECISIONS].map((value) => new DraftTriageDecision(value));
+    const accepted = decisions.filter((decision) => decision.acceptsCompletion);
+    return [
+      `${route.triageStepId} handoff accepts only these completed-item decisions: ${accepted.map((decision) => decision.value).join(", ")}. Accepted triage proceeds to ${route.repairStepId}; it does not reopen QA.`,
+      ...decisions.map((decision) => decision.workerGuidance()),
+    ].join("\n");
+  }
+}
 
 function requireString(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -322,8 +358,8 @@ function validateDraftTriageArtifact(issues, route, review, triageFile) {
       issues.push(`${prefix} exceeds matching source review item count`);
     }
     validateRequiredStringFields(issues, prefix, item, DRAFT_TRIAGE_ITEM_FIELDS);
-    if (!ALLOWED_DRAFT_TRIAGE_DECISIONS.has(item?.decision)) issues.push(`${prefix}.decision is invalid`);
-    if (item?.decision === "requires_user_decision") issues.push(`${prefix}.decision requires user decision`);
+    try { new DraftTriageDecision(item?.decision).assertAccepted(); }
+    catch (error) { issues.push(`${prefix}.${error.message}`); }
     if (item?.decision === "apply") {
       if (!Array.isArray(item.allowedFieldPaths)) issues.push(`${prefix}.allowedFieldPaths must be an array`);
       if (!Array.isArray(item.requiredFieldPaths)) issues.push(`${prefix}.requiredFieldPaths must be an array`);

@@ -19,7 +19,12 @@ import { validWorkerHandoffTaskSpec, workerArtifactJson } from "../../support/in
 import { dispatchContainer, fixtureRepository, installGateProviderFake,
   requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
-it("keeps a later Spec file evaluation failure across reload without publishing earlier findings", async () => {
+for (const { outcome, title } of [
+  { outcome: "unavailable", title: "keeps a later Spec file evaluation failure across reload without publishing earlier findings" },
+  { outcome: "recovered", title: "publishes a valid Spec Gate finding after regenerating an invalid target selection" },
+  { outcome: "invalid", title: "rejects two invalid Spec Gate target selections without publication or settlement across reload" },
+]) {
+it(title, async () => {
   const root = fixtureRepository("spec-file-failure-");
   const specId = "903-spec-file-failure";
   let gateAgentLookup = null;
@@ -27,7 +32,7 @@ it("keeps a later Spec file evaluation failure across reload without publishing 
   try {
     fs.mkdirSync(path.join(root, ".sennel"), { recursive: true });
     fs.writeFileSync(path.join(root, ".sennel", "guardrail.json"), workerArtifactJson({
-      guardrails: ["FIRST", "SECOND"].map((id) => ({
+      guardrails: (outcome === "unavailable" ? ["FIRST", "SECOND"] : ["TARGET-CONTRACT"]).map((id) => ({
         id, title: id, body: `Check the full Spec for ${id}.`,
         meta: { phase: ["spec"], category: "requirements" },
       })),
@@ -40,6 +45,18 @@ it("keeps a later Spec file evaluation failure across reload without publishing 
     }).create().registerActive().activate("spec");
     const paths = [];
     const gateCalls = [];
+    let targetResponses = 0;
+    const localTarget = { entity: "requirement", id: "R1", field: "desc" };
+    const collectionTarget = { collection: "constraints" };
+    const targetObservation = { failureMode: "guardrail-violation", requirementRef: "TARGET-CONTRACT",
+      where: { file: "spec.json", locator: "requirements.R1.desc" },
+      observed: "The requirement needs a local clarification and an explicit constraint.",
+      targets: [localTarget],
+      allowedTargets: [
+        { target: localTarget, operationKinds: ["edit-text-field"] },
+        { target: collectionTarget, operationKinds: ["add-array-element"] },
+      ],
+    };
     const unavailableReason = "SECOND could not read the complete Spec file within its available context.";
     gateAgentLookup = installGateProviderFake((prompt, options) => {
       const ids = options.jsonSchema?.properties?.observations?.items?.properties?.requirementRef?.enum ?? [];
@@ -50,6 +67,13 @@ it("keeps a later Spec file evaluation failure across reload without publishing 
       paths.push(filePath);
       assert.ok(fs.readFileSync(filePath, "utf8").includes("FULL_SPEC_TAIL"));
       gateCalls.push(ids[0]);
+      if (ids[0] === "TARGET-CONTRACT") {
+        targetResponses += 1;
+        return JSON.stringify({ observations: [{ ...targetObservation,
+          targets: outcome === "recovered" && targetResponses === 2
+            ? [localTarget, collectionTarget] : [localTarget],
+        }], evaluationUnavailable: null });
+      }
       if (ids[0] !== "FIRST" && ids[0] !== "SECOND") {
         return JSON.stringify({ observations: [], evaluationUnavailable: null });
       }
@@ -111,31 +135,64 @@ it("keeps a later Spec file evaluation failure across reload without publishing 
       sealWorkerArtifactHandoff({ requestPath, invocationId });
       return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
     } };
-    const dispatcher = new RunDispatchCommand({ agent: worker, maxDispatches: 64 });
+    const dispatcher = new RunDispatchCommand({ agent: worker, maxDispatches: outcome === "recovered" ? 1 : 64 });
     dispatcher.container = dispatchContainer({ root, flowManager: manager, agent: worker });
-    const result = await dispatcher.execute({
-      root, mainRoot: root, executionRoot: root, specId, flowManager: manager,
-      flowState: manager.loadReadOnly(specId),
-      expectBinding: FlowTargetBinding.capture({ flowState: manager.loadReadOnly(specId),
-        mainRoot: root, authorityRoot: root }).serialize(),
-      _envelopeType: "run", _envelopeKey: "dispatch",
-    });
-    assert.deepEqual(gateCalls.slice(-2), ["FIRST", "SECOND"], JSON.stringify({
-      attemptFailure: manager.canonicalState(specId).attempt.failure,
-      settlement: manager.readCurrentStepSettlement({ specId, stepId: "spec-gate" }),
-      artifacts: manager.artifactCatalog(specId).artifacts.map((entry) => entry.logicalKey),
-    }));
-    assert.equal(new Set(gateCalls).size, gateCalls.length, "valid unavailable output must not trigger a format retry");
+    let result;
+    for (let index = 0; index < 16; index += 1) {
+      result = await dispatcher.execute({
+        root, mainRoot: root, executionRoot: root, specId, flowManager: manager,
+        flowState: manager.loadReadOnly(specId),
+        expectBinding: FlowTargetBinding.capture({ flowState: manager.loadReadOnly(specId),
+          mainRoot: root, authorityRoot: root }).serialize(),
+        _envelopeType: "run", _envelopeKey: "dispatch",
+      });
+      if (outcome !== "recovered" || targetResponses > 0) break;
+      assert.equal(result.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(result));
+    }
+    const restored = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    if (outcome !== "unavailable") {
+      assert.equal(targetResponses, 2, "invalid targets permit exactly one fresh format response");
+      assert.deepEqual(gateCalls.filter((id) => id === "TARGET-CONTRACT"), ["TARGET-CONTRACT", "TARGET-CONTRACT"]);
+    }
+    if (outcome === "recovered") {
+      assert.equal(restored.canonicalState(specId).current.at(-1), "spec-gate-repair");
+      const savedGate = restored.activityLedger(specId).findLast((entry) => entry.nodeId === "spec-gate"
+        && entry.result?.stepResult?.kind === "spec-gate-repair-required");
+      assert.equal(savedGate.result.draftSettlementReceipt.targetStepId, "spec-gate-repair");
+      const gate = JSON.parse(restored.readArtifact({
+        specId, logicalKey: "spec.gate", consumerNodeId: "spec-gate-repair",
+      }).bytes.toString("utf8")).attempts.at(-1).artifact.payload;
+      assert.equal(gate.result, "fail", "accepted observations receive a semantic Gate outcome");
+      const [observation] = gate.artifacts.nextAction.diagnosis.observations;
+      assert.deepEqual(observation.targets, [localTarget, collectionTarget]);
+      assert.deepEqual(observation.allowedTargets, targetObservation.allowedTargets);
+      const recovered = gate.artifacts.responseProtocolEvidence.groups.find((group) => group.attempts.length === 2);
+      assert.deepEqual(recovered.attempts.map((attempt) => attempt.failureKind), ["schema_validation_failure", null]);
+      assert.match(recovered.attempts[0].reason, /allowedTargets must be among its targets/);
+      assert.equal(recovered.attempts[1].retryKind, "format");
+      assert.equal(recovered.outcome, "accepted");
+      assert.equal(recovered.stopReason, "recovered");
+      for (const filePath of paths) assert.equal(fs.existsSync(filePath), false);
+      return;
+    }
+    if (outcome === "unavailable") {
+      assert.deepEqual(gateCalls.slice(-2), ["FIRST", "SECOND"], JSON.stringify({
+        attemptFailure: manager.canonicalState(specId).attempt.failure,
+        settlement: manager.readCurrentStepSettlement({ specId, stepId: "spec-gate" }),
+        artifacts: manager.artifactCatalog(specId).artifacts.map((entry) => entry.logicalKey),
+      }));
+      assert.equal(new Set(gateCalls).size, gateCalls.length, "valid unavailable output must not trigger a format retry");
+    }
     assert.equal(paths.length, gateCalls.length);
     assert.equal(new Set(paths).size, 1);
     assert.equal(fs.existsSync(paths[0]), false);
     assert.equal(result.dispatch?.boundary, "blocked", JSON.stringify(result));
 
-    const restored = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
     const failure = restored.canonicalState(specId).attempt.failure;
     assert.equal(failure.category, "tooling");
     assert.equal(failure.code, "GATE_OUTPUT_TOOLING_FAILURE");
-    assert.match(failure.message, /SECOND could not read the complete Spec file/);
+    assert.match(failure.message, outcome === "unavailable"
+      ? /SECOND could not read the complete Spec file/ : /allowedTargets must be among its targets/);
     assert.doesNotMatch(failure.message, /The first rule identifies a concrete issue/);
     assert.equal(restored.readCurrentStepSettlement({ specId, stepId: "spec-gate" }), null);
     assert.equal(restored.artifactCatalog(specId).artifacts.some((entry) => entry.logicalKey === "spec.gate"), false);
@@ -154,3 +211,4 @@ it("keeps a later Spec file evaluation failure across reload without publishing 
     removeTmpDir(root);
   }
 });
+}

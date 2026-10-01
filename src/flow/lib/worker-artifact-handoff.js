@@ -28,6 +28,7 @@ import {
 } from "../../lib/regular-file-snapshot.js";
 import { FlowVersionRuntimeLockLocation } from "../../lib/flow-version.js";
 import { draftReviewRouteForStepId } from "./draft-review-routes.js";
+import { DraftTriageDecision } from "./draft-review-artifacts.js";
 import {
   findActiveNode,
   getFlowNode,
@@ -4968,6 +4969,8 @@ export class WorkerArtifactWorkerInstructions {
 }
 
 function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
+  const draftReviewRoute = draftReviewRouteForStepId(stepId);
+  if (draftReviewRoute?.triageStepId === stepId) return DraftTriageDecision.triageGuidance(draftReviewRoute);
   const gateRecurrence = inputs.find((input) => (
     input.name === "gate-observation-recurrence.json"
   ))?.document ?? null;

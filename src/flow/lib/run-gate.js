@@ -942,7 +942,7 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
     "- Matched Spec Acknowledgment Rationale is context only. Exception permission comes from the guardrail article clause, not from the rationale section alone.",
     "- To acknowledge a guardrail exception in a spec, write the target guardrail_id directly in constraints, clarifications, or alternatives_considered.",
     options.specTargetScope
-      ? "- For each FAIL, include non-empty `targets` for observed locations and `allowedTargets` for specific permitted edits, both selected from the canonical Spec target inventory. Use {\"document\":\"spec\"} in targets for a whole-document violation; it grants no edits by itself. Use a parent collection target with add-array-element for an addition and the absent field target with add-entity-field for a missing optional field. `where` explains the finding; it does not select the repair location."
+      ? SpecGateTargetSelection.guidance()
       : "- For each FAIL, describe the actionable Observation using these AI-owned fields: failureMode, requirementRef, where, observed. The system derives kind, severity, and refs.",
     ...(phase === "spec" ? [
       "- At the Spec stage, check that confirmation methods and acceptance conditions are stated. Later implementation and test execution are owned by later steps unless explicit execution evidence is supplied.",
@@ -958,18 +958,18 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
     "requirementRef",
     knownIds,
   ));
-  pb.setFmtFallback(exactIdFallback(options.fileInput ? [
+  const fmtFallback = options.fileInput ? [
     'Return exactly one JSON object with keys "observations" and "evaluationUnavailable".',
     'For a complete evaluation return {"observations":[],"evaluationUnavailable":null}, adding concrete observations as needed.',
-    ...(options.specTargetScope ? [
-      'For each observation include non-empty targets and allowedTargets selected from the canonical Spec target inventory.',
-    ] : []),
     'If the complete file cannot be read or evaluated, return {"observations":null,"evaluationUnavailable":{"kind":"file-read-failed|context-limit|evaluation-failed","reason":"<specific reason>"}}.',
     'Use file-read-failed only for an explicit file open/read failure, context-limit when the complete content cannot fit available context, and evaluation-failed for other evaluation failures.',
     'Never return observations and an unavailable reason together. Output JSON only.',
   ].join("\n") : options.specTargetScope
     ? GUARDRAIL_FMT_FALLBACK.replace('"observed":"<concrete violation>"', '"observed":"<concrete violation>","targets":[<exact target from schema>],"allowedTargets":[{"target":<exact target from schema>,"operationKinds":["<permitted operation>"]}]')
-    : GUARDRAIL_FMT_FALLBACK, "<guardrail id>", knownIds));
+    : GUARDRAIL_FMT_FALLBACK;
+  pb.setFmtFallback(exactIdFallback(options.specTargetScope
+    ? [fmtFallback, SpecGateTargetSelection.guidance()].join("\n") : fmtFallback,
+    "<guardrail id>", knownIds));
 
   if (Array.isArray(previouslyPassedIds) && previouslyPassedIds.length > 0) {
     pb.addUserPrompt(

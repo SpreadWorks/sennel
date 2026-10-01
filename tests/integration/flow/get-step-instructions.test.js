@@ -208,6 +208,18 @@ describe("getStepInstructions (loader contract)", () => {
       assert.match(content, /Codebase-context design gaps belong to `spec-review` \/ `spec-triage` \/ `spec-repair`/);
     });
 
+    it("spec gate instructions use the selected directive for every continuation outcome", () => {
+      const content = getStepInstructions("plan.spec-gate");
+
+      assert.match(content, /latest Definition-selected next Action \/ typed directive/);
+      assert.match(content, /After execution, refresh next-action and follow its selected directive/);
+      assert.match(content, /user decision, or stopping/);
+      assert.match(content, /Do not edit `spec\.json`, another spec directory, or any canonical Flow artifact/);
+      assert.doesNotMatch(content, /managed by hooks|transition back to `spec`/);
+      assert.doesNotMatch(content, /gate step completes as deferred|Do not proceed until PASS/);
+      assert.doesNotMatch(content, /edit only that entry in `spec\.json\.tasks/);
+    });
+
     it("requires typed finding disposition policy in flow and task implementation review", () => {
       for (const key of ["impl.impl-review", "task.task-review"]) {
         const content = getStepInstructions(key);

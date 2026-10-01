@@ -33,6 +33,13 @@ import {
   requestPayloadPath,
 } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
+function assertSelectedGateInstructions(next) {
+  assert.equal(next.instructions.key, "plan.spec-gate");
+  assert.match(next.instructions.content, /latest Definition-selected next Action \/ typed directive/);
+  assert.match(next.instructions.content, /After execution, refresh next-action and follow its selected directive/);
+  assert.doesNotMatch(next.instructions.content, /transition back to `spec`|gate step completes as deferred|Do not proceed until PASS/);
+}
+
 describe("Spec artifact lifecycle and downstream consumption", { concurrency: false }, () => {
   for (const { retainGateFindings, advisoryRepair, largeGateResponse = false, largeSpecFile = false } of [
     { retainGateFindings: false, advisoryRepair: false },
@@ -90,7 +97,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         + Array.from({ length: 47 }, (_, index) => `Evidence ${index + 1} for ${id} compares the stated behavior with its planned check.`).join(" ");
       let largeFirstResponse = null;
       let firstGroupReadFailures = 0;
-      gateAgentLookup = installGateProviderFake((_prompt, options) => {
+      gateAgentLookup = installGateProviderFake(async (_prompt, options) => {
         const observationSchema = options.jsonSchema?.properties?.observations?.items;
         const evidenceIds = observationSchema?.properties?.requirementId?.enum ?? [];
         const sourceRefs = observationSchema?.properties?.sourceRef?.enum ?? [];
@@ -98,6 +105,10 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         const state = flowManager.canonicalState(specId);
         const phase = state.current.at(-1);
         assert.equal(phase, "spec-gate");
+        assertSelectedGateInstructions(await new GetNextActionCommand().execute({
+          root, mainRoot: root, executionRoot: root, specId,
+          flowManager, flowState: flowManager.loadReadOnly(specId),
+        }));
         const attempts = specGateAttempts;
         attempts.add(state.attempt.id);
         const fail = retainGateFindings || attempts.size === 1;
@@ -343,6 +354,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
                 root, mainRoot: root, executionRoot: root, specId,
                 flowManager: restored, flowState: restored.loadReadOnly(specId),
               });
+              assertSelectedGateInstructions(next);
               assert.ok(next.nonblockingDecision.allowedActions.includes("repair"));
               observedAwaitAfterReload = true;
             }
@@ -403,6 +415,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
           root, mainRoot: root, executionRoot: root, specId,
           flowManager: stopped, flowState: stopped.loadReadOnly(specId),
         });
+        assertSelectedGateInstructions(strict);
         assert.equal(strict.directive.kind, "blocked", JSON.stringify({ result, strict }));
         assert.equal(strict.directive.requiresUserAction, false);
         assert.match(strict.directive.reason, /cycle 4 reached maximum 4/);

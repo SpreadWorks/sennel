@@ -108,8 +108,19 @@ export class SpecGateTargetSelection {
     return [{ document: "spec" }, ...specRepairTargetEntries(spec).map((entry) => entry.target.toJSON())];
   }
 
+  static guidance() {
+    return [
+      'Each FAIL needs non-empty targets and allowedTargets.',
+      'Unless targets=[{"document":"spec"}], every allowedTargets[].target must also appear in targets as the exact same structured target.',
+      'Include a parent collection target in targets for add-array-element; absent fields use add-entity-field.',
+      'The {"document":"spec"} target must stand alone in targets and grants no edits.',
+      'allowedTargets must still name concrete inventory targets with permitted operationKinds.',
+      'where is display context only.',
+    ].join(" ");
+  }
+
   static schema(spec, { document = true } = {}) {
-    return targetSchema(specRepairTargetEntries(spec), { document });
+    return { ...targetSchema(specRepairTargetEntries(spec), { document }), description: this.guidance() };
   }
 
   static permissionSchema(spec) {
@@ -129,7 +140,7 @@ export class SpecGateTargetSelection {
         }, required: ["target", "operationKinds"], additionalProperties: false });
       }
     }
-    return { anyOf: alternatives };
+    return { anyOf: alternatives, description: this.guidance() };
   }
 
   toJSON() { return this.targets.map((target) => target.toJSON()); }

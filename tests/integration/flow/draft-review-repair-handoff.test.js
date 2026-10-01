@@ -26,6 +26,7 @@ import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infr
 import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
+import { AnsweredQuestion } from "../../../src/flow/lib/draft-question-ledger.js";
 
 const finding = {
   title: "Make validation explicit", target: "analysis.validation", classification: "blocking",
@@ -81,6 +82,63 @@ async function worker(ctx, coordinator, StepClass, Connector, payload, refusedRe
 }
 
 for (const phase of ["questions", "coverage"]) {
+  it(`refuses a new ${phase} user choice after Review and preserves prior QA, publication and completion across reload`, async () => {
+    const root = fixtureRepository(`draft-${phase}-triage-refusal-`);
+    try {
+      const specId = `804-${phase}-triage-refusal`;
+      const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager };
+      const fixture = new CanonicalFlowFixture({
+        flowManager, specId, runId: `run-${specId}`, request: "Preserve earlier answers when a new choice is required.",
+        execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+      }).create().registerActive().activate("draft");
+      const source = canonicalDraftDocument({ questions: [new AnsweredQuestion({
+        id: "q1", question: "Keep the existing public behavior?", revision: 0,
+        category: "user-visible-behavior", provenance: { producer: "fixture" }, evidenceDigest: "a".repeat(64),
+        answer: "Keep the public behavior.", why: "The request requires it.", considered: "Changing it was rejected.",
+      }).toJSON()] });
+      flowManager.confirmCurrentAttempt({ specId, artifactWrites: [{
+        logicalKey: "draft", mediaType: "application/json", bytes: Buffer.from(workerArtifactJson(source)),
+      }] });
+      fixture.activate("draft-questions-review");
+      if (phase === "coverage") {
+        await review(ctx, "draft-questions", false);
+        fixture.activate("draft-coverage-review");
+      }
+      await review(ctx, `draft-${phase}`, true);
+      flowManager.beginNextAction(specId);
+      const coordinator = new WorkerArtifactHandoffCoordinator();
+      const request = coordinator.createRequest({ ctx, state: flowManager.loadReadOnly(specId), invocation: {
+        id: `${phase}-new-choice`, target: { digest: "b".repeat(64) },
+        action: { digest: "a".repeat(64), nextAction: { step: `draft-${phase}-triage` } },
+      } });
+      const storedRequest = JSON.parse(fs.readFileSync(request.requestPath, "utf8"));
+      assert.match(storedRequest.workerInstructions.schemaGuidance, /requires_user_decision is recognized but rejected/);
+      fs.writeFileSync(request.payloadPath(`draft-${phase}-triage.json`), workerArtifactJson({
+        version: 1, phase: `draft-${phase}-triage`, sourceReview: `draft-review-${phase}.json`,
+        summary: "A new user choice is required.", items: [{ ...finding, decision: "requires_user_decision" }],
+      }));
+      sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
+      const before = {
+        state: flowManager.canonicalState(specId).toJSON(), catalog: flowManager.artifactCatalog(specId).toJSON(),
+        activities: flowManager.activityLedger(specId),
+      };
+      for (let replay = 0; replay < 2; replay += 1) {
+        const restarted = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+        assert.throws(() => coordinator.prepareDraftWorker({ ctx: { ...ctx, flowManager: restarted }, request }), (error) => {
+          assert.equal(error.code, "FLOW_ARTIFACT_HANDOFF_INVALID");
+          assert.match(error.message, /decision requires user decision/);
+          return true;
+        });
+        assert.deepEqual(restarted.canonicalState(specId).toJSON(), before.state);
+        assert.deepEqual(restarted.artifactCatalog(specId).toJSON(), before.catalog);
+        assert.deepEqual(restarted.activityLedger(specId), before.activities);
+        const persistedDraft = JSON.parse(restarted.readArtifact({ specId, logicalKey: "draft", consumerNodeId: `draft-${phase}-triage` }).bytes);
+        assert.deepEqual(persistedDraft, source);
+        assert.deepEqual(persistedDraft.questionLedger.questions[0], source.questionLedger.questions[0]);
+      }
+    } finally { removeTmpDir(root); }
+  });
   for (const changed of [true, false]) {
     it(`publishes ${phase} Repair ${changed ? "changed" : "unchanged"} through its real Step and reloads the selected Result and audit`, async () => {
       const root = fixtureRepository(`draft-${phase}-repair-`);

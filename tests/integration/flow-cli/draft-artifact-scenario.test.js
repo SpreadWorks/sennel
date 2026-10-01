@@ -7,12 +7,12 @@ import path from "node:path";
 import { it, mock } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
+import { FlowTargetExpectation, FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
+import { FlowDispatchInvocation, FlowDispatchSession, FlowDispatchTarget, UnapprovedFlowDispatchAuthorization } from "../../../src/flow/lib/dispatch-invocation.js";
+import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
-import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
-import { draftWorkerStepRegistration } from "../../../src/flow/engine/composition/draft.js";
 import { AgentAuthenticationFailure } from "../../../src/lib/agent-failure.js";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
 import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
@@ -90,23 +90,47 @@ for (const phase of ["questions", "coverage"]) {
         assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, `draft-${phase}-triage`);
         flowManager.beginNextAction(specId);
         const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager };
-        const coordinator = new WorkerArtifactHandoffCoordinator();
-        const request = coordinator.createRequest({ ctx, state: flowManager.loadReadOnly(specId), invocation: {
-          id: `${phase}-triage-worker`, target: { digest: "b".repeat(64) },
-          action: { digest: "a".repeat(64), nextAction: { step: `draft-${phase}-triage` } },
-        } });
-        const input = requestInput(request, `draft-review-${phase}.json`).document;
-        assert.equal(input.blockingFindings[0].evidence, evidence);
-        fs.writeFileSync(request.payloadPath(`draft-${phase}-triage.json`), workerArtifactJson({
-          version: 1, phase: `draft-${phase}-triage`, sourceReview: `draft-review-${phase}.json`,
-          summary: "Apply the retained finding.", items: input.blockingFindings.map((finding) => ({
-            ...finding, decision: "apply", allowedFieldPaths: ["analysis.validation"], requiredFieldPaths: ["analysis.validation"],
-          })),
-        }));
-        sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
-        const preparation = coordinator.prepareDraftWorker({ ctx, request });
-        const result = await new RunDispatchCommand({ handoffCoordinator: coordinator })
-          .runDraftWorkerStep(ctx, request, draftWorkerStepRegistration(`draft-${phase}-triage`), preparation);
+        const session = new FlowDispatchSession({ target: new FlowDispatchTarget({
+          expectation: new FlowTargetExpectation({ expectRunId: `run-${specId}`, expectSpec: specId }),
+        }) });
+        const selectedAction = await new GetNextActionCommand().execute({
+          ...ctx, flowState: flowManager.loadReadOnly(specId),
+        });
+        assert.equal(selectedAction.step, `draft-${phase}-triage`);
+        assert.match(selectedAction.instructions.content, /workerInstructions.schemaGuidance/);
+        const action = session.captureAction(selectedAction, "draft-triage-scenario");
+        const invocation = new FlowDispatchInvocation({ session, action,
+          authorization: new UnapprovedFlowDispatchAuthorization(action),
+        });
+        let workerCalls = 0;
+        const agent = { async call(prompt, options) {
+          workerCalls += 1;
+          assert.match(prompt, /Follow workerInstructions in request.json/);
+          const workerInvocation = JSON.parse(options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION);
+          const workerAction = JSON.parse(fs.readFileSync(workerInvocation.actionFilePath, "utf8"));
+          assert.deepEqual(workerAction.instructions, selectedAction.instructions);
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          const guidance = request.workerInstructions.schemaGuidance;
+          assert.match(guidance, /accepts only these completed-item decisions: apply, invalid, already_resolved, downgraded_to_non_blocking/);
+          assert.match(guidance, /requires_user_decision is recognized but rejected by handoff validation/);
+          assert.match(guidance, /no successful triage completion or QA route/);
+          assert.match(guidance, /Preserve existing QA entries and prior answers/);
+          assert.match(guidance, new RegExp(`Accepted triage proceeds to draft-${phase}-repair`));
+          const input = requestInput(request, `draft-review-${phase}.json`).document;
+          assert.equal(input.blockingFindings[0].evidence, evidence);
+          fs.writeFileSync(requestPayloadPath(request, `draft-${phase}-triage.json`), workerArtifactJson({
+            version: 1, phase: `draft-${phase}-triage`, sourceReview: `draft-review-${phase}.json`,
+            summary: "Apply the retained finding.", items: input.blockingFindings.map((finding) => ({
+              ...finding, decision: "apply", allowedFieldPaths: ["analysis.validation"], requiredFieldPaths: ["analysis.validation"],
+            })),
+          }));
+          sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
+          return "sealed";
+        } };
+        const result = await new RunDispatchCommand().runWorkerAttempt(ctx, invocation, null, agent);
+        assert.equal(workerCalls, 1);
+        assert.equal(result.error, null);
         assert.equal(result.stepResult.kind, `draft-${phase}-triage-completed`);
         const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
         assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, `draft-${phase}-repair`);
