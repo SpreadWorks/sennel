@@ -1,4 +1,6 @@
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
+import { MAX_WORKER_ARTIFACT_INPUT_BYTES as MAX_INPUT_BYTES,
+  workerArtifactStableStringify as stableStringify } from "./worker-artifact-input-format.js";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -56,7 +58,6 @@ import { SpecGateRepairWorkerFacts } from "./spec-gate-repair-worker-facts.js";
 import { readProgressBoundSpecGateRepairInput, SPEC_GATE_REPAIR_REQUEST_LIMIT,
   latestRepairBudget } from "./spec-gate-repair-progress.js";
 import { nextSpecGateRepairEvidence } from "./spec-gate-repair-evidence.js";
-import { PromptElementTooLargeFailure } from "../../lib/prompt-batching.js";
 import { CanonicalFlowFindingsStore } from "./flow-findings.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { findStepById } from "./step-tree.js";
@@ -164,7 +165,6 @@ export const WORKER_ARTIFACT_HANDOFF_VERSION = 5;
 export const WORKER_ARTIFACT_HANDOFF_ROOT = PRODUCT.managedPath("handoffs");
 
 const SHA256 = /^[a-f0-9]{64}$/;
-const MAX_INPUT_BYTES = 2 * 1024 * 1024;
 const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const MAX_TOTAL_PAYLOAD_BYTES = 8 * 1024 * 1024;
 const MAX_PAYLOAD_FILES = 256;
@@ -253,16 +253,6 @@ function assertUniqueSourceRequirementClaims(files, label) {
       { retryable: false, data: { duplicateRequirementIds: duplicateRequirementIds.slice(0, 20) } },
     );
   }
-}
-
-function stableStringify(value) {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) => (
-      `${JSON.stringify(key)}:${stableStringify(value[key])}`
-    )).join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function digest(value) {
@@ -2209,37 +2199,45 @@ function specGateRepairContextHandoffInput({ flowManager, state, policy, executi
       if (prior === undefined) throw new Error("Spec Gate repair has no remaining bounded unit");
       document = prior;
     } else {
-      const directUnits = [];
       const additionalRanges = Object.fromEntries(remaining.map((unit) => [
         unit.id, ledger.additionalRangeIds(source.context, unit.id),
       ]));
-      for (const unit of remaining) {
-        try { source.context.plan({ limit: SPEC_GATE_REPAIR_REQUEST_LIMIT, unitIds: [unit.id],
-          additionalRanges }); }
-        catch (error) {
-          if (!(error instanceof PromptElementTooLargeFailure)) throw error;
-          break;
-        }
-        directUnits.push(unit.id);
-      }
-      const work = directUnits.length === 0
-        ? nextSpecGateRepairEvidence({ context: source.context, limit: SPEC_GATE_REPAIR_REQUEST_LIMIT,
-          unitId: remaining[0].id, publications: ledger.entries, executionBudget,
-          additionalRangeIds: additionalRanges[remaining[0].id] })
-        : null;
-      const directBatch = directUnits.length > 0
-        ? source.context.plan({ limit: SPEC_GATE_REPAIR_REQUEST_LIMIT, unitIds: directUnits,
-          additionalRanges }).batches[0] : null;
-      const batch = directBatch ?? work.batch;
-      document = { version: 1, stage: "spec-gate-repair", mode: work?.mode ?? "repair",
-        baseRevision: source.baseRevision, unitId: work?.mode === "evidence" ? remaining[0].id : null,
-        batchIndex: batch.index, batchCount: batch.count,
-        batchDigest: batch.digest,
-        ...(work?.mode === "evidence" ? {
+      const savedContext = request?.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document;
+      if (savedContext?.mode === "evidence") {
+        const work = nextSpecGateRepairEvidence({ context: source.context, limit: SPEC_GATE_REPAIR_REQUEST_LIMIT,
+          unitId: savedContext.unitId, publications: ledger.entries, executionBudget,
+          additionalRangeIds: additionalRanges[savedContext.unitId] });
+        document = { version: 1, stage: "spec-gate-repair", mode: work.mode,
+          baseRevision: source.baseRevision, unitId: savedContext.unitId,
+          batchIndex: work.batch.index, batchCount: work.batch.count, batchDigest: work.batch.digest,
           evidenceDepth: work.evidenceDepth, evidenceContextDigest: work.evidenceContextDigest,
-          request: batch.request,
-        } : { selections: directBatch === null ? [work.selection]
-          : batch.payloadElements.map((entry) => JSON.parse(entry.text)) }) };
+          request: work.batch.request };
+      } else if (savedContext?.mode === "repair") {
+        // A durable claim owns its immutable selection and batch identity. Re-read
+        // every complete selection from the canonical source before exact replay.
+        const selections = savedContext.selections.map((selection) => {
+          if (!remaining.some((unit) => unit.id === selection.unit.id)) {
+            throw new Error("Saved repair claim selects an unavailable atomic unit");
+          }
+          if (Object.hasOwn(selection, "evidence")) {
+            const work = nextSpecGateRepairEvidence({ context: source.context,
+              limit: SPEC_GATE_REPAIR_REQUEST_LIMIT, unitId: selection.unit.id,
+              publications: ledger.entries, executionBudget,
+              additionalRangeIds: additionalRanges[selection.unit.id] });
+            if (work.mode !== "repair" || work.batch.digest !== savedContext.batchDigest) {
+              throw new Error("Saved repair claim lacks its complete evidence coverage");
+            }
+            return work.selection;
+          }
+          return source.context.select(selection.unit.id,
+            { additionalRangeIds: additionalRanges[selection.unit.id] }).toJSON();
+        });
+        document = { ...savedContext, selections };
+      } else {
+        const batch = source.context.referencePlan({ limit: SPEC_GATE_REPAIR_REQUEST_LIMIT,
+          unitIds: remaining.map((unit) => unit.id), additionalRanges }).batches[0];
+        document = source.context.referenceDocument(batch);
+      }
     }
   }
   document = { ...document, evidenceDigest: source.context.evidenceDigest };

@@ -24,7 +24,7 @@ import { loadSpecJsonSchema } from "../../lib/spec-json.js";
 import { FlowCommand } from "./base-command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { AgentFailure } from "../../lib/agent-failure.js";
-import { PromptBatchingError } from "../../lib/prompt-batching.js";
+import { PromptBatchingError, PromptRequestLimit } from "../../lib/prompt-batching.js";
 import { Agent } from "../../lib/agent.js";
 import { DeferredAgentInvocationMetric } from "../../lib/agent-invocation-metric.js";
 import { flowCommands } from "../../lib/command-registry.js";
@@ -54,6 +54,7 @@ import {
   WorkerArtifactRetryExhaustedError,
   RequirementTestStructuralHandoffError,
   WorkerArtifactHandoffRequest,
+  WorkerArtifactHandoffReference,
   WorkerArtifactWorkerInstructions,
   materializeSourceWorkerEffect,
   sealParentMaterializedSourceWorkerEffect,
@@ -1003,17 +1004,38 @@ export function workerFacingNextAction(nextAction) {
 }
 
 export class FlowDispatchWork {
-  constructor(invocation, handoffRequest) {
+  constructor(invocation, handoffRequest, handoffReference = handoffRequest.toPromptReference()) {
     if (!(invocation instanceof FlowDispatchInvocation)) {
       throw new Error("FlowDispatchWork requires a FlowDispatchInvocation");
     }
     if (!(handoffRequest instanceof WorkerArtifactHandoffRequest)) {
       throw new Error("FlowDispatchWork handoff requires a WorkerArtifactHandoffRequest");
     }
+    if (!(handoffReference instanceof WorkerArtifactHandoffReference)) {
+      throw new TypeError("FlowDispatchWork requires a typed handoff reference");
+    }
     this.invocation = invocation;
     this.handoffRequest = handoffRequest;
-    this.handoffReference = handoffRequest.toPromptReference();
+    this.handoffReference = handoffReference;
     Object.freeze(this);
+  }
+
+  /** Pure transport projection before a conditional Step persists its checkpoint. */
+  static forAdmission(invocation, request) {
+    return new FlowDispatchWork(invocation, request, new WorkerArtifactHandoffReference(request));
+  }
+
+  callOptions({ ctx, agentOptions, deferredMetric, supervisorEvents }, workerInvocation) {
+    return {
+      commandId: this.handoffRequest.policy.preservesRejectedSource ? `flow.dispatch.${this.handoffRequest.stepId}` : "flow.dispatch",
+      executionWorkDir: ctx.executionRoot || ctx.root,
+      cacheMode: "bypass", retryCount: 0, waitForProcessTree: true,
+      executionEnvironment: this.executionEnvironment(workerInvocation), deferredMetric,
+      onSupervisorEvent(event) {
+        supervisorEvents.push(Object.freeze({ at: new Date().toISOString(), ...event }));
+      },
+      ...agentOptions,
+    };
   }
 
   workerInvocation() {
@@ -1125,6 +1147,19 @@ export class FlowDispatchWork {
       handoffInstruction,
       specTestTopologyInstruction,
     ].join("\n");
+  }
+}
+
+async function assertWorkerAgentAdmission(agent, prompt, options, stepId) {
+  if (typeof agent?.projectInvocation !== "function") return;
+  try {
+    const projection = await agent.projectInvocation(prompt, options);
+    projection.assertWithinLimit(agent.promptCharacterLimit ?? new PromptRequestLimit());
+  } catch (error) {
+    if (!(error instanceof AgentFailure || error instanceof PromptBatchingError)) throw error;
+    throw new WorkerArtifactHandoffError("recovery-required", error.code,
+      error.message, { cause: error, recoveryPossible: false,
+        data: { ...error.details, stepId, failureKind: "step-admission" } });
   }
 }
 
@@ -1614,7 +1649,8 @@ export default class RunDispatchCommand extends FlowCommand {
     });
   }
 
-  async prepareConditionalDraftWorker({ ctx, state, invocation, workerInstructions, definition, retrying }) {
+  async prepareConditionalDraftWorker({ ctx, state, invocation, workerInstructions, definition, retrying,
+    agent, agentOptions, deferredMetric, supervisorEvents }) {
     const stepId = invocation.action.nextAction.step;
     let selectedStepResult = null;
     let selectedSettlement = null;
@@ -1731,25 +1767,30 @@ export default class RunDispatchCommand extends FlowCommand {
         "conditional Draft worker inputs no longer match their canonical execution generation",
       );
     }
+    let admittedCallOptions = null;
+    let preparedStep = null;
     if (!reusePrior) {
-      const preparedStep = await definition.create({
+      preparedStep = await definition.create({
         flowManager: ctx.flowManager, binding: stepBinding, executionBinding,
       });
-      const draftService = preparedStep.dependency(DraftService);
-      const result = await preparedStep.step.execute();
-      if (result.stepId !== stepId) {
+      selectedStepResult = preparedStep.step.prepareResult();
+      if (selectedStepResult.stepId !== stepId) {
         throw new Error("conditional Draft pre-execution Step selected a different Step");
       }
-      if (result.type !== "loop-required") {
-        return {
-          request: null,
-          invocation: workerInvocation,
-          publicationRecovery: false,
-          stepResult: result,
-        };
+      if (selectedStepResult.type !== "loop-required") {
+        const result = await preparedStep.step.execute();
+        return { request: null, invocation: workerInvocation, publicationRecovery: false, stepResult: result };
       }
-      selectedStepResult = result;
-      selectedSettlement = draftService.executionSelection;
+    }
+    if (claimed === null && typeof agent?.projectInvocation === "function") {
+      const plannedWork = FlowDispatchWork.forAdmission(workerInvocation, request);
+      const plannedInvocation = plannedWork.workerInvocation();
+      admittedCallOptions = plannedWork.callOptions({ ctx, agentOptions, deferredMetric, supervisorEvents }, plannedInvocation);
+      await assertWorkerAgentAdmission(agent, plannedWork.prompt(plannedInvocation), admittedCallOptions, stepId);
+    }
+    if (preparedStep !== null) {
+      await preparedStep.step.execute();
+      selectedSettlement = preparedStep.dependency(DraftService).executionSelection;
       this.handoffCoordinator.admitConditionalDraftRequest({ ctx, state, request });
     }
     if (selectedStepResult === null || selectedSettlement === null) {
@@ -1783,6 +1824,7 @@ export default class RunDispatchCommand extends FlowCommand {
       request,
       invocation: workerInvocation,
       publicationRecovery: prior?.phase === "publication",
+      admittedCallOptions,
     };
   }
 
@@ -1819,6 +1861,10 @@ export default class RunDispatchCommand extends FlowCommand {
     let agentOptions = {};
     let draftDefinition = null;
     let specDefinition = null;
+    let admittedCallOptions = null;
+    let deferredMetric = new DeferredAgentInvocationMetric({ flowManager: ctx.flowManager });
+    const supervisorEvents = [];
+    const agent = agentOverride || this.agent || (this.agent = this.container.get("agent"));
     try {
       try {
         handoffPolicy = workerArtifactHandoffPolicy(action.nextAction.step);
@@ -1864,6 +1910,7 @@ export default class RunDispatchCommand extends FlowCommand {
             workerInstructions,
             definition: draftDefinition,
             retrying: retryFeedback !== null,
+            agent, agentOptions, deferredMetric, supervisorEvents,
           });
           if (prepared.request === null) {
             return {
@@ -1875,6 +1922,7 @@ export default class RunDispatchCommand extends FlowCommand {
               deferredMetric: null,
             };
           }
+          admittedCallOptions = prepared.admittedCallOptions;
           handoffRequest = prepared.request;
           workerInvocation = prepared.invocation;
           publicationRecovery = prepared.publicationRecovery;
@@ -1935,6 +1983,7 @@ export default class RunDispatchCommand extends FlowCommand {
           };
         }
         if (!(error instanceof WorkerArtifactHandoffError)) throw error;
+        if (isStepAdmissionRefusal(error)) deferredMetric?.discard();
         return { error, handoffRequest, agentError: null };
       }
 
@@ -1949,44 +1998,43 @@ export default class RunDispatchCommand extends FlowCommand {
       }
 
       const holdsSpecRepairMetric = action.nextAction.step === "spec-repair";
-      const deferredMetric = handoffRequest && !resumeSealedDraftExecution
-        ? new DeferredAgentInvocationMetric({ flowManager: ctx.flowManager })
-        : null;
+      if (!handoffRequest || resumeSealedDraftExecution) {
+        deferredMetric.discard();
+        deferredMetric = null;
+      }
       let agentError = null;
       let sourceResponseError = null;
       let sourceWorkerStopped = false;
-      const supervisorEvents = [];
       try {
         let responseText;
         let processError = null;
         let sourceWorkerStarted = false;
         try {
           if (!resumeSealedDraftExecution) {
-            const agent = agentOverride || this.agent || (this.agent = this.container.get("agent"));
             // Verify both immutable worker files before source start intent or
             // any provider-visible effect is recorded.
             const workerInvocation = work.workerInvocation();
             const prompt = work.prompt(workerInvocation);
-            if (handoffRequest?.stepId === "spec-gate-repair") {
-              reserveSpecGateRepairWorkerCall({ ctx, request: handoffRequest, prompt });
+            const callOptions = admittedCallOptions
+              ?? work.callOptions({ ctx, agentOptions, deferredMetric, supervisorEvents }, workerInvocation);
+            try {
+              await assertWorkerAgentAdmission(agent, prompt, callOptions, action.nextAction.step);
+              if (handoffRequest?.stepId === "spec-gate-repair") {
+                reserveSpecGateRepairWorkerCall({ ctx, request: handoffRequest, prompt });
+              }
+            } catch (error) {
+              if (!(isStepAdmissionRefusal(error) || error instanceof PromptBatchingError)) throw error;
+              deferredMetric?.discard();
+              return { error: isStepAdmissionRefusal(error) ? error : new WorkerArtifactHandoffError("recovery-required", error.code,
+                error.message, { cause: error, recoveryPossible: false,
+                  data: { ...error.details, stepId: action.nextAction.step, failureKind: "step-admission" } }),
+                handoffRequest, agentError: null, deferredMetric: null };
             }
             if (handoffRequest?.policy.kind === "source") {
               this.handoffCoordinator.startSourceWorker({ ctx, request: handoffRequest, invocation });
               sourceWorkerStarted = true;
             }
-            responseText = await agent.call(prompt, {
-              commandId: handoffRequest?.policy.preservesRejectedSource ? `flow.dispatch.${handoffRequest.stepId}` : "flow.dispatch",
-              executionWorkDir: ctx.executionRoot || ctx.root,
-              cacheMode: "bypass",
-              retryCount: 0,
-              waitForProcessTree: true,
-              executionEnvironment: work.executionEnvironment(workerInvocation),
-              deferredMetric,
-              onSupervisorEvent(event) {
-                supervisorEvents.push(Object.freeze({ at: new Date().toISOString(), ...event }));
-              },
-              ...agentOptions,
-            });
+            responseText = await agent.call(prompt, callOptions);
           }
         } catch (error) {
           if (handoffRequest?.stepId === "spec-gate-repair" && error instanceof PromptBatchingError) {

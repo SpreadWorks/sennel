@@ -11,6 +11,8 @@ import { PromptLogicalFootprint, ResolvedAgentInvocationProjection } from "../..
 import { Agent } from "../../../src/lib/agent.js";
 import { Logger } from "../../../src/lib/log.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
+import { AgentFileInputFailure } from "../../../src/lib/agent-file-input-failure.js";
+import { StepAdmissionRefusal, isStepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
 
 const rule = (id, body = "Report every marked violation.") => ({
   id, title: id, body, meta: { phase: ["draft"], category: "requirements" },
@@ -25,6 +27,14 @@ function filePathFromPrompt(prompt) {
 async function withRoot(callback) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "draft-file-gate-"));
   try { return await callback(root); } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+function assertDraftFileAdmissionRefusal(error) {
+  assert.ok(error instanceof StepAdmissionRefusal);
+  assert.equal(isStepAdmissionRefusal(error), true);
+  assert.ok(error.cause instanceof AgentFileInputFailure);
+  assert.equal(error.cause.code, "AGENT_FILE_INPUT_FAILURE");
+  assert.equal(error.cause.data.failureMode, "local_input_failure");
 }
 
 it("evaluates the exact oversized Draft bytes through a temporary file and removes it", async () => withRoot(async (root) => {
@@ -232,24 +242,28 @@ it("does not publish a partial pass when a later whole-rule file group is unavai
 
 it("removes its owned directory when the atomic Draft file write fails", async () => withRoot(async (root) => {
   const originalOpen = fs.openSync;
+  const writeFailure = new Error("injected atomic write failure");
   const injected = mock.method(fs, "openSync", (filePath, ...args) => {
     if (String(filePath).includes("draft-gate-") && String(filePath).endsWith(".tmp")) {
-      throw new Error("injected atomic write failure");
+      throw writeFailure;
     }
     return originalOpen(filePath, ...args);
   });
   let calls = 0;
-  let result;
   try {
-    result = await checkGuardrail(root, "x".repeat(130000), "draft", undefined, [], {
+    // Local materialization fails before any provider execution or Gate Result.
+    await assert.rejects(checkGuardrail(root, "x".repeat(130000), "draft", undefined, [], {
       loadGuardrails: () => [rule("D1")],
       agent: { resolve: () => true, async call() { calls += 1; return "{}"; } },
+    }), (error) => {
+      assertDraftFileAdmissionRefusal(error);
+      assert.equal(error.cause.cause, writeFailure);
+      assert.match(error.message, /injected atomic write failure/);
+      return true;
     });
   } finally {
     injected.mock.restore();
   }
-  assert.equal(result.passed, false);
-  assert.match(result.failureReason, /injected atomic write failure/);
   assert.equal(calls, 0);
   assert.deepEqual(fs.readdirSync(path.join(root, ".sennel", "agent-work")), []);
 }));
@@ -302,12 +316,14 @@ it("fails safely when the Draft file cannot be created", async () => withRoot(as
   fs.mkdirSync(path.join(root, ".sennel"));
   fs.writeFileSync(path.join(root, ".sennel", "agent-work"), "blocked");
   let calls = 0;
-  const result = await checkGuardrail(root, "x".repeat(130000), "draft", undefined, [], {
+  await assert.rejects(checkGuardrail(root, "x".repeat(130000), "draft", undefined, [], {
     loadGuardrails: () => [rule("D1")],
     agent: { resolve: () => true, async call() { calls += 1; return "{}"; } },
+  }), (error) => {
+    assertDraftFileAdmissionRefusal(error);
+    assert.equal(error.cause.cause.code, "EEXIST");
+    return true;
   });
-  assert.equal(result.passed, false);
-  assert.equal(result.failureCode, "GATE_REQUIRED_AGENT_EVALUATION");
   assert.equal(calls, 0);
   assert.equal(fs.readFileSync(path.join(root, ".sennel", "agent-work"), "utf8"), "blocked");
 }));

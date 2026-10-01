@@ -82,6 +82,7 @@ describe("Flow artifact contract registry", () => {
         "test.requirement.candidate.source", "test.requirement.support", "test.requirement.review", "test.requirement.repair.progress",
         "test.requirement.gate", "test.requirement.deferred", "acceptance.decision",
         "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome",
+        "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit",
         "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement",
         "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.review.aborted.work-unit",
         "task.triage", "task.repair",
@@ -228,7 +229,7 @@ describe("Flow artifact contract registry", () => {
     assert.equal(FLOW_ARTIFACT_CONTRACTS.inventory().some((entry) => entry.logicalKey.toString() === "worker.handoff"), false);
     assert.deepEqual(FLOW_ARTIFACT_CONTRACTS.require("draft").ownership.consumers, [
       "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
-      "draft-gate-repair", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "spec",
+      "draft-gate-repair", "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "spec", "spec-gate-repair",
     ]);
     assert.deepEqual(FLOW_ARTIFACT_CONTRACTS.require("draft").ownership.updaters, [
       "system", "draft", "draft-questions-repair", "draft-refine", "draft-gate-repair", "draft-coverage-repair",
@@ -263,6 +264,7 @@ describe("Flow artifact contract registry", () => {
       ["spec.json", "spec.record"],
       ["review.delta.json", null],
       ["gate-repair-report.json", null],
+      ["spec-gate-repair.json", null],
       ["spec-tests", "tests.source"],
     ]);
     for (const stepId of WORKER_ARTIFACT_HANDOFF_STEPS) {
@@ -285,6 +287,8 @@ describe("Flow artifact contract registry", () => {
         if (logicalKey === null) {
           if (payload.logicalName === "gate-repair-report.json") {
             assert.equal(stepId, "spec", `${stepId} owns only a transient Gate repair report`);
+          } else if (payload.logicalName === "spec-gate-repair.json") {
+            assert.equal(stepId, "spec-gate-repair", `${stepId} owns only a transient Gate repair proposal`);
           } else {
             assert.equal(["spec-triage", "spec-repair"].includes(stepId), true, `${stepId} owns only a transient review delta`);
           }

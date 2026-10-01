@@ -215,8 +215,9 @@ function installLegacyPresetFixture(root) {
   }
 }
 
-export function createTmpDir(prefix = "sennel-test-") {
-  return mkdtempSync(join(tmpdir(), prefix));
+export function createTmpDir(prefix = "sennel-test-", { parent = tmpdir() } = {}) {
+  mkdirSync(parent, { recursive: true });
+  return mkdtempSync(join(parent, prefix));
 }
 
 export function removeTmpDir(dir) {

@@ -2414,7 +2414,6 @@ describe("draft repair target checkpoint replay", () => {
       }]);
 
       const producedArtifact = buildDraftReviewArtifact({
-        raw: "FINALIZED_CHECKPOINT_EVIDENCE",
         draftPath: "draft.json",
         draftRevision: draftReviewRevision(),
         proposals: [checkpoint.toProposal()],
@@ -2520,14 +2519,12 @@ describe("draft review artifact phases", () => {
     it(`persists ${retryPhase} for ${artifactPhase}`, () => {
       const stage = { retryPhase, artifactPhase, findingClassification: "advisory" };
       const pass = buildDraftReviewArtifact({
-        raw: "NO_PROPOSALS",
         draftPath: "draft.json",
         draftRevision: draftReviewRevision(retryPhase === "draft-coverage" ? "draft-refine" : "draft"),
         proposals: [],
         stage,
       });
       const advisory = buildDraftReviewArtifact({
-        raw: "A review finding was recorded.",
         draftPath: "draft.json",
         draftRevision: draftReviewRevision(retryPhase === "draft-coverage" ? "draft-refine" : "draft"),
         proposals: [proposal],
@@ -2547,7 +2544,6 @@ describe("draft review artifact phases", () => {
   it("rejects draft review artifact construction without a finalized revision", () => {
     assert.throws(
       () => buildDraftReviewArtifact({
-        raw: "NO_PROPOSALS",
         draftPath: "draft.json",
         proposals: [],
         stage: {
@@ -2562,7 +2558,6 @@ describe("draft review artifact phases", () => {
 
   it("does not invent coverage findings when the review reports none", () => {
     const artifact = buildDraftReviewArtifact({
-      raw: "NO_PROPOSALS",
       draftPath: "draft.json",
       draftRevision: draftReviewRevision("draft-refine"),
       proposals: [],

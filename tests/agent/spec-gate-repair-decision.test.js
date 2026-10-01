@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { Agent } from "../../src/lib/agent.js";
+import { AgentFileReference } from "../../src/lib/agent-file-reference.js";
 import { ProviderRegistry } from "../../src/lib/provider.js";
 import { Logger } from "../../src/lib/log.js";
 import { SpecGateRepairContext } from "../../src/flow/lib/spec-gate-repair-context.js";
@@ -11,10 +12,11 @@ import { SpecGateRepairSource } from "../../src/flow/lib/spec-gate-repair-values
 import { readSpecJsonValidator } from "../../src/lib/spec-json.js";
 import { applySpecGateRepairOperations, SpecGateRepairAuthority } from "../../src/flow/lib/spec-repair-operations.js";
 import { validWorkerHandoffTaskSpec } from "../support/infrastructure/worker-artifact.js";
+import { createTmpDir, removeTmpDir } from "../support/builders/tmp-dir.js";
 
 test("real repair model resolves existing evidence and returns only missing choices to Draft", { timeout: 600_000 }, async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-repair-decision-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = createTmpDir("sennel-repair-decision-", { parent: fileURLToPath(new URL("../../.tmp/", import.meta.url)) });
+  t.after(() => removeTmpDir(root));
   const model = process.env.SENNEL_GATE_QUALITY_MODEL || "gpt-6-luna";
   const config = { agent: { default: "repair-quality", timeout: 240, retryCount: 0,
     providers: { "repair-quality": { command: "codex",
@@ -40,9 +42,14 @@ test("real repair model resolves existing evidence and returns only missing choi
         content: known ? "The user explicitly requires regression checks for every direct shared help renderer consumer. Source investigation confirms docs, core and plugin import the shared renderer. Preserve their command semantics."
           : "Retention is a user policy choice between 30 and 365 days. Both are technically supported. The user has not selected a duration; neither project rules nor source defines a default." })] });
     const selection = ctx.select(ctx.units()[0].id).toJSON();
-    fs.writeFileSync(path.join(root, "spec-gate-repair-context.json"), JSON.stringify({ mode: "repair", baseRevision, selections: [selection] }));
-    const text = await agent.call(`${prompt}\nRead spec-gate-repair-context.json in the working directory. Return only the JSON response as your final output; do not write files.`,
+    const contextPath = path.join(root, "spec-gate-repair-context.json");
+    const contextBytes = Buffer.from(JSON.stringify({ mode: "repair", baseRevision, selections: [selection] }), "utf8");
+    fs.writeFileSync(contextPath, contextBytes);
+    const reference = AgentFileReference.resolve({ projectRoot: root, filePath: contextPath,
+      label: "Spec Gate repair quality context", maxBytes: contextBytes.length });
+    const text = await agent.call(`${prompt}\nRead the complete canonical context from the exact absolute file path below. Resolve its relative path only against the stated project root. Return only the JSON response as your final output; do not write files.\n${reference.toPromptText()}`,
       { commandId: "flow.spec-gate-repair", executionWorkDir: root, cacheMode: "bypass" });
+    reference.assertUnchanged({ label: "Spec Gate repair quality context", maxBytes: reference.byteLength });
     const response = JSON.parse(text.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, ""));
     assert.equal(response.baseRevision, baseRevision);
     if (known) {

@@ -1,3 +1,4 @@
+import { PromptLogicalFootprint, PromptFixedContextTooLargeFailure, PromptBatchCountExceededFailure } from "../../../lib/prompt-batching.js";
 import { PreparedStepReplay } from "./step-registration.js";
 import { CurrentFlowStateConflictError } from "../../lib/current-flow-state-conflict-error.js";
 import { SpecWorkerStepBinding } from "../connectors/spec/spec-step-binding.js";
@@ -91,9 +92,14 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt }) {
     attemptId: binding.attempt.id, baseRevision: request.inputs.find((entry) => (
       entry.name === "spec-gate-repair-context.json"
     ))?.document?.baseRevision, consumerNodeId: binding.stepId });
-  const inputCharacters = request.inputs.reduce((total, input) => total + input.byteLength, 0);
-  if (typeof prompt !== "string" || prompt.length + inputCharacters > limit.maxRequestCharacters) {
-    throw new Error("Spec Gate repair prompt exceeds its durable request limit");
+  // Immutable file inputs are bounded in bytes by WorkerArtifactInputSnapshot.
+  // Count their decoded documents only in the aggregate character budget; they
+  // do not occupy the provider instruction/argv character budget.
+  const inputCharacters = request.inputs.reduce((total, input) => total + JSON.stringify(input.document).length, 0);
+  const instructionCharacters = PromptLogicalFootprint.measure(prompt).total;
+  if (typeof prompt !== "string" || instructionCharacters > limit.maxRequestCharacters) {
+    throw new PromptFixedContextTooLargeFailure("Spec Gate repair instructions exceed their durable character limit",
+      { actualCharacters: instructionCharacters, maximumCharacters: limit.maxRequestCharacters });
   }
   const selectedContext = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document;
   const state = flowManager.canonicalState(binding.specId);
@@ -113,12 +119,13 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt }) {
   }
   budget.assertCanExecute(requiredCalls);
   if (budget.providerCallCount + 1 > limit.maxBatchCount) {
-    throw new Error("Spec Gate repair exceeds its durable batch limit");
+    throw new PromptBatchCountExceededFailure("Spec Gate repair exceeds its durable batch limit",
+      { batchCount: budget.providerCallCount + 1, maxBatchCount: limit.maxBatchCount });
   }
   if (selectedContext?.mode === "evidence" && selectedContext.evidenceDepth > 0) {
     budget.consumeSynthesisCalls(1);
   }
-  budget.consumeAggregate({ characters: prompt.length + inputCharacters,
+  budget.consumeAggregate({ characters: instructionCharacters + inputCharacters,
     items: request.inputs.length + 1 });
   const execution = flowManager.draftStepExecutionState({ binding });
   const executionBinding = execution.workerBinding({

@@ -9,6 +9,10 @@ import { it, mock } from "node:test";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import RunReviewCommand from "../../../src/flow/lib/run-review.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { draftWorkerStepRegistration } from "../../../src/flow/engine/composition/draft.js";
 import { AgentAuthenticationFailure } from "../../../src/lib/agent-failure.js";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
 import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
@@ -21,6 +25,96 @@ import { dispatchContainer, fixtureRepository, installGateProviderFake, requestI
 function assertArtifactIntegrity(artifact) {
   assert.equal(crypto.createHash("sha256").update(artifact.bytes).digest("hex"), artifact.descriptor.hash);
   assert.equal(artifact.bytes.length, artifact.descriptor.size);
+}
+
+for (const phase of ["questions", "coverage"]) {
+  for (const size of ["inline", "whole-file"]) {
+    it(`retains quoted NO_PROPOSALS in ${size} Draft ${phase} findings through publication, reload and triage`, async () => {
+      const root = fixtureRepository(`draft-response-${phase}-${size}-`);
+      try {
+        const specId = `805-${phase}-${size}`;
+        let flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+        const fixture = new CanonicalFlowFixture({
+          flowManager, specId, runId: `run-${specId}`,
+          request: `Preserve actual findings, including quoted response markers.${size === "whole-file" ? "X".repeat(130_000) : ""}`,
+          execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+        }).create().registerActive().activate("draft");
+        const draft = canonicalDraftDocument({ goal: "Preserve findings." });
+        flowManager.confirmCurrentAttempt({ specId, artifactWrites: [{
+          logicalKey: "draft", mediaType: "application/json", bytes: Buffer.from(workerArtifactJson(draft)),
+        }] });
+        fixture.activate("draft-questions-review");
+        const responsePath = path.join(root, ".tmp", "review-response.txt");
+        const callsPath = path.join(root, ".tmp", "review-calls.jsonl");
+        const provider = path.join(root, "review-provider.mjs");
+        fs.writeFileSync(provider, [
+          'import fs from "node:fs";',
+          `const prompt = process.argv.at(-1);`,
+          'const file = /^Absolute file path: (.+)$/m.exec(prompt)?.[1];',
+          'if (file) fs.readFileSync(file, "utf8");',
+          `fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({ file: Boolean(file) }) + "\\n");`,
+          `process.stdout.write(fs.readFileSync(${JSON.stringify(responsePath)}, "utf8"));`,
+        ].join("\n"));
+        const config = { lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" }, agent: {
+          default: "fixture", workDir: ".tmp", timeout: 30,
+          providers: { fixture: { command: process.execPath, args: [provider, "{{PROMPT}}"] } },
+        } };
+        fs.writeFileSync(path.join(root, ".sennel", "config.json"), JSON.stringify(config));
+        const review = async () => {
+          const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager,
+            phase: "draft", config, flowState: flowManager.loadReadOnly(specId) };
+          const result = await new RunReviewCommand().execute(ctx);
+          assert.equal(result.result, "ok", JSON.stringify(result));
+          await FLOW_COMMANDS.run.review.post(ctx, result);
+          return result;
+        };
+        if (phase === "coverage") {
+          fs.writeFileSync(responsePath, "NO_PROPOSALS");
+          await review();
+          fixture.activate("draft-coverage-review");
+        }
+        fs.writeFileSync(callsPath, "");
+        const evidence = "The draft incorrectly quotes NO_PROPOSALS while leaving validation unspecified.";
+        fs.writeFileSync(responsePath, `### 1. Missing validation\n**Classification:** blocking\n**QA:** analysis.validation\n**Issue:** ${evidence}\n**Suggestion:** State the required validation.`);
+        await review();
+        const calls = fs.readFileSync(callsPath, "utf8").trim().split("\n").map(JSON.parse);
+        assert.equal(calls.length, phase === "coverage" ? 2 : 1);
+        assert.ok(calls.every((call) => call.file === (size === "whole-file")));
+        flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+        const published = flowManager.readArtifact({ specId, logicalKey: `draft.${phase}.review`, consumerNodeId: `draft-${phase}-triage` });
+        assertArtifactIntegrity(published);
+        const artifact = JSON.parse(published.bytes).attempts.at(-1).artifact.payload;
+        assert.equal(artifact.verdict, "REJECTED");
+        assert.equal(artifact.blockingFindings.length, 1);
+        assert.equal(artifact.blockingFindings[0].evidence, evidence);
+        assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, `draft-${phase}-triage`);
+        flowManager.beginNextAction(specId);
+        const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager };
+        const coordinator = new WorkerArtifactHandoffCoordinator();
+        const request = coordinator.createRequest({ ctx, state: flowManager.loadReadOnly(specId), invocation: {
+          id: `${phase}-triage-worker`, target: { digest: "b".repeat(64) },
+          action: { digest: "a".repeat(64), nextAction: { step: `draft-${phase}-triage` } },
+        } });
+        const input = requestInput(request, `draft-review-${phase}.json`).document;
+        assert.equal(input.blockingFindings[0].evidence, evidence);
+        fs.writeFileSync(request.payloadPath(`draft-${phase}-triage.json`), workerArtifactJson({
+          version: 1, phase: `draft-${phase}-triage`, sourceReview: `draft-review-${phase}.json`,
+          summary: "Apply the retained finding.", items: input.blockingFindings.map((finding) => ({
+            ...finding, decision: "apply", allowedFieldPaths: ["analysis.validation"], requiredFieldPaths: ["analysis.validation"],
+          })),
+        }));
+        sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
+        const preparation = coordinator.prepareDraftWorker({ ctx, request });
+        const result = await new RunDispatchCommand({ handoffCoordinator: coordinator })
+          .runDraftWorkerStep(ctx, request, draftWorkerStepRegistration(`draft-${phase}-triage`), preparation);
+        assert.equal(result.stepResult.kind, `draft-${phase}-triage-completed`);
+        const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+        assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, `draft-${phase}-repair`);
+      } finally {
+        removeTmpDir(root);
+      }
+    });
+  }
 }
 
 it("produces Draft through registered Review/Gate commands and reloads its exact findings for Spec and Acceptance", async () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SpecGateRepairContext } from "../../src/flow/lib/spec-gate-repair-context.js";
-import { PromptRequestLimit } from "../../src/lib/prompt-batching.js";
+import { PromptRequestLimit, PromptReferenceElement } from "../../src/lib/prompt-batching.js";
 import { SpecGateRepairSource } from "../../src/flow/lib/spec-gate-repair-values.js";
 
 const revision = `sha256:${"a".repeat(64)}`;
@@ -190,6 +190,68 @@ test("oversized repair units are read in ranges without splitting their mutation
   assert(evidence.batches.every((batch) => batch.request.userPrompt.includes(rule.body)));
   assert.equal(ctx.units().length, 1);
   assert(evidence.batches.some((batch) => batch.elements.some((element) => element.originId === "requirements[R1].desc" && element.start > 0)));
+});
+
+test("immutable file references pack complete oversized atomic units without body fragments", () => {
+  const document = spec();
+  document.requirements[0].desc = "日本語の完全な確認条件。".repeat(9000);
+  const ctx = context([finding("F1")], document);
+  const selection = ctx.select(ctx.units()[0].id).toJSON();
+  const plan = ctx.referencePlan({ limit: new PromptRequestLimit({ maxCharacters: 10000 }) });
+  assert.equal(plan.batches.length, 1);
+  const [element] = plan.batches[0].payloadElements;
+  assert(element instanceof PromptReferenceElement);
+  assert.equal(element.id, selection.unit.id);
+  assert.equal(element.byteLength, Buffer.byteLength(JSON.stringify(selection), "utf8"));
+  assert.equal(element.coverageEntries()[0].status, "reference");
+  assert(!plan.batches[0].request.userPrompt.includes(document.requirements[0].desc));
+  assert.equal(ctx.select(element.id).ranges.find((range) => range.writable).value, document.requirements[0].desc);
+});
+
+test("file packing measures exact UTF-8 JSON and actual metadata independently of reference instructions", () => {
+  const document = spec();
+  document.requirements = Array.from({ length: 10 }, (_, index) => ({
+    id: `R${index + 1}`, desc: `Whole \"漢🧭\"\nunit ${index}`, task_ids: [], testable: false,
+  }));
+  document.tasks = [];
+  const findings = document.requirements.map((requirement, index) => finding(`F${index}`, [target(requirement.id)]));
+  let ctx = context(findings, document);
+  const selectedUnit = ctx.units().find((unit) => unit.rangeIds.includes("requirements[R1].desc"));
+  const single = ctx.referencePlan({ unitIds: [selectedUnit.id] });
+  const initialBytes = Buffer.byteLength(JSON.stringify(ctx.referenceDocument(single.batches[0])));
+  document.requirements[0].desc += "a".repeat(2 * 1024 * 1024 - initialBytes);
+  ctx = context(findings, document);
+  const plan = ctx.referencePlan({ limit: new PromptRequestLimit({ maxCharacters: 10000 }) });
+  assert.ok(plan.batches.length > 1);
+  const documents = plan.batches.map((batch) => ctx.referenceDocument(batch));
+  const sizes = documents.map((entry) => Buffer.byteLength(JSON.stringify(entry)));
+  assert.equal(Math.max(...sizes), 2 * 1024 * 1024);
+  assert.equal(documents.flatMap((entry) => entry.selections).length, 10);
+  assert.ok(plan.batches.every((batch) => batch.footprint.total <= 10000));
+  for (const selection of documents.flatMap((entry) => entry.selections)) {
+    assert.deepEqual(selection, ctx.select(selection.unit.id).toJSON());
+  }
+  document.requirements[0].desc += "a";
+  assert.throws(() => context(findings, document).referencePlan(),
+    { code: "FLOW_SPEC_GATE_REPAIR_INPUT_TOO_LARGE" });
+});
+
+test("additional context participates in complete file packing without granting edit permission", () => {
+  const document = spec();
+  document.background = "漢\"\n🧭".repeat(160000);
+  const ctx = context([finding("F1"), finding("F2", [target("R2")])], document);
+  const additionalRanges = Object.fromEntries(ctx.units().map((unit) => [unit.id, ["background"]]));
+  assert.equal(ctx.referencePlan().batches.length, 1);
+  const plan = ctx.referencePlan({ additionalRanges });
+  assert.equal(plan.batches.length, 2);
+  for (const batch of plan.batches) {
+    const input = ctx.referenceDocument(batch);
+    assert.ok(Buffer.byteLength(JSON.stringify(input)) <= 2 * 1024 * 1024);
+    assert.equal(input.selections.length, 1);
+    const range = input.selections[0].ranges.find((entry) => entry.id === "background");
+    assert.equal(range.value, document.background);
+    assert.equal(range.writable, false);
+  }
 });
 
 test("missing canonical rule and forged finding identity fail before a repair request", () => {

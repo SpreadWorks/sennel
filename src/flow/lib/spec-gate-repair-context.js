@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
 import {
-  AtomicPromptElement, RangedTextPromptElement, PromptRequestEnvelope,
+  AtomicPromptElement, RangedTextPromptElement, PromptReferenceElement, PromptRequestEnvelope,
   PromptInputBuilder, PromptBatchPlan, PromptRequestLimit,
   PromptBatchGroup, GroupedPromptBatchTopology,
 } from "../../lib/prompt-batching.js";
@@ -9,6 +9,9 @@ import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
 import { SpecRepairTarget, specRepairTargetEntries } from "./spec-repair-operations.js";
 import { SpecGateDocumentTarget } from "./spec-gate-targets.js";
 import { SpecGateRepairSource } from "./spec-gate-repair-values.js";
+import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
+import { MAX_WORKER_ARTIFACT_INPUT_BYTES,
+  workerArtifactStableStringify } from "./worker-artifact-input-format.js";
 
 function hash(value) { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function freeze(value) {
@@ -121,6 +124,19 @@ function planFor(elements, envelope, limit) {
   const builder = new PromptInputBuilder({ envelope, limit });
   elements.forEach((element) => builder.add(element));
   return PromptBatchPlan.create({ collection: builder.build(), envelope, limit });
+}
+
+class SpecGateRepairReference extends PromptReferenceElement {
+  constructor({ selection, sequence }) {
+    const text = workerArtifactStableStringify(selection);
+    super({ id: selection.unit.id, sourceRevision: selection.baseRevision, sequence,
+      path: `request.json#inputs/spec-gate-repair-context.json/selections/${selection.unit.id}`,
+      digest: createHash("sha256").update(text).digest("hex"),
+      byteLength: Buffer.byteLength(text, "utf8"),
+      authorization: "Read the complete immutable selected unit; only its allowedTargets grant mutation authority." });
+    this.selection = freeze(selection);
+    Object.freeze(this);
+  }
 }
 
 /** Pure canonical context selection. Persistence and call admission belong to the Service. */
@@ -306,14 +322,70 @@ export class SpecGateRepairContext {
       guardrails: this.#guardrails.filter((rule) => unit.findings.some((finding) => finding.requirementRef === rule.id)),
       acknowledgedRationale: this.#rationale });
   }
-  plan({ limit = new PromptRequestLimit(), additionalRanges = {}, unitIds = null } = {}) {
+  #selectedUnits(unitIds) {
     const units = this.units();
     if (unitIds !== null && (!Array.isArray(unitIds) || new Set(unitIds).size !== unitIds.length
       || unitIds.some((id) => !units.some((unit) => unit.id === id)))) throw new Error("Unknown or duplicate repair unit");
-    return planFor(units.filter((unit) => unitIds === null || unitIds.includes(unit.id)).map((unit, sequence) => new AtomicPromptElement({
+    return units.filter((unit) => unitIds === null || unitIds.includes(unit.id));
+  }
+  plan({ limit = new PromptRequestLimit(), additionalRanges = {}, unitIds = null } = {}) {
+    const units = this.#selectedUnits(unitIds);
+    return planFor(units.map((unit, sequence) => new AtomicPromptElement({
       id: unit.id, sourceRevision: this.baseRevision, sequence,
       text: JSON.stringify(this.select(unit.id, { additionalRangeIds: additionalRanges[unit.id] ?? [] }).toJSON()),
     })), new SpecGateRepairEnvelope({ baseRevision: this.baseRevision, mode: "repair" }), limit);
+  }
+  /** Pack semantic units using immutable handoff references, never body fragments. */
+  referencePlan({ limit = new PromptRequestLimit(), additionalRanges = {}, unitIds = null } = {}) {
+    const units = this.#selectedUnits(unitIds);
+    const elements = units.map((unit, sequence) => new SpecGateRepairReference({ sequence,
+      selection: this.select(unit.id, { additionalRangeIds: additionalRanges[unit.id] ?? [] }).toJSON() }));
+    const envelope = new SpecGateRepairEnvelope({ baseRevision: this.baseRevision, mode: "repair" });
+    const instructionPlan = planFor(elements, envelope, limit);
+    let count = instructionPlan.batches.length;
+    let groups;
+    // File groups only subdivide the character-safe reference batches. Repack
+    // small metadata until the real count is known; unit bodies are measured once.
+    do {
+      const expectedCount = count;
+      groups = [];
+      const overhead = () => Buffer.byteLength(workerArtifactStableStringify(this.referenceDocument({
+        index: groups.length, count: expectedCount, digest: "0".repeat(64), payloadElements: [],
+      })), "utf8");
+      for (const batch of instructionPlan.batches) {
+        let payload = [];
+        let bytes = overhead();
+        const flush = () => {
+          groups.push(new PromptBatchGroup({ id: `repair-file:${groups.length}`, payloadElements: payload }));
+          payload = [];
+          bytes = overhead();
+        };
+        for (const element of batch.payloadElements) {
+          if (payload.length && bytes + element.byteLength + 1 > MAX_WORKER_ARTIFACT_INPUT_BYTES) flush();
+          if (bytes + element.byteLength > MAX_WORKER_ARTIFACT_INPUT_BYTES) {
+            throw new WorkerArtifactHandoffError("invalid", "FLOW_SPEC_GATE_REPAIR_INPUT_TOO_LARGE",
+              "A complete Spec Gate repair unit exceeds its immutable input file limit",
+              { data: { failureKind: "step-admission", unitId: element.id,
+                actualBytes: bytes + element.byteLength, maximumBytes: MAX_WORKER_ARTIFACT_INPUT_BYTES } });
+          }
+          bytes += element.byteLength + (payload.length ? 1 : 0);
+          payload.push(element);
+        }
+        flush();
+      }
+      count = groups.length;
+      if (count === expectedCount) break;
+    } while (true);
+    return PromptBatchPlan.create({ collection: instructionPlan.collection, envelope, limit,
+      topology: new GroupedPromptBatchTopology({ groups }) });
+  }
+
+  referenceDocument(batch) {
+    return { version: 1, stage: "spec-gate-repair", mode: "repair",
+      baseRevision: this.baseRevision, unitId: null,
+      batchIndex: batch.index, batchCount: batch.count, batchDigest: batch.digest,
+      selections: batch.payloadElements.map((entry) => entry.selection),
+      evidenceDigest: this.evidenceDigest };
   }
   locationPlan({ limit = new PromptRequestLimit() } = {}) {
     const envelope = new SpecGateRepairEnvelope({ baseRevision: this.baseRevision, mode: "locate" });

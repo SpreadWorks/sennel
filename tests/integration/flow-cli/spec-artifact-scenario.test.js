@@ -478,7 +478,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         ]).flat(),
       ]);
       if (largeGateResponse) {
-        assert.ok(gateRepairWorkerRuns > 1);
+        assert.equal(gateRepairWorkerRuns, 1, "Complete selected finding units share one immutable-file worker call");
         assert.equal(repairedFindingIdentities.size, 40);
       } else {
         assert.equal(gateRepairWorkerRuns, cycles - 1);

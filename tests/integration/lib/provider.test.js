@@ -186,13 +186,17 @@ describe("CodexProvider", () => {
     }
   });
 
-  it("builtin profiles use GPT-5.6 tiers with explicit reasoning effort", () => {
+  it("builtin profiles include GPT-5.6 and GPT-6 tiers with explicit reasoning effort", () => {
     const profiles = provider.builtinProfiles();
     const expected = {
       "codex/gpt-5.6-luna-low": ["gpt-5.6-luna", 'model_reasoning_effort="low"'],
       "codex/gpt-5.6-terra-low": ["gpt-5.6-terra", 'model_reasoning_effort="low"'],
       "codex/gpt-5.6-terra-medium": ["gpt-5.6-terra", 'model_reasoning_effort="medium"'],
       "codex/gpt-5.6-sol-medium": ["gpt-5.6-sol", 'model_reasoning_effort="medium"'],
+      "codex/gpt-6-luna-low": ["gpt-6-luna", 'model_reasoning_effort="low"'],
+      "codex/gpt-6-sol-low": ["gpt-6-sol", 'model_reasoning_effort="low"'],
+      "codex/gpt-6-sol-medium": ["gpt-6-sol", 'model_reasoning_effort="medium"'],
+      "codex/gpt-6-astra-medium": ["gpt-6-astra", 'model_reasoning_effort="medium"'],
     };
 
     assert.deepEqual(Object.keys(profiles).sort(), Object.keys(expected).sort());

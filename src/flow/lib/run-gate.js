@@ -18,10 +18,8 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { AtomicFile } from "../../lib/atomic-file.js";
-import { AgentFileReference } from "../../lib/agent-file-reference.js";
+import { TemporaryAgentFileInput } from "../../lib/agent-file-reference.js";
 import { AgentFileInputFailure } from "../../lib/agent-file-input-failure.js";
-import { RegularFileSnapshot } from "../../lib/regular-file-snapshot.js";
 import { AgentResponseAttemptEvidence, AgentResponseProtocolEvidence,
   AgentResponseProtocolFailure, EvaluationUnavailable, executeAgentResponseProtocol,
 } from "../../lib/agent-response-protocol.js";
@@ -826,12 +824,7 @@ function guardrailFileEvaluationSchema(logicalName, specTargetScope = null) {
         },
       },
     },
-    evaluationUnavailable: {
-      type: ["object", "null"],
-      properties: { kind: { type: "string", enum: ["file-read-failed", "context-limit", "evaluation-failed"] }, reason: { type: "string", minLength: 1 } },
-      required: ["kind", "reason"],
-      additionalProperties: false,
-    },
+    evaluationUnavailable: EvaluationUnavailable.toJsonSchema({ nullable: true }),
   },
   required: ["observations", "evaluationUnavailable"],
   additionalProperties: false,
@@ -1022,39 +1015,11 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
   return pb;
 }
 
-class GuardrailFileInput {
-  constructor({ directory, logicalName, reference }) {
-    this.directory = directory;
-    this.logicalName = logicalName;
-    this.reference = reference;
-    this.filePath = reference.absolutePath;
-    Object.freeze(this);
-  }
-
+class GuardrailFileInput extends TemporaryAgentFileInput {
   static create(executionRoot, text, phase) {
-    const runtimeRoot = path.join(executionRoot, PRODUCT.managedPath("agent-work"));
-    fs.mkdirSync(runtimeRoot, { recursive: true });
-    const directory = fs.mkdtempSync(path.join(runtimeRoot, `${phase}-gate-`));
-    const bytes = Buffer.from(text, "utf8");
-    const logicalName = `${phase}.json`;
-    const filePath = path.join(directory, logicalName);
-    try {
-      new AtomicFile(filePath, { phaseNamespace: `${phase}-gate-input` }).write(bytes);
-      const expected = new RegularFileSnapshot({ filePath, bytes });
-      const reference = AgentFileReference.resolve({ projectRoot: executionRoot, filePath,
-        label: `${phase} Gate input`, maxBytes: bytes.length });
-      if (reference.digest !== expected.digest || reference.byteLength !== expected.byteLength) {
-        throw new AgentFileInputFailure("Gate input bytes differ from the caller-owned exact input", { reference: expected });
-      }
-      return new GuardrailFileInput({ directory, logicalName, reference });
-    } catch (error) {
-      fs.rmSync(directory, { recursive: true, force: true });
-      throw error;
-    }
-  }
-
-  assertUnchanged() {
-    return this.reference.assertUnchanged({ label: `${this.logicalName} Gate input`, maxBytes: this.reference.byteLength });
+    return super.create({ projectRoot: executionRoot,
+      runtimeRoot: path.join(executionRoot, PRODUCT.managedPath("agent-work")),
+      text, logicalName: `${phase}.json`, label: `${phase}.json Gate input`, prefix: `${phase}-gate-` });
   }
 
   toPromptText() {
@@ -1068,7 +1033,6 @@ class GuardrailFileInput {
     ].join("\n");
   }
 
-  dispose() { fs.rmSync(this.directory, { recursive: true, force: true }); }
 }
 
 function parseGuardrailFileEvaluation(raw, knownIds, fileInput, specTargetScope = null) {

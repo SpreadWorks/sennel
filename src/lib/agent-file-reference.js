@@ -1,6 +1,48 @@
 import path from "node:path";
+import fs from "node:fs";
+import { AtomicFile } from "./atomic-file.js";
 import { captureRegularFile, RegularFileSnapshot } from "./regular-file-snapshot.js";
 import { AgentFileInputFailure } from "./agent-file-input-failure.js";
+
+/** Owns the exact, temporary input bytes for a provider file reference. */
+export class TemporaryAgentFileInput {
+  constructor({ directory, logicalName, reference, label = logicalName }) {
+    this.directory = directory;
+    this.logicalName = logicalName;
+    this.reference = reference;
+    this.label = label;
+    this.filePath = reference.absolutePath;
+    Object.freeze(this);
+  }
+
+  static create({ projectRoot, runtimeRoot, text, logicalName, label = logicalName, prefix = "input-" }) {
+    const bytes = Buffer.from(text, "utf8");
+    let directory = null;
+    try {
+      fs.mkdirSync(runtimeRoot, { recursive: true });
+      directory = fs.mkdtempSync(path.join(runtimeRoot, prefix));
+      const filePath = path.join(directory, logicalName);
+      new AtomicFile(filePath).write(bytes);
+      const expected = new RegularFileSnapshot({ filePath, bytes });
+      const reference = AgentFileReference.resolve({ projectRoot, filePath,
+        label, maxBytes: bytes.length });
+      if (reference.digest !== expected.digest || reference.byteLength !== expected.byteLength) {
+        throw new AgentFileInputFailure("Temporary input bytes differ from the caller-owned exact input", { reference: expected });
+      }
+      return new this({ directory, logicalName, reference, label });
+    } catch (error) {
+      if (directory) fs.rmSync(directory, { recursive: true, force: true });
+      if (error instanceof AgentFileInputFailure) throw error;
+      throw new AgentFileInputFailure(`Unable to materialize ${label}: ${error.message}`, { cause: error });
+    }
+  }
+
+  assertUnchanged() {
+    return this.reference.assertUnchanged({ label: this.label, maxBytes: this.reference.byteLength });
+  }
+
+  dispose() { fs.rmSync(this.directory, { recursive: true, force: true }); }
+}
 
 /** A reference to exact caller-owned bytes, resolved only against an explicit root. */
 export class AgentFileReference {

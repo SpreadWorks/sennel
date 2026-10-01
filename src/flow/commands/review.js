@@ -20,6 +20,8 @@ import {
   AgentPermissionConfigurationFailure,
 } from "../../lib/agent-failure.js";
 import { DeferredAgentInvocationMetric } from "../../lib/agent-invocation-metric.js";
+import { AgentResponseProtocolFailure } from "../../lib/agent-response-protocol.js";
+import { AgentFileInputFailure } from "../../lib/agent-file-input-failure.js";
 import { AgentRuntimeDirectorySet } from "../../lib/agent.js";
 import { getSpecName } from "../../lib/flow-helpers.js";
 import { relativeFlowSpecFile } from "../../lib/flow-workspace.js";
@@ -165,12 +167,16 @@ const reviewAgentInvocationOptions = (prompt, commandId, systemPrompt, protocolO
   waitForProcessTree: true,
 });
 
-const callReviewAgent = (agent, prompt, commandId, systemPrompt, protocolOptions = {}) => {
+const callReviewAgent = async (agent, prompt, commandId, systemPrompt, protocolOptions = {}) => {
   const options = reviewAgentInvocationOptions(prompt, commandId, systemPrompt, protocolOptions);
-  if (prompt && typeof prompt === "object" && "userPrompt" in prompt) {
-    return agent.call(prompt.userPrompt, options);
-  }
-  return agent.call(prompt, options);
+  let cacheDecision = null;
+  if (protocolOptions.responseProtocol) options.onCacheDecision = (decision) => { cacheDecision = decision; };
+  const text = await agent.call(prompt && typeof prompt === "object" && "userPrompt" in prompt ? prompt.userPrompt : prompt, options);
+  if (!protocolOptions.responseProtocol) return text;
+  return { text, cacheOutcome: cacheDecision?.cacheOutcome ?? options.cacheMode,
+    fresh: cacheDecision?.fresh ?? options.cacheMode === "bypass",
+    providerCalled: cacheDecision?.providerCalled ?? true,
+    providerAttemptCount: protocolOptions.providerCallAdmission?.attemptCount ?? 1 };
 };
 
 const projectReviewAgentInvocation = (agent, prompt, commandId, systemPrompt, protocolOptions = {}) => (
@@ -291,14 +297,6 @@ async function synthesizeReviewFindings({
       return completions[0]?.response ?? emptyResponse();
     },
   });
-}
-
-function splitReviewTextAtHeadings(text, headingPattern) {
-  const starts = [0];
-  for (const match of text.matchAll(headingPattern)) {
-    if (match.index > 0) starts.push(match.index);
-  }
-  return starts.map((start, index) => text.slice(start, starts[index + 1] ?? text.length));
 }
 
 class TaskReviewSourceObservation {
@@ -3690,6 +3688,15 @@ async function runTestReviewWithDependencies({
 
 function classifyReviewCommandError(err, phase) {
   while (err instanceof PromptBatchingError && err.cause) err = err.cause;
+  if (err instanceof AgentResponseProtocolFailure || err instanceof AgentFileInputFailure) {
+    const input = { phase: phase || "impl", reason: err.message,
+      recoveryHint: "Restore the complete immutable input and available context before starting new review evidence.",
+      recoveryCommand: phase && phase !== "impl" ? `sennel flow run review --phase ${phase}` : "sennel flow run review",
+      failureCode: "REVIEW_FILE_EVALUATION_UNAVAILABLE" };
+    return err.data.failureMode === "context_limit"
+      ? ReviewFailure.inputSizeFailure(input)
+      : ReviewFailure.providerFailure({ ...input, retryable: false, agentFailureKind: err.data.failureMode });
+  }
   if (err instanceof PromptBatchingError) {
     const promptFailure = ReviewFailure.fromPromptBatchingFailure({
       phase: phase || "impl",
@@ -4362,23 +4369,6 @@ function buildSpecReviewPrompt(specText, contextEntries, previousReview = null) 
   return pb.build();
 }
 
-function buildSpecReviewSynthesisPrompt(findingTexts, _context, sourceRefs = []) {
-  return new PromptBuilder()
-    .setRole("You are the final spec review synthesizer. Cross-check findings only after every bounded spec and code-context range was reviewed.")
-    .setRules([
-      "Return JSON only with blockingFindings[] and nonBlockingImprovements[].",
-      "Resolve duplicate and contradictory findings globally.",
-      "Check requirement relationships and contradictions spanning bounded source ranges.",
-      "Preserve a blocker when any validated range establishes its concrete failure mode.",
-      "Adjudicate every supplied map finding; omit one only when canonical authority disproves or resolves it. The returned JSON is authoritative.",
-    ])
-    .setJsonSchema(SPEC_REVIEW_RESPONSE_SCHEMA)
-    .setFmtFallback(SPEC_REVIEW_FMT_FALLBACK)
-    .addUserPrompt("## Covered Canonical Evidence References", sourceRefs.join("\n") || "(none)")
-    .addUserPrompt("## Reduced Canonical Authority and Validated Map Evidence", findingTexts.join("\n\n"))
-    .build();
-}
-
 function extractMarkdownField(body, label) {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = String(body || "").match(new RegExp(`^\\*\\*${escaped}:\\*\\*\\s*(.+)$`, "im"));
@@ -4682,7 +4672,9 @@ async function runSpecReview(root, flow, spec, config, dryRun) {
     maxChars: promptLimit,
     ElementClass: SpecSectionPromptElement,
     id: "spec-review-document",
-    sections: splitReviewTextAtHeadings(proposePrompt.userPrompt, /^#{1,2}\s/gm),
+    projectRoot: container.get("root"),
+    projectInvocation: typeof proposeAgent.projectInvocation === "function"
+      ? (request) => projectReviewAgentInvocation(proposeAgent, request, "flow.spec.review.propose") : null,
   });
   const executionBudget = new PromptExecutionBudget(new PromptExecutionLimit({
       maxRequestCharacters: promptLimit,
@@ -4692,54 +4684,29 @@ async function runSpecReview(root, flow, spec, config, dryRun) {
       maxAggregateCharacters: 1_000_000,
     }));
   const executor = new PromptBatchExecutor({ executionBudget });
-  const completions = await executor.executeCompletions({
-    plan: promptPlan.corePlan,
-    callAgent: (request, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => callReviewAgent(
-      proposeAgent,
-      request,
-      "flow.spec.review.propose",
-      null,
-      { providerCallAdmission },
-    ),
-    responseContract: {
-      parse: parseSpecReviewFindings,
-      itemCount: (response) => response.blocking.length + response.improvements.length,
-    },
-    ...(typeof proposeAgent.projectInvocation === "function" ? {
-      projectInvocation: (request) => projectReviewAgentInvocation(proposeAgent, request, "flow.spec.review.propose"),
-    } : {}),
-  });
-  let findings = new SpecReviewFindingReducer().reduce(completions);
-  if (completions.length > 1) {
-    const synthesized = await synthesizeReviewFindings({
-      initialItems: [...findings.blocking, ...findings.improvements],
-      authorityElements: promptPlan.corePlan.collection.elements,
-      toText: (finding) => JSON.stringify(finding.toJSON ? finding.toJSON() : finding),
-      buildRequest: buildSpecReviewSynthesisPrompt,
-      parseResponse: parseSpecReviewFindings,
-      responseItems: (response) => [...response.blocking, ...response.improvements],
-      emptyResponse: () => ({ blocking: [], improvements: [] }),
-      maxChars: promptLimit,
-      executionBudget,
-      callAgent: (request, _batch, _retry, _context, providerCallAdmission) => callReviewAgent(
+  const fileProtocolPolicy = promptPlan.protocolPolicy(parseSpecReviewFindings);
+  let findings;
+  try {
+    const completions = await executor.executeCompletions({
+      plan: promptPlan.corePlan,
+      ...(fileProtocolPolicy ? { protocolPolicy: fileProtocolPolicy } : {}),
+      callAgent: (request, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => callReviewAgent(
         proposeAgent,
         request,
         "flow.spec.review.propose",
         null,
-        { retryCount: 0, providerCallAdmission },
+        { ..._attemptContext, providerCallAdmission },
       ),
-      projectInvocation: typeof proposeAgent.projectInvocation === "function"
-        ? (request) => projectReviewAgentInvocation(
-          proposeAgent,
-          request,
-          "flow.spec.review.propose",
-          null,
-          { retryCount: 0 },
-        )
-        : null,
+      responseContract: {
+        parse: parseSpecReviewFindings,
+        itemCount: (response) => response.blocking.length + response.improvements.length,
+      },
+      ...(typeof proposeAgent.projectInvocation === "function" ? {
+        projectInvocation: (request) => projectReviewAgentInvocation(proposeAgent, request, "flow.spec.review.propose"),
+      } : {}),
     });
-    findings = synthesized;
-  }
+    findings = new SpecReviewFindingReducer().reduce(completions);
+  } finally { promptPlan.dispose(); }
   const blockingCount = findings.blocking.length;
   const improvementCount = findings.improvements.length;
   const proposalCount = blockingCount + improvementCount;
@@ -4957,7 +4924,7 @@ function buildDraftReviewPrompt(draftJson, requestText, contextEntries, stage) {
   ].join("\n");
 }
 
-function buildDraftReviewSynthesisPrompt(findingTexts, stage, sourceRefs = []) {
+function buildDraftReviewSynthesisPrompt(findingTexts, stage, sourceRefs = [], completeInputReference = null) {
   return [
     "You are the final draft review synthesizer. All bounded question, decision, request, and context ranges have completed.",
     "Resolve duplicates, findings already answered by authoritative information, and cross-range dependencies.",
@@ -4971,6 +4938,7 @@ function buildDraftReviewSynthesisPrompt(findingTexts, stage, sourceRefs = []) {
     sourceRefs.join("\n") || "(none)",
     "## Reduced Canonical Authority and Validated Map Evidence",
     ...findingTexts,
+    ...(completeInputReference ? ["## Complete Immutable Review Input", completeInputReference] : []),
   ].join("\n\n");
 }
 
@@ -5037,17 +5005,15 @@ function addDraftReviewFindingToBucket(buckets, finding) {
   }
 }
 
-function buildDraftReviewArtifact({ raw, draftPath, draftRevision, proposals, stage }) {
+function buildDraftReviewArtifact({ draftPath, draftRevision, proposals, stage }) {
   const buckets = {
     blockingFindings: [],
     advisoryFindings: [],
     repairTargets: [],
   };
-  if (!raw.includes("NO_PROPOSALS")) {
-    for (const proposal of proposals) {
-      const finding = issueToDraftReviewFinding(proposal, stage.findingClassification);
-      addDraftReviewFindingToBucket(buckets, finding);
-    }
+  for (const proposal of proposals) {
+    const finding = issueToDraftReviewFinding(proposal, stage.findingClassification);
+    addDraftReviewFindingToBucket(buckets, finding);
   }
   return new DraftReviewArtifactDocument({
     phase: stage.retryPhase,
@@ -5199,6 +5165,15 @@ export function writeReviewAttemptHistory({ specDir, phase, latestBasename, arti
   return { latestPath, historyPath, historyJsonPath: normalizedHistoryPath, normalizedHistoryPath };
 }
 
+function parseCompleteDraftReviewProposals(raw, options = {}) {
+  if (raw.trim() === "NO_PROPOSALS") return [];
+  if (!/^### \d+\.\s+\S/m.test(raw)) throw new TypeError("Complete Draft review requires numbered proposal headings");
+  const proposals = parseProposals(raw);
+  if (proposals.length === 0 || proposals.some((proposal) => !proposal.body)) throw new TypeError("Complete Draft review requires valid proposals or exactly NO_PROPOSALS");
+  const limit = Number.isInteger(options.limit) && options.limit >= 0 ? options.limit : Infinity;
+  return proposals.slice(0, limit);
+}
+
 async function runDraftReview(root, flow, config, dryRun) {
   const outputDirectory = configuredReviewDirectory();
   const source = canonicalDraftReviewSource(outputDirectory);
@@ -5236,9 +5211,6 @@ async function runDraftReview(root, flow, config, dryRun) {
     ? "You are a draft question boundary reviewer. Remove redundant confirmations using supplied authority; do not generate new questions."
     : "You are a draft coverage gate reviewer. Follow the current bounded map or final synthesis request; do not generate follow-up loops.";
   const promptLimit = Math.min(TASK_REVIEW_PROMPT_CHAR_LIMIT, agent.promptCharacterLimit ?? TASK_REVIEW_PROMPT_CHAR_LIMIT);
-  const draftAuthorityStart = detectPrompt.search(/^## Request \/ Issue$/m);
-  const repeatedDraftInstructions = draftAuthorityStart < 0 ? "" : detectPrompt.slice(0, draftAuthorityStart);
-  const draftAuthorityText = draftAuthorityStart < 0 ? detectPrompt : detectPrompt.slice(draftAuthorityStart);
   const promptPlan = ReviewTextPromptPlan.create({
     request: {
       systemPrompt: fallbackSystemPrompt,
@@ -5249,8 +5221,9 @@ async function runDraftReview(root, flow, config, dryRun) {
     maxChars: promptLimit,
     ElementClass: DraftSectionPromptElement,
     id: `draft-review-${stage.key}`,
-    repeatedPrefix: repeatedDraftInstructions,
-    sections: splitReviewTextAtHeadings(draftAuthorityText, /^##\s/gm),
+    projectRoot: container.get("root"),
+    projectInvocation: typeof agent.projectInvocation === "function"
+      ? (request) => projectReviewAgentInvocation(agent, request, stage.commandId, fallbackSystemPrompt) : null,
   });
   const proposalLimit = stage.key === "coverage" ? 3 : DRAFT_REVIEW_ARTIFACT_LIMIT;
   const executionBudget = new PromptExecutionBudget(new PromptExecutionLimit({
@@ -5261,69 +5234,67 @@ async function runDraftReview(root, flow, config, dryRun) {
       maxAggregateCharacters: 1_000_000,
     }));
   const executor = new PromptBatchExecutor({ executionBudget });
-  const completions = await executor.executeCompletions({
-    plan: promptPlan.corePlan,
-    callAgent: (request, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => callReviewAgent(
-      agent,
-      request,
-      stage.commandId,
-      fallbackSystemPrompt,
-      { providerCallAdmission },
-    ),
-    responseContract: {
-      parse: (batchRaw) => batchRaw.includes("NO_PROPOSALS")
-        ? []
-        : parseProposals(batchRaw),
-      itemCount: (response) => response.length,
-    },
-    ...(typeof agent.projectInvocation === "function" ? {
-      projectInvocation: (request) => projectReviewAgentInvocation(agent, request, stage.commandId, fallbackSystemPrompt),
-    } : {}),
-  });
-  let proposals = new DraftReviewCandidateReducer().reduce(completions);
-  if (stage.key === "coverage" || completions.length > 1) {
-    proposals = await synthesizeReviewFindings({
-      initialItems: proposals,
-      authorityElements: promptPlan.corePlan.collection.elements,
-      toText: (proposal) => JSON.stringify({ title: proposal.title, body: proposal.body, file: proposal.file || null }),
-      buildRequest: (findingTexts, _context, sourceRefs) => buildDraftReviewSynthesisPrompt(
-        findingTexts,
-        stage,
-        sourceRefs,
-      ),
-      parseResponse: (batchRaw) => batchRaw.includes("NO_PROPOSALS")
-        ? []
-        : parseProposals(batchRaw, { limit: DRAFT_REVIEW_ARTIFACT_LIMIT }),
-      responseItems: (response) => response,
-      emptyResponse: () => [],
-      maxChars: promptLimit,
-      executionBudget,
-      callAgent: (request, _batch, _retry, _context, providerCallAdmission) => callReviewAgent(
+  const fileProtocolPolicy = promptPlan.protocolPolicy(parseCompleteDraftReviewProposals);
+  let proposals;
+  try {
+    const completions = await executor.executeCompletions({
+      plan: promptPlan.corePlan,
+      ...(fileProtocolPolicy ? { protocolPolicy: fileProtocolPolicy } : {}),
+      callAgent: (request, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => callReviewAgent(
         agent,
         request,
         stage.commandId,
         fallbackSystemPrompt,
-        { retryCount: 0, providerCallAdmission },
+        { ..._attemptContext, providerCallAdmission },
       ),
-      projectInvocation: typeof agent.projectInvocation === "function"
-        ? (request) => projectReviewAgentInvocation(
+      responseContract: {
+        parse: parseCompleteDraftReviewProposals,
+        itemCount: (response) => response.length,
+      },
+      ...(typeof agent.projectInvocation === "function" ? {
+        projectInvocation: (request) => projectReviewAgentInvocation(agent, request, stage.commandId, fallbackSystemPrompt),
+      } : {}),
+    });
+    proposals = new DraftReviewCandidateReducer().reduce(completions);
+    if (stage.key === "coverage") {
+      proposals = await synthesizeReviewFindings({
+        ...(fileProtocolPolicy ? { protocolPolicy: fileProtocolPolicy } : {}),
+        initialItems: proposals,
+        authorityElements: promptPlan.corePlan.collection.elements,
+        toText: (proposal) => JSON.stringify({ title: proposal.title, body: proposal.body, file: proposal.file || null }),
+        buildRequest: (findingTexts, _context, sourceRefs) => buildDraftReviewSynthesisPrompt(
+          findingTexts, stage, sourceRefs, promptPlan.fileInput ? promptPlan.batches[0].request.userPrompt : null,
+        ),
+        parseResponse: (batchRaw) => parseCompleteDraftReviewProposals(batchRaw, { limit: DRAFT_REVIEW_ARTIFACT_LIMIT }),
+        responseItems: (response) => response,
+        emptyResponse: () => [],
+        maxChars: promptLimit,
+        executionBudget,
+        callAgent: (request, _batch, _retry, _context, providerCallAdmission) => callReviewAgent(
           agent,
           request,
           stage.commandId,
           fallbackSystemPrompt,
-          { retryCount: 0 },
-        )
-        : null,
-    });
-  }
+          { ..._context, retryCount: 0, providerCallAdmission },
+        ),
+        projectInvocation: typeof agent.projectInvocation === "function"
+          ? (request) => projectReviewAgentInvocation(
+            agent,
+            request,
+            stage.commandId,
+            fallbackSystemPrompt,
+            { retryCount: 0 },
+          )
+          : null,
+      });
+    }
+  } finally { promptPlan.dispose(); }
   proposals = proposals.slice(0, proposalLimit);
-  const raw = proposals.length === 0 ? "NO_PROPOSALS" : "BATCHED_PROPOSALS";
 
   canonicalDraftSnapshot(source, container.get("flowManager").load(), stage.retryPhase);
 
   const reviewPath = path.join(outputDirectory, stage.artifact);
   const reviewArtifact = buildDraftReviewArtifact({
-    raw,
     draftPath: source.logicalPath,
     draftRevision: source.revision,
     proposals,
@@ -5715,7 +5686,7 @@ function isValidSpecOutput(text) {
 }
 
 export {
-  parseProposals, formatReviewMd, resolveReviewTarget,
+  parseProposals, parseCompleteDraftReviewProposals, formatReviewMd, resolveReviewTarget,
   resolveMergeBase,
   buildDraftSystemPrompt,
   NO_PROPOSALS_MARKER,
@@ -5732,6 +5703,7 @@ export {
   runImplReview,
   isValidSpecOutput, stripPreamble, buildGapAnalysisPrompt, buildTestFixPrompt,
   buildDraftReviewPrompt,
+  buildDraftReviewSynthesisPrompt,
   buildDraftReviewAuthorityText,
   buildDraftReviewArtifact,
   shouldUseLoopReview, groupByDiffContent, buildPerFileReviewInput,

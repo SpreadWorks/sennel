@@ -9,6 +9,7 @@ import {
 } from "../../src/lib/prompt-batching.js";
 import {
   DraftReviewCandidateReducer,
+  parseCompleteDraftReviewProposals,
   synthesizeReviewFindings,
 } from "../../src/flow/commands/review.js";
 import {
@@ -117,57 +118,32 @@ describe("review prompt plans", () => {
     }
   });
 
-  for (const [label, ElementClass] of [
-    ["spec", SpecSectionPromptElement],
-    ["draft", DraftSectionPromptElement],
-  ]) {
-    it(`partitions a ${label} review document and keeps every request bounded`, () => {
-      const request = { systemPrompt: "review", userPrompt: "x".repeat(180_000), jsonSchema: null, fmtFallback: null };
-      const plan = ReviewTextPromptPlan.create({ request, maxChars: 120_000, ElementClass, id: `${label}-document` });
-      assert.ok(plan.batches.length > 1);
-      assert.ok(plan.batches.every((batch) => PromptLogicalFootprint.measure(batch.request).total <= 120_000));
-      const reconstructed = plan.batches.flatMap((batch) => batch.payloadElements).map((element) => element.text).join("");
-      assert.equal(reconstructed, request.userPrompt);
-    });
-  }
+  it("never interprets unread or malformed Draft file output as an empty successful review", () => {
+    assert.deepEqual(parseCompleteDraftReviewProposals("NO_PROPOSALS"), []);
+    assert.equal(parseCompleteDraftReviewProposals("### 1. Missing decision\n**Classification:** blocking")[0].title, "1. Missing decision");
+    for (const raw of ["", "I could not read the file", "NO_PROPOSALS because I could not read the file", "{\"evaluationUnavailable\":{\"kind\":\"context-limit\",\"reason\":\"unread\"}}"] ) {
+      assert.throws(() => parseCompleteDraftReviewProposals(raw), TypeError);
+    }
+  });
 
-  it("keeps Spec and Draft canonical review sources and partition leaves immutable", () => {
-    for (const [label, ElementClass] of [
-      ["Spec", SpecSectionPromptElement],
-      ["Draft", DraftSectionPromptElement],
-    ]) {
-      const request = {
-        systemPrompt: "review",
-        userPrompt: "canonical original",
-        jsonSchema: null,
-        fmtFallback: null,
-      };
-      const source = new ElementClass({
-        id: `${label}-canonical-source`, text: request.userPrompt, sourceLength: request.userPrompt.length,
-      });
-      const plan = ReviewTextPromptPlan.create({ request, maxChars: 1_000, ElementClass });
+  it("retains quoted Draft markers and validates complete output before limiting candidates", () => {
+    const raw = "### 1. Missing validation\n**Classification:** blocking\n**Issue:** NO_PROPOSALS is quoted evidence.\n### 2. Missing acceptance\n**Classification:** blocking";
+    const proposals = parseCompleteDraftReviewProposals(raw, { limit: 1 });
+    assert.equal(proposals.length, 1);
+    assert.equal(proposals[0].body, "**Classification:** blocking\n**Issue:** NO_PROPOSALS is quoted evidence.");
+    assert.deepEqual(parseCompleteDraftReviewProposals("\n NO_PROPOSALS \n", { limit: 1 }), []);
+    assert.throws(() => parseCompleteDraftReviewProposals(`${raw}\n### 3. Missing body`, { limit: 1 }), TypeError);
+  });
+
+  it("keeps small canonical review sources immutable in one complete request", () => {
+    for (const ElementClass of [SpecSectionPromptElement, DraftSectionPromptElement]) {
+      const plan = ReviewTextPromptPlan.create({ request: "canonical original", maxChars: 1_000, ElementClass });
       const element = plan.corePlan.collection.elements[0];
-      const partitionedPlan = ReviewTextPromptPlan.create({
-        request: "x".repeat(2_500), maxChars: 1_000, ElementClass,
-      });
-      const leaf = partitionedPlan.corePlan.collection.elements[0];
-      const digest = partitionedPlan.corePlan.collection.digest;
-      const serialized = partitionedPlan.corePlan.collection.toJSON();
-      const prompt = partitionedPlan.batches[0].request.userPrompt;
-
-      for (const candidate of [source, element, leaf]) {
-        assert.throws(() => { candidate.text = "mutated prompt text"; }, TypeError);
-        assert.throws(() => { candidate.id = "mutated-id"; }, TypeError);
-        assert.throws(() => { candidate.sourceRevision = "mutated-revision"; }, TypeError);
-        assert.throws(() => { candidate.start = 1; }, TypeError);
-      }
-
-      assert.equal(source.text, "canonical original");
-      assert.equal(element.text, "canonical original");
+      assert.equal(plan.batches.length, 1);
       assert.equal(plan.batches[0].request.userPrompt, "canonical original");
-      assert.equal(partitionedPlan.corePlan.collection.digest, digest);
-      assert.deepEqual(partitionedPlan.corePlan.collection.toJSON(), serialized);
-      assert.equal(partitionedPlan.batches[0].request.userPrompt, prompt);
+      assert.throws(() => { element.text = "mutated"; }, TypeError);
+      assert.throws(() => { element.sourceRevision = "mutated"; }, TypeError);
+      assert.equal(plan.fileInput, null);
     }
   });
 
@@ -191,26 +167,6 @@ describe("review prompt plans", () => {
     assert.equal(plan.batches[0].request.userPrompt, "canonical original");
     assert.deepEqual(plan.corePlan.envelope.request.jsonSchema, expectedSchema);
     assert.deepEqual(plan.batches[0].request.jsonSchema, expectedSchema);
-  });
-
-  it("repeats Draft instructions while preserving semantic authority section identities", () => {
-    const prefix = "Follow the final Draft Review contract.\n";
-    const sections = ["\n## Request\n" + "r".repeat(80_000), "\n## Decisions\n" + "d".repeat(80_000)];
-    const plan = ReviewTextPromptPlan.create({
-      request: `${prefix}${sections.join("")}`,
-      repeatedPrefix: prefix,
-      sections,
-      maxChars: 120_000,
-      ElementClass: DraftSectionPromptElement,
-      id: "draft-sections",
-    });
-
-    assert.ok(plan.batches.length > 1);
-    assert.ok(plan.batches.every((batch) => batch.request.userPrompt.startsWith(prefix)));
-    assert.deepEqual(plan.corePlan.collection.originalElements.map((element) => element.originId), [
-      "draft-sections:section:0",
-      "draft-sections:section:1",
-    ]);
   });
 
   it("detects a relation that exists only across authoritative chunks with no local map findings", async () => {

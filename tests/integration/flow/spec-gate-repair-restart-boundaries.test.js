@@ -1,3 +1,4 @@
+import { ResolvedAgentInvocationProjection } from "../../../src/lib/prompt-batching.js";
 import { ServiceBoundaryCoverage } from "../../support/structure/service-boundary.js";
 import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
@@ -16,9 +17,7 @@ import { settleSpecStepResult } from "../../../src/flow/definition.js";
 import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
 import { latestRepairBudget, SpecGateRepairProgressLedger } from "../../../src/flow/lib/spec-gate-repair-progress.js";
-import { readProgressBoundSpecGateRepairInput,
-  SPEC_GATE_REPAIR_REQUEST_LIMIT } from "../../../src/flow/lib/spec-gate-repair-progress.js";
-import { nextSpecGateRepairEvidence } from "../../../src/flow/lib/spec-gate-repair-evidence.js";
+import { readProgressBoundSpecGateRepairInput } from "../../../src/flow/lib/spec-gate-repair-progress.js";
 import { validateSpecJsonObject } from "../../../src/lib/spec-json.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
@@ -30,6 +29,12 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { validWorkerHandoffSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { dispatchContainer, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+
+function projectInvocation(prompt) {
+  return new ResolvedAgentInvocationProjection({ providerKey: "fixture", profileKey: "fixture", command: "fixture",
+    promptCharacterCount: prompt.length, systemPromptCharacterCount: 0, schemaCharacterCount: 0,
+    finalArgs: [], inlineArgvByteCount: 0, schemaMode: "none", usesStdin: true });
+}
 
 function durableSnapshot(manager, specId) {
   return {
@@ -252,7 +257,7 @@ describe("Spec Gate repair restart boundaries", () => {
         const initialSpec = durableSnapshot(value.flowManager, value.specId).spec;
         const generations = [];
         let baseRevision = null;
-        const agent = { async call(_prompt, options) {
+        const agent = { projectInvocation, async call(_prompt, options) {
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
           const selected = requestInput(request, "spec-gate-repair-context.json").document;
@@ -325,7 +330,7 @@ describe("Spec Gate repair restart boundaries", () => {
       let context = null;
       let firstRequestDirectory = null;
       let firstWorkerCalls = 0;
-      const firstAgent = { async call(_prompt, options) {
+      const firstAgent = { projectInvocation, async call(_prompt, options) {
         firstWorkerCalls += 1;
         const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
         firstRequestDirectory = path.dirname(requestPath);
@@ -357,7 +362,7 @@ describe("Spec Gate repair restart boundaries", () => {
         inWorktree: false, specId: value.specId });
       let workerCalls = 0;
       let nextContext = null;
-      const agent = { async call(_prompt, options) {
+      const agent = { projectInvocation, async call(_prompt, options) {
         workerCalls += 1;
         const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
         const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -414,7 +419,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
         inWorktree: false, specId: value.specId });
       let workerCalls = 0;
-      const agent = { async call(_prompt, options) {
+      const agent = { projectInvocation, async call(_prompt, options) {
         workerCalls += 1;
         const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
         const next = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -470,7 +475,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
         inWorktree: false, specId: value.specId });
       let workerCalls = 0;
-      const agent = { async call() { workerCalls += 1; throw new Error("sealed claim must not call provider again"); } };
+      const agent = { projectInvocation, async call() { workerCalls += 1; throw new Error("sealed claim must not call provider again"); } };
       const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1 });
       dispatcher.container = dispatchContainer({ root: value.root, flowManager: restarted, agent });
       const result = await dispatcher.execute({ ...value.ctx, flowManager: restarted,
@@ -536,7 +541,7 @@ describe("Spec Gate repair restart boundaries", () => {
       assert.equal(projected.directive.code, "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE");
       assert.deepEqual(durableSnapshot(restarted, value.specId), before);
       let workerCalls = 0;
-      const agent = { async call() { workerCalls += 1; throw new Error("claimed response must not re-execute"); } };
+      const agent = { projectInvocation, async call() { workerCalls += 1; throw new Error("claimed response must not re-execute"); } };
       const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1 });
       await assert.rejects(() => dispatcher.runWorkerAttempt({ ...value.ctx, flowManager: restarted },
         value.invocation), { code: "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE" });
@@ -721,7 +726,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
         inWorktree: false, specId: value.specId });
       let workerCalls = 0;
-      const agent = { async call(_prompt, options) {
+      const agent = { projectInvocation, async call(_prompt, options) {
         workerCalls += 1;
         const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
         const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -768,83 +773,45 @@ describe("Spec Gate repair restart boundaries", () => {
     } finally { removeTmpDir(value.root); }
   });
 
-  it("persists every oversized-unit evidence batch before one atomic repair after restart", async () => {
+  it("preserves the complete oversized selected unit across sealed restart and one atomic repair", async () => {
     const specRecord = oversizedSpec();
     const value = await createSpecGateRepairScenario({ specRecord });
     try {
       const original = durableSnapshot(value.flowManager, value.specId);
-      validateSpecJsonObject(JSON.parse(original.spec));
-      const repairAttemptId = value.flowManager.canonicalState(value.specId).attempt.id;
-      const baseRevision = `sha256:${original.catalog.artifacts.find((entry) => entry.logicalKey === "spec.record").hash}`;
-      let evidenceCalls = 0;
-      let finalResult = null;
-      for (let index = 0; index < 16; index += 1) {
-        const request = nextRequest(value, `evidence-${index}`);
-        const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
-        let proposal;
-        if (context.mode === "evidence") {
-          evidenceCalls += 1;
-          const { source, ledger } = readProgressBoundSpecGateRepairInput({
-            flowManager: value.ctx.flowManager,
-            state: value.ctx.flowManager.canonicalState(value.specId),
-            executionRoot: value.root,
-          });
-          const { budget } = latestRepairBudget({ flowManager: value.ctx.flowManager,
-            specId: value.specId, attemptId: value.ctx.flowManager.canonicalState(value.specId).attempt.id,
-            baseRevision: source.baseRevision, consumerNodeId: "spec-gate-repair" });
-          const work = nextSpecGateRepairEvidence({ context: source.context,
-            unitId: context.unitId, limit: SPEC_GATE_REPAIR_REQUEST_LIMIT,
-            publications: ledger.entries, executionBudget: budget });
-          assert.equal(work.mode, "evidence");
-          assert.equal(work.batch.digest, context.batchDigest);
-          proposal = { version: 1, stage: "spec-gate-repair-evidence",
-            baseRevision: context.baseRevision, unitId: context.unitId,
-            observations: work.batch.payloadElements.map((element) => ({
-              requirementId: context.unitId, sourceRef: element.id,
-              ...(element.coveredSourceRefs ? { coveredSourceRefs: element.coveredSourceRefs } : {}),
-              support: ["The cited original range preserves the planned interface."],
-              contradictions: [], unresolved: [],
-            })) };
-        } else {
-          assert.equal(context.mode, "repair");
-          assert.ok(evidenceCalls > 1);
-          const selection = context.selections[0];
-          const writable = selection.ranges.find((range) => range.writable);
-          assert.equal(writable.id, "requirements[R1].desc");
-          proposal = { version: 1, stage: "spec-gate-repair",
-            baseRevision: context.baseRevision,
-            groups: [{ findingIdentities: selection.unit.findings.map((finding) => finding.identity),
-              operations: [{ kind: "edit-text-field", target: writable.target,
-                expectedDigest: writable.digest,
-                edits: [{ startByte: 0,
-                  endByte: Buffer.byteLength("Publish a validated artifact.", "utf8"),
-                  replacement: "Publish a precisely validated artifact." }],
-                reason: "Correct the planned validation target using complete evidence.",
-              }] }] };
-        }
-        const { result } = await completeWorkerResponse(value, request, proposal);
-        if (context.mode === "repair") { finalResult = result; break; }
-        assert.equal(result.kind, "spec-gate-repair-context-required");
-        assert.equal(durableSnapshot(value.ctx.flowManager, value.specId).spec, original.spec);
-        value.ctx.flowManager = new FlowManager({ root: value.root, mainRoot: value.root,
-          inWorktree: false, specId: value.specId });
+      const attemptId = value.flowManager.canonicalState(value.specId).attempt.id;
+      const request = nextRequest(value, "complete-file");
+      const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
+      assert.equal(context.mode, "repair");
+      assert.equal(context.batchCount, 1);
+      const selection = context.selections[0];
+      const decisionRanges = selection.ranges.filter((range) => range.id.startsWith("overview.decisions["));
+      assert.equal(decisionRanges.length, specRecord.overview.decisions.length);
+      for (const range of decisionRanges) {
+        assert.deepEqual(range.value, specRecord.overview.decisions[Number(range.id.match(/\[(\d+)\]/)[1])]);
       }
-      assert.equal(finalResult?.kind, "spec-gate-repair-review-required");
-      const after = durableSnapshot(value.ctx.flowManager, value.specId);
-      assert.equal(artifactCount(after, "spec.snapshot"), artifactCount(original, "spec.snapshot") + 1);
-      assert.equal(artifactCount(after, "spec.gate.repair.audit"),
-        artifactCount(original, "spec.gate.repair.audit") + 1);
-      const ledger = new SpecGateRepairProgressLedger({ flowManager: value.ctx.flowManager,
-        specId: value.specId, attemptId: repairAttemptId, baseRevision });
-      const evidence = ledger.forMode("evidence");
-      assert.equal(evidence.length, evidenceCalls);
-      assert.equal(new Set(evidence.map((entry) => entry.context.batchDigest)).size, evidenceCalls);
-      assert.equal(ledger.groups().length, 1);
-      const { budget } = latestRepairBudget({ flowManager: value.ctx.flowManager,
-        specId: value.specId, attemptId: repairAttemptId,
-        baseRevision,
-        consumerNodeId: "spec-gate-repair" });
-      assert.equal(budget.providerCallCount, evidenceCalls + 1);
+      const writable = selection.ranges.find((range) => range.writable);
+      const proposal = { version: 1, stage: "spec-gate-repair", baseRevision: context.baseRevision,
+        groups: [{ findingIdentities: selection.unit.findings.map((finding) => finding.identity),
+          operations: [{ kind: "edit-text-field", target: writable.target, expectedDigest: writable.digest,
+            edits: [{ startByte: 0, endByte: Buffer.byteLength(writable.value),
+              replacement: "Publish a precisely validated artifact." }], reason: "Clarify the full selected obligation." }] }] };
+      fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(proposal));
+      reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request, prompt: JSON.stringify(request.toPromptReference()) });
+      sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
+      assert.equal(durableSnapshot(value.flowManager, value.specId).spec, original.spec);
+      const restarted = new FlowManager({ root: value.root, mainRoot: value.root, inWorktree: false, specId: value.specId });
+      value.ctx.flowManager = restarted;
+      const restored = value.coordinator.restoreClaimedDraftRequest({ ctx: value.ctx,
+        state: restarted.canonicalState(value.specId), lifecycle: restarted.draftStepExecutionState({ binding: {
+          runId: request.runId, specId: value.specId, stepId: "spec-gate-repair",
+          attempt: restarted.canonicalState(value.specId).attempt } }).lifecycle });
+      const service = await prepareSpecGateRepairService({ ctx: value.ctx, request: restored,
+        Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
+      const result = await new SpecGateRepairStep(service).execute();
+      assert.equal(result.kind, "spec-gate-repair-review-required");
+      assertOneTerminalPublication(restarted, value.specId, original);
+      assert.equal(latestRepairBudget({ flowManager: restarted, specId: value.specId, attemptId,
+        baseRevision: context.baseRevision, consumerNodeId: "spec-gate-repair" }).budget.providerCallCount, 1);
     } finally { removeTmpDir(value.root); }
   });
 
@@ -895,44 +862,27 @@ describe("Spec Gate repair restart boundaries", () => {
     } finally { removeTmpDir(value.root); }
   });
 
-  for (const mode of ["evidence", "context", "draft-return", "repair"]) {
+  for (const mode of ["context", "draft-return", "repair"]) {
     it(`dispatches a published ${mode} response after restart without another provider call`, async () => {
-      const value = await createSpecGateRepairScenario({
-        ...(mode === "evidence" ? { specRecord: oversizedSpec() } : {}),
-      });
+      const value = await createSpecGateRepairScenario();
       try {
         initGitRepo(value.root);
         fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
         commitAll(value.root, "Create isolated repair replay repository");
         const request = nextRequest(value, `interrupted-${mode}`);
         const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
-        let proposal;
-        if (mode === "evidence") {
-          assert.equal(context.mode, "evidence");
-          const { source, ledger } = readProgressBoundSpecGateRepairInput({
-            flowManager: value.flowManager, state: value.flowManager.canonicalState(value.specId),
-            executionRoot: value.root });
-          const work = nextSpecGateRepairEvidence({ context: source.context, unitId: context.unitId,
-            limit: SPEC_GATE_REPAIR_REQUEST_LIMIT, publications: ledger.entries });
-          proposal = { version: 1, stage: "spec-gate-repair-evidence", baseRevision: context.baseRevision,
-            unitId: context.unitId, observations: work.batch.payloadElements.map((element) => ({
-              requirementId: context.unitId, sourceRef: element.id,
-              support: ["The original range preserves the validation contract."], contradictions: [], unresolved: [],
-            })) };
-        } else {
-          assert.equal(context.mode, "repair");
-          const selection = context.selections[0];
-          const range = selection.ranges.find((entry) => entry.writable);
-          proposal = mode === "context" ? { version: 1, stage: "spec-gate-repair-context-request",
-            baseRevision: context.baseRevision, unitId: selection.unit.id, additionalRangeIds: ["background"] }
-            : mode === "draft-return"
-              ? draftReturnProposal(context, "Which validation target is intended?")
-              : { version: 1, stage: "spec-gate-repair", baseRevision: context.baseRevision,
-                groups: [{ findingIdentities: selection.unit.findings.map((finding) => finding.identity),
-                  operations: [{ kind: "edit-text-field", target: range.target, expectedDigest: range.digest,
-                    edits: [{ startByte: 0, endByte: Buffer.byteLength(range.value),
-                      replacement: "Publish a precisely validated artifact." }], reason: "Clarify the exact finding." }] }] };
-        }
+        assert.equal(context.mode, "repair");
+        const selection = context.selections[0];
+        const range = selection.ranges.find((entry) => entry.writable);
+        const proposal = mode === "context" ? { version: 1, stage: "spec-gate-repair-context-request",
+          baseRevision: context.baseRevision, unitId: selection.unit.id, additionalRangeIds: ["background"] }
+          : mode === "draft-return"
+            ? draftReturnProposal(context, "Which validation target is intended?")
+            : { version: 1, stage: "spec-gate-repair", baseRevision: context.baseRevision,
+              groups: [{ findingIdentities: selection.unit.findings.map((finding) => finding.identity),
+                operations: [{ kind: "edit-text-field", target: range.target, expectedDigest: range.digest,
+                  edits: [{ startByte: 0, endByte: Buffer.byteLength(range.value),
+                    replacement: "Publish a precisely validated artifact." }], reason: "Clarify the exact finding." }] }] };
         fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(proposal));
         reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
           prompt: JSON.stringify(request.toPromptReference()) });
@@ -950,7 +900,7 @@ describe("Spec Gate repair restart boundaries", () => {
         const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
           inWorktree: false, specId: value.specId });
         let workerCalls = 0;
-        const agent = { async call() { workerCalls += 1; throw new Error("published response must replay"); } };
+        const agent = { projectInvocation, async call() { workerCalls += 1; throw new Error("published response must replay"); } };
         const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1 });
         dispatcher.container = dispatchContainer({ root: value.root, flowManager: restarted, agent });
         const result = await dispatcher.execute({ ...value.ctx, flowManager: restarted,
@@ -963,12 +913,12 @@ describe("Spec Gate repair restart boundaries", () => {
         assert.deepEqual(latestRepairBudget({ ...budgetInput, flowManager: restarted }).budget.snapshot(), savedBudget);
         const after = durableSnapshot(restarted, value.specId);
         assert.equal(artifactCount(after, "spec.gate.repair.progress"),
-          artifactCount(before, "spec.gate.repair.progress") + (["evidence", "context"].includes(mode) ? 1 : 0));
+          artifactCount(before, "spec.gate.repair.progress") + (mode === "context" ? 1 : 0));
         const ledger = new SpecGateRepairProgressLedger({ flowManager: restarted,
           specId: value.specId, attemptId, baseRevision: context.baseRevision });
         assert.equal(ledger.entries.length, 1);
         assert.deepEqual(ledger.entries[0].proposal, proposal);
-        if (["evidence", "context"].includes(mode)) {
+        if (mode === "context") {
           const settled = restarted.readCurrentStepSettlement({ specId: value.specId,
             stepId: "spec-gate-repair" });
           const completion = restarted.readArtifact({ specId: value.specId,
@@ -979,28 +929,12 @@ describe("Spec Gate repair restart boundaries", () => {
           assert.notEqual(settled.receipt.id, publicationReceipt);
           assert.equal(after.spec, before.spec);
           let nextContext = null;
-          const nextAgent = { async call(_prompt, options) {
+          const nextAgent = { projectInvocation, async call(_prompt, options) {
             workerCalls += 1;
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             const following = JSON.parse(fs.readFileSync(requestPath, "utf8"));
             nextContext = requestInput(following, "spec-gate-repair-context.json").document;
-            let response;
-            if (nextContext.mode === "evidence") {
-              const { source, ledger: nextLedger } = readProgressBoundSpecGateRepairInput({
-                flowManager: restarted, state: restarted.canonicalState(value.specId), executionRoot: value.root });
-              const work = nextSpecGateRepairEvidence({ context: source.context,
-                unitId: nextContext.unitId, limit: SPEC_GATE_REPAIR_REQUEST_LIMIT,
-                publications: nextLedger.entries });
-              response = { version: 1, stage: "spec-gate-repair-evidence",
-                baseRevision: nextContext.baseRevision, unitId: nextContext.unitId,
-                observations: work.batch.payloadElements.map((element) => ({
-                  requirementId: nextContext.unitId, sourceRef: element.id,
-                  support: ["The cited range retains the planned contract."],
-                  contradictions: [], unresolved: [],
-                })) };
-            } else {
-              response = draftReturnProposal(nextContext, "Which target should this repair use?");
-            }
+            const response = draftReturnProposal(nextContext, "Which target should this repair use?");
             fs.writeFileSync(requestPayloadPath(following, "spec-gate-repair.json"), workerArtifactJson(response));
             sealWorkerArtifactHandoff({ requestPath,
               invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
@@ -1015,7 +949,7 @@ describe("Spec Gate repair restart boundaries", () => {
             _envelopeType: "run", _envelopeKey: "dispatch" });
           assert.equal(workerCalls, 1, JSON.stringify(nextResult));
           assert.notEqual(nextContext.batchDigest, context.batchDigest);
-          if (mode === "context") assert.equal(nextContext.selections[0].ranges.find((range) => range.id === "background").writable, false);
+          assert.equal(nextContext.selections[0].ranges.find((range) => range.id === "background").writable, false);
           const afterNewClaim = durableSnapshot(restarted, value.specId);
           assert.throws(() => request.assertCurrent(restarted.loadReadOnly(value.specId)),
             { code: "FLOW_ARTIFACT_HANDOFF_STALE" });

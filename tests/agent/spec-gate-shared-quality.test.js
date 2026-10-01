@@ -9,6 +9,7 @@ import { ProviderRegistry } from "../../src/lib/provider.js";
 import { Logger } from "../../src/lib/log.js";
 import { PromptLogicalFootprint } from "../../src/lib/prompt-batching.js";
 import { checkGuardrail } from "../../src/flow/lib/run-gate.js";
+import { createTmpDir, removeTmpDir } from "../support/builders/tmp-dir.js";
 
 // Frozen expected findings are derived from these rules, independently of the
 // baseline implementation's output. No real Flow artifacts enter this fixture.
@@ -37,10 +38,8 @@ const source = JSON.stringify({
 const expectedViolations = ["consistent-timeout", "planned-threshold"];
 
 test("real model preserves cross-range violations, justified exceptions and Spec-stage semantics", { timeout: 1_800_000 }, async (t) => {
-  const temporaryParent = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../.tmp");
-  fs.mkdirSync(temporaryParent, { recursive: true });
-  const root = fs.mkdtempSync(path.join(temporaryParent, "spec-gate-quality-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = createTmpDir("spec-gate-quality-", { parent: fileURLToPath(new URL("../../.tmp/", import.meta.url)) });
+  t.after(() => removeTmpDir(root));
   const model = process.env.SENNEL_GATE_QUALITY_MODEL || "gpt-6-luna";
   const profile = "quality-frozen";
   const config = { agent: { default: profile, timeout: 240, retryCount: 0, promptCharacterLimit: 18000,

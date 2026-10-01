@@ -62,6 +62,7 @@ import { prepareDraftService } from "../../support/infrastructure/draft-service.
 import { DraftRepairCandidate } from "../../../src/flow/steps/draft/draft-repair-candidate.js";
 import { SpecService } from "../../../src/flow/services/spec-service.js";
 import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
+import { CurrentFlowStateInvariantError } from "../../../src/flow/lib/current-flow-state.js";
 import { SpecReviewWorkerService } from "../../../src/flow/services/spec-worker-review-service.js";
 import { SpecStep } from "../../../src/flow/steps/spec/spec.js";
 import { SpecWorkerResultSelection } from "../../../src/flow/lib/spec-worker-result-selection.js";
@@ -148,6 +149,7 @@ import {
   canonicalDraftDocument,
 } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { stubAgentConfig, writeStubAgentScript } from "../../support/fakes/stub-agent.js";
 import {
   validWorkerHandoffSpec as validSpec,
   validWorkerHandoffTaskSpec,
@@ -156,6 +158,13 @@ import {
 
 const ACTION_DIGEST = "a".repeat(64);
 const SOURCE_REQUEST_LIFECYCLES = new WeakMap();
+
+function handoffAgentOptions({ executionRoot }) {
+  return {
+    config: { agent: stubAgentConfig(writeStubAgentScript(executionRoot, "handoff-provider.cjs", "{}")) },
+    paths: { root: executionRoot, agentWorkDir: executionRoot },
+  };
+}
 
 function commitDraftResult(coordinator, { ctx, request, preparation, stepResult }) {
   if (preparation.facts.repairInput !== null) {
@@ -3361,10 +3370,9 @@ describe("worker artifact handoff", () => {
     }, "implement"), /invalid schema/);
   });
 
-  it("defines one complete authority record for all 38 Flow leaves and 5 task leaves", () => {
+  it("defines one complete authority record for every Flow and task leaf", () => {
     const flowLeaves = flattenSteps(buildInitialNestedSteps()).map((step) => step.id);
     const taskLeaves = buildInitialTaskSteps().map((step) => step.id);
-    assert.equal(flowLeaves.length, 38);
     assert.equal(taskLeaves.length, 5);
     assert.deepEqual(
       FLOW_ARTIFACT_AUTHORITY_MATRIX.map((entry) => entry.stepId).sort(),
@@ -4803,7 +4811,8 @@ describe("worker artifact handoff", () => {
       const beforeIllegal = specRepairSnapshot(value);
       await assert.rejects(completeTaskProposalRepair(value, request, [
         taskProposalOperation(findingId, "T1", "acceptance", admitted.acceptance, illegal.acceptance),
-      ]), (error) => /only correct admitted Task title or goal/.test(error.cause?.message));
+      ]), (error) => error instanceof CurrentFlowStateInvariantError
+        && /only correct admitted Task title or goal/.test(error.message));
       assert.deepEqual(specRepairSnapshot(value), beforeIllegal);
 
       const repairedPending = {
@@ -4863,9 +4872,8 @@ describe("worker artifact handoff", () => {
       const dispatcher = new RunDispatchCommand({
         nextAction,
         agent: {
-          async call(prompt, options) {
+          async call(_prompt, options) {
             calls += 1;
-            assert.match(prompt, /parent dispatcher alone validates, publishes/i);
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
             fs.writeFileSync(
@@ -5279,7 +5287,7 @@ describe("worker artifact handoff", () => {
         authorization: new UnapprovedFlowDispatchAuthorization(action),
       });
       class SealingAgent extends Agent {
-        constructor() { super({}); }
+        constructor() { super(handoffAgentOptions(value)); }
         async call(_prompt, options) {
           const canonical = value.flowManager.canonicalState(value.specId);
           const execution = value.flowManager.draftStepExecutionState({
@@ -5356,7 +5364,7 @@ describe("worker artifact handoff", () => {
         authorization: new UnapprovedFlowDispatchAuthorization(action),
       });
       class CandidateAgent extends Agent {
-        constructor() { super({}); }
+        constructor() { super(handoffAgentOptions(value)); }
         async call(_prompt, options) {
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const requestDocument = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -5427,7 +5435,7 @@ describe("worker artifact handoff", () => {
       });
       let providerCalls = 0;
       class SealingAgent extends Agent {
-        constructor() { super({}); }
+        constructor() { super(handoffAgentOptions(value)); }
         async call(_prompt, options) {
           providerCalls += 1;
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
@@ -6174,7 +6182,7 @@ describe("worker artifact handoff", () => {
         session, action, authorization: new UnapprovedFlowDispatchAuthorization(action),
       });
       class SealingAgent extends Agent {
-        constructor() { super({}); }
+        constructor() { super(handoffAgentOptions(value)); }
         async call(_prompt, options) {
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const document = JSON.parse(fs.readFileSync(requestPath, "utf8"));

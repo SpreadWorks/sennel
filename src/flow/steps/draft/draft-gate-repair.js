@@ -11,6 +11,7 @@ export class DraftGateRepairStep extends Step {
   static dependencies = [DraftService];
 
   #draftService;
+  #selectedResult = null;
 
   constructor(draftService) {
     super();
@@ -18,12 +19,13 @@ export class DraftGateRepairStep extends Step {
     this.#draftService = draftService;
   }
 
-  async _execute() {
+  prepareResult() {
+    if (this.#selectedResult !== null) return this.#selectedResult;
     const requiresWorker = this.#draftService.requiresWorkerExecution();
     const recovered = requiresWorker ? null : this.#draftService.inspectWorkerFacts().repairSelection;
     if (recovered != null) {
-      await recovered.result.persist(this.#draftService);
-      return recovered.result;
+      this.#selectedResult = recovered.result;
+      return this.#selectedResult;
     }
     const facts = requiresWorker
       ? this.#draftService.inspectPlanGateRepair()
@@ -38,6 +40,12 @@ export class DraftGateRepairStep extends Step {
       result = draftGateRepairResult(error);
     }
     if (candidate != null) this.#draftService.adoptRepairCandidate(candidate);
+    this.#selectedResult = result;
+    return result;
+  }
+
+  async _execute() {
+    const result = this.prepareResult();
     await result.persist(this.#draftService);
     return result;
   }

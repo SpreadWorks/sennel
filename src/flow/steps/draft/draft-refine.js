@@ -35,6 +35,7 @@ export class DraftRefineStep extends Step {
   static dependencies = [DraftService];
 
   #draftService;
+  #selectedResult = null;
 
   constructor(draftService) {
     super();
@@ -42,7 +43,8 @@ export class DraftRefineStep extends Step {
     this.#draftService = draftService;
   }
 
-  async _execute() {
+  prepareResult() {
+    if (this.#selectedResult !== null) return this.#selectedResult;
     const input = this.#draftService.inspectDraftTransition();
     let result;
     try {
@@ -50,6 +52,12 @@ export class DraftRefineStep extends Step {
     } catch (error) {
       result = new StepErrorResult("draft-refine", error);
     }
+    this.#selectedResult = result;
+    return result;
+  }
+
+  async _execute() {
+    const result = this.prepareResult();
     await result.persist(this.#draftService);
     return result;
   }

@@ -6,6 +6,15 @@ function count(value, label, minimum = 0) {
 }
 
 export class EvaluationUnavailable {
+  static toJsonSchema({ nullable = false } = {}) {
+    return {
+      type: nullable ? ["object", "null"] : "object",
+      properties: { kind: { type: "string", enum: ["file-read-failed", "context-limit", "evaluation-failed"] },
+        reason: { type: "string", minLength: 1 } },
+      required: ["kind", "reason"], additionalProperties: false,
+    };
+  }
+
   constructor(kind, reason) {
     if (!["file-read-failed", "context-limit", "evaluation-failed"].includes(kind)
       || typeof reason !== "string" || !reason.trim()) throw new TypeError("Evaluation unavailable requires a supported kind and non-empty reason");
