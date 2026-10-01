@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-09-30T16:28:06.024Z",
+  "analyzedAt": "2026-10-01T14:08:34.239Z",
   "package": {
     "entries": [
       {
@@ -3264,9 +3264,9 @@
       },
       {
         "file": "src/flow/commands/review.js",
-        "hash": "1f42741cc9d5fead57424b4af55dd24a",
-        "lines": 5774,
-        "mtime": "2026-09-13T14:25:08.726Z",
+        "hash": "c1ad9fba9862732826d8c880e9284e50",
+        "lines": 5746,
+        "mtime": "2026-10-01T06:04:01.723Z",
         "className": "review",
         "methods": [
           "TaskReviewSourceEffectObserver",
@@ -3274,7 +3274,6 @@
           "DraftReviewCandidateReducer",
           "writeReviewAttemptHistory",
           "synthesizeReviewFindings",
-          "splitReviewTextAtHeadings",
           "taskReviewProtocolIgnoredDirectories",
           "taskReviewAgentRuntimeDirectories",
           "ensureAgent",
@@ -3415,7 +3414,6 @@
           "extractGoalAndScope",
           "extractScopePaths",
           "buildSpecReviewPrompt",
-          "buildSpecReviewSynthesisPrompt",
           "extractMarkdownField",
           "specReviewFindingId",
           "extractJsonObjectCandidate",
@@ -3455,6 +3453,7 @@
           "findingText",
           "findingCategory",
           "normalizeReviewFindingRecords",
+          "parseCompleteDraftReviewProposals",
           "runDraftReview",
           "runReview",
           "stripPreamble",
@@ -3468,6 +3467,8 @@
           "../../lib/product.js",
           "../../lib/agent-failure.js",
           "../../lib/agent-invocation-metric.js",
+          "../../lib/agent-response-protocol.js",
+          "../../lib/agent-file-input-failure.js",
           "../../lib/agent.js",
           "../../lib/flow-helpers.js",
           "../../lib/flow-workspace.js",
@@ -3522,6 +3523,7 @@
           "writeReviewAttemptHistory",
           "default",
           "parseProposals",
+          "parseCompleteDraftReviewProposals",
           "formatReviewMd",
           "resolveReviewTarget",
           "resolveMergeBase",
@@ -3564,6 +3566,7 @@
           "buildGapAnalysisPrompt",
           "buildTestFixPrompt",
           "buildDraftReviewPrompt",
+          "buildDraftReviewSynthesisPrompt",
           "buildDraftReviewAuthorityText",
           "buildDraftReviewArtifact",
           "shouldUseLoopReview",
@@ -3592,21 +3595,23 @@
         "extends": "PromptBatchReducer",
         "usedBy": null,
         "id": "331cf497",
-        "summary": "Implements the flow review command across specification, implementation, testing, and draft review phases.",
-        "detail": "Coordinates canonical review inputs, agent invocation, review loops, diff and scope filtering, requirement mappings, typed findings, persistence strategies, artifact histories, and review outputs. It supports implementation findings, test coverage and test-review artifacts, specification review deltas, and draft question or coverage reviews.",
+        "summary": "Flow review command orchestration and artifact management",
+        "detail": "Implements the flow review command across draft, test, specification, implementation, and task-review phases. It resolves canonical review inputs, task identities, diff scopes, guardrails, prompt plans, provider retry policies, loop-review batches, structured finding schemas, persistence strategies, review history, and generated review artifacts. The module also filters proposals by touched-file scope, enforces requirement and test-review contracts, handles tooling and provider failures, and exposes the command entry point.",
         "chapter": "cli_commands",
-        "role": "cli",
+        "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-13T14:29:39.415Z",
+          "processedAt": "2026-10-01T12:50:38.142Z",
           "attempts": 1
         },
+        "app": "senti",
         "keywords": [
           "flow review",
-          "implementation review",
-          "test coverage",
-          "specification review",
+          "review command",
           "review artifacts",
-          "finding persistence"
+          "implementation review",
+          "test review",
+          "task review",
+          "provider retry"
         ]
       },
       {
@@ -4368,9 +4373,9 @@
       },
       {
         "file": "src/flow/engine/composition/spec-gate-repair.js",
-        "hash": "b233b523c7e6365d03d0aa05832cf3a5",
-        "lines": 307,
-        "mtime": "2026-09-29T09:32:03.536Z",
+        "hash": "23e1bdc0f0fd16302a4c766b3d2db196",
+        "lines": 314,
+        "mtime": "2026-10-01T06:04:01.723Z",
         "className": "spec-gate-repair",
         "methods": [
           "preparePublishedSpecGateRepairArguments",
@@ -4381,6 +4386,7 @@
           "serviceArguments"
         ],
         "imports": [
+          "../../../lib/prompt-batching.js",
           "./step-registration.js",
           "../../lib/current-flow-state-conflict-error.js",
           "../connectors/spec/spec-step-binding.js",
@@ -4405,22 +4411,23 @@
           "src/flow/engine/composition/spec.js"
         ],
         "id": "3d73a5fe",
-        "summary": "Coordinates Spec Gate repair preparation, worker reservation, evidence validation, replay, and durable settlement.",
-        "detail": "Builds bounded Spec Gate repair requests and service arguments, validates selected evidence and location plans, detects stale or changed context, and enforces limits on prompts, batches, responses, and atomic units. It also requires durable provider claims and consistent worker replay before returning settlement arguments.",
+        "summary": "Spec Gate repair worker preparation and settlement composition",
+        "detail": "Coordinates Spec Gate repair execution by combining canonical repair inputs, worker execution claims, evidence revisions, bounded prompt batches, context expansion, and settlement writing. It validates selected atomic units, location plans, response revisions, durable response limits, provider claims, replay consistency, and handoff freshness before returning service arguments or raising recovery and stale-state errors.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-01T12:50:38.142Z",
           "attempts": 1
         },
+        "app": "senti",
         "keywords": [
           "Spec Gate repair",
-          "worker reservation",
-          "evidence validation",
-          "durable handoff",
-          "replay",
+          "worker handoff",
+          "canonical evidence",
+          "prompt batching",
           "context expansion",
-          "settlement"
+          "settlement writer",
+          "replay validation"
         ]
       },
       {
@@ -8484,11 +8491,12 @@
       },
       {
         "file": "src/flow/lib/draft-review-artifacts.js",
-        "hash": "99d65f5766e0fc542386c560af5c00aa",
-        "lines": 444,
-        "mtime": "2026-08-28T00:01:53.125Z",
+        "hash": "38ab58b2370d8f17b7a484d06bb6841a",
+        "lines": 480,
+        "mtime": "2026-10-01T14:07:31.112Z",
         "className": "draft-review-artifacts",
         "methods": [
+          "DraftTriageDecision",
           "normalizeDraftReviewText",
           "DraftReviewFinding",
           "DraftReviewArtifactDocument",
@@ -8513,6 +8521,7 @@
           "./draft-repair-operations.js"
         ],
         "exports": [
+          "DraftTriageDecision",
           "normalizeDraftReviewText",
           "DraftReviewFinding",
           "DraftReviewArtifactDocument",
@@ -8522,24 +8531,25 @@
         "extends": null,
         "usedBy": [
           "src/flow/lib/canonical-review-artifacts.js",
-          "src/flow/lib/run-review.js"
+          "src/flow/lib/run-review.js",
+          "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "66b61303",
-        "summary": "Builds and validates review, triage, and repair artifacts for draft review workflows. It normalizes findings, enforces bounded schemas, and checks revision bindings and cross-artifact consistency.",
-        "detail": "Review findings use controlled classifications and normalized, truncated text fields with fixed item limits. Artifact documents derive and verify verdicts, versions, required strings, and exact field sets. Validation routines connect review files to revisions, triage decisions, repair evidence, and the current route or state. DraftReviewEvidenceSet exposes consolidated validation issues and the normalized triage document for downstream decisions.",
+        "summary": "Defines draft review, triage, repair, and evidence artifact models with normalization and validation.",
+        "detail": "Provides typed artifact representations for review findings, triage decisions, review documents, revision bindings, and evidence sets. It enforces field limits, classifications, verdict consistency, required strings, item counts, revision integrity, and artifact relationships before producing normalized JSON or validation issues.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-08-28T16:08:35.815Z",
+          "processedAt": "2026-10-01T14:09:10.187Z",
           "attempts": 1
         },
         "keywords": [
-          "draft review",
-          "triage artifact",
-          "repair artifact",
-          "finding classification",
-          "revision binding",
-          "evidence validation"
+          "draft review artifacts",
+          "triage decisions",
+          "repair validation",
+          "artifact normalization",
+          "evidence sets",
+          "revision binding"
         ]
       },
       {
@@ -10344,7 +10354,8 @@
         "extends": "PromptBatchReducer",
         "usedBy": [
           "src/flow/lib/run-gate.js",
-          "src/flow/lib/spec-gate-repair-evidence.js"
+          "src/flow/lib/spec-gate-repair-evidence.js",
+          "src/flow/lib/review-text-prompt-plan.js"
         ],
         "id": "a824bced",
         "summary": "Plans and executes prompt batches for gate observations, evidence reduction, and guardrail judgments.",
@@ -14238,9 +14249,9 @@
       },
       {
         "file": "src/flow/lib/review-text-prompt-plan.js",
-        "hash": "cf07e4332a59ecb27a972d208e2114e4",
-        "lines": 127,
-        "mtime": "2026-09-10T08:54:50.672Z",
+        "hash": "d3d341e0bcc3cfedd4c0ec54d073ceeb",
+        "lines": 152,
+        "mtime": "2026-10-01T06:04:01.724Z",
         "className": "review-text-prompt-plan",
         "methods": [
           "SpecSectionPromptElement",
@@ -14249,6 +14260,11 @@
         ],
         "imports": [
           "node:crypto",
+          "node:path",
+          "../../lib/agent-file-reference.js",
+          "../../lib/product.js",
+          "../../lib/agent-response-protocol.js",
+          "./gate-prompt-plan.js",
           "../../lib/prompt-batching.js"
         ],
         "exports": [
@@ -14256,23 +14272,26 @@
           "DraftSectionPromptElement",
           "ReviewTextPromptPlan"
         ],
-        "extends": "PartitionedPromptPayloadElement",
+        "extends": "AtomicPromptElement",
         "usedBy": null,
         "id": "4678e8ac",
-        "summary": "Creates ranged prompt plans for specification and draft review text.",
-        "detail": "Defines prompt elements that preserve canonical character ranges and source lengths, then specializes them for specification and draft sections. The envelope renders these ranged sections for review, while the plan validates that semantic sections are supplied before creating a batched prompt plan.",
+        "summary": "Review text prompt planning and file response validation",
+        "detail": "Defines the prompt elements, envelope, and plan used for review text requests, including specification and draft sections, prompt batching, agent runtime files, and project runtime roots. It also provides a file-response policy that parses structured JSON when available, preserves Markdown-compatible responses, requires exactly reviewResponse and evaluationUnavailable fields, enforces one evaluation outcome, and delegates evaluation-unavailable handling to the response protocol.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-10T12:55:19.937Z",
+          "processedAt": "2026-10-01T12:50:38.142Z",
           "attempts": 1
         },
+        "app": "senti",
         "keywords": [
-          "review text",
+          "review prompts",
           "prompt plan",
-          "source ranges",
-          "spec sections",
-          "draft sections"
+          "prompt envelope",
+          "file response",
+          "JSON validation",
+          "Markdown response",
+          "evaluation unavailable"
         ]
       },
       {
@@ -14837,9 +14856,9 @@
       },
       {
         "file": "src/flow/lib/run-dispatch.js",
-        "hash": "ced7796d3b6dafa57df930a848fa7593",
-        "lines": 2941,
-        "mtime": "2026-09-29T13:57:11.274Z",
+        "hash": "9abcf0d5774579e55ff172af50be1036",
+        "lines": 2989,
+        "mtime": "2026-10-01T06:04:01.724Z",
         "className": "run-dispatch",
         "methods": [
           "DispatcherOwnedFlowCommand",
@@ -14891,6 +14910,7 @@
           "dispatchLockError",
           "persistDispatchApproval",
           "nonblockingDecisionSchema",
+          "assertWorkerAgentAdmission",
           "appendWorkerHandoffDiagnostic",
           "workerHandoffFailureData",
           "quarantineRejectedWorkerHandoff",
@@ -14959,22 +14979,21 @@
         "extends": "Error",
         "usedBy": null,
         "id": "6c7fd82a",
-        "summary": "Coordinates flow dispatch, worker execution, approvals, retries, failures, and recovery boundaries.",
-        "detail": "Provides the central RunDispatchCommand and related dispatch abstractions for selecting and executing flow actions. It validates targets and repository fingerprints, persists approval receipts, manages dispatcher-owned commands, invokes registered workers, handles Draft and Spec worker outcomes, records handoff diagnostics, classifies failures, supports retry feedback, flushes deferred metrics, and returns blocked or recovery-required dispatch boundaries when execution cannot continue safely.",
+        "summary": "Coordinates flow command dispatch, worker execution, approvals, retries, and recovery.",
+        "detail": "This dispatcher validates worker and action identity, manages dispatch leases and repository fingerprints, persists approval receipts, routes dispatcher-owned commands, executes registered worker steps, and converts failures into structured recovery boundaries. It also handles artifact handoffs, retry feedback, deferred metrics, nonblocking agent decisions, and canonical flow-state updates.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-01T12:50:38.142Z",
           "attempts": 1
         },
         "keywords": [
           "flow dispatch",
-          "worker execution",
+          "worker handoff",
           "approval receipt",
-          "retry handling",
-          "failure recovery",
-          "handoff",
-          "dispatch boundary"
+          "retry recovery",
+          "repository fingerprint",
+          "execution lease"
         ]
       },
       {
@@ -15490,9 +15509,9 @@
       },
       {
         "file": "src/flow/lib/run-gate.js",
-        "hash": "2259d59373361f6a3e79d795a06b351a",
-        "lines": 4708,
-        "mtime": "2026-09-30T16:20:18.458Z",
+        "hash": "df6d96075b0cebb558e7aa46cfd26b63",
+        "lines": 4672,
+        "mtime": "2026-10-01T14:07:31.112Z",
         "className": "run-gate",
         "methods": [
           "parsePublicGateArguments",
@@ -15624,10 +15643,8 @@
           "fs",
           "path",
           "crypto",
-          "../../lib/atomic-file.js",
           "../../lib/agent-file-reference.js",
           "../../lib/agent-file-input-failure.js",
-          "../../lib/regular-file-snapshot.js",
           "../../lib/agent-response-protocol.js",
           "child_process",
           "util",
@@ -15756,21 +15773,22 @@
           "src/flow/lib/task-review-prompt-plan.js"
         ],
         "id": "b4aa4dad",
-        "summary": "Orchestrates gate commands, prompt evaluation, diff scoping, canonical execution, and issue-log settlement.",
-        "detail": "Implements public gate argument parsing, phase validation, Git diff collection and filtering, guardrail and requirement prompt construction, strict evaluation-response parsing, retry and protocol handling, scope identity, evidence reuse, and requirement batching. RunGateCommand and runGateFlow coordinate canonical gate execution, task and integration contexts, result publication, recovery, and issue-log entries.",
+        "summary": "Orchestrates gate execution, evidence collection, prompt evaluation, result validation, and canonical Flow state updates.",
+        "detail": "Implements the run-gate controller across specification, task, implementation, and integration phases. It parses gate inputs, collects and filters Git diffs, builds guardrail and requirement prompts, validates structured agent responses, manages retries and execution budgets, tracks evidence and evaluation scopes, applies reusable results, and publishes pass, fail, or blocked outcomes through canonical Flow state and issue logs.",
         "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-30T16:29:29.037Z",
+          "processedAt": "2026-10-01T14:09:10.187Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "gate command",
-          "runGateFlow",
-          "Git diff scoping",
+          "run gate",
           "guardrail evaluation",
-          "issue log"
+          "Git diff collection",
+          "prompt batching",
+          "gate retries",
+          "Flow state",
+          "agent response validation"
         ]
       },
       {
@@ -18186,9 +18204,9 @@
       },
       {
         "file": "src/flow/lib/spec-gate-repair-context.js",
-        "hash": "78a5377f40945a4923e27cfe5310d065",
-        "lines": 372,
-        "mtime": "2026-09-29T02:11:17.329Z",
+        "hash": "1f14b0d61426811e411dc0575c2fd86d",
+        "lines": 444,
+        "mtime": "2026-10-01T06:04:01.725Z",
         "className": "spec-gate-repair-context",
         "methods": [
           "SpecGateRepairRange",
@@ -18209,7 +18227,9 @@
           "./flow-finding-source.js",
           "./spec-repair-operations.js",
           "./spec-gate-targets.js",
-          "./spec-gate-repair-values.js"
+          "./spec-gate-repair-values.js",
+          "./worker-artifact-handoff-error.js",
+          "./worker-artifact-input-format.js"
         ],
         "exports": [
           "SpecGateRepairRange",
@@ -18226,20 +18246,21 @@
           "src/flow/lib/spec-gate-repair-input.js"
         ],
         "id": "46f160bf",
-        "summary": "Builds typed Spec Gate repair context and prompt batches.",
-        "detail": "Defines repair ranges, findings, units, selections, and envelopes; hashes canonical data, validates typed read-only sources, enforces revision and identity guards, selects related ranges, and creates prompt plans for repair and location resolution.",
+        "summary": "Builds typed, revision-bound repair context for Spec Gate findings and writable ranges.",
+        "detail": "This module models repair ranges, findings, units, selections, envelopes, and prompt references. It validates canonical source identities, detects stale revisions and foreign or duplicated ranges, groups findings into repair units, restricts writable targets by permissions, creates bounded prompt plans, and rejects oversized worker-artifact input.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-01T12:50:38.142Z",
           "attempts": 1
         },
         "keywords": [
           "Spec Gate repair",
-          "repair context",
-          "prompt batching",
-          "range selection",
-          "revision guard"
+          "repair ranges",
+          "finding identity",
+          "revision validation",
+          "writable targets",
+          "prompt batching"
         ]
       },
       {
@@ -18689,9 +18710,9 @@
       },
       {
         "file": "src/flow/lib/spec-gate-targets.js",
-        "hash": "491f58c9b7b6219ead47e2c8909c73ed",
-        "lines": 137,
-        "mtime": "2026-09-28T00:00:14.117Z",
+        "hash": "d62f3b38c65474f63b9a549ce16fcc40",
+        "lines": 148,
+        "mtime": "2026-10-01T14:07:31.113Z",
         "className": "spec-gate-targets",
         "methods": [
           "SpecGateDocumentTarget",
@@ -18715,21 +18736,21 @@
           "src/flow/lib/spec-gate-repair-input.js"
         ],
         "id": "1d36353f",
-        "summary": "Defines Spec Gate document targets, target selections, and schemas for allowed repair targets.",
-        "detail": "This module provides the SpecGateDocumentTarget and SpecGateTargetSelection abstractions and generates validation schemas from specification repair targets. It recognizes SHA-256 revision identifiers, requires explicit allowed target permissions, rejects absent or ambiguous observation targets, ensures allowed targets belong to the declared target set, and supports both document-level and entity-level target schemas.",
+        "summary": "Models Spec Gate target selections and generates schemas for unambiguous observation targets.",
+        "detail": "Defines document and repair-target selection objects for the canonical specification. It validates target identity and allowed target sets, rejects absent or ambiguous observations, derives target alternatives from specification repair entries, and exposes JSON-schema fragments and guidance for structured Spec Gate responses.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-28T00:06:01.176Z",
+          "processedAt": "2026-10-01T14:09:10.187Z",
           "attempts": 1
         },
         "keywords": [
-          "document targets",
+          "Spec Gate targets",
           "target selection",
-          "repair schema",
-          "allowed targets",
-          "SHA-256 revision",
-          "Spec Gate"
+          "repair targets",
+          "JSON schema",
+          "observation validation",
+          "canonical specification"
         ]
       },
       {
@@ -21484,7 +21505,8 @@
         "usedBy": [
           "src/flow/lib/spec-gate-repair-progress.js",
           "src/flow/lib/worker-artifact-handoff.js",
-          "src/flow/lib/worker-execution-admission.js"
+          "src/flow/lib/worker-execution-admission.js",
+          "src/flow/lib/spec-gate-repair-context.js"
         ],
         "id": "303425c4",
         "summary": "Defines errors for invalid, stale, or conflicting worker artifact handoffs.",
@@ -21505,9 +21527,9 @@
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "f4579c655988a33653cff5468feefb0c",
-        "lines": 10348,
-        "mtime": "2026-09-29T13:48:35.439Z",
+        "hash": "674f250aa5368f5beb8fbf347c124327",
+        "lines": 10349,
+        "mtime": "2026-10-01T14:07:31.115Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "RequirementTestStructuralHandoffResult",
@@ -21569,7 +21591,6 @@
           "exactObjectKeys",
           "duplicateValues",
           "assertUniqueSourceRequirementClaims",
-          "stableStringify",
           "digest",
           "base64Bytes",
           "boundedJson",
@@ -21708,6 +21729,7 @@
         ],
         "imports": [
           "../../lib/flow-schema-revision.js",
+          "./worker-artifact-input-format.js",
           "node:crypto",
           "node:child_process",
           "node:fs",
@@ -21722,6 +21744,7 @@
           "../../lib/regular-file-snapshot.js",
           "../../lib/flow-version.js",
           "./draft-review-routes.js",
+          "./draft-review-artifacts.js",
           "../definition.js",
           "./source-handoff-failure.js",
           "./draft-lifecycle.js",
@@ -21737,7 +21760,6 @@
           "./spec-gate-repair-worker-facts.js",
           "./spec-gate-repair-progress.js",
           "./spec-gate-repair-evidence.js",
-          "../../lib/prompt-batching.js",
           "./flow-findings.js",
           "./task-step-identity.js",
           "./step-tree.js",
@@ -21856,23 +21878,59 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Implements the worker artifact handoff protocol for isolated Flow workers.",
-        "detail": "Coordinates source and artifact workers through typed handoff requests, input snapshots, policy and canonical-authority validation, bounded payload manifests, digest-based integrity checks, sealed submissions, publication receipts, quarantine records, cleanup, and worker coordination. Tracks source mutations, repository authority snapshots, and rollback checkpoints; supports recovery, source mutation rollback, gate and review repairs, Requirement test workflows, and safeguards canonical publication through strict filesystem and Git authority validation.",
+        "summary": "Coordinates the Flow worker artifact handoff protocol, including typed validation, authority tracking, publication, rollback, recovery, and cleanup.",
+        "detail": "This module manages source and artifact worker workflows through versioned policies, immutable input snapshots, typed requests and sealed submissions, canonical Flow and Requirement test contexts, and manifest-bound payload validation. It records Git or filesystem authority snapshots, source mutation baselines, manifests, checkpoints, publication baselines, receipts, quarantine state, and recovery evidence; detects stale, foreign, malformed, duplicated, path-escaping, identity-mismatched, replayed, or unauthorized artifacts; enforces repository boundaries, real-directory checks, normalized paths, file-size limits, retry handling, review and gate-repair inputs, and source-mutation authority. Worker outputs are staged, sealed, and canonically published with atomic files and digests, while rollback and canonical restoration are verified through classified recovery reconciliation. Completed and transient handoff directories are cleaned up safely.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-01T14:09:10.187Z",
           "attempts": 1
         },
         "keywords": [
-          "worker handoff",
-          "artifact publication",
+          "worker artifact handoff",
           "payload validation",
-          "source rollback",
-          "repository authority",
-          "quarantine",
-          "recovery",
-          "integrity checks"
+          "canonical authority",
+          "source mutation rollback",
+          "recovery reconciliation",
+          "publication receipts",
+          "authority snapshot",
+          "safe cleanup"
+        ]
+      },
+      {
+        "file": "src/flow/lib/worker-artifact-input-format.js",
+        "hash": "a351522521cbd2ff9c817884ace9c27c",
+        "lines": 13,
+        "mtime": "2026-10-01T06:04:01.727Z",
+        "className": "worker-artifact-input-format",
+        "methods": [
+          "workerArtifactStableStringify"
+        ],
+        "imports": [],
+        "exports": [
+          "workerArtifactStableStringify",
+          "MAX_WORKER_ARTIFACT_INPUT_BYTES"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/lib/spec-gate-repair-context.js",
+          "src/flow/lib/worker-artifact-handoff.js"
+        ],
+        "id": "02297d2c",
+        "summary": "Defines the worker artifact input size limit and deterministic object serialization helper.",
+        "detail": "The module exports a 2 MiB maximum input size constant and a stable stringifier. Objects are serialized with lexicographically sorted keys and recursively serialized values, while non-object values use standard JSON serialization.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-10-01T12:50:38.142Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "artifact input",
+          "size limit",
+          "stable stringify",
+          "deterministic serialization",
+          "JSON"
         ]
       },
       {
@@ -23240,9 +23298,9 @@
       },
       {
         "file": "src/flow/steps/draft/draft-gate-repair.js",
-        "hash": "7d8f9971d5bce3af784563f1436a7103",
-        "lines": 45,
-        "mtime": "2026-09-23T15:05:40.773Z",
+        "hash": "74de02b5b271a9faad6427690326124e",
+        "lines": 53,
+        "mtime": "2026-10-01T06:04:01.728Z",
         "className": "draft-gate-repair",
         "methods": [
           "DraftGateRepairStep"
@@ -23259,21 +23317,20 @@
         "extends": "Step",
         "usedBy": null,
         "id": "21c9d893",
-        "summary": "Executes Draft Gate repair and persists recovered or newly produced repair results.",
-        "detail": "DraftGateRepairStep uses DraftService, DraftRepairCandidate, and the Gate repair result factory. It supports both recovered repair results and newly selected results, persisting each through the Draft service before returning it.",
+        "summary": "Defines the Draft Gate repair flow step and persists its selected repair result.",
+        "detail": "DraftGateRepairStep integrates the generic Step base class with DraftService, DraftRepairCandidate, and the draft repair result factory. It exposes the selected result, returns the computed result, and persists that result through DraftService.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-23T23:08:18.192Z",
+          "processedAt": "2026-10-01T12:50:38.142Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
-          "Gate repair",
-          "Draft step",
+          "Draft Gate repair",
+          "flow step",
+          "DraftService",
           "repair candidate",
-          "result persistence",
-          "recovery"
+          "result persistence"
         ]
       },
       {
@@ -23434,9 +23491,9 @@
       },
       {
         "file": "src/flow/steps/draft/draft-refine.js",
-        "hash": "cecdb5865d2ef103a809d6be7fe67976",
-        "lines": 57,
-        "mtime": "2026-09-23T14:03:25.186Z",
+        "hash": "340efc2a29b9172ddd9bc2702a210812",
+        "lines": 65,
+        "mtime": "2026-10-01T06:04:01.728Z",
         "className": "draft-refine",
         "methods": [
           "createDraftRefineResult",
@@ -23455,22 +23512,20 @@
         "extends": "Step",
         "usedBy": null,
         "id": "4e3e1fde",
-        "summary": "Selects the Draft refine outcome from transition facts and persists the resulting StepResult.",
-        "detail": "createDraftRefineResult requires typed transition facts and an auto-approval decision, then selects an awaiting-answer, worker-required, or completed result. DraftRefineStep delegates persistence of the selected result to DraftService.",
+        "summary": "Implements draft refinement result selection and persistence for awaiting, worker, and completed outcomes.",
+        "detail": "The module provides createDraftRefineResult, which requires typed DraftTransitionFacts and an autoApprove flag before selecting an awaiting-answer, worker-required, or completed result. DraftRefineStep uses the Step framework and DraftService to return and persist the selected result.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-23T23:08:18.192Z",
+          "processedAt": "2026-10-01T12:50:38.142Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
-          "Draft refine",
+          "draft refinement",
           "transition facts",
           "auto approval",
           "worker required",
-          "awaiting answer",
-          "StepResult"
+          "result persistence"
         ]
       },
       {
@@ -24345,40 +24400,43 @@
       },
       {
         "file": "src/lib/agent-file-reference.js",
-        "hash": "56ac684d99f3534511c0a590a293bf5d",
-        "lines": 73,
-        "mtime": "2026-09-30T16:20:18.460Z",
+        "hash": "35f90f8c5029b9a5c7b7c56a3d7e723d",
+        "lines": 115,
+        "mtime": "2026-10-01T06:04:01.728Z",
         "className": "agent-file-reference",
         "methods": [
+          "TemporaryAgentFileInput",
           "AgentFileReference"
         ],
         "imports": [
           "node:path",
+          "node:fs",
+          "./atomic-file.js",
           "./regular-file-snapshot.js",
           "./agent-file-input-failure.js"
         ],
         "exports": [
+          "TemporaryAgentFileInput",
           "AgentFileReference"
         ],
         "extends": null,
         "usedBy": null,
         "id": "4efc0b82",
-        "summary": "Provides safe, snapshot-based references to agent input files within an absolute project root.",
-        "detail": "AgentFileReference validates an absolute project root and a RegularFileSnapshot, enforces that referenced files remain inside the root, and creates references from paths or captured snapshots. It reports capture and availability failures, detects changes to referenced bytes after capture, and preserves guidance to resolve relative paths against the declared project root rather than the current working directory.",
+        "summary": "Provides secure references and temporary materialization for agent input files.",
+        "detail": "TemporaryAgentFileInput creates a runtime-scoped temporary directory, writes exact input bytes, verifies them against a RegularFileSnapshot, and removes the materialized directory on disposal or failure. AgentFileReference requires an absolute project root, keeps the referenced regular file inside that root, captures file snapshots, detects unavailable or changed inputs, and preserves the project-root-relative path guidance.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-30T16:29:29.037Z",
+          "processedAt": "2026-10-01T12:50:38.142Z",
           "attempts": 1
         },
         "keywords": [
           "agent file reference",
-          "project root",
+          "temporary input",
+          "file snapshot",
           "path containment",
-          "regular file snapshot",
           "input integrity",
-          "absolute path",
-          "file capture"
+          "cleanup"
         ]
       },
       {
@@ -24472,9 +24530,9 @@
       },
       {
         "file": "src/lib/agent-response-protocol.js",
-        "hash": "f1cc3a4233bc7704e4067cf072ca5efd",
-        "lines": 206,
-        "mtime": "2026-09-30T16:20:18.460Z",
+        "hash": "9303ac7438b88428ed46f794a7a7aa1d",
+        "lines": 215,
+        "mtime": "2026-10-01T06:04:01.728Z",
         "className": "agent-response-protocol",
         "methods": [
           "EvaluationUnavailable",
@@ -24507,21 +24565,21 @@
         "extends": "EvaluationUnavailable",
         "usedBy": null,
         "id": "f2dc5d6c",
-        "summary": "Defines the typed protocol for agent response attempts, evidence, failures, and execution results.",
-        "detail": "The module models unavailable evaluation conditions, individual response attempts, grouped and protocol-level evidence, and protocol failures. Its executor invokes an agent, parses responses, tracks attempt ordinals and failure reasons, and returns a successful AgentResponseProtocolResult with accepted or recovered evidence when a valid response is obtained.",
+        "summary": "Defines evidence and result types for executing an agent response protocol.",
+        "detail": "The module models unavailable evaluation conditions, per-attempt evidence, grouped protocol evidence, protocol failures, and final protocol results. It validates response ordinals and accepted evidence requirements, tracks execution counts, and executeAgentResponseProtocol returns an accepted result with recovered status when multiple attempts were needed.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-30T16:29:29.037Z",
+          "processedAt": "2026-10-01T12:50:38.142Z",
           "attempts": 1
         },
         "keywords": [
           "agent response protocol",
-          "response attempts",
-          "protocol evidence",
-          "evaluation unavailable",
-          "response parsing",
-          "recovery"
+          "attempt evidence",
+          "evaluation failure",
+          "response recovery",
+          "execution counts",
+          "protocol result"
         ]
       },
       {
@@ -24781,7 +24839,8 @@
           "src/lib/plugin-installer.js",
           "src/lib/preparing-flow-store.js",
           "src/lib/specs-migration.js",
-          "src/lib/worktree-flow-binding.js"
+          "src/lib/worktree-flow-binding.js",
+          "src/lib/agent-file-reference.js"
         ],
         "id": "fe595520",
         "summary": "AtomicFile provides secure, durable replacement and deletion of regular files. It validates file authority, writes through unique temporary files, fsyncs data and directories, and reports detailed commit failures.",
@@ -30960,10 +31019,10 @@
       }
     ],
     "summary": {
-      "total": 556,
-      "totalMethods": 5326
+      "total": 557,
+      "totalMethods": 5328
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-09-30T16:29:29.037Z"
+  "enrichedAt": "2026-10-01T14:09:10.187Z"
 }

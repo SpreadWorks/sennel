@@ -1,0 +1,106 @@
+{
+  "version": 2,
+  "phase": "draft-gate-repair",
+  "sourceAuthority": {
+    "kind": "plan-gate-repair",
+    "repairId": "plan-gate-repair-6137d5237ad7d1fdedab6108ec35212b34e51d3dab3613391a23269c1a59b5b8",
+    "recordFingerprint": "6137d5237ad7d1fdedab6108ec35212b34e51d3dab3613391a23269c1a59b5b8"
+  },
+  "baseRevision": "sha256:96330082e4ba9a4592f225accde3b92283629a407d711ab817e6902dfe7af1fe",
+  "acceptedOperations": [
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.knownFacts[1]",
+      "replacement": "[MUST] The restart baseline has exactly 66 total FLOW_COMMANDS leaves: 65 shared routed leaves—resume (1), prepare (1), get (11), set (17), run (34), and report/show (1)—plus the independent flow query leaf. The shared migration and verification scope is exactly those 65 leaves; flow query is excluded from shared parser, help-projection, and exhaustive routed-parser coverage and is tested separately for stdin, --request-file, help, and errors. The inventory is re-enumerated from FLOW_COMMANDS at implementation time.",
+      "reason": "Resolve the total-versus-shared leaf count by explicitly defining the 66-leaf inventory and the independent query exception.",
+      "observedDigest": "64bdde8270f0f94fea8ec539738c3b6a21cca02f300f2ae212673c6c298be565"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.deferredToSpec[0].boundary",
+      "replacement": "[MUST] The initial Spec and implementation must preserve the following 66-leaf migration inventory and owner mapping: shared routed leaves are resume; prepare; get status, resolve-context, check, prompt, artifact, qa-count, guardrail, issue, next-action, context, runtime-log; set step, request, issue, note, draft-answer, files, review-evidence, broad, policy, nonblocking-decision, metric, approval, issue-log, init, retry, acceptance-decision, auto; run seal-handoff, dispatch, recover-review-pass, gate, review, auto-check, finalize-commit, finalize-merge, finalize-sync, finalize-cleanup, abort, sync, reopen-draft, repair-plan-gate, settle-failure, settle-review-transition, recover-missing-producer-artifact, recover-draft-execution, reconcile-task-review, filter-task-review, recover-finalization, recover-task-execution-overrun, claim-next-action, settle-gate-transition, start-task, complete-task, update-overview, lint, test-execute, requirement-test-gate, test-result-review, retro, final-regression, acceptance-review, report; and report show. The independent flow query leaf is the 66th leaf. FLOW_COMMANDS.<group>.<leaf> remains the registry owner; each leaf's existing command module remains the execution owner. Preserve the existing parser/dispatcher, target guard, runtime/container, query, hook, log, state/artifact, and exit-code owners named in analysis.",
+      "reason": "Move the complete leaf inventory and its registry-versus-execution ownership mapping into the Draft instead of deferring it to the Spec.",
+      "observedDigest": "bfaba6bceca7111fed1768917946c33fc6f6411e7d52d4f28e9a946373c5e017"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.deferredToSpec[0].relevance",
+      "replacement": "For every inventory row, the Spec must record exact positionals/rest inputs; flags; required and optional values; aliases; placeholders; descriptions; implicit -h/--help; target guards; path/runtime/state/size policies; rejection order; exit codes; hooks; logs; artifacts; side effects; and a behavior probe, mapping parser/help to CommandDefinition and FLOW_COMMANDS and execution to its existing command module. Acceptance requires real dispatcher/CLI parity for each of the 65 shared leaves: parser acceptance equals leaf help; all three group-help routes derive complete direct-child option intersections with at least two ASCII spaces and locale-independent name order; valid and rejected commands preserve status, diagnostics, state, artifacts, hooks, runtime/log paths, and cleanup; query independently preserves stdin, --request-file, help, malformed, missing, and conflicting-input behavior. Add focused probes for resume, prepare, abort, guarded get/set/run, both --agent-work-dir forms, configured log precedence, runtime cleanup, exit codes, longest and synthetic 64/65-character renderer names. No command is removed, no command-name limit or blanket validator is added, and no execution semantic changes are accepted.",
+      "reason": "Define retained behavior, concrete owners, and behavior-level verification for every migrated public surface.",
+      "observedDigest": "c8fe3a20cce646361c12a174771dba2db4d69b8216e1af3244efe6262f8a80d3"
+    }
+  ],
+  "discardedOperations": [],
+  "appliedFindingKeys": [],
+  "operationDigest": "c2f9afcb50832248ca5453f8e92f123a650a10478b2a2825fa05378bbfa33b7f",
+  "audit": {
+    "envelopeErrors": [],
+    "baseRevisionMatches": true,
+    "missingRequiredTargets": [],
+    "lifecycleIssues": [],
+    "duplicatePaths": [],
+    "overlappingPaths": [],
+    "outputByteLength": 17911
+  },
+  "sourceIssueLogId": "draft-gate-result-aac7dffd6c93b16973c5d1fa9de647a137ebb1b7b6bab689ea3b44af1405e0b7",
+  "sourceEntryDigest": "d4eafd019f5c4c5900f84e89dcc63fa57789769dd9816e37f0fcbeac3eaa2f2f",
+  "resultLogicalKey": "draft.gate",
+  "catalogFingerprint": "d5d15280905f2ba384a8bfb8fb9325d170b1ffff3bed833a0cce567854a5ec1d",
+  "report": {
+    "beforeEvidenceDigest": "b820151c4b5f850c5c14a59c2b2db99b1e9530af68c9c1effeef57ec05cbed3c",
+    "outputEvidenceDigest": "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689",
+    "summary": "The Draft now resolves the 66-leaf inventory ambiguity and carries the complete migration ownership and behavior-verification contract.",
+    "requests": [
+      {
+        "fingerprint": "516a1bf7dc8e1ebf63740ec4c5570bc204679b904e539f9fad7d5183a008c21c",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "07b53669eb6f54217d5725809f65a34d33722923b21b5a6c54dc275cc8bc1038",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "50207abfed987df873fca1e357d376dd1913ece6ac1e744342b812129f128230",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "516a1bf7dc8e1ebf63740ec4c5570bc204679b904e539f9fad7d5183a008c21c",
+        "strategy": "State the total inventory and independent query exception in one authoritative Draft fact.",
+        "summary": "The Draft explicitly defines 66 total leaves as 65 shared routed leaves plus the independent flow query leaf.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689"
+        ]
+      },
+      {
+        "fingerprint": "07b53669eb6f54217d5725809f65a34d33722923b21b5a6c54dc275cc8bc1038",
+        "strategy": "State the total inventory and independent query exception in one authoritative Draft fact.",
+        "summary": "The Draft identifies the exact shared scope, query exception, and implementation-time registry re-enumeration rule.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689"
+        ]
+      },
+      {
+        "fingerprint": "50207abfed987df873fca1e357d376dd1913ece6ac1e744342b812129f128230",
+        "strategy": "Replace the deferred migration placeholder with the full leaf inventory, ownership mapping, retained behavior, and CLI verification contract.",
+        "summary": "The Draft now maps every listed leaf to registry and execution owners and requires behavior-level parity evidence for all retained surfaces.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689"
+      ]
+    }
+  }
+}

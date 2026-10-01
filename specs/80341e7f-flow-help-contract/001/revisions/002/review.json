@@ -1,0 +1,93 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "f1ad2bdebbbb833eade57a1a39dfb115bd4634bf298fd37fe4a645f20c13cf23",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "cf8fe4f85f06fcd00f8194210df3972e933f01679d6c2301c2b86c2e5dba0a6b",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "no-op",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "22c743eb9680906dae33b44acb715362748a08642d9158ec1873411642bf2417",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "no-op",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "body": "**Target:** Constraints, R8, Acceptance Criteria\n**Issue:** Current FLOW_COMMANDS contains 67 leaves including query and 66 shared leaves excluding query: get=11, set=17, run=35, report show=1. The spec requires 65 shared leaves and run=34; run recover-draft-execution is present in the current registry.\n**Required change:** Either update the contract and matrix to 66 shared leaves/run=35, or define the exact 65-leaf allowlist and explicitly exclude the additional current leaf.\n**Why blocking:** A mechanically enumerated registry cannot both produce 65 and cover the current shared command set; omitting the extra recovery leaf leaves its distinct execution and lifecycle behavior untested.",
+      "findingId": "spec-review-54d7018f2703ca1d9fedab626bc0be9f",
+      "issue": "Current FLOW_COMMANDS contains 67 leaves including query and 66 shared leaves excluding query: get=11, set=17, run=35, report show=1. The spec requires 65 shared leaves and run=34; run recover-draft-execution is present in the current registry.",
+      "kind": "blocking",
+      "requiredChange": "Either update the contract and matrix to 66 shared leaves/run=35, or define the exact 65-leaf allowlist and explicitly exclude the additional current leaf.",
+      "target": "Constraints, R8, Acceptance Criteria",
+      "title": "Shared-leaf cardinality contradicts the current registry",
+      "whyBlocking": "A mechanically enumerated registry cannot both produce 65 and cover the current shared command set; omitting the extra recovery leaf leaves its distinct execution and lifecycle behavior untested."
+    },
+    {
+      "body": "**Target:** R3, R4, R8, Scope\n**Issue:** FLOW_COMMANDS contains a real flow report group with report show, but R8 specifies only three group routes while R3/R4 apply to each shared flow group. The existing generic group projection also displays --agent-work-dir for report even though report show does not accept it.\n**Required change:** Explicitly include report in group projection and leafless-route coverage with its intersection, or explicitly limit group requirements to get/set/run and exclude flow report group surfaces.\n**Why blocking:** Implementation and tests cannot determine whether flow report --help and flow report must change, and either including or omitting it can leave a visible help/input mismatch.",
+      "findingId": "spec-review-1485980e2748a7fdfbd4c918111a099d",
+      "issue": "FLOW_COMMANDS contains a real flow report group with report show, but R8 specifies only three group routes while R3/R4 apply to each shared flow group. The existing generic group projection also displays --agent-work-dir for report even though report show does not accept it.",
+      "kind": "blocking",
+      "requiredChange": "Explicitly include report in group projection and leafless-route coverage with its intersection, or explicitly limit group requirements to get/set/run and exclude flow report group surfaces.",
+      "target": "R3, R4, R8, Scope",
+      "title": "The report group is not classified",
+      "whyBlocking": "Implementation and tests cannot determine whether flow report --help and flow report must change, and either including or omitting it can leave a visible help/input mismatch."
+    },
+    {
+      "body": "**Target:** R9, R6, Data Flow, Modules\n**Issue:** The dispatcher accepts both --agent-work-dir <path> and --agent-work-dir=<path>, but src/sennel.js pre-scans only the separate-token form before initContainer. Consequently, the equals form can reach the command parser while leaving container paths and default runtime logs on the configured directory.\n**Required change:** Specify that both spellings are normalized by the top-level bootstrap before initContainer, and state the precedence among the CLI override, config.agent.workDir, and config.logs.dir.\n**Why blocking:** Parser/help parity can pass while runtime-directory, log-authority, and cleanup behavior differs between accepted spellings, so R6/R9 cannot be implemented or verified safely.",
+      "findingId": "spec-review-a1f0efcc07b7dce30128a87a061b0dc9",
+      "issue": "The dispatcher accepts both --agent-work-dir <path> and --agent-work-dir=<path>, but src/sennel.js pre-scans only the separate-token form before initContainer. Consequently, the equals form can reach the command parser while leaving container paths and default runtime logs on the configured directory.",
+      "kind": "blocking",
+      "requiredChange": "Specify that both spellings are normalized by the top-level bootstrap before initContainer, and state the precedence among the CLI override, config.agent.workDir, and config.logs.dir.",
+      "target": "R9, R6, Data Flow, Modules",
+      "title": "agent-work-dir has divergent bootstrap paths",
+      "whyBlocking": "Parser/help parity can pass while runtime-directory, log-authority, and cleanup behavior differs between accepted spellings, so R6/R9 cannot be implemented or verified safely."
+    },
+    {
+      "body": "**Target:** R6, R7, T2, T5\n**Issue:** R7 requires invalid enum/numeric/ID/path/JSON/ISO/digest inputs to execute no command hook or internal operation, but semantic validation is owned by command classes after dispatcher lifecycle hooks. For example, run gate's pre hook can read flow state and perform admission work before RunGateCommand validates an invalid phase.\n**Required change:** Define the rejection boundary: either specify a per-leaf pre-hook semantic validation contract, or limit R7's no-hook rule to parser and target-resolution failures and preserve owner-level validation behavior.\n**Why blocking:** Without this decision, tests cannot determine whether the existing owner diagnostic and hook order must be preserved or semantic validation must move before lifecycle execution, which changes existing Flow behavior.",
+      "findingId": "spec-review-f95d9b1d8bbc9768b4b4fa85ffcdf62c",
+      "issue": "R7 requires invalid enum/numeric/ID/path/JSON/ISO/digest inputs to execute no command hook or internal operation, but semantic validation is owned by command classes after dispatcher lifecycle hooks. For example, run gate's pre hook can read flow state and perform admission work before RunGateCommand validates an invalid phase.",
+      "kind": "blocking",
+      "requiredChange": "Define the rejection boundary: either specify a per-leaf pre-hook semantic validation contract, or limit R7's no-hook rule to parser and target-resolution failures and preserve owner-level validation behavior.",
+      "target": "R6, R7, T2, T5",
+      "title": "Semantic rejection timing conflicts with the no-hook requirement",
+      "whyBlocking": "Without this decision, tests cannot determine whether the existing owner diagnostic and hook order must be preserved or semantic validation must move before lifecycle execution, which changes existing Flow behavior."
+    },
+    {
+      "body": "**Target:** Overview, Constraints, src/lib/command-registry.js\n**Improvement:** Identify whether OptionContract, CommandRow, and RenderedFragment live in a separate cycle-free module, since command-registry.js currently imports FLOW_COMMANDS while FLOW_COMMANDS would need the shared classes.\n**Why non-blocking:** An implementer can resolve this locally without changing the required behavior or acceptance basis.",
+      "findingId": "spec-review-af265f1560ec88d9e5e531d5f1442bd1",
+      "improvement": "Identify whether OptionContract, CommandRow, and RenderedFragment live in a separate cycle-free module, since command-registry.js currently imports FLOW_COMMANDS while FLOW_COMMANDS would need the shared classes.",
+      "kind": "improvement",
+      "target": "Overview, Constraints, src/lib/command-registry.js",
+      "title": "Specify a cycle-free home for shared value classes",
+      "whyNonBlocking": "An implementer can resolve this locally without changing the required behavior or acceptance basis."
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 23986,
+    "digest": "f956e86eb54fbd25eb26b807dc0ffba52f96d02145c4906248be03296c8ef425",
+    "revision": 2,
+    "specId": "80341e7f-flow-help-contract"
+  },
+  "version": 2
+}

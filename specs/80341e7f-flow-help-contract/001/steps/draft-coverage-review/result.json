@@ -1,0 +1,312 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "draft-coverage-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "draft-coverage",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "11180894e5f605822ba1a2a83dd0ac7fcef9a99ae4d3abae72ef8ce3551a358c",
+          "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+          "targetStateDigest": "207d5927d3397248c54a7dbd860a19b0e6c60e9ccdc513e0d0795887ea03387b",
+          "issueCount": 0,
+          "retryPhase": "draft-coverage"
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.coverage.review",
+        "payload": {
+          "version": 2,
+          "phase": "draft-coverage",
+          "sourceDraft": "draft.json",
+          "sourceDraftRevision": {
+            "version": 1,
+            "runId": "80341e7f-56c7-4b8f-adf4-826c31385728",
+            "specId": "80341e7f-flow-help-contract",
+            "sourceStepId": "draft",
+            "digest": "207d5927d3397248c54a7dbd860a19b0e6c60e9ccdc513e0d0795887ea03387b",
+            "byteLength": 9488,
+            "finalizedAt": "2026-10-01T07:39:42.971Z"
+          },
+          "generatedAt": "2026-10-01T07:40:31.513Z",
+          "verdict": "PASS",
+          "summary": "No draft review findings recorded.",
+          "blockingFindings": [],
+          "advisoryFindings": [],
+          "repairTargets": [],
+          "workerOutput": {
+            "digest": "d574e3d14a3d2d914ede053cd6eb03b5a4f2695f1e4a86824c7e5390adec2701",
+            "byteLength": 600,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "draft-coverage",
+            "taskId": null,
+            "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+            "targetStateDigest": "207d5927d3397248c54a7dbd860a19b0e6c60e9ccdc513e0d0795887ea03387b",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "54a6037c100d361ec2ade103fb645b0c6396a5b44c0af9c7c852f544c2688624",
+              "capturedAt": "2026-10-01T07:40:31.513Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "draft-coverage",
+              "taskId": null,
+              "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "54a6037c100d361ec2ade103fb645b0c6396a5b44c0af9c7c852f544c2688624",
+                "capturedAt": "2026-10-01T07:40:31.513Z"
+              },
+              "evidenceDigest": "11180894e5f605822ba1a2a83dd0ac7fcef9a99ae4d3abae72ef8ce3551a358c"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+            "targetStateDigest": "207d5927d3397248c54a7dbd860a19b0e6c60e9ccdc513e0d0795887ea03387b"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "draft-coverage-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "draft-coverage",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "2d020fc26887d0430d0264a50efa2bd403f504727a6cf4ea3c817ac8324e824b",
+          "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+          "targetStateDigest": "fe78814220a4632ae000d0a7267cdf529b7858d26b3c9b3889738cbbe1f31877",
+          "issueCount": 0,
+          "retryPhase": "draft-coverage"
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.coverage.review",
+        "payload": {
+          "version": 2,
+          "phase": "draft-coverage",
+          "sourceDraft": "draft.json",
+          "sourceDraftRevision": {
+            "version": 1,
+            "runId": "80341e7f-56c7-4b8f-adf4-826c31385728",
+            "specId": "80341e7f-flow-help-contract",
+            "sourceStepId": "draft-gate-repair",
+            "digest": "fe78814220a4632ae000d0a7267cdf529b7858d26b3c9b3889738cbbe1f31877",
+            "byteLength": 15449,
+            "finalizedAt": "2026-10-01T07:50:46.165Z"
+          },
+          "generatedAt": "2026-10-01T07:51:19.499Z",
+          "verdict": "PASS",
+          "summary": "No draft review findings recorded.",
+          "blockingFindings": [],
+          "advisoryFindings": [],
+          "repairTargets": [],
+          "workerOutput": {
+            "digest": "c3b0ea5d402c16a7ea6036a8a552a8b4f2df66fe4a81b515e1a5e2b16446cce3",
+            "byteLength": 613,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "draft-coverage",
+            "taskId": null,
+            "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+            "targetStateDigest": "fe78814220a4632ae000d0a7267cdf529b7858d26b3c9b3889738cbbe1f31877",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "2700939e47224808857b9865a385082b462c7d24a97f7b7e23268ddd486adfee",
+              "capturedAt": "2026-10-01T07:51:19.499Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "draft-coverage",
+              "taskId": null,
+              "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "2700939e47224808857b9865a385082b462c7d24a97f7b7e23268ddd486adfee",
+                "capturedAt": "2026-10-01T07:51:19.499Z"
+              },
+              "evidenceDigest": "2d020fc26887d0430d0264a50efa2bd403f504727a6cf4ea3c817ac8324e824b"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+            "targetStateDigest": "fe78814220a4632ae000d0a7267cdf529b7858d26b3c9b3889738cbbe1f31877"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "draft-coverage-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "draft-coverage",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "e636931de24ac104fea338e59df45d131f88bac77387813a83eb407ab2b7f081",
+          "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+          "targetStateDigest": "b820151c4b5f850c5c14a59c2b2db99b1e9530af68c9c1effeef57ec05cbed3c",
+          "issueCount": 0,
+          "retryPhase": "draft-coverage"
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.coverage.review",
+        "payload": {
+          "version": 2,
+          "phase": "draft-coverage",
+          "sourceDraft": "draft.json",
+          "sourceDraftRevision": {
+            "version": 1,
+            "runId": "80341e7f-56c7-4b8f-adf4-826c31385728",
+            "specId": "80341e7f-flow-help-contract",
+            "sourceStepId": "draft-gate-repair",
+            "digest": "b820151c4b5f850c5c14a59c2b2db99b1e9530af68c9c1effeef57ec05cbed3c",
+            "byteLength": 15537,
+            "finalizedAt": "2026-10-01T07:58:21.652Z"
+          },
+          "generatedAt": "2026-10-01T07:58:47.401Z",
+          "verdict": "PASS",
+          "summary": "No draft review findings recorded.",
+          "blockingFindings": [],
+          "advisoryFindings": [],
+          "repairTargets": [],
+          "workerOutput": {
+            "digest": "20c9672cd7bb97254a59b60dd5110dc8e0f29e0a791c8d5f92ef8a1eb8df0bc5",
+            "byteLength": 613,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "draft-coverage",
+            "taskId": null,
+            "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+            "targetStateDigest": "b820151c4b5f850c5c14a59c2b2db99b1e9530af68c9c1effeef57ec05cbed3c",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "c8131453f3239d7a72e174eaf5dff45e17013979c84a2fafd1969777f137edf4",
+              "capturedAt": "2026-10-01T07:58:47.401Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "draft-coverage",
+              "taskId": null,
+              "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "c8131453f3239d7a72e174eaf5dff45e17013979c84a2fafd1969777f137edf4",
+                "capturedAt": "2026-10-01T07:58:47.401Z"
+              },
+              "evidenceDigest": "e636931de24ac104fea338e59df45d131f88bac77387813a83eb407ab2b7f081"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+            "targetStateDigest": "b820151c4b5f850c5c14a59c2b2db99b1e9530af68c9c1effeef57ec05cbed3c"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 4,
+      "nodeId": "draft-coverage-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "draft-coverage",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "030f0c4cf663999e796f0cbd088bcddd54c3f55252b922d92aa217821c90a6ce",
+          "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+          "targetStateDigest": "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689",
+          "issueCount": 0,
+          "retryPhase": "draft-coverage"
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.coverage.review",
+        "payload": {
+          "version": 2,
+          "phase": "draft-coverage",
+          "sourceDraft": "draft.json",
+          "sourceDraftRevision": {
+            "version": 1,
+            "runId": "80341e7f-56c7-4b8f-adf4-826c31385728",
+            "specId": "80341e7f-flow-help-contract",
+            "sourceStepId": "draft-gate-repair",
+            "digest": "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689",
+            "byteLength": 17911,
+            "finalizedAt": "2026-10-01T08:04:56.550Z"
+          },
+          "generatedAt": "2026-10-01T08:05:38.633Z",
+          "verdict": "PASS",
+          "summary": "No draft review findings recorded.",
+          "blockingFindings": [],
+          "advisoryFindings": [],
+          "repairTargets": [],
+          "workerOutput": {
+            "digest": "9a2a512475cc5a08c09cc8d7fb56ad9440fe3c8da340d139ecd2757a2d4ccfc0",
+            "byteLength": 613,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "draft-coverage",
+            "taskId": null,
+            "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+            "targetStateDigest": "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "076432348f54bc0136f32cdd18fe5dfc83554fa4e100ec773ff77b19698d403f",
+              "capturedAt": "2026-10-01T08:05:38.633Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "draft-coverage",
+              "taskId": null,
+              "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "076432348f54bc0136f32cdd18fe5dfc83554fa4e100ec773ff77b19698d403f",
+                "capturedAt": "2026-10-01T08:05:38.633Z"
+              },
+              "evidenceDigest": "030f0c4cf663999e796f0cbd088bcddd54c3f55252b922d92aa217821c90a6ce"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "8c741a837d181eef9a1bed3fed45a17d798e8736",
+            "targetStateDigest": "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689"
+          }
+        }
+      }
+    }
+  ]
+}

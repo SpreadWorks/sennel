@@ -40,7 +40,7 @@ src/spec/commands/    (cli)
 
 | Directory | Files | Role |
 | --- | --- | --- |
-| src/flow | 362 | controller, lib, cli, model, other, middleware, view, config, route, get guardrail flow command, Retry counter and failure classification utility, test, Metric setter command handler |
+| src/flow | 363 | controller, lib, model, cli, other, middleware, view, config, route, get guardrail flow command, Retry counter and failure classification utility, test, Metric setter command handler |
 | src/lib | 106 | lib, config, model, Metric dimension normalizer shared by agent runner and metrics aggregator, cli, controller, Error preview formatter utility, Option normalization utility, Core utility for translating glob patterns into executable regular expressions., migration, lint-executor, Makefile parsing utility for automated test command discovery., view, Repository path matching utility, Fluent builder for AI prompts assembled from labeled sections, Skill rule loader and directive expander, Test command source collection and precedence resolution., other |
 | src/docs | 52 | cli, analysis entry core library, utility, model, lib, rendering, test environment detector |
 | src | 13 | cli, controller, view, route |

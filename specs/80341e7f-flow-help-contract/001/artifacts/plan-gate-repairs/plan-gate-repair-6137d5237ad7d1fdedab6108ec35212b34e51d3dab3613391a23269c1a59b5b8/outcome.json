@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-6137d5237ad7d1fdedab6108ec35212b34e51d3dab3613391a23269c1a59b5b8",
+  "repairRecordFingerprint": "6137d5237ad7d1fdedab6108ec35212b34e51d3dab3613391a23269c1a59b5b8",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-draft-gate-bccf1db6-f95d-492d-9180-b8c4bdb7927e",
+      "sequence": 3
+    },
+    "resultLogicalKey": "draft.gate",
+    "publicationActivityId": "plan-gate-repaired-9dfeec67-1a6f-43f9-8d5e-b4ca5882bd76",
+    "catalogFingerprint": "d5d15280905f2ba384a8bfb8fb9325d170b1ffff3bed833a0cce567854a5ec1d",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-draft-gate-bccf1db6-f95d-492d-9180-b8c4bdb7927e",
+        "sequence": 3
+      },
+      "canonicalAttempt": {
+        "id": "attempt-draft-gate-bccf1db6-f95d-492d-9180-b8c4bdb7927e",
+        "sequence": 3
+      },
+      "sourceFingerprint": "31a4727ac16cb4501ed8b9e5f13e40d73bf97be85258da049cfea57636205f50",
+      "canonicalFingerprint": "d5d15280905f2ba384a8bfb8fb9325d170b1ffff3bed833a0cce567854a5ec1d",
+      "sourceRevisionFingerprint": "40ee8c7a3db710641c4bdad24cba806f4bc3f786da08d13715d9f3041ff06fed",
+      "canonicalRevisionFingerprint": "40ee8c7a3db710641c4bdad24cba806f4bc3f786da08d13715d9f3041ff06fed"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-draft-gate-bccf1db6-f95d-492d-9180-b8c4bdb7927e",
+    "sequence": 3
+  },
+  "targetAttempt": {
+    "id": "attempt-draft-gate-repair-d4819641-3f14-4703-ae9e-d15a3f3d7d67",
+    "sequence": 4
+  },
+  "publicationActivityId": "attempt-confirmed-70f77b7c-2d3c-4ff4-b4ed-ed712d27e2fe",
+  "handoffRevision": "96330082e4ba9a4592f225accde3b92283629a407d711ab817e6902dfe7af1fe",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "b820151c4b5f850c5c14a59c2b2db99b1e9530af68c9c1effeef57ec05cbed3c",
+    "outputEvidenceDigest": "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689",
+    "summary": "The Draft now resolves the 66-leaf inventory ambiguity and carries the complete migration ownership and behavior-verification contract.",
+    "requests": [
+      {
+        "fingerprint": "516a1bf7dc8e1ebf63740ec4c5570bc204679b904e539f9fad7d5183a008c21c",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "07b53669eb6f54217d5725809f65a34d33722923b21b5a6c54dc275cc8bc1038",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "50207abfed987df873fca1e357d376dd1913ece6ac1e744342b812129f128230",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "516a1bf7dc8e1ebf63740ec4c5570bc204679b904e539f9fad7d5183a008c21c",
+        "strategy": "State the total inventory and independent query exception in one authoritative Draft fact.",
+        "summary": "The Draft explicitly defines 66 total leaves as 65 shared routed leaves plus the independent flow query leaf.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689"
+        ]
+      },
+      {
+        "fingerprint": "07b53669eb6f54217d5725809f65a34d33722923b21b5a6c54dc275cc8bc1038",
+        "strategy": "State the total inventory and independent query exception in one authoritative Draft fact.",
+        "summary": "The Draft identifies the exact shared scope, query exception, and implementation-time registry re-enumeration rule.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689"
+        ]
+      },
+      {
+        "fingerprint": "50207abfed987df873fca1e357d376dd1913ece6ac1e744342b812129f128230",
+        "strategy": "Replace the deferred migration placeholder with the full leaf inventory, ownership mapping, retained behavior, and CLI verification contract.",
+        "summary": "The Draft now maps every listed leaf to registry and execution owners and requires behavior-level parity evidence for all retained surfaces.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "cb93082ec8d66fb5d519068669c0931cca073f4d57744411dd911d082535a689"
+      ]
+    }
+  }
+}
