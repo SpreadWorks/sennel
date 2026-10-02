@@ -56,9 +56,11 @@ import { StepPersistenceFailure } from "./definition-lifecycle-failure.js";
 import { SpecWorkerCompletionFacts } from "./spec-worker-completion-facts.js";
 import { SpecReviewWorkerFacts } from "./spec-review-worker-facts.js";
 import { SpecGateRepairWorkerFacts } from "./spec-gate-repair-worker-facts.js";
-import { readProgressBoundSpecGateRepairInput, SPEC_GATE_REPAIR_REQUEST_LIMIT,
+import { readProgressBoundSpecGateRepairInput, readSpecGateRepairExecutionProgress, SPEC_GATE_REPAIR_REQUEST_LIMIT,
   latestRepairBudget } from "./spec-gate-repair-progress.js";
-import { nextSpecGateRepairEvidence } from "./spec-gate-repair-evidence.js";
+import { SpecGateRepairBundle } from "./spec-gate-repair-bundle.js";
+import { SpecGateRepairCallPlan } from "./spec-gate-repair-call-plan.js";
+import { PromptBatchingError } from "../../lib/prompt-batching.js";
 import { CanonicalFlowFindingsStore } from "./flow-findings.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { findStepById } from "./step-tree.js";
@@ -2167,28 +2169,21 @@ function deferredFindingsHandoffInput({ flowManager, state, policy }) {
   })];
 }
 
-function specGateRepairContextHandoffInput({ flowManager, state, policy, executionRoot, request }) {
-  if (policy.stepId !== "spec-gate-repair") return [];
-  state = flowManager.canonicalState(state.specId);
-  const { source, ledger, locationPlan } = readProgressBoundSpecGateRepairInput({
-    flowManager, state, executionRoot,
-    executionLifecycle: request == null ? null
-      : canonicalWorkerExecutionClaimForStored({ flowManager, stored: request }),
-  });
-  const { budget: executionBudget } = latestRepairBudget({ flowManager,
-    specId: state.specId, attemptId: state.attempt.id, baseRevision: source.baseRevision,
-    consumerNodeId: "spec-gate-repair" });
+function specGateRepairContextDocuments({ source, ledger, locationPlan, request = null }) {
   let document;
+  let documents;
   if (source.context.unresolvedFindings().length > 0) {
     const plan = locationPlan;
     const completed = ledger.completedLocationBatches(plan);
     if (completed.length < plan.batches.length) {
       const completedIndexes = new Set(completed.map((entry) => entry.context.batchIndex));
-      const batch = plan.batches.find((entry) => !completedIndexes.has(entry.index));
-      document = { version: 1, stage: "spec-gate-repair", mode: "locate",
+      documents = plan.batches.filter((entry) => !completedIndexes.has(entry.index)).map((batch) => ({
+        version: 2, stage: "spec-gate-repair", mode: "locate",
         baseRevision: source.baseRevision, batchIndex: batch.index, batchCount: batch.count,
         batchDigest: batch.digest, finding: JSON.parse(batch.contextElements[0].text),
-        tableOfContents: batch.payloadElements.map((entry) => JSON.parse(entry.text)) };
+        tableOfContents: batch.payloadElements.map((entry) => JSON.parse(entry.text)),
+      }));
+      document = documents[0];
     }
   }
   if (document === undefined) {
@@ -2204,62 +2199,56 @@ function specGateRepairContextHandoffInput({ flowManager, state, policy, executi
         unit.id, ledger.additionalRangeIds(source.context, unit.id),
       ]));
       const savedContext = request?.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document;
-      if (savedContext?.mode === "evidence") {
-        const work = nextSpecGateRepairEvidence({ context: source.context, limit: SPEC_GATE_REPAIR_REQUEST_LIMIT,
-          unitId: savedContext.unitId, publications: ledger.entries, executionBudget,
-          additionalRangeIds: additionalRanges[savedContext.unitId] });
-        document = { version: 1, stage: "spec-gate-repair", mode: work.mode,
-          baseRevision: source.baseRevision, unitId: savedContext.unitId,
-          batchIndex: work.batch.index, batchCount: work.batch.count, batchDigest: work.batch.digest,
-          evidenceDepth: work.evidenceDepth, evidenceContextDigest: work.evidenceContextDigest,
-          request: work.batch.request };
-      } else if (savedContext?.mode === "repair") {
+      if (savedContext?.mode === "repair") {
         // A durable claim owns its immutable selection and batch identity. Re-read
         // every complete selection from the canonical source before exact replay.
-        const selections = savedContext.selections.map((selection) => {
+        const selections = SpecGateRepairBundle.fromJSON(savedContext.bundle).selections().map((selection) => {
           if (!remaining.some((unit) => unit.id === selection.unit.id)) {
             throw new Error("Saved repair claim selects an unavailable atomic unit");
           }
-          if (Object.hasOwn(selection, "evidence")) {
-            const work = nextSpecGateRepairEvidence({ context: source.context,
-              limit: SPEC_GATE_REPAIR_REQUEST_LIMIT, unitId: selection.unit.id,
-              publications: ledger.entries, executionBudget,
-              additionalRangeIds: additionalRanges[selection.unit.id] });
-            if (work.mode !== "repair" || work.batch.digest !== savedContext.batchDigest) {
-              throw new Error("Saved repair claim lacks its complete evidence coverage");
-            }
-            return work.selection;
-          }
           return source.context.select(selection.unit.id,
-            { additionalRangeIds: additionalRanges[selection.unit.id] }).toJSON();
+            { additionalRangeIds: additionalRanges[selection.unit.id] });
         });
-        document = { ...savedContext, selections };
+        document = { ...savedContext, bundle: SpecGateRepairBundle.fromSelections(selections).toJSON() };
       } else {
-        const batch = source.context.referencePlan({ limit: SPEC_GATE_REPAIR_REQUEST_LIMIT,
-          unitIds: remaining.map((unit) => unit.id), additionalRanges }).batches[0];
-        document = source.context.referenceDocument(batch);
+        const plan = source.context.referencePlan({ limit: SPEC_GATE_REPAIR_REQUEST_LIMIT,
+          unitIds: remaining.map((unit) => unit.id), additionalRanges });
+        documents = plan.batches.map((batch) => source.context.referenceDocument(batch));
+        document = documents[0];
       }
     }
   }
-  document = { ...document, evidenceDigest: source.context.evidenceDigest };
-  Object.freeze(document);
-  const bytes = Buffer.from(stableStringify(document), "utf8");
-  return [new WorkerArtifactInputSnapshot({
-    name: "spec-gate-repair-context.json",
-    targetRelativePath: "spec-gate-repair-context.json",
-    snapshot: { digest: digest(bytes), byteLength: bytes.length },
-    document,
-  })];
+  return (documents ?? [document]).map((entry) => Object.freeze({ ...entry,
+    evidenceDigest: source.context.evidenceDigest }));
 }
 
-function workerVirtualHandoffInputs({ flowManager, state, policy, contextSnapshot = null, executionRoot, request = null }) {
+function specGateRepairContextSnapshot(document) {
+  const bytes = Buffer.from(stableStringify(document), "utf8");
+  return new WorkerArtifactInputSnapshot({ name: "spec-gate-repair-context.json",
+    targetRelativePath: "spec-gate-repair-context.json",
+    snapshot: { digest: digest(bytes), byteLength: bytes.length }, document });
+}
+
+function specGateRepairContextHandoffInput({ flowManager, state, policy, executionRoot, request, document = null }) {
+  if (policy.stepId !== "spec-gate-repair") return [];
+  if (document === null) {
+    state = flowManager.canonicalState(state.specId);
+    const frontier = readProgressBoundSpecGateRepairInput({ flowManager, state, executionRoot,
+      executionLifecycle: request == null ? null
+        : canonicalWorkerExecutionClaimForStored({ flowManager, stored: request }) });
+    document = specGateRepairContextDocuments({ ...frontier, request })[0];
+  }
+  return [specGateRepairContextSnapshot(document)];
+}
+
+function workerVirtualHandoffInputs({ flowManager, state, policy, contextSnapshot = null, executionRoot, request = null, specGateRepairDocument = null }) {
   const available = new Map([
     ...taskReviewStageHandoffInputs({ flowManager, state, policy, contextSnapshot }),
     ...approvedFindingExceptionHandoffInputs({ flowManager, state, policy, executionRoot }),
     ...reviewRecurrenceHandoffInput({ flowManager, state, policy }),
     ...gateObservationRecurrenceHandoffInput({ flowManager, state, policy }),
     ...planGateRepairHandoffInput({ flowManager, state, policy }),
-    ...specGateRepairContextHandoffInput({ flowManager, state, policy, executionRoot, request }),
+    ...specGateRepairContextHandoffInput({ flowManager, state, policy, executionRoot, request, document: specGateRepairDocument }),
     ...deferredFindingsHandoffInput({ flowManager, state, policy }),
   ].map((input) => [input.targetRelativePath, input]));
   return policy.inputContract.virtualInputs.map((relativePath) => {
@@ -4662,7 +4651,7 @@ class WorkerHandoffInputCapture {
   }
 }
 
-function captureWorkerHandoffInputs({ flowManager, state, invocation, executionRoot, policy }) {
+function captureWorkerHandoffInputs({ flowManager, state, invocation, executionRoot, policy, specGateRepairDocument = null }) {
   const planGateRepair = currentPlanGateRepair({ flowManager, state, stepId: policy.stepId });
   const testReviewRepair = currentTestReviewRepair({ flowManager, state, stepId: policy.stepId });
   const testReviewRepairProgress = currentTestReviewRepairProgress({ flowManager, state, repair: testReviewRepair });
@@ -4704,7 +4693,7 @@ function captureWorkerHandoffInputs({ flowManager, state, invocation, executionR
         `worker context could not be materialized: ${cause.message}`, { cause });
     }
   }
-  inputs.push(...workerVirtualHandoffInputs({ flowManager, state, policy, contextSnapshot, executionRoot }));
+  inputs.push(...workerVirtualHandoffInputs({ flowManager, state, policy, contextSnapshot, executionRoot, specGateRepairDocument }));
   return new WorkerHandoffInputCapture({
     policy, planGateRepair, testReviewRepair, testReviewRepairProgress,
     acceptanceRepairRoute, inputs, contextSnapshot,
@@ -4971,6 +4960,12 @@ export class WorkerArtifactWorkerInstructions {
 function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
   const draftReviewRoute = draftReviewRouteForStepId(stepId);
   if (draftReviewRoute?.triageStepId === stepId) return DraftTriageDecision.triageGuidance(draftReviewRoute);
+  if (stepId === "spec-gate-repair") return [
+    "Read the complete immutable Spec Gate repair context file. Repair mode uses a versioned bundle with shared ranges, guardrails and rationales, and ordered unit references.",
+    "Resolve every unit reference against its shared table before evaluating the unit. Preserve each full finding identity and source citation; shared tables supply context, not edit permission.",
+    "Only the current unit's findings allowedTargets and operationKinds grant mutation authority. Its writable range references must match those permissions; never borrow another unit's authority.",
+    "Return one complete atomic group per ordered bundle unit, using original digests and UTF-8 edit offsets. Read-only evidence and related ranges must remain unchanged.",
+  ].join("\n");
   const gateRecurrence = inputs.find((input) => (
     input.name === "gate-observation-recurrence.json"
   ))?.document ?? null;
@@ -5038,6 +5033,24 @@ function assertConditionalWorkerExecutionSelected({ flowManager, state, policy }
     );
   }
   return canonical;
+}
+
+/** Obtained canonical facts; candidate assembly never captures or selects input again. */
+class WorkerHandoffRequestAssemblyCapture {
+  constructor({ revisionParameters, ...parameters }) {
+    this.parameters = Object.freeze(parameters);
+    this.revisionParameters = Object.freeze(revisionParameters);
+    Object.freeze(this);
+  }
+  assemble(specGateRepairDocument = null) {
+    const inputs = specGateRepairDocument === null ? this.parameters.inputs
+      : this.parameters.inputs.map((input) => input.name === "spec-gate-repair-context.json"
+        ? specGateRepairContextSnapshot(specGateRepairDocument) : input);
+    const inputDigestValue = handoffInputDigest(inputs, this.parameters.contextSnapshot);
+    return new WorkerArtifactHandoffRequest({ ...this.parameters, inputs,
+      inputDigest: inputDigestValue,
+      inputRevision: inputRevision(inputDigestValue, this.revisionParameters) });
+  }
 }
 
 export class WorkerArtifactHandoffRequest {
@@ -5224,7 +5237,12 @@ export class WorkerArtifactHandoffRequest {
     });
   }
 
-  static create({
+  static create(options) {
+    const capture = WorkerArtifactHandoffRequest.capture(options);
+    return capture === null ? null : capture.assemble();
+  }
+
+  static capture({
     mainRoot,
     executionRoot,
     state,
@@ -5234,6 +5252,7 @@ export class WorkerArtifactHandoffRequest {
     generatedAt = null,
     workerInstructions = new WorkerArtifactWorkerInstructions(),
     deferConditionalAdmission = false,
+    specGateRepairDocument = null,
   }) {
     const policy = workerArtifactHandoffPolicy(invocation?.action?.nextAction?.step);
     if (!policy) return null;
@@ -5255,7 +5274,7 @@ export class WorkerArtifactHandoffRequest {
       ? state
       : assertConditionalWorkerExecutionSelected({ flowManager, state, policy });
     state = admittedState;
-    const capture = captureWorkerHandoffInputs({ flowManager, state, invocation, executionRoot, policy });
+    const capture = captureWorkerHandoffInputs({ flowManager, state, invocation, executionRoot, policy, specGateRepairDocument });
     const {
       planGateRepair, testReviewRepair, testReviewRepairProgress, acceptanceRepairRoute,
       inputs, contextSnapshot,
@@ -5302,7 +5321,7 @@ export class WorkerArtifactHandoffRequest {
       attempt: semanticIdentity.attempt,
       ignoredDirectories: sourceIgnoredDirectories,
     });
-    return new WorkerArtifactHandoffRequest({
+    return new WorkerHandoffRequestAssemblyCapture({
       mainRoot,
       executionRoot,
       state,
@@ -5312,13 +5331,13 @@ export class WorkerArtifactHandoffRequest {
       contextSnapshot,
       payloads,
       inputDigest: inputDigestValue,
-      inputRevision: inputRevision(inputDigestValue, {
+      revisionParameters: {
         semanticIdentity,
         planGateRepair,
         testReviewRepair,
         requirementTestBinding: requirementTestContext?.binding ?? null,
         acceptanceRepairRoute,
-      }),
+      },
       generatedAt: generatedAt ?? now().toISOString(),
       testReviewRepair,
       testReviewRepairProgress,
@@ -6351,7 +6370,7 @@ function canonicalSourceAuthorityForStored({ stored, flowManager }) {
   return authority;
 }
 
-function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, policy, payloads, canonicalLocation, flowManager }) {
+function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, policy, payloads, canonicalLocation, flowManager, nextAction = null }) {
   const sourceAuthority = canonicalSourceAuthorityForStored({ stored, flowManager });
   return new WorkerArtifactHandoffRequest({
     mainRoot,
@@ -6361,7 +6380,7 @@ function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, 
       id: stored.dispatchInvocationId,
       action: {
         digest: stored.actionDigest,
-        nextAction: { step: stored.stepId, taskId: stored.taskId },
+        nextAction: nextAction ?? { step: stored.stepId, taskId: stored.taskId },
       },
       ...(stored.contextSnapshot === null ? {} : {
         target: { digest: stored.contextSnapshot.binding.targetDigest },
@@ -6387,7 +6406,7 @@ function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, 
   });
 }
 
-function reboundRestoredHandoffRequest({ identityRequest, mainRoot, executionRoot, state, stored, policy, payloads, canonicalLocation, flowManager }) {
+function reboundRestoredHandoffRequest({ identityRequest, mainRoot, executionRoot, state, stored, policy, payloads, canonicalLocation, flowManager, nextAction = null }) {
   const sourceAuthority = canonicalSourceAuthorityForStored({ stored, flowManager });
   const { testReviewRepair, testReviewRepairProgress } = restoredTestReviewRepairContext({
     flowManager, state, stepId: policy.stepId, workerVisibleTestReviewRepair: stored.testReviewRepair,
@@ -6400,7 +6419,7 @@ function reboundRestoredHandoffRequest({ identityRequest, mainRoot, executionRoo
       id: stored.dispatchInvocationId,
       action: {
         digest: stored.actionDigest,
-        nextAction: { step: stored.stepId, taskId: stored.taskId },
+        nextAction: nextAction ?? { step: stored.stepId, taskId: stored.taskId },
       },
       ...(stored.contextSnapshot === null ? {} : {
         target: { digest: stored.contextSnapshot.binding.targetDigest },
@@ -6434,21 +6453,21 @@ function reboundRestoredHandoffRequest({ identityRequest, mainRoot, executionRoo
   return request;
 }
 
-function restoreExecutionHandoffRequest({ mainRoot, executionRoot, state, stored, canonicalLocation, flowManager }) {
+function restoreExecutionHandoffRequest({ mainRoot, executionRoot, state, stored, canonicalLocation, flowManager, nextAction = null }) {
   if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
     throw new Error("canonical handoff restore requires a Version-1 Flow state");
   }
   const policy = workerArtifactHandoffPolicy(stored.stepId);
   if (!policy) throw new Error(`unsupported canonical worker handoff step: ${stored.stepId}`);
   const identityRequest = restoredStoredHandoffRequest({
-    mainRoot, executionRoot, state, stored, policy, payloads: stored.payloads, canonicalLocation, flowManager,
+    mainRoot, executionRoot, state, stored, policy, payloads: stored.payloads, canonicalLocation, flowManager, nextAction,
   });
   if (identityRequest.directory !== stored.directory || identityRequest.requestDigest !== stored.requestDigest) {
     throw new Error("canonical handoff request does not reproduce its persisted identity");
   }
   if (canonicalHandoffReceiptForRequest(state, identityRequest, flowManager) !== null) return identityRequest;
   return reboundRestoredHandoffRequest({
-    identityRequest, mainRoot, executionRoot, state, stored, policy, payloads: stored.payloads, canonicalLocation, flowManager,
+    identityRequest, mainRoot, executionRoot, state, stored, policy, payloads: stored.payloads, canonicalLocation, flowManager, nextAction,
   });
 }
 
@@ -7190,10 +7209,6 @@ function validateSpecGateRepairWorkerPayload(request, proposal) {
         throw new Error("Spec Gate repair Draft return proposal is invalid");
       }
     } else throw new Error("Spec Gate repair response has no typed repair disposition");
-  } else if (mode === "evidence") {
-    if (proposal?.stage !== "spec-gate-repair-evidence" || !Array.isArray(proposal.observations)) {
-      throw new Error("Spec Gate repair evidence response must contain typed observations");
-    }
   } else if (mode === "locate") {
     if (proposal?.stage !== "spec-gate-repair-locate" || !Array.isArray(proposal.locations)) {
       throw new Error("Spec Gate repair location response must contain typed locations");
@@ -8615,6 +8630,31 @@ export class WorkerArtifactHandoffCoordinator {
     return this.prepareSourceWorker({ ctx, request, invocation });
   }
 
+  planSpecGateRepairRequest({ ctx, state, invocation, workerInstructions, dispatchWorkClass, generatedAt = null }) {
+    state = ctx.flowManager.canonicalState(state.specId);
+    const frontier = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
+      state, executionRoot: ctx.executionRoot || ctx.root });
+    const { limit, budget } = latestRepairBudget({ flowManager: ctx.flowManager,
+      specId: state.specId, attemptId: state.attempt.id,
+      baseRevision: frontier.source.baseRevision, consumerNodeId: "spec-gate-repair" });
+    const documents = specGateRepairContextDocuments(frontier);
+    const capture = WorkerArtifactHandoffRequest.capture({ mainRoot: ctx.mainRoot || ctx.root,
+      executionRoot: ctx.executionRoot || ctx.root, state, invocation,
+      flowManager: ctx.flowManager, generatedAt: generatedAt ?? this.now().toISOString(),
+      workerInstructions, specGateRepairDocument: documents[0] });
+    const requests = documents.map((document) => capture.assemble(document));
+    let callPlan;
+    try {
+      callPlan = new SpecGateRepairCallPlan({ requests, invocation, dispatchWorkClass, limit, budget });
+    } catch (cause) {
+      if (!(cause instanceof PromptBatchingError)) throw cause;
+      throw new WorkerArtifactHandoffError("recovery-required", cause.code, cause.message,
+        { cause, recoveryPossible: false, data: { ...cause.details,
+          stepId: "spec-gate-repair", failureKind: "step-admission" } });
+    }
+    return { request: requests[0].prepare(), callPlan };
+  }
+
   admitConditionalDraftRequest({ ctx, state, request }) {
     if (!(request instanceof WorkerArtifactHandoffRequest)
       || !isConditionalDraftWorkerStep(request.stepId)) {
@@ -8628,10 +8668,15 @@ export class WorkerArtifactHandoffCoordinator {
     return request;
   }
 
-  restoreClaimedDraftRequest({ ctx, state, lifecycle }) {
-    const claim = lifecycle?.claim;
+  restoreClaimedDraftRequest({ ctx, state, lifecycle, executionLocator = null, actionFileDigest = null }) {
+    const claim = lifecycle?.claim ?? executionLocator;
     const binding = lifecycle?.binding;
     const activeStepId = activeFlowStepId(state);
+    if (lifecycle?.claim == null && executionLocator !== null
+      && (activeStepId !== "spec-gate-repair" || lifecycle?.phase !== "checkpoint"
+        || !(executionLocator instanceof DraftWorkerExecutionClaim))) {
+      throw new TypeError("unclaimed request restoration requires its typed Spec Gate repair checkpoint locator");
+    }
     if (claim?.kind !== "worker"
       || binding?.kind !== (isConditionalDraftWorkerStep(activeStepId) ? "conditional-worker" : "worker")
       || !(isConditionalDraftWorkerStep(activeStepId)
@@ -8645,13 +8690,33 @@ export class WorkerArtifactHandoffCoordinator {
       ),
       "request.json",
     );
-    if (!fs.existsSync(requestPath)) return null;
+    if (!fs.existsSync(requestPath)) {
+      if (actionFileDigest !== null) {
+        throw new WorkerArtifactHandoffError("recovery-required", "FLOW_DRAFT_EXECUTION_CLAIM_MISMATCH",
+          "persisted worker request is missing at its canonical execution locator",
+          { retryable: false, recoveryPossible: false, data: { failureKind: "step-admission" } });
+      }
+      return null;
+    }
     const stored = requestFromStored(requestPath);
+    let nextAction = null;
+    if (actionFileDigest !== null) {
+      const { document } = boundedJson(path.join(path.dirname(requestPath), "action.json"),
+        "worker guarded action request");
+      if (digest(stableStringify(document)) !== requiredDigest(actionFileDigest, "saved worker action file digest")
+        || document?.step !== stored.stepId || (document?.taskId ?? null) !== stored.taskId) {
+        throw new WorkerArtifactHandoffError("recovery-required", "FLOW_DRAFT_EXECUTION_CLAIM_MISMATCH",
+          "persisted worker guarded action differs from its canonical execution checkpoint",
+          { retryable: false, recoveryPossible: false, data: { failureKind: "step-admission" } });
+      }
+      nextAction = document;
+    }
     const request = restoreExecutionHandoffRequest({
       mainRoot: ctx.mainRoot || ctx.root,
       executionRoot: ctx.executionRoot || ctx.root,
       state,
       stored,
+      nextAction,
       canonicalLocation: ctx.flowManager.specLocation(state.specId),
       flowManager: ctx.flowManager,
     });
@@ -8666,7 +8731,8 @@ export class WorkerArtifactHandoffCoordinator {
         "recovery-required",
         "FLOW_DRAFT_EXECUTION_CLAIM_MISMATCH",
         "persisted Draft worker request does not match its canonical execution claim",
-        { retryable: false, recoveryPossible: false },
+        { retryable: false, recoveryPossible: false,
+          data: activeStepId === "spec-gate-repair" ? { failureKind: "step-admission" } : {} },
       );
     }
     return request;
@@ -9330,6 +9396,22 @@ export class WorkerArtifactHandoffCoordinator {
           // resume instead of inventing a fresh invocation.
           if (canonicalWorkerExecutionClaimForStored({ flowManager: ctx.flowManager, state, stored }) !== null) {
             continue;
+          }
+          // A checkpoint has reserved input but has not claimed a provider call.
+          // Preserve only its exact, validated request for Definition to resume.
+          if (stored.stepId === "spec-gate-repair" && activeFlowStepId(state) === stored.stepId) {
+            const canonical = ctx.flowManager.canonicalState(state.specId);
+            if (canonical.runId === stored.runId && canonical.attempt?.nodeId === stored.stepId) {
+              const { lifecycle } = ctx.flowManager.draftStepExecutionState({ binding: {
+                runId: canonical.runId, specId: canonical.specId, stepId: stored.stepId, attempt: canonical.attempt,
+              } });
+              if (lifecycle?.phase === "checkpoint") {
+                const saved = readSpecGateRepairExecutionProgress({ flowManager: ctx.flowManager, state: canonical, lifecycle });
+                const request = this.restoreClaimedDraftRequest({ ctx, state: canonical, lifecycle,
+                  executionLocator: saved.executionLocator, actionFileDigest: saved.document.actionFileDigest });
+                if (request.directory === stored.directory) continue;
+              }
+            }
           }
           // Other artifact handoffs remain transient and may be discarded.
           if (cleanupTransientExecutionHandoffDirectory(handoffRoot, stored.directory)) cleaned += 1;

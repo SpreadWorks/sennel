@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
 import {
-  AtomicPromptElement, RangedTextPromptElement, PromptReferenceElement, PromptRequestEnvelope,
+  AtomicPromptElement, PromptReferenceElement, PromptRequestEnvelope,
   PromptInputBuilder, PromptBatchPlan, PromptRequestLimit,
   PromptBatchGroup, GroupedPromptBatchTopology,
 } from "../../lib/prompt-batching.js";
-import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
 import { SpecRepairTarget, specRepairTargetEntries } from "./spec-repair-operations.js";
 import { SpecGateDocumentTarget } from "./spec-gate-targets.js";
 import { SpecGateRepairSource } from "./spec-gate-repair-values.js";
@@ -13,94 +12,26 @@ import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 import { MAX_WORKER_ARTIFACT_INPUT_BYTES,
   workerArtifactStableStringify } from "./worker-artifact-input-format.js";
 
-function hash(value) { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
-function freeze(value) {
-  if (value && typeof value === "object") { Object.values(value).forEach(freeze); Object.freeze(value); }
-  return value;
-}
-function identity(value) { return value instanceof FlowFindingSourceIdentity ? value : new FlowFindingSourceIdentity(value); }
+import {
+  SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection,
+  specGateRepairValueDigest as hash, freezeSpecGateRepairValue as freeze,
+  specGateRepairFindingIdentity as identity,
+} from "./spec-gate-repair-selection.js";
+import { SpecGateRepairBundle } from "./spec-gate-repair-bundle.js";
+export { SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection }
+  from "./spec-gate-repair-selection.js";
+
 function targetKey(value) {
   const target = value instanceof SpecRepairTarget ? value : SpecRepairTarget.fromJSON(value, "repair context target");
   return JSON.stringify(target.toJSON());
 }
 
-/** A canonical field, with stable entity identity rather than an array ordinal. */
-export class SpecGateRepairRange {
-  constructor({ id, path, value, entity = null, target = null, digest = hash(value), collectionAnchor = false, exists = true }) {
-    this.id = id;
-    this.path = path;
-    this.value = freeze(structuredClone(value));
-    this.entity = entity;
-    this.target = target;
-    this.digest = digest;
-    this.collectionAnchor = collectionAnchor;
-    this.exists = exists;
-    Object.freeze(this);
-  }
-  descriptor() {
-    return { id: this.id, path: this.path, entity: this.entity, digest: this.digest,
-      target: this.target?.toJSON() ?? null, collectionAnchor: this.collectionAnchor, exists: this.exists };
-  }
-  toJSON({ writable = false } = {}) { return { ...this.descriptor(), writable, value: this.value }; }
-}
-
-export class SpecGateRepairFinding {
-  constructor(value, rangeIds = []) {
-    this.identity = identity(value.identity);
-    if (typeof value.requirementRef !== "string" || !value.requirementRef
-      || typeof value.observed !== "string" || !value.observed) {
-      throw new TypeError("Gate repair finding requires its rule and complete reason");
-    }
-    this.requirementRef = value.requirementRef;
-    this.observed = value.observed;
-    this.where = freeze(structuredClone(value.where ?? null));
-    this.targets = freeze(structuredClone(value.targets ?? []));
-    this.allowedTargets = freeze(structuredClone(value.allowedTargets ?? []));
-    this.specRevision = value.specRevision ?? null;
-    this.rangeIds = Object.freeze([...rangeIds].sort());
-    Object.freeze(this);
-  }
-  toJSON() {
-    return { identity: this.identity.toJSON(), requirementRef: this.requirementRef,
-      observed: this.observed, where: this.where, targets: this.targets,
-      allowedTargets: this.allowedTargets, ...(this.specRevision === null ? {} : { specRevision: this.specRevision }),
-      rangeIds: this.rangeIds };
-  }
-}
-
-/** Connected findings form one indivisible proposal, even across several fields. */
-export class SpecGateRepairUnit {
-  constructor(findings) {
-    this.findings = Object.freeze([...findings].sort((a, b) => a.identity.toString().localeCompare(b.identity.toString())));
-    this.rangeIds = Object.freeze([...new Set(findings.flatMap((item) => item.rangeIds))].sort());
-    this.id = `repair-unit:${hash(this.findings.map((item) => item.identity.toJSON()))}`;
-    Object.freeze(this);
-  }
-  toJSON() { return { id: this.id, rangeIds: this.rangeIds, findings: this.findings.map((item) => item.toJSON()) }; }
-}
-
-export class SpecGateRepairSelection {
-  constructor({ baseRevision, unit, ranges, guardrails, acknowledgedRationale }) {
-    this.baseRevision = baseRevision;
-    this.unit = unit;
-    this.ranges = freeze(ranges);
-    this.guardrails = freeze(structuredClone(guardrails));
-    this.acknowledgedRationale = acknowledgedRationale;
-    Object.freeze(this);
-  }
-  toJSON() {
-    return { baseRevision: this.baseRevision, unit: this.unit.toJSON(), ranges: this.ranges,
-      guardrails: this.guardrails, acknowledgedRationale: this.acknowledgedRationale };
-  }
-}
-
 class SpecGateRepairEnvelope extends PromptRequestEnvelope {
-  constructor({ baseRevision, mode, fixed = null }) { super(); this.baseRevision = baseRevision; this.mode = mode; this.fixed = fixed; }
+  constructor({ baseRevision, mode }) { super(); this.baseRevision = baseRevision; this.mode = mode; }
   build(elements) {
     return new PromptBuilder()
       .setRole(this.mode === "locate" ? "Locate Spec Gate findings in the canonical structural index."
-        : this.mode === "evidence" ? "Read the supplied parts of one indivisible Spec Gate repair unit."
-          : "Propose bounded operations for the supplied Spec Gate repair units.")
+        : "Propose bounded operations for the supplied Spec Gate repair units.")
       .setRules([
         "This is the Spec stage. Evaluate the planned verification method and acceptance conditions. Executed evidence belongs to later stages.",
         "The source is deliberately selected, not the full document. Never infer absence from an omitted range. Request additional range IDs bound to baseRevision when needed.",
@@ -108,11 +39,9 @@ class SpecGateRepairEnvelope extends PromptRequestEnvelope {
         "Read-only ranges are context, not authority to change them. Only the explicit allowedTargets and operationKinds grant mutation authority.",
         "Never rewrite the full Spec. All proposals share the given baseRevision and original value digests. Do not apply a proposal to another proposal's output.",
         this.mode === "locate" ? "Return locations with exact finding identity and existing rangeIds only. Do not fabricate a position or declare a free-text location resolved by approximation. The repeated location element is the finding; other elements are one part of the structural index. Return that exact finding once, with only rangeIds present in this part. Return an empty rangeIds array if this part contains no matching location; the parent combines every part before declaring it unresolved."
-          : this.mode === "evidence" ? "Collect support, contradictions, unresolved questions and exact range citations; do not propose independent partial changes. The final proposal must cover the entire unit."
-            : "Return one atomic group per unit, preserving all findingIdentities. Resolve facts from supplied Issue, request, prior Draft answers, rules and source evidence before proposing any return to Draft. Only a genuinely missing user choice may produce spec-gate-repair-draft-return with unitId, decision, evidence and unresolvedBecause. Missing context, tooling failures or inability to locate text are not user choices. Never ask the user directly.",
+          : "Return one atomic group per unit, preserving all findingIdentities. Resolve facts from supplied Issue, request, prior Draft answers, rules and source evidence before proposing any return to Draft. Only a genuinely missing user choice may produce spec-gate-repair-draft-return with unitId, decision, evidence and unresolvedBecause. Missing context, tooling failures or inability to locate text are not user choices. Never ask the user directly.",
       ].join("\n"))
       .addUserPrompt("## Canonical revision", this.baseRevision)
-      .addUserPrompt("## Required context", JSON.stringify(this.fixed))
       .addUserPrompt("## Selected input", JSON.stringify(elements.map((entry) => ({
         id: entry.id, originId: entry.originId, start: entry.start, end: entry.end, content: entry.toPromptText(),
       }))))
@@ -128,18 +57,18 @@ function planFor(elements, envelope, limit) {
 
 class SpecGateRepairReference extends PromptReferenceElement {
   constructor({ selection, sequence }) {
-    const text = workerArtifactStableStringify(selection);
+    const text = workerArtifactStableStringify(selection.toJSON());
     super({ id: selection.unit.id, sourceRevision: selection.baseRevision, sequence,
-      path: `request.json#inputs/spec-gate-repair-context.json/selections/${selection.unit.id}`,
+      path: "spec-gate-repair-context.json#bundle",
       digest: createHash("sha256").update(text).digest("hex"),
       byteLength: Buffer.byteLength(text, "utf8"),
-      authorization: "Read the complete immutable selected unit; only its allowedTargets grant mutation authority." });
+      authorization: "Match the selected element ID to bundle.units[].unit.id and resolve all its range, source, guardrail and rationale references by ID. Read the complete immutable selection; only its allowedTargets grant mutation authority." });
     this.selection = freeze(selection);
     Object.freeze(this);
   }
 }
 
-/** Pure canonical context selection. Persistence and call admission belong to the Service. */
+/** Pure canonical context selection; execution composition handles persistence and admission. */
 export class SpecGateRepairContext {
   static evidenceDigestFor({ sources, guardrails }) {
     if (!Array.isArray(sources) || sources.some((source) => !(source instanceof SpecGateRepairSource))) {
@@ -328,47 +257,41 @@ export class SpecGateRepairContext {
       || unitIds.some((id) => !units.some((unit) => unit.id === id)))) throw new Error("Unknown or duplicate repair unit");
     return units.filter((unit) => unitIds === null || unitIds.includes(unit.id));
   }
-  plan({ limit = new PromptRequestLimit(), additionalRanges = {}, unitIds = null } = {}) {
-    const units = this.#selectedUnits(unitIds);
-    return planFor(units.map((unit, sequence) => new AtomicPromptElement({
-      id: unit.id, sourceRevision: this.baseRevision, sequence,
-      text: JSON.stringify(this.select(unit.id, { additionalRangeIds: additionalRanges[unit.id] ?? [] }).toJSON()),
-    })), new SpecGateRepairEnvelope({ baseRevision: this.baseRevision, mode: "repair" }), limit);
-  }
   /** Pack semantic units using immutable handoff references, never body fragments. */
   referencePlan({ limit = new PromptRequestLimit(), additionalRanges = {}, unitIds = null } = {}) {
     const units = this.#selectedUnits(unitIds);
     const elements = units.map((unit, sequence) => new SpecGateRepairReference({ sequence,
-      selection: this.select(unit.id, { additionalRangeIds: additionalRanges[unit.id] ?? [] }).toJSON() }));
+      selection: this.select(unit.id, { additionalRangeIds: additionalRanges[unit.id] ?? [] }) }));
     const envelope = new SpecGateRepairEnvelope({ baseRevision: this.baseRevision, mode: "repair" });
     const instructionPlan = planFor(elements, envelope, limit);
     let count = instructionPlan.batches.length;
     let groups;
-    // File groups only subdivide the character-safe reference batches. Repack
-    // small metadata until the real count is known; unit bodies are measured once.
+    // File groups only subdivide character-safe reference batches. Measure each
+    // complete union through the bundle contract: shared context costs bytes once.
     do {
       const expectedCount = count;
       groups = [];
-      const overhead = () => Buffer.byteLength(workerArtifactStableStringify(this.referenceDocument({
-        index: groups.length, count: expectedCount, digest: "0".repeat(64), payloadElements: [],
+      const bytesFor = (payloadElements) => Buffer.byteLength(workerArtifactStableStringify(this.referenceDocument({
+        index: groups.length, count: expectedCount, digest: "0".repeat(64), payloadElements,
       })), "utf8");
       for (const batch of instructionPlan.batches) {
         let payload = [];
-        let bytes = overhead();
         const flush = () => {
           groups.push(new PromptBatchGroup({ id: `repair-file:${groups.length}`, payloadElements: payload }));
           payload = [];
-          bytes = overhead();
         };
         for (const element of batch.payloadElements) {
-          if (payload.length && bytes + element.byteLength + 1 > MAX_WORKER_ARTIFACT_INPUT_BYTES) flush();
-          if (bytes + element.byteLength > MAX_WORKER_ARTIFACT_INPUT_BYTES) {
+          let bytes = bytesFor([...payload, element]);
+          if (payload.length && bytes > MAX_WORKER_ARTIFACT_INPUT_BYTES) {
+            flush();
+            bytes = bytesFor([element]);
+          }
+          if (bytes > MAX_WORKER_ARTIFACT_INPUT_BYTES) {
             throw new WorkerArtifactHandoffError("invalid", "FLOW_SPEC_GATE_REPAIR_INPUT_TOO_LARGE",
               "A complete Spec Gate repair unit exceeds its immutable input file limit",
               { data: { failureKind: "step-admission", unitId: element.id,
-                actualBytes: bytes + element.byteLength, maximumBytes: MAX_WORKER_ARTIFACT_INPUT_BYTES } });
+                actualBytes: bytes, maximumBytes: MAX_WORKER_ARTIFACT_INPUT_BYTES } });
           }
-          bytes += element.byteLength + (payload.length ? 1 : 0);
           payload.push(element);
         }
         flush();
@@ -381,10 +304,10 @@ export class SpecGateRepairContext {
   }
 
   referenceDocument(batch) {
-    return { version: 1, stage: "spec-gate-repair", mode: "repair",
+    return { version: 2, stage: "spec-gate-repair", mode: "repair",
       baseRevision: this.baseRevision, unitId: null,
       batchIndex: batch.index, batchCount: batch.count, batchDigest: batch.digest,
-      selections: batch.payloadElements.map((entry) => entry.selection),
+      bundle: SpecGateRepairBundle.fromSelections(batch.payloadElements.map((entry) => entry.selection)).toJSON(),
       evidenceDigest: this.evidenceDigest };
   }
   locationPlan({ limit = new PromptRequestLimit() } = {}) {
@@ -432,12 +355,5 @@ export class SpecGateRepairContext {
     }
     return this.resolveLocations({ baseRevision: this.baseRevision,
       locations: [...merged.values()].map((entry) => ({ identity: entry.identity, rangeIds: [...entry.rangeIds] })) });
-  }
-  evidencePlan(unitId, { limit = new PromptRequestLimit(), additionalRangeIds = [] } = {}) {
-    const selection = this.select(unitId, { additionalRangeIds }).toJSON();
-    const { ranges, ...fixed } = selection;
-    return planFor(ranges.map((range, sequence) => new RangedTextPromptElement({
-      id: range.id, sourceRevision: this.baseRevision, sequence, text: JSON.stringify(range),
-    })), new SpecGateRepairEnvelope({ baseRevision: this.baseRevision, mode: "evidence", fixed }), limit);
   }
 }

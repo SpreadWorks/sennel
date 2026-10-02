@@ -8,6 +8,7 @@ import { AgentFileReference } from "../../src/lib/agent-file-reference.js";
 import { ProviderRegistry } from "../../src/lib/provider.js";
 import { Logger } from "../../src/lib/log.js";
 import { SpecGateRepairContext } from "../../src/flow/lib/spec-gate-repair-context.js";
+import { SpecGateRepairBundle } from "../../src/flow/lib/spec-gate-repair-bundle.js";
 import { SpecGateRepairSource } from "../../src/flow/lib/spec-gate-repair-values.js";
 import { readSpecJsonValidator } from "../../src/lib/spec-json.js";
 import { applySpecGateRepairOperations, SpecGateRepairAuthority } from "../../src/flow/lib/spec-repair-operations.js";
@@ -41,9 +42,11 @@ test("real repair model resolves existing evidence and returns only missing choi
       sources: [new SpecGateRepairSource({ id: "issue", origin: "issue.md", revision: "original-request",
         content: known ? "The user explicitly requires regression checks for every direct shared help renderer consumer. Source investigation confirms docs, core and plugin import the shared renderer. Preserve their command semantics."
           : "Retention is a user policy choice between 30 and 365 days. Both are technically supported. The user has not selected a duration; neither project rules nor source defines a default." })] });
-    const selection = ctx.select(ctx.units()[0].id).toJSON();
+    const selected = ctx.select(ctx.units()[0].id);
+    const selection = selected.toJSON();
     const contextPath = path.join(root, "spec-gate-repair-context.json");
-    const contextBytes = Buffer.from(JSON.stringify({ mode: "repair", baseRevision, selections: [selection] }), "utf8");
+    const contextBytes = Buffer.from(JSON.stringify({ version: 2, mode: "repair", baseRevision,
+      bundle: SpecGateRepairBundle.fromSelections([selected]).toJSON() }), "utf8");
     fs.writeFileSync(contextPath, contextBytes);
     const reference = AgentFileReference.resolve({ projectRoot: root, filePath: contextPath,
       label: "Spec Gate repair quality context", maxBytes: contextBytes.length });

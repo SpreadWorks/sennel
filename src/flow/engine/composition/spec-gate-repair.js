@@ -1,15 +1,17 @@
-import { PromptLogicalFootprint, PromptFixedContextTooLargeFailure, PromptBatchCountExceededFailure } from "../../../lib/prompt-batching.js";
 import { PreparedStepReplay } from "./step-registration.js";
 import { CurrentFlowStateConflictError } from "../../lib/current-flow-state-conflict-error.js";
 import { SpecWorkerStepBinding } from "../connectors/spec/spec-step-binding.js";
 import { DraftWorkerExecutionClaim, settleSpecStepResult as selectSettlement } from "../../definition.js";
 import { SpecGateRepairContextRequiredResult } from "../step-result.js";
 import { SpecGateRepairWorkerFacts, SpecGateRepairContinuationFacts } from "../../lib/spec-gate-repair-worker-facts.js";
-import { readProgressBoundSpecGateRepairInput, SPEC_GATE_REPAIR_REQUEST_LIMIT, latestRepairBudget } from "../../lib/spec-gate-repair-progress.js";
+import { readProgressBoundSpecGateRepairInput, latestRepairBudget, readSpecGateRepairExecutionProgress } from "../../lib/spec-gate-repair-progress.js";
 import { readSpecGateRepairInput } from "../../lib/spec-gate-repair-input.js";
-import { nextSpecGateRepairEvidence, SpecGateRepairContextExpansion } from "../../lib/spec-gate-repair-evidence.js";
+import { SpecGateRepairContextExpansion } from "../../lib/spec-gate-repair-context-expansion.js";
 import { canonicalWorkerExecutionClaimForStored, WorkerArtifactHandoffError } from "../../lib/worker-artifact-handoff.js";
 import { isDeepStrictEqual } from "node:util";
+import { SpecGateRepairBundle } from "../../lib/spec-gate-repair-bundle.js";
+import { specGateRepairCallFootprint, specGateRepairResponseCost } from "../../lib/spec-gate-repair-call-plan.js";
+import { rethrowStepSettlementFailure } from "../../lib/definition-lifecycle-failure.js";
 import { SpecGateRepairServiceInput } from "../../services/spec-gate-repair-service.js";
 import { SpecGateRepairSettlementWriter } from "../../services/spec-gate-repair-settlement-writer.js";
 
@@ -32,11 +34,11 @@ function changedLocationPlanError({ stepId, attemptId, context, locationPlan }) 
 }
 
 class SpecGateRepairPublishedDecision {
-  constructor({ source, ledger, refreshed, proposal, contextMode }) {
+  constructor({ source, ledger, refreshed, proposal }) {
     const continuation = new SpecGateRepairContinuationFacts({ input: refreshed.source,
       ledger: refreshed.ledger, locationPlan: refreshed.locationPlan, proposal });
     const intermediate = continuation.unresolvedLocationCount > 0
-      || contextMode === "evidence" || continuation.draftReturnRequired
+      || continuation.draftReturnRequired
       || continuation.additionalContextRequested || continuation.completedUnitCount < continuation.unitCount;
     this.facts = new SpecGateRepairWorkerFacts({ input: source, proposal: intermediate
       ? proposal : { ...proposal, groups: [...ledger.groups(), ...proposal.groups] } });
@@ -76,7 +78,7 @@ export async function preparePublishedSpecGateRepairArguments({ ctx, state: requ
   const refreshed = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
     state, executionRoot: ctx.executionRoot || ctx.root, acceptedPublication: true });
   const { facts, continuation } = new SpecGateRepairPublishedDecision({ source, ledger, refreshed,
-    proposal: saved.proposal, contextMode: saved.context.mode });
+    proposal: saved.proposal });
   return serviceArguments({ ctx, request: null, binding, preparation: null,
     facts, handoffCoordinator, continuation,
     publicationReceipt: ctx.flowManager.readCurrentStepSettlement({
@@ -85,72 +87,69 @@ export async function preparePublishedSpecGateRepairArguments({ ctx, state: requ
 }
 
 /** The claimed budget is committed before a provider-visible call. */
-export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt }) {
+export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, callPlan = null }) {
   const binding = new SpecWorkerStepBinding({ request });
   const flowManager = ctx.flowManager;
+  binding.assertCurrent();
+  const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
+  request.assertCurrent(flowManager.loadReadOnly(binding.specId));
   const { limit, budget } = latestRepairBudget({ flowManager, specId: binding.specId,
-    attemptId: binding.attempt.id, baseRevision: request.inputs.find((entry) => (
-      entry.name === "spec-gate-repair-context.json"
-    ))?.document?.baseRevision, consumerNodeId: binding.stepId });
-  // Immutable file inputs are bounded in bytes by WorkerArtifactInputSnapshot.
-  // Count their decoded documents only in the aggregate character budget; they
-  // do not occupy the provider instruction/argv character budget.
-  const inputCharacters = request.inputs.reduce((total, input) => total + JSON.stringify(input.document).length, 0);
-  const instructionCharacters = PromptLogicalFootprint.measure(prompt).total;
-  if (typeof prompt !== "string" || instructionCharacters > limit.maxRequestCharacters) {
-    throw new PromptFixedContextTooLargeFailure("Spec Gate repair instructions exceed their durable character limit",
-      { actualCharacters: instructionCharacters, maximumCharacters: limit.maxRequestCharacters });
-  }
-  const selectedContext = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document;
-  const state = flowManager.canonicalState(binding.specId);
-  const { ledger, locationPlan } = readProgressBoundSpecGateRepairInput({ flowManager,
-    state, executionRoot: request.executionRoot });
-  let requiredCalls = 1;
-  if (selectedContext.mode === "locate") {
-    requiredCalls = locationPlan.batches.length - ledger.completedLocationBatches(locationPlan).length + 1;
-  } else if (selectedContext.mode === "evidence") {
-    const completed = ledger.entries.filter((entry) => entry.context.mode === "evidence"
-      && entry.context.unitId === selectedContext.unitId
-      && entry.context.evidenceContextDigest === selectedContext.evidenceContextDigest
-      && entry.context.evidenceDepth === selectedContext.evidenceDepth);
-    requiredCalls = selectedContext.batchCount - completed.length + 1;
-  } else if (selectedContext.mode === "repair") {
-    requiredCalls = selectedContext.batchCount;
-  }
-  budget.assertCanExecute(requiredCalls);
-  if (budget.providerCallCount + 1 > limit.maxBatchCount) {
-    throw new PromptBatchCountExceededFailure("Spec Gate repair exceeds its durable batch limit",
-      { batchCount: budget.providerCallCount + 1, maxBatchCount: limit.maxBatchCount });
-  }
-  if (selectedContext?.mode === "evidence" && selectedContext.evidenceDepth > 0) {
-    budget.consumeSynthesisCalls(1);
-  }
-  budget.consumeAggregate({ characters: instructionCharacters + inputCharacters,
-    items: request.inputs.length + 1 });
+    attemptId: binding.attempt.id, baseRevision: context.baseRevision, consumerNodeId: binding.stepId });
   const execution = flowManager.draftStepExecutionState({ binding });
-  const executionBinding = execution.workerBinding({
-    inputDigest: request.inputDigest, inputRevision: request.inputRevision,
-  });
+  const checkpoint = execution.lifecycle?.phase === "checkpoint";
+  let base;
+  let executionBinding;
   const stepResult = new SpecGateRepairContextRequiredResult();
   const settlement = selectSettlement(binding.stepId, stepResult);
-  const base = { version: 1, attemptId: binding.attempt.id,
-    inputRevision: request.inputRevision, requestDigest: request.requestDigest,
-    limit: { ...limit }, generation: executionBinding.executionGeneration,
-    context: selectedContext };
-  flowManager.checkpointDraftStepExecution({ binding, stepResult, settlement, executionBinding,
-    artifactWrites: [progressWrite(binding, executionBinding.executionGeneration, "checkpoint",
-      { ...base, phase: "checkpoint", budget: budget.snapshot() })] });
-  budget.consumeProviderCall();
-  const claim = new DraftWorkerExecutionClaim({
-    dispatchInvocationId: request.dispatchInvocationId,
-    generatedAt: request.generatedAt,
-    actionDigest: request.actionDigest,
-    requestDigest: request.requestDigest,
-  });
-  flowManager.claimDraftStepExecution({ binding, stepResult, settlement, executionBinding,
-    executionClaim: claim,
-    artifactWrites: [progressWrite(binding, executionBinding.executionGeneration, "claimed",
-      { ...base, phase: "claimed", budget: budget.snapshot() })] });
+  if (checkpoint) {
+    const saved = readSpecGateRepairExecutionProgress({ flowManager,
+      state: flowManager.canonicalState(binding.specId), lifecycle: execution.lifecycle });
+    const call = saved.callPlan.currentCall(saved.document);
+    if (request.inputDigest !== saved.document.inputDigest
+      || request.inputRevision !== saved.document.inputRevision
+      || request.requestDigest !== saved.document.requestDigest
+      || !isDeepStrictEqual(specGateRepairCallFootprint(request, prompt).toJSON(), call.callCost.toJSON())
+      || !isDeepStrictEqual(context, saved.document.context)) {
+      throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_PLAN_CHANGED",
+        "Spec Gate repair checkpoint does not match its exact request and measured cost",
+        { data: { failureKind: "step-admission" }, recoveryPossible: false });
+    }
+    // Input/synthesis cost was durably consumed before interruption. Only the
+    // unclaimed provider slot is consumed by the exact checkpoint continuation.
+    budget.assertCanExecute(1);
+    executionBinding = execution.lifecycle.binding;
+    base = saved.document;
+  } else {
+    if (callPlan === null) throw new WorkerArtifactHandoffError("invalid", "FLOW_SPEC_GATE_REPAIR_PLAN_REQUIRED",
+      "Spec Gate repair execution requires its measured remaining call plan",
+      { data: { failureKind: "step-admission" } });
+    const call = callPlan.assertCurrent({ request, prompt, budget });
+    executionBinding = execution.workerBinding({ inputDigest: request.inputDigest, inputRevision: request.inputRevision });
+    budget.consumeAggregate(call.callCost);
+    if (call.synthesisCallCount > 0) budget.consumeSynthesisCalls(call.synthesisCallCount);
+    const executionLocator = new DraftWorkerExecutionClaim({ dispatchInvocationId: request.dispatchInvocationId,
+      generatedAt: request.generatedAt, actionDigest: request.actionDigest, requestDigest: request.requestDigest });
+    base = { version: 2, runId: request.runId, specId: request.specId,
+      attemptId: binding.attempt.id, attemptSequence: binding.attempt.sequence,
+      inputDigest: request.inputDigest, inputRevision: request.inputRevision,
+      requestDigest: request.requestDigest, actionFileDigest: request.actionRequestDigest, limit: { ...limit },
+      actionRepositoryFingerprint: request.invocation.action.repositoryFingerprint ?? null,
+      generation: executionBinding.executionGeneration, context,
+      executionLocator: executionLocator.toJSON(), plan: callPlan.toJSON(),
+      callCost: call.callCost.toJSON(), responseAllowance: call.responseAllowance.toJSON() };
+  }
+  try {
+    if (!checkpoint) {
+      flowManager.checkpointDraftStepExecution({ binding, stepResult, settlement, executionBinding,
+        artifactWrites: [progressWrite(binding, executionBinding.executionGeneration, "checkpoint",
+          { ...base, phase: "checkpoint", budget: budget.snapshot() })] });
+    }
+    budget.consumeProviderCall();
+    flowManager.claimDraftStepExecution({ binding, stepResult, settlement, executionBinding,
+      executionClaim: new DraftWorkerExecutionClaim(base.executionLocator),
+      artifactWrites: [progressWrite(binding, executionBinding.executionGeneration, "claimed",
+        { ...base, phase: "claimed", budget: budget.snapshot() })] });
+  } catch (error) { rethrowStepSettlementFailure(error); }
 }
 
 export async function prepareSpecGateRepairServiceArguments({ ctx, request, handoffCoordinator }, ConnectorClass) {
@@ -216,28 +215,14 @@ export async function prepareSpecGateRepairServiceArguments({ ctx, request, hand
       || proposal.locations[0].rangeIds.some((id) => !allowed.has(id))) {
       throw new Error("Spec Gate repair location response exceeds its selected canonical table of contents");
     }
-  } else if (context.mode === "evidence") {
-    const { budget: executionBudget } = latestRepairBudget({ flowManager: ctx.flowManager,
-      specId: binding.specId, attemptId: binding.attempt.id,
-      baseRevision: context.baseRevision, consumerNodeId: binding.stepId });
-    const work = nextSpecGateRepairEvidence({ context: source.context,
-      limit: SPEC_GATE_REPAIR_REQUEST_LIMIT, executionBudget,
-      unitId: context.unitId, publications: ledger.entries,
-      additionalRangeIds: ledger.additionalRangeIds(source.context, context.unitId) });
-    if (work.mode !== "evidence" || work.batch.digest !== context.batchDigest
-      || work.evidenceDepth !== context.evidenceDepth
-      || work.evidenceContextDigest !== context.evidenceContextDigest
-      || preparation.facts.proposal.baseRevision !== context.baseRevision
-      || preparation.facts.proposal.unitId !== context.unitId) {
-      throw new Error("Spec Gate repair evidence response differs from its bounded work unit");
-    }
   } else if (context.mode === "repair") {
+    const selections = SpecGateRepairBundle.fromJSON(context.bundle).selections();
     const proposal = preparation.facts.proposal;
     if (proposal.baseRevision !== context.baseRevision) {
       throw new Error("Spec Gate repair response changed its base revision");
     }
     if (proposal.stage === "spec-gate-repair-context-request") {
-      if (!context.selections.some((selection) => selection.unit.id === proposal.unitId)) {
+      if (!selections.some((selection) => selection.unit.id === proposal.unitId)) {
         throw new Error("Spec Gate repair requested context for an unselected atomic unit");
       }
       new SpecGateRepairContextExpansion({ context: source.context,
@@ -247,13 +232,13 @@ export async function prepareSpecGateRepairServiceArguments({ ctx, request, hand
     } else if (proposal.stage === "spec-gate-repair-draft-return") {
       if (![proposal.decision, proposal.evidence, proposal.unresolvedBecause].every((value) => (
         typeof value === "string" && value.trim() !== ""
-      )) || !context.selections.some((selection) => selection.unit.id === proposal.unitId)) {
+      )) || !selections.some((selection) => selection.unit.id === proposal.unitId)) {
         throw new Error("Spec Gate repair Draft return requires a selected unit and cited decision gap");
       }
-    } else if (proposal.groups.length !== context.selections.length
+    } else if (proposal.groups.length !== selections.length
       || proposal.groups.some((group, index) => !isDeepStrictEqual(
         group.findingIdentities,
-        context.selections[index].unit.findings.map((finding) => finding.identity),
+        selections[index].unit.findings.map((finding) => finding.identity),
       ))) {
       throw new Error("Spec Gate repair proposal does not cover its selected atomic units");
     }
@@ -262,28 +247,29 @@ export async function prepareSpecGateRepairServiceArguments({ ctx, request, hand
   }
   let publicationReceipt = null;
   if (lifecycle.phase === "claimed") {
-    const { limit, budget } = latestRepairBudget({ flowManager: ctx.flowManager, specId: binding.specId,
-      attemptId: binding.attempt.id, baseRevision: context.baseRevision,
-      consumerNodeId: binding.stepId });
+    const saved = readSpecGateRepairExecutionProgress({ flowManager: ctx.flowManager,
+      state: ctx.flowManager.canonicalState(binding.specId), lifecycle });
+    const { limit, budget } = saved;
     const proposal = preparation.facts.proposal;
-    const proposalCharacters = JSON.stringify(proposal).length;
-    if (proposalCharacters > limit.maxResponseCharacters) {
+    const responseCost = specGateRepairResponseCost(context, proposal);
+    if (responseCost.characters > limit.maxResponseCharacters) {
       throw new Error("Spec Gate repair response exceeds its durable response limit");
     }
-    budget.consumeAggregate({ characters: proposalCharacters,
-      items: context.mode === "locate" ? proposal.locations.length
-        : context.mode === "evidence" ? proposal.observations.length
-          : proposal.stage === "spec-gate-repair" ? proposal.groups.length : 1 });
+    if (responseCost.characters > saved.document.responseAllowance.characters
+      || responseCost.items > saved.document.responseAllowance.items) {
+      throw new Error("Spec Gate repair response exceeds its admitted response allowance");
+    }
+    budget.consumeAggregate(responseCost);
     const stepResult = new SpecGateRepairContextRequiredResult();
-    publicationReceipt = ctx.flowManager.settleSpecStepResult({
-      binding, stepResult, settlement: selectSettlement(binding.stepId, stepResult),
-      artifactWrites: [progressWrite(binding, lifecycle.executionGeneration, "publication", {
-        version: 1, phase: "publication", attemptId: binding.attempt.id,
-        generation: lifecycle.executionGeneration,
-        inputRevision: request.inputRevision, requestDigest: request.requestDigest,
-        limit: { ...limit }, budget: budget.snapshot(), context, proposal,
-      })],
-    }).receipt;
+    try {
+      publicationReceipt = ctx.flowManager.settleSpecStepResult({
+        binding, stepResult, settlement: selectSettlement(binding.stepId, stepResult),
+        artifactWrites: [progressWrite(binding, lifecycle.executionGeneration, "publication", {
+          ...saved.document, phase: "publication", budget: budget.snapshot(),
+          responseCost: responseCost.toJSON(), context, proposal,
+        })],
+      }).receipt;
+    } catch (error) { rethrowStepSettlementFailure(error); }
   } else if (lifecycle.phase !== "publication") {
     throw new Error("Spec Gate repair worker response lacks a durable provider claim");
   }
@@ -302,7 +288,7 @@ export async function prepareSpecGateRepairServiceArguments({ ctx, request, hand
     state: ctx.flowManager.canonicalState(binding.specId), executionRoot: request.executionRoot,
     acceptedPublication: true });
   const selected = new SpecGateRepairPublishedDecision({ source, ledger, refreshed,
-    proposal: preparation.facts.proposal, contextMode: context.mode });
+    proposal: preparation.facts.proposal });
   if (selected.continuation !== null) {
     return serviceArguments({ ctx, request, binding, preparation, handoffCoordinator,
       continuation: selected.continuation, publicationReceipt });

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
 import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -196,7 +197,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
             gateRepairWorkerRuns += 1;
             const context = requestInput(request, "spec-gate-repair-context.json").document;
             assert.equal(context.mode, "repair");
-            const groups = context.selections.map((selection) => {
+            const groups = SpecGateRepairBundle.fromJSON(context.bundle).selections().map((selection) => {
               const finding = selection.unit.findings[0];
               const target = finding.targets[0];
               const range = selection.ranges.find((entry) => entry.path === `requirements[${target.id}].desc` && entry.writable);

@@ -1,4 +1,5 @@
-import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
+import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
+import { reserveFixtureSpecGateRepairWorkerCall as reserveSpecGateRepairWorkerCall } from "../../support/infrastructure/spec-gate-repair-admission.js";
 import { prepareSpecGateRepairService } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
@@ -66,7 +67,7 @@ test("Spec Gate decision gap returns through Draft answer to regenerated Spec Ga
     const repairContext = repairRequest.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
     fs.writeFileSync(repairRequest.payloadPath("spec-gate-repair.json"), workerArtifactJson({
       version: 1, stage: "spec-gate-repair-draft-return",
-      baseRevision: repairContext.baseRevision, unitId: repairContext.selections[0].unit.id,
+      baseRevision: repairContext.baseRevision, unitId: SpecGateRepairBundle.fromJSON(repairContext.bundle).selections()[0].unit.id,
       decision: newQuestion.question,
       evidence: "The saved Draft answers and Issue do not identify the validation target.",
       unresolvedBecause: "A user choice is required to name one target.",

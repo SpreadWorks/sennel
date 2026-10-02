@@ -1,5 +1,4 @@
 import { planSpecGateRepairWorkerExecution } from "../../src/flow/lib/spec-gate-repair-execution.js";
-import { prepareSpecGateRepairService } from "../support/infrastructure/spec-gate-repair-scenario.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -9,11 +8,7 @@ import { brotliDecompressSync } from "node:zlib";
 import { afterEach, describe, it } from "node:test";
 
 import { buildCurrentFlowDefinition } from "../../src/flow/definition.js";
-import { SpecGateRepairService } from "../../src/flow/services/spec-gate-repair-service.js";
-import { SpecGateRepairStep } from "../../src/flow/steps/spec/spec-gate-repair.js";
-import { StepFactory } from "../../src/flow/engine/step-factory.js";
 import { WorkerArtifactHandoffCoordinator } from "../../src/flow/lib/worker-artifact-handoff.js";
-import { DraftReopenContext } from "../../src/flow/lib/draft-reopen-context.js";
 import { readSpecGateRepairInput } from "../../src/flow/lib/spec-gate-repair-input.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
 import { CanonicalRevisionRootTransaction, SpecsMigrationTransaction } from "../../src/lib/specs-migration.js";
@@ -260,7 +255,7 @@ describe("migrate specs --to 4", () => {
       originalPublication);
   });
 
-  it("replays a long retired question through the ordinary Step and gives Draft the unverified later notes", async () => {
+  it("refuses retired progress without an exact admitted call plan after question migration", () => {
     const { root, version, worktreePath } = seed();
     const oldQuestion = activityLedger(version).find((entry) => (
       entry.result?.stepResult?.kind === "spec-gate-repair-awaiting-decision"
@@ -279,26 +274,15 @@ describe("migrate specs --to 4", () => {
     const ctx = { root: worktreePath, mainRoot: root, executionRoot: worktreePath,
       specId: SPEC_ID, flowManager };
     const coordinator = new WorkerArtifactHandoffCoordinator();
-    const plan = planSpecGateRepairWorkerExecution({ ctx, state,
-      handoffCoordinator: coordinator });
-    assert.equal(plan.canonicalReplay, true);
-    assert.equal(plan.sealedReplay, false);
-    assert.equal(plan.request, null);
-    const service = await prepareSpecGateRepairService({
-      ctx, state, handoffCoordinator: coordinator,
-    });
-    const result = await new StepFactory().provide(SpecGateRepairService, service)
-      .create(SpecGateRepairStep).execute();
-    assert.equal(result.kind, "spec-gate-repair-draft-return-required");
-    const resumed = manager(root).canonicalState(SPEC_ID);
-    assert.equal(resumed.current.at(-1), "draft");
-    const issue = manager(root).readArtifact({ specId: SPEC_ID, logicalKey: "issue.log",
-      consumerNodeId: "draft" });
-    const draftInput = DraftReopenContext.fromIssueLog(JSON.parse(issue.bytes), resumed.attempt.id);
-    assert.equal(draftInput.reason, longDecision);
-    assert.match(draftInput.source.evidence, /Unverified related note Activity/);
-    assert.match(draftInput.source.evidence, /import graph confirms docs group help/);
-    assert.deepEqual(draftInput.previousDraft.questionLedger.questions, [],
-      "migration and reopen must not create an Answer or a resolved question");
+    // The retired publication has no input cost, response allowance or exact
+    // execution locator. The new alpha contract cannot infer these authorities.
+    const beforeState = flowManager.canonicalState(SPEC_ID);
+    const beforeActivities = flowManager.activityLedger(SPEC_ID);
+    const beforeCatalog = flowManager.artifactCatalog(SPEC_ID);
+    assert.throws(() => planSpecGateRepairWorkerExecution({ ctx, state,
+      handoffCoordinator: coordinator }), { code: "FLOW_SPEC_GATE_REPAIR_PROGRESS_MISMATCH" });
+    assert.deepEqual(manager(root).canonicalState(SPEC_ID), beforeState);
+    assert.deepEqual(manager(root).activityLedger(SPEC_ID), beforeActivities);
+    assert.deepEqual(manager(root).artifactCatalog(SPEC_ID), beforeCatalog);
   });
 });

@@ -4,14 +4,16 @@ import {
   SpecGateRepairExecutionStop,
   SpecGateRepairPublicationReplay,
   SpecGateRepairSealedReplay,
+  SpecGateRepairCheckpointResume,
 } from "../definition.js";
-import { readProgressBoundSpecGateRepairInput } from "./spec-gate-repair-progress.js";
+import { readProgressBoundSpecGateRepairInput, readSpecGateRepairExecutionProgress } from "./spec-gate-repair-progress.js";
 import { WorkerArtifactHandoffCoordinator, WorkerArtifactHandoffError } from "./worker-artifact-handoff.js";
 
 class SpecGateRepairExecutionObservation {
-  constructor(facts, request) {
+  constructor(facts, request, checkpointActionRepositoryFingerprint) {
     this.facts = facts;
     this.request = request;
+    this.checkpointActionRepositoryFingerprint = checkpointActionRepositoryFingerprint;
     Object.freeze(this);
   }
 }
@@ -27,25 +29,33 @@ export function readSpecGateRepairExecutionFacts({ ctx, state,
   const lifecycle = execution.lifecycle;
   let publicationCompletion = null;
   let request = null;
-  if (lifecycle?.phase === "claimed" || lifecycle?.phase === "publication") {
+  let checkpointActionRepositoryFingerprint = null;
+  if (["checkpoint", "claimed", "publication"].includes(lifecycle?.phase)) {
+    const saved = readSpecGateRepairExecutionProgress({ flowManager: ctx.flowManager,
+      state: canonical, lifecycle });
+    if (lifecycle.phase === "checkpoint") {
+      checkpointActionRepositoryFingerprint = saved.document.actionRepositoryFingerprint;
+    }
     const progress = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
       state: canonical, executionRoot: ctx.executionRoot || ctx.root,
       executionLifecycle: lifecycle });
     publicationCompletion = progress.ledger.completion;
-    if (lifecycle.phase === "claimed") {
-      request = handoffCoordinator.restoreClaimedDraftRequest({ ctx, state: canonical, lifecycle });
+    if (lifecycle.phase !== "publication") {
+      request = handoffCoordinator.restoreClaimedDraftRequest({ ctx, state: canonical, lifecycle,
+        executionLocator: saved.executionLocator, actionFileDigest: saved.document.actionFileDigest });
     }
   }
   return new SpecGateRepairExecutionObservation(new SpecGateRepairExecutionFacts({
     phase: lifecycle?.phase ?? null, publicationCompletion,
     response: request === null ? "absent" : request.hasSealedSubmission() ? "sealed" : "unsealed",
-  }), request);
+  }), request, checkpointActionRepositoryFingerprint);
 }
 
 class SpecGateRepairExecutionSelection {
   constructor(observation) {
     this.decision = resolveSpecGateRepairExecution(observation.facts);
     this.request = observation.request;
+    this.checkpointActionRepositoryFingerprint = observation.checkpointActionRepositoryFingerprint;
     Object.freeze(this);
   }
 }
@@ -55,14 +65,19 @@ export function selectSpecGateRepairExecution(input) {
 }
 
 export class SpecGateRepairWorkerExecution {
-  constructor({ request, canonicalReplay = false, sealedReplay = false }) {
+  constructor({ request, canonicalReplay = false, sealedReplay = false,
+    callPlan = null, checkpointResume = false, checkpointActionRepositoryFingerprint = null }) {
     if (request === null && !canonicalReplay || sealedReplay && request === null
-      || canonicalReplay && sealedReplay) {
+      || canonicalReplay && sealedReplay
+      || checkpointResume && (canonicalReplay || sealedReplay || request === null || callPlan !== null)) {
       throw new TypeError("Gate repair execution requires one durable response source");
     }
     this.request = request;
     this.canonicalReplay = canonicalReplay;
     this.sealedReplay = sealedReplay;
+    this.callPlan = callPlan;
+    this.checkpointResume = checkpointResume;
+    this.checkpointActionRepositoryFingerprint = checkpointActionRepositoryFingerprint;
     Object.freeze(this);
   }
 }
@@ -80,5 +95,9 @@ export function planSpecGateRepairWorkerExecution(input) {
   if (selected.decision instanceof SpecGateRepairSealedReplay) {
     return new SpecGateRepairWorkerExecution({ request: selected.request, sealedReplay: true });
   }
-  return new SpecGateRepairWorkerExecution({ request: input.handoffCoordinator.createRequest(input) });
+  if (selected.decision instanceof SpecGateRepairCheckpointResume) {
+    return new SpecGateRepairWorkerExecution({ request: selected.request, checkpointResume: true,
+      checkpointActionRepositoryFingerprint: selected.checkpointActionRepositoryFingerprint });
+  }
+  return new SpecGateRepairWorkerExecution(input.handoffCoordinator.planSpecGateRepairRequest(input));
 }

@@ -1,6 +1,7 @@
 import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import { PreparedStep } from "../../../src/flow/engine/composition/step-registration.js";
-import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
+import { reserveFixtureSpecGateRepairWorkerCall } from "./spec-gate-repair-admission.js";
+import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 
@@ -96,8 +97,8 @@ export function prepareSpecGateRepairHandoffInput({
   const request = coordinator.createRequest({
     ctx, state: ctx.flowManager.load(ctx.specId), invocation,
   });
-  const selected = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")
-    ?.document.selections[0];
+  const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
+  const selected = SpecGateRepairBundle.fromJSON(context.bundle).selections()[0];
   const range = selected?.ranges.find((entry) => entry.writable);
   if (!range || typeof range.value !== "string" || selected.unit.findings.length !== 1) {
     throw new Error("Spec Gate repair scenario requires one canonical writable text finding unit");
@@ -110,7 +111,7 @@ export function prepareSpecGateRepairHandoffInput({
       reason: "Correct the exact finding selected by Spec Gate.",
     }] }],
   }));
-  reserveSpecGateRepairWorkerCall({ ctx, request, prompt: JSON.stringify(request.toPromptReference()) });
+  reserveFixtureSpecGateRepairWorkerCall({ ctx, request, prompt: JSON.stringify(request.toPromptReference()) });
   sealWorkerArtifactHandoff({
     requestPath: request.requestPath, invocationId: request.dispatchInvocationId,
     now: () => new Date("2026-08-04T00:00:01.000Z"),

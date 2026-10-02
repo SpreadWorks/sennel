@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { SpecGateRepairContext } from "../../src/flow/lib/spec-gate-repair-context.js";
 import { PromptRequestLimit, PromptReferenceElement } from "../../src/lib/prompt-batching.js";
 import { SpecGateRepairSource } from "../../src/flow/lib/spec-gate-repair-values.js";
+import { SpecGateRepairBundle } from "../../src/flow/lib/spec-gate-repair-bundle.js";
 
 const revision = `sha256:${"a".repeat(64)}`;
 const rule = { id: "planned-check", title: "Planned checks", body: "State a check and its passing condition. Exception: a justified non-testable item needs no executable check." };
@@ -86,7 +87,7 @@ test("shared locations and one finding spanning locations form a single atomic r
   assert.equal(ctx.units().length, 1);
   assert.equal(ctx.units()[0].findings.length, 3);
   assert.deepEqual(ctx.units()[0].rangeIds, ["requirements[R1].desc", "requirements[R2].desc"]);
-  const batch = ctx.plan().batches;
+  const batch = ctx.referencePlan().batches;
   assert.equal(batch.length, 1);
   assert.equal(batch[0].elements.length, 1);
   assert.equal(batch[0].elements[0].id, ctx.units()[0].id);
@@ -97,8 +98,8 @@ test("independent units share a bounded call and preserve order-independent iden
   const first = context([a, b]); const second = context([b, a]);
   assert.equal(first.units().length, 2);
   assert.deepEqual(first.units().map((unit) => unit.id), second.units().map((unit) => unit.id));
-  assert.equal(first.plan().batches.length, 1);
-  assert.equal(first.plan().batches[0].elements.length, 2);
+  assert.equal(first.referencePlan().batches.length, 1);
+  assert.equal(first.referencePlan().batches[0].elements.length, 2);
 });
 
 test("free text is unresolved until a version-bound canonical location response is validated", () => {
@@ -180,18 +181,6 @@ test("whole-document findings select canonical context while preserving explicit
   assert.equal(selected.ranges.find(({ id }) => id === "tasks[T2].goal").writable, false);
 });
 
-test("oversized repair units are read in ranges without splitting their mutation unit", () => {
-  const document = spec(); document.requirements[0].desc = "Long planned check. ".repeat(3000);
-  const ctx = context([finding("F1")], document);
-  const limit = new PromptRequestLimit({ maxCharacters: 10000 });
-  assert.throws(() => ctx.plan({ limit }));
-  const evidence = ctx.evidencePlan(ctx.units()[0].id, { limit });
-  assert(evidence.batches.length > 1);
-  assert(evidence.batches.every((batch) => batch.request.userPrompt.includes(rule.body)));
-  assert.equal(ctx.units().length, 1);
-  assert(evidence.batches.some((batch) => batch.elements.some((element) => element.originId === "requirements[R1].desc" && element.start > 0)));
-});
-
 test("immutable file references pack complete oversized atomic units without body fragments", () => {
   const document = spec();
   document.requirements[0].desc = "日本語の完全な確認条件。".repeat(9000);
@@ -226,9 +215,10 @@ test("file packing measures exact UTF-8 JSON and actual metadata independently o
   const documents = plan.batches.map((batch) => ctx.referenceDocument(batch));
   const sizes = documents.map((entry) => Buffer.byteLength(JSON.stringify(entry)));
   assert.equal(Math.max(...sizes), 2 * 1024 * 1024);
-  assert.equal(documents.flatMap((entry) => entry.selections).length, 10);
+  const selections = documents.flatMap((entry) => SpecGateRepairBundle.fromJSON(entry.bundle).selections());
+  assert.equal(selections.length, 10);
   assert.ok(plan.batches.every((batch) => batch.footprint.total <= 10000));
-  for (const selection of documents.flatMap((entry) => entry.selections)) {
+  for (const selection of selections) {
     assert.deepEqual(selection, ctx.select(selection.unit.id).toJSON());
   }
   document.requirements[0].desc += "a";
@@ -243,14 +233,19 @@ test("additional context participates in complete file packing without granting 
   const additionalRanges = Object.fromEntries(ctx.units().map((unit) => [unit.id, ["background"]]));
   assert.equal(ctx.referencePlan().batches.length, 1);
   const plan = ctx.referencePlan({ additionalRanges });
-  assert.equal(plan.batches.length, 2);
+  // One shared full range permits both units in the same immutable input file.
+  assert.equal(plan.batches.length, 1);
   for (const batch of plan.batches) {
     const input = ctx.referenceDocument(batch);
     assert.ok(Buffer.byteLength(JSON.stringify(input)) <= 2 * 1024 * 1024);
-    assert.equal(input.selections.length, 1);
-    const range = input.selections[0].ranges.find((entry) => entry.id === "background");
-    assert.equal(range.value, document.background);
-    assert.equal(range.writable, false);
+    const selections = SpecGateRepairBundle.fromJSON(input.bundle).selections();
+    assert.equal(selections.length, 2);
+    for (const selection of selections) {
+      const range = selection.ranges.find((entry) => entry.id === "background");
+      assert.equal(range.value, document.background);
+      assert.equal(range.writable, false);
+    }
+    assert.equal(input.bundle.ranges.filter((entry) => entry.id === "background").length, 1);
   }
 });
 

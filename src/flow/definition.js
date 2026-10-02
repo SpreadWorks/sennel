@@ -6638,6 +6638,6 @@ export function resolveTaskReviewReconciliation(facts) {
 }
 
 export { resolveSpecGateRepairExecution, SpecGateRepairExecutionFacts,
-  SpecGateRepairNewWorker, SpecGateRepairSealedReplay,
+  SpecGateRepairNewWorker, SpecGateRepairCheckpointResume, SpecGateRepairSealedReplay,
   SpecGateRepairPublicationReplay, SpecGateRepairExecutionStop,
 } from "./lib/spec-gate-repair-execution-decision.js";

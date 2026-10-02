@@ -26,7 +26,7 @@ export class SpecGateRepairContinuationFacts {
 export class SpecGateRepairWorkerFacts {
   constructor({ input, proposal }) {
     if (!(input instanceof SpecGateRepairInput)
-      || !["spec-gate-repair", "spec-gate-repair-locate", "spec-gate-repair-evidence",
+      || !["spec-gate-repair", "spec-gate-repair-locate",
         "spec-gate-repair-context-request", "spec-gate-repair-draft-return"].includes(proposal?.stage)) {
       throw new TypeError("Spec Gate repair worker facts require canonical input and proposal");
     }

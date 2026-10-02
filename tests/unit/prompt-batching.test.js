@@ -11,6 +11,8 @@ import {
   PromptBatchGroup,
   PromptBatchPlan,
   PromptBatchReducer,
+  PromptCallFootprint,
+  PromptCallPlanFootprint,
   PromptCoverageInvalidFailure,
   PromptElementPartition,
   PromptElementTooLargeFailure,
@@ -30,6 +32,7 @@ import {
   PromptRequestEnvelope,
   PromptRequestLimit,
   PromptResponseTooLargeFailure,
+  PromptResponseAllowance,
   PromptScopedBinding,
   RangedTextPromptElement,
   RepeatedPromptContextElement,
@@ -717,6 +720,149 @@ describe("prompt batch execution", () => {
       assert.throws(() => PromptExecutionBudget.fromSnapshot(limit, invalid));
     }
     assert.deepEqual(snapshot, { providerCallCount: 0, synthesisCallCount: 0, aggregateCharacters: 0, aggregateItemCount: 0 });
+  });
+});
+
+describe("known prompt call costs", () => {
+  it("counts decoded documents and every logical instruction component independently of UTF-8 bytes", () => {
+    for (const text of ["aaa", "日本語", "😀a"]) {
+      const instructions = { systemPrompt: text, userPrompt: text,
+        jsonSchema: { description: text }, fmtFallback: text };
+      const documentTexts = [JSON.stringify({ text }), JSON.stringify({ repeated: text })];
+      const footprint = new PromptCallFootprint({ instructions, documentTexts });
+      const expectedInstructions = PromptLogicalFootprint.measure(instructions);
+      const expectedDocuments = documentTexts.reduce((total, entry) => total + entry.length, 0);
+      assert.deepEqual(footprint.toJSON(), {
+        instructionFootprint: expectedInstructions.toJSON(),
+        instructionCharacters: expectedInstructions.total,
+        documentCharacters: expectedDocuments,
+        characters: expectedInstructions.total + expectedDocuments,
+        items: 3,
+      });
+      documentTexts.push("changed after measurement");
+      assert.equal(footprint.documentCharacters, expectedDocuments);
+      if (text !== "aaa") assert.ok(Buffer.byteLength(text, "utf8") > text.length);
+      assert.equal(Object.isFrozen(footprint), true);
+    }
+  });
+
+  it("projects all remaining input and per-call response allowances without spending restored accounting", () => {
+    const calls = [new PromptCallFootprint({ instructions: "ask", documentTexts: ["日本語"] }),
+      new PromptCallFootprint({ instructions: "next", documentTexts: ["{}", "[]"] })];
+    const responseAllowances = [new PromptResponseAllowance({ characters: 2, items: 1 }),
+      new PromptResponseAllowance({ characters: 5, items: 2 })];
+    const plan = new PromptCallPlanFootprint({ calls, responseAllowances, synthesisCallCount: 1 });
+    const limit = new PromptExecutionLimit({ maxAggregateCharacters: 24, maxAggregateItemCount: 10,
+      maxProviderCallCount: 3, maxSynthesisCallCount: 2 });
+    const spent = new PromptExecutionBudget(limit);
+    spent.consumeProviderCall();
+    spent.consumeSynthesisCalls(1);
+    spent.consumeAggregate({ characters: 3, items: 2 });
+    const budget = PromptExecutionBudget.fromSnapshot(limit, JSON.parse(JSON.stringify(spent.snapshot())));
+    const before = budget.snapshot();
+    assert.equal(plan.assertFits(budget), plan);
+    assert.deepEqual(budget.snapshot(), before);
+    assert.deepEqual(plan.toJSON(), { calls: calls.map((call) => call.toJSON()),
+      responseAllowances: responseAllowances.map((allowance) => allowance.toJSON()),
+      callCount: 2, synthesisCallCount: 1, characters: 21, items: 8 });
+    calls.pop(); responseAllowances.pop();
+    assert.equal(plan.callCount, 2);
+    budget.consumeAggregate(plan);
+    assert.equal(budget.aggregateCharacters, 24);
+    assert.equal(budget.aggregateItemCount, 10);
+  });
+
+  it("rejects projected and actual aggregate overflow identically and atomically", () => {
+    for (const cost of [{ characters: 5, items: 0 }, { characters: 0, items: 3 }]) {
+      const budget = new PromptExecutionBudget(new PromptExecutionLimit({
+        maxAggregateCharacters: 10, maxAggregateItemCount: 5 }));
+      budget.consumeAggregate({ characters: 6, items: 3 });
+      const before = budget.snapshot();
+      let projectedError;
+      assert.throws(() => budget.assertCanConsumeAggregate(cost), (error) => {
+        projectedError = error;
+        return error.code === "PROMPT_RESPONSE_TOO_LARGE";
+      });
+      assert.throws(() => budget.consumeAggregate(cost), (error) => {
+        assert.deepEqual(error.details, projectedError.details);
+        return error.code === projectedError.code;
+      });
+      assert.deepEqual(budget.snapshot(), before);
+    }
+  });
+
+  it("refuses a plan whose input fits but whose conservative response allowance exhausts aggregate capacity", () => {
+    for (const allowance of [{ characters: 6, items: 0 }, { characters: 0, items: 2 }]) {
+      const budget = new PromptExecutionBudget(new PromptExecutionLimit({
+        maxAggregateCharacters: 10, maxAggregateItemCount: 2 }));
+      const call = new PromptCallFootprint({ instructions: "input" });
+      budget.assertCanConsumeAggregate(call);
+      const plan = new PromptCallPlanFootprint({ calls: [call],
+        responseAllowances: [new PromptResponseAllowance(allowance)] });
+      const before = budget.snapshot();
+      assert.throws(() => plan.assertFits(budget), { code: "PROMPT_RESPONSE_TOO_LARGE" });
+      assert.deepEqual(budget.snapshot(), before);
+    }
+  });
+
+  it("keeps instruction, response, batch, provider and synthesis limits independent from aggregate input", () => {
+    const cases = [
+      { options: { maxRequestCharacters: 4 }, code: "PROMPT_FIXED_CONTEXT_TOO_LARGE" },
+      { options: { maxResponseCharacters: 1 }, code: "PROMPT_RESPONSE_TOO_LARGE" },
+      { options: { maxBatchCount: 1 }, code: "PROMPT_BATCH_COUNT_EXCEEDED" },
+      { options: { maxProviderCallCount: 1 }, code: "PROMPT_CALL_LIMIT_EXCEEDED" },
+      { options: { maxSynthesisCallCount: 1 }, code: "PROMPT_CALL_LIMIT_EXCEEDED" },
+    ];
+    const call = new PromptCallFootprint({ instructions: "input", documentTexts: ["d".repeat(20)] });
+    const allowance = new PromptResponseAllowance({ characters: 2, items: 1 });
+    const plan = new PromptCallPlanFootprint({ calls: [call, call],
+      responseAllowances: [allowance, allowance], synthesisCallCount: 2 });
+    for (const { options, code } of cases) {
+      const budget = new PromptExecutionBudget(new PromptExecutionLimit(options));
+      const before = budget.snapshot();
+      assert.throws(() => plan.assertFits(budget), { code });
+      assert.deepEqual(budget.snapshot(), before);
+    }
+    const budget = new PromptExecutionBudget(new PromptExecutionLimit({ maxRequestCharacters: 5,
+      maxResponseCharacters: null }));
+    assert.equal(plan.assertFits(budget), plan);
+    assert.equal(budget.aggregateCharacters, 0);
+  });
+
+  it("requires serialized document text and one typed response allowance for every known call", () => {
+    assert.throws(() => new PromptCallFootprint({ instructions: "ask", documentTexts: [{}] }), TypeError);
+    assert.throws(() => new PromptCallFootprint(), TypeError);
+    const call = new PromptCallFootprint({ instructions: "ask" });
+    assert.throws(() => new PromptCallPlanFootprint({ calls: [call], responseAllowances: [] }), TypeError);
+    assert.throws(() => new PromptCallPlanFootprint({ calls: [call],
+      responseAllowances: [{ characters: 1, items: 1 }] }), TypeError);
+    assert.throws(() => new PromptResponseAllowance({ characters: -1, items: 0 }), TypeError);
+  });
+
+  it("restores typed call cost projections and rejects inconsistent or malformed serialized costs", () => {
+    const call = new PromptCallFootprint({ instructions: { systemPrompt: "sys", userPrompt: "日本語" },
+      documentTexts: [JSON.stringify({ text: "😀" })] });
+    const allowance = new PromptResponseAllowance({ characters: 6, items: 2 });
+    const plan = new PromptCallPlanFootprint({ calls: [call], responseAllowances: [allowance] });
+    const serialized = JSON.parse(JSON.stringify(plan));
+    const restored = PromptCallPlanFootprint.fromJSON(serialized);
+    assert.ok(restored.calls[0] instanceof PromptCallFootprint);
+    assert.ok(restored.responseAllowances[0] instanceof PromptResponseAllowance);
+    assert.deepEqual(restored.toJSON(), serialized);
+    assert.equal(Object.isFrozen(restored), true);
+    const callJSON = serialized.calls[0];
+    for (const invalid of [null, { ...callJSON, extra: 0 }, { ...callJSON, documentCharacters: null },
+      { ...callJSON, items: 0 }, { ...callJSON, items: 1 }, { ...callJSON, characters: callJSON.characters + 1 },
+      { ...callJSON, instructionCharacters: callJSON.instructionCharacters + 1 },
+      { ...callJSON, instructionFootprint: { ...callJSON.instructionFootprint, total: 0 } }]) {
+      assert.throws(() => PromptCallFootprint.fromJSON(invalid), TypeError);
+    }
+    for (const invalid of [{ ...serialized, characters: serialized.characters + 1 },
+      { ...serialized, items: serialized.items + 1 }, { ...serialized, callCount: 2 },
+      { ...serialized, responseAllowances: [] }]) {
+      assert.throws(() => PromptCallPlanFootprint.fromJSON(invalid), TypeError);
+    }
+    assert.throws(() => PromptResponseAllowance.fromJSON({ characters: 6, items: 2, extra: 0 }), TypeError);
   });
 });
 

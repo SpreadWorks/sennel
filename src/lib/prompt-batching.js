@@ -14,6 +14,13 @@ function safeInteger(value, name, { minimum = 0 } = {}) {
   return value;
 }
 
+function assertSerializedFields(value, fields, name) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).sort().join(",") !== [...fields].sort().join(",")) {
+    throw new TypeError(`${name} has invalid serialized fields`);
+  }
+}
+
 function asRequestLimit(limit) {
   if (limit instanceof PromptRequestLimit) return limit;
   if (Number.isSafeInteger(limit)) return new PromptRequestLimit({ maxCharacters: limit });
@@ -571,6 +578,149 @@ export class PromptLogicalFootprint {
       separators: this.separators,
       total: this.total,
     };
+  }
+}
+
+/** Decoded logical call input; transport bytes are a separate constraint. */
+export class PromptCallFootprint {
+  constructor({ instructions, documentTexts = [] } = {}, measuredDocuments) {
+    if (!Array.isArray(documentTexts) || documentTexts.some((text) => typeof text !== "string")) {
+      throw new TypeError("Prompt call documents must be serialized text");
+    }
+    this.instructionFootprint = PromptLogicalFootprint.measure(instructions instanceof PromptLogicalFootprint
+      ? instructions : normalizePromptRequest(instructions));
+    this.instructionCharacters = this.instructionFootprint.total;
+    this.documentCharacters = safeInteger(measuredDocuments === undefined
+      ? documentTexts.reduce((total, text) => total + text.length, 0) : measuredDocuments.characters,
+      "Prompt call document characters");
+    this.characters = safeInteger(this.instructionCharacters + this.documentCharacters, "Prompt call characters");
+    this.items = safeInteger(measuredDocuments === undefined ? documentTexts.length + 1 : measuredDocuments.items,
+      "Prompt call items", { minimum: 1 });
+    if (this.items === 1 && this.documentCharacters !== 0) {
+      throw new TypeError("Prompt call without documents cannot have document characters");
+    }
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      instructionFootprint: this.instructionFootprint.toJSON(),
+      instructionCharacters: this.instructionCharacters,
+      documentCharacters: this.documentCharacters,
+      characters: this.characters,
+      items: this.items,
+    };
+  }
+
+  static fromJSON(value) {
+    assertSerializedFields(value, ["instructionFootprint", "instructionCharacters", "documentCharacters",
+      "characters", "items"], "Prompt call footprint");
+    assertSerializedFields(value.instructionFootprint, ["systemPrompt", "userPrompt", "jsonSchema",
+      "fmtFallback", "separators", "total"], "Prompt logical footprint");
+    const instructions = new PromptLogicalFootprint(value.instructionFootprint);
+    const footprint = new PromptCallFootprint({ instructions }, {
+      characters: value.documentCharacters, items: value.items,
+    });
+    if (instructions.total !== value.instructionFootprint.total
+      || footprint.instructionCharacters !== value.instructionCharacters || footprint.characters !== value.characters) {
+      throw new TypeError("Prompt call footprint serialized totals are inconsistent");
+    }
+    return footprint;
+  }
+}
+
+/** A caller-supplied conservative bound on one parsed response. */
+export class PromptResponseAllowance {
+  constructor({ characters, items } = {}) {
+    this.characters = safeInteger(characters, "Prompt response allowance characters");
+    this.items = safeInteger(items, "Prompt response allowance items");
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return { characters: this.characters, items: this.items };
+  }
+
+  static fromJSON(value) {
+    assertSerializedFields(value, ["characters", "items"], "Prompt response allowance");
+    return new PromptResponseAllowance(value);
+  }
+}
+
+/** Pure projection of the known calls still required by a command. */
+export class PromptCallPlanFootprint {
+  constructor({ calls, responseAllowances, synthesisCallCount = 0 } = {}) {
+    if (!Array.isArray(calls) || calls.some((call) => !(call instanceof PromptCallFootprint))) {
+      throw new TypeError("Prompt call plan requires typed call footprints");
+    }
+    if (!Array.isArray(responseAllowances) || responseAllowances.length !== calls.length
+      || responseAllowances.some((allowance) => !(allowance instanceof PromptResponseAllowance))) {
+      throw new TypeError("Prompt call plan requires one typed response allowance per call");
+    }
+    this.calls = Object.freeze([...calls]);
+    this.responseAllowances = Object.freeze([...responseAllowances]);
+    this.callCount = calls.length;
+    this.synthesisCallCount = safeInteger(synthesisCallCount, "Prompt planned synthesis call count");
+    this.characters = safeInteger(calls.reduce((total, call, index) => (
+      total + call.characters + responseAllowances[index].characters
+    ), 0), "Prompt planned aggregate characters");
+    this.items = safeInteger(calls.reduce((total, call, index) => (
+      total + call.items + responseAllowances[index].items
+    ), 0), "Prompt planned aggregate items");
+    Object.freeze(this);
+  }
+
+  assertFits(budget) {
+    if (!(budget instanceof PromptExecutionBudget)) throw new TypeError("Prompt call plan requires an execution budget");
+    for (let index = 0; index < this.callCount; index += 1) {
+      const call = this.calls[index];
+      if (!call.instructionFootprint.fits(budget.limit.requestLimit())) {
+        throw new PromptFixedContextTooLargeFailure("Prompt call instructions exceed their execution limit", {
+          callIndex: index,
+          actualCharacters: call.instructionCharacters,
+          maximumCharacters: budget.limit.maxRequestCharacters,
+        });
+      }
+      const responseCharacters = this.responseAllowances[index].characters;
+      if (budget.limit.maxResponseCharacters !== null && responseCharacters > budget.limit.maxResponseCharacters) {
+        throw new PromptResponseTooLargeFailure("Prompt response allowance exceeds its execution limit", {
+          callIndex: index,
+          responseCharacters,
+          maxResponseCharacters: budget.limit.maxResponseCharacters,
+        });
+      }
+    }
+    budget.assertCanExecute(this.callCount);
+    budget.assertCanConsumeSynthesisCalls(this.synthesisCallCount);
+    budget.assertCanConsumeAggregate(this);
+    return this;
+  }
+
+  toJSON() {
+    return {
+      calls: this.calls.map((call) => call.toJSON()),
+      responseAllowances: this.responseAllowances.map((allowance) => allowance.toJSON()),
+      callCount: this.callCount,
+      synthesisCallCount: this.synthesisCallCount,
+      characters: this.characters,
+      items: this.items,
+    };
+  }
+
+  static fromJSON(value) {
+    assertSerializedFields(value, ["calls", "responseAllowances", "callCount", "synthesisCallCount",
+      "characters", "items"], "Prompt call plan footprint");
+    if (!Array.isArray(value.calls) || !Array.isArray(value.responseAllowances)) {
+      throw new TypeError("Prompt call plan serialized calls and allowances must be arrays");
+    }
+    const footprint = new PromptCallPlanFootprint({
+      calls: value.calls.map((call) => PromptCallFootprint.fromJSON(call)),
+      responseAllowances: value.responseAllowances.map((allowance) => PromptResponseAllowance.fromJSON(allowance)),
+      synthesisCallCount: value.synthesisCallCount,
+    });
+    if (footprint.callCount !== value.callCount || footprint.characters !== value.characters
+      || footprint.items !== value.items) throw new TypeError("Prompt call plan serialized totals are inconsistent");
+    return footprint;
   }
 }
 
@@ -1320,8 +1470,8 @@ export class PromptExecutionBudget {
     this.providerCallCount -= 1;
   }
 
-  consumeSynthesisCalls(count) {
-    safeInteger(count, "Prompt synthesis call count", { minimum: 1 });
+  assertCanConsumeSynthesisCalls(count) {
+    safeInteger(count, "Prompt synthesis call count");
     if (this.synthesisCallCount + count > this.limit.maxSynthesisCallCount) {
       throw new PromptCallLimitExceededFailure("Prompt synthesis call limit is exhausted", {
         synthesisCallCount: this.synthesisCallCount,
@@ -1329,10 +1479,15 @@ export class PromptExecutionBudget {
         maxSynthesisCallCount: this.limit.maxSynthesisCallCount,
       });
     }
+  }
+
+  consumeSynthesisCalls(count) {
+    safeInteger(count, "Prompt synthesis call count", { minimum: 1 });
+    this.assertCanConsumeSynthesisCalls(count);
     this.synthesisCallCount += count;
   }
 
-  consumeAggregate({ characters, items }) {
+  assertCanConsumeAggregate({ characters, items }) {
     safeInteger(characters, "Prompt aggregate characters");
     safeInteger(items, "Prompt aggregate items");
     if (this.aggregateCharacters + characters > this.limit.maxAggregateCharacters
@@ -1346,6 +1501,10 @@ export class PromptExecutionBudget {
         maxAggregateItemCount: this.limit.maxAggregateItemCount,
       });
     }
+  }
+
+  consumeAggregate({ characters, items }) {
+    this.assertCanConsumeAggregate({ characters, items });
     this.aggregateCharacters += characters;
     this.aggregateItemCount += items;
   }

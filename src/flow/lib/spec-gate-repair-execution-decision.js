@@ -13,12 +13,15 @@ export class SpecGateRepairExecutionFacts {
 }
 
 export class SpecGateRepairNewWorker {}
+export class SpecGateRepairCheckpointResume {}
 export class SpecGateRepairSealedReplay {}
 export class SpecGateRepairPublicationReplay {}
 export class SpecGateRepairExecutionStop {
-  constructor() {
+  constructor({ phase = "claimed" } = {}) {
     this.code = "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE";
-    this.reason = "claimed Spec Gate repair has no exact sealed worker response";
+    this.reason = phase === "checkpoint"
+      ? "Spec Gate repair checkpoint has no exact unsealed worker request"
+      : "claimed Spec Gate repair has no exact sealed worker response";
     Object.freeze(this);
   }
 }
@@ -29,6 +32,10 @@ export function resolveSpecGateRepairExecution(facts) {
   }
   if (facts.phase === "publication" && facts.publicationCompletion === null) {
     return new SpecGateRepairPublicationReplay();
+  }
+  if (facts.phase === "checkpoint") {
+    return facts.response === "unsealed"
+      ? new SpecGateRepairCheckpointResume() : new SpecGateRepairExecutionStop({ phase: "checkpoint" });
   }
   if (facts.phase === "claimed") {
     return facts.response === "sealed"

@@ -1,19 +1,24 @@
 import { ResolvedAgentInvocationProjection } from "../../../src/lib/prompt-batching.js";
 import { ServiceBoundaryCoverage } from "../../support/structure/service-boundary.js";
 import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
-import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
+import { reserveFixtureSpecGateRepairWorkerCall as reserveSpecGateRepairWorkerCall,
+} from "../../support/infrastructure/spec-gate-repair-admission.js";
 import { prepareSpecGateRepairService } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { brotliDecompressSync } from "node:zlib";
-import { describe, it } from "node:test";
+import { createHash } from "node:crypto";
+import { describe, it, mock } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { SpecGateRepairService } from "../../../src/flow/services/spec-gate-repair-service.js";
+import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
 import { SpecGateRepairStep } from "../../../src/flow/steps/spec/spec-gate-repair.js";
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { settleSpecStepResult } from "../../../src/flow/definition.js";
+import { workerArtifactStableStringify } from "../../../src/flow/lib/worker-artifact-input-format.js";
+import { SpecWorkerStepBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
 import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
 import { latestRepairBudget, SpecGateRepairProgressLedger } from "../../../src/flow/lib/spec-gate-repair-progress.js";
@@ -77,9 +82,13 @@ function nextRequest(value, index) {
   });
 }
 
+function repairSelections(context) {
+  return SpecGateRepairBundle.fromJSON(context.bundle).selections();
+}
+
 function draftReturnProposal(context, decision) {
   return { version: 1, stage: "spec-gate-repair-draft-return",
-    baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+    baseRevision: context.baseRevision, unitId: repairSelections(context)[0].unit.id,
     decision, evidence: "The supplied Issue, Draft and Spec leave this choice unresolved.",
     unresolvedBecause: "No supplied source selects the required validation target." };
 }
@@ -157,11 +166,11 @@ describe("Spec Gate repair restart boundaries", () => {
         const { source } = readProgressBoundSpecGateRepairInput({
           flowManager: value.ctx.flowManager,
           state: value.ctx.flowManager.canonicalState(value.specId), executionRoot: value.root });
-        const selectedIds = new Set(selected.selections[0].ranges.map((range) => range.id));
+        const selectedIds = new Set(repairSelections(selected)[0].ranges.map((range) => range.id));
         const extra = source.context.tableOfContents().find((range) => !selectedIds.has(range.id));
         assert(extra, "each provider response must request new canonical context");
         return { request, selected, proposal: { version: 1, stage: "spec-gate-repair-context-request",
-          baseRevision: selected.baseRevision, unitId: selected.selections[0].unit.id,
+          baseRevision: selected.baseRevision, unitId: repairSelections(selected)[0].unit.id,
           additionalRangeIds: [extra.id] } };
       };
       for (let index = 0; index < 15; index += 1) {
@@ -268,11 +277,11 @@ describe("Spec Gate repair restart boundaries", () => {
             const { source } = readProgressBoundSpecGateRepairInput({
               flowManager: value.flowManager, state: value.flowManager.canonicalState(value.specId),
               executionRoot: value.root });
-            const selectedIds = new Set(selected.selections[0].ranges.map((range) => range.id));
+            const selectedIds = new Set(repairSelections(selected)[0].ranges.map((range) => range.id));
             const extra = source.context.tableOfContents().find((range) => !selectedIds.has(range.id));
             assert(extra, "four distinct additional ranges are available");
             return { version: 1, stage: "spec-gate-repair-context-request",
-              baseRevision: selected.baseRevision, unitId: selected.selections[0].unit.id,
+              baseRevision: selected.baseRevision, unitId: repairSelections(selected)[0].unit.id,
               additionalRangeIds: [extra.id] };
           })() : draftReturnProposal(selected, "Which exact acceptance condition is intended?");
           fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson(proposal));
@@ -338,7 +347,7 @@ describe("Spec Gate repair restart boundaries", () => {
         context = requestInput(request, "spec-gate-repair-context.json").document;
         fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson({
           version: 1, stage: "spec-gate-repair-context-request",
-          baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+          baseRevision: context.baseRevision, unitId: repairSelections(context)[0].unit.id,
           additionalRangeIds: ["background"],
         }));
         sealWorkerArtifactHandoff({ requestPath,
@@ -403,7 +412,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const original = durableSnapshot(value.flowManager, value.specId);
       fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
         version: 1, stage: "spec-gate-repair-context-request",
-        baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+        baseRevision: context.baseRevision, unitId: repairSelections(context)[0].unit.id,
         additionalRangeIds: ["background"],
       }));
       reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
@@ -454,6 +463,180 @@ describe("Spec Gate repair restart boundaries", () => {
     } finally { removeTmpDir(value.root); }
   });
 
+  for (const [name, invalidate, expectedCode = "FLOW_SPEC_GATE_REPAIR_PROGRESS_MISMATCH"] of [
+    ["missing locator", (saved) => { delete saved.executionLocator; }],
+    ["missing plan", (saved) => { delete saved.plan; }],
+    ["changed cost", (saved) => { saved.callCost.characters += 1; }],
+    ["invalid nested cost", (saved) => {
+      saved.plan.calls[0].callCost.instructionFootprint.total += 1;
+      const { digest: _digest, ...unsigned } = saved.plan;
+      saved.plan.digest = createHash("sha256").update(workerArtifactStableStringify(unsigned)).digest("hex");
+    }],
+    ["invalid locator action", (saved) => { saved.executionLocator.actionDigest = "invalid"; }],
+    ["changed locator action", (saved) => {
+      const current = saved.executionLocator.actionDigest;
+      saved.executionLocator.actionDigest = (current[0] === "a" ? "b" : "a") + current.slice(1);
+    }, "FLOW_DRAFT_EXECUTION_CLAIM_MISMATCH"],
+    ["changed plan hash", (saved) => { saved.plan.digest = "0".repeat(64); }],
+    ["invalid budget snapshot", (saved) => { saved.budget.aggregateCharacters = -1; }],
+    ["missing action file digest", (saved) => { delete saved.actionFileDigest; }],
+    ["missing action repository fingerprint", (saved) => { delete saved.actionRepositoryFingerprint; }],
+    ["invalid action repository fingerprint", (saved) => { saved.actionRepositoryFingerprint = 42; }],
+  ]) {
+    it(`refuses a canonical checkpoint with ${name} after reload without charging or publishing`, async () => {
+      const value = await createSpecGateRepairScenario();
+      try {
+        const request = nextRequest(value, `invalid-checkpoint-${name}`);
+        const checkpoint = value.flowManager.checkpointDraftStepExecution.bind(value.flowManager);
+        // Corrupt only serialized data at the producer's canonical write boundary.
+        value.flowManager.checkpointDraftStepExecution = (input) => {
+          const artifactWrites = input.artifactWrites.map((write) => {
+            const saved = JSON.parse(write.bytes.toString("utf8"));
+            invalidate(saved);
+            return { ...write, bytes: Buffer.from(`${JSON.stringify(saved, null, 2)}\n`) };
+          });
+          checkpoint({ ...input, artifactWrites });
+          throw new Error("interrupted after checkpoint publication");
+        };
+        assert.throws(() => reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
+          prompt: JSON.stringify(request.toPromptReference()) }), /interrupted after checkpoint publication/);
+        const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
+          inWorktree: false, specId: value.specId });
+        const before = durableSnapshot(restarted, value.specId);
+        let providerCalls = 0;
+        const dispatcher = new RunDispatchCommand({ agent: { projectInvocation,
+          async call() { providerCalls += 1; throw new Error("invalid checkpoint cannot execute"); } } });
+        await assert.rejects(() => dispatcher.runWorkerAttempt({ ...value.ctx,
+          flowManager: restarted }, value.invocation), (error) => {
+          assert.equal(error.code, expectedCode);
+          assert.equal(error.data.failureKind, "step-admission");
+          return true;
+        });
+        assert.equal(providerCalls, 0);
+        assert.deepEqual(durableSnapshot(restarted, value.specId), before);
+        assert.equal(artifactCount(before, "spec.gate.repair.progress"), 1);
+      } finally { removeTmpDir(value.root); }
+    });
+  }
+
+  for (const { title, method, phase, providerCallsBeforeRestart } of [
+    { title: "resumes a committed checkpoint with its exact request and charges input once",
+      method: "claimDraftStepExecution", phase: "checkpoint", providerCallsBeforeRestart: 0 },
+    { title: "resumes a sealed claim after interrupted publication without another provider call",
+      method: "settleSpecStepResult", phase: "claimed", providerCallsBeforeRestart: 1 },
+  ]) {
+    it(title, async () => {
+      let interrupted = false;
+      let interruptedRequestPath = null;
+      const value = await createSpecGateRepairScenario();
+      const originalOperation = FlowManager.prototype[method];
+      const operationMock = mock.method(FlowManager.prototype, method, function (input) {
+        if (input.binding.request?.executionRoot === value.root
+          && input.binding.specId === value.specId && !interrupted
+          && (phase === "checkpoint" || input.artifactWrites?.some((write) => write.parameters?.phase === "publication"))) {
+          interrupted = true;
+          interruptedRequestPath = input.binding.request.requestPath;
+          throw new Error(`simulated interruption before ${method}`);
+        }
+        return originalOperation.call(this, input);
+      });
+      try {
+        initGitRepo(value.root);
+        fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
+        commitAll(value.root, "Create isolated checkpoint resume repository");
+        let workerCalls = 0;
+        let workerRequest = null;
+        const agent = { projectInvocation, async call(_prompt, options) {
+          workerCalls += 1;
+          const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+          const stored = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          const context = requestInput(stored, "spec-gate-repair-context.json").document;
+          fs.writeFileSync(requestPayloadPath(stored, "spec-gate-repair.json"), workerArtifactJson(
+            draftReturnProposal(context, "Which exact target should the repair use?")));
+          const sealed = sealWorkerArtifactHandoff({ requestPath,
+            invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
+          const submission = JSON.parse(fs.readFileSync(sealed.handoffPath, "utf8"));
+          workerRequest = { ...stored, requestDigest: submission.requestDigest };
+          return JSON.stringify(sealed);
+        } };
+        const execute = async (manager) => {
+          const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1 });
+          dispatcher.container = dispatchContainer({ root: value.root, flowManager: manager, agent });
+          return dispatcher.execute({ ...value.ctx, flowManager: manager,
+            flowState: manager.loadReadOnly(value.specId),
+            expectBinding: FlowTargetBinding.capture({ flowState: manager.loadReadOnly(value.specId),
+              mainRoot: value.root, authorityRoot: value.root }).serialize(),
+            _envelopeType: "run", _envelopeKey: "dispatch" });
+        };
+        // Interrupt before transaction staging; journal faults are recoverable
+        // transactions and can legitimately finish the saved claim themselves.
+        if (phase === "checkpoint") {
+          const interruptedResult = await execute(value.flowManager);
+          assert.equal(interruptedResult.ok, false, JSON.stringify(interruptedResult));
+          assert.ok(JSON.stringify(interruptedResult).includes(`simulated interruption before ${method}`));
+        } else {
+          await assert.rejects(() => execute(value.flowManager), (error) => {
+            assert.ok(error instanceof StepPersistenceFailure);
+            assert.equal(error.message, `simulated interruption before ${method}`);
+            return true;
+          });
+        }
+        assert.equal(interrupted, true);
+        assert.equal(workerCalls, providerCallsBeforeRestart);
+        assert.equal(fs.existsSync(interruptedRequestPath), true, interruptedRequestPath);
+        const state = value.flowManager.canonicalState(value.specId);
+        assert.equal(state.current.at(-1), "spec-gate-repair");
+        assert.equal(state.attempt.failure, null);
+        const lifecycle = value.flowManager.draftStepExecutionState({ binding: {
+          runId: state.runId, specId: value.specId, stepId: "spec-gate-repair", attempt: state.attempt,
+        } }).lifecycle;
+        assert.equal(lifecycle.phase, phase);
+        assert.equal(lifecycle.executionGeneration, 0);
+        const saved = JSON.parse(value.flowManager.readArtifact({ specId: value.specId,
+          logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
+          parameters: { attemptId: state.attempt.id, generation: "0", phase },
+        }).bytes.toString("utf8"));
+        assert.equal(saved.budget.providerCallCount, providerCallsBeforeRestart);
+        assert.equal(saved.budget.aggregateCharacters, saved.callCost.characters);
+        assert.equal(saved.budget.aggregateItemCount, saved.callCost.items);
+        const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
+          inWorktree: false, specId: value.specId });
+        const result = await execute(restarted);
+        assert.equal(workerCalls, 1, JSON.stringify(result));
+        for (const field of ["requestDigest", "inputDigest", "inputRevision"]) {
+          assert.equal(workerRequest[field], saved[field]);
+        }
+        for (const field of ["dispatchInvocationId", "actionDigest", "generatedAt"]) {
+          assert.equal(workerRequest[field], saved.executionLocator[field]);
+        }
+        assert.equal(restarted.canonicalState(value.specId).current.at(-1), "draft", JSON.stringify(result));
+        const phases = restarted.activityLedger(value.specId).filter((entry) => (
+          entry.result?.draftSettlementReceipt?.binding.stepId === "spec-gate-repair"
+        ))
+          .map((entry) => entry.result?.draftSettlementReceipt?.executionLifecycle)
+          .filter((entry) => entry != null);
+        assert.deepEqual(phases.map((entry) => entry.phase), ["checkpoint", "claimed", "publication", "terminal"]);
+        for (const entry of phases) {
+          assert.equal(entry.binding.executionGeneration, 0);
+          assert.equal(entry.binding.inputDigest, saved.inputDigest);
+          assert.equal(entry.binding.inputRevision, saved.inputRevision);
+          if (entry.phase !== "checkpoint") assert.deepEqual(entry.claim, saved.executionLocator);
+        }
+        const finalBudget = latestRepairBudget({ flowManager: restarted, specId: value.specId,
+          attemptId: state.attempt.id, baseRevision: saved.context.baseRevision,
+          consumerNodeId: "spec-gate-repair" }).budget.snapshot();
+        const publication = JSON.parse(restarted.readArtifact({ specId: value.specId,
+          logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
+          parameters: { attemptId: state.attempt.id, generation: "0", phase: "publication" },
+        }).bytes.toString("utf8"));
+        assert.equal(finalBudget.providerCallCount, 1);
+        assert.equal(finalBudget.synthesisCallCount, saved.budget.synthesisCallCount);
+        assert.equal(finalBudget.aggregateCharacters, saved.callCost.characters + publication.responseCost.characters);
+        assert.equal(finalBudget.aggregateItemCount, saved.callCost.items + publication.responseCost.items);
+      } finally { operationMock.mock.restore(); removeTmpDir(value.root); }
+    });
+  }
+
   it("restores a sealed claimed response without another provider call", async () => {
     const value = await createSpecGateRepairScenario();
     try {
@@ -501,7 +684,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       const completed = await completeWorkerResponse(value, request, {
         version: 1, stage: "spec-gate-repair-context-request",
-        baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+        baseRevision: context.baseRevision, unitId: repairSelections(context)[0].unit.id,
         additionalRangeIds: ["background"],
       });
       assert.equal(completed.result.kind, "spec-gate-repair-context-required");
@@ -607,7 +790,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
         version: 1, stage: "spec-gate-repair-context-request",
-        baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+        baseRevision: context.baseRevision, unitId: repairSelections(context)[0].unit.id,
         additionalRangeIds: ["background"],
       }));
       reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
@@ -653,7 +836,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const binding = await new SpecEntryConnector(request).connect();
       const completed = await completeWorkerResponse(value, request, {
         version: 1, stage: "spec-gate-repair-context-request",
-        baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+        baseRevision: context.baseRevision, unitId: repairSelections(context)[0].unit.id,
         additionalRangeIds: ["background"],
       });
       const manager = value.ctx.flowManager;
@@ -712,8 +895,8 @@ describe("Spec Gate repair restart boundaries", () => {
       commitAll(value.root, "Create isolated multiple-unit repair repository");
       const first = nextRequest(value, "multiple-units-first");
       const context = first.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
-      assert.equal(context.selections.length, 2);
-      const firstUnit = context.selections.find((selection) => (
+      assert.equal(repairSelections(context).length, 2);
+      const firstUnit = repairSelections(context).find((selection) => (
         selection.ranges.some((range) => range.id === "requirements[R1].desc")
       ));
       const initial = durableSnapshot(value.flowManager, value.specId);
@@ -732,8 +915,8 @@ describe("Spec Gate repair restart boundaries", () => {
         const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
         const selected = requestInput(request, "spec-gate-repair-context.json").document;
         assert.equal(selected.mode, "repair");
-        assert.equal(selected.selections.length, 2);
-        const groups = selected.selections.map((selection) => {
+        assert.equal(repairSelections(selected).length, 2);
+        const groups = repairSelections(selected).map((selection) => {
           const range = selection.ranges.find((entry) => entry.writable
             && ["requirements[R1].desc", "background"].includes(entry.id));
           assert.ok(range);
@@ -783,7 +966,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       assert.equal(context.mode, "repair");
       assert.equal(context.batchCount, 1);
-      const selection = context.selections[0];
+      const selection = repairSelections(context)[0];
       const decisionRanges = selection.ranges.filter((range) => range.id.startsWith("overview.decisions["));
       assert.equal(decisionRanges.length, specRecord.overview.decisions.length);
       for (const range of decisionRanges) {
@@ -823,8 +1006,8 @@ describe("Spec Gate repair restart boundaries", () => {
       const first = nextRequest(value, 0);
       const initial = first.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       assert.equal(initial.mode, "repair");
-      const unitId = initial.selections[0].unit.id;
-      assert.equal(initial.selections[0].ranges.some((range) => range.id === "background"), false);
+      const unitId = repairSelections(initial)[0].unit.id;
+      assert.equal(repairSelections(initial)[0].ranges.some((range) => range.id === "background"), false);
       const extra = await completeWorkerResponse(value, first, { version: 1,
         stage: "spec-gate-repair-context-request", baseRevision: initial.baseRevision,
         unitId, additionalRangeIds: ["background"] });
@@ -836,7 +1019,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const expanded = second.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       assert.equal(expanded.mode, "repair");
       assert.notEqual(expanded.batchDigest, initial.batchDigest);
-      const readOnly = expanded.selections[0].ranges.find((range) => range.id === "background");
+      const readOnly = repairSelections(expanded)[0].ranges.find((range) => range.id === "background");
       assert.equal(readOnly.value, "The worker cannot write canonical Flow artifacts.");
       assert.equal(readOnly.writable, false);
       const decision = await completeWorkerResponse(value, second,
@@ -872,7 +1055,7 @@ describe("Spec Gate repair restart boundaries", () => {
         const request = nextRequest(value, `interrupted-${mode}`);
         const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
         assert.equal(context.mode, "repair");
-        const selection = context.selections[0];
+        const selection = repairSelections(context)[0];
         const range = selection.ranges.find((entry) => entry.writable);
         const proposal = mode === "context" ? { version: 1, stage: "spec-gate-repair-context-request",
           baseRevision: context.baseRevision, unitId: selection.unit.id, additionalRangeIds: ["background"] }
@@ -949,7 +1132,7 @@ describe("Spec Gate repair restart boundaries", () => {
             _envelopeType: "run", _envelopeKey: "dispatch" });
           assert.equal(workerCalls, 1, JSON.stringify(nextResult));
           assert.notEqual(nextContext.batchDigest, context.batchDigest);
-          assert.equal(nextContext.selections[0].ranges.find((range) => range.id === "background").writable, false);
+          assert.equal(repairSelections(nextContext)[0].ranges.find((range) => range.id === "background").writable, false);
           const afterNewClaim = durableSnapshot(restarted, value.specId);
           assert.throws(() => request.assertCurrent(restarted.loadReadOnly(value.specId)),
             { code: "FLOW_ARTIFACT_HANDOFF_STALE" });

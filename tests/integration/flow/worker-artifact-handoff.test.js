@@ -1,3 +1,4 @@
+import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
 import { readSpecJsonValidator } from "../../../src/lib/spec-json.js";
 import { rewriteWorkerSubmission as rewriteSubmission } from "../../support/infrastructure/worker-artifact.js";
 import assert from "node:assert/strict";
@@ -48,7 +49,7 @@ import { DraftEntryConnector } from "../../../src/flow/engine/connectors/draft/d
 import { DraftRefineConnector } from "../../../src/flow/engine/connectors/draft/draft-refine-connector.js";
 import { SpecReviewConnector } from "../../../src/flow/engine/connectors/spec/spec-review-connector.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
-import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
+import { reserveFixtureSpecGateRepairWorkerCall as reserveSpecGateRepairWorkerCall } from "../../support/infrastructure/spec-gate-repair-admission.js";
 import { SpecGateRepairStep } from "../../../src/flow/steps/spec/spec-gate-repair.js";
 import {
   createSpecGateRepairScenario, completeSpecGateRepairHandoff, prepareSpecGateRepairService,
@@ -906,7 +907,7 @@ describe("worker artifact handoff", () => {
       const request = value.coordinator.createRequest({
         ctx: value.ctx, state: value.flowManager.load(value.specId), invocation: value.invocation,
       });
-      const selected = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document.selections[0];
+      const selected = SpecGateRepairBundle.fromJSON(request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document.bundle).selections()[0];
       fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), json({
         version: 1, stage: "spec-gate-repair", baseRevision: selected.baseRevision,
         groups: [{ findingIdentities: [{ ...selected.unit.findings[0].identity,

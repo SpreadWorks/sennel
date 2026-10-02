@@ -492,13 +492,16 @@ function reboundWorkerAuthorization(invocation, action) {
   return new UnapprovedFlowDispatchAuthorization(action);
 }
 
-function reboundWorkerInvocation(invocation, nextAction, id = undefined) {
+function reboundWorkerInvocation(invocation, nextAction, id = undefined, {
+  repositoryFingerprint = invocation.action.repositoryFingerprint,
+  expectedDigest = invocation.action.digest,
+} = {}) {
   const session = new FlowDispatchSession({ ...(id === undefined ? {} : { id }), target: invocation.target });
   const action = session.captureAction(
     workerFacingNextAction(nextAction),
-    invocation.action.repositoryFingerprint,
+    repositoryFingerprint,
   );
-  if (action.digest !== invocation.action.digest) {
+  if (action.digest !== expectedDigest) {
     throw new Error("fresh worker handoff action changed before retry");
   }
   return new FlowDispatchInvocation({
@@ -1930,6 +1933,7 @@ export default class RunDispatchCommand extends FlowCommand {
           if (action.nextAction.step === "spec-gate-repair") {
             repairExecution = planSpecGateRepairWorkerExecution({
               ctx, state, invocation, workerInstructions, handoffCoordinator: this.handoffCoordinator,
+              dispatchWorkClass: FlowDispatchWork,
             });
             if (repairExecution.canonicalReplay) {
               const prepared = await specDefinition.create({
@@ -1942,6 +1946,23 @@ export default class RunDispatchCommand extends FlowCommand {
                 stepResult: result.stepResult, supervisorEvents: [], deferredMetric: null };
             }
             handoffRequest = repairExecution.request;
+            if (repairExecution.checkpointResume) {
+              if (repairExecution.checkpointActionRepositoryFingerprint === null) {
+                throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_PLAN_CHANGED",
+                  "checkpoint worker action lacks its original repository fingerprint", { data: { failureKind: "step-admission" } });
+              }
+              try {
+                workerInvocation = reboundWorkerInvocation(invocation, handoffRequest.invocation.action.nextAction,
+                  handoffRequest.dispatchInvocationId, {
+                    repositoryFingerprint: repairExecution.checkpointActionRepositoryFingerprint,
+                    expectedDigest: handoffRequest.actionDigest,
+                  });
+              } catch (cause) {
+                throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_PLAN_CHANGED",
+                  "checkpoint worker action differs from its saved request",
+                  { cause, data: { failureKind: "step-admission" }, recoveryPossible: false });
+              }
+            }
           } else {
             handoffRequest = this.handoffCoordinator.createRequest({
               ctx, state, invocation, workerInstructions,
@@ -2020,12 +2041,13 @@ export default class RunDispatchCommand extends FlowCommand {
             try {
               await assertWorkerAgentAdmission(agent, prompt, callOptions, action.nextAction.step);
               if (handoffRequest?.stepId === "spec-gate-repair") {
-                reserveSpecGateRepairWorkerCall({ ctx, request: handoffRequest, prompt });
+                reserveSpecGateRepairWorkerCall({ ctx, request: handoffRequest, prompt, callPlan: repairExecution.callPlan });
               }
             } catch (error) {
-              if (!(isStepAdmissionRefusal(error) || error instanceof PromptBatchingError)) throw error;
+              if (!(isStepAdmissionRefusal(error) || isStepPersistenceFailure(error)
+                || error instanceof PromptBatchingError)) throw error;
               deferredMetric?.discard();
-              return { error: isStepAdmissionRefusal(error) ? error : new WorkerArtifactHandoffError("recovery-required", error.code,
+              return { error: isStepAdmissionRefusal(error) || isStepPersistenceFailure(error) ? error : new WorkerArtifactHandoffError("recovery-required", error.code,
                 error.message, { cause: error, recoveryPossible: false,
                   data: { ...error.details, stepId: action.nextAction.step, failureKind: "step-admission" } }),
                 handoffRequest, agentError: null, deferredMetric: null };

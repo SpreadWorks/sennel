@@ -1,12 +1,12 @@
-import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
+import { reserveFixtureSpecGateRepairWorkerCall as reserveSpecGateRepairWorkerCall } from "../../support/infrastructure/spec-gate-repair-admission.js";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { createSpecGateRepairScenario, completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
-import { SpecGateRepairService } from "../../../src/flow/services/spec-gate-repair-service.js";
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { planSpecGateRepairWorkerExecution } from "../../../src/flow/lib/spec-gate-repair-execution.js";
 
 const now = () => new Date("2026-08-04T00:00:00.000Z");
 
@@ -85,48 +85,23 @@ describe("Spec Gate repair durable handoff", () => {
         attempt: restored.canonicalState(value.specId).attempt,
       } }).lifecycle.phase, "claimed");
       const restartedCtx = { ...value.ctx, flowManager: restored };
-      const nextRequest = new WorkerArtifactHandoffCoordinator({ now }).createRequest({
-        ctx: restartedCtx, state: restored.load(value.specId),
-        invocation: { ...value.invocation, id: "dispatch-spec-gate-repair-after-crash" },
-      });
-      reserveSpecGateRepairWorkerCall({ ctx: restartedCtx, request: nextRequest, prompt: JSON.stringify(nextRequest.toPromptReference()) });
-      const resumed = currentProgress(restored, value.specId, nextRequest, "claimed", "1");
-      assert.equal(resumed.budget.providerCallCount, 2);
-      assert.deepEqual(currentProgress(restored, value.specId, request, "claimed"), claimed);
-    } finally { removeTmpDir(value.root); }
-  });
-
-  it("keeps an exhausted provider budget across a manager restart", async () => {
-    const value = await gateRepairFixture();
-    try {
-      for (let index = 0; index < 16; index += 1) {
-        const request = value.coordinator.createRequest({
-          ctx: value.ctx, state: value.ctx.flowManager.load(value.specId),
-          invocation: { ...value.invocation, id: `dispatch-spec-gate-repair-budget-${index}` },
-        });
-        reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
-          prompt: JSON.stringify(request.toPromptReference()) });
-      }
-      const restored = new FlowManager({ root: value.root, mainRoot: value.root,
-        inWorktree: false, specId: value.specId });
       const before = {
         state: restored.canonicalState(value.specId).toJSON(),
         activities: restored.activityLedger(value.specId),
         catalog: restored.artifactCatalog(value.specId).toJSON(),
       };
-      const context = { ...value.ctx, flowManager: restored };
-      const request = value.coordinator.createRequest({ ctx: context,
-        state: restored.load(value.specId),
-        invocation: { ...value.invocation, id: "dispatch-spec-gate-repair-budget-exhausted" },
-      });
-      assert.throws(() => reserveSpecGateRepairWorkerCall({ ctx: context, request,
-        prompt: JSON.stringify(request.toPromptReference()) }), /budget|limit|exhaust/i);
+      // A claimed call without a sealed response cannot produce another generation.
+      assert.throws(() => planSpecGateRepairWorkerExecution({ ctx: restartedCtx,
+        state: restored.loadReadOnly(value.specId),
+        handoffCoordinator: new WorkerArtifactHandoffCoordinator({ now }),
+        invocation: { ...value.invocation, id: "dispatch-spec-gate-repair-after-crash" },
+      }), { code: "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE" });
       assert.deepEqual({ state: restored.canonicalState(value.specId).toJSON(),
         activities: restored.activityLedger(value.specId),
         catalog: restored.artifactCatalog(value.specId).toJSON(),
       }, before);
-      assert.equal(currentProgress(restored, value.specId, request, "claimed", "15")
-        .budget.providerCallCount, 16);
+      assert.deepEqual(currentProgress(restored, value.specId, request, "claimed"), claimed);
+      assert.equal(currentProgress(restored, value.specId, request, "claimed").budget.providerCallCount, 1);
     } finally { removeTmpDir(value.root); }
   });
 });

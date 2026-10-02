@@ -1,4 +1,5 @@
-import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
+import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
+import { reserveFixtureSpecGateRepairWorkerCall as reserveSpecGateRepairWorkerCall } from "../../support/infrastructure/spec-gate-repair-admission.js";
 import { planSpecGateRepairWorkerExecution } from "../../../src/flow/lib/spec-gate-repair-execution.js";
 import { prepareSpecGateRepairService } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import assert from "node:assert/strict";
@@ -29,7 +30,7 @@ test("a published Spec Gate decision gap reopens Draft with durable worker input
     assert.equal(context.mode, "repair");
     const oldAttempt = value.flowManager.canonicalState(value.specId).attempt;
     const proposal = { version: 1, stage: "spec-gate-repair-draft-return",
-      baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+      baseRevision: context.baseRevision, unitId: SpecGateRepairBundle.fromJSON(context.bundle).selections()[0].unit.id,
       decision: "Which validation target should the requirement name?",
       evidence: "The current Issue and Spec identify the requirement but leave its target open.",
       unresolvedBecause: "Neither source selects one validation target." };
@@ -116,7 +117,7 @@ test("a published Draft return refuses changed source evidence after restart", a
     const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
     fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
       version: 1, stage: "spec-gate-repair-draft-return",
-      baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+      baseRevision: context.baseRevision, unitId: SpecGateRepairBundle.fromJSON(context.bundle).selections()[0].unit.id,
       decision: "Which target should the requirement validate?",
       evidence: "The project rules leave the target open.",
       unresolvedBecause: "No supplied source selects a target.",
@@ -152,11 +153,11 @@ test("a published Draft return refuses changed Spec guardrails after restart wit
       state: value.flowManager.load(value.specId), invocation: value.invocation });
     const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
     assert.equal(context.mode, "repair");
-    assert(context.selections[0].guardrails.some((rule) =>
+    assert(SpecGateRepairBundle.fromJSON(context.bundle).selections()[0].guardrails.some((rule) =>
       rule.id === "R1" && rule.body === "The validation target remains a user choice."));
     fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
       version: 1, stage: "spec-gate-repair-draft-return",
-      baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+      baseRevision: context.baseRevision, unitId: SpecGateRepairBundle.fromJSON(context.bundle).selections()[0].unit.id,
       decision: "Which validation target should be used?",
       evidence: "The canonical sources leave the target open.",
       unresolvedBecause: "The project must choose one target.",
@@ -196,7 +197,7 @@ test("completed context expansion cannot authorize another repair call after its
     const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
     fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
       version: 1, stage: "spec-gate-repair-context-request",
-      baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+      baseRevision: context.baseRevision, unitId: SpecGateRepairBundle.fromJSON(context.bundle).selections()[0].unit.id,
       additionalRangeIds: ["background"],
     }));
     reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
@@ -243,7 +244,7 @@ test("an interrupted Draft return keeps its reason and state in one transaction"
       state: value.flowManager.load(value.specId), invocation: value.invocation });
     const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
     const proposal = { version: 1, stage: "spec-gate-repair-draft-return",
-      baseRevision: context.baseRevision, unitId: context.selections[0].unit.id,
+      baseRevision: context.baseRevision, unitId: SpecGateRepairBundle.fromJSON(context.bundle).selections()[0].unit.id,
       decision: "Which validation target is intended?",
       evidence: "The saved sources leave the validation target open.",
       unresolvedBecause: "The target requires a user choice." };
