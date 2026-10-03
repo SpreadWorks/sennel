@@ -42,8 +42,8 @@ function assertSelectedGateInstructions(next) {
 }
 
 describe("Spec artifact lifecycle and downstream consumption", { concurrency: false }, () => {
-  for (const { retainGateFindings, advisoryRepair, largeGateResponse = false, largeSpecFile = false } of [
-    { retainGateFindings: false, advisoryRepair: false },
+  for (const { retainGateFindings, advisoryRepair, largeGateResponse = false, largeSpecFile = false, overlongAcceptance = false } of [
+    { retainGateFindings: false, advisoryRepair: false, overlongAcceptance: true },
     { retainGateFindings: true, advisoryRepair: false },
     { retainGateFindings: false, advisoryRepair: true },
     { retainGateFindings: false, advisoryRepair: false, largeGateResponse: true, largeSpecFile: false },
@@ -82,6 +82,9 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         }).toJSON() : null,
       }).create().registerActive().activate("spec");
       const requests = [];
+      const sealFailures = [];
+      let acceptanceTruncationLogPath = null;
+      const overlongAcceptanceText = "受".repeat(501);
       const sharedGuardrail = "SPEC-SHARED";
       const specGateAttempts = new Set();
       let specReviewRuns = 0;
@@ -166,7 +169,19 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
           requests.push(request);
           writeWorkerPayload(request);
-          sealWorkerArtifactHandoff({ requestPath, invocationId });
+          let sealed;
+          try {
+            sealed = sealWorkerArtifactHandoff({ requestPath, invocationId, mainRoot: root, flowManager });
+          } catch (cause) {
+            sealFailures.push({
+              stepId: request.stepId,
+              code: cause.code ?? null,
+              message: cause.message,
+              data: cause.data ?? null,
+            });
+            throw cause;
+          }
+          if (request.stepId === "spec") acceptanceTruncationLogPath = sealed.acceptanceTruncationLog ?? null;
           return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
         },
       };
@@ -189,6 +204,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
               tasks: validWorkerHandoffTaskSpec().tasks.map((task) => ({
                 ...task,
                 test_strategy: "Verify the retained behavior through the focused Flow scenario.",
+                ...(overlongAcceptance ? { acceptance: [overlongAcceptanceText] } : {}),
               })),
             }));
             return true;
@@ -480,7 +496,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         requests: requests.map((request) => request.stepId),
         next: flowManager.canonicalState(specId).nextAction().nodeId,
         specGateRuns: specGateAttempts.size,
-        specReviewRuns, specWorkerRuns,
+        specReviewRuns, specWorkerRuns, sealFailures,
       }, null, 2));
       const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
       const cycles = retainGateFindings ? 4 : 2;
@@ -563,6 +579,23 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         specId, logicalKey: "spec.record", consumerNodeId: "approval",
       }).bytes.toString("utf8"));
       assert.equal(spec.goal, approvedGoal);
+      if (overlongAcceptance) {
+        const retainedText = spec.tasks.find((task) => task.id === "T1").acceptance[0];
+        assert.equal(retainedText, overlongAcceptanceText.slice(0, 500));
+        assert.equal(retainedText.length, 500);
+        assert.equal(typeof acceptanceTruncationLogPath, "string");
+        const [truncation] = fs.readFileSync(acceptanceTruncationLogPath, "utf8")
+          .trim().split("\n").map((line) => JSON.parse(line));
+        assert.equal(truncation.event, "spec-task-acceptance-truncated");
+        assert.equal(truncation.taskId, "T1");
+        assert.equal(truncation.acceptanceIndex, 0);
+        assert.equal(typeof truncation.attemptId, "string");
+        assert.equal(typeof truncation.attemptSequence, "number");
+        assert.equal(truncation.originalText, overlongAcceptanceText);
+        assert.equal(truncation.retainedText, retainedText);
+        assert.equal(truncation.originalLength, 501);
+        assert.equal(truncation.retainedLength, 500);
+      }
       assert.equal(spec.requirements[0].desc, reviewedRequirement);
       assert.match(spec.requirements.find((entry) => entry.id === "R10").desc,
         /Spec Gate observation is addressed/);

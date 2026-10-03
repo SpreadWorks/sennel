@@ -6,6 +6,7 @@
     "handoffPath": { "type": "string" },
     "handoffDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "payloadCount": { "type": "integer", "minimum": 0 },
+    "acceptanceTruncationLog": { "type": "string" },
     "runtimeLog": {
       "type": "object",
       "required": ["runId", "sequence"],

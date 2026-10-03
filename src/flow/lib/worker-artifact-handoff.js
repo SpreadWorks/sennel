@@ -12,6 +12,7 @@ import { FlowHandoffAuthorityLease } from "../../lib/flow-handoff-authority-leas
 import { PRODUCT } from "../../lib/product.js";
 import {
   normalizeGeneratedSpecRequirementIds,
+  truncateGeneratedSpecTaskAcceptanceText,
   validateSpecJsonObject,
   readSpecJsonValidator,
 } from "../../lib/spec-json.js";
@@ -5887,7 +5888,10 @@ export class WorkerArtifactHandoffSubmission {
     return { ...this.unsignedJSON(), handoffDigest: this.handoffDigest };
   }
 
-  static seal(request, now = () => new Date(), { sourceMutationManifest = null } = {}) {
+  static seal(request, now = () => new Date(), {
+    sourceMutationManifest = null,
+    onAcceptanceTruncationLog = () => {},
+  } = {}) {
     if (request.policy.kind === "source" && !(sourceMutationManifest instanceof SourceMutationManifest)) {
       throw new WorkerArtifactHandoffError(
         "invalid", "FLOW_SOURCE_HANDOFF_PARENT_MANIFEST_REQUIRED",
@@ -5901,7 +5905,10 @@ export class WorkerArtifactHandoffSubmission {
       const source = request.payloadPath(rule.logicalName);
       if (rule.kind === "file") {
         if (!fs.existsSync(source) && !rule.required) continue;
-        validateFilePayloadAtCliBoundary(request, rule, source, { normalizeGeneratedSpecRequirements: true });
+        const acceptanceTruncationLog = validateFilePayloadAtCliBoundary(
+          request, rule, source, { persistGeneratedNormalization: true },
+        );
+        if (acceptanceTruncationLog) onAcceptanceTruncationLog(acceptanceTruncationLog);
         const snapshot = readRegularFile(source, `handoff payload ${rule.logicalName}`);
         const relativePath = path.relative(request.payloadDirectory, source).split(path.sep).join("/");
         manifest.push(new WorkerArtifactManifestEntry({
@@ -6040,8 +6047,196 @@ function validateDraftGateRepairPayloadAtProducerBoundary(request, document) {
   }
 }
 
-function validateFilePayloadAtCliBoundary(request, rule, source, { normalizeGeneratedSpecRequirements = false } = {}) {
+class GeneratedTaskAcceptanceTruncation {
+  constructor({ taskId = null, acceptanceIndex, operationIndex = null, groupIndex = null, originalText, retainedText }) {
+    this.taskId = taskId;
+    this.acceptanceIndex = acceptanceIndex;
+    this.operationIndex = operationIndex;
+    this.groupIndex = groupIndex;
+    this.originalText = originalText;
+    this.retainedText = retainedText;
+    this.originalLength = originalText.length;
+    this.retainedLength = retainedText.length;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      taskId: this.taskId,
+      acceptanceIndex: this.acceptanceIndex,
+      operationIndex: this.operationIndex,
+      groupIndex: this.groupIndex,
+      originalLength: this.originalLength,
+      retainedLength: this.retainedLength,
+      originalText: this.originalText,
+      retainedText: this.retainedText,
+    };
+  }
+}
+
+class GeneratedTaskAcceptanceNormalization {
+  constructor(document, truncations = []) {
+    this.document = document;
+    this.truncations = Object.freeze([...truncations]);
+    Object.freeze(this);
+  }
+}
+
+function normalizeGeneratedAcceptanceArray(value, location, truncations) {
+  if (!Array.isArray(value)) return value;
+  let changed = false;
+  const normalized = value.map((originalText, acceptanceIndex) => {
+    if (typeof originalText !== "string") return originalText;
+    const retainedText = truncateGeneratedSpecTaskAcceptanceText(originalText);
+    if (retainedText === originalText) return originalText;
+    changed = true;
+    truncations.push(new GeneratedTaskAcceptanceTruncation({
+      ...location,
+      acceptanceIndex,
+      originalText,
+      retainedText,
+    }));
+    return retainedText;
+  });
+  return changed ? normalized : value;
+}
+
+function normalizeGeneratedSpecTaskAcceptances(document) {
+  const truncations = [];
+  if (!Array.isArray(document?.tasks)) return new GeneratedTaskAcceptanceNormalization(document);
+  let changed = false;
+  const tasks = document.tasks.map((task) => {
+    if (!task || typeof task !== "object" || Array.isArray(task)) return task;
+    const acceptance = normalizeGeneratedAcceptanceArray(task.acceptance, { taskId: task.id ?? null }, truncations);
+    if (acceptance === task.acceptance) return task;
+    changed = true;
+    return { ...task, acceptance };
+  });
+  return new GeneratedTaskAcceptanceNormalization(changed ? { ...document, tasks } : document, truncations);
+}
+
+function normalizeGeneratedAcceptanceOperation(operation, { operationIndex, groupIndex = null }, truncations, allowedKinds) {
+  const target = operation?.target;
+  if (!allowedKinds.includes(operation?.kind)
+    || target?.entity !== "task"
+    || target.field !== "acceptance") return operation;
+  const replacement = normalizeGeneratedAcceptanceArray(operation.replacement, {
+    taskId: target.id ?? null,
+    operationIndex,
+    groupIndex,
+  }, truncations);
+  return replacement === operation.replacement ? operation : { ...operation, replacement };
+}
+
+function normalizeGeneratedSpecRepairAcceptance(document) {
+  const truncations = [];
+  if (!Array.isArray(document?.operations)) return new GeneratedTaskAcceptanceNormalization(document);
+  let changed = false;
+  const operations = document.operations.map((operation, operationIndex) => {
+    const normalized = normalizeGeneratedAcceptanceOperation(
+      operation, { operationIndex }, truncations, ["replace-entity-field"],
+    );
+    if (normalized !== operation) changed = true;
+    return normalized;
+  });
+  return new GeneratedTaskAcceptanceNormalization(changed ? { ...document, operations } : document, truncations);
+}
+
+function normalizeGeneratedSpecGateRepairAcceptance(document) {
+  const truncations = [];
+  if (!Array.isArray(document?.groups)) return new GeneratedTaskAcceptanceNormalization(document);
+  let changed = false;
+  const groups = document.groups.map((group, groupIndex) => {
+    if (!Array.isArray(group?.operations)) return group;
+    let groupChanged = false;
+    const operations = group.operations.map((operation, operationIndex) => {
+      const normalized = normalizeGeneratedAcceptanceOperation(
+        operation, { operationIndex, groupIndex }, truncations,
+        ["replace-entity-field", "add-entity-field"],
+      );
+      if (normalized !== operation) groupChanged = true;
+      return normalized;
+    });
+    if (!groupChanged) return group;
+    changed = true;
+    return { ...group, operations };
+  });
+  return new GeneratedTaskAcceptanceNormalization(changed ? { ...document, groups } : document, truncations);
+}
+
+function appendGeneratedAcceptanceTruncationLog(request, truncations) {
+  if (truncations.length === 0) return null;
+  const logPath = generatedAcceptanceTruncationLogPath(request);
+  const lines = truncations.map((truncation) => JSON.stringify({
+    event: "spec-task-acceptance-truncated",
+    loggedAt: new Date().toISOString(),
+    runId: request.runId,
+    specId: request.specId,
+    issue: request.issue,
+    attemptId: request.state?.attempt?.id ?? null,
+    attemptSequence: request.state?.attempt?.sequence ?? null,
+    stepId: request.stepId,
+    actionDigest: request.actionDigest,
+    dispatchInvocationId: request.dispatchInvocationId,
+    ...truncation.toJSON(),
+  }));
   try {
+    appendPrivateJsonLines(logPath, request.mainRoot, `${lines.join("\n")}\n`);
+    return logPath;
+  } catch (cause) {
+    // A logging failure must not reintroduce the schema rejection this
+    // normalization exists to prevent. Keep a visible fallback in the seal
+    // command's diagnostic stream so the dispatcher can retain the originals.
+    for (const line of lines) console.error(`[acceptance-truncation-log-fallback] ${line}`);
+    console.error(`[acceptance-truncation-log-write-failed] ${cause.message || cause}`);
+    return null;
+  }
+}
+
+function appendPrivateJsonLines(filePath, boundary, content) {
+  ensureRealDirectory(path.dirname(filePath), boundary);
+  let visible = null;
+  try {
+    visible = fs.lstatSync(filePath);
+  } catch (cause) {
+    if (cause.code !== "ENOENT") throw cause;
+  }
+  if (visible && (!visible.isFile() || visible.isSymbolicLink() || fs.realpathSync(filePath) !== filePath)) {
+    throw new Error(`acceptance truncation log must be a regular real file: ${filePath}`);
+  }
+  const flags = fs.constants.O_WRONLY
+    | fs.constants.O_APPEND
+    | fs.constants.O_CREAT
+    | (fs.constants.O_NOFOLLOW || 0);
+  const descriptor = fs.openSync(filePath, flags, 0o600);
+  try {
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile() || (visible && !sameFileIdentity(visible, opened)) || fs.realpathSync(filePath) !== filePath) {
+      throw new Error(`acceptance truncation log identity changed while opening: ${filePath}`);
+    }
+    fs.fchmodSync(descriptor, 0o600);
+    fs.writeFileSync(descriptor, content, "utf8");
+    fs.fsyncSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function generatedAcceptanceTruncationLogPath(request) {
+  return path.join(
+    request.mainRoot,
+    ".tmp",
+    "logs",
+    "acceptance-truncations",
+    digest(request.specId).slice(0, 24),
+    digest(request.runId).slice(0, 24),
+    `${digest(request.dispatchInvocationId).slice(0, 24)}.jsonl`,
+  );
+}
+
+function validateFilePayloadAtCliBoundary(request, rule, source, { persistGeneratedNormalization = false } = {}) {
+  try {
+    let acceptanceTruncationLog = null;
     // Every file payload is JSON. Parsing it here keeps malformed worker
     // output outside the sealed handoff protocol and gives the parent a
     // retryable producer error before any publication journal can exist.
@@ -6061,20 +6256,42 @@ function validateFilePayloadAtCliBoundary(request, rule, source, { normalizeGene
       rule.logicalName === "spec.json"
       && ["spec", "spec-repair"].includes(request.stepId)
     ) {
-      const normalized = normalizeGeneratedSpecRequirementIds(document);
+      let normalized = normalizeGeneratedSpecRequirementIds(document);
+      const acceptanceNormalization = normalizeGeneratedSpecTaskAcceptances(normalized);
+      normalized = acceptanceNormalization.document;
       validateSpecJsonObject(normalized);
       if (normalized !== document) {
-        if (normalizeGeneratedSpecRequirements) {
-          new AtomicFile(source, { phaseNamespace: "worker-spec-requirement-id-normalization" })
+        if (persistGeneratedNormalization) {
+          new AtomicFile(source, { phaseNamespace: "worker-spec-generated-normalization" })
             .write(`${JSON.stringify(normalized, null, 2)}\n`);
+          acceptanceTruncationLog = appendGeneratedAcceptanceTruncationLog(request, acceptanceNormalization.truncations);
         }
         document = normalized;
       }
+    }
+    if (rule.logicalName === "review.delta.json" && request.stepId === "spec-repair") {
+      const normalization = normalizeGeneratedSpecRepairAcceptance(document);
+      if (normalization.document !== document && persistGeneratedNormalization) {
+        new AtomicFile(source, { phaseNamespace: "worker-spec-task-acceptance-normalization" })
+          .write(`${JSON.stringify(normalization.document, null, 2)}\n`);
+        acceptanceTruncationLog = appendGeneratedAcceptanceTruncationLog(request, normalization.truncations);
+      }
+      document = normalization.document;
+    }
+    if (rule.logicalName === "spec-gate-repair.json" && request.stepId === "spec-gate-repair") {
+      const normalization = normalizeGeneratedSpecGateRepairAcceptance(document);
+      if (normalization.document !== document && persistGeneratedNormalization) {
+        new AtomicFile(source, { phaseNamespace: "worker-spec-task-acceptance-normalization" })
+          .write(`${JSON.stringify(normalization.document, null, 2)}\n`);
+        acceptanceTruncationLog = appendGeneratedAcceptanceTruncationLog(request, normalization.truncations);
+      }
+      document = normalization.document;
     }
     if (rule.logicalName === "review.delta.json") {
       if (request.stepId === "spec-triage") validateSpecTriagePayloadAtProducerBoundary(request, document);
       if (request.stepId === "spec-repair") validateSpecRepairPayloadAtProducerBoundary(request, document);
     }
+    return acceptanceTruncationLog;
   } catch (cause) {
     if (cause instanceof WorkerArtifactHandoffError) {
       throw new WorkerArtifactHandoffError(
@@ -6149,7 +6366,7 @@ function prePublicationArtifactError(request, error) {
   );
 }
 
-function requestFromStored(filePath) {
+function requestFromStored(filePath, { mainRoot: trustedMainRoot = null, flowManager = null } = {}) {
   const resolvedRequestPath = path.resolve(filePath);
   const actionDirectory = path.dirname(resolvedRequestPath);
   const invocationDirectory = path.dirname(actionDirectory);
@@ -6236,8 +6453,12 @@ function requestFromStored(filePath) {
   const request = {
     policy,
     version: document.version,
+    mainRoot: trustedMainRoot === null ? executionRoot : path.resolve(
+      requiredString(trustedMainRoot, "trusted handoff main root"),
+    ),
     runId,
     specId,
+    state: flowManager?.canonicalState(specId) ?? null,
     issue: document.issue ?? null,
     stepId: requiredString(document.stepId, "handoff request stepId"),
     taskId,
@@ -6529,10 +6750,16 @@ export function stageWorkerUpgradeResult({ requestPath, artifact } = {}) {
   return Object.freeze({ staged: true, path: target, stepId: request.stepId });
 }
 
-export function sealWorkerArtifactHandoff({ requestPath, invocationId, now = () => new Date() } = {}) {
+export function sealWorkerArtifactHandoff({
+  requestPath,
+  invocationId,
+  mainRoot = null,
+  flowManager = null,
+  now = () => new Date(),
+} = {}) {
   try {
     const resolvedRequestPath = path.resolve(requiredString(requestPath, "handoff request path"));
-    const request = requestFromStored(resolvedRequestPath);
+    const request = requestFromStored(resolvedRequestPath, { mainRoot, flowManager });
     if (request.version !== WORKER_ARTIFACT_HANDOFF_VERSION) {
       throw new Error(`worker artifact handoff request version must be ${WORKER_ARTIFACT_HANDOFF_VERSION}`);
     }
@@ -6550,7 +6777,10 @@ export function sealWorkerArtifactHandoff({ requestPath, invocationId, now = () 
         { retryable: false, data: { stepId: request.stepId } },
       );
     }
-    const submission = WorkerArtifactHandoffSubmission.seal(request, now);
+    let acceptanceTruncationLogPath = null;
+    const submission = WorkerArtifactHandoffSubmission.seal(request, now, {
+      onAcceptanceTruncationLog: (logPath) => { acceptanceTruncationLogPath = logPath; },
+    });
     new AtomicFile(request.submissionPath, { phaseNamespace: "worker-handoff-seal" })
       .write(`${JSON.stringify(submission.toJSON(), null, 2)}\n`);
     return Object.freeze({
@@ -6558,6 +6788,9 @@ export function sealWorkerArtifactHandoff({ requestPath, invocationId, now = () 
       handoffPath: request.submissionPath,
       handoffDigest: submission.handoffDigest,
       payloadCount: submission.payloadManifest.length,
+      ...(acceptanceTruncationLogPath !== null && {
+        acceptanceTruncationLog: acceptanceTruncationLogPath,
+      }),
     });
   } catch (cause) {
     if (cause instanceof WorkerArtifactHandoffError) throw cause;
@@ -7196,7 +7429,9 @@ class SpecWorkerPreparation {
 function validateSpecGateRepairWorkerPayload(request, proposal) {
   const mode = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document?.mode;
   if (mode === "repair") {
-    if (proposal?.stage === "spec-gate-repair") new SpecGateRepairOperationBatch(proposal);
+    if (proposal?.stage === "spec-gate-repair") {
+      new SpecGateRepairOperationBatch(proposal, readSpecJsonValidator().taskAcceptanceContract());
+    }
     else if (proposal?.stage === "spec-gate-repair-context-request") {
       if (typeof proposal.unitId !== "string" || !Array.isArray(proposal.additionalRangeIds)) {
         throw new Error("Spec Gate repair additional context request is invalid");

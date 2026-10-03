@@ -60,6 +60,13 @@
    - `added_round` (required): 0 for initial tasks.
    - `status` (required): `"pending"` initially.
 
+   Every `acceptance[]` item must be written in 500 characters or fewer. This is
+   a per-item limit, not a limit on the complete acceptance array. The CLI
+   truncates any overlong item to the first 500 characters before schema
+   validation and logs both the original and retained text; do not rely on that
+   fallback, because it can cut off a criterion. Keep each criterion concise
+   and split independent criteria into separate items.
+
    Empty `tasks[]` or undefined `tasks` causes the spec gate to FAIL. The `task-single-responsibility` guardrail evaluates each task's concern singularity in phase `spec` and `task-spec`.
 
    - **On complete**: write `spec.json` only to its exact handoff `payloadPath`, then run the exact handoff `sealCommand` once.

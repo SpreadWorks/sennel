@@ -99,6 +99,23 @@ export function normalizeGeneratedSpecRequirementIds(spec) {
   return changed ? { ...spec, requirements } : spec;
 }
 
+/**
+ * Truncate one generated Task acceptance item to the canonical Spec schema
+ * limit. JavaScript string length and the schema's maxLength both count UTF-16
+ * code units; if the boundary falls inside a surrogate pair, keep the valid
+ * prefix before that pair.
+ */
+export function truncateGeneratedSpecTaskAcceptanceText(value) {
+  if (typeof value !== "string") return value;
+  const maxLength = loadSchema().properties.tasks.items.properties.acceptance.items.maxLength;
+  if (value.length <= maxLength) return value;
+  let end = maxLength;
+  const last = value.charCodeAt(end - 1);
+  const next = value.charCodeAt(end);
+  if (last >= 0xD800 && last <= 0xDBFF && next >= 0xDC00 && next <= 0xDFFF) end -= 1;
+  return value.slice(0, end);
+}
+
 function loadSchema() {
   if (!cachedSchema) {
     cachedSchema = JSON.parse(fs.readFileSync(SCHEMA_PATH, "utf8"));

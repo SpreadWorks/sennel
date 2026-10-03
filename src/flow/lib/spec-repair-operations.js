@@ -27,6 +27,20 @@ function requiredText(value, field) {
 }
 function clone(value) { return structuredClone(value); }
 function stableBytes(value) { return Buffer.byteLength(JSON.stringify(value)); }
+function isSchemaBoundTaskAcceptanceReplacement(target, replacement, acceptanceContract) {
+  if (!target || typeof target !== "object" || Array.isArray(target)
+    || Object.keys(target).length !== 3
+    || !Object.hasOwn(target, "entity")
+    || !Object.hasOwn(target, "id")
+    || !Object.hasOwn(target, "field")
+    || target.entity !== "task"
+    || typeof target.id !== "string"
+    || target.id.trim() === ""
+    || target.field !== "acceptance"
+    || typeof acceptanceContract?.acceptsReplacement !== "function"
+    || !Number.isSafeInteger(acceptanceContract.maxReplacementBytes)) return false;
+  return acceptanceContract.acceptsReplacement(replacement);
+}
 function valueDigest(value) { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -208,7 +222,7 @@ export class SpecGateRepairPermission extends SpecRepairPermission {
 }
 
 export class SpecRepairOperation {
-  constructor(input, index, { replacementRequired = true, editsRequired = false } = {}) {
+  constructor(input, index, { replacementRequired = true, editsRequired = false, maxValueBytes = MAX_VALUE_BYTES } = {}) {
     const keys = ["findingIds", "kind", "target", "expectedDigest", "reason"];
     if (replacementRequired) keys.push("replacement");
     if (editsRequired) keys.push("edits");
@@ -224,7 +238,9 @@ export class SpecRepairOperation {
     this.kind = requiredText(input.kind, `spec-repair.operations[${index}].kind`);
     this.target = SpecRepairTarget.fromJSON(input.target, `spec-repair.operations[${index}].target`);
     this.reason = requiredText(input.reason, `spec-repair.operations[${index}].reason`);
-    if (replacementRequired && stableBytes(input.replacement) > MAX_VALUE_BYTES) throw new Error(`spec-repair.operations[${index}].replacement is oversized`);
+    if (replacementRequired) {
+      if (stableBytes(input.replacement) > maxValueBytes) throw new Error(`spec-repair.operations[${index}].replacement is oversized`);
+    }
     this.replacement = replacementRequired ? frozen(input.replacement) : null;
     this.replacementRequired = replacementRequired;
     if (editsRequired) {
@@ -299,7 +315,7 @@ export class SpecRepairFieldReplace extends SpecRepairOperation {
   apply(context) { return context.replace(this.resolve(context), this); }
 }
 export class SpecRepairIdEntityFieldReplace extends SpecRepairOperation {
-  constructor(input, index) { super(input, index); if (this.kind !== "replace-entity-field" || !SpecRepairIdEntityFieldReplace.supportsTarget(this.target) || this.expectedDigest === null) throw new Error(`spec-repair.operations[${index}] replace-entity-field target or digest is invalid`); Object.freeze(this); }
+  constructor(input, index, options = {}) { super(input, index, options); if (this.kind !== "replace-entity-field" || !SpecRepairIdEntityFieldReplace.supportsTarget(this.target) || this.expectedDigest === null) throw new Error(`spec-repair.operations[${index}] replace-entity-field target or digest is invalid`); Object.freeze(this); }
   static supportsTarget(target) { return target instanceof SpecRepairIdEntityTarget; }
   apply(context) { return context.replace(this.resolve(context), this); }
 }
@@ -318,8 +334,8 @@ export class SpecGateRepairIdEntityFieldDelete extends SpecRepairOperation {
   apply(context) { return context.deleteField(this.resolve(context), this); }
 }
 export class SpecGateRepairIdEntityFieldAdd extends SpecRepairOperation {
-  constructor(input, index) {
-    super(input, index);
+  constructor(input, index, options = {}) {
+    super(input, index, options);
     if (this.kind !== "add-entity-field" || !SpecGateRepairIdEntityFieldAdd.supportsTarget(this.target)
       || this.expectedDigest !== null) throw new Error(`spec-repair.operations[${index}] add-entity-field target or digest is invalid`);
     Object.freeze(this);
@@ -368,7 +384,7 @@ GATE_OPERATION_TYPES.set("delete-entity-field", SpecGateRepairIdEntityFieldDelet
 GATE_OPERATION_TYPES.set("add-entity-field", SpecGateRepairIdEntityFieldAdd);
 
 export class SpecRepairOperationBatch {
-  constructor(document) {
+  constructor(document, acceptanceContract = null) {
     try {
       optionalExactKeys(document, ["version", "stage", "identity", "baseReviewDigest", "findings", "operations"], ["scopeExpansions"], "review.delta.json");
       if (document.version !== 2 || document.stage !== "spec-repair") throw new Error("review.delta.json must be a spec-repair v2 delta");
@@ -389,7 +405,10 @@ export class SpecRepairOperationBatch {
       try {
         const Type = OPERATION_TYPES.get(operation?.kind);
         if (!Type) throw new Error(`spec-repair.operations[${index}] kind is invalid`);
-        operations.push(new Type(operation, index));
+        const maxValueBytes = isSchemaBoundTaskAcceptanceReplacement(
+          operation?.target, operation?.replacement, acceptanceContract,
+        ) ? acceptanceContract.maxReplacementBytes : MAX_VALUE_BYTES;
+        operations.push(new Type(operation, index, { maxValueBytes }));
       } catch (cause) { discardedOperations.push(discardedOperation(operation, cause.message)); }
     });
     this.operations = Object.freeze(operations);
@@ -682,7 +701,9 @@ function currentAttemptConflictKeys(operations, keyFor = (operation) => operatio
 
 export function applySpecRepairOperations({ spec, triage, repair, inputRevision, validator }) {
   if (!(validator instanceof SpecJsonValidator)) throw new TypeError("Spec repair requires its canonical Spec validator");
-  const batch = repair instanceof SpecRepairOperationBatch ? repair : new SpecRepairOperationBatch(repair);
+  const batch = repair instanceof SpecRepairOperationBatch
+    ? repair
+    : new SpecRepairOperationBatch(repair, validator.taskAcceptanceContract());
   if (batch.baseRevision !== revisionFor(inputRevision)) throw new SpecRepairOperationsError("FLOW_SPEC_REPAIR_BASE_REVISION_MISMATCH", "spec-repair operations do not match the immutable handoff revision", { retryable: false, audit: commandOwnedAudit(batch, [], []) });
   const permissions = triageMap(triage, spec);
   let candidate = clone(spec); let context = new SpecRepairApplicationContext(candidate, frozen(spec));
@@ -819,7 +840,7 @@ function rejectedGateGroup(group, index, reason) {
 
 /** A worker group is one indivisible semantic correction. */
 export class SpecGateRepairOperationGroup {
-  constructor(value, index) {
+  constructor(value, index, acceptanceContract = null) {
     exactKeys(value, ["findingIdentities", "operations"], `Spec Gate repair group ${index}`);
     if (!Array.isArray(value.findingIdentities) || value.findingIdentities.length === 0) throw new Error("Spec Gate repair group requires finding identities");
     this.identities = Object.freeze(value.findingIdentities.map((entry, identityIndex) => {
@@ -837,7 +858,10 @@ export class SpecGateRepairOperationGroup {
       // full identities live at group level; this key is internal to parsing.
       const keys = Object.keys(operation ?? {});
       if (keys.includes("findingIds")) throw new Error("Spec Gate operation must not declare Review findingIds");
-      return new Type({ ...operation, findingIds: ["gate-group"] }, operationIndex);
+      const maxValueBytes = isSchemaBoundTaskAcceptanceReplacement(
+        operation?.target, operation?.replacement, acceptanceContract,
+      ) ? acceptanceContract.maxReplacementBytes : MAX_VALUE_BYTES;
+      return new Type({ ...operation, findingIds: ["gate-group"] }, operationIndex, { maxValueBytes });
     });
     const seen = new Set();
     this.operations = Object.freeze(operations.filter((operation) => {
@@ -851,7 +875,7 @@ export class SpecGateRepairOperationGroup {
 }
 
 export class SpecGateRepairOperationBatch {
-  constructor(value) {
+  constructor(value, acceptanceContract = null) {
     exactKeys(value, ["version", "stage", "baseRevision", "groups"], "Spec Gate repair proposal");
     if (value.version !== 1 || value.stage !== "spec-gate-repair" || !SHA256_REVISION.test(value.baseRevision)
       || !Array.isArray(value.groups) || value.groups.length > MAX_OPERATIONS
@@ -860,7 +884,7 @@ export class SpecGateRepairOperationBatch {
     }
     this.baseRevision = value.baseRevision;
     this.groups = Object.freeze(value.groups.map((group, index) => {
-      try { return new SpecGateRepairOperationGroup(group, index); }
+      try { return new SpecGateRepairOperationGroup(group, index, acceptanceContract); }
       catch (cause) { return rejectedGateGroup(group, index, cause.message); }
     }));
     Object.freeze(this);
@@ -872,7 +896,9 @@ export class SpecGateRepairOperationBatch {
 export function applySpecGateRepairOperations({ spec, authority, repair, inputRevision, validator }) {
   if (!(validator instanceof SpecJsonValidator)) throw new TypeError("Spec Gate repair requires its canonical Spec validator");
   if (!(authority instanceof SpecGateRepairAuthority)) throw new Error("Spec Gate repair requires typed Gate authority");
-  const batch = repair instanceof SpecGateRepairOperationBatch ? repair : new SpecGateRepairOperationBatch(repair);
+  const batch = repair instanceof SpecGateRepairOperationBatch
+    ? repair
+    : new SpecGateRepairOperationBatch(repair, validator.taskAcceptanceContract());
   const revision = revisionFor(inputRevision);
   if (authority.baseRevision !== revision || batch.baseRevision !== revision) {
     throw new SpecRepairOperationsError("FLOW_SPEC_REPAIR_BASE_REVISION_MISMATCH", "Spec Gate repair does not match the immutable Spec revision");

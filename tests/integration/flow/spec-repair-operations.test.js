@@ -72,6 +72,22 @@ function apply(spec, findings, operations, scopeExpansions = []) {
 }
 
 describe("revision-scoped spec repair operations", () => {
+  it("accepts a schema-sized Task acceptance replacement above the generic operation byte cap", () => {
+    const spec = sourceSpec();
+    const target = { entity: "task", id: "T1", field: "acceptance" };
+    const original = ["The existing acceptance criterion."];
+    const replacement = Array.from({ length: 50 }, () => "受".repeat(500));
+    spec.tasks[0].acceptance = original;
+
+    const result = apply(spec, [applyFinding("F-acceptance", [permission(target, ["replace-entity-field"])])], [
+      replace(["F-acceptance"], target, replacement, valueDigest(original)),
+    ]);
+
+    assert.deepEqual(result.spec.tasks[0].acceptance, replacement);
+    assert.deepEqual(result.audit.appliedFindings, ["F-acceptance"]);
+    assert.ok(Buffer.byteLength(JSON.stringify(replacement)) > 32 * 1024);
+  });
+
   it("partially adopts valid operations while auditing malformed and unauthorized proposals", () => {
     const spec = sourceSpec();
     const original = spec.requirements[0].desc;

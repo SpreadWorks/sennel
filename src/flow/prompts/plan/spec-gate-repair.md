@@ -6,6 +6,8 @@ When `mode` is `repair`, read the version `2` context through its `bundle`. Each
 
 Repair groups contain exactly `findingIdentities` and `operations`; do not add `unitId` or a group-level reason. For an allowed `edit-text-field`, each operation contains exactly `kind`, `target`, `expectedDigest`, `edits`, and `reason`. Copy the target and original digest from its writable range. Each edit contains `startByte`, `endByte`, and `replacement`, using UTF-8 byte offsets in the original value. Do not put Review `findingIds` on Gate operations.
 
+Every item in a replacement for `target: { entity: "task", field: "acceptance" }` must be 500 characters or fewer. This limit applies to each acceptance item, not the array. The CLI truncates any overlong item to the first 500 characters before applying the repair and logs the original and retained text; write within the limit so truncation cannot remove part of a criterion.
+
 Read the supplied Issue, request, previous Draft answers, project rules and source evidence before treating a finding as an unresolved decision. Facts determined by that evidence must be repaired without asking again. Evidence ranges are read-only and grant no mutation authority. Source evidence includes referenced tracked paths, not an exhaustive code search; an unobserved implementation fact is not a missing user choice.
 
 If omitted canonical context is required, return only version `1`, stage `spec-gate-repair-context-request`, exact `baseRevision`, the selected `unitId`, and `additionalRangeIds` listing canonical range IDs to read. Each requested ID must add a range beyond those already supplied; do not guess from omitted text.
