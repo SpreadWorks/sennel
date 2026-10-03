@@ -1,12 +1,12 @@
 {
-  "analyzedAt": "2026-10-03T05:00:42.164Z",
+  "analyzedAt": "2026-10-03T13:25:43.815Z",
   "package": {
     "entries": [
       {
         "file": "package.json",
-        "hash": "c17b9dcdad0ae4fbf0155a93e11423fb",
-        "lines": 52,
-        "mtime": "2026-09-28T15:01:20.794Z",
+        "hash": "73267835251022718c6c45d4e13ca5d0",
+        "lines": 53,
+        "mtime": "2026-10-03T13:24:04.761Z",
         "packageDeps": {
           "dependencies": {},
           "devDependencies": {}
@@ -22,6 +22,7 @@
           "validate:skills": "node scripts/validate-skills.js",
           "test": "node tests/run.js",
           "test:unit": "node tests/run.js --scope unit",
+          "test:contract:result": "node tests/run.js --file tests/unit/structured-step-result.contract.js",
           "test:integration": "node tests/run.js --scope integration",
           "test:e2e": "node tests/run.js --scope e2e",
           "test:acceptance": "node tests/run.js --scope acceptance",
@@ -33,22 +34,22 @@
         "composerScripts": null,
         "makefileTest": null,
         "id": "451a9f25",
-        "summary": "Defines Sennel as an ESM-based Node.js toolkit for spec-driven documentation generation.",
-        "detail": "The package metadata identifies Sennel as version 0.1.0-alpha.2004, exposes the `sennel` CLI through `src/sennel.js`, requires Node.js 18.19.0 or newer, and publishes the `src/` directory. It provides release validation and publishing scripts, scoped test commands, skill validation, MIT licensing, and pnpm package-manager metadata.",
+        "summary": "Sennel package metadata for spec-driven documentation tooling.",
+        "detail": "Defines the Sennel package as an ES module CLI for automated documentation generation. It exposes the `sennel` binary from `src/sennel.js`, requires Node.js 18.19.0 or newer, publishes `src/` while excluding preset tests, and uses pnpm 12.3.4. Scripts cover release workflows, skill validation, unit, contract, integration, end-to-end, acceptance, structure, agent, and full test execution.",
         "chapter": "overview",
         "role": "config",
         "enrich": {
-          "processedAt": "2026-09-28T15:48:26.915Z",
+          "processedAt": "2026-10-03T13:25:59.665Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
+          "Sennel",
           "package metadata",
-          "Node.js",
-          "CLI",
           "documentation generation",
-          "spec-driven development",
-          "release scripts"
+          "CLI",
+          "Node.js",
+          "release scripts",
+          "testing"
         ]
       }
     ],
@@ -31200,5 +31201,5 @@
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-10-03T05:01:26.686Z"
+  "enrichedAt": "2026-10-03T13:25:59.665Z"
 }
