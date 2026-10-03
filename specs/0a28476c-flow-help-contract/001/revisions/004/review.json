@@ -1,0 +1,259 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "d79b1170bda93b1c1530934181fb17e3372780e46ee7e5a249e8afff164c26dc",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "6cdc89b03e98f41596a3a444dccc08a9f96f0ae2056974df6e50354a6fbe4235",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "edits": [
+            {
+              "endByte": 802,
+              "replacement": "\n\nここで alias は表示上の metadata ではなく parser の admission と正規化を伴う公開入力として扱う。現行 dispatcher が受理する alias は暗黙の -h/--help の組だけとし、両表記を canonical help flag に正規化する。その他の alias を model に追加する場合は parseEntryInput/parseArgs への投影と alias argv の exact test を同じ変更で実装し、表示だけの未受理 alias を許可しない。",
+              "startByte": 802
+            }
+          ],
+          "expectedDigest": "4ab9b934449c92efc036e741f62baa7573086c132097fc3f62a3b38d3e30dd6b",
+          "findingIds": [
+            "spec-review-0d21a6d4422fd2e8fee374b62d73a20e"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Clarify the R1 repair contract in the immutable requirement text.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 1914,
+              "replacement": "\n\nさらに、Flow 外の共有 renderer の plugin metadata/lazy-import 経路は、tests/fixtures/help-plugin/plugin.json（name: help-fixture、files: [plugin.json, commands/]、contributions.commands: [{name: fixture-help, path: commands/fixture-help.js}]）を manifest とする isolated fixture plugin を用い、sennel fixture-help --help と sennel help fixture-help を実行して、plugin-contributed command の localized summary、Usage/Options metadata、subcommand row の名前順と ASCII 空白二つ以上、implementation 非実行を確認すること。fixture は .sennel/plugins/help-fixture に materialize し、core の sennel plugin --help と sennel plugin find --help の回帰とは別の row として扱う。",
+              "startByte": 1914
+            }
+          ],
+          "expectedDigest": "83a40fba66318f44b46361089e44df6c8f926ad5d0ac78a7464c958a6826d721",
+          "findingIds": [
+            "spec-review-6b705d136f598938bfee97b2414a3f81"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Clarify the R6 repair contract in the immutable requirement text.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R6"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 2358,
+              "replacement": "\n\nさらに、T-4 の contract-test report は開始時点の live FLOW_COMMANDS から生成する共有 routed leaf（query を除く）の網羅的な per-leaf inventory と acceptance matrix の normative record とし、全 leaf を一行ずつ含めること。各 row は R3 に列挙した user-facing input、validator owner、制約、conditional combination、exact argv の valid/invalid outcome を対応付け、実 registry の leaf set と一致しない report は不合格とすること。",
+              "startByte": 2358
+            }
+          ],
+          "expectedDigest": "a202c43f87b7334e4b90235537d80b155a062214dd293329cda7fca295be227e",
+          "findingIds": [
+            "spec-review-73441da6381aa99d67f8ba5c87e736f6"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Clarify the R3 repair contract in the immutable requirement text.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R3"
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-0d21a6d4422fd2e8fee374b62d73a20e",
+        "spec-review-6b705d136f598938bfee97b2414a3f81",
+        "spec-review-73441da6381aa99d67f8ba5c87e736f6"
+      ],
+      "discardedOperations": [],
+      "inputDigest": "aa2c40fe544d3050299975d96c3bf12c3ecf57408b82179043da50056d15262d",
+      "operationDigest": "da7ab36072bc8b19b3814d1d197bdd97f8d1c06623227349700ead6819bf618f",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R3"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-4"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-7"
+          }
+        }
+      ],
+      "body": "**Target:** R3/T-4/T-7 and the per-leaf acceptance matrix\n**Issue:** The live registry currently has 67 leaves including query (66 shared), with different guarded/unguarded entries and command-owned validators. The spec gives a global option list but no row per leaf mapping cardinality, value/domain/path semantics, owner, and exact argv outcomes.\n**Required change:** Add the required live-registry-derived per-leaf inventory and acceptance rows, or explicitly make a generated artifact/test output the normative record.\n**Why blocking:** Tests can omit leaves such as run recover-draft-execution or run filter-task-review, or assign validation to the wrong owner, while still satisfying the current prose.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec snapshot requires R3/T-4/T-7 to cover the live per-leaf inventory, but it does not define the per-leaf rows or make a generated report normative. The blocking finding remains applicable; authorize only text edits to the named requirement and task implementation notes.",
+      "findingId": "spec-review-73441da6381aa99d67f8ba5c87e736f6",
+      "issue": "The live registry currently has 67 leaves including query (66 shared), with different guarded/unguarded entries and command-owned validators. The spec gives a global option list but no row per leaf mapping cardinality, value/domain/path semantics, owner, and exact argv outcomes.",
+      "kind": "blocking",
+      "requiredChange": "Add the required live-registry-derived per-leaf inventory and acceptance rows, or explicitly make a generated artifact/test output the normative record.",
+      "target": "R3/T-4/T-7 and the per-leaf acceptance matrix",
+      "title": "Live per-leaf inventory is not recorded",
+      "whyBlocking": "Tests can omit leaves such as run recover-draft-execution or run filter-task-review, or assign validation to the wrong owner, while still satisfying the current prose."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-1"
+          }
+        }
+      ],
+      "body": "**Target:** R1/R2 and T-1; src/lib/dispatcher.js parseEntryInput\n**Issue:** The requirements make alias a canonical option field, but do not state whether aliases are accepted argv forms. parseEntryInput currently ignores args.aliases even though src/lib/cli.js supports aliases, so an alias could be displayed and compared while remaining unparseable.\n**Required change:** Specify alias admission and normalization; either restrict aliases to the existing implicit help pair or require alias projection through parseEntryInput/parseArgs with exact argv tests.\n**Why blocking:** Parser/help parity and group intersection tests have no determinable expected behavior, and accepting aliases would otherwise require an unstated dispatcher contract change.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec snapshot mentions alias metadata in R1/R2/T-1 but does not state whether aliases are admitted and normalized by the existing parser owner. The blocking contract gap remains applicable; authorize only text edits to the named requirement and task implementation notes.",
+      "findingId": "spec-review-0d21a6d4422fd2e8fee374b62d73a20e",
+      "issue": "The requirements make alias a canonical option field, but do not state whether aliases are accepted argv forms. parseEntryInput currently ignores args.aliases even though src/lib/cli.js supports aliases, so an alias could be displayed and compared while remaining unparseable.",
+      "kind": "blocking",
+      "requiredChange": "Specify alias admission and normalization; either restrict aliases to the existing implicit help pair or require alias projection through parseEntryInput/parseArgs with exact argv tests.",
+      "target": "R1/R2 and T-1; src/lib/dispatcher.js parseEntryInput",
+      "title": "Alias admission is undefined and unsupported by the current dispatcher path",
+      "whyBlocking": "Parser/help parity and group intersection tests have no determinable expected behavior, and accepting aliases would otherwise require an unstated dispatcher contract change."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R6"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-6"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-7"
+          }
+        }
+      ],
+      "body": "**Target:** T-6/R6 and the common-help Acceptance Criteria\n**Issue:** sennel plugin and sennel plugin find are core CommandDefinition entries. Plugin-contributed commands are instead loaded through loadPluginRegistry and addressed as sennel <contributed-command> --help. No fixture manifest, command name, or setup is specified for the stated fixture-plugin coverage.\n**Required change:** Name the fixture manifest and contributed command used by the test, or reclassify these cases as core plugin-manager help and add a real plugin-contributed command case.\n**Why blocking:** The acceptance can pass without exercising the plugin metadata normalization/lazy-import path that the requirement claims to preserve.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec snapshot names core plugin-manager help cases but does not identify the fixture manifest, contributed command, or setup needed to exercise loadPluginRegistry metadata. The blocking coverage gap remains applicable; authorize only text edits to R6 and T-6 prose.",
+      "findingId": "spec-review-6b705d136f598938bfee97b2414a3f81",
+      "issue": "sennel plugin and sennel plugin find are core CommandDefinition entries. Plugin-contributed commands are instead loaded through loadPluginRegistry and addressed as sennel <contributed-command> --help. No fixture manifest, command name, or setup is specified for the stated fixture-plugin coverage.",
+      "kind": "blocking",
+      "requiredChange": "Name the fixture manifest and contributed command used by the test, or reclassify these cases as core plugin-manager help and add a real plugin-contributed command case.",
+      "target": "T-6/R6 and the common-help Acceptance Criteria",
+      "title": "The plugin help cases do not exercise plugin-contributed metadata",
+      "whyBlocking": "The acceptance can pass without exercising the plugin metadata normalization/lazy-import path that the requirement claims to preserve."
+    },
+    {
+      "body": "**Target:** R4/T-5/T-7\n**Improvement:** List the existing target-resolution codes such as FLOW_TARGET_NOT_FOUND, FLOW_TARGET_AMBIGUOUS, FLOW_TARGET_RECOVERY_REQUIRED, and FLOW_TARGET_AUTHORITY_CORRUPT alongside ARGS_ERROR and ACTIVE_FLOW_MISMATCH.\n**Why non-blocking:** The existing dispatcher and flow-context owners already determine these outcomes; this only makes the CLI matrix less ambiguous.",
+      "findingId": "spec-review-7c07f085bdec2aa5a8f2ffb6a58c416f",
+      "improvement": "List the existing target-resolution codes such as FLOW_TARGET_NOT_FOUND, FLOW_TARGET_AMBIGUOUS, FLOW_TARGET_RECOVERY_REQUIRED, and FLOW_TARGET_AUTHORITY_CORRUPT alongside ARGS_ERROR and ACTIVE_FLOW_MISMATCH.",
+      "kind": "improvement",
+      "target": "R4/T-5/T-7",
+      "title": "Make selector failure expectations explicit",
+      "whyNonBlocking": "The existing dispatcher and flow-context owners already determine these outcomes; this only makes the CLI matrix less ambiguous."
+    },
+    {
+      "body": "**Target:** Out, R5, and R6\n**Improvement:** State whether sennel help flow query and the top-level flow help may display the query row while query parsing/admission remains excluded from the shared model.\n**Why non-blocking:** The current bootstrap boundary is already explicit, and this choice does not block the shared routed implementation.",
+      "findingId": "spec-review-45cfcb3648a9846cc660e9bd193f465a",
+      "improvement": "State whether sennel help flow query and the top-level flow help may display the query row while query parsing/admission remains excluded from the shared model.",
+      "kind": "improvement",
+      "target": "Out, R5, and R6",
+      "title": "Clarify query visibility versus query contract isolation",
+      "whyNonBlocking": "The current bootstrap boundary is already explicit, and this choice does not block the shared routed implementation."
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 42683,
+    "digest": "931c3e61a0f4a465cdc7eb01eff5989b001a9ddf78cb4f738cdba387b1caaf5d",
+    "revision": 4,
+    "specId": "0a28476c-flow-help-contract"
+  },
+  "version": 2
+}

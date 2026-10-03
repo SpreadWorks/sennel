@@ -1,0 +1,99 @@
+{
+  "devType": "feature",
+  "goal": "この Issue は、Flow CLI の parser、leaf help、group help、共通 help 入口の公開契約を同じ registry 定義から検証可能にし、既存の実行・guard・runtime 挙動を変えずに利用者が受理可能な選択肢を完全に確認できる状態に must 到達させる。達成条件は、開始時点の FLOW_COMMANDS から query を除く全 routed leaf を再列挙し、各 leaf の parser が受理する positionals、rest、flags、options、optionalOptions、implicit -h, --help の完全な契約を対応する leaf help の Usage/Options row と照合して漏れ・重複・value kind/placeholder/alias の不一致がないこと、各 group の Options を全 direct child leaf の完全な契約の共通部分から導出すること、三つの公開 help 入口で同じ option 順・名前昇順の subcommand row・2 個以上の ASCII 空白を観測できることとする。さらに、query の独立 parser、既存 validator、target guard、runtime directory、拒否順序、exit code、既存 side effect は保持し、実 dispatcher/CLI の help・parser failure・target rejection・valid execution・command failure と query の個別回帰で、handler 非実行、mutation、runtime log、canonical artifact、stdout/stderr、終了値（valid help/success は 0、実際の失敗と no-leaf group help は 1）を確認可能にする。",
+  "analysis": {
+    "problem": "現状は FLOW_COMMANDS の parser 定義と help 定義が別々に管理されているため、受理される option と表示される option が一致せず、group の option 集合、subcommand の行間隔、登録順依存の表示順にも不整合がある。さらに、leaf help、group help、sennel help flow の入口が同じ表示契約を共有していることを確認できず、query という独立 parser の例外、target guard、runtime directory、拒否順序、exit code の既存契約も一つの検証範囲に整理されていない。",
+    "proposedApproach": "Issue が指定した既存の CommandDefinition と FLOW_COMMANDS を定義の中心として扱い、option の種別・値表現・別名・説明と subcommand 行の表示情報を同じ公開契約から parser、leaf help、group help、三つの help 入口へ投影する。group は全 direct child leaf の完全な option 契約から導出し、query は共有経路へ移行せず独立契約として残す。registry から対象 leaf を再列挙する契約テストと、実 dispatcher/CLI を通る help・実行・拒否・guard・runtime の振る舞いテストを追加する方針を Spec へ渡す。",
+    "validation": "Issue 521 の restart contract、acceptance criteria、project overview、draft 対象 guardrail を照合した結果、対象は help と parser の契約整合性という一つの concern に限定され、query の独立性、既存 validator の責務、target guard、runtime directory、拒否順序、exit code、後方互換の保持が明示されている。初期 Draft でユーザーだけが決める未解決事項は見つからないため、questionLedger は空にする。Spec では registry の現行集合を再列挙し、各 leaf の入力・所有 validator・公開 surface・挙動テスト・副作用を対応付けてから実装へ進める。"
+  },
+  "decisionMap": {
+    "knownFacts": [
+      "Issue 521 は Flow CLI の parser と help の不一致、group help の誤った option 集合、subcommand 行の分離不足、登録順依存の表示順を一つの concern として定義している。",
+      "2026-09-24 の restart contract は過去の監査件数と停止した旧 revision の文言より優先され、停止した flow の recovery はこの Issue の scope 外である。",
+      "restart contract の基準では FLOW_COMMANDS は 66 leaf、query を除く shared routed path は 65 leaf だが、実装と acceptance test は固定数を権威にせず開始時の registry から再列挙する必要がある。",
+      "flow query は bootstrapFlowQueryCli と query modules が所有する独立 parser/help/error 契約であり、shared option projection、共通 admission、routed parser matrix から除外しつつ個別回帰を保持する。",
+      "既存の parser option は flags、required-value options、optional-value options と implicit help から構成され、help は別の手書き情報を持つため、現在は両者の完全な対応が保証されていない。",
+      "公開 help surface は sennel flow <group> --help、sennel help flow <group>、leaf を省略した sennel flow <group> の三つであり、同じ group の row order と spacing が検証対象である。",
+      "group option は selected example や nested descendant ではなく、全 direct child leaf の option 契約の共通部分から求め、alias と value kind を含む完全な契約を比較する必要がある。",
+      "shared target guard は --expect-binding、--expect-issue、--expect-no-issue、--expect-spec、--expect-run-id であり、適用 leaf 集合は shared registry から導出して既存の期待値検証経路を使う。",
+      "既存の値・path・状態の検証責務は parseEntryInput、FlowTargetExpectation、buildFlowCommandHookContext、domain class、registry、各 command validator などに分散しており、新しい汎用 admission validator や推測による上限追加は要求されていない。",
+      "--agent-work-dir の override、configured agent workDir、default の優先順位と config.logs.dir の logDir 優先順位、finalize-cleanup の durable root policy は既存 runtime 契約として保持する。",
+      "valid help と successful command の exit code は 0、selector・parser・target・command の実際の失敗は 1、no-leaf group help は help を表示しても 1 を保持するという観測契約が指定されている。"
+    ],
+    "decisionPoints": [
+      "must は、shared routed leaf ごとに parser が受理する全 option と implicit -h, --help を canonical Options row として一度ずつ表示し、flag、required-value、optional-value の違いと placeholder を可視化する。",
+      "must は、leaf help の command-specific prose、example、localization を既存出力の期待値として保持する。各 shared routed leaf と利用可能な locale について、実 dispatcher/CLI で移行前に取得した canonical Options section 以外の prose、example、localized summary と移行後の同じ selector の出力を比較し、各文字列と example 行が一致し、Usage/Options の構造化行だけが registry の parser metadata から投影されることを受入条件にする。Options section は canonical option ごとに一行だけ（implicit -h, --help を含む）とし、required/optional value の placeholder、flag、alias、description を parser 定義と比較する。翻訳済み prose を構造化契約の代替にせず、command handler と execution hook を help 中に呼び出さないことも実行結果で確認する。",
+      "must は、group help の option を全 direct child leaf の完全な契約から導出し、get/set/report に --agent-work-dir を表示せず run にだけ表示する。",
+      "must は、subcommand row を名前昇順で決定的に表示し、各 row の name と summary の間に少なくとも ASCII 空白二つを置き、短名、13/14/15 文字境界、最長登録名、合成 64/65 文字名を検証する。",
+      "must は、sennel flow <group> --help、sennel help flow <group>、sennel flow <group> の三つの公開経路で同じ row order、spacing、option order の契約を成立させる。",
+      "must は、resume、prepare、get、set、run、report/show を含む開始時点の routed leaf を registry から列挙し、query の stdin、request-file、help、error を別の回帰契約として検証する。",
+      "must は、開始時点の registry から query を除く shared routed leaf を列挙し、各 leaf を一行の input-inventory にして、positional/rest/flag/option/optionalOption/implicit -h, --help の順序、arity/cardinality、alias、required/optional value kind と placeholder、空値と format/domain、実装で定義された既存の size/retry/context limit、path の性質（該当する場合の relative/absolute、file/dir、存在・非存在、正規化・symlink 条件）および validator owner（parseEntryInput、FlowTargetExpectation、buildFlowCommandHookContext、domain class、registry、command validator のいずれか）を実値で記録する。各行は対応する parser 入口、help Options row、拒否ケースを参照し、Spec は registry の現集合と照合して漏れ・重複・推測値を拒否する。新しい limit や path 制約は追加しない。",
+      "must は、既存 FlowTargetExpectation と guard 経路を authority とし、対象 leaf から導出した matrix に、(a) guard なし、(b) --expect-binding 単独、(c) --expect-run-id + --expect-spec + active Issue に応じた --expect-issue または --expect-no-issue、(d) 各 guard の一致と不一致、(e) --expect-issue と --expect-no-issue の同時指定、(f) --expect-binding と明示 guard の競合を具体的な argv として列挙する。各 case は parser error または ACTIVE_FLOW_MISMATCH、command-owned mutation が呼ばれないこと、exit 1 を記録し、一致する valid case は既存 command を実行して exit 0 になることを確認する。guard の追加規則や新しい拒否理由は導入しない。",
+      "must は、runtime option を受理する flow run の behavior-level test で --agent-work-dir <path>（argv 配列では [\"--agent-work-dir\", \"<path>\"]）と --agent-work-dir=<path>（[\"--agent-work-dir=<path>\"]）の二つの形式を同じ override として検証し、値欠落・空値・option-like value は command 実行前に拒否されることを確認する。Spec は override > config.agent.workDir > .tmp の workDir precedence、config.logs.dir > <agentWorkDir>/logs の logDir precedence、configured logs の有無、finalize-cleanup の durable root policy を個別の入力と期待結果に対応付ける。help、parser failure、target rejection、valid execution、command failure について side effect と exit code（成功は 0、実際の失敗は 1）を記録し、既存の path limit や runtime policy を推測して追加しない。",
+      "must は、Flow 外の共通 help consumer を src/help.js の metadata-only renderer として特定し、sennel help <topic> と top-level <command> --help（Flow 以外を含む）が buildCoreHelpModel/renderHelp の同じ registry metadata から localized summary、usage、options、subcommand rows を得る意味を維持することを acceptance にする。Spec はこの consumer が command implementation module を import・実行しないこと、Flow の Usage/Options/row projection が同じ metadata に反映されることを確認する。sennel flow query の stdin、request-file、help、error は bootstrapFlowQueryCli の独立契約として別に検証し、no-leaf group help は help を表示しても exit 1 を保持する。"
+    ],
+    "resolvedByProjectRules": [
+      "must は、ユーザー定義の Issue を分割提案せず、一つの concern の scope として扱う。",
+      "must は、同じ責務を担う既存 API とその利用箇所・テストを先に再利用し、parser と help の判断を別名 helper や並列 registry に複製しない。",
+      "must は、意味のある option と row の構造的制約を専用 class の constructor invariant と振る舞いで表現し、既存の OOP による型表現の方針へ合わせる。",
+      "must は、Node.js 組み込み module のみを使用し、外部依存を追加しない。",
+      "must は、Codex hooks、Claude hooks、IDE callback など agent 固有 lifecycle を Sennel の機能契約に導入しない。",
+      "must は、テストを通すために test code の期待値を弱めず、結果から逆算した拒否・help・実行・再利用経路をテストする。",
+      "must は、backward-compatible CLI interface の guardrail に従い、既存 command、option、query、runtime、side effect の保持を acceptance と behavior-level verification で示す。"
+    ],
+    "requiresUserJudgment": [],
+    "deferredToSpec": [
+      {
+        "boundary": "全 routed leaf の public input inventory と既存 validator owner の対応付け",
+        "relevance": "Priority: must。Spec は開始時点の registry から query を除く全 routed leaf を再列挙し、各 leaf を一行の public input inventory として成果物にする。各行は positionals/rest/flags/options/optionalOptions/implicit -h, --help の順序、実際の arity/cardinality、alias、required/optional value kind と placeholder、空値・format・allowed domain、既存の size/retry/context limit（明示的な上限がなければその事実）、path の file/dir・存在・絶対/相対・解決 root・正規化/symlink 条件、既存 validator owner（parseEntryInput、FlowTargetExpectation、buildFlowCommandHookContext、domain class、registry、command validator）を実値で記録する。各行は対応する parser 入口、leaf help Options row、unknown/missing/extra/empty の既存拒否ケースと valid case を参照し、registry の現集合との照合で漏れ・重複・推測値を拒否する。help 統合はこの既存入力契約を変更せず、新しい blanket admission validator や制限を追加しない。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "registry から導出する leaf/group 集合、query 除外、option intersection、表示順・表示幅の検証行列",
+        "relevance": "Priority: must。Spec はテスト開始時に registry から routed leaf と group の集合を再列挙し、query を shared projection と exhaustive routed matrix から除外する。各 group は全 direct child leaf の完全な option contract（canonical name、alias、flag/required-value/optional-value kind、placeholder、description）の intersection から導出し、selected example や nested descendant を使わない。三つの public help path で option order と subcommand row を同一 model から比較し、row は locale-independent な名前昇順、name と summary の間に ASCII 空白 2 個以上、短名・13/14/15 文字境界・最長登録名・synthetic 64/65 文字名を含む。件数を固定せず、合成名は renderer/registry integration test 限定で production command や新しい長さ制限を導入しない。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "既存 public surface、lifecycle hook、configuration、generated artifact、side effect の migration parity mapping",
+        "relevance": "Priority: must。Spec は registry の開始時点の全 routed leaf と三つの help 入口を照合し、各 retained public surface について current owner、保持する入力・実行・guard・runtime・query・exit code・side effect、new canonical owner、削除または非権威化する重複、確認する test surface を一対一の migration parity 表にする。対象行には、CommandDefinition/FLOW_COMMANDS の positionals/rest/flags/options/optionalOptions/implicit help と leaf Usage/Options、flowDefinition の direct-child projection と shared renderer、src/flow.js の leaf 省略、src/sennel.js の pre-scan、src/help.js の共通 consumer、bootstrapFlowQueryCli/query modules、FlowTargetExpectation/buildFlowCommandHookContext、resolveWorkDir/buildPaths/container、dispatcher の rejection envelope/exit code を含める。parser/help の二重 authorityだけを registry の明示 metadata と shared renderer に移し、query parser、command semantics、target guard evaluation、runtime directory policy、generated artifact と既存 pre/post/onError/finally・runtime log・canonical artifact・command-owned mutation の所有と観測を変更しない。各表行を実 dispatcher/CLI test に割り当て、registry の現集合との照合で漏れ、重複、未定義の削除判断、推測制約を拒否する。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "parser、help、guard、runtime、query、exit code、拒否順序を接続する integration/E2E の受入条件",
+        "relevance": "Priority: must。Spec は parser、help、guard、runtime、query、exit code、拒否順序を実 dispatcher/CLI で接続する受入 matrix を必須成果物にする。matrix は registry から query を除く全 routed leaf を再列挙し、各 leaf の parser/help Options 完全一致、implicit -h, --help、実 arity、required/optional value、unknown/missing/extra/empty の既存拒否、valid execution を記録する。group と leaf なしの flow <group>、sennel flow <group> --help、sennel help flow <group> は同じ renderer の名前順・option 順・2 個以上の ASCII 空白・13/14/15 文字境界・最長登録名・synthetic 64/65 文字名・handler/execution hook 非実行を比較する。query は bootstrapFlowQueryCli の stdin/request-file/help/error を別回帰にする。guard は既存 FlowTargetExpectation/buildFlowCommandHookContext で guard なし、binding 単独、明示 guard 一致/不一致、issue/no-issue 同時指定、binding と明示 guard の競合を実 argv で検証し、拒否時の mutation 非実行と exit 1、valid case の exit 0 を記録する。runtime は --agent-work-dir <path> と --agent-work-dir=<path>、欠落/空値/option-like value、override > config.agent.workDir > default、config.logs.dir > <agentWorkDir>/logs、configured logs の有無、finalize-cleanup の durable root を既存 resolver/container で確認する。help、parser failure、target rejection、valid execution、command failure、no-leaf help の stdout/stderr、exit code、runtime log、canonical artifact、command-owned mutation、既存 pre/post/onError/finally 順序を実測し、新しい admission validator、path/size/retry 制限、拒否理由、query 共通化を導入しない。",
+        "owner": "spec"
+      }
+    ]
+  },
+  "scopeVerification": {
+    "in": [
+      "must は、既存 CommandDefinition と FLOW_COMMANDS を authority として、shared routed leaf の parser/help option 契約、implicit help、group intersection、subcommand row の表示契約を整合させる。",
+      "must は、flow resume/prepare/get/set/run/report/show の routed path、三つの public help entry point、query の個別回帰、target guard、runtime directory、exit code、拒否順序を acceptance scope に含める。",
+      "must は、registry/help integration と focused public CLI E2E を対象ファイルおよび関連する既存 owner の test surface に追加し、行順・空白・option 集合・実行非実行を behavior-level で確認する。",
+      "must は、Issue が指定した parser、help、dispatcher、registry、flow entry、pre-initialization、container、target guard、flow context、query の touchpoint を実装前の影響 inventory に含める。"
+    ],
+    "out": [
+      "must not は、flow query を shared migration に取り込み、stdin、request-file、query-specific help/error の既存契約を再設計する。",
+      "must not は、停止した過去 flow の recovery、未解決の旧 revision の仕様転記、Issue 外の command 分割や unrelated docs refresh を行う。",
+      "must not は、新しい parallel command registry、help の逆解析を authority とする実装、汎用 admission validator、推測による ID/path/size/retry 制限を導入する。",
+      "must not は、command execution semantics、target guard evaluation、runtime directory policy、既存 rejection lifecycle、Flow 外の help consumer を変更する。",
+      "must not は、synthetic command name を production command として追加したり、合成名テストから新しい command-name length limit を導入したりする。"
+    ]
+  },
+  "impactOnExisting": [
+    "must preserve 既存 leaf parser の受理範囲、positional/rest の arity、option value の形式、missing/unknown/extra input の拒否を各 leaf の validator owner のまま維持する。",
+    "must preserve 既存の leaf help の command-specific prose、example、localization を変更しない。各 shared routed leaf と各利用可能な locale について、移行前の実 CLI 出力から Usage/Options の canonical row を除いた prose、example 行、localized summary を期待値として固定し、移行後の同じ selector の出力がそれぞれ同じ文字列・行順・locale であることを behavior-level test で確認する。変更対象は parser registry から投影する Usage/Options の構造化行だけであり、canonical option は一度ずつ（implicit -h, --help を含む）表示し、required/optional value の placeholder、alias、description を parser metadata と一致させる。",
+    "must preserve flow get/set/run/report の group help が direct child leaf の実際の共通 option だけを示す状態に変わることを behavior-level で確認し、unsupported option の表示を除去する。",
+    "must preserve sennel flow の pre-scan、agentWorkDir/logDir の precedence、finalize-cleanup の durable root、runtime log の既存生成・診断順序を変更しない。",
+    "must preserve target guard の expectation、identity、mutual-exclusion、command-owned mutation より前の拒否を FlowTargetExpectation と既存 hook context の責務として維持する。",
+    "must preserve query の独立 parser と、query 以外の shared routed path の実行 semantics を分離して回帰確認する。",
+    "must preserve source distribution の外部依存なし、agent 非依存性、既存 test helper と既存 public command の互換性を変更しない。"
+  ],
+  "questionLedger": {
+    "revision": 0,
+    "publication": "draft-worker-publication",
+    "evidenceDigest": "6443375a5b99258635088695cdefa410f2f160a795b8c59322674b4b740532a3",
+    "questions": []
+  },
+  "openQuestions": []
+}

@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-10-02T13:32:49.356Z",
+  "analyzedAt": "2026-10-03T05:00:42.164Z",
   "package": {
     "entries": [
       {
@@ -16653,9 +16653,9 @@
       },
       {
         "file": "src/flow/lib/run-seal-handoff.js",
-        "hash": "759bc75240963dce5e3d2d4bb8cdbb41",
-        "lines": 45,
-        "mtime": "2026-08-22T15:31:40.384Z",
+        "hash": "02264c6a0167e58f93f72c1ce16d6917",
+        "lines": 47,
+        "mtime": "2026-10-03T04:56:40.448Z",
         "className": "run-seal-handoff",
         "methods": [],
         "imports": [
@@ -16670,20 +16670,19 @@
         "extends": "FlowCommand",
         "usedBy": null,
         "id": "ed147df7",
-        "summary": "Defines the flow command that seals a worker artifact handoff. It passes the request artifact and dispatch invocation identity to the handoff operation and wraps the result in a standard envelope.",
-        "detail": "RunSealHandoffCommand extends the common FlowCommand abstraction used by flow lifecycle commands. It reads the worker handoff request path from the environment and preserves the dispatch invocation ID for correlation. Successful handoffs are returned with an operation-specific Envelope.ok response. Failures are converted into an Envelope.fail result for consistent CLI and dispatcher handling.",
-        "chapter": "internal_design",
+        "summary": "Implements the run seal-handoff flow command.",
+        "detail": "Defines RunSealHandoffCommand as a FlowCommand subclass. It uses environment-provided worker artifact handoff request and flow dispatch invocation identifiers, then reports successful or failed execution through Envelope responses for the run seal-handoff operation.",
+        "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-08-23T14:13:18.859Z",
+          "processedAt": "2026-10-03T05:01:26.686Z",
           "attempts": 1
         },
         "keywords": [
-          "artifact handoff",
-          "seal command",
-          "dispatch invocation",
-          "worker request",
           "flow command",
+          "seal handoff",
+          "artifact handoff",
+          "invocation ID",
           "envelope response"
         ]
       },
@@ -18902,9 +18901,9 @@
       },
       {
         "file": "src/flow/lib/spec-repair-operations.js",
-        "hash": "c9baf93870f8d57f1d63f7b23904039f",
-        "lines": 994,
-        "mtime": "2026-09-29T02:11:17.329Z",
+        "hash": "ae7b5f2a3f86a21c8d9b2f1fe2f1f506",
+        "lines": 1020,
+        "mtime": "2026-10-03T04:56:40.449Z",
         "className": "spec-repair-operations",
         "methods": [
           "specRepairProposalDigest",
@@ -18943,6 +18942,7 @@
           "requiredText",
           "clone",
           "stableBytes",
+          "isSchemaBoundTaskAcceptanceReplacement",
           "valueDigest",
           "canonicalJson",
           "semanticOperationDigest",
@@ -19017,27 +19017,30 @@
         "usedBy": [
           "src/flow/lib/observation.js",
           "src/flow/lib/plan-gate-repair.js",
+          "src/flow/lib/spec-gate-repair-bundle.js",
           "src/flow/lib/spec-gate-repair-context.js",
           "src/flow/lib/spec-gate-repair-review.js",
           "src/flow/lib/spec-gate-targets.js",
-          "src/flow/lib/worker-artifact-handoff.js",
-          "src/flow/lib/spec-gate-repair-bundle.js"
+          "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "4f196bfc",
-        "summary": "Validates, authorizes, and applies specification repair operations.",
-        "detail": "Defines repair targets, text edits, field and array operations, permissions, authorities, operation batches, audit records, and gate groups; enforces size, key, ordering, overlap, identity, and revision constraints while applying authorized changes.",
+        "summary": "Provides validated and auditable operations for repairing specification JSON.",
+        "detail": "Defines specification repair targets, permissions, operations, text edits, operation batches, authority checks, target resolution, canonical digests, immutable revisions, bounded audit data, and application contexts. It supports root, entity, field, text, and array repairs, including Spec Gate repair groups, triage validation, conflict detection, stable ordering, size limits, replay checks, and SHA-256-based proposal or operation identity.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-03T05:01:26.686Z",
           "attempts": 1
         },
         "keywords": [
-          "repair operations",
-          "target authority",
+          "spec repair",
+          "JSON validation",
+          "operation authority",
           "text edits",
-          "operation batch",
-          "audit"
+          "array operations",
+          "audit trail",
+          "SHA-256 digest",
+          "Spec Gate"
         ]
       },
       {
@@ -21676,9 +21679,9 @@
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "b8a2055813a741534cbe5b2c1cfe06fd",
-        "lines": 10431,
-        "mtime": "2026-10-02T13:06:17.825Z",
+        "hash": "6582f703e8159a16b7fa124c0fea9134",
+        "lines": 10666,
+        "mtime": "2026-10-03T04:56:40.451Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "RequirementTestStructuralHandoffResult",
@@ -21826,6 +21829,14 @@
           "validateSpecRepairPayloadAtProducerBoundary",
           "draftGateRepairReport",
           "validateDraftGateRepairPayloadAtProducerBoundary",
+          "normalizeGeneratedAcceptanceArray",
+          "normalizeGeneratedSpecTaskAcceptances",
+          "normalizeGeneratedAcceptanceOperation",
+          "normalizeGeneratedSpecRepairAcceptance",
+          "normalizeGeneratedSpecGateRepairAcceptance",
+          "appendGeneratedAcceptanceTruncationLog",
+          "appendPrivateJsonLines",
+          "generatedAcceptanceTruncationLogPath",
           "validateFilePayloadAtCliBoundary",
           "unsealedFilePayloadError",
           "prePublicationArtifactError",
@@ -22031,23 +22042,25 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Coordinates secure worker artifact handoff and lifecycle management for Flow tasks.",
-        "detail": "Validates and seals typed handoff requests, bounds payloads, records canonical input snapshots and source mutation manifests, verifies repository authority and path, digest, schema, ownership, and lifecycle invariants, and coordinates draft, specification, requirement-test, implementation, review, triage, and repair workers. Manages immutable submissions, publication receipts, retries, quarantine, recovery reconciliation and validation, rollback checkpoints and enforcement, repair reports, and filesystem cleanup across source and test-review flows.",
+        "summary": "Coordinates secure worker artifact handoff, publication, recovery, rollback, cleanup, and replay across Flow execution steps.",
+        "detail": "Implements typed handoff policies, canonical input snapshots, source-effect reports, repository authority snapshots, mutation manifests, rollback checkpoints, retry handling, request assembly, payload validation, and generated acceptance normalization. It coordinates source and artifact workers for draft, specification, test, gate-repair, implementation, and test-review workflows while enforcing bounded payloads, immutable bindings, repository ownership, and canonical publications. The module validates stored handoff paths, versions, identities, step policies, payload contracts, source authority bindings, manifests, and publications; stages and seals worker outputs; records receipts and journals; reconciles committed or replayed results; quarantines failures; performs guarded cleanup; and supports source rollback and recovery.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-03T05:01:26.686Z",
           "attempts": 1
         },
+        "app": "flow",
         "keywords": [
           "worker artifact handoff",
-          "artifact validation",
+          "artifact publication",
           "source mutation manifest",
-          "publication receipt",
-          "rollback",
-          "recovery reconciliation",
+          "repository authority snapshot",
+          "payload validation",
+          "rollback checkpoint",
+          "reconciliation",
           "quarantine",
-          "flow coordinator"
+          "Flow workers"
         ]
       },
       {
@@ -29750,11 +29763,12 @@
       },
       {
         "file": "src/lib/spec-json-validator.js",
-        "hash": "0e6ee353bad27b964b0d7e740af958ec",
-        "lines": 47,
-        "mtime": "2026-09-29T02:11:17.336Z",
+        "hash": "0d252a790efb0eefe5a3448d89149ad1",
+        "lines": 77,
+        "mtime": "2026-10-03T04:56:40.453Z",
         "className": "spec-json-validator",
         "methods": [
+          "SpecTaskAcceptanceContract",
           "SpecJsonValidator"
         ],
         "imports": [
@@ -29764,6 +29778,7 @@
           "node:crypto"
         ],
         "exports": [
+          "SpecTaskAcceptanceContract",
           "SpecJsonValidator"
         ],
         "extends": "AtomicPromptElement",
@@ -29771,31 +29786,32 @@
           "src/lib/spec-json.js"
         ],
         "id": "1544c4f9",
-        "summary": "Validates canonical spec.json documents and requirement rules.",
-        "detail": "SpecJsonValidator applies the canonical schema, enforces testability-related preimplementation test expectation rules, builds the CanonicalTaskRequirementMap, and returns the validated specification.",
+        "summary": "Validates spec.json against its canonical schema and exposes bounded task-acceptance rules.",
+        "detail": "The module defines SpecTaskAcceptanceContract for bounded acceptance arrays and item schemas, while SpecJsonValidator validates the canonical specification schema. It also enforces the conditional preimplementation_test_expectation rule and constructs a CanonicalTaskRequirementMap before returning validated specifications.",
         "chapter": "configuration",
-        "role": "config",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-03T05:01:26.686Z",
           "attempts": 1
         },
         "keywords": [
-          "spec.json",
-          "schema validation",
+          "spec validation",
+          "JSON schema",
+          "task acceptance",
           "requirements",
-          "testability",
-          "canonical map"
+          "test expectation"
         ]
       },
       {
         "file": "src/lib/spec-json.js",
-        "hash": "0fe97ae269a7ba77e76d270069635599",
-        "lines": 298,
-        "mtime": "2026-09-29T02:11:17.337Z",
+        "hash": "dea6ea084e98b6a8b1d83663b4fc394e",
+        "lines": 315,
+        "mtime": "2026-10-03T04:56:40.453Z",
         "className": "spec-json",
         "methods": [
           "CanonicalRequirementId",
           "normalizeGeneratedSpecRequirementIds",
+          "truncateGeneratedSpecTaskAcceptanceText",
           "loadSpecJsonSchema",
           "resolveSpecJsonPath",
           "resolveSpecDir",
@@ -29818,6 +29834,7 @@
         "exports": [
           "CanonicalRequirementId",
           "normalizeGeneratedSpecRequirementIds",
+          "truncateGeneratedSpecTaskAcceptanceText",
           "loadSpecJsonSchema",
           "resolveSpecJsonPath",
           "resolveSpecDir",
@@ -29833,22 +29850,21 @@
         "extends": null,
         "usedBy": null,
         "id": "e288cfbd",
-        "summary": "Provides shared utilities for canonical requirement IDs and spec.json lifecycle operations.",
-        "detail": "Defines canonical and generated requirement ID validation and normalization, including collision detection. Loads and clones the spec.json schema, resolves spec file or directory paths, loads and optionally validates JSON data, provides nullable loading and formatted saving, enumerates usable requirement IDs, creates an empty specification stub, and converts specifications into prompt text. Uses Node.js filesystem and path APIs together with SpecJsonValidator.",
-        "chapter": "internal_design",
+        "summary": "Provides spec.json loading, requirement ID normalization, persistence, and prompt conversion utilities.",
+        "detail": "The module defines canonical and generated requirement ID patterns, normalizes generated IDs while detecting collisions, truncates generated task-acceptance text, loads the specification schema, resolves spec paths and directories, loads or probes spec.json files, validates and saves specifications, enumerates usable requirement IDs, creates an empty stub, and converts a specification to prompt text.",
+        "chapter": "configuration",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-03T05:01:26.686Z",
           "attempts": 1
         },
         "keywords": [
-          "requirement IDs",
           "spec.json",
-          "schema validation",
-          "path resolution",
-          "JSON loading",
-          "JSON saving",
-          "prompt generation"
+          "requirement IDs",
+          "schema loading",
+          "file persistence",
+          "prompt conversion",
+          "normalization"
         ]
       },
       {
@@ -31180,9 +31196,9 @@
     ],
     "summary": {
       "total": 560,
-      "totalMethods": 5340
+      "totalMethods": 5351
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-10-02T13:33:44.447Z"
+  "enrichedAt": "2026-10-03T05:01:26.686Z"
 }

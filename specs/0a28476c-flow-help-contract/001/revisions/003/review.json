@@ -1,0 +1,181 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "7dd1aba1b2dbae69e8ff69fd5fa62ba668ca56b1e9de360ed2cefff4f3811066",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "7852ff97d94c5197902071e8f5df679f4a114c0d8e2e2bb457f1ad52a7755977",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "edits": [
+            {
+              "endByte": 220,
+              "replacement": "inventory は test-only の live-registry inventory として、実際の FLOW_COMMANDS/CommandDefinition から導出する contract-test helper buildFlowInputInventory(FLOW_COMMANDS) の返却値を同テスト内の in-memory report として扱い、production artifact や runtime admission table として保存・参照しない。各 leaf の name、group、positionals/rest、flags、required/optional options、implicit help、value kind/placeholder/alias、validator-owner reference、および既存 owner が示す cardinality、format/domain、size/retry/context limit、path 条件（file/dir、存在、絶対/相対、解決 root、正規化/symlink）を記録し、registry、parseEntryInput、既存 domain class、command validator、FlowTargetExpectation、buildFlowCommandHookContext の実値と照合する。内部 _rawArgs、resolved target、injected runtime state は public option として列挙しない。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "2f8488eff6df62824b8c9d79578d2cb34b658f599b14c8bca490eb251c6da78a",
+          "findingIds": [
+            "spec-review-17b05b8ea0dd0524e74ee8bfa53f1e01"
+          ],
+          "kind": "edit-text-field",
+          "reason": "T-4 の inventory を test-only の live registry report として導出し、必須フィールドと既存 owner の照合責務を明示する。",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-4"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 219,
+              "replacement": "src/sennel.js の pre-init scanner（必要なら同ファイルから呼ぶ shared helper）を、separate 形式と equals 形式の --agent-work-dir の値を同じ agentWorkDirOverride に正規化し、initContainer 前に渡す owner とする。focused CLI/E2E はその境界で override が initContainer の agentWorkDir に反映され、logDir が config.logs.dir > agentWorkDir/logs を満たすことを検証し、override > config.agent.workDir > .tmp、config.logs.dir > agentWorkDir/logs、finalize-cleanup の durable root という既存 precedence を維持する。guard の追加規則、path/size/retry の新制限、既存拒否順序の再設計は対象外とする。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "461166183e7601fa397cd652dafb89024a7a47327699f4fa5ab5875d780d5876",
+          "findingIds": [
+            "spec-review-7ff81279d5b4fb3468d9b3d58b8aaf43"
+          ],
+          "kind": "edit-text-field",
+          "reason": "pre-init scanner を両形式の agent work directory override と initContainer の path/log 境界の owner として明示する。",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-5"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 896,
+              "replacement": "実 dispatcher/CLI の parser、guard、runtime、failure lifecycle を既存 owner のまま保持すること。五つの target guard の適用 leaf を registry から導出し、guard なし、binding 単独、明示 guard の一致/不一致、issue/no-issue の同時指定、binding と明示 guard の競合を実 argv で検証する。一致する valid case は既存 command を実行し、不一致・invalid combination は既存 ARGS_ERROR または ACTIVE_FLOW_MISMATCH を返して command-owned mutation より前に停止すること。ただし、buildFlowCommandHookContext 中の FlowTargetExpectation constructor が issue/no-issue または binding 競合で失敗する場合は、公開 CLI が stderr に現行の未捕捉エラー stack を出し現行の exit behavior を返す挙動を互換維持し、ARGS_ERROR / ACTIVE_FLOW_MISMATCH に再分類せず command loading 前に停止すること。--agent-work-dir <path> と --agent-work-dir=<path> は同一 override として扱い、override > config.agent.workDir > .tmp、config.logs.dir > agentWorkDir/logs、finalize-cleanup の durable root を維持すること。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "cae57d8d2eec5975784bdedd1dc5ebe966f69651d061d4d8ef39481ae0a6206f",
+          "findingIds": [
+            "spec-review-ebd87c5c77f6487e1baf865af26ed678"
+          ],
+          "kind": "edit-text-field",
+          "reason": "FlowTargetExpectation constructor failure の現行未捕捉 stack と exit behavior を明示し、既存 envelope 契約との境界を分ける。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R4"
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-17b05b8ea0dd0524e74ee8bfa53f1e01",
+        "spec-review-7ff81279d5b4fb3468d9b3d58b8aaf43",
+        "spec-review-ebd87c5c77f6487e1baf865af26ed678"
+      ],
+      "discardedOperations": [],
+      "inputDigest": "39c4d58365b37bb88cefc922a1426a310413101d39563808f13d41681be9f6a7",
+      "operationDigest": "cbe378b77152d8c90996675bb573a07dd091749fe16011414815e73ad953e63e",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R4"
+          }
+        }
+      ],
+      "body": "**Target:** R4 / target-guard acceptance / src/lib/flow-target-guard.js\n**Issue:** FlowTargetExpectation throws for issue/no-issue and binding conflicts while buildFlowCommandHookContext is built. The public CLI currently emits an uncaught error stack, not an ARGS_ERROR or ACTIVE_FLOW_MISMATCH envelope.\n**Required change:** Specify the required error boundary and observable shape for these constructor failures, including whether current uncaught-error behavior is preserved or converted to ARGS_ERROR before command loading.\n**Why blocking:** The stated error contract contradicts verified behavior, so correct compatibility and E2E assertions cannot be determined.",
+      "disposition": "apply",
+      "evidence": "R4 の現行記述は issue/no-issue と binding 競合を ARGS_ERROR または ACTIVE_FLOW_MISMATCH とする一方、review の source evidence は FlowTargetExpectation の constructor 失敗が未捕捉 stack になることを示している。R4 の target-guard 契約を明示化するため、既存 requirement の desc を編集対象にする。",
+      "findingId": "spec-review-ebd87c5c77f6487e1baf865af26ed678",
+      "issue": "FlowTargetExpectation throws for issue/no-issue and binding conflicts while buildFlowCommandHookContext is built. The public CLI currently emits an uncaught error stack, not an ARGS_ERROR or ACTIVE_FLOW_MISMATCH envelope.",
+      "kind": "blocking",
+      "requiredChange": "Specify the required error boundary and observable shape for these constructor failures, including whether current uncaught-error behavior is preserved or converted to ARGS_ERROR before command loading.",
+      "target": "R4 / target-guard acceptance / src/lib/flow-target-guard.js",
+      "title": "R4 requires guard errors the current dispatcher does not emit",
+      "whyBlocking": "The stated error contract contradicts verified behavior, so correct compatibility and E2E assertions cannot be determined."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-5"
+          }
+        }
+      ],
+      "body": "**Target:** R4 / Clarifications [CORRECTION] / src/sennel.js\n**Issue:** parseEntryInput accepts --agent-work-dir=<path>, but initContainer computes agentWorkDir and logDir before dispatch and src/sennel.js only pre-scans the separate form. Parsed input is not reapplied to container paths.\n**Required change:** Declare src/sennel.js's pre-init scanner, or a shared helper called by it, as the owner that normalizes both forms into agentWorkDirOverride before initContainer; require path/log assertions at that boundary.\n**Why blocking:** Implementing only the shared parser leaves equals-form executions using the wrong runtime directory and logs.",
+      "disposition": "apply",
+      "evidence": "Spec の T-5 は separate/equals の同値性と既存 sennel.js/container/config 経路を受入対象にしているが、pre-init scanner が両形式を正規化して initContainer 前に override を渡す責務と path/log の観測境界を明記していない。T-5 の implementation_notes を編集対象にする。",
+      "findingId": "spec-review-7ff81279d5b4fb3468d9b3d58b8aaf43",
+      "issue": "parseEntryInput accepts --agent-work-dir=<path>, but initContainer computes agentWorkDir and logDir before dispatch and src/sennel.js only pre-scans the separate form. Parsed input is not reapplied to container paths.",
+      "kind": "blocking",
+      "requiredChange": "Declare src/sennel.js's pre-init scanner, or a shared helper called by it, as the owner that normalizes both forms into agentWorkDirOverride before initContainer; require path/log assertions at that boundary.",
+      "target": "R4 / Clarifications [CORRECTION] / src/sennel.js",
+      "title": "Equals-form runtime override has no pre-init integration point",
+      "whyBlocking": "Implementing only the shared parser leaves equals-form executions using the wrong runtime directory and logs."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-4"
+          }
+        }
+      ],
+      "body": "**Target:** R3 / T-4 / R6\n**Issue:** The registry stores option names and positional names, while cardinality, semantic limits, path rules, and validator ownership are distributed across command implementations. The spec does not define whether the required inventory is production metadata, a test report, or a static table.\n**Required change:** State that T-4 produces a test-only live-registry inventory, name its API/output, and define the fields and owner references that tests must assert without introducing runtime admission rules.\n**Why blocking:** Without this target, implementation may duplicate domain constraints in production or omit the required inventory, and tests cannot establish the claimed owner/path/limit mapping.",
+      "disposition": "apply",
+      "evidence": "R3/T-4 は live registry 由来の inventory を求めているが、T-4 の implementation_notes は後続の contract test と acceptance matrix のための成果物と述べるだけで、test-only の API/output、必須フィールド、owner reference の具体的な導出契約を定義していない。T-4 の implementation_notes を編集対象にする。",
+      "findingId": "spec-review-17b05b8ea0dd0524e74ee8bfa53f1e01",
+      "issue": "The registry stores option names and positional names, while cardinality, semantic limits, path rules, and validator ownership are distributed across command implementations. The spec does not define whether the required inventory is production metadata, a test report, or a static table.",
+      "kind": "blocking",
+      "requiredChange": "State that T-4 produces a test-only live-registry inventory, name its API/output, and define the fields and owner references that tests must assert without introducing runtime admission rules.",
+      "target": "R3 / T-4 / R6",
+      "title": "R3 input inventory has no concrete storage or derivation contract",
+      "whyBlocking": "Without this target, implementation may duplicate domain constraints in production or omit the required inventory, and tests cannot establish the claimed owner/path/limit mapping."
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 35675,
+    "digest": "48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+    "revision": 3,
+    "specId": "0a28476c-flow-help-contract"
+  },
+  "version": 2
+}

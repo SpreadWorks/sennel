@@ -1,0 +1,15 @@
+{
+  "route": {
+    "kind": "gate",
+    "phase": "draft",
+    "taskId": null
+  },
+  "attemptId": "attempt-draft-gate-f09541fd-40b9-47f4-a3f3-9fd16e0536f1",
+  "attempt": 2,
+  "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+  "specId": "0a28476c-flow-help-contract",
+  "issue": 521,
+  "projectDigest": "5aba4bf26e706a4f1919a5b77652b3ed83e171ea6d3832b7eb5d01499bd7939a",
+  "runtimeDigest": "aec757ce17dcca5fa42e89c056e64885462ebff7cd2f632414cc2aacd04672a3",
+  "targetDigest": "d2cdcbb75bff043b528433043c6b2fab8ffca01736b4939c0de07fc28f6569a2"
+}

@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-52903448d31a808d595bc07ce8d318fb3ac63884d0781327f1d970b4f7725966",
+  "repairRecordFingerprint": "52903448d31a808d595bc07ce8d318fb3ac63884d0781327f1d970b4f7725966",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-draft-gate-d889b2ee-bd80-4c17-8128-d8e7881de00b",
+      "sequence": 1
+    },
+    "resultLogicalKey": "draft.gate",
+    "publicationActivityId": "plan-gate-repaired-96d4c9a8-d2e2-4a25-ab67-92a07be9aba8",
+    "catalogFingerprint": "3ee1da7ab037c8cd0b2ef9256bf95c5250a22d598917aa533aba91cef0fce830",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-draft-gate-d889b2ee-bd80-4c17-8128-d8e7881de00b",
+        "sequence": 1
+      },
+      "canonicalAttempt": {
+        "id": "attempt-draft-gate-d889b2ee-bd80-4c17-8128-d8e7881de00b",
+        "sequence": 1
+      },
+      "sourceFingerprint": "c7321650b45680b3ac45e474a7405b4a61fa6eff2e9c30226bb5f301b1e1e823",
+      "canonicalFingerprint": "3ee1da7ab037c8cd0b2ef9256bf95c5250a22d598917aa533aba91cef0fce830",
+      "sourceRevisionFingerprint": "50857dfa62607dd23b8d00ca4b30125eaa314fbdc68498e1669383047419f58a",
+      "canonicalRevisionFingerprint": "50857dfa62607dd23b8d00ca4b30125eaa314fbdc68498e1669383047419f58a"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-draft-gate-d889b2ee-bd80-4c17-8128-d8e7881de00b",
+    "sequence": 1
+  },
+  "targetAttempt": {
+    "id": "attempt-draft-gate-repair-fddc2054-a6f4-4303-aa4e-c8ce1ae3369d",
+    "sequence": 2
+  },
+  "publicationActivityId": "attempt-confirmed-73e57e47-ab39-42fd-b8b4-dad6730aed6c",
+  "handoffRevision": "09b88683508647a9010b65e6b89be1ac28919b6dfac9e1cad49268ba00badd30",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "46bea0e2ecad1571e1114b2101b4c986d2ac9b6ea0ff82da97ca1cd87bc813db",
+    "outputEvidenceDigest": "8fda785584751403f5c650c2f26198f5dc6a404b1f6c5701650b9c202fc2df40",
+    "summary": "Resolved all eight blocking observations by making the inventory, target-guard matrix, runtime argv forms, shared-help consumer, parity ownership, and behavior-level evidence explicit.",
+    "requests": [
+      {
+        "fingerprint": "b30d11329a4d982f6dc02a164efdc1b74960124760f07f7d7870de10ba0002e2",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "0c8c558ec3b1a9f024dbe5ee998d43dd638e647d477ca505d51856c575a00be4",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "c784e196b8697a43c8f024434ce6122f11dd69ca18794d5b5f423b410954c920",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "540beaa5b0cab8e64020ccc06f8e0b11ca7e36dbbede60c30d12092ce7c8f579",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "2484b4a2e3aca868e9899d47dcae3aca5aca7b35edb55eac8f540c439641b5d7",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "49e52c632a1c44d15a46d26bae7d10a88cda4e29d36832bf90e6733c9bf14588",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "90f41538730db2e62069c303166648c2c149bfc0cceb68a5c1122930748914a7",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "09b4334df1b7c590ba98c42060b7fba8d250acc4799a5cfa58fbcc411908c11a",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "b30d11329a4d982f6dc02a164efdc1b74960124760f07f7d7870de10ba0002e2",
+        "strategy": "Specify the complete per-leaf input inventory.",
+        "summary": "The repair defines the exact parser, value, limit, path, and validator-owner fields and requires current registry values.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "8fda785584751403f5c650c2f26198f5dc6a404b1f6c5701650b9c202fc2df40"
+        ]
+      },
+      {
+        "fingerprint": "0c8c558ec3b1a9f024dbe5ee998d43dd638e647d477ca505d51856c575a00be4",
+        "strategy": "Bind path and limit coverage to observable inventory rows.",
+        "summary": "Each applicable path property and existing limit is now recorded as a code-derived inventory value with no invented constraint.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "8fda785584751403f5c650c2f26198f5dc6a404b1f6c5701650b9c202fc2df40"
+        ]
+      },
+      {
+        "fingerprint": "c784e196b8697a43c8f024434ce6122f11dd69ca18794d5b5f423b410954c920",
+        "strategy": "Enumerate target-guard argv cases.",
+        "summary": "The repair lists no guard, binding, exact guards, mismatch, mutual exclusion, and binding-conflict cases.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "8fda785584751403f5c650c2f26198f5dc6a404b1f6c5701650b9c202fc2df40"
+        ]
+      },
+      {
+        "fingerprint": "540beaa5b0cab8e64020ccc06f8e0b11ca7e36dbbede60c30d12092ce7c8f579",
+        "strategy": "Attach each guard case to its rejection boundary.",
+        "summary": "Each target case now has parser or ACTIVE_FLOW_MISMATCH behavior, mutation ordering, and exit-code evidence.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "8fda785584751403f5c650c2f26198f5dc6a404b1f6c5701650b9c202fc2df40"
+        ]
+      },
+      {
+        "fingerprint": "2484b4a2e3aca868e9899d47dcae3aca5aca7b35edb55eac8f540c439641b5d7",
+        "strategy": "Specify both runtime option argv forms.",
+        "summary": "The separated and equals forms of --agent-work-dir, invalid values, precedence, logs, cleanup, and outcomes are explicit.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "8fda785584751403f5c650c2f26198f5dc6a404b1f6c5701650b9c202fc2df40"
+        ]
+      },
+      {
+        "fingerprint": "49e52c632a1c44d15a46d26bae7d10a88cda4e29d36832bf90e6733c9bf14588",
+        "strategy": "Identify the shared help consumer and preserved semantics.",
+        "summary": "The metadata-only shared renderer, its public consumers, and the separate query bootstrap contract are named with verification behavior.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "8fda785584751403f5c650c2f26198f5dc6a404b1f6c5701650b9c202fc2df40"
+        ]
+      },
+      {
+        "fingerprint": "90f41538730db2e62069c303166648c2c149bfc0cceb68a5c1122930748914a7",
+        "strategy": "Create an owner-by-owner migration parity map.",
+        "summary": "Every retained parser, help, guard, runtime, query, dispatcher, artifact, and side-effect surface is assigned ownership and migration boundaries.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "8fda785584751403f5c650c2f26198f5dc6a404b1f6c5701650b9c202fc2df40"
+        ]
+      },
+      {
+        "fingerprint": "09b4334df1b7c590ba98c42060b7fba8d250acc4799a5cfa58fbcc411908c11a",
+        "strategy": "Map retained surfaces to behavior-level acceptance evidence.",
+        "summary": "The repair connects each public surface to tests, expected output, exit code, state, logs, and mutation evidence rather than metadata snapshots alone.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "8fda785584751403f5c650c2f26198f5dc6a404b1f6c5701650b9c202fc2df40"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "8fda785584751403f5c650c2f26198f5dc6a404b1f6c5701650b9c202fc2df40"
+      ]
+    }
+  }
+}

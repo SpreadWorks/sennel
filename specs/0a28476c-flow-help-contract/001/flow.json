@@ -1,0 +1,980 @@
+{
+  "schemaRevision": 4,
+  "flowId": "flow-0a28476c-026a-4548-9b92-b9c2fa50c71c",
+  "flowVersionId": "flow-v1-0a28476c-026a-4548-9b92-b9c2fa50c71c",
+  "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+  "specId": "0a28476c-flow-help-contract",
+  "issue": 521,
+  "request": "Goal: Make Flow help reliably reflect each routed command’s real argument contract.\nScope: Re-enumerate the current FLOW_COMMANDS registry; preserve flow query as its separately owned parser exception; extend the existing CommandDefinition and FLOW_COMMANDS with explicit typed option metadata; derive group option intersections; and share subcommand row rendering across all three public entry paths. Inventory each leaf input against its existing validator and add contract, integration, and focused E2E coverage for parser/help agreement, ordering, formatting, query behavior, and unchanged command semantics.\nOut of scope: Recovering the stopped prior flow, changing command execution or target-guard semantics, changing runtime directory behavior, adding blanket admission validation, or inventing tighter input limits.\nDescription: Start from a fresh Draft and Spec using the 2026-09-24 restart contract. Re-enumerate commands from source instead of relying on historical counts, preserve existing prose and localization, and do not copy unresolved revision 008 as an approved specification.",
+  "version": 1,
+  "lifecycle": {
+    "state": "active"
+  },
+  "execution": {
+    "mode": "worktree",
+    "baseBranch": "main",
+    "featureBranch": "feature/0a28476c-flow-help-contract"
+  },
+  "policy": {
+    "autoApprove": false,
+    "nonblocking": null
+  },
+  "kind": "flow",
+  "id": "flow",
+  "key": "flow",
+  "status": "in_progress",
+  "result": null,
+  "attemptSequence": 0,
+  "steps": [
+    {
+      "kind": "step",
+      "id": "plan",
+      "key": "plan",
+      "status": "in_progress",
+      "result": null,
+      "attemptSequence": 0,
+      "steps": [
+        {
+          "kind": "step",
+          "id": "branch",
+          "key": "plan.branch",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for branch",
+            "confirmedAt": "2026-10-02T13:44:23.671Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "prepare-spec",
+          "key": "plan.prepare-spec",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for prepare-spec",
+            "confirmedAt": "2026-10-02T13:44:23.853Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft",
+          "key": "plan.draft",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "Worker handoff confirmed for draft.",
+            "confirmedAt": "2026-10-02T13:50:19.793Z",
+            "artifactRefs": [
+              {
+                "kind": "worker-handoff",
+                "id": "dd080aa759999f199aba2d2066f967be37ce7968b95358c4eb0be5ba9873aec1"
+              },
+              {
+                "kind": "worker-handoff-request",
+                "id": "4ac2a5700a5472ed8df55b262a560c999f5478f8b7d52166cb85ca80cb0bb977"
+              }
+            ],
+            "stepResult": {
+              "kind": "draft-created",
+              "type": "completed"
+            },
+            "draftSettlementReceipt": {
+              "id": "1223e6290421dfe249de6ddea7a36c0230c23ac3b1b50e417b6031335a56a89a",
+              "binding": {
+                "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+                "specId": "0a28476c-flow-help-contract",
+                "stepId": "draft",
+                "attemptId": "attempt-draft-8d8ec283-f87b-4ef7-9839-029dc3702a84",
+                "attemptSequence": 1
+              },
+              "resultKind": "draft-created",
+              "resultType": "completed",
+              "resultDigest": "e18bac3ddc7ff21414e6504ccdb432a0121d8677a0868eab80aa8e14ab607b43",
+              "settlementKind": "target-connection",
+              "targetStepId": "draft-questions-review",
+              "effects": {
+                "skipStepIds": [],
+                "resetStepIds": []
+              },
+              "connector": {
+                "name": "DraftReviewConnector"
+              },
+              "publicationDigest": "85639519deb478c96a6664bdf714a62185ca0f3794e15821c2eb597b102afd8d",
+              "executionLifecycle": null,
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-questions-review",
+          "key": "plan.draft-questions-review",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for draft-questions-review",
+            "confirmedAt": "2026-10-02T13:50:38.454Z",
+            "artifactRefs": [],
+            "stepResult": {
+              "kind": "draft-questions-review-passed",
+              "type": "completed"
+            },
+            "draftSettlementReceipt": {
+              "id": "e23f2946416a21ffe6226c6779e6f5870ac90c6eb854012e6a2269ddba3d1221",
+              "binding": {
+                "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+                "specId": "0a28476c-flow-help-contract",
+                "stepId": "draft-questions-review",
+                "attemptId": "attempt-draft-questions-review-f9ab66dc-b261-4a64-91c4-6665565fba6c",
+                "attemptSequence": 1
+              },
+              "resultKind": "draft-questions-review-passed",
+              "resultType": "completed",
+              "resultDigest": "cf856d08d2e59893e662fb9a22cc22e815165bff0b21c113da02dc994df84908",
+              "settlementKind": "target-connection",
+              "targetStepId": "draft-refine",
+              "effects": {
+                "skipStepIds": [
+                  "draft-questions-triage",
+                  "draft-questions-repair"
+                ],
+                "resetStepIds": []
+              },
+              "connector": {
+                "name": "DraftRefineConnector"
+              },
+              "publicationDigest": "371eeda76073720750d8848450b47f3c61f99e2d4a6df063d2c7c5bed22870ee",
+              "executionLifecycle": {
+                "phase": "terminal",
+                "binding": {
+                  "kind": "review",
+                  "executionGeneration": 0,
+                  "manifestDigest": "e3f2b562718b1b2349d97301ff142540c28aedf0f4c681300d05ed9d3791ee5e",
+                  "inputDigest": "6747975869c2478839cd7d6ac396b2c6930fba25e75c3b2ce12baa2896fa1e2f",
+                  "target": {
+                    "treeSha": "4839413e267c0980d4716aaff44b1a8a15ba979f",
+                    "targetStateDigest": "46bea0e2ecad1571e1114b2101b4c986d2ac9b6ea0ff82da97ca1cd87bc813db"
+                  }
+                },
+                "claim": {
+                  "kind": "review"
+                }
+              },
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-questions-triage",
+          "key": "plan.draft-questions-triage",
+          "status": "skipped",
+          "result": {
+            "outcome": "skipped",
+            "summary": "Draft route from draft-questions-review bypassed draft-questions-triage",
+            "confirmedAt": "2026-10-02T13:50:38.454Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-questions-repair",
+          "key": "plan.draft-questions-repair",
+          "status": "skipped",
+          "result": {
+            "outcome": "skipped",
+            "summary": "Draft route from draft-questions-review bypassed draft-questions-repair",
+            "confirmedAt": "2026-10-02T13:50:38.454Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-refine",
+          "key": "plan.draft-refine",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for draft-refine",
+            "confirmedAt": "2026-10-02T13:50:46.745Z",
+            "artifactRefs": [],
+            "stepResult": {
+              "kind": "draft-refine-completed",
+              "type": "completed"
+            },
+            "draftSettlementReceipt": {
+              "id": "8148b7986314cf93d57b42462a638dbdc2c9c92707b6e837637579cfe071c56f",
+              "binding": {
+                "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+                "specId": "0a28476c-flow-help-contract",
+                "stepId": "draft-refine",
+                "attemptId": "attempt-draft-refine-c8803b04-419d-416f-b9d1-0b581ca219f0",
+                "attemptSequence": 1
+              },
+              "resultKind": "draft-refine-completed",
+              "resultType": "completed",
+              "resultDigest": "6c62801ab762b9c6405aed836c7a917a3f8c7b62acf8617208e5089812c1378d",
+              "settlementKind": "target-connection",
+              "targetStepId": "draft-coverage-review",
+              "effects": {
+                "skipStepIds": [
+                  "draft-gate-repair"
+                ],
+                "resetStepIds": []
+              },
+              "connector": {
+                "name": "DraftReviewConnector"
+              },
+              "publicationDigest": "432100699005035c4ce541d79fb4301f0f95e488d2149fa719623c5613a2d342",
+              "executionLifecycle": null,
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-gate-repair",
+          "key": "plan.draft-gate-repair",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "Worker handoff confirmed for draft-gate-repair.",
+            "confirmedAt": "2026-10-02T14:07:10.593Z",
+            "artifactRefs": [
+              {
+                "kind": "worker-handoff",
+                "id": "8cacc569c30ab7f34cb82d7340d55db944dccdb0be8ae7f79868f1a6a280af1f"
+              },
+              {
+                "kind": "worker-handoff-request",
+                "id": "1d2eed836ddf14fab3fab47d34d3f81f2f02a129ffa57529fea54dcbe86d77ff"
+              }
+            ],
+            "stepResult": {
+              "kind": "draft-gate-repair-applied",
+              "type": "completed"
+            },
+            "draftSettlementReceipt": {
+              "id": "22d46d2c27de324c06a1e296f13cede4b51b8a995b494747b8f51cc506e95b54",
+              "binding": {
+                "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+                "specId": "0a28476c-flow-help-contract",
+                "stepId": "draft-gate-repair",
+                "attemptId": "attempt-draft-gate-repair-40c5c17c-fcc4-484d-9e36-cb6ecda1bb58",
+                "attemptSequence": 4
+              },
+              "resultKind": "draft-gate-repair-applied",
+              "resultType": "completed",
+              "resultDigest": "2d068266d0805c8f4d2ab17e32b5ca8ea3c22375c32b301d1069e9e19bd337b4",
+              "settlementKind": "target-connection",
+              "targetStepId": "draft-coverage-review",
+              "effects": {
+                "skipStepIds": [],
+                "resetStepIds": []
+              },
+              "connector": {
+                "name": "DraftReviewConnector"
+              },
+              "publicationDigest": "d5d02e4b3099d1c55a78e09e59a0d3481669166ed8305c2a6e2f41f1700f8f39",
+              "executionLifecycle": {
+                "phase": "terminal",
+                "binding": {
+                  "kind": "conditional-worker",
+                  "executionGeneration": 0,
+                  "inputDigest": "2d637841e5c6847ae504fac1b34a3bf462a8ae70e280b8c56a1232a418c29eda",
+                  "inputRevision": "e2a7403bb39b74ac0366329089ee805ce7c3826b6c4e8a4c54f617d4754428ad",
+                  "contentDigest": "c7d04989bf85f4cfa7412feaa910bff4698fcaae29a0e62b2e99f03a890ed014"
+                },
+                "claim": {
+                  "kind": "worker",
+                  "dispatchInvocationId": "396b54bf-519d-47f7-a58a-5855ffefce32",
+                  "generatedAt": "2026-10-02T14:04:11.651Z",
+                  "actionDigest": "3dd7d6e651540d7844947a9bb06cc10b0f7d4f0b6c22824f9bd8160012941eb9",
+                  "requestDigest": "1d2eed836ddf14fab3fab47d34d3f81f2f02a129ffa57529fea54dcbe86d77ff"
+                }
+              },
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 4,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-coverage-review",
+          "key": "plan.draft-coverage-review",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "Draft coverage repair completion confirmed the canonical draft.",
+            "confirmedAt": "2026-10-02T14:07:40.321Z",
+            "artifactRefs": [
+              {
+                "kind": "draft-completion-connector",
+                "id": "19f3e9da22597626747f6c17360c1c40c69d45887698d04bb65ad83cf8af79b5"
+              }
+            ],
+            "stepResult": {
+              "kind": "draft-coverage-review-passed",
+              "type": "completed"
+            },
+            "draftSettlementReceipt": {
+              "id": "399b68d93c0bcd17e75b7b063f82470f3dee008ac17bd1034cc270437d70ef67",
+              "binding": {
+                "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+                "specId": "0a28476c-flow-help-contract",
+                "stepId": "draft-coverage-review",
+                "attemptId": "attempt-draft-coverage-review-bd70da3a-9334-440e-bfca-3ccc5ed63548",
+                "attemptSequence": 4
+              },
+              "resultKind": "draft-coverage-review-passed",
+              "resultType": "completed",
+              "resultDigest": "9627a99fa94ebb91b19d54194df3db55e77bbe59a2a1575c8ff3f4c1415068a8",
+              "settlementKind": "target-connection",
+              "targetStepId": "draft-gate",
+              "effects": {
+                "skipStepIds": [
+                  "draft-coverage-triage",
+                  "draft-coverage-repair"
+                ],
+                "resetStepIds": []
+              },
+              "connector": {
+                "name": "DraftCompletionConnector"
+              },
+              "publicationDigest": "8364e88e2cfd632e4c06572f176456cb716a8ff3a1315a023e40f3a50d29c38c",
+              "executionLifecycle": {
+                "phase": "terminal",
+                "binding": {
+                  "kind": "review",
+                  "executionGeneration": 0,
+                  "manifestDigest": "c5e5564782fbb62f841b5597dcdec18dcb81442bfe19a48467321f520cccda74",
+                  "inputDigest": "efeea58dfffebf0a04260b8fec0044f02d70df17d44745b8d9555e51b4c2fdb0",
+                  "target": {
+                    "treeSha": "4839413e267c0980d4716aaff44b1a8a15ba979f",
+                    "targetStateDigest": "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+                  }
+                },
+                "claim": {
+                  "kind": "review"
+                }
+              },
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 4,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-coverage-triage",
+          "key": "plan.draft-coverage-triage",
+          "status": "skipped",
+          "result": {
+            "outcome": "skipped",
+            "summary": "Draft route from draft-coverage-review bypassed draft-coverage-triage",
+            "confirmedAt": "2026-10-02T14:07:40.321Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 4,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-coverage-repair",
+          "key": "plan.draft-coverage-repair",
+          "status": "skipped",
+          "result": {
+            "outcome": "skipped",
+            "summary": "Draft route from draft-coverage-review bypassed draft-coverage-repair",
+            "confirmedAt": "2026-10-02T14:07:40.321Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 4,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-gate",
+          "key": "plan.draft-gate",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for draft-gate",
+            "confirmedAt": "2026-10-02T14:09:10.941Z",
+            "artifactRefs": [],
+            "stepResult": {
+              "kind": "draft-gate-passed",
+              "type": "completed"
+            },
+            "draftSettlementReceipt": {
+              "id": "13ca0acea0c8c6f28c084b179e480bad4c004868a522358a695553e480403be9",
+              "binding": {
+                "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+                "specId": "0a28476c-flow-help-contract",
+                "stepId": "draft-gate",
+                "attemptId": "attempt-draft-gate-62bbf70a-01e2-4bcf-ae76-3e4945c3b132",
+                "attemptSequence": 4
+              },
+              "resultKind": "draft-gate-passed",
+              "resultType": "completed",
+              "resultDigest": "d18784cb81ebda162ebc9506cd13640abaa38ebdb2109faaf77ba6e431114534",
+              "settlementKind": "target-connection",
+              "targetStepId": "spec",
+              "effects": {
+                "skipStepIds": [],
+                "resetStepIds": []
+              },
+              "connector": {
+                "name": "DraftSpecConnector"
+              },
+              "publicationDigest": "9d30a7c1c10ad5d94f25c0890f45cdf2f9d59c58ace34236aa1c13562d0cc56c",
+              "executionLifecycle": null,
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 4,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec",
+          "key": "plan.spec",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "Worker handoff confirmed for spec.",
+            "confirmedAt": "2026-10-02T14:15:23.721Z",
+            "artifactRefs": [
+              {
+                "kind": "worker-handoff",
+                "id": "7764ac37d00b81c80f4405f8dfb80810baffadd8a34b8c274587247d00346cf8"
+              },
+              {
+                "kind": "worker-handoff-request",
+                "id": "be42255aa6407ca70dfc9ce97ea24e15bc9c1a19278b44f6beaca918dd20cfe3"
+              }
+            ],
+            "stepResult": {
+              "kind": "spec-created",
+              "type": "completed"
+            },
+            "draftSettlementReceipt": {
+              "id": "473303a75b79b4471008abfe8ba734f00de0a2c0d042c96e0e6ab527023bb491",
+              "binding": {
+                "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+                "specId": "0a28476c-flow-help-contract",
+                "stepId": "spec",
+                "attemptId": "attempt-spec-40f28b9f-0691-49ad-9cbb-1f3b1ea787f6",
+                "attemptSequence": 1
+              },
+              "resultKind": "spec-created",
+              "resultType": "completed",
+              "resultDigest": "1861407872bc4e057bca860aea94e1de59827217a28b7f21f345dc5b526de6c5",
+              "settlementKind": "target-connection",
+              "targetStepId": "spec-review",
+              "effects": {
+                "skipStepIds": [],
+                "resetStepIds": []
+              },
+              "connector": {
+                "name": "SpecReviewConnector"
+              },
+              "publicationDigest": "e4be426c840acf020ad589587531c03f08013b6e8203e3be92fec6a2c9d04be5",
+              "executionLifecycle": null,
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec-review",
+          "key": "plan.spec-review",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for spec-review",
+            "confirmedAt": "2026-10-02T14:42:32.496Z",
+            "artifactRefs": [],
+            "stepResult": {
+              "kind": "spec-review-rejected",
+              "type": "completed"
+            },
+            "draftSettlementReceipt": {
+              "id": "35282ef74fefa98b130f5271b5b8e4cb272732c8a602e4e04105c39659cf8ae5",
+              "binding": {
+                "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+                "specId": "0a28476c-flow-help-contract",
+                "stepId": "spec-review",
+                "attemptId": "attempt-spec-review-3e14066c-3bd5-4c98-9005-7fd625eb8564",
+                "attemptSequence": 2
+              },
+              "resultKind": "spec-review-rejected",
+              "resultType": "completed",
+              "resultDigest": "5c60b49724dc4be2b780d2b47c53a54c53d99ff637a4780b1c976cf2e1664912",
+              "settlementKind": "target-connection",
+              "targetStepId": "spec-triage",
+              "effects": {
+                "skipStepIds": [],
+                "resetStepIds": []
+              },
+              "connector": {
+                "name": "SpecTriageConnector"
+              },
+              "publicationDigest": "432100699005035c4ce541d79fb4301f0f95e488d2149fa719623c5613a2d342",
+              "executionLifecycle": {
+                "phase": "terminal",
+                "binding": {
+                  "kind": "review",
+                  "executionGeneration": 0,
+                  "manifestDigest": "53c73501a2a9a52bd8cdc0edef651afc24ecf77cc76b59b4934001471ac348f2",
+                  "inputDigest": "3391c844b6d4bb9ddffd7753ce85c87efa4860b51c475dd67e945166b0a3f2bf",
+                  "target": {
+                    "treeSha": "4839413e267c0980d4716aaff44b1a8a15ba979f",
+                    "targetStateDigest": "b509dc2e021f0d6be5dc76cd5f01b799193fa334948ee61fcc101e09a41c4858"
+                  }
+                },
+                "claim": {
+                  "kind": "review",
+                  "request": {
+                    "skipConfirm": false
+                  }
+                }
+              },
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 2,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec-triage",
+          "key": "plan.spec-triage",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "Worker handoff confirmed for spec-triage.",
+            "confirmedAt": "2026-10-02T14:46:15.908Z",
+            "artifactRefs": [
+              {
+                "kind": "worker-handoff",
+                "id": "6dc5b1746c3b48b8d09f250e8e8319d9c31e431726b3bf3fbf31defb4321da57"
+              },
+              {
+                "kind": "worker-handoff-request",
+                "id": "0c419337406c048b9fcc7bafd8b094835b804f4bd9e54ad4f727c8cf86109746"
+              }
+            ],
+            "stepResult": {
+              "kind": "spec-triage-completed",
+              "type": "completed"
+            },
+            "draftSettlementReceipt": {
+              "id": "27e2099388041d42ca79267e00e71f1b8efbae15a469d3b2169d14dabe0d4c44",
+              "binding": {
+                "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+                "specId": "0a28476c-flow-help-contract",
+                "stepId": "spec-triage",
+                "attemptId": "attempt-spec-triage-48115de3-6f74-4c74-a5db-cfd6d7621c08",
+                "attemptSequence": 2
+              },
+              "resultKind": "spec-triage-completed",
+              "resultType": "completed",
+              "resultDigest": "757ed7e964e42af4c3b2fc8fc4159d97d40ea485cfda78788cda2c61f8069cb8",
+              "settlementKind": "target-connection",
+              "targetStepId": "spec-repair",
+              "effects": {
+                "skipStepIds": [],
+                "resetStepIds": []
+              },
+              "connector": {
+                "name": "SpecRepairConnector"
+              },
+              "publicationDigest": "18c3ee96604a954ed7734dccf5b31fcd0fdbf89adf21a30f7ee391b3f8e98c1e",
+              "executionLifecycle": null,
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 2,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec-repair",
+          "key": "plan.spec-repair",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "Worker handoff confirmed for spec-repair.",
+            "confirmedAt": "2026-10-02T14:49:26.868Z",
+            "artifactRefs": [
+              {
+                "kind": "worker-handoff",
+                "id": "67276ef8cf044b98cbc4ee2125e8116d28fc549499ffa73ec1be862841fc37ff"
+              },
+              {
+                "kind": "worker-handoff-request",
+                "id": "0bd86e13f8bc5c13e71871e6565d32802c29339eb0d2c24a2b28d9364c8901e0"
+              }
+            ],
+            "stepResult": {
+              "kind": "spec-repair-changed",
+              "type": "completed"
+            },
+            "draftSettlementReceipt": {
+              "id": "098b7ef62a8cecac672b2300057d536993913cb8118c8d012ef1deae6268f4ef",
+              "binding": {
+                "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+                "specId": "0a28476c-flow-help-contract",
+                "stepId": "spec-repair",
+                "attemptId": "attempt-spec-repair-0c06f649-19de-4904-8c07-8a48e18c282c",
+                "attemptSequence": 2
+              },
+              "resultKind": "spec-repair-changed",
+              "resultType": "completed",
+              "resultDigest": "b75bb5dab5705e05064176d4eca476626a56c67086805518c21ea3d23f8d1c56",
+              "settlementKind": "target-connection",
+              "targetStepId": "spec-gate",
+              "effects": {
+                "skipStepIds": [],
+                "resetStepIds": []
+              },
+              "connector": {
+                "name": "SpecGateConnector"
+              },
+              "publicationDigest": "39b8f8b2c987e064207d246d1f73227a5545b19c9cf8205bd1d38f305bbab715",
+              "executionLifecycle": null,
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 2,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec-gate",
+          "key": "plan.spec-gate",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for spec-gate",
+            "confirmedAt": "2026-10-02T14:52:26.454Z",
+            "artifactRefs": [],
+            "stepResult": {
+              "kind": "spec-gate-repair-required",
+              "type": "loop-required"
+            },
+            "draftSettlementReceipt": {
+              "id": "80958adafe8257874fe65edd899516f8d27956b3444192db784d447d53e16971",
+              "binding": {
+                "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+                "specId": "0a28476c-flow-help-contract",
+                "stepId": "spec-gate",
+                "attemptId": "attempt-spec-gate-14cafddc-81a4-4fd9-a386-c8706bbcbbc9",
+                "attemptSequence": 2
+              },
+              "resultKind": "spec-gate-repair-required",
+              "resultType": "loop-required",
+              "resultDigest": "1e672cf5fc1ae10a0f3a70ac860cce00ac56bf04003e44128db170fb25762871",
+              "settlementKind": "target-connection",
+              "targetStepId": "spec-gate-repair",
+              "effects": {
+                "skipStepIds": [],
+                "resetStepIds": [
+                  "spec-gate-repair",
+                  "spec-gate"
+                ]
+              },
+              "connector": {
+                "name": "SpecGateRepairConnector"
+              },
+              "publicationDigest": "e5b7effb4cf980a04fcc14cec3a4982f67ff4b05cd10552ddb2396034c40634c",
+              "executionLifecycle": null,
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 2,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec-gate-repair",
+          "key": "plan.spec-gate-repair",
+          "status": "in_progress",
+          "result": null,
+          "attemptSequence": 2,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "approval",
+          "key": "plan.approval",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-generate",
+          "key": "plan.test",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-review",
+          "key": "plan.test-review",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-repair",
+          "key": "plan.test-repair",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-gate",
+          "key": "plan.test-gate",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        }
+      ]
+    },
+    {
+      "kind": "step",
+      "id": "impl",
+      "key": "impl",
+      "status": "invalidated",
+      "result": null,
+      "attemptSequence": 0,
+      "steps": [
+        {
+          "kind": "step",
+          "id": "implement",
+          "key": "impl.implement",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-execute",
+          "key": "impl.test-execute",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-result-review",
+          "key": "impl.test-result-review",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "impl-review",
+          "key": "impl.impl-review",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "impl-triage",
+          "key": "impl.impl-triage",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "impl-repair",
+          "key": "impl.impl-repair",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "impl-gate",
+          "key": "impl.impl-gate",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "retro",
+          "key": "impl.retro",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "acceptance-review",
+          "key": "impl.acceptance-review",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "acceptance-decision",
+          "key": "impl.acceptance-decision",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "final-regression",
+          "key": "impl.final-regression",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "report",
+          "key": "impl.report",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "finalize",
+          "key": "finalize",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": [
+            {
+              "kind": "step",
+              "id": "finalize-commit",
+              "key": "impl.finalize-commit",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "finalize-merge",
+              "key": "impl.finalize-merge",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "finalize-sync",
+              "key": "impl.finalize-sync",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "finalize-cleanup",
+              "key": "impl.finalize-cleanup",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "current": "spec-gate-repair",
+  "attempt": {
+    "id": "attempt-spec-gate-repair-450ba103-e787-45b4-9e88-9db09a6589f6",
+    "nodeId": "spec-gate-repair",
+    "sequence": 2,
+    "startedAt": "2026-10-02T14:52:26.717Z",
+    "consumption": {
+      "semantic": 0,
+      "tooling": 0
+    },
+    "failure": {
+      "category": "step-result-error",
+      "code": "STEP_RESULT_ERROR",
+      "message": "Gate repair left a blocking observation without an accepted change",
+      "retryable": false,
+      "retryKind": null
+    },
+    "blocker": null,
+    "incomplete": [],
+    "operationClaims": [
+      {
+        "operation": "resolve-command-context",
+        "resources": [
+          "spec",
+          "guardrail"
+        ]
+      }
+    ]
+  },
+  "confirmationOrder": 117,
+  "artifacts": [],
+  "outbox": [],
+  "context": {
+    "gitSnapshot": {
+      "available": true,
+      "commit": "bd5b30542f35c3cadccd7d754246b09cf176562d"
+    }
+  },
+  "history": null,
+  "migration": null
+}

@@ -1,0 +1,246 @@
+{
+  "version": 2,
+  "phase": "draft-gate-repair",
+  "sourceAuthority": {
+    "kind": "plan-gate-repair",
+    "repairId": "plan-gate-repair-f02a02728ed1deee16a171fe39393c23f80b99d2d2461367d484a1c6020f323c",
+    "recordFingerprint": "f02a02728ed1deee16a171fe39393c23f80b99d2d2461367d484a1c6020f323c"
+  },
+  "baseRevision": "sha256:e2a7403bb39b74ac0366329089ee805ce7c3826b6c4e8a4c54f617d4754428ad",
+  "acceptedOperations": [
+    {
+      "kind": "replace-value",
+      "path": "goal",
+      "replacement": "この Issue は、Flow CLI の parser、leaf help、group help、共通 help 入口の公開契約を同じ registry 定義から検証可能にし、既存の実行・guard・runtime 挙動を変えずに利用者が受理可能な選択肢を完全に確認できる状態に must 到達させる。達成条件は、開始時点の FLOW_COMMANDS から query を除く全 routed leaf を再列挙し、各 leaf の parser が受理する positionals、rest、flags、options、optionalOptions、implicit -h, --help の完全な契約を対応する leaf help の Usage/Options row と照合して漏れ・重複・value kind/placeholder/alias の不一致がないこと、各 group の Options を全 direct child leaf の完全な契約の共通部分から導出すること、三つの公開 help 入口で同じ option 順・名前昇順の subcommand row・2 個以上の ASCII 空白を観測できることとする。さらに、query の独立 parser、既存 validator、target guard、runtime directory、拒否順序、exit code、既存 side effect は保持し、実 dispatcher/CLI の help・parser failure・target rejection・valid execution・command failure と query の個別回帰で、handler 非実行、mutation、runtime log、canonical artifact、stdout/stderr、終了値（valid help/success は 0、実際の失敗と no-leaf group help は 1）を確認可能にする。",
+      "reason": "目標に完全性の判定対象、照合単位、公開経路、保持対象、実行時の観測結果と終了値を明記し、独立したレビューアが同じ達成判定をできるようにする。",
+      "observedDigest": "75ef855f9571c9be88906fcfd3a247e8437dbc86c04cc8ce6be4d3535e0cfeef"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.decisionPoints[1]",
+      "replacement": "must は、leaf help の command-specific prose、example、localization を既存出力の期待値として保持する。各 shared routed leaf と利用可能な locale について、実 dispatcher/CLI で移行前に取得した canonical Options section 以外の prose、example、localized summary と移行後の同じ selector の出力を比較し、各文字列と example 行が一致し、Usage/Options の構造化行だけが registry の parser metadata から投影されることを受入条件にする。Options section は canonical option ごとに一行だけ（implicit -h, --help を含む）とし、required/optional value の placeholder、flag、alias、description を parser 定義と比較する。翻訳済み prose を構造化契約の代替にせず、command handler と execution hook を help 中に呼び出さないことも実行結果で確認する。",
+      "reason": "保持すべき非構造化 help の比較対象と、変更を許す構造化 Usage/Options 投影の境界を実出力の期待値として定義する。",
+      "observedDigest": "6d447926b6936ca8879da30b4bb42c33629bb9f694b0f9ebbcbf9fd887b39952"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.deferredToSpec[0].relevance",
+      "replacement": "Priority: must。Spec は開始時点の registry から query を除く全 routed leaf を再列挙し、各 leaf を一行の public input inventory として成果物にする。各行は positionals/rest/flags/options/optionalOptions/implicit -h, --help の順序、実際の arity/cardinality、alias、required/optional value kind と placeholder、空値・format・allowed domain、既存の size/retry/context limit（明示的な上限がなければその事実）、path の file/dir・存在・絶対/相対・解決 root・正規化/symlink 条件、既存 validator owner（parseEntryInput、FlowTargetExpectation、buildFlowCommandHookContext、domain class、registry、command validator）を実値で記録する。各行は対応する parser 入口、leaf help Options row、unknown/missing/extra/empty の既存拒否ケースと valid case を参照し、registry の現集合との照合で漏れ・重複・推測値を拒否する。help 統合はこの既存入力契約を変更せず、新しい blanket admission validator や制限を追加しない。",
+      "reason": "inventory を必須成果物として優先付けし、各入力値、既存所有者、拒否・成功確認との対応を明示して、help 整合化が入力契約を拡張しないことを判定可能にする。",
+      "observedDigest": "d46f8b42cbc0cc1868aeda5489d1e40b3eede2342076d230f85696b76f673b3e"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.deferredToSpec[1].relevance",
+      "replacement": "Priority: must。Spec はテスト開始時に registry から routed leaf と group の集合を再列挙し、query を shared projection と exhaustive routed matrix から除外する。各 group は全 direct child leaf の完全な option contract（canonical name、alias、flag/required-value/optional-value kind、placeholder、description）の intersection から導出し、selected example や nested descendant を使わない。三つの public help path で option order と subcommand row を同一 model から比較し、row は locale-independent な名前昇順、name と summary の間に ASCII 空白 2 個以上、短名・13/14/15 文字境界・最長登録名・synthetic 64/65 文字名を含む。件数を固定せず、合成名は renderer/registry integration test 限定で production command や新しい長さ制限を導入しない。",
+      "reason": "対象集合、query 除外、group intersection、表示順・空白境界を must の検証行列として固定し、開始時の registry 変更にも漏れなく追随できるようにする。",
+      "observedDigest": "58ec3509c116111993fda070883ee9f22cdc83778bd85f72ed5569e8398d2d50"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.deferredToSpec[2].relevance",
+      "replacement": "Priority: must。Spec は registry の開始時点の全 routed leaf と三つの help 入口を照合し、各 retained public surface について current owner、保持する入力・実行・guard・runtime・query・exit code・side effect、new canonical owner、削除または非権威化する重複、確認する test surface を一対一の migration parity 表にする。対象行には、CommandDefinition/FLOW_COMMANDS の positionals/rest/flags/options/optionalOptions/implicit help と leaf Usage/Options、flowDefinition の direct-child projection と shared renderer、src/flow.js の leaf 省略、src/sennel.js の pre-scan、src/help.js の共通 consumer、bootstrapFlowQueryCli/query modules、FlowTargetExpectation/buildFlowCommandHookContext、resolveWorkDir/buildPaths/container、dispatcher の rejection envelope/exit code を含める。parser/help の二重 authorityだけを registry の明示 metadata と shared renderer に移し、query parser、command semantics、target guard evaluation、runtime directory policy、generated artifact と既存 pre/post/onError/finally・runtime log・canonical artifact・command-owned mutation の所有と観測を変更しない。各表行を実 dispatcher/CLI test に割り当て、registry の現集合との照合で漏れ、重複、未定義の削除判断、推測制約を拒否する。",
+      "reason": "migration parity を必須成果物として、各 retained surface の所有権、保持挙動、非権威化範囲、副作用、実行テストを一対一に対応付ける。",
+      "observedDigest": "ebcde2ba9d476056b7dda178486acf149fd9ef70976ae16e68e9d5fa1ac872aa"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.deferredToSpec[3].relevance",
+      "replacement": "Priority: must。Spec は parser、help、guard、runtime、query、exit code、拒否順序を実 dispatcher/CLI で接続する受入 matrix を必須成果物にする。matrix は registry から query を除く全 routed leaf を再列挙し、各 leaf の parser/help Options 完全一致、implicit -h, --help、実 arity、required/optional value、unknown/missing/extra/empty の既存拒否、valid execution を記録する。group と leaf なしの flow <group>、sennel flow <group> --help、sennel help flow <group> は同じ renderer の名前順・option 順・2 個以上の ASCII 空白・13/14/15 文字境界・最長登録名・synthetic 64/65 文字名・handler/execution hook 非実行を比較する。query は bootstrapFlowQueryCli の stdin/request-file/help/error を別回帰にする。guard は既存 FlowTargetExpectation/buildFlowCommandHookContext で guard なし、binding 単独、明示 guard 一致/不一致、issue/no-issue 同時指定、binding と明示 guard の競合を実 argv で検証し、拒否時の mutation 非実行と exit 1、valid case の exit 0 を記録する。runtime は --agent-work-dir <path> と --agent-work-dir=<path>、欠落/空値/option-like value、override > config.agent.workDir > default、config.logs.dir > <agentWorkDir>/logs、configured logs の有無、finalize-cleanup の durable root を既存 resolver/container で確認する。help、parser failure、target rejection、valid execution、command failure、no-leaf help の stdout/stderr、exit code、runtime log、canonical artifact、command-owned mutation、既存 pre/post/onError/finally 順序を実測し、新しい admission validator、path/size/retry 制限、拒否理由、query 共通化を導入しない。",
+      "reason": "各 retained surface の入力、経路、観測結果、保持する既存 owner を必須 matrix に結び付け、metadata snapshot だけで達成を判定しないようにする。",
+      "observedDigest": "8caf9d481618ea2dda7f39f99f76ffec7283e2cf0e0cb73f42ced8174352fae5"
+    },
+    {
+      "kind": "replace-value",
+      "path": "impactOnExisting[1]",
+      "replacement": "must preserve 既存の leaf help の command-specific prose、example、localization を変更しない。各 shared routed leaf と各利用可能な locale について、移行前の実 CLI 出力から Usage/Options の canonical row を除いた prose、example 行、localized summary を期待値として固定し、移行後の同じ selector の出力がそれぞれ同じ文字列・行順・locale であることを behavior-level test で確認する。変更対象は parser registry から投影する Usage/Options の構造化行だけであり、canonical option は一度ずつ（implicit -h, --help を含む）表示し、required/optional value の placeholder、alias、description を parser metadata と一致させる。",
+      "reason": "非構造化の既存説明を実出力で比較する保持条件を定義し、parser/help 統合で変更可能な範囲を canonical Usage/Options rows に限定する。",
+      "observedDigest": "bf4855a4c3aa0ad40d69dd2099a1408c8ce20e6d79451ccc2796b48650accf2e"
+    }
+  ],
+  "discardedOperations": [],
+  "appliedFindingKeys": [],
+  "operationDigest": "f6bb1f5684bb337dc0075587a6a94606d2e1a0b849dbfd964f62d746d2b5db3b",
+  "audit": {
+    "envelopeErrors": [],
+    "baseRevisionMatches": true,
+    "missingRequiredTargets": [],
+    "lifecycleIssues": [],
+    "duplicatePaths": [],
+    "overlappingPaths": [],
+    "outputByteLength": 22638
+  },
+  "sourceIssueLogId": "draft-gate-result-1ab187987b3fb393dd1d20090638c49a1046b2ff9f13dfb5161593b9ea0dad10",
+  "sourceEntryDigest": "6695bc2a884850a6f8778a562ec78c9720a56a2de26c73c911568559d5582bda",
+  "resultLogicalKey": "draft.gate",
+  "catalogFingerprint": "48ed1ada560970e825afd8aef4469a07aaac640c54fb8d2786e0ad5bd672ad38",
+  "report": {
+    "beforeEvidenceDigest": "647d20d2496d5865b927b89e17626defda1838c129d0900689b9e293ae8e9811",
+    "outputEvidenceDigest": "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75",
+    "summary": "Draft gate の全 blocking observation を、既存の Draft の値を置換して解消する。goal と leaf-help の保持条件を測定可能にし、4 件の Spec 委譲事項を must 優先度付きの inventory、registry-derived matrix、migration parity、実 dispatcher/CLI acceptance matrix として具体化した。ユーザー判断、新規フィールド、新しい制約、query の shared 化は導入していない。",
+    "requests": [
+      {
+        "fingerprint": "171bc695d48d04d271262f9af8e88040dd24aa2444ed416ed50e14ed2a789a37",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "528675715ac49888e607a1424d81251956e545ba163cb8b7c971607dba5f4de5",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "c635dbb918d7e01d8ac9e98d7471a66ce128b88614ab7eac4eb2004eaf23e064",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "8fe21cac0de94ac9dfa8ae4f26abe25504544867467de0323b481329db17172b",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "4e80641545cb2d79ec2c96b388996340fb97d21eddc34aee5fec5d9d80ce40b5",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "07e2f5ddc0522882b776e64d14e0b66dc4a122485f328c3f87e9fbd9bf5b33cf",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "2c5f947107ae875c642dfc644a9bfa04dd767a1a4e640462a6148df9d3e38668",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "b320c9b0c3f0cf9dcb780119b86168e4682fd826bff89e94600de83e3380bc77",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "dc2f2b2b6b0bc6eeb209b06d4f883e566a1cf5aa16008ee53520a8edd6c7c649",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "a9261db5a0cccec2d513586352b4ab649253c11f3efb9e289285b1f77f839743",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "2c25b60a9ece06fe5fbe000257358fe73c8d62852bf5f2c388b525b7e56a0005",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "171bc695d48d04d271262f9af8e88040dd24aa2444ed416ed50e14ed2a789a37",
+        "strategy": "goal に判定対象と観測結果を追加する",
+        "summary": "完全性を全 routed leaf の parser/help 契約照合、group intersection、3 経路の同一表示、query 除外、既存挙動、実行時観測、終了値として定義した。",
+        "priorRepairInsufficiency": "No prior repair exists for this observation.",
+        "deltaIds": [
+          "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+        ]
+      },
+      {
+        "fingerprint": "528675715ac49888e607a1424d81251956e545ba163cb8b7c971607dba5f4de5",
+        "strategy": "goal に独立レビュー可能な acceptance criteria を追加する",
+        "summary": "registry からの再列挙、契約の比較単位、3 つの help path、保持する owner、handler/mutation/log/artifact と exit code の観測を明記した。",
+        "priorRepairInsufficiency": "No prior repair exists for this observation.",
+        "deltaIds": [
+          "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+        ]
+      },
+      {
+        "fingerprint": "c635dbb918d7e01d8ac9e98d7471a66ce128b88614ab7eac4eb2004eaf23e064",
+        "strategy": "decision point に prose/example/localization の実出力比較を定義する",
+        "summary": "既存出力の canonical Options section 以外を leaf・locale 単位の期待値として保持し、構造化 rows のみを registry から投影する条件にした。",
+        "priorRepairInsufficiency": "No prior repair exists for this observation.",
+        "deltaIds": [
+          "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+        ]
+      },
+      {
+        "fingerprint": "8fe21cac0de94ac9dfa8ae4f26abe25504544867467de0323b481329db17172b",
+        "strategy": "decision point に比較対象と変更許可範囲を追加する",
+        "summary": "Usage/Options の canonical rows と、それ以外の prose/example/localized summary の一致を別々に検証する acceptance を明記した。",
+        "priorRepairInsufficiency": "No prior repair exists for this observation.",
+        "deltaIds": [
+          "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+        ]
+      },
+      {
+        "fingerprint": "4e80641545cb2d79ec2c96b388996340fb97d21eddc34aee5fec5d9d80ce40b5",
+        "strategy": "impact 条件を実 CLI の保持テストへ具体化する",
+        "summary": "各 leaf と locale の移行前後出力から canonical rows を除いて比較し、行順・文字列・locale の保持を確認する条件にした。",
+        "priorRepairInsufficiency": "No prior repair exists for this observation.",
+        "deltaIds": [
+          "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+        ]
+      },
+      {
+        "fingerprint": "07e2f5ddc0522882b776e64d14e0b66dc4a122485f328c3f87e9fbd9bf5b33cf",
+        "strategy": "impact 条件に実測する出力と許可される変更を明示する",
+        "summary": "command-specific prose、example、localized summary を期待値として固定し、変更を parser metadata 由来の Usage/Options rows に限定した。",
+        "priorRepairInsufficiency": "No prior repair exists for this observation.",
+        "deltaIds": [
+          "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+        ]
+      },
+      {
+        "fingerprint": "2c5f947107ae875c642dfc644a9bfa04dd767a1a4e640462a6148df9d3e38668",
+        "strategy": "input inventory の deferred item に Priority: must と成果物構造を追加する",
+        "summary": "全 routed leaf の入力値、arity、domain、path 性質、既存 validator owner、拒否/成功ケースの inventory を必須成果物にした。",
+        "priorRepairInsufficiency": "No prior repair exists for this observation.",
+        "deltaIds": [
+          "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+        ]
+      },
+      {
+        "fingerprint": "b320c9b0c3f0cf9dcb780119b86168e4682fd826bff89e94600de83e3380bc77",
+        "strategy": "registry-derived collection と表示行列を Priority: must として定義する",
+        "summary": "query 除外、direct-child intersection、3 経路の同一表示、order/spacing 境界、固定件数禁止を必須 matrix にした。",
+        "priorRepairInsufficiency": "No prior repair exists for this observation.",
+        "deltaIds": [
+          "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+        ]
+      },
+      {
+        "fingerprint": "dc2f2b2b6b0bc6eeb209b06d4f883e566a1cf5aa16008ee53520a8edd6c7c649",
+        "strategy": "migration parity mapping に Priority: must と一対一の表項目を追加する",
+        "summary": "current/new owner、retained behavior、非権威化する重複、side effect、test surface を全 public surface と対応付ける必須表を定義した。",
+        "priorRepairInsufficiency": "No prior repair exists for this observation.",
+        "deltaIds": [
+          "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+        ]
+      },
+      {
+        "fingerprint": "a9261db5a0cccec2d513586352b4ab649253c11f3efb9e289285b1f77f839743",
+        "strategy": "integration/E2E acceptance matrix に Priority: must と実測列を追加する",
+        "summary": "全 routed leaf、help/guard/runtime/query/exit code/拒否順序を実 dispatcher/CLI の入力・出力・side effect として検証する必須 matrix にした。",
+        "priorRepairInsufficiency": "No prior repair exists for this observation.",
+        "deltaIds": [
+          "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+        ]
+      },
+      {
+        "fingerprint": "2c25b60a9ece06fe5fbe000257358fe73c8d62852bf5f2c388b525b7e56a0005",
+        "strategy": "migration parity mapping の対象 owner と retained behavior を明示する",
+        "summary": "parser/help の authority transfer だけを変更し、query、execution、guard、runtime、generated artifact、既存 lifecycle と side effect は保持する対応表を必須化した。",
+        "priorRepairInsufficiency": "No prior repair exists for this observation.",
+        "deltaIds": [
+          "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "0fbcddf62eadeb6f3f532dbd268d46f292cb7aac960163f84bf57ff5d83a5e75"
+      ]
+    }
+  }
+}

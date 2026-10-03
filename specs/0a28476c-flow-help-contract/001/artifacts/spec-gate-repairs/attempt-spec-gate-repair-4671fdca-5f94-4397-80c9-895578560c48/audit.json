@@ -1,0 +1,695 @@
+{
+  "version": 1,
+  "phase": "spec-gate-repair",
+  "baseRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+  "acceptedGroups": [
+    {
+      "index": 0,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:9",
+          "fingerprint": "29f94a60f81faedb70560d4535bca772bbcac22ce86de7f6563b86e32fdb43bf"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "task",
+            "id": "T-4",
+            "field": "acceptance"
+          },
+          "expectedDigest": "06e2fdb020e7d39d7666ab908528a5e46ed5b1e25f60fb8f77defff5fa082952",
+          "replacement": [
+            "positionals/rest/flags/options/optionalOptions/implicit help の順序と cardinality を実 registry から抽出し、set step/auto/broad、get status、set files、resume/gate/prepare/lint/runtime-log の型差を記録する。",
+            "各 public input の size/retry/context 上限は、定義元（parseEntryInput、既存 domain class、command validator、FlowTargetExpectation、buildFlowCommandHookContext 等）と値・単位を記録し、定義がない場合は「未定義」とその owner を記録する。T-4 の inventory と検証入力は各ケースの有限な size/count/depth/retry 値を数値で記録し、無制限の retry・再帰・bulk processing を許可する仕様を追加しない。",
+            "query の stdin、--request-file、help、error、limit は shared inventory と shared renderer/admission matrix から除外し、独立 parser の既存 behavior を記録する。"
+          ],
+          "reason": "bounded-resource-usage のため、既存 owner の上限を記録する範囲に限定し、未定義の処理を無制限に許可する仕様を受入条件から除去する。"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:1",
+          "fingerprint": "00de1353fcee687cf41fd07212ef3e60adef8ecadb6abea932dc73cc847b7125"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R1",
+            "field": "desc"
+          },
+          "expectedDigest": "45a818a370dea2e2c2db1ebd55589ef3e25301a7ce9f69b20b864635664b502b",
+          "replacement": "開始時点の FLOW_COMMANDS から query を除く全 shared routed leaf を再列挙し、各 leaf の positionals、rest、flags、required-value options、optional-value options、implicit -h, --help を一つの canonical option model で表現すること。model の constructor invariant は、flag が value を消費せず placeholder を持たないこと、required-value と optional-value がそれぞれ parser の必須／任意の値消費を表し、どちらも空でない `<token>` 形式の placeholder と非空 description を持つこと、name と alias が重複しないことを保証する。args、Usage、Options row は同じ model から投影し、各 canonical option は Options に一行だけ現れ、Usage/example の再掲は重複 row と数えないこと。",
+          "reason": "unambiguous-requirements の指摘に対し、placeholder が必要な option kind、placeholder の形式、flag の扱い、model の invariant と表示投影を明記する。"
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:4",
+          "fingerprint": "2153535b9079d2cf1fa3857cd4c45888fe6f5b2900a528a1255d3ffb550e95f6"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "acceptance_criteria",
+            "position": 8
+          },
+          "expectedDigest": "b06da95df052c845f45ec5b77f1473707a5a5879bac3a378933a1dc584026321",
+          "replacement": "Flow 外の共通 help consumer は src/help.js の metadata-only renderer を通る次の固定ケースで検証する。core namespace は `sennel docs --help` と `sennel help docs`、core leaf は `sennel docs build --help`、plugin namespace/leaf は fixture plugin の `sennel plugin --help` と `sennel plugin find --help` とする。各ケースで registry metadata から localized summary、Usage、Options、subcommand row を投影し、row の名前昇順、名前と summary の間の ASCII 空白二つ以上、同一 metadata の option order、command implementation の import・handler・execution hook の非実行を確認する。Flow の shared projection と query の独立 parser はこの consumer の対象に含めず、それぞれの個別契約で検証する。",
+          "reason": "代表ケースを docs namespace、docs leaf、plugin namespace、plugin leaf の固定入力として列挙し、core/plugin と group/leaf の coverage および測定結果を定義する。"
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:10",
+          "fingerprint": "f12683ccfec7a0802ccbd71f3b70420b71d5687b1ab69ff26cc020fbe165e797"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:8",
+          "fingerprint": "6b09b5c2ee296bbd09a086bbe7137bebc3c89474d285f1a7f4e1e5be9e253ee7"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R3",
+            "field": "desc"
+          },
+          "expectedDigest": "19d70b7d3e16b62651335eeba529a301d94df77a1955f49e1e9a27be6e681908",
+          "replacement": "開始時点の FLOW_COMMANDS から query を除く全 shared routed leaf を再列挙し、各 leaf を一行の public input inventory として Spec に記録すること。各行は leaf 名と、実際の user-facing argument の全て（positionals の runId、target、kind、logicalKey、phase、number、path、id、status、text、questionId、reqId、action、value、counter、rest の paths、flags の --expect-no-issue、--no-branch、--worktree、--dry-run、--details、--raw、--drop、--approved、--yes、--skip-confirm、--auto-rescue、--force、--record-and-proceed、options の --spec、--expect-issue、--expect-spec、--expect-run-id、--expect-binding、--title、--base、--issue、--request、--run-id、--mode、--spec-id、--version、--format、--search、--sequence、--task-id、--question-revision、--answer、--why、--considered、--dropped-reason、--file、--step、--reason、--choice、--expect-evidence-digest、--remaining-risk、--notes、--confirmed-at、--trigger、--resolution、--guardrail-candidate、--normalized-finding-id、--repair-ref-commit、--repair-ref-file、--agent-work-dir、--approve、--phase、--message、--category、--expect-digest、--exclusions、--expect-attempt-id、--expect-review-digest、--expect-source-fingerprint、--expect-catalog-fingerprint、--json、--record-category、--record-evidence）を名前で列挙し、required/optional、arity/cardinality、alias、value kind/placeholder、空値の扱い、type/format/allowed domain、既存 size/retry/context limit（未定義なら未定義と owner）、path の file/dir・存在・絶対/相対・解決 root・正規化/symlink 条件、conditional combination、および validator owner を値付きで対応付けること。set step/auto/broad の positional、get status の optional runId、set files の一つ以上の rest path、resume --spec の FlowSpecId、run gate --spec の filesystem path、prepare/run lint --base の branch、runtime-log --run-id の runId[#sequence] を別の型として記録する。internal の _rawArgs、resolved target、injected runtime state は別行で internal と明記し public option から除外する。query の stdin、--request-file、help、error、limit はこの inventory と shared projection から除外し、独立 parser の回帰で保持する。",
+          "reason": "validate-user-input-at-entry-point のため、全 public argument 名を列挙した per-leaf inventory と、既存 owner ごとの type/format/range/size/conditional 契約を Spec の成果物として定義する。bounded-resource-usage に反する一律上限や新しい admission validator は追加しない。"
+        },
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "task",
+            "id": "T-4",
+            "field": "implementation_notes"
+          },
+          "expectedDigest": "8de1b91fbd69d788309a9e624ede242d335313fd064d6b4975d4e7a9caa0666a",
+          "replacement": "T-4 は test-only の補助情報ではなく、Spec の per-leaf public input inventory を検証する contract-test report を実 registry から生成する。開始時点の FLOW_COMMANDS を走査して query を除く全 shared routed leaf を一行ずつ出力し、各行に leaf name、group、positionals/rest、flags、required/optional options、implicit -h, --help、value kind/placeholder/alias、arity/cardinality、空値、format/domain、既存 size/retry/context limit または未定義、path の file/dir・存在・絶対/相対・解決 root・正規化/symlink 条件、conditional combination、validator-owner reference を記録する。owner は registry、parseEntryInput、既存 domain class、command validator、FlowTargetExpectation、buildFlowCommandHookContext の実値と照合し、public argument の完全な一覧として次を含める: positionals runId/target/kind/logicalKey/phase/number/path/id/status/text/questionId/reqId/action/value/counter、rest paths、registry に現れる全 flags/options。set step/auto/broad、get status、set files、resume/gate/prepare/lint/runtime-log の cardinality と型、query の独立 parser を個別に記録する。internal inventory には _rawArgs、resolved target、injected runtime state を internal と明記し、public option model と report の user-facing 行から除外する。report は production artifact や runtime admission table として保存・参照せず、既存 owner の判断を複製せず、実値との照合結果を in-memory の contract-test output として扱う。",
+          "reason": "R3 の inventory を実装タスクへ接続し、全 public argument と internal context の明示的な区別、既存 validator owner、query exclusion、test-only report の責務を定義する。"
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:2",
+          "fingerprint": "84bb331f10f694abba887cb91c93b11edec8ae9513957657080fdb31b87e9a04"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:3",
+          "fingerprint": "04288b7125d1e30139895d8ea328c3afda36101f27e4224681062a0f52500f1a"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R6",
+            "field": "desc"
+          },
+          "expectedDigest": "bf7b51ea77756c6118c44ad3c65f35f1443898cf9b15da4b2bea3b93c3791b78",
+          "replacement": "registry integration と focused public CLI E2E を、開始時点の live registry と実 dispatcher/CLI に接続して追加すること。integration は query を除く全 shared routed leaf を開始時に再列挙し、各 leaf の parser/help 完全一致、implicit help、required/optional value、unknown/missing/extra/empty、実 arity/cardinality、13/14/15 文字境界、最長登録名、synthetic 64/65 文字名、全 direct child group intersection を検証する。E2E は次の固定シナリオを実 dispatcher/CLI で実行する。(1) `sennel flow run abort --help` で全 target guard、runtime option、--force、implicit help、stdout、handler/execution hook 非実行を検証する。(2) group `get`、`set`、`run`、`report` ごとに `sennel flow <group> --help`、`sennel help flow <group>`、leaf を省略した `sennel flow <group>` を実行し、同じ row order/spacing/option order と no-leaf exit 1 を検証する。(3) isolated fixture で guard なし、matching guard、各 guard の mismatch、issue/no-issue 同時指定、binding と明示 guard の競合を get/set/run で検証し、拒否時の command-owned mutation 非実行と exit 1、valid case の exit 0 を確認する。(4) `--agent-work-dir /path` と `--agent-work-dir=/path`、configured workDir、default、explicit config.logs.dir、finalize-cleanup の durable root を実行し、workDir/logDir precedence と runtime log を確認する。(5) query の help、stdin、--request-file、invalid request は独立 parser の回帰として実行する。(6) valid execution、parser/selector/target/command failure の stdout/stderr、runtime log、canonical artifact、pre/post/onError/finally を固定 fixture で観測する。全 invalid matrix は integration、entry-point wiring と代表的な接続は E2E に割り当て、破壊的 command は隔離 fixture/stub で検証する。",
+          "reason": "unambiguous-requirements と complete-context のため、E2E の対象入力・三つの help path・固定された guard/runtime/query 接続・各観測結果を代表ケースではなく明示的なシナリオとして定義する。"
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:11",
+          "fingerprint": "caf3948e2b815a16178b9735d32910134f446c45779bce7e0a7e64a8a221b926"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "acceptance_criteria",
+            "position": 7
+          },
+          "expectedDigest": "3e95898579cea70240a46b4bcfd3c0226c029d281764b83d4cd6d3f1813d4193",
+          "replacement": "開始時点の registry から query を除く全 shared routed leaf を列挙し、各 leaf の acceptance matrix に leaf path、実行する exact argv、成功条件、失敗条件、期待 stdout/stderr、exit code を一行ずつ記録する。各 leaf は valid help と valid execution の少なくとも一つを exit 0 とし、適用される missing/unknown/extra/empty parser failure、selector failure、target guard mismatch、command failure を exit 1 とする。`sennel flow <group>` の no-leaf group help は help を表示しても exit 1 とし、query の stdin、--request-file、help、error は別 matrix の exact argv と結果で保持する。各行で runtime log、canonical artifact、pre/post/onError/finally、command-owned mutation、stdout/stderr の観測有無も明示し、category-level の exit code だけで個別 leaf の条件を代用しない。",
+          "reason": "exit-code-contract のため、全 leaf ごとに exact argv と success/failure condition、no-leaf、query exception、観測成果物を acceptance matrix として要求する。"
+        },
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R4",
+            "field": "desc"
+          },
+          "expectedDigest": "fdfbcc07f97f9f5c3d1d4161ccec16d9d40b78f6ace6f35bcd74b4cadf405446",
+          "replacement": "実 dispatcher/CLI の parser、guard、runtime、failure lifecycle を既存 owner のまま保持すること。五つの target guard の適用 leaf を registry から導出し、guard なし、binding 単独、明示 guard の一致/不一致、issue/no-issue の同時指定、binding と明示 guard の競合を実 argv で検証する。一致する valid case は既存 command を実行し、不一致・invalid combination は既存 ARGS_ERROR または ACTIVE_FLOW_MISMATCH を返して command-owned mutation より前に停止すること。ただし、buildFlowCommandHookContext 中の FlowTargetExpectation constructor が issue/no-issue または binding 競合で失敗する場合は、公開 CLI が stderr に現行の未捕捉エラー stack を出し現行の exit behavior を返す挙動を互換維持し、ARGS_ERROR / ACTIVE_FLOW_MISMATCH に再分類せず command loading 前に停止すること。--agent-work-dir <path> と --agent-work-dir=<path> は同一 override として扱い、override > config.agent.workDir > .tmp、config.logs.dir > agentWorkDir/logs、finalize-cleanup の durable root を維持すること。さらに、registry から列挙した各 leaf の acceptance row に exact argv と成功・失敗条件を持たせ、valid help/success は exit 0、no-leaf group help と各 leaf に定義された parser/selector/target/command の実際の失敗は exit 1 とする。各 row は期待 stdout/stderr、runtime log、canonical artifact、pre/post/onError/finally、command-owned mutation の観測結果を対応付け、query の stdin/--request-file/help/error は独立 row として扱う。",
+          "reason": "R4 に個別 leaf の exact success/failure matrix と既存 lifecycle の観測契約を追加し、category-level の exit code 説明だけに依存しないようにする。"
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:6",
+          "fingerprint": "4f08918c80b2aaca422f5dae3f453faf093b0141ecb289c831cbad66c02df943"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:7",
+          "fingerprint": "ff95fcfe5b356427d0b92cc91985e9468cfe666e222998848d1689326195eae4"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "task",
+            "id": "T-7",
+            "field": "acceptance"
+          },
+          "expectedDigest": "9ab6cc3a363e28b1dc9c3576593ac8409a0886fb6821a4653573201deb3ab725",
+          "replacement": [
+            "integration test は開始時点の FLOW_COMMANDS を走査して query を除く全 shared routed leaf、全 group、implicit help、各 option の flag/required-value/optional-value kind、alias、placeholder、per-leaf input inventory、13/14/15 文字境界、最長登録名、synthetic 64/65 文字名、option order、subcommand name order、ASCII spacing を検証し、registry の actual leaf set と group の全 direct child intersection に照合する。",
+            "focused E2E は固定した `sennel flow run abort --help`、get/set/run/report の三つの public help path（`sennel flow <group> --help`、`sennel help flow <group>`、`sennel flow <group>`）、guard matching/mismatch/conflict を伴う get/set/run、`--agent-work-dir /path` と `--agent-work-dir=/path` の runtime precedence、query の stdin/--request-file/help/error、valid/rejected execution、no-leaf exit 1 を実 dispatcher/CLI で検証する。",
+            "integration は全 parser invalid matrix を所有し、E2E は entry-point wiring と上記固定接続を所有する。各層で handler/mutation 非実行、runtime log、canonical artifact、stdout/stderr、exit code、pre/post/onError/finally のうちその層で観測する項目を明示し、同じ invalid case を二層で重複実行しない。破壊的 command は isolated fixture/stub を用いる。"
+          ],
+          "reason": "T-7 の各 test layer に必須シナリオ、入力、境界、観測結果、重複を避ける所有範囲を明記し、「代表的な接続シナリオ」「必要な結果」を具体化する。"
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:5",
+          "fingerprint": "eee092054019ce448caec0f121c4d4b69d28f4894cd2a6a01684328d6d376d7e"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "task",
+            "id": "T-6",
+            "field": "acceptance"
+          },
+          "expectedDigest": "973c8bc00e012e9d3bd9933dc08d1672856179d43d4042bc78378a75482a4a85",
+          "replacement": [
+            "help rendering は metadata-only renderer から registry metadata を読み、command implementation module、handler、execution hook、mutation を import・実行せず、既存の lazy entrypoint 境界を保つ。",
+            "Flow leaf の prose、example、localization は変更せず、structured Usage/Options row だけを canonical option model から投影し、各 option の kind、alias、required/optional placeholder、description と row order を parser metadata と比較する。",
+            "Flow 外の共有 renderer の固定回帰は、core namespace `docs`（`sennel docs --help`、`sennel help docs`、`sennel docs build --help`）、core namespace `check`（`sennel check --help`、`sennel check config --help`）、fixture plugin（`sennel plugin --help`、`sennel plugin find --help`）で実行し、subcommand row の名前昇順、名前と summary の ASCII 空白二つ以上、同一 metadata の option order、localized summary、implementation 非実行を確認する。"
+          ],
+          "reason": "docs/core/plugin の group/leaf を固定入力として列挙し、metadata-only、row order、spacing、localized summary、lazy implementation 境界の検証条件を具体化する。"
+        }
+      ]
+    }
+  ],
+  "discardedGroups": [],
+  "operationDigest": "84b2c76a72a95b36d12e1998c4e8d3bef17a8a3bfe1f11ee477b5c1c48978d11",
+  "resultRevision": {
+    "digest": "a112b3d1b0c8b41411aef6dd96921202f4231bac4b69dec971c94ca7c8231172",
+    "byteLength": 40201
+  },
+  "sourceReviewIdentity": {
+    "specId": "0a28476c-flow-help-contract",
+    "revision": 2,
+    "digest": "0db2ce0c3be489205993bdd03df7e237728a72c92ab542ccfaa1510a5c8b0b37",
+    "byteLength": 34219
+  },
+  "sourceEvidenceIdentity": {
+    "sourceAttempt": {
+      "id": "attempt-spec-gate-89f164fc-f0f8-4733-a2dd-6e7c8c80e743",
+      "sequence": 1
+    },
+    "resultLogicalKey": "spec.gate",
+    "publicationActivityId": "plan-gate-repaired-8342c165-a874-43f7-ba04-f98c9aeab0f8",
+    "catalogFingerprint": "32655122f50195b9a3a3055e64eb8ebc6d26a53b9335e14231e6f44c677deff8",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-spec-gate-89f164fc-f0f8-4733-a2dd-6e7c8c80e743",
+        "sequence": 1
+      },
+      "canonicalAttempt": {
+        "id": "attempt-spec-gate-89f164fc-f0f8-4733-a2dd-6e7c8c80e743",
+        "sequence": 1
+      },
+      "sourceFingerprint": "8e211d7a963a17da7434e2c136599ef69442df94ab20e1bf51eb4995a68b8377",
+      "canonicalFingerprint": "32655122f50195b9a3a3055e64eb8ebc6d26a53b9335e14231e6f44c677deff8",
+      "sourceRevisionFingerprint": "ac2fb28aec4ed3ac33ba2312c3c94a3db60e9472dd8f1346467612aca93d2fc5",
+      "canonicalRevisionFingerprint": "ac2fb28aec4ed3ac33ba2312c3c94a3db60e9472dd8f1346467612aca93d2fc5"
+    }
+  },
+  "sourceFindingIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:9",
+      "fingerprint": "29f94a60f81faedb70560d4535bca772bbcac22ce86de7f6563b86e32fdb43bf"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "00de1353fcee687cf41fd07212ef3e60adef8ecadb6abea932dc73cc847b7125"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:4",
+      "fingerprint": "2153535b9079d2cf1fa3857cd4c45888fe6f5b2900a528a1255d3ffb550e95f6"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:10",
+      "fingerprint": "f12683ccfec7a0802ccbd71f3b70420b71d5687b1ab69ff26cc020fbe165e797"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:8",
+      "fingerprint": "6b09b5c2ee296bbd09a086bbe7137bebc3c89474d285f1a7f4e1e5be9e253ee7"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "84bb331f10f694abba887cb91c93b11edec8ae9513957657080fdb31b87e9a04"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:3",
+      "fingerprint": "04288b7125d1e30139895d8ea328c3afda36101f27e4224681062a0f52500f1a"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:11",
+      "fingerprint": "caf3948e2b815a16178b9735d32910134f446c45779bce7e0a7e64a8a221b926"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:6",
+      "fingerprint": "4f08918c80b2aaca422f5dae3f453faf093b0141ecb289c831cbad66c02df943"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:7",
+      "fingerprint": "ff95fcfe5b356427d0b92cc91985e9468cfe666e222998848d1689326195eae4"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:5",
+      "fingerprint": "eee092054019ce448caec0f121c4d4b69d28f4894cd2a6a01684328d6d376d7e"
+    }
+  ],
+  "observationIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "00de1353fcee687cf41fd07212ef3e60adef8ecadb6abea932dc73cc847b7125"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "84bb331f10f694abba887cb91c93b11edec8ae9513957657080fdb31b87e9a04"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:3",
+      "fingerprint": "04288b7125d1e30139895d8ea328c3afda36101f27e4224681062a0f52500f1a"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:4",
+      "fingerprint": "2153535b9079d2cf1fa3857cd4c45888fe6f5b2900a528a1255d3ffb550e95f6"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:5",
+      "fingerprint": "eee092054019ce448caec0f121c4d4b69d28f4894cd2a6a01684328d6d376d7e"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:6",
+      "fingerprint": "4f08918c80b2aaca422f5dae3f453faf093b0141ecb289c831cbad66c02df943"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:7",
+      "fingerprint": "ff95fcfe5b356427d0b92cc91985e9468cfe666e222998848d1689326195eae4"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:8",
+      "fingerprint": "6b09b5c2ee296bbd09a086bbe7137bebc3c89474d285f1a7f4e1e5be9e253ee7"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:9",
+      "fingerprint": "29f94a60f81faedb70560d4535bca772bbcac22ce86de7f6563b86e32fdb43bf"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:10",
+      "fingerprint": "f12683ccfec7a0802ccbd71f3b70420b71d5687b1ab69ff26cc020fbe165e797"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:11",
+      "fingerprint": "caf3948e2b815a16178b9735d32910134f446c45779bce7e0a7e64a8a221b926"
+    }
+  ],
+  "repairId": "plan-gate-repair-509c3c5ca843a137e0ac2f9d46e925d6a161d7333b8ca9c8f24f0edc671e88fc",
+  "repairRecordFingerprint": "509c3c5ca843a137e0ac2f9d46e925d6a161d7333b8ca9c8f24f0edc671e88fc",
+  "targetAttempt": {
+    "id": "attempt-spec-gate-repair-4671fdca-5f94-4397-80c9-895578560c48",
+    "sequence": 1
+  },
+  "observationResults": [
+    {
+      "fingerprint": "f8a86ab688f31404a71314e91833335460f45930c9bbbce697cc6b51e8841981",
+      "strategy": "sha256:9f010f24d37042501ae6ecf84d213f9f8ed0de0d73ebaf414ec61ef09d000722",
+      "summary": "unambiguous-requirements の指摘に対し、placeholder が必要な option kind、placeholder の形式、flag の扱い、model の invariant と表示投影を明記する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        1
+      ]
+    },
+    {
+      "fingerprint": "56540186b883c00fb1611098d992bdb9a7754b0dbb5211b857f4e545982e2d79",
+      "strategy": "sha256:0fb483dc5460ef4cd1566a8d215bee2cc8777b70bfd3e43bd8469edd4a3f78fc",
+      "summary": "unambiguous-requirements と complete-context のため、E2E の対象入力・三つの help path・固定された guard/runtime/query 接続・各観測結果を代表ケースではなく明示的なシナリオとして定義する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        4
+      ]
+    },
+    {
+      "fingerprint": "abd2f8ea9b0ce78de059b60221cd0d13f4394b1cb99e3456b8901b97efc16008",
+      "strategy": "sha256:0fb483dc5460ef4cd1566a8d215bee2cc8777b70bfd3e43bd8469edd4a3f78fc",
+      "summary": "unambiguous-requirements と complete-context のため、E2E の対象入力・三つの help path・固定された guard/runtime/query 接続・各観測結果を代表ケースではなく明示的なシナリオとして定義する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        4
+      ]
+    },
+    {
+      "fingerprint": "2a65b59fff1941ab010924833ad74bfae5e3c04910ab4e152e2696554e03a184",
+      "strategy": "sha256:e72c563a9c42ca254092adba59d3439ed4e7d39b285127f6c3f50c7ee8344c70",
+      "summary": "代表ケースを docs namespace、docs leaf、plugin namespace、plugin leaf の固定入力として列挙し、core/plugin と group/leaf の coverage および測定結果を定義する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        2
+      ]
+    },
+    {
+      "fingerprint": "35db65f41a05a0777dcf59e59bff6d4c7594767dd9bc0697ef0572d918d97b07",
+      "strategy": "sha256:fdfd5302378c665b85bff30c09f03fd2f53fd009b15b7698ce369e84ffb204ac",
+      "summary": "docs/core/plugin の group/leaf を固定入力として列挙し、metadata-only、row order、spacing、localized summary、lazy implementation 境界の検証条件を具体化する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        7
+      ]
+    },
+    {
+      "fingerprint": "efd49e502e71f283f1412818f1d57d7d35315d4ed54c822c7a8c278fb5e86966",
+      "strategy": "sha256:6f3e7d6a7d8294d5fdf0d6acfad3fff2e3e7f7b8539fdb1ddedf95c222b79f1c",
+      "summary": "T-7 の各 test layer に必須シナリオ、入力、境界、観測結果、重複を避ける所有範囲を明記し、「代表的な接続シナリオ」「必要な結果」を具体化する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        6
+      ]
+    },
+    {
+      "fingerprint": "ac6774ae25c7e7b65b868053866d9c8c57e6d7b04ef0e4f03ee594c6cf54bdfd",
+      "strategy": "sha256:6f3e7d6a7d8294d5fdf0d6acfad3fff2e3e7f7b8539fdb1ddedf95c222b79f1c",
+      "summary": "T-7 の各 test layer に必須シナリオ、入力、境界、観測結果、重複を避ける所有範囲を明記し、「代表的な接続シナリオ」「必要な結果」を具体化する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        6
+      ]
+    },
+    {
+      "fingerprint": "87728dd2ec60375ec40dbc1df72d4f29a4407a4573f03bfafd6b9d14e97f4f64",
+      "strategy": "sha256:f9ebef39f81e62484ff0ebd59b6243864dbf7e3df59339bd164784555e6da5ff",
+      "summary": "validate-user-input-at-entry-point のため、全 public argument 名を列挙した per-leaf inventory と、既存 owner ごとの type/format/range/size/conditional 契約を Spec の成果物として定義する。bounded-resource-usage に反する一律上限や新しい admission validator は追加しない。 R3 の inventory を実装タスクへ接続し、全 public argument と internal context の明示的な区別、既存 validator owner、query exclusion、test-only report の責務を定義する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "3a2b3c8e1ddea3dc742bfbbd38ca00fe9e5518814fcb1eb9ba9f0bf948e645b7",
+      "strategy": "sha256:2f52ea9d169bb0297c1dd2eaa7f3c36d76599166da17b45f6e9430a7fecac6b9",
+      "summary": "bounded-resource-usage のため、既存 owner の上限を記録する範囲に限定し、未定義の処理を無制限に許可する仕様を受入条件から除去する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        0
+      ]
+    },
+    {
+      "fingerprint": "974f34b6bfa88f89b1c162ab83694110877190d8cca4fc91e3b4799fcdf24017",
+      "strategy": "sha256:f9ebef39f81e62484ff0ebd59b6243864dbf7e3df59339bd164784555e6da5ff",
+      "summary": "validate-user-input-at-entry-point のため、全 public argument 名を列挙した per-leaf inventory と、既存 owner ごとの type/format/range/size/conditional 契約を Spec の成果物として定義する。bounded-resource-usage に反する一律上限や新しい admission validator は追加しない。 R3 の inventory を実装タスクへ接続し、全 public argument と internal context の明示的な区別、既存 validator owner、query exclusion、test-only report の責務を定義する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "c60ef7f501ad92011a0868242b4f3ff5121bfab62d67e3af9234acf25b334ab9",
+      "strategy": "sha256:2668d9d0c949bc067d4a9b5878c993d2e86f75253a015c9dddcd996192110759",
+      "summary": "exit-code-contract のため、全 leaf ごとに exact argv と success/failure condition、no-leaf、query exception、観測成果物を acceptance matrix として要求する。 R4 に個別 leaf の exact success/failure matrix と既存 lifecycle の観測契約を追加し、category-level の exit code 説明だけに依存しないようにする。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        5
+      ]
+    }
+  ],
+  "reviewFacts": {
+    "version": 1,
+    "baseRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+    "resultRevision": {
+      "digest": "a112b3d1b0c8b41411aef6dd96921202f4231bac4b69dec971c94ca7c8231172",
+      "byteLength": 40201
+    },
+    "sourceReviewIdentity": {
+      "specId": "0a28476c-flow-help-contract",
+      "revision": 2,
+      "digest": "0db2ce0c3be489205993bdd03df7e237728a72c92ab542ccfaa1510a5c8b0b37",
+      "byteLength": 34219
+    },
+    "sourceReviewDigest": "4ac1abf0b582f959cc793132260a4a92643ec2dc6fdd652c5ea44fed39ca702c",
+    "sourceReviewArtifact": "revisions/002/review.json",
+    "sourceSpecDigest": "5c2ae36d6584c8b6a90793efbf86a97fed3ee34172da639d5fd11d6ac1f37bdb",
+    "resultSpecDigest": "23de72a916db11b5ffce39da857cbf6842f632766d3f009559671f02a724f38e",
+    "findings": [
+      {
+        "identity": {
+          "sourceArtifact": "revisions/002/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-ebd87c5c77f6487e1baf865af26ed678",
+          "fingerprint": "388239e2455c485c086daa69f806ef5cd15e463b56b4f4b8a7f9516940d80164"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R4"
+              }
+            }
+          ],
+          "body": "**Target:** R4 / target-guard acceptance / src/lib/flow-target-guard.js\n**Issue:** FlowTargetExpectation throws for issue/no-issue and binding conflicts while buildFlowCommandHookContext is built. The public CLI currently emits an uncaught error stack, not an ARGS_ERROR or ACTIVE_FLOW_MISMATCH envelope.\n**Required change:** Specify the required error boundary and observable shape for these constructor failures, including whether current uncaught-error behavior is preserved or converted to ARGS_ERROR before command loading.\n**Why blocking:** The stated error contract contradicts verified behavior, so correct compatibility and E2E assertions cannot be determined.",
+          "disposition": "apply",
+          "evidence": "R4 の現行記述は issue/no-issue と binding 競合を ARGS_ERROR または ACTIVE_FLOW_MISMATCH とする一方、review の source evidence は FlowTargetExpectation の constructor 失敗が未捕捉 stack になることを示している。R4 の target-guard 契約を明示化するため、既存 requirement の desc を編集対象にする。",
+          "findingId": "spec-review-ebd87c5c77f6487e1baf865af26ed678",
+          "issue": "FlowTargetExpectation throws for issue/no-issue and binding conflicts while buildFlowCommandHookContext is built. The public CLI currently emits an uncaught error stack, not an ARGS_ERROR or ACTIVE_FLOW_MISMATCH envelope.",
+          "kind": "blocking",
+          "requiredChange": "Specify the required error boundary and observable shape for these constructor failures, including whether current uncaught-error behavior is preserved or converted to ARGS_ERROR before command loading.",
+          "target": "R4 / target-guard acceptance / src/lib/flow-target-guard.js",
+          "title": "R4 requires guard errors the current dispatcher does not emit",
+          "whyBlocking": "The stated error contract contradicts verified behavior, so correct compatibility and E2E assertions cannot be determined."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 5,
+            "operationIndex": 1,
+            "target": {
+              "entity": "requirement",
+              "id": "R4",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:11",
+                "fingerprint": "caf3948e2b815a16178b9735d32910134f446c45779bce7e0a7e64a8a221b926"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/002/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-7ff81279d5b4fb3468d9b3d58b8aaf43",
+          "fingerprint": "c3c61bcca510f060f0810d916757783f14132193000339dcc87b1fda98228813"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-5"
+              }
+            }
+          ],
+          "body": "**Target:** R4 / Clarifications [CORRECTION] / src/sennel.js\n**Issue:** parseEntryInput accepts --agent-work-dir=<path>, but initContainer computes agentWorkDir and logDir before dispatch and src/sennel.js only pre-scans the separate form. Parsed input is not reapplied to container paths.\n**Required change:** Declare src/sennel.js's pre-init scanner, or a shared helper called by it, as the owner that normalizes both forms into agentWorkDirOverride before initContainer; require path/log assertions at that boundary.\n**Why blocking:** Implementing only the shared parser leaves equals-form executions using the wrong runtime directory and logs.",
+          "disposition": "apply",
+          "evidence": "Spec の T-5 は separate/equals の同値性と既存 sennel.js/container/config 経路を受入対象にしているが、pre-init scanner が両形式を正規化して initContainer 前に override を渡す責務と path/log の観測境界を明記していない。T-5 の implementation_notes を編集対象にする。",
+          "findingId": "spec-review-7ff81279d5b4fb3468d9b3d58b8aaf43",
+          "issue": "parseEntryInput accepts --agent-work-dir=<path>, but initContainer computes agentWorkDir and logDir before dispatch and src/sennel.js only pre-scans the separate form. Parsed input is not reapplied to container paths.",
+          "kind": "blocking",
+          "requiredChange": "Declare src/sennel.js's pre-init scanner, or a shared helper called by it, as the owner that normalizes both forms into agentWorkDirOverride before initContainer; require path/log assertions at that boundary.",
+          "target": "R4 / Clarifications [CORRECTION] / src/sennel.js",
+          "title": "Equals-form runtime override has no pre-init integration point",
+          "whyBlocking": "Implementing only the shared parser leaves equals-form executions using the wrong runtime directory and logs."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/002/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-17b05b8ea0dd0524e74ee8bfa53f1e01",
+          "fingerprint": "427a76793406965699816a03d384b87e3bc8971345988a07788f226926d3a3b3"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-4"
+              }
+            }
+          ],
+          "body": "**Target:** R3 / T-4 / R6\n**Issue:** The registry stores option names and positional names, while cardinality, semantic limits, path rules, and validator ownership are distributed across command implementations. The spec does not define whether the required inventory is production metadata, a test report, or a static table.\n**Required change:** State that T-4 produces a test-only live-registry inventory, name its API/output, and define the fields and owner references that tests must assert without introducing runtime admission rules.\n**Why blocking:** Without this target, implementation may duplicate domain constraints in production or omit the required inventory, and tests cannot establish the claimed owner/path/limit mapping.",
+          "disposition": "apply",
+          "evidence": "R3/T-4 は live registry 由来の inventory を求めているが、T-4 の implementation_notes は後続の contract test と acceptance matrix のための成果物と述べるだけで、test-only の API/output、必須フィールド、owner reference の具体的な導出契約を定義していない。T-4 の implementation_notes を編集対象にする。",
+          "findingId": "spec-review-17b05b8ea0dd0524e74ee8bfa53f1e01",
+          "issue": "The registry stores option names and positional names, while cardinality, semantic limits, path rules, and validator ownership are distributed across command implementations. The spec does not define whether the required inventory is production metadata, a test report, or a static table.",
+          "kind": "blocking",
+          "requiredChange": "State that T-4 produces a test-only live-registry inventory, name its API/output, and define the fields and owner references that tests must assert without introducing runtime admission rules.",
+          "target": "R3 / T-4 / R6",
+          "title": "R3 input inventory has no concrete storage or derivation contract",
+          "whyBlocking": "Without this target, implementation may duplicate domain constraints in production or omit the required inventory, and tests cannot establish the claimed owner/path/limit mapping."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 3,
+            "operationIndex": 1,
+            "target": {
+              "entity": "task",
+              "id": "T-4",
+              "field": "implementation_notes"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:10",
+                "fingerprint": "f12683ccfec7a0802ccbd71f3b70420b71d5687b1ab69ff26cc020fbe165e797"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:8",
+                "fingerprint": "6b09b5c2ee296bbd09a086bbe7137bebc3c89474d285f1a7f4e1e5be9e253ee7"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      }
+    ],
+    "reviewInputPreserved": false,
+    "unresolvedBlocking": true,
+    "requiresReview": true,
+    "reason": "unresolved-blocking-review"
+  }
+}

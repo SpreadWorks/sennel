@@ -1,0 +1,4536 @@
+{
+  "entries": [
+    {
+      "step": "draft-gate",
+      "level": "parent",
+      "phase": "draft",
+      "reason": "「既存 limit」「path の性質」が何を指すか定義されておらず、入力 inventory の達成条件を一意に判定できない。; 各 leaf に対応付ける path の属性と既存 limit の範囲が未定義で、独立したレビュー担当者が同じ inventory の完全性を判定できない。; 「不正な組合せ」が具体的に列挙されておらず、どの target guard 組合せを検証対象とするか不明確である。; target guard の不正組合せに対する期待される拒否条件が指定されておらず、実装の適合性を独立に判定できない。; 「--agent-work-dir の二つの argv 形式」が具体的に示されておらず、どの入力形式を behavior-level test で検証するか判定できない。; Flow 外の共通 help consumer について、どの consumer のどの意味を維持するか、また確認方法が指定されていない。; 既存 public surface、hook、configuration、generated artifact、side effect の migration parity mapping を Spec へ先送りしており、現 draft に既存挙動の完全な inventory と retained behavior ごとの新 owner／削除判断がない。; 各 retained public surface が新経路で動作することを示す受入条件と behavior-level verification の対応付けを Spec へ先送りしており、現 draft では surface ごとの parity 証拠を確認できない。",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-10-02T13:51:17.714Z",
+      "passedGuardrails": [],
+      "headSha": "bd5b30542f35c3cadccd7d754246b09cf176562d",
+      "worktreeHash": "78d5b1bf6ad40327b6ebd33a5bc106a931d4dbbfe9917f8017c41e1e70e87bf4",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[6]"
+          },
+          "observed": "「既存 limit」「path の性質」が何を指すか定義されておらず、入力 inventory の達成条件を一意に判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[6]"
+          },
+          "observed": "各 leaf に対応付ける path の属性と既存 limit の範囲が未定義で、独立したレビュー担当者が同じ inventory の完全性を判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[7]"
+          },
+          "observed": "「不正な組合せ」が具体的に列挙されておらず、どの target guard 組合せを検証対象とするか不明確である。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[7]"
+          },
+          "observed": "target guard の不正組合せに対する期待される拒否条件が指定されておらず、実装の適合性を独立に判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[8]"
+          },
+          "observed": "「--agent-work-dir の二つの argv 形式」が具体的に示されておらず、どの入力形式を behavior-level test で検証するか判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[9]"
+          },
+          "observed": "Flow 外の共通 help consumer について、どの consumer のどの意味を維持するか、また確認方法が指定されていない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[2]"
+          },
+          "observed": "既存 public surface、hook、configuration、generated artifact、side effect の migration parity mapping を Spec へ先送りしており、現 draft に既存挙動の完全な inventory と retained behavior ごとの新 owner／削除判断がない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[3]"
+          },
+          "observed": "各 retained public surface が新経路で動作することを示す受入条件と behavior-level verification の対応付けを Spec へ先送りしており、現 draft では surface ごとの parity 証拠を確認できない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「既存 limit」「path の性質」が何を指すか定義されておらず、入力 inventory の達成条件を一意に判定できない。"
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "各 leaf に対応付ける path の属性と既存 limit の範囲が未定義で、独立したレビュー担当者が同じ inventory の完全性を判定できない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「不正な組合せ」が具体的に列挙されておらず、どの target guard 組合せを検証対象とするか不明確である。"
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "target guard の不正組合せに対する期待される拒否条件が指定されておらず、実装の適合性を独立に判定できない。"
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "「--agent-work-dir の二つの argv 形式」が具体的に示されておらず、どの入力形式を behavior-level test で検証するか判定できない。"
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "Flow 外の共通 help consumer について、どの consumer のどの意味を維持するか、また確認方法が指定されていない。"
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "既存 public surface、hook、configuration、generated artifact、side effect の migration parity mapping を Spec へ先送りしており、現 draft に既存挙動の完全な inventory と retained behavior ごとの新 owner／削除判断がない。"
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "各 retained public surface が新経路で動作することを示す受入条件と behavior-level verification の対応付けを Spec へ先送りしており、現 draft では surface ごとの parity 証拠を確認できない。"
+        }
+      ],
+      "issueLogId": "draft-gate-result-8cff50e5e5e36985d77ecb2ec4c98a2f65651ebfd25b8c13838f2fe9297c8c14"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "draft-gate",
+      "phase": "draft",
+      "reason": "Guarded draft gate repair rewound to draft-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[6]"
+          },
+          "observed": "「既存 limit」「path の性質」が何を指すか定義されておらず、入力 inventory の達成条件を一意に判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "b30d11329a4d982f6dc02a164efdc1b74960124760f07f7d7870de10ba0002e2"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[6]"
+          },
+          "observed": "各 leaf に対応付ける path の属性と既存 limit の範囲が未定義で、独立したレビュー担当者が同じ inventory の完全性を判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "0c8c558ec3b1a9f024dbe5ee998d43dd638e647d477ca505d51856c575a00be4"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[7]"
+          },
+          "observed": "「不正な組合せ」が具体的に列挙されておらず、どの target guard 組合せを検証対象とするか不明確である。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "c784e196b8697a43c8f024434ce6122f11dd69ca18794d5b5f423b410954c920"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[7]"
+          },
+          "observed": "target guard の不正組合せに対する期待される拒否条件が指定されておらず、実装の適合性を独立に判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "540beaa5b0cab8e64020ccc06f8e0b11ca7e36dbbede60c30d12092ce7c8f579"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[8]"
+          },
+          "observed": "「--agent-work-dir の二つの argv 形式」が具体的に示されておらず、どの入力形式を behavior-level test で検証するか判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "2484b4a2e3aca868e9899d47dcae3aca5aca7b35edb55eac8f540c439641b5d7"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[9]"
+          },
+          "observed": "Flow 外の共通 help consumer について、どの consumer のどの意味を維持するか、また確認方法が指定されていない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "49e52c632a1c44d15a46d26bae7d10a88cda4e29d36832bf90e6733c9bf14588"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[2]"
+          },
+          "observed": "既存 public surface、hook、configuration、generated artifact、side effect の migration parity mapping を Spec へ先送りしており、現 draft に既存挙動の完全な inventory と retained behavior ごとの新 owner／削除判断がない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "90f41538730db2e62069c303166648c2c149bfc0cceb68a5c1122930748914a7"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[3]"
+          },
+          "observed": "各 retained public surface が新経路で動作することを示す受入条件と behavior-level verification の対応付けを Spec へ先送りしており、現 draft では surface ごとの parity 証拠を確認できない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "09b4334df1b7c590ba98c42060b7fba8d250acc4799a5cfa58fbcc411908c11a"
+        }
+      ],
+      "timestamp": "2026-10-02T13:53:18.286Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+        "specId": "0a28476c-flow-help-contract",
+        "issue": 521,
+        "phase": "draft",
+        "targetStepId": "draft-gate-repair",
+        "connector": {
+          "phase": "draft",
+          "sourceGateStepId": "draft-gate",
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-d889b2ee-bd80-4c17-8128-d8e7881de00b",
+            "sequence": 1
+          },
+          "resultLogicalKey": "draft.gate",
+          "resultArtifactId": "steps/draft-gate/result.json",
+          "catalogFingerprint": "3ee1da7ab037c8cd0b2ef9256bf95c5250a22d598917aa533aba91cef0fce830",
+          "targetStepId": "draft-gate-repair",
+          "resetStepIds": [
+            "draft-gate-repair",
+            "draft-coverage-review",
+            "draft-coverage-triage",
+            "draft-coverage-repair",
+            "draft-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-d889b2ee-bd80-4c17-8128-d8e7881de00b",
+            "sequence": 1
+          },
+          "resultLogicalKey": "draft.gate",
+          "publicationActivityId": "plan-gate-repaired-96d4c9a8-d2e2-4a25-ab67-92a07be9aba8",
+          "catalogFingerprint": "3ee1da7ab037c8cd0b2ef9256bf95c5250a22d598917aa533aba91cef0fce830",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-draft-gate-d889b2ee-bd80-4c17-8128-d8e7881de00b",
+              "sequence": 1
+            },
+            "canonicalAttempt": {
+              "id": "attempt-draft-gate-d889b2ee-bd80-4c17-8128-d8e7881de00b",
+              "sequence": 1
+            },
+            "sourceFingerprint": "c7321650b45680b3ac45e474a7405b4a61fa6eff2e9c30226bb5f301b1e1e823",
+            "canonicalFingerprint": "3ee1da7ab037c8cd0b2ef9256bf95c5250a22d598917aa533aba91cef0fce830",
+            "sourceRevisionFingerprint": "50857dfa62607dd23b8d00ca4b30125eaa314fbdc68498e1669383047419f58a",
+            "canonicalRevisionFingerprint": "50857dfa62607dd23b8d00ca4b30125eaa314fbdc68498e1669383047419f58a"
+          }
+        },
+        "sourceIssueLogId": "draft-gate-result-8cff50e5e5e36985d77ecb2ec4c98a2f65651ebfd25b8c13838f2fe9297c8c14",
+        "sourceEntryDigest": "fc084d596d1c25922dc5f7a679aa07f2314daa3e6a8d528567a23d1edfa48151",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[6]"
+            },
+            "observed": "「既存 limit」「path の性質」が何を指すか定義されておらず、入力 inventory の達成条件を一意に判定できない。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "b30d11329a4d982f6dc02a164efdc1b74960124760f07f7d7870de10ba0002e2"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[6]"
+            },
+            "observed": "各 leaf に対応付ける path の属性と既存 limit の範囲が未定義で、独立したレビュー担当者が同じ inventory の完全性を判定できない。",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "0c8c558ec3b1a9f024dbe5ee998d43dd638e647d477ca505d51856c575a00be4"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[7]"
+            },
+            "observed": "「不正な組合せ」が具体的に列挙されておらず、どの target guard 組合せを検証対象とするか不明確である。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "c784e196b8697a43c8f024434ce6122f11dd69ca18794d5b5f423b410954c920"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[7]"
+            },
+            "observed": "target guard の不正組合せに対する期待される拒否条件が指定されておらず、実装の適合性を独立に判定できない。",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "540beaa5b0cab8e64020ccc06f8e0b11ca7e36dbbede60c30d12092ce7c8f579"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[8]"
+            },
+            "observed": "「--agent-work-dir の二つの argv 形式」が具体的に示されておらず、どの入力形式を behavior-level test で検証するか判定できない。",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "2484b4a2e3aca868e9899d47dcae3aca5aca7b35edb55eac8f540c439641b5d7"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[9]"
+            },
+            "observed": "Flow 外の共通 help consumer について、どの consumer のどの意味を維持するか、また確認方法が指定されていない。",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "49e52c632a1c44d15a46d26bae7d10a88cda4e29d36832bf90e6733c9bf14588"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.deferredToSpec[2]"
+            },
+            "observed": "既存 public surface、hook、configuration、generated artifact、side effect の migration parity mapping を Spec へ先送りしており、現 draft に既存挙動の完全な inventory と retained behavior ごとの新 owner／削除判断がない。",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "90f41538730db2e62069c303166648c2c149bfc0cceb68a5c1122930748914a7"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.deferredToSpec[3]"
+            },
+            "observed": "各 retained public surface が新経路で動作することを示す受入条件と behavior-level verification の対応付けを Spec へ先送りしており、現 draft では surface ごとの parity 証拠を確認できない。",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "09b4334df1b7c590ba98c42060b7fba8d250acc4799a5cfa58fbcc411908c11a"
+          }
+        ],
+        "observationFingerprints": [
+          "b30d11329a4d982f6dc02a164efdc1b74960124760f07f7d7870de10ba0002e2",
+          "0c8c558ec3b1a9f024dbe5ee998d43dd638e647d477ca505d51856c575a00be4",
+          "c784e196b8697a43c8f024434ce6122f11dd69ca18794d5b5f423b410954c920",
+          "540beaa5b0cab8e64020ccc06f8e0b11ca7e36dbbede60c30d12092ce7c8f579",
+          "2484b4a2e3aca868e9899d47dcae3aca5aca7b35edb55eac8f540c439641b5d7",
+          "49e52c632a1c44d15a46d26bae7d10a88cda4e29d36832bf90e6733c9bf14588",
+          "90f41538730db2e62069c303166648c2c149bfc0cceb68a5c1122930748914a7",
+          "09b4334df1b7c590ba98c42060b7fba8d250acc4799a5cfa58fbcc411908c11a"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "b30d11329a4d982f6dc02a164efdc1b74960124760f07f7d7870de10ba0002e2",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "0c8c558ec3b1a9f024dbe5ee998d43dd638e647d477ca505d51856c575a00be4",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "c784e196b8697a43c8f024434ce6122f11dd69ca18794d5b5f423b410954c920",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "540beaa5b0cab8e64020ccc06f8e0b11ca7e36dbbede60c30d12092ce7c8f579",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "2484b4a2e3aca868e9899d47dcae3aca5aca7b35edb55eac8f540c439641b5d7",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "49e52c632a1c44d15a46d26bae7d10a88cda4e29d36832bf90e6733c9bf14588",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "90f41538730db2e62069c303166648c2c149bfc0cceb68a5c1122930748914a7",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "09b4334df1b7c590ba98c42060b7fba8d250acc4799a5cfa58fbcc411908c11a",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-10-02T13:53:18.286Z"
+      },
+      "issueLogId": "plan-gate-repair-52903448d31a808d595bc07ce8d318fb3ac63884d0781327f1d970b4f7725966"
+    },
+    {
+      "step": "draft-gate",
+      "level": "parent",
+      "phase": "draft",
+      "reason": "Parser/help の既存 public behavior を新しい canonical owner または明示的な削除判断へ一対一に対応付ける migration parity mapping がこの draft に定義されず、後続の Spec に延期されている。; 各 retained public surface に対する behavior-level verification と受入条件の対応付けがこの draft に含まれず、Spec で matrix を定義するとだけ記載されているため、実装前の parity 証拠が未定義である。",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-10-02T13:58:08.451Z",
+      "passedGuardrails": [],
+      "headSha": "bd5b30542f35c3cadccd7d754246b09cf176562d",
+      "worktreeHash": "b11a18e012b3e88b99fb25cd93beaf98937b628cbccf2c604acdbdadf7dbcc3d",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "draft.json",
+            "locator": "decisionMap.deferredToSpec[2]"
+          },
+          "observed": "Parser/help の既存 public behavior を新しい canonical owner または明示的な削除判断へ一対一に対応付ける migration parity mapping がこの draft に定義されず、後続の Spec に延期されている。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "draft.json",
+            "locator": "decisionMap.deferredToSpec[3]"
+          },
+          "observed": "各 retained public surface に対する behavior-level verification と受入条件の対応付けがこの draft に含まれず、Spec で matrix を定義するとだけ記載されているため、実装前の parity 証拠が未定義である。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "Parser/help の既存 public behavior を新しい canonical owner または明示的な削除判断へ一対一に対応付ける migration parity mapping がこの draft に定義されず、後続の Spec に延期されている。"
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "各 retained public surface に対する behavior-level verification と受入条件の対応付けがこの draft に含まれず、Spec で matrix を定義するとだけ記載されているため、実装前の parity 証拠が未定義である。"
+        }
+      ],
+      "issueLogId": "draft-gate-result-66290553fdf9a0c036942c2e3a33b5064d23e1dda61c981d5b09bccd2fb706de"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "draft-gate",
+      "phase": "draft",
+      "reason": "Guarded draft gate repair rewound to draft-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "draft.json",
+            "locator": "decisionMap.deferredToSpec[2]"
+          },
+          "observed": "Parser/help の既存 public behavior を新しい canonical owner または明示的な削除判断へ一対一に対応付ける migration parity mapping がこの draft に定義されず、後続の Spec に延期されている。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "1f4147b389752b387e31fb4bbbcb21c3ea5b4d44affdf49eb2f06cb2a1c91cb9"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "draft.json",
+            "locator": "decisionMap.deferredToSpec[3]"
+          },
+          "observed": "各 retained public surface に対する behavior-level verification と受入条件の対応付けがこの draft に含まれず、Spec で matrix を定義するとだけ記載されているため、実装前の parity 証拠が未定義である。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "dd683ebed82caf26a7852533c82fbec5c9101fa8ee363b7f6e6e9b7413464399"
+        }
+      ],
+      "timestamp": "2026-10-02T13:59:30.839Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+        "specId": "0a28476c-flow-help-contract",
+        "issue": 521,
+        "phase": "draft",
+        "targetStepId": "draft-gate-repair",
+        "connector": {
+          "phase": "draft",
+          "sourceGateStepId": "draft-gate",
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-f09541fd-40b9-47f4-a3f3-9fd16e0536f1",
+            "sequence": 2
+          },
+          "resultLogicalKey": "draft.gate",
+          "resultArtifactId": "steps/draft-gate/result.json",
+          "catalogFingerprint": "5b8f0a39aa2b05c0ee50eed5ae95c67fbae97fc86c1040ed93dee3b6992e9523",
+          "targetStepId": "draft-gate-repair",
+          "resetStepIds": [
+            "draft-gate-repair",
+            "draft-coverage-review",
+            "draft-coverage-triage",
+            "draft-coverage-repair",
+            "draft-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-f09541fd-40b9-47f4-a3f3-9fd16e0536f1",
+            "sequence": 2
+          },
+          "resultLogicalKey": "draft.gate",
+          "publicationActivityId": "plan-gate-repaired-c5d2645a-9142-451f-b1f2-00474f5d413d",
+          "catalogFingerprint": "5b8f0a39aa2b05c0ee50eed5ae95c67fbae97fc86c1040ed93dee3b6992e9523",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-draft-gate-f09541fd-40b9-47f4-a3f3-9fd16e0536f1",
+              "sequence": 2
+            },
+            "canonicalAttempt": {
+              "id": "attempt-draft-gate-f09541fd-40b9-47f4-a3f3-9fd16e0536f1",
+              "sequence": 2
+            },
+            "sourceFingerprint": "0e72c44cfb24d5b7b94aa32448b9f82b823ed6b6a545c3e9495b6ed6b2c4ab66",
+            "canonicalFingerprint": "5b8f0a39aa2b05c0ee50eed5ae95c67fbae97fc86c1040ed93dee3b6992e9523",
+            "sourceRevisionFingerprint": "c853d3726819d91cc460755939181970c6152858f58e3456a872c42f121749b4",
+            "canonicalRevisionFingerprint": "c853d3726819d91cc460755939181970c6152858f58e3456a872c42f121749b4"
+          }
+        },
+        "sourceIssueLogId": "draft-gate-result-66290553fdf9a0c036942c2e3a33b5064d23e1dda61c981d5b09bccd2fb706de",
+        "sourceEntryDigest": "1c70bc7f4ad837e4c369f81fe5c3f3fc3bc2ccfb42ab115b0c4062b3d3d7221b",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "draft.json",
+              "locator": "decisionMap.deferredToSpec[2]"
+            },
+            "observed": "Parser/help の既存 public behavior を新しい canonical owner または明示的な削除判断へ一対一に対応付ける migration parity mapping がこの draft に定義されず、後続の Spec に延期されている。",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "1f4147b389752b387e31fb4bbbcb21c3ea5b4d44affdf49eb2f06cb2a1c91cb9"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "draft.json",
+              "locator": "decisionMap.deferredToSpec[3]"
+            },
+            "observed": "各 retained public surface に対する behavior-level verification と受入条件の対応付けがこの draft に含まれず、Spec で matrix を定義するとだけ記載されているため、実装前の parity 証拠が未定義である。",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "dd683ebed82caf26a7852533c82fbec5c9101fa8ee363b7f6e6e9b7413464399"
+          }
+        ],
+        "observationFingerprints": [
+          "1f4147b389752b387e31fb4bbbcb21c3ea5b4d44affdf49eb2f06cb2a1c91cb9",
+          "dd683ebed82caf26a7852533c82fbec5c9101fa8ee363b7f6e6e9b7413464399"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "1f4147b389752b387e31fb4bbbcb21c3ea5b4d44affdf49eb2f06cb2a1c91cb9",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "dd683ebed82caf26a7852533c82fbec5c9101fa8ee363b7f6e6e9b7413464399",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-10-02T13:59:30.839Z"
+      },
+      "issueLogId": "plan-gate-repair-6e176e0642d3bc2c6291d94d58fe016998be2161b81d081842cd5c814a5e9e36"
+    },
+    {
+      "step": "draft-gate",
+      "level": "parent",
+      "phase": "draft",
+      "reason": "「利用者が受理可能な選択肢を完全に確認できる状態」は、何をもって完全とするかが検証可能な条件として定義されていない。; 目標の「完全に確認できる状態」だけでは、独立したレビューアが達成条件を一致して判定できない。; leaf help の command-specific prose、example、localization の「意味を維持する」条件に、比較対象や判定基準がない。; 「canonical Options row 以外の説明文の意味を維持する」では、どの出力がどの期待値を満たせばよいか特定できない。; 既存 help の prose、example、localization の「意味を維持する」は、検証可能な保持条件に分解されていない。; 説明文の「意味を維持する」ための具体的な受入条件または期待出力がなく、実装達成の判定が一致しない。; 全 routed leaf の public input inventory と validator owner 対応付けを Spec の成果物として要求しているが、must／should／nice-to-have の優先度が付いていない。; registry 由来の leaf/group 集合と検証行列の確定を要求しているが、優先度が付いていない。; public surface の migration parity mapping 作成を要求しているが、優先度が付いていない。; parser、help、guard、runtime、query、exit code、拒否順序を接続する受入条件の作成を要求しているが、優先度が付いていない。; migration parity の inventory、owner mapping、side effect、test surface は「Spec で表にする」成果物として先送りされており、この draft 自体には各 retained public surface の具体的な一対一の移行表が定義されていない。",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-10-02T14:02:29.150Z",
+      "passedGuardrails": [],
+      "headSha": "bd5b30542f35c3cadccd7d754246b09cf176562d",
+      "worktreeHash": "0739a90e5f1c435819adb3e300a399ca283be39087355e5544878e973d4f6b68",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "goal"
+          },
+          "observed": "「利用者が受理可能な選択肢を完全に確認できる状態」は、何をもって完全とするかが検証可能な条件として定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "goal"
+          },
+          "observed": "目標の「完全に確認できる状態」だけでは、独立したレビューアが達成条件を一致して判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[1]"
+          },
+          "observed": "leaf help の command-specific prose、example、localization の「意味を維持する」条件に、比較対象や判定基準がない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[1]"
+          },
+          "observed": "「canonical Options row 以外の説明文の意味を維持する」では、どの出力がどの期待値を満たせばよいか特定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.impactOnExisting[1]"
+          },
+          "observed": "既存 help の prose、example、localization の「意味を維持する」は、検証可能な保持条件に分解されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.impactOnExisting[1]"
+          },
+          "observed": "説明文の「意味を維持する」ための具体的な受入条件または期待出力がなく、実装達成の判定が一致しない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[0]"
+          },
+          "observed": "全 routed leaf の public input inventory と validator owner 対応付けを Spec の成果物として要求しているが、must／should／nice-to-have の優先度が付いていない。",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[1]"
+          },
+          "observed": "registry 由来の leaf/group 集合と検証行列の確定を要求しているが、優先度が付いていない。",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[2]"
+          },
+          "observed": "public surface の migration parity mapping 作成を要求しているが、優先度が付いていない。",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[3]"
+          },
+          "observed": "parser、help、guard、runtime、query、exit code、拒否順序を接続する受入条件の作成を要求しているが、優先度が付いていない。",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[2]"
+          },
+          "observed": "migration parity の inventory、owner mapping、side effect、test surface は「Spec で表にする」成果物として先送りされており、この draft 自体には各 retained public surface の具体的な一対一の移行表が定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「利用者が受理可能な選択肢を完全に確認できる状態」は、何をもって完全とするかが検証可能な条件として定義されていない。"
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "目標の「完全に確認できる状態」だけでは、独立したレビューアが達成条件を一致して判定できない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "leaf help の command-specific prose、example、localization の「意味を維持する」条件に、比較対象や判定基準がない。"
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "「canonical Options row 以外の説明文の意味を維持する」では、どの出力がどの期待値を満たせばよいか特定できない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "既存 help の prose、example、localization の「意味を維持する」は、検証可能な保持条件に分解されていない。"
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "説明文の「意味を維持する」ための具体的な受入条件または期待出力がなく、実装達成の判定が一致しない。"
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "全 routed leaf の public input inventory と validator owner 対応付けを Spec の成果物として要求しているが、must／should／nice-to-have の優先度が付いていない。"
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "registry 由来の leaf/group 集合と検証行列の確定を要求しているが、優先度が付いていない。"
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "public surface の migration parity mapping 作成を要求しているが、優先度が付いていない。"
+        },
+        {
+          "guardrail_id": "prioritize-requirements",
+          "reason": "parser、help、guard、runtime、query、exit code、拒否順序を接続する受入条件の作成を要求しているが、優先度が付いていない。"
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "migration parity の inventory、owner mapping、side effect、test surface は「Spec で表にする」成果物として先送りされており、この draft 自体には各 retained public surface の具体的な一対一の移行表が定義されていない。"
+        }
+      ],
+      "issueLogId": "draft-gate-result-1ab187987b3fb393dd1d20090638c49a1046b2ff9f13dfb5161593b9ea0dad10"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "draft-gate",
+      "phase": "draft",
+      "reason": "Guarded draft gate repair rewound to draft-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "goal"
+          },
+          "observed": "「利用者が受理可能な選択肢を完全に確認できる状態」は、何をもって完全とするかが検証可能な条件として定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "171bc695d48d04d271262f9af8e88040dd24aa2444ed416ed50e14ed2a789a37"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "goal"
+          },
+          "observed": "目標の「完全に確認できる状態」だけでは、独立したレビューアが達成条件を一致して判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "528675715ac49888e607a1424d81251956e545ba163cb8b7c971607dba5f4de5"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[1]"
+          },
+          "observed": "leaf help の command-specific prose、example、localization の「意味を維持する」条件に、比較対象や判定基準がない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "c635dbb918d7e01d8ac9e98d7471a66ce128b88614ab7eac4eb2004eaf23e064"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.decisionPoints[1]"
+          },
+          "observed": "「canonical Options row 以外の説明文の意味を維持する」では、どの出力がどの期待値を満たせばよいか特定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "8fe21cac0de94ac9dfa8ae4f26abe25504544867467de0323b481329db17172b"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.impactOnExisting[1]"
+          },
+          "observed": "既存 help の prose、example、localization の「意味を維持する」は、検証可能な保持条件に分解されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "4e80641545cb2d79ec2c96b388996340fb97d21eddc34aee5fec5d9d80ce40b5"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.impactOnExisting[1]"
+          },
+          "observed": "説明文の「意味を維持する」ための具体的な受入条件または期待出力がなく、実装達成の判定が一致しない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "07e2f5ddc0522882b776e64d14e0b66dc4a122485f328c3f87e9fbd9bf5b33cf"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[0]"
+          },
+          "observed": "全 routed leaf の public input inventory と validator owner 対応付けを Spec の成果物として要求しているが、must／should／nice-to-have の優先度が付いていない。",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "2c5f947107ae875c642dfc644a9bfa04dd767a1a4e640462a6148df9d3e38668"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[1]"
+          },
+          "observed": "registry 由来の leaf/group 集合と検証行列の確定を要求しているが、優先度が付いていない。",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "b320c9b0c3f0cf9dcb780119b86168e4682fd826bff89e94600de83e3380bc77"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[2]"
+          },
+          "observed": "public surface の migration parity mapping 作成を要求しているが、優先度が付いていない。",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "dc2f2b2b6b0bc6eeb209b06d4f883e566a1cf5aa16008ee53520a8edd6c7c649"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "prioritize-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[3]"
+          },
+          "observed": "parser、help、guard、runtime、query、exit code、拒否順序を接続する受入条件の作成を要求しているが、優先度が付いていない。",
+          "severity": "blocking",
+          "refs": [
+            "prioritize-requirements"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "prioritize-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "a9261db5a0cccec2d513586352b4ab649253c11f3efb9e289285b1f77f839743"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[2]"
+          },
+          "observed": "migration parity の inventory、owner mapping、side effect、test surface は「Spec で表にする」成果物として先送りされており、この draft 自体には各 retained public surface の具体的な一対一の移行表が定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "authority": {
+            "kind": "requirement",
+            "id": "migration-parity"
+          },
+          "rootCause": null,
+          "fingerprint": "2c25b60a9ece06fe5fbe000257358fe73c8d62852bf5f2c388b525b7e56a0005"
+        }
+      ],
+      "timestamp": "2026-10-02T14:04:06.887Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+        "specId": "0a28476c-flow-help-contract",
+        "issue": 521,
+        "phase": "draft",
+        "targetStepId": "draft-gate-repair",
+        "connector": {
+          "phase": "draft",
+          "sourceGateStepId": "draft-gate",
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-a4f85540-25e2-423a-b445-dee008dc6ad6",
+            "sequence": 3
+          },
+          "resultLogicalKey": "draft.gate",
+          "resultArtifactId": "steps/draft-gate/result.json",
+          "catalogFingerprint": "48ed1ada560970e825afd8aef4469a07aaac640c54fb8d2786e0ad5bd672ad38",
+          "targetStepId": "draft-gate-repair",
+          "resetStepIds": [
+            "draft-gate-repair",
+            "draft-coverage-review",
+            "draft-coverage-triage",
+            "draft-coverage-repair",
+            "draft-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-draft-gate-a4f85540-25e2-423a-b445-dee008dc6ad6",
+            "sequence": 3
+          },
+          "resultLogicalKey": "draft.gate",
+          "publicationActivityId": "plan-gate-repaired-998594d5-919b-4b00-b8fe-10a3b0644fcc",
+          "catalogFingerprint": "48ed1ada560970e825afd8aef4469a07aaac640c54fb8d2786e0ad5bd672ad38",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-draft-gate-a4f85540-25e2-423a-b445-dee008dc6ad6",
+              "sequence": 3
+            },
+            "canonicalAttempt": {
+              "id": "attempt-draft-gate-a4f85540-25e2-423a-b445-dee008dc6ad6",
+              "sequence": 3
+            },
+            "sourceFingerprint": "eb34562f7e0ce852337e5c6f07ea5cc1d03c674a0a758832c76481e8a755998a",
+            "canonicalFingerprint": "48ed1ada560970e825afd8aef4469a07aaac640c54fb8d2786e0ad5bd672ad38",
+            "sourceRevisionFingerprint": "aeaf1fe8406946c2d2affda5a1c475644f013a974e1072fd4f47d92f8203681e",
+            "canonicalRevisionFingerprint": "aeaf1fe8406946c2d2affda5a1c475644f013a974e1072fd4f47d92f8203681e"
+          }
+        },
+        "sourceIssueLogId": "draft-gate-result-1ab187987b3fb393dd1d20090638c49a1046b2ff9f13dfb5161593b9ea0dad10",
+        "sourceEntryDigest": "6695bc2a884850a6f8778a562ec78c9720a56a2de26c73c911568559d5582bda",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "goal"
+            },
+            "observed": "「利用者が受理可能な選択肢を完全に確認できる状態」は、何をもって完全とするかが検証可能な条件として定義されていない。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "171bc695d48d04d271262f9af8e88040dd24aa2444ed416ed50e14ed2a789a37"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "goal"
+            },
+            "observed": "目標の「完全に確認できる状態」だけでは、独立したレビューアが達成条件を一致して判定できない。",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "528675715ac49888e607a1424d81251956e545ba163cb8b7c971607dba5f4de5"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[1]"
+            },
+            "observed": "leaf help の command-specific prose、example、localization の「意味を維持する」条件に、比較対象や判定基準がない。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "c635dbb918d7e01d8ac9e98d7471a66ce128b88614ab7eac4eb2004eaf23e064"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.decisionPoints[1]"
+            },
+            "observed": "「canonical Options row 以外の説明文の意味を維持する」では、どの出力がどの期待値を満たせばよいか特定できない。",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "8fe21cac0de94ac9dfa8ae4f26abe25504544867467de0323b481329db17172b"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.impactOnExisting[1]"
+            },
+            "observed": "既存 help の prose、example、localization の「意味を維持する」は、検証可能な保持条件に分解されていない。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "4e80641545cb2d79ec2c96b388996340fb97d21eddc34aee5fec5d9d80ce40b5"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.impactOnExisting[1]"
+            },
+            "observed": "説明文の「意味を維持する」ための具体的な受入条件または期待出力がなく、実装達成の判定が一致しない。",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "07e2f5ddc0522882b776e64d14e0b66dc4a122485f328c3f87e9fbd9bf5b33cf"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.deferredToSpec[0]"
+            },
+            "observed": "全 routed leaf の public input inventory と validator owner 対応付けを Spec の成果物として要求しているが、must／should／nice-to-have の優先度が付いていない。",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "2c5f947107ae875c642dfc644a9bfa04dd767a1a4e640462a6148df9d3e38668"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.deferredToSpec[1]"
+            },
+            "observed": "registry 由来の leaf/group 集合と検証行列の確定を要求しているが、優先度が付いていない。",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "b320c9b0c3f0cf9dcb780119b86168e4682fd826bff89e94600de83e3380bc77"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.deferredToSpec[2]"
+            },
+            "observed": "public surface の migration parity mapping 作成を要求しているが、優先度が付いていない。",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "dc2f2b2b6b0bc6eeb209b06d4f883e566a1cf5aa16008ee53520a8edd6c7c649"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "prioritize-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.deferredToSpec[3]"
+            },
+            "observed": "parser、help、guard、runtime、query、exit code、拒否順序を接続する受入条件の作成を要求しているが、優先度が付いていない。",
+            "severity": "blocking",
+            "refs": [
+              "prioritize-requirements"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "prioritize-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "a9261db5a0cccec2d513586352b4ab649253c11f3efb9e289285b1f77f839743"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "migration-parity",
+            "where": {
+              "file": "spec.json",
+              "locator": "decisionMap.deferredToSpec[2]"
+            },
+            "observed": "migration parity の inventory、owner mapping、side effect、test surface は「Spec で表にする」成果物として先送りされており、この draft 自体には各 retained public surface の具体的な一対一の移行表が定義されていない。",
+            "severity": "blocking",
+            "refs": [
+              "migration-parity"
+            ],
+            "authority": {
+              "kind": "requirement",
+              "id": "migration-parity"
+            },
+            "rootCause": null,
+            "fingerprint": "2c25b60a9ece06fe5fbe000257358fe73c8d62852bf5f2c388b525b7e56a0005"
+          }
+        ],
+        "observationFingerprints": [
+          "171bc695d48d04d271262f9af8e88040dd24aa2444ed416ed50e14ed2a789a37",
+          "528675715ac49888e607a1424d81251956e545ba163cb8b7c971607dba5f4de5",
+          "c635dbb918d7e01d8ac9e98d7471a66ce128b88614ab7eac4eb2004eaf23e064",
+          "8fe21cac0de94ac9dfa8ae4f26abe25504544867467de0323b481329db17172b",
+          "4e80641545cb2d79ec2c96b388996340fb97d21eddc34aee5fec5d9d80ce40b5",
+          "07e2f5ddc0522882b776e64d14e0b66dc4a122485f328c3f87e9fbd9bf5b33cf",
+          "2c5f947107ae875c642dfc644a9bfa04dd767a1a4e640462a6148df9d3e38668",
+          "b320c9b0c3f0cf9dcb780119b86168e4682fd826bff89e94600de83e3380bc77",
+          "dc2f2b2b6b0bc6eeb209b06d4f883e566a1cf5aa16008ee53520a8edd6c7c649",
+          "a9261db5a0cccec2d513586352b4ab649253c11f3efb9e289285b1f77f839743",
+          "2c25b60a9ece06fe5fbe000257358fe73c8d62852bf5f2c388b525b7e56a0005"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "171bc695d48d04d271262f9af8e88040dd24aa2444ed416ed50e14ed2a789a37",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "528675715ac49888e607a1424d81251956e545ba163cb8b7c971607dba5f4de5",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "c635dbb918d7e01d8ac9e98d7471a66ce128b88614ab7eac4eb2004eaf23e064",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "8fe21cac0de94ac9dfa8ae4f26abe25504544867467de0323b481329db17172b",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "4e80641545cb2d79ec2c96b388996340fb97d21eddc34aee5fec5d9d80ce40b5",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "07e2f5ddc0522882b776e64d14e0b66dc4a122485f328c3f87e9fbd9bf5b33cf",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "2c5f947107ae875c642dfc644a9bfa04dd767a1a4e640462a6148df9d3e38668",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "b320c9b0c3f0cf9dcb780119b86168e4682fd826bff89e94600de83e3380bc77",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "dc2f2b2b6b0bc6eeb209b06d4f883e566a1cf5aa16008ee53520a8edd6c7c649",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "a9261db5a0cccec2d513586352b4ab649253c11f3efb9e289285b1f77f839743",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "2c25b60a9ece06fe5fbe000257358fe73c8d62852bf5f2c388b525b7e56a0005",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-10-02T14:04:06.887Z"
+      },
+      "issueLogId": "plan-gate-repair-f02a02728ed1deee16a171fe39393c23f80b99d2d2461367d484a1c6020f323c"
+    },
+    {
+      "step": "spec-gate",
+      "level": "parent",
+      "phase": "spec",
+      "reason": "R1 uses the vague phrase 「必要な placeholder」 without defining which option kinds require one or what concrete placeholder contract applies.; R6 requires E2E verification using 「代表ケース」 but does not define the selection or coverage criteria for a representative case.; The subjective term 「代表ケース」 leaves the required E2E coverage unspecified, so independent reviewers cannot agree on whether the verification scope is sufficient.; The acceptance criterion refers to 「representative docs/core/plugin group help」 without identifying the required surfaces or a measurable representativeness rule.; T-6 acceptance requires 「代表的な docs/core/plugin group help」 but does not define which examples must be covered or how selection is judged.; T-7 acceptance refers to 「代表的な接続シナリオ」 without defining the scenarios that are mandatory or the selection criterion.; T-7 acceptance requires checking 「必要な結果」 but does not identify which results are required at each test layer.; R3 explicitly permits recording 「size/retry/context limit または上限なし」. Retry and resource-related processing therefore have no required upper bound, contrary to the guardrail's prohibition on unbounded processing.; T-4 repeats the allowance 「size/retry/context limit または上限なし」, so the planned inventory can accept unbounded retry or resource processing instead of requiring explicit limits.; The spec does not list the concrete user-facing argument set with each argument's type, format, and range. It defers deriving a test-only inventory from the live registry and owners, while only naming categories and examples; internal arguments are not provided as a complete marked inventory either.; The spec gives category-level exit codes for valid help/success, parser/target/command failures, and no-leaf help, but does not state success and failure conditions for each modified command or leaf individually.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-10-02T14:27:13.136Z",
+      "passedGuardrails": [
+        "spec-test-coverage"
+      ],
+      "headSha": "bd5b30542f35c3cadccd7d754246b09cf176562d",
+      "worktreeHash": "ebb344d51d8b354e70ab48a7c01e5ea68a6dc5f4778fb720d9fab54bb93caec9",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R1].desc"
+          },
+          "observed": "R1 uses the vague phrase 「必要な placeholder」 without defining which option kinds require one or what concrete placeholder contract applies.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R1",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R6].desc"
+          },
+          "observed": "R6 requires E2E verification using 「代表ケース」 but does not define the selection or coverage criteria for a representative case.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R6].desc"
+          },
+          "observed": "The subjective term 「代表ケース」 leaves the required E2E coverage unspecified, so independent reviewers cannot agree on whether the verification scope is sufficient.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "acceptance_criteria[8]"
+          },
+          "observed": "The acceptance criterion refers to 「representative docs/core/plugin group help」 without identifying the required surfaces or a measurable representativeness rule.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "collection": "acceptance_criteria",
+              "position": 8
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "collection": "acceptance_criteria",
+                "position": 8
+              },
+              "operationKinds": [
+                "delete-array-element",
+                "replace-array-element"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[id=T-6].acceptance"
+          },
+          "observed": "T-6 acceptance requires 「代表的な docs/core/plugin group help」 but does not define which examples must be covered or how selection is judged.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-6",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-6",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[id=T-7].acceptance"
+          },
+          "observed": "T-7 acceptance refers to 「代表的な接続シナリオ」 without defining the scenarios that are mandatory or the selection criterion.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-7",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[id=T-7].acceptance"
+          },
+          "observed": "T-7 acceptance requires checking 「必要な結果」 but does not identify which results are required at each test layer.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-7",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R3].desc"
+          },
+          "observed": "R3 explicitly permits recording 「size/retry/context limit または上限なし」. Retry and resource-related processing therefore have no required upper bound, contrary to the guardrail's prohibition on unbounded processing.",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[id=T-4].acceptance"
+          },
+          "observed": "T-4 repeats the allowance 「size/retry/context limit または上限なし」, so the planned inventory can accept unbounded retry or resource processing instead of requiring explicit limits.",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-4",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-4",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "validate-user-input-at-entry-point",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R3].desc; tasks[id=T-4].implementation_notes"
+          },
+          "observed": "The spec does not list the concrete user-facing argument set with each argument's type, format, and range. It defers deriving a test-only inventory from the live registry and owners, while only naming categories and examples; internal arguments are not provided as a complete marked inventory either.",
+          "severity": "blocking",
+          "refs": [
+            "validate-user-input-at-entry-point"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            },
+            {
+              "entity": "task",
+              "id": "T-4",
+              "field": "implementation_notes"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            },
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-4",
+                "field": "implementation_notes"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "exit-code-contract",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R4].desc; acceptance_criteria[7]"
+          },
+          "observed": "The spec gives category-level exit codes for valid help/success, parser/target/command failures, and no-leaf help, but does not state success and failure conditions for each modified command or leaf individually.",
+          "severity": "blocking",
+          "refs": [
+            "exit-code-contract"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R4",
+              "field": "desc"
+            },
+            {
+              "collection": "acceptance_criteria",
+              "position": 7
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R4",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            },
+            {
+              "target": {
+                "collection": "acceptance_criteria",
+                "position": 7
+              },
+              "operationKinds": [
+                "delete-array-element",
+                "replace-array-element"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60"
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "R1 uses the vague phrase 「必要な placeholder」 without defining which option kinds require one or what concrete placeholder contract applies."
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "R6 requires E2E verification using 「代表ケース」 but does not define the selection or coverage criteria for a representative case."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "The subjective term 「代表ケース」 leaves the required E2E coverage unspecified, so independent reviewers cannot agree on whether the verification scope is sufficient."
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "The acceptance criterion refers to 「representative docs/core/plugin group help」 without identifying the required surfaces or a measurable representativeness rule."
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "T-6 acceptance requires 「代表的な docs/core/plugin group help」 but does not define which examples must be covered or how selection is judged."
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "T-7 acceptance refers to 「代表的な接続シナリオ」 without defining the scenarios that are mandatory or the selection criterion."
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "T-7 acceptance requires checking 「必要な結果」 but does not identify which results are required at each test layer."
+        },
+        {
+          "guardrail_id": "bounded-resource-usage",
+          "reason": "R3 explicitly permits recording 「size/retry/context limit または上限なし」. Retry and resource-related processing therefore have no required upper bound, contrary to the guardrail's prohibition on unbounded processing."
+        },
+        {
+          "guardrail_id": "bounded-resource-usage",
+          "reason": "T-4 repeats the allowance 「size/retry/context limit または上限なし」, so the planned inventory can accept unbounded retry or resource processing instead of requiring explicit limits."
+        },
+        {
+          "guardrail_id": "validate-user-input-at-entry-point",
+          "reason": "The spec does not list the concrete user-facing argument set with each argument's type, format, and range. It defers deriving a test-only inventory from the live registry and owners, while only naming categories and examples; internal arguments are not provided as a complete marked inventory either."
+        },
+        {
+          "guardrail_id": "exit-code-contract",
+          "reason": "The spec gives category-level exit codes for valid help/success, parser/target/command failures, and no-leaf help, but does not state success and failure conditions for each modified command or leaf individually."
+        }
+      ],
+      "issueLogId": "spec-gate-result-341801f6d79a979409530254b1337c6dd802d67d9c2f4ff107ab57e27beb66ec"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "spec-gate",
+      "phase": "spec",
+      "reason": "Guarded spec gate repair rewound to spec-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R1].desc"
+          },
+          "observed": "R1 uses the vague phrase 「必要な placeholder」 without defining which option kinds require one or what concrete placeholder contract applies.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R1",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "f8a86ab688f31404a71314e91833335460f45930c9bbbce697cc6b51e8841981"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R6].desc"
+          },
+          "observed": "R6 requires E2E verification using 「代表ケース」 but does not define the selection or coverage criteria for a representative case.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "56540186b883c00fb1611098d992bdb9a7754b0dbb5211b857f4e545982e2d79"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R6].desc"
+          },
+          "observed": "The subjective term 「代表ケース」 leaves the required E2E coverage unspecified, so independent reviewers cannot agree on whether the verification scope is sufficient.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "abd2f8ea9b0ce78de059b60221cd0d13f4394b1cb99e3456b8901b97efc16008"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "acceptance_criteria[8]"
+          },
+          "observed": "The acceptance criterion refers to 「representative docs/core/plugin group help」 without identifying the required surfaces or a measurable representativeness rule.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "collection": "acceptance_criteria",
+              "position": 8
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "collection": "acceptance_criteria",
+                "position": 8
+              },
+              "operationKinds": [
+                "delete-array-element",
+                "replace-array-element"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "2a65b59fff1941ab010924833ad74bfae5e3c04910ab4e152e2696554e03a184"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[id=T-6].acceptance"
+          },
+          "observed": "T-6 acceptance requires 「代表的な docs/core/plugin group help」 but does not define which examples must be covered or how selection is judged.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-6",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-6",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "35db65f41a05a0777dcf59e59bff6d4c7594767dd9bc0697ef0572d918d97b07"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[id=T-7].acceptance"
+          },
+          "observed": "T-7 acceptance refers to 「代表的な接続シナリオ」 without defining the scenarios that are mandatory or the selection criterion.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-7",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "efd49e502e71f283f1412818f1d57d7d35315d4ed54c822c7a8c278fb5e86966"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[id=T-7].acceptance"
+          },
+          "observed": "T-7 acceptance requires checking 「必要な結果」 but does not identify which results are required at each test layer.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-7",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "ac6774ae25c7e7b65b868053866d9c8c57e6d7b04ef0e4f03ee594c6cf54bdfd"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R3].desc"
+          },
+          "observed": "R3 explicitly permits recording 「size/retry/context limit または上限なし」. Retry and resource-related processing therefore have no required upper bound, contrary to the guardrail's prohibition on unbounded processing.",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+          "authority": {
+            "kind": "requirement",
+            "id": "bounded-resource-usage"
+          },
+          "rootCause": null,
+          "fingerprint": "87728dd2ec60375ec40dbc1df72d4f29a4407a4573f03bfafd6b9d14e97f4f64"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[id=T-4].acceptance"
+          },
+          "observed": "T-4 repeats the allowance 「size/retry/context limit または上限なし」, so the planned inventory can accept unbounded retry or resource processing instead of requiring explicit limits.",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-4",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-4",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+          "authority": {
+            "kind": "requirement",
+            "id": "bounded-resource-usage"
+          },
+          "rootCause": null,
+          "fingerprint": "3a2b3c8e1ddea3dc742bfbbd38ca00fe9e5518814fcb1eb9ba9f0bf948e645b7"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "validate-user-input-at-entry-point",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R3].desc; tasks[id=T-4].implementation_notes"
+          },
+          "observed": "The spec does not list the concrete user-facing argument set with each argument's type, format, and range. It defers deriving a test-only inventory from the live registry and owners, while only naming categories and examples; internal arguments are not provided as a complete marked inventory either.",
+          "severity": "blocking",
+          "refs": [
+            "validate-user-input-at-entry-point"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            },
+            {
+              "entity": "task",
+              "id": "T-4",
+              "field": "implementation_notes"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            },
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-4",
+                "field": "implementation_notes"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+          "authority": {
+            "kind": "requirement",
+            "id": "validate-user-input-at-entry-point"
+          },
+          "rootCause": null,
+          "fingerprint": "974f34b6bfa88f89b1c162ab83694110877190d8cca4fc91e3b4799fcdf24017"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "exit-code-contract",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[id=R4].desc; acceptance_criteria[7]"
+          },
+          "observed": "The spec gives category-level exit codes for valid help/success, parser/target/command failures, and no-leaf help, but does not state success and failure conditions for each modified command or leaf individually.",
+          "severity": "blocking",
+          "refs": [
+            "exit-code-contract"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R4",
+              "field": "desc"
+            },
+            {
+              "collection": "acceptance_criteria",
+              "position": 7
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R4",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            },
+            {
+              "target": {
+                "collection": "acceptance_criteria",
+                "position": 7
+              },
+              "operationKinds": [
+                "delete-array-element",
+                "replace-array-element"
+              ]
+            }
+          ],
+          "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+          "authority": {
+            "kind": "requirement",
+            "id": "exit-code-contract"
+          },
+          "rootCause": null,
+          "fingerprint": "c60ef7f501ad92011a0868242b4f3ff5121bfab62d67e3af9234acf25b334ab9"
+        }
+      ],
+      "timestamp": "2026-10-02T14:29:53.014Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+        "specId": "0a28476c-flow-help-contract",
+        "issue": 521,
+        "phase": "spec",
+        "targetStepId": "spec-gate-repair",
+        "connector": {
+          "phase": "spec",
+          "sourceGateStepId": "spec-gate",
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-89f164fc-f0f8-4733-a2dd-6e7c8c80e743",
+            "sequence": 1
+          },
+          "resultLogicalKey": "spec.gate",
+          "resultArtifactId": "steps/spec-gate/result.json",
+          "catalogFingerprint": "32655122f50195b9a3a3055e64eb8ebc6d26a53b9335e14231e6f44c677deff8",
+          "targetStepId": "spec-gate-repair",
+          "resetStepIds": [
+            "spec-gate-repair",
+            "spec-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-89f164fc-f0f8-4733-a2dd-6e7c8c80e743",
+            "sequence": 1
+          },
+          "resultLogicalKey": "spec.gate",
+          "publicationActivityId": "plan-gate-repaired-8342c165-a874-43f7-ba04-f98c9aeab0f8",
+          "catalogFingerprint": "32655122f50195b9a3a3055e64eb8ebc6d26a53b9335e14231e6f44c677deff8",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-spec-gate-89f164fc-f0f8-4733-a2dd-6e7c8c80e743",
+              "sequence": 1
+            },
+            "canonicalAttempt": {
+              "id": "attempt-spec-gate-89f164fc-f0f8-4733-a2dd-6e7c8c80e743",
+              "sequence": 1
+            },
+            "sourceFingerprint": "8e211d7a963a17da7434e2c136599ef69442df94ab20e1bf51eb4995a68b8377",
+            "canonicalFingerprint": "32655122f50195b9a3a3055e64eb8ebc6d26a53b9335e14231e6f44c677deff8",
+            "sourceRevisionFingerprint": "ac2fb28aec4ed3ac33ba2312c3c94a3db60e9472dd8f1346467612aca93d2fc5",
+            "canonicalRevisionFingerprint": "ac2fb28aec4ed3ac33ba2312c3c94a3db60e9472dd8f1346467612aca93d2fc5"
+          }
+        },
+        "sourceIssueLogId": "spec-gate-result-341801f6d79a979409530254b1337c6dd802d67d9c2f4ff107ab57e27beb66ec",
+        "sourceEntryDigest": "329e17f5c23cfebbeb49eb893cf5c8ccf9f18ca360eca761420c2e40a7e3a35b",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[id=R1].desc"
+            },
+            "observed": "R1 uses the vague phrase 「必要な placeholder」 without defining which option kinds require one or what concrete placeholder contract applies.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R1",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R1",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "f8a86ab688f31404a71314e91833335460f45930c9bbbce697cc6b51e8841981"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[id=R6].desc"
+            },
+            "observed": "R6 requires E2E verification using 「代表ケース」 but does not define the selection or coverage criteria for a representative case.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R6",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "56540186b883c00fb1611098d992bdb9a7754b0dbb5211b857f4e545982e2d79"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[id=R6].desc"
+            },
+            "observed": "The subjective term 「代表ケース」 leaves the required E2E coverage unspecified, so independent reviewers cannot agree on whether the verification scope is sufficient.",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R6",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "abd2f8ea9b0ce78de059b60221cd0d13f4394b1cb99e3456b8901b97efc16008"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "acceptance_criteria[8]"
+            },
+            "observed": "The acceptance criterion refers to 「representative docs/core/plugin group help」 without identifying the required surfaces or a measurable representativeness rule.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "targets": [
+              {
+                "collection": "acceptance_criteria",
+                "position": 8
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "collection": "acceptance_criteria",
+                  "position": 8
+                },
+                "operationKinds": [
+                  "delete-array-element",
+                  "replace-array-element"
+                ]
+              }
+            ],
+            "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "2a65b59fff1941ab010924833ad74bfae5e3c04910ab4e152e2696554e03a184"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "tasks[id=T-6].acceptance"
+            },
+            "observed": "T-6 acceptance requires 「代表的な docs/core/plugin group help」 but does not define which examples must be covered or how selection is judged.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "targets": [
+              {
+                "entity": "task",
+                "id": "T-6",
+                "field": "acceptance"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-6",
+                  "field": "acceptance"
+                },
+                "operationKinds": [
+                  "delete-entity-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "35db65f41a05a0777dcf59e59bff6d4c7594767dd9bc0697ef0572d918d97b07"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "tasks[id=T-7].acceptance"
+            },
+            "observed": "T-7 acceptance refers to 「代表的な接続シナリオ」 without defining the scenarios that are mandatory or the selection criterion.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "targets": [
+              {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-7",
+                  "field": "acceptance"
+                },
+                "operationKinds": [
+                  "delete-entity-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "efd49e502e71f283f1412818f1d57d7d35315d4ed54c822c7a8c278fb5e86966"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "tasks[id=T-7].acceptance"
+            },
+            "observed": "T-7 acceptance requires checking 「必要な結果」 but does not identify which results are required at each test layer.",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "targets": [
+              {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-7",
+                  "field": "acceptance"
+                },
+                "operationKinds": [
+                  "delete-entity-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "ac6774ae25c7e7b65b868053866d9c8c57e6d7b04ef0e4f03ee594c6cf54bdfd"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "bounded-resource-usage",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[id=R3].desc"
+            },
+            "observed": "R3 explicitly permits recording 「size/retry/context limit または上限なし」. Retry and resource-related processing therefore have no required upper bound, contrary to the guardrail's prohibition on unbounded processing.",
+            "severity": "blocking",
+            "refs": [
+              "bounded-resource-usage"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R3",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+            "authority": {
+              "kind": "requirement",
+              "id": "bounded-resource-usage"
+            },
+            "rootCause": null,
+            "fingerprint": "87728dd2ec60375ec40dbc1df72d4f29a4407a4573f03bfafd6b9d14e97f4f64"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "bounded-resource-usage",
+            "where": {
+              "file": "spec.json",
+              "locator": "tasks[id=T-4].acceptance"
+            },
+            "observed": "T-4 repeats the allowance 「size/retry/context limit または上限なし」, so the planned inventory can accept unbounded retry or resource processing instead of requiring explicit limits.",
+            "severity": "blocking",
+            "refs": [
+              "bounded-resource-usage"
+            ],
+            "targets": [
+              {
+                "entity": "task",
+                "id": "T-4",
+                "field": "acceptance"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-4",
+                  "field": "acceptance"
+                },
+                "operationKinds": [
+                  "delete-entity-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+            "authority": {
+              "kind": "requirement",
+              "id": "bounded-resource-usage"
+            },
+            "rootCause": null,
+            "fingerprint": "3a2b3c8e1ddea3dc742bfbbd38ca00fe9e5518814fcb1eb9ba9f0bf948e645b7"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "validate-user-input-at-entry-point",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[id=R3].desc; tasks[id=T-4].implementation_notes"
+            },
+            "observed": "The spec does not list the concrete user-facing argument set with each argument's type, format, and range. It defers deriving a test-only inventory from the live registry and owners, while only naming categories and examples; internal arguments are not provided as a complete marked inventory either.",
+            "severity": "blocking",
+            "refs": [
+              "validate-user-input-at-entry-point"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              {
+                "entity": "task",
+                "id": "T-4",
+                "field": "implementation_notes"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R3",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              },
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-4",
+                  "field": "implementation_notes"
+                },
+                "operationKinds": [
+                  "delete-entity-field",
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+            "authority": {
+              "kind": "requirement",
+              "id": "validate-user-input-at-entry-point"
+            },
+            "rootCause": null,
+            "fingerprint": "974f34b6bfa88f89b1c162ab83694110877190d8cca4fc91e3b4799fcdf24017"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "exit-code-contract",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[id=R4].desc; acceptance_criteria[7]"
+            },
+            "observed": "The spec gives category-level exit codes for valid help/success, parser/target/command failures, and no-leaf help, but does not state success and failure conditions for each modified command or leaf individually.",
+            "severity": "blocking",
+            "refs": [
+              "exit-code-contract"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R4",
+                "field": "desc"
+              },
+              {
+                "collection": "acceptance_criteria",
+                "position": 7
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R4",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              },
+              {
+                "target": {
+                  "collection": "acceptance_criteria",
+                  "position": 7
+                },
+                "operationKinds": [
+                  "delete-array-element",
+                  "replace-array-element"
+                ]
+              }
+            ],
+            "specRevision": "sha256:48c0001cdf80819288ad6079708a03cd24daca7890fef28a3fc69fd9106e7f60",
+            "authority": {
+              "kind": "requirement",
+              "id": "exit-code-contract"
+            },
+            "rootCause": null,
+            "fingerprint": "c60ef7f501ad92011a0868242b4f3ff5121bfab62d67e3af9234acf25b334ab9"
+          }
+        ],
+        "observationFingerprints": [
+          "f8a86ab688f31404a71314e91833335460f45930c9bbbce697cc6b51e8841981",
+          "56540186b883c00fb1611098d992bdb9a7754b0dbb5211b857f4e545982e2d79",
+          "abd2f8ea9b0ce78de059b60221cd0d13f4394b1cb99e3456b8901b97efc16008",
+          "2a65b59fff1941ab010924833ad74bfae5e3c04910ab4e152e2696554e03a184",
+          "35db65f41a05a0777dcf59e59bff6d4c7594767dd9bc0697ef0572d918d97b07",
+          "efd49e502e71f283f1412818f1d57d7d35315d4ed54c822c7a8c278fb5e86966",
+          "ac6774ae25c7e7b65b868053866d9c8c57e6d7b04ef0e4f03ee594c6cf54bdfd",
+          "87728dd2ec60375ec40dbc1df72d4f29a4407a4573f03bfafd6b9d14e97f4f64",
+          "3a2b3c8e1ddea3dc742bfbbd38ca00fe9e5518814fcb1eb9ba9f0bf948e645b7",
+          "974f34b6bfa88f89b1c162ab83694110877190d8cca4fc91e3b4799fcdf24017",
+          "c60ef7f501ad92011a0868242b4f3ff5121bfab62d67e3af9234acf25b334ab9"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "f8a86ab688f31404a71314e91833335460f45930c9bbbce697cc6b51e8841981",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "56540186b883c00fb1611098d992bdb9a7754b0dbb5211b857f4e545982e2d79",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "abd2f8ea9b0ce78de059b60221cd0d13f4394b1cb99e3456b8901b97efc16008",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "2a65b59fff1941ab010924833ad74bfae5e3c04910ab4e152e2696554e03a184",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "35db65f41a05a0777dcf59e59bff6d4c7594767dd9bc0697ef0572d918d97b07",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "efd49e502e71f283f1412818f1d57d7d35315d4ed54c822c7a8c278fb5e86966",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "ac6774ae25c7e7b65b868053866d9c8c57e6d7b04ef0e4f03ee594c6cf54bdfd",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "87728dd2ec60375ec40dbc1df72d4f29a4407a4573f03bfafd6b9d14e97f4f64",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "3a2b3c8e1ddea3dc742bfbbd38ca00fe9e5518814fcb1eb9ba9f0bf948e645b7",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "974f34b6bfa88f89b1c162ab83694110877190d8cca4fc91e3b4799fcdf24017",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "c60ef7f501ad92011a0868242b4f3ff5121bfab62d67e3af9234acf25b334ab9",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-10-02T14:29:53.014Z"
+      },
+      "issueLogId": "plan-gate-repair-509c3c5ca843a137e0ac2f9d46e925d6a161d7333b8ca9c8f24f0edc671e88fc"
+    },
+    {
+      "step": "spec-gate",
+      "level": "parent",
+      "phase": "spec",
+      "reason": "「代表的な接続」の対象シナリオ、選定条件、網羅範囲が定義されていない。; 「代表的な接続」が何を指すか、対象となる接続シナリオや選定条件が定義されていない。; E2Eで扱う「代表的な接続」の範囲が不明なため、独立したレビュー担当者が検証対象の完全性を同じ基準で判定できない。; 「代表的な接続」の具体的な対象と受入条件が示されていないため、E2Eの検証範囲を一意に判定できない。; set files の rest path は「一つ以上」としか定義されず、最大個数や総サイズの上限がない。; size/retry/context limit を「未定義なら未定義」として記録できるため、対象となる処理の上限が仕様上確定していない。; size/count/depth/retry の有限なテスト値を記録することは求めているが、実装が許容する最大値を定義せず、既存上限が未定義の場合も許容している。; 各入力の size/retry/context limit を「実値または未定義」としてレポートする計画で、再試行・再帰・bulk processing の明示的な上限値を定めていない。; ユーザー向け引数名は列挙されているが、各引数に対応する具体的な type、format、range、allowed domain、path 条件が記載されず、後続の inventory/report 生成に委ねられている。; per-leaf report を生成する手順は示されているが、各 user-facing argument の具体的な検証要件をこの Spec 内に記載せず、registry や validator の実値を後で照合する計画になっている。",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-10-02T14:49:33.005Z",
+      "passedGuardrails": [
+        "spec-test-coverage"
+      ],
+      "headSha": "bd5b30542f35c3cadccd7d754246b09cf176562d",
+      "worktreeHash": "99c77ec49ab8274d42fa797af9a4511c3cfb376063501f2ddbbe05cc872e6c21",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[R6].desc"
+          },
+          "observed": "「代表的な接続」の対象シナリオ、選定条件、網羅範囲が定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[T-7].acceptance[1]"
+          },
+          "observed": "「代表的な接続」が何を指すか、対象となる接続シナリオや選定条件が定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-7",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[R6].desc"
+          },
+          "observed": "E2Eで扱う「代表的な接続」の範囲が不明なため、独立したレビュー担当者が検証対象の完全性を同じ基準で判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[T-7].acceptance[1]"
+          },
+          "observed": "「代表的な接続」の具体的な対象と受入条件が示されていないため、E2Eの検証範囲を一意に判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-7",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[R3].desc"
+          },
+          "observed": "set files の rest path は「一つ以上」としか定義されず、最大個数や総サイズの上限がない。",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[R3].desc"
+          },
+          "observed": "size/retry/context limit を「未定義なら未定義」として記録できるため、対象となる処理の上限が仕様上確定していない。",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[T-4].acceptance[1]"
+          },
+          "observed": "size/count/depth/retry の有限なテスト値を記録することは求めているが、実装が許容する最大値を定義せず、既存上限が未定義の場合も許容している。",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-4",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-4",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[T-4].implementation_notes"
+          },
+          "observed": "各入力の size/retry/context limit を「実値または未定義」としてレポートする計画で、再試行・再帰・bulk processing の明示的な上限値を定めていない。",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-4",
+              "field": "implementation_notes"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-4",
+                "field": "implementation_notes"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "validate-user-input-at-entry-point",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[R3].desc"
+          },
+          "observed": "ユーザー向け引数名は列挙されているが、各引数に対応する具体的な type、format、range、allowed domain、path 条件が記載されず、後続の inventory/report 生成に委ねられている。",
+          "severity": "blocking",
+          "refs": [
+            "validate-user-input-at-entry-point"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "validate-user-input-at-entry-point",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[T-4].implementation_notes"
+          },
+          "observed": "per-leaf report を生成する手順は示されているが、各 user-facing argument の具体的な検証要件をこの Spec 内に記載せず、registry や validator の実値を後で照合する計画になっている。",
+          "severity": "blocking",
+          "refs": [
+            "validate-user-input-at-entry-point"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-4",
+              "field": "implementation_notes"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-4",
+                "field": "implementation_notes"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f"
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「代表的な接続」の対象シナリオ、選定条件、網羅範囲が定義されていない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「代表的な接続」が何を指すか、対象となる接続シナリオや選定条件が定義されていない。"
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "E2Eで扱う「代表的な接続」の範囲が不明なため、独立したレビュー担当者が検証対象の完全性を同じ基準で判定できない。"
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "「代表的な接続」の具体的な対象と受入条件が示されていないため、E2Eの検証範囲を一意に判定できない。"
+        },
+        {
+          "guardrail_id": "bounded-resource-usage",
+          "reason": "set files の rest path は「一つ以上」としか定義されず、最大個数や総サイズの上限がない。"
+        },
+        {
+          "guardrail_id": "bounded-resource-usage",
+          "reason": "size/retry/context limit を「未定義なら未定義」として記録できるため、対象となる処理の上限が仕様上確定していない。"
+        },
+        {
+          "guardrail_id": "bounded-resource-usage",
+          "reason": "size/count/depth/retry の有限なテスト値を記録することは求めているが、実装が許容する最大値を定義せず、既存上限が未定義の場合も許容している。"
+        },
+        {
+          "guardrail_id": "bounded-resource-usage",
+          "reason": "各入力の size/retry/context limit を「実値または未定義」としてレポートする計画で、再試行・再帰・bulk processing の明示的な上限値を定めていない。"
+        },
+        {
+          "guardrail_id": "validate-user-input-at-entry-point",
+          "reason": "ユーザー向け引数名は列挙されているが、各引数に対応する具体的な type、format、range、allowed domain、path 条件が記載されず、後続の inventory/report 生成に委ねられている。"
+        },
+        {
+          "guardrail_id": "validate-user-input-at-entry-point",
+          "reason": "per-leaf report を生成する手順は示されているが、各 user-facing argument の具体的な検証要件をこの Spec 内に記載せず、registry や validator の実値を後で照合する計画になっている。"
+        }
+      ],
+      "issueLogId": "spec-gate-result-75582891f7ade882bd10042e6e3cd921eeaa73fa9bbb8f908e9e7dd5c29057d0"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "spec-gate",
+      "phase": "spec",
+      "reason": "Guarded spec gate repair rewound to spec-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[R6].desc"
+          },
+          "observed": "「代表的な接続」の対象シナリオ、選定条件、網羅範囲が定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "1ee6ed1259f2ebf3d3cd8c9fc6b9b326fb85fe46842f7d8cf4c492ba5eeaaf2a"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[T-7].acceptance[1]"
+          },
+          "observed": "「代表的な接続」が何を指すか、対象となる接続シナリオや選定条件が定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-7",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+          "authority": {
+            "kind": "requirement",
+            "id": "unambiguous-requirements"
+          },
+          "rootCause": null,
+          "fingerprint": "37b540858911666be2a0a36c21646ca3aa0d92af33177fed133b2f91eff12e16"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[R6].desc"
+          },
+          "observed": "E2Eで扱う「代表的な接続」の範囲が不明なため、独立したレビュー担当者が検証対象の完全性を同じ基準で判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "e0f225ef7b7bd2ecc4d35a84a8f1292ee5705e35c62dd6e54d49538f665d6fc2"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[T-7].acceptance[1]"
+          },
+          "observed": "「代表的な接続」の具体的な対象と受入条件が示されていないため、E2Eの検証範囲を一意に判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-7",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "9d89beeea6f880b8a4168ab42f1aac513c39b9647dacd8891c6dff2721494c15"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[R3].desc"
+          },
+          "observed": "set files の rest path は「一つ以上」としか定義されず、最大個数や総サイズの上限がない。",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+          "authority": {
+            "kind": "requirement",
+            "id": "bounded-resource-usage"
+          },
+          "rootCause": null,
+          "fingerprint": "70a9913cf2c9b15b17c3cbe631ff2b0f7c7fd68569cf8e2d5907fafe7daf1c53"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[R3].desc"
+          },
+          "observed": "size/retry/context limit を「未定義なら未定義」として記録できるため、対象となる処理の上限が仕様上確定していない。",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+          "authority": {
+            "kind": "requirement",
+            "id": "bounded-resource-usage"
+          },
+          "rootCause": null,
+          "fingerprint": "4987bbe5258b8c30b06cbe72a371164bcc932efde3e65b85e2426dd94733da19"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[T-4].acceptance[1]"
+          },
+          "observed": "size/count/depth/retry の有限なテスト値を記録することは求めているが、実装が許容する最大値を定義せず、既存上限が未定義の場合も許容している。",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-4",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-4",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+          "authority": {
+            "kind": "requirement",
+            "id": "bounded-resource-usage"
+          },
+          "rootCause": null,
+          "fingerprint": "278699d8bb56209a3ee6275ad5283b10f5b106ec2073cbdf54c7aa50642dac22"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[T-4].implementation_notes"
+          },
+          "observed": "各入力の size/retry/context limit を「実値または未定義」としてレポートする計画で、再試行・再帰・bulk processing の明示的な上限値を定めていない。",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-4",
+              "field": "implementation_notes"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-4",
+                "field": "implementation_notes"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+          "authority": {
+            "kind": "requirement",
+            "id": "bounded-resource-usage"
+          },
+          "rootCause": null,
+          "fingerprint": "accbf5273b9f36391dc8cd72751064610342d8ac063b3f9dbd0638cbdd3cd0de"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "validate-user-input-at-entry-point",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements[R3].desc"
+          },
+          "observed": "ユーザー向け引数名は列挙されているが、各引数に対応する具体的な type、format、range、allowed domain、path 条件が記載されず、後続の inventory/report 生成に委ねられている。",
+          "severity": "blocking",
+          "refs": [
+            "validate-user-input-at-entry-point"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+          "authority": {
+            "kind": "requirement",
+            "id": "validate-user-input-at-entry-point"
+          },
+          "rootCause": null,
+          "fingerprint": "52e07f77d2761cee68a3e413b4b394d83b5d8676a7792dbdace074d17693cd19"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "validate-user-input-at-entry-point",
+          "where": {
+            "file": "spec.json",
+            "locator": "tasks[T-4].implementation_notes"
+          },
+          "observed": "per-leaf report を生成する手順は示されているが、各 user-facing argument の具体的な検証要件をこの Spec 内に記載せず、registry や validator の実値を後で照合する計画になっている。",
+          "severity": "blocking",
+          "refs": [
+            "validate-user-input-at-entry-point"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-4",
+              "field": "implementation_notes"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-4",
+                "field": "implementation_notes"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+          "authority": {
+            "kind": "requirement",
+            "id": "validate-user-input-at-entry-point"
+          },
+          "rootCause": null,
+          "fingerprint": "9f9edf740ddb26d8fad4441308d800f49686c919bb18d3605abf16eee92349e8"
+        }
+      ],
+      "timestamp": "2026-10-02T14:52:26.714Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "0a28476c-026a-4548-9b92-b9c2fa50c71c",
+        "specId": "0a28476c-flow-help-contract",
+        "issue": 521,
+        "phase": "spec",
+        "targetStepId": "spec-gate-repair",
+        "connector": {
+          "phase": "spec",
+          "sourceGateStepId": "spec-gate",
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-14cafddc-81a4-4fd9-a386-c8706bbcbbc9",
+            "sequence": 2
+          },
+          "resultLogicalKey": "spec.gate",
+          "resultArtifactId": "steps/spec-gate/result.json",
+          "catalogFingerprint": "2708f9840672efaa327dd9cd56fc26dfe3e549666704f02170831f0fd55d41c0",
+          "targetStepId": "spec-gate-repair",
+          "resetStepIds": [
+            "spec-gate-repair",
+            "spec-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-14cafddc-81a4-4fd9-a386-c8706bbcbbc9",
+            "sequence": 2
+          },
+          "resultLogicalKey": "spec.gate",
+          "publicationActivityId": "plan-gate-repaired-d89acb6f-862f-41f6-a0a2-f1d09b9c0a7d",
+          "catalogFingerprint": "2708f9840672efaa327dd9cd56fc26dfe3e549666704f02170831f0fd55d41c0",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-spec-gate-14cafddc-81a4-4fd9-a386-c8706bbcbbc9",
+              "sequence": 2
+            },
+            "canonicalAttempt": {
+              "id": "attempt-spec-gate-14cafddc-81a4-4fd9-a386-c8706bbcbbc9",
+              "sequence": 2
+            },
+            "sourceFingerprint": "cc79b033ad1304e5d234797c1cb9e9ec767e61c49d188b6625d66182153dbdf7",
+            "canonicalFingerprint": "2708f9840672efaa327dd9cd56fc26dfe3e549666704f02170831f0fd55d41c0",
+            "sourceRevisionFingerprint": "340836559671d4305fa120c8418731cbcb87fe0023fd59d6932a4fb45fdbf8ae",
+            "canonicalRevisionFingerprint": "340836559671d4305fa120c8418731cbcb87fe0023fd59d6932a4fb45fdbf8ae"
+          }
+        },
+        "sourceIssueLogId": "spec-gate-result-75582891f7ade882bd10042e6e3cd921eeaa73fa9bbb8f908e9e7dd5c29057d0",
+        "sourceEntryDigest": "6b8df7e66ddcb1ea57b141eb335b8a7dff7bfed5efa2ff961e0daedf92439a9f",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[R6].desc"
+            },
+            "observed": "「代表的な接続」の対象シナリオ、選定条件、網羅範囲が定義されていない。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R6",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "1ee6ed1259f2ebf3d3cd8c9fc6b9b326fb85fe46842f7d8cf4c492ba5eeaaf2a"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "unambiguous-requirements",
+            "where": {
+              "file": "spec.json",
+              "locator": "tasks[T-7].acceptance[1]"
+            },
+            "observed": "「代表的な接続」が何を指すか、対象となる接続シナリオや選定条件が定義されていない。",
+            "severity": "blocking",
+            "refs": [
+              "unambiguous-requirements"
+            ],
+            "targets": [
+              {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-7",
+                  "field": "acceptance"
+                },
+                "operationKinds": [
+                  "delete-entity-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+            "authority": {
+              "kind": "requirement",
+              "id": "unambiguous-requirements"
+            },
+            "rootCause": null,
+            "fingerprint": "37b540858911666be2a0a36c21646ca3aa0d92af33177fed133b2f91eff12e16"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[R6].desc"
+            },
+            "observed": "E2Eで扱う「代表的な接続」の範囲が不明なため、独立したレビュー担当者が検証対象の完全性を同じ基準で判定できない。",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R6",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "e0f225ef7b7bd2ecc4d35a84a8f1292ee5705e35c62dd6e54d49538f665d6fc2"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "tasks[T-7].acceptance[1]"
+            },
+            "observed": "「代表的な接続」の具体的な対象と受入条件が示されていないため、E2Eの検証範囲を一意に判定できない。",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "targets": [
+              {
+                "entity": "task",
+                "id": "T-7",
+                "field": "acceptance"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-7",
+                  "field": "acceptance"
+                },
+                "operationKinds": [
+                  "delete-entity-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "9d89beeea6f880b8a4168ab42f1aac513c39b9647dacd8891c6dff2721494c15"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "bounded-resource-usage",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[R3].desc"
+            },
+            "observed": "set files の rest path は「一つ以上」としか定義されず、最大個数や総サイズの上限がない。",
+            "severity": "blocking",
+            "refs": [
+              "bounded-resource-usage"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R3",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+            "authority": {
+              "kind": "requirement",
+              "id": "bounded-resource-usage"
+            },
+            "rootCause": null,
+            "fingerprint": "70a9913cf2c9b15b17c3cbe631ff2b0f7c7fd68569cf8e2d5907fafe7daf1c53"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "bounded-resource-usage",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[R3].desc"
+            },
+            "observed": "size/retry/context limit を「未定義なら未定義」として記録できるため、対象となる処理の上限が仕様上確定していない。",
+            "severity": "blocking",
+            "refs": [
+              "bounded-resource-usage"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R3",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+            "authority": {
+              "kind": "requirement",
+              "id": "bounded-resource-usage"
+            },
+            "rootCause": null,
+            "fingerprint": "4987bbe5258b8c30b06cbe72a371164bcc932efde3e65b85e2426dd94733da19"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "bounded-resource-usage",
+            "where": {
+              "file": "spec.json",
+              "locator": "tasks[T-4].acceptance[1]"
+            },
+            "observed": "size/count/depth/retry の有限なテスト値を記録することは求めているが、実装が許容する最大値を定義せず、既存上限が未定義の場合も許容している。",
+            "severity": "blocking",
+            "refs": [
+              "bounded-resource-usage"
+            ],
+            "targets": [
+              {
+                "entity": "task",
+                "id": "T-4",
+                "field": "acceptance"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-4",
+                  "field": "acceptance"
+                },
+                "operationKinds": [
+                  "delete-entity-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+            "authority": {
+              "kind": "requirement",
+              "id": "bounded-resource-usage"
+            },
+            "rootCause": null,
+            "fingerprint": "278699d8bb56209a3ee6275ad5283b10f5b106ec2073cbdf54c7aa50642dac22"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "bounded-resource-usage",
+            "where": {
+              "file": "spec.json",
+              "locator": "tasks[T-4].implementation_notes"
+            },
+            "observed": "各入力の size/retry/context limit を「実値または未定義」としてレポートする計画で、再試行・再帰・bulk processing の明示的な上限値を定めていない。",
+            "severity": "blocking",
+            "refs": [
+              "bounded-resource-usage"
+            ],
+            "targets": [
+              {
+                "entity": "task",
+                "id": "T-4",
+                "field": "implementation_notes"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-4",
+                  "field": "implementation_notes"
+                },
+                "operationKinds": [
+                  "delete-entity-field",
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+            "authority": {
+              "kind": "requirement",
+              "id": "bounded-resource-usage"
+            },
+            "rootCause": null,
+            "fingerprint": "accbf5273b9f36391dc8cd72751064610342d8ac063b3f9dbd0638cbdd3cd0de"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "validate-user-input-at-entry-point",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements[R3].desc"
+            },
+            "observed": "ユーザー向け引数名は列挙されているが、各引数に対応する具体的な type、format、range、allowed domain、path 条件が記載されず、後続の inventory/report 生成に委ねられている。",
+            "severity": "blocking",
+            "refs": [
+              "validate-user-input-at-entry-point"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R3",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+            "authority": {
+              "kind": "requirement",
+              "id": "validate-user-input-at-entry-point"
+            },
+            "rootCause": null,
+            "fingerprint": "52e07f77d2761cee68a3e413b4b394d83b5d8676a7792dbdace074d17693cd19"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "validate-user-input-at-entry-point",
+            "where": {
+              "file": "spec.json",
+              "locator": "tasks[T-4].implementation_notes"
+            },
+            "observed": "per-leaf report を生成する手順は示されているが、各 user-facing argument の具体的な検証要件をこの Spec 内に記載せず、registry や validator の実値を後で照合する計画になっている。",
+            "severity": "blocking",
+            "refs": [
+              "validate-user-input-at-entry-point"
+            ],
+            "targets": [
+              {
+                "entity": "task",
+                "id": "T-4",
+                "field": "implementation_notes"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-4",
+                  "field": "implementation_notes"
+                },
+                "operationKinds": [
+                  "delete-entity-field",
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:30e459692d45662e2822333161ded57cf98086a649a92a9481a222cdd834eb6f",
+            "authority": {
+              "kind": "requirement",
+              "id": "validate-user-input-at-entry-point"
+            },
+            "rootCause": null,
+            "fingerprint": "9f9edf740ddb26d8fad4441308d800f49686c919bb18d3605abf16eee92349e8"
+          }
+        ],
+        "observationFingerprints": [
+          "1ee6ed1259f2ebf3d3cd8c9fc6b9b326fb85fe46842f7d8cf4c492ba5eeaaf2a",
+          "37b540858911666be2a0a36c21646ca3aa0d92af33177fed133b2f91eff12e16",
+          "e0f225ef7b7bd2ecc4d35a84a8f1292ee5705e35c62dd6e54d49538f665d6fc2",
+          "9d89beeea6f880b8a4168ab42f1aac513c39b9647dacd8891c6dff2721494c15",
+          "70a9913cf2c9b15b17c3cbe631ff2b0f7c7fd68569cf8e2d5907fafe7daf1c53",
+          "4987bbe5258b8c30b06cbe72a371164bcc932efde3e65b85e2426dd94733da19",
+          "278699d8bb56209a3ee6275ad5283b10f5b106ec2073cbdf54c7aa50642dac22",
+          "accbf5273b9f36391dc8cd72751064610342d8ac063b3f9dbd0638cbdd3cd0de",
+          "52e07f77d2761cee68a3e413b4b394d83b5d8676a7792dbdace074d17693cd19",
+          "9f9edf740ddb26d8fad4441308d800f49686c919bb18d3605abf16eee92349e8"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "1ee6ed1259f2ebf3d3cd8c9fc6b9b326fb85fe46842f7d8cf4c492ba5eeaaf2a",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "37b540858911666be2a0a36c21646ca3aa0d92af33177fed133b2f91eff12e16",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "e0f225ef7b7bd2ecc4d35a84a8f1292ee5705e35c62dd6e54d49538f665d6fc2",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "9d89beeea6f880b8a4168ab42f1aac513c39b9647dacd8891c6dff2721494c15",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "70a9913cf2c9b15b17c3cbe631ff2b0f7c7fd68569cf8e2d5907fafe7daf1c53",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "4987bbe5258b8c30b06cbe72a371164bcc932efde3e65b85e2426dd94733da19",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "278699d8bb56209a3ee6275ad5283b10f5b106ec2073cbdf54c7aa50642dac22",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "accbf5273b9f36391dc8cd72751064610342d8ac063b3f9dbd0638cbdd3cd0de",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "52e07f77d2761cee68a3e413b4b394d83b5d8676a7792dbdace074d17693cd19",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "9f9edf740ddb26d8fad4441308d800f49686c919bb18d3605abf16eee92349e8",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-10-02T14:52:26.714Z"
+      },
+      "issueLogId": "plan-gate-repair-7df14e1e3b3ec7e1ae8febd5203b402a865cefd3d96444634ffb16c293a2e464"
+    }
+  ]
+}
