@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
+import { PreparedStep, StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
 import { specStepRegistrations } from "../../../src/flow/engine/composition/spec.js";
 import { workerStepExecutionContract } from "../../../src/flow/lib/worker-execution-admission.js";
 import { Step } from "../../../src/flow/engine/step.js";
@@ -115,4 +115,88 @@ test("A07 rejects a violating Service in a later registered Step", async () => {
     inspectPreparedDependencies(registrations, new PreparationFixture()),
     (error) => error instanceof ServiceBoundaryViolation && error.property === "exposed",
   );
+});
+
+
+test("A07 rejects an unprepared registration even when another Step uses the same Service", async (t) => {
+  const root = createTmpDir("spec-shared-service-boundary-");
+  t.after(() => removeTmpDir(root));
+  const fixture = new SpecStepPreparationFixture(root);
+  t.after(() => fixture.dispose());
+  const coverage = new ServiceBoundaryCoverage(specStepRegistrations);
+  const omitted = specStepRegistrations.find((registration) => registration.stepId === "spec-repair");
+  assert.ok(specStepRegistrations.some((registration) => registration !== omitted
+    && registration.ServiceClass === omitted.ServiceClass));
+  for (const registration of specStepRegistrations.filter((candidate) => candidate !== omitted)) {
+    const { input } = await fixture.createInput(registration.stepId);
+    coverage.inspectPrepared(registration, await registration.create(input));
+  }
+  assert.throws(() => coverage.assertComplete(), (error) => error.rule === "A07"
+    && error.registrations.includes(omitted) && error.message.includes("spec-repair"));
+  const { input } = await fixture.createInput(omitted.stepId);
+  coverage.inspectPrepared(omitted, await omitted.create(input));
+  const types = new Set(specStepRegistrations.map((registration) => registration.ServiceClass));
+  assert.equal(coverage.assertComplete(), types.size);
+});
+
+test("A07 records registration and constructor argument evidence for wrong prepared arguments", async (t) => {
+  const root = createTmpDir("spec-argument-boundary-");
+  t.after(() => removeTmpDir(root));
+  const fixture = new SpecStepPreparationFixture(root);
+  t.after(() => fixture.dispose());
+  const registration = specStepRegistrations.find((candidate) => candidate.stepId === "spec");
+  const { input } = await fixture.createInput(registration.stepId);
+  const prepared = await registration.create(input);
+  const coverage = new ServiceBoundaryCoverage([registration]);
+  const invalid = new PreparedStep(prepared.step, prepared.dependencies,
+    [prepared.serviceArguments[1], prepared.serviceArguments[0]]);
+  assert.throws(() => coverage.inspectPrepared(registration, invalid), (error) =>
+    error.rule === "A07" && error.registration === registration
+      && error.service === registration.ServiceClass && error.argumentIndex === 0
+      && error.expectedType === registration.ServiceClass.argumentTypes[0]
+      && error.actualValue === prepared.serviceArguments[1]);
+  assert.throws(() => coverage.assertComplete(), /no inspected instance/);
+  coverage.inspectPrepared(registration, prepared);
+  assert.equal(coverage.assertComplete(), 1);
+});
+
+
+test("A07 records the production registration for hidden and Symbol Service properties", async (t) => {
+  const root = createTmpDir("spec-public-property-boundary-");
+  t.after(() => removeTmpDir(root));
+  const fixture = new SpecStepPreparationFixture(root);
+  t.after(() => fixture.dispose());
+  const registration = specStepRegistrations.find((candidate) => candidate.stepId === "spec");
+  const { input } = await fixture.createInput(registration.stepId);
+  const prepared = await registration.create(input);
+  const service = prepared.dependency(registration.ServiceClass);
+  for (const property of ["hidden", Symbol("hidden")]) {
+    const coverage = new ServiceBoundaryCoverage([registration]);
+    Object.defineProperty(service, property, { value: true, enumerable: false, configurable: true });
+    assert.throws(() => coverage.inspectPrepared(registration, prepared), (error) =>
+      error instanceof ServiceBoundaryViolation && error.rule === "A07"
+        && error.registration === registration && error.service === service && error.property === property);
+    assert.throws(() => coverage.assertComplete(), /no inspected instance/);
+    delete service[property];
+    coverage.inspectPrepared(registration, prepared);
+    assert.equal(coverage.assertComplete(), 1);
+  }
+});
+
+test("A07 type boundary inspection cannot substitute for production Step preparation", async (t) => {
+  const root = createTmpDir("spec-type-only-boundary-");
+  t.after(() => removeTmpDir(root));
+  const fixture = new SpecStepPreparationFixture(root);
+  t.after(() => fixture.dispose());
+  const registration = specStepRegistrations.find((candidate) => candidate.stepId === "spec");
+  const { input } = await fixture.createInput(registration.stepId);
+  const prepared = await registration.create(input);
+  const coverage = new ServiceBoundaryCoverage([registration]);
+  coverage.inspect(registration.ServiceClass, prepared.dependency(registration.ServiceClass));
+  assert.throws(() => coverage.assertComplete(), (error) => error.rule === "A07"
+    && error.registrations.length === 1 && error.registrations[0] === registration);
+  const unrelated = new StepRegistration({ ...registration });
+  assert.throws(() => coverage.inspectPrepared(unrelated, prepared), /registered production StepRegistration/);
+  coverage.inspectPrepared(registration, prepared);
+  assert.equal(coverage.assertComplete(), 1);
 });

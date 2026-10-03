@@ -4,6 +4,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { checkStructure } from "../support/structure/checker.js";
 import { ProductionRegistrations } from "../support/structure/production-registrations.js";
+import { specStructureManifest } from "../support/structure/phase-manifest.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const registrationSource = new ProductionRegistrations(
@@ -13,7 +14,9 @@ const registrationSource = new ProductionRegistrations(
 
 test("Spec source obeys shared Flow structure rules through production registration", async (context) => {
   const registrations = await registrationSource.load();
-  const report = checkStructure({ root, entry: "src/flow/steps/spec", registrations });
+  const scope = specStructureManifest.entries[0];
+  const report = checkStructure({ root, entry: scope.entry, registrations,
+    registrationModule: scope.composition, contract: scope.contract(registrations) });
   context.diagnostic(report.describe());
   assert.equal(report.ok, true, `${report.describe()}\n${report.diagnostics.map((entry) => entry.toString()).join("\n")}`);
   assert.ok(report.visited.size > 0);

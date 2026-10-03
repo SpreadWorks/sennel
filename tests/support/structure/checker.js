@@ -1,18 +1,38 @@
 import path from "node:path";
 import { StepExecutionContract } from "../../../src/flow/engine/composition/step-execution-contract.js";
-import { SourceModule, SourceReadError, SourceOriginUsage, readParameters, readClassMember, readInvocations, readMemberAccess, readTokens } from "./source-reader.js";
+import { StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
+import { TaskStepIdentity } from "../../../src/flow/lib/task-step-identity.js";
+import { SourceModule, SourceDeclarationHeader, SourceReadError, SourceOriginUsage, readParameters, readTypeInvariants, readClassMember, readInvocations, readMemberAccess, readTokens } from "./source-reader.js";
 import { FlowStructureRules } from "./flow-rules.js";
 import { SourceRepository } from "./source-repository.js";
+import { ProductionRegistrations, StructureScopeContract } from "./production-registrations.js";
 
 const nativeClassBases = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "AggregateError", "Array", "Map", "Set"]);
 
+class SharedExecutionAdapter {
+  constructor(kind, selector, projector, executor, command) {
+    Object.assign(this, { kind, selector, projector, executor, command });
+    Object.freeze(this);
+  }
+  get contractName() { return `${this.kind}StepExecutionContract`; }
+  get module() { return this.kind === "worker" ? "src/flow/lib/worker-execution-admission.js" : "src/flow/lib/execution-admission.js"; }
+}
+
+const sharedExecutionAdapters = new Map([
+  new SharedExecutionAdapter("gate", "selectGateExecutionAdmission", "projectGateExecutionAdmission", "executeGateSelection", "src/flow/lib/run-gate.js"),
+  new SharedExecutionAdapter("review", "selectReviewExecutionAdmission", "projectReviewExecutionAdmission", "executeReviewSelection", "src/flow/lib/run-review.js"),
+  new SharedExecutionAdapter("worker", "selectWorkerExecutionAdmission", "projectWorkerExecutionAdmission", "executeWorkerExecutionAdmission", "src/flow/lib/run-dispatch.js"),
+].map((adapter) => [adapter.kind, adapter]));
+
 export class StructureScope {
-  constructor(root, entry, registrations, registrationModule = `src/flow/engine/composition/${entry.split("/").at(-1)}.js`) {
-    if (typeof root !== "string" || typeof entry !== "string" || !Array.isArray(registrations)) throw new TypeError("invalid structure scope");
+  constructor(root, entry, registrations, registrationModule = `src/flow/engine/composition/${entry.split("/").at(-1)}.js`, contract = null) {
+    if (typeof root !== "string" || typeof entry !== "string" || !Array.isArray(registrations)
+      || contract !== null && !(contract instanceof StructureScopeContract)) throw new TypeError("invalid structure scope");
     this.root = path.resolve(root);
     this.entry = entry.replace(/\\/g, "/").replace(/\/$/, "");
     this.registrations = registrations;
     this.registrationModule = registrationModule;
+    this.contract = contract;
   }
 }
 
@@ -57,11 +77,50 @@ class ResolvedSourceClass {
   get key() { return `${this.file}#${this.classEntry.name}`; }
 }
 
+class ServiceClassReceiver {
+  constructor(value, isStatic) {
+    if (!(value instanceof ResolvedSourceClass) || typeof isStatic !== "boolean") throw new TypeError("class receiver required");
+    this.value = value;
+    this.isStatic = isStatic;
+  }
+  get key() { return `${this.value.key}:${this.isStatic ? "static" : "instance"}`; }
+}
+
+class ResolvedSourceBinding {
+  constructor(file, module, header, route = [file]) {
+    if (!(module instanceof SourceModule) || !(header instanceof SourceDeclarationHeader)) throw new TypeError("resolved source declaration header required");
+    this.file = file;
+    this.module = module;
+    this.header = header;
+    this.name = header.name;
+    this.route = route;
+  }
+  get key() { return `${this.file}#${this.name}`; }
+  through(file) {
+    return this.route[0] === file ? this : new ResolvedSourceBinding(this.file, this.module, this.header, [file, ...this.route]);
+  }
+}
+
 class ResolvedDependency {
   constructor(reference, target, sourceClass) {
     this.reference = reference;
     this.target = target;
     this.sourceClass = sourceClass;
+  }
+}
+
+class ExecutionEntryBindings {
+  constructor(module) {
+    if (typeof module !== "string" || !module) throw new TypeError("execution entry module required");
+    this.module = module;
+    this.origins = new Set();
+    this.accepted = new Map();
+    this.publicNames = new Set();
+  }
+  add(name, declaration, isPublic = false) {
+    this.origins.add(name);
+    if (declaration) this.accepted.set(declaration.token.offset, declaration.tokens);
+    if (isPublic) this.publicNames.add(name);
   }
 }
 
@@ -74,13 +133,17 @@ export class StructureChecker {
     this.modules = new Map();
     this.reverseModules = new Map();
     this.sources = new Map();
+    this.resolvedPaths = new Map();
     this.exports = new Map();
+    this.bindingExports = new Map();
+    this.exportNames = new Map();
     this.unresolvedHeritage = new Set();
     this.ambiguousExports = new Set();
     this.allFiles = [];
     this.registeredServices = new Map();
     this.argumentTypeKeys = new Set();
     this.topLevelVisited = new Set();
+    this.serviceBindings = new Map();
     this.rules = new FlowStructureRules();
   }
 
@@ -89,8 +152,10 @@ export class StructureChecker {
     const entries = this.#jsFiles(this.scope.entry);
     if (entries.length === 0) this.#diagnose("A01", this.scope.entry, null, [this.scope.entry], "scope has no JavaScript entry files");
     const registered = this.#registrationIndex(entries);
+    this.#fixedScopeContract();
     for (const entry of entries) this.#visit(entry, [entry], registered);
     this.#serviceDependencies();
+    this.#serviceBindingWrites();
     const stepFiles = new Set(registered.keys());
     for (const entry of entries) {
       const module = this.#module(entry, [entry]);
@@ -98,13 +163,418 @@ export class StructureChecker {
     }
     this.#reverseIndex(stepFiles);
     this.#reverseServiceIndex();
-    this.#sharedExecutionSelections();
-    this.#registeredExecutionRoute();
+    if (this.scope.contract?.executionShapes.length) this.#declaredExecutionRoutes();
+    else {
+      this.#sharedExecutionSelections();
+      this.#registeredExecutionRoute();
+    }
     return this.report;
   }
 
   #diagnose(rule, file, token, trace, message) {
     this.report.diagnostics.push(new StructureDiagnostic(rule, file, token, trace, message));
+  }
+
+  #executionKind(registration) {
+    const selector = registration.executionContract?.selectorName;
+    return [...sharedExecutionAdapters.values()].find((adapter) => adapter.selector === selector)?.kind ?? "unknown";
+  }
+
+  #fixedScopeContract() {
+    const contract = this.scope.contract;
+    if (contract === null) return;
+    const definition = contract.definition;
+    const file = definition.module;
+    const module = this.#module(file, [this.scope.entry, file], "A11", true);
+    const declaration = module?.declaration(definition.declarationName);
+    const tokens = declaration?.tokens ?? [];
+    if (!declaration) this.#diagnose("A11", file, null, [this.scope.entry, file], `missing Definition declaration ${definition.declarationName}`);
+    const definitionIds = tokens.filter((token, index) => token.kind === "string"
+      && tokens[index - 1]?.value === ":" && tokens[index - 2]?.value === "id");
+    const expected = new Set(definition.leaves.map((leaf) => leaf.stepId));
+    for (const leaf of definition.leaves) {
+      const requiredDeclaration = leaf.scope === "task" ? "TASK_DEFINITION" : "FLOW_DEFINITION";
+      if (definition.declarationName !== requiredDeclaration) this.#diagnose("A11", file, declaration?.token,
+        [this.scope.entry, file], `${leaf.stepId} belongs to ${leaf.scope} scope, not ${definition.declarationName}`);
+      const matches = definitionIds.filter((token) => token.value === leaf.stepId);
+      // Draft review leaf producers are explicit Definition composition calls, inspected by A11 below.
+      const routeGenerated = leaf.scope === "flow" && this.#draftDefinitionRouteLeaf(module, leaf.stepId);
+      if (matches.length !== 1 && !routeGenerated) this.#diagnose("A11", file, matches[0] ?? declaration?.token,
+        [this.scope.entry, file], `fixed Definition leaf ${leaf.stepId} has ${matches.length} declarations`);
+      if (leaf.scope === "flow" && leaf.nodeId !== leaf.stepId) this.#diagnose("A11", file, matches[0],
+        [this.scope.entry, file], `Flow leaf ${leaf.stepId} has inconsistent node identity ${leaf.nodeId}`);
+      if (leaf.scope === "task") {
+        const identity = leaf.taskIdentity;
+        if (!(identity instanceof TaskStepIdentity) || identity.definitionId !== leaf.stepId || !identity.matchesNode(leaf.nodeId)) {
+          this.#diagnose("A11", file, matches[0], [this.scope.entry, file], `Task role ${leaf.stepId} does not match node ${leaf.nodeId}`);
+        }
+      }
+      const registrations = this.scope.registrations.filter((registration) => registration.stepId === leaf.stepId);
+      if (registrations.length !== 1) this.#diagnose("A01", this.scope.registrationModule, null,
+        [file, this.scope.registrationModule], `responsibility leaf ${leaf.stepId} has ${registrations.length} selected registrations`);
+    }
+    for (const registration of this.scope.registrations) if (!expected.has(registration.stepId)) {
+      this.#diagnose("A01", this.scope.registrationModule, null, [file, this.scope.registrationModule],
+        `selected registration ${registration.stepId} is outside fixed responsibility leaves`);
+    }
+    if (contract.registry !== null) {
+      for (const issue of ProductionRegistrations.inspect(contract.registry)) {
+        this.#diagnose("A01", this.scope.registrationModule, null, [this.scope.registrationModule], issue.toRegistryMessage());
+      }
+      for (const registration of this.scope.registrations) if (!contract.registry.includes(registration)) {
+        this.#diagnose("A01", this.scope.registrationModule, null, [this.scope.registrationModule],
+          `selection ${registration.stepId} does not belong to the single production registry`);
+      }
+      for (const registration of contract.registry) if (registration instanceof StepRegistration
+        && expected.has(registration.stepId) && !this.scope.registrations.includes(registration)) {
+        this.#diagnose("A01", this.scope.registrationModule, null, [this.scope.registrationModule],
+          `single production registry leaf ${registration.stepId} was excluded from phase selection`);
+      }
+    }
+  }
+
+  #draftDefinitionRouteLeaf(definition, stepId) {
+    const flow = definition?.declaration("FLOW_DEFINITION");
+    if (!flow) return false;
+    const routeFile = "src/flow/lib/draft-review-routes.js";
+    if (!this.allFiles.includes(routeFile)) return false;
+    const routes = this.#module(routeFile, [definition.file, routeFile], "A11", true);
+    const tokens = routes?.declaration("DRAFT_REVIEW_ROUTES")?.tokens ?? [];
+    for (let index = 0; index < flow.tokens.length; index++) {
+      if (flow.tokens[index].value !== "createDraftReviewRouteNodes") continue;
+      const route = definition.declaration(flow.tokens[index + 2]?.value ?? "");
+      const keyIndex = route?.tokens.findIndex((token) => token.value === "draftReviewRouteForKey") ?? -1;
+      const key = route?.tokens[keyIndex + 2]?.value;
+      const start = tokens.findIndex((token, offset) => token.value === "key" && tokens[offset + 2]?.value === key);
+      let end = tokens.findIndex((token, offset) => offset > start && token.value === "key");
+      if (end < 0) end = tokens.length;
+      if (start >= 0 && tokens.slice(start, end).some((token, offset, part) =>
+        ["triageStepId", "repairStepId"].includes(token.value) && part[offset + 2]?.value === stepId)) return true;
+    }
+    return false;
+  }
+
+  #declaredExecutionRoutes() {
+    const contract = this.scope.contract;
+    this.#declaredLookups();
+    const entryModules = new Set(contract.executionShapes.flatMap((shape) =>
+      [...shape.callers, ...shape.loaders].map((entry) => entry.module)));
+    const entries = new Map([...entryModules].map((file) => [file, new ExecutionEntryBindings(file)]));
+    const allowed = new Map();
+    const loaderTokens = new Map();
+    for (const leaf of contract.definition.leaves) {
+      const registration = this.scope.registrations.find((entry) => entry.stepId === leaf.stepId);
+      if (!registration) continue;
+      const shape = contract.executionShapes.find((entry) => entry.form === leaf.executionForm);
+      if (!shape || !(registration.executionContract instanceof StepExecutionContract) || !shape.matches(registration.executionContract)) {
+        this.#diagnose("A10", this.scope.registrationModule, null, [this.scope.registrationModule],
+          `registration ${leaf.stepId} lacks named execution form ${leaf.executionForm}`);
+      }
+    }
+    for (const shape of contract.executionShapes) {
+      const file = shape.adapterModule;
+      const module = this.#module(file, [this.scope.registrationModule, file], "A10", true);
+      const declaration = module?.declaration(shape.contractName);
+      if (!declaration?.matchesDeclaration(`const ${shape.contractName} = new StepExecutionContract({
+        select: ${shape.selectorName}, project: ${shape.projectorName}, execute: ${shape.executorName} });`)) {
+        this.#diagnose("A10", file, declaration?.token, [this.scope.registrationModule, file],
+          `${shape.contractName} does not bind its named adapters`);
+      }
+      for (const name of [shape.selectorName, shape.projectorName, shape.executorName]) if (!module?.declaration(name)?.bodyTokens()) {
+        this.#diagnose("A10", file, declaration?.token, [this.scope.registrationModule, file], `named adapter ${name} cannot be resolved`);
+      }
+      const consumers = new Map();
+      for (const name of [shape.projectorName, shape.executorName]) {
+        if (module && !this.#declaredSelectionConsumer(module, name, shape, consumers)) this.#diagnose("A10", file,
+          module.declaration(name)?.token, [this.scope.registrationModule, file],
+          `named adapter ${name} does not preserve its supplied selection in a supported consumer shape`);
+      }
+      if (module) this.#declaredAdapterBindings(module, shape, declaration, consumers);
+      for (const caller of shape.callers) {
+        const source = this.#module(caller.module, [file, caller.module], "A10", true);
+        const body = source?.declaration(caller.declarationName);
+        const matched = body?.matchesFunction("input", caller.body());
+        if (!matched) this.#diagnose("A10", caller.module, body?.token,
+          [this.scope.registrationModule, file, caller.module], `${caller.declarationName} does not preserve registered lookup and selection`);
+        entries.get(caller.module).add(caller.declarationName, matched ? body : null, true);
+        if (caller.receiptReplayName !== null) {
+          const replay = source?.declaration(caller.receiptReplayName);
+          const matchedReplay = replay?.matchesFunction("receipt", "return receipt;");
+          if (!matchedReplay) {
+            this.#diagnose("A10", caller.module, replay?.token ?? body?.token,
+              [this.scope.registrationModule, file, caller.module], "receipt replay must consume the acquired receipt without execution or judgment");
+          }
+          entries.get(caller.module).add(caller.receiptReplayName, matchedReplay ? replay : null);
+        }
+        const lookup = source?.references.find((reference) => reference.bindings.get(caller.lookupName) === caller.lookupName);
+        const target = lookup && this.#resolve(caller.module, lookup, [caller.module], "A11", true);
+        if (target?.file !== this.scope.registrationModule) this.#diagnose("A11", caller.module, lookup?.token ?? body?.token,
+          [caller.module, this.scope.registrationModule], `${caller.lookupName} is not the selected production lookup`);
+        if (!allowed.has(caller.module)) allowed.set(caller.module, new Set());
+        if (matched) for (const token of body.tokens) allowed.get(caller.module).add(token.offset);
+      }
+      for (const loader of shape.loaders) {
+        const source = this.#module(loader.module, [file, loader.module], "A11", true);
+        const declaration = source?.declaration(loader.declarationName);
+        const specifier = path.posix.relative(path.posix.dirname(loader.module), loader.commandModule);
+        const relative = specifier.startsWith(".") ? specifier : `./${specifier}`;
+        const matched = declaration?.matchesFunction("", `return import('${relative}');`);
+        if (!matched) this.#diagnose("A11", loader.module, declaration?.token,
+          [loader.module, loader.commandModule], `${loader.declarationName} is not its named command loader`);
+        entries.get(loader.module).add(loader.declarationName, matched ? declaration : null, true);
+        if (!loaderTokens.has(loader.module)) loaderTokens.set(loader.module, new Set());
+        if (matched) for (const token of declaration.tokens) loaderTokens.get(loader.module).add(token.offset);
+      }
+    }
+    // Several shapes can share an entry module and receipt helper. Accept only
+    // verified declarations, then check their complete binding closure once.
+    for (const bindings of entries.values()) {
+      const module = this.reverseModules.get(bindings.module);
+      if (module) this.#declaredBindings(module, bindings.origins, bindings.accepted.values(), "execution entry", bindings.publicNames);
+    }
+    for (const shape of contract.executionShapes) {
+      const file = shape.adapterModule;
+      const lookupNames = new Set(shape.callers.map((caller) => caller.lookupName));
+      const commandModules = new Set(shape.callers.map((caller) => caller.module));
+      for (const sourceFile of this.allFiles) {
+        if (sourceFile === this.scope.registrationModule) continue;
+        const source = this.#module(sourceFile, [sourceFile], "A11", true);
+        const aliases = new Set();
+        const namespaces = new Set();
+        let consumesSelectedBoundary = false;
+        const routes = new Map();
+        const adapterNames = new Set([shape.contractName, shape.selectorName, shape.projectorName, shape.executorName]);
+        for (const reference of source?.references ?? []) {
+          const target = this.#resolve(sourceFile, reference, [sourceFile], "A11", true)?.file;
+          if (!target) continue;
+          const exposed = reference.kind === "reexport"
+            ? source.exports.filter((entry) => entry.reference === reference).map((entry) => [entry.name, entry.local])
+            : reference.bindings;
+          for (const [local, imported] of exposed) {
+            const names = imported === "*" ? this.#exportedNames(target) : [imported];
+            for (const exported of names) {
+              // Explicit local exports win over wildcard exports in ESM. Resolve
+              // the effective source slot before treating a re-export as escape.
+              const binding = reference.kind === "reexport" && !(imported === "*" && local !== "*")
+                ? this.#resolveExportBinding(sourceFile, local === "*" ? exported : local, new Set(), "A11")
+                : this.#resolveExportBinding(target, exported, new Set(), "A11");
+              if (!binding) continue;
+              const lookup = binding.file === this.scope.registrationModule && lookupNames.has(binding.name);
+              const adapter = binding.file === file && adapterNames.has(binding.name);
+              if (!lookup && !adapter) continue;
+              consumesSelectedBoundary = true;
+              const trace = [sourceFile, ...binding.route.filter((entry) => entry !== sourceFile)];
+              if (adapter && !this.rules.isComposition(sourceFile)) {
+                this.#diagnose("A11", sourceFile, reference.token, trace,
+                  "shared execution adapter imported outside production registration");
+              }
+              if (!lookup) continue;
+              if (reference.kind === "reexport") {
+                this.#diagnose("A11", sourceFile, reference.token, trace,
+                  "unregistered execution lookup caller or capability escape through re-export");
+              } else {
+                (imported === "*" ? namespaces : aliases).add(local);
+                routes.set(local, trace);
+              }
+            }
+          }
+        }
+        if (source?.tokens.length) {
+          const usage = source.originUsage([...aliases, ...namespaces]);
+          for (const reference of source.references) if (reference.kind === "import") usage.accept(source.referenceTokens(reference));
+          for (const token of source.tokens) if (allowed.get(sourceFile)?.has(token.offset)) usage.accept([token]);
+          for (const token of usage.unresolved()) {
+            this.#diagnose("A11", sourceFile, token, routes.get(token.value) ?? [sourceFile, this.scope.registrationModule],
+              `unregistered execution lookup caller or capability escape ${token.value}`);
+          }
+        }
+        for (const reference of source?.references ?? []) {
+          if (reference.kind !== "dynamic") continue;
+          const target = this.#resolve(sourceFile, reference, [sourceFile], "A11", true);
+          if (commandModules.has(target?.file) && !loaderTokens.get(sourceFile)?.has(reference.token.offset)) {
+            this.#diagnose("A11", sourceFile, reference.token, [sourceFile, target.file], "unregistered execution command loader");
+          }
+        }
+        for (const token of source?.tokens ?? []) {
+          if (token.value !== "executionContract" || sourceFile === file || this.rules.isComposition(sourceFile)
+            || !consumesSelectedBoundary || allowed.get(sourceFile)?.has(token.offset)) continue;
+          this.#diagnose("A11", sourceFile, token, [sourceFile, this.scope.registrationModule], "execution contract consumed outside declared callers");
+        }
+      }
+    }
+  }
+
+  // Named adapters currently support selection forwarding, immutable aliases,
+  // and same-module helper delegation. Each helper must obey the same contract;
+  // an opaque call is not evidence of consumption. Production Draft/Spec adapters
+  // retain their existing concrete routing checks below. Additional execution
+  // terminals need an explicit contract, not a method-name inference here.
+  #declaredSelectionConsumer(module, name, shape, consumers, visited = new Set()) {
+    if (visited.has(name)) return false;
+    const declaration = module.declaration(name);
+    if (declaration?.tokens[0]?.value !== "function") return false;
+    const parameters = readParameters(declaration.tokens);
+    if (parameters.length < 1 || parameters.length > 2
+      || parameters.some((parameter) => parameter.length !== 1 || parameter[0].kind !== "identifier")) return false;
+    const names = parameters.map((parameter) => parameter[0].value);
+    if (new Set(names).size !== names.length) return false;
+    const origins = new Map(names.map((parameter, index) => [parameter, index]));
+    const body = declaration.bodyTokens();
+    if (body === null) return false;
+    let prefix = "";
+    let index = 0;
+    // A closed straight-line prefix is essential: origin tracking alone cannot
+    // establish that an alias is never overwritten or bypassed by an early return.
+    while (body[index]?.value === "const") {
+      const alias = body[index + 1];
+      const initializer = alias && declaration.topLevelInitializer(alias.value);
+      const source = initializer?.tokens;
+      if (alias?.kind !== "identifier" || origins.has(alias.value)
+        || source?.length !== 1 || !origins.has(source[0].value)
+        || body[index + 2]?.value !== "=" || body[index + 4]?.value !== ";") return false;
+      origins.set(alias.value, origins.get(source[0].value));
+      prefix += `const ${alias.value} = ${source[0].value};`;
+      index += 5;
+    }
+    for (const [alias, origin] of origins) {
+      if (origin === 0 && declaration.matchesBody(`${prefix} return ${alias};`)) {
+        consumers.set(name, declaration);
+        return true;
+      }
+    }
+    const calls = readInvocations({ tokens: body.slice(index) });
+    if (calls.length !== 1) return false;
+    const call = calls[0];
+    if ([shape.selectorName, shape.projectorName, shape.executorName].includes(call.name)
+      || origins.has(call.name) || call.arguments.length < 1 || call.arguments.length > 2
+      || call.arguments.some((argument, position) => argument.length !== 1
+        || argument[0].kind !== "identifier" || origins.get(argument[0].value) !== position)) return false;
+    const target = module.declaration(call.name);
+    if (!target || readParameters(target.tokens).length !== call.arguments.length
+      || !declaration.matchesBody(`${prefix} return ${call.name}(${call.arguments.map((argument) => argument[0].value).join(",")});`)) return false;
+    if (!this.#declaredSelectionConsumer(module, call.name, shape, consumers, new Set([...visited, name]))) return false;
+    consumers.set(name, declaration);
+    return true;
+  }
+
+  #declaredAdapterBindings(module, shape, contract, consumers) {
+    const publicNames = new Set([shape.contractName, shape.projectorName, shape.executorName]);
+    // Trace aliases using the shared capability reader, but accept only the
+    // already inspected consumer closure and the named contract construction.
+    // A transfer into a field or exported alias is not a trusted binding here.
+    const accepted = [contract?.tokens ?? []];
+    for (const declaration of consumers.values()) accepted.push(declaration.tokens);
+    this.#declaredBindings(module, [...publicNames, ...consumers.keys()], accepted, "execution adapter", publicNames);
+  }
+
+  #declaredBindings(module, origins, accepted, description, publicNames) {
+    let usage;
+    try { usage = module.originUsage(origins, { acceptBindings: false, moduleBindings: true }); }
+    catch (error) {
+      if (!(error instanceof SourceReadError)) throw error;
+      this.#diagnose("A10", module.file, error, [this.scope.registrationModule, module.file],
+        `cannot inspect ${description} bindings: ${error.message}`);
+      return;
+    }
+    for (const tokens of accepted) usage.accept(tokens);
+    const explicitPublicNames = new Set();
+    for (const name of origins) {
+      const declaration = module.declaration(name);
+      if (publicNames.has(name) && declaration?.exported && !declaration.defaultExport) explicitPublicNames.add(name);
+      if (declaration?.exported && (!publicNames.has(name) || declaration.defaultExport)) {
+        const exportKind = publicNames.has(name) ? "default export"
+          : declaration.tokens[0].value === "function" ? "exported helper" : "private export";
+        this.#diagnose("A10", module.file, declaration.token, [this.scope.registrationModule, module.file],
+          `unresolved ${description} binding: ${exportKind} ${name}`);
+      }
+    }
+    const wildcardExports = [];
+    for (const exported of module.exports) {
+      if (exported.name === "*") {
+        wildcardExports.push(exported);
+        continue;
+      }
+      if (!publicNames.has(exported.name)) continue;
+      if (exported.reference !== null || exported.name !== exported.local) {
+        this.#diagnose("A10", module.file, exported.token ?? exported.reference?.token,
+          [this.scope.registrationModule, module.file],
+          `unresolved ${description} binding: public export ${exported.name} does not expose its declared binding`);
+      } else {
+        explicitPublicNames.add(exported.name);
+        if (exported.token) usage.accept([exported.token]);
+      }
+    }
+    // ESM's explicit named exports take precedence over wildcard exports. A
+    // wildcard cannot establish which binding an otherwise unresolved slot uses.
+    for (const exported of wildcardExports) for (const name of publicNames) {
+      if (explicitPublicNames.has(name)) continue;
+      this.#diagnose("A10", module.file, exported.token ?? exported.reference?.token,
+        [this.scope.registrationModule, module.file],
+        `unresolved ${description} binding: wildcard export does not establish public binding ${name}`);
+    }
+    for (const token of usage.unresolved()) this.#diagnose("A10", module.file, token,
+      [this.scope.registrationModule, module.file], `unresolved ${description} binding ${token.value}`);
+  }
+
+  #declaredLookups() {
+    const file = this.scope.registrationModule;
+    const module = this.#module(file, [file], "A10", true);
+    if (!module) return;
+    // Callers and execution forms can share one lookup and selection. Inspect
+    // each lookup once, then account for all composition bindings in one pass.
+    const names = new Set(this.scope.contract.executionShapes.flatMap((shape) => shape.callers.map((caller) => caller.lookupName)));
+    const origins = new Set(names);
+    const publicNames = new Set(names);
+    const accepted = new Map();
+    for (const name of names) this.#declaredLookup(module, name, origins, accepted, publicNames);
+    this.#declaredBindings(module, origins, accepted.values(), "execution lookup", publicNames);
+  }
+
+  #declaredLookup(module, name, origins, accepted, publicNames) {
+    const file = module.file;
+    const lookup = module.declaration(name);
+    const returned = lookup?.returns();
+    const mapName = returned?.length === 1 ? returned[0].tokens[0]?.value : null;
+    const map = mapName && module.declaration(mapName);
+    const arrayName = map?.tokens[6]?.value;
+    const array = arrayName && module.declaration(arrayName);
+    const staticCalls = array ? readInvocations({ tokens: array.tokens }).filter((call) => call.name === "StepRegistration") : [];
+    const selectedIds = staticCalls.map((call) => {
+      const tokens = call.arguments.flat();
+      const identity = tokens.findIndex((token, index) => token.value === "stepId" && tokens[index + 1]?.value === ":" && tokens[index + 2]?.kind === "string");
+      return identity < 0 ? null : tokens[identity + 2].value;
+    });
+    const runtimeIds = this.scope.registrations.map((registration) => registration.stepId);
+    const completeSelection = selectedIds.length === runtimeIds.length && selectedIds.every((id) => id !== null && runtimeIds.includes(id))
+      && new Set(selectedIds).size === selectedIds.length;
+    // Constructor arguments are inspected by the registration rules. Here the
+    // complete array must contain those constructors directly, without a filter,
+    // spread, wrapper, or any other expression changing the selected entries.
+    const source = this.#source(file);
+    const constructors = staticCalls.map((call) => {
+      if (call.arguments.length !== 1) return null;
+      const argument = call.arguments[0];
+      if (argument[0]?.value !== "{" || argument.at(-1)?.value !== "}") return null;
+      return `new StepRegistration(${source.slice(argument[0].offset, argument.at(-1).offset + 1)})`;
+    });
+    const directSelection = constructors.every((entry) => entry !== null) && ["", ","].some((trailing) =>
+      array?.matchesDeclaration(`const ${arrayName} = [${constructors.join(",")}${trailing}];`));
+    const connected = lookup?.matchesFunction("stepId", `return ${mapName}.get(stepId) ?? null;`)
+      && map?.matchesDeclaration(`const ${mapName} = new Map(${arrayName}.map((registration) => [registration.stepId, registration]));`)
+      && directSelection && completeSelection;
+    if (!connected) {
+      this.#diagnose("A10", file, lookup?.token, [file], `lookup ${name} does not cover its full registration selection`);
+      return;
+    }
+    origins.add(mapName);
+    origins.add(arrayName);
+    // The verified registration selection is public; its lookup Map is private.
+    publicNames.add(arrayName);
+    accepted.set(lookup.token.offset, lookup.tokens);
+    accepted.set(map.token.offset, map.tokens);
+    // Only the array binding itself is a checked use: its constructor arguments
+    // cannot capture, replace, or leak any of the tracked lookup capabilities.
+    accepted.set(array.token.offset, [array.tokens[1]]);
   }
 
   #jsFiles(relative) {
@@ -140,7 +610,11 @@ export class StructureChecker {
       if (!silent) this.#diagnose(rule, from, reference.token, trace, `unresolved bare dependency ${specifier}`);
       return null;
     }
-    try { return { file: this.repository.resolve(from, specifier) }; }
+    try {
+      const key = `${from}#${specifier}`;
+      if (!this.resolvedPaths.has(key)) this.resolvedPaths.set(key, this.repository.resolve(from, specifier));
+      return { file: this.resolvedPaths.get(key) };
+    }
     catch (error) {
       if (!silent) this.#diagnose(rule, from, reference.token, trace, error.message);
       return null;
@@ -170,21 +644,54 @@ export class StructureChecker {
   }
 
   #resolveLocal(file, module, name, seen, rule) {
-    const local = module.classes.find((entry) => entry.name === name);
-    if (local) return new ResolvedSourceClass(file, module, local);
+    // An import owns this module binding. A named class expression elsewhere
+    // can reuse its name without replacing that binding.
     const reference = module.references.find((entry) => entry.kind === "import" && entry.bindings.has(name));
-    if (!reference) return null;
-    const target = this.#resolve(file, reference, [file], rule, true);
-    return target?.file ? this.#resolveExport(target.file, reference.bindings.get(name), seen, rule) : null;
+    if (reference) {
+      const target = this.#resolve(file, reference, [file], rule, true);
+      return target?.file ? this.#resolveExport(target.file, reference.bindings.get(name), seen, rule) : null;
+    }
+    // The class index also contains nested declarations and named expressions.
+    // Only the module declaration can supply a local type binding here.
+    const declaration = module.declaration(name);
+    const local = module.classes.find((entry) => entry.name === name
+      && entry.token.offset === declaration?.token.offset);
+    return local ? new ResolvedSourceClass(file, module, local) : null;
   }
 
   #resolveExport(file, name, seen, rule) {
     const key = `${file}#${name}`;
-    if (seen.has(key)) return null;
     if (this.exports.has(key)) return this.exports.get(key);
+    const binding = this.#resolveExportBinding(file, name, seen, rule);
+    if (!binding || binding.header.token.value !== "class") return null;
+    const module = this.#module(binding.file, [file, binding.file], rule);
+    const entry = module?.classes.find((candidate) => candidate.name === binding.name
+      && candidate.token.offset === binding.header.token.offset);
+    const resolved = entry ? new ResolvedSourceClass(binding.file, module, entry) : null;
+    if (resolved) this.exports.set(key, resolved);
+    return resolved;
+  }
+
+  #resolveLocalBinding(file, module, name, seen, rule) {
+    const imported = module.references.find((entry) => entry.kind === "import" && entry.bindings.has(name));
+    if (imported) {
+      const target = this.#resolve(file, imported, [file], rule, true);
+      return target?.file ? this.#resolveExportBinding(target.file, imported.bindings.get(name), seen, rule)?.through(file) ?? null : null;
+    }
+    const header = module.declarationHeader(name);
+    return header ? new ResolvedSourceBinding(file, module, header) : null;
+  }
+
+  #resolveExportBinding(file, name, seen, rule) {
+    const key = `${file}#${name}`;
+    if (seen.has(key)) return null;
+    if (this.bindingExports.has(key)) return this.bindingExports.get(key);
+    const root = seen.size === 0;
     seen.add(key);
-    const module = this.#module(file, [file], rule);
-    if (!module) return null;
+    // Export provenance does not require scope/global analysis. In particular,
+    // unrelated reverse-index modules may contain lexical-only var declarations.
+    const module = this.#module(file, [file], rule, true);
+    if (!module) { seen.delete(key); return null; }
     const matches = [];
     const explicit = module.exports.filter((entry) => entry.name === name);
     const candidates = explicit.length ? explicit : module.exports.filter((entry) => entry.name === "*" && name !== "default");
@@ -192,26 +699,45 @@ export class StructureChecker {
       if (binding.reference) {
         const target = this.#resolve(file, binding.reference, [file], rule, true);
         if (target?.file && binding.local !== "*") {
-          const resolved = this.#resolveExport(target.file, binding.local, seen, rule);
+          const resolved = this.#resolveExportBinding(target.file, binding.local, seen, rule);
           if (resolved) matches.push(resolved);
         } else if (target?.file && binding.name === "*") {
-          const resolved = this.#resolveExport(target.file, name, seen, rule);
+          const resolved = this.#resolveExportBinding(target.file, name, seen, rule);
           if (resolved) matches.push(resolved);
         }
       } else if (binding.local !== "*") {
-        const resolved = this.#resolveLocal(file, module, binding.local, seen, rule);
+        const resolved = this.#resolveLocalBinding(file, module, binding.local, seen, rule);
         if (resolved) matches.push(resolved);
       }
     }
     seen.delete(key);
     const unique = new Map(matches.map((entry) => [entry.key, entry]));
-    const resolved = unique.size === 1 ? unique.values().next().value : null;
+    const resolved = unique.size === 1 ? unique.values().next().value.through(file) : null;
     if (unique.size > 1 && !this.ambiguousExports.has(`${rule}:${key}`)) {
       this.ambiguousExports.add(`${rule}:${key}`);
       this.#diagnose(rule, file, null, [file], `ambiguous export ${name}`);
     }
-    if (resolved) this.exports.set(key, resolved);
+    // A recursive query can have a cycle-truncated view. Only completed root
+    // queries are independent of that traversal path and safe to cache.
+    if (root && resolved) this.bindingExports.set(key, resolved);
     return resolved;
+  }
+
+  #exportedNames(file, seen = new Set()) {
+    if (this.exportNames.has(file)) return this.exportNames.get(file);
+    if (seen.has(file)) return new Set();
+    const root = seen.size === 0;
+    seen.add(file);
+    const module = this.#module(file, [file], "A11", true);
+    const names = new Set();
+    for (const binding of module?.exports ?? []) {
+      if (binding.name !== "*") { names.add(binding.name); continue; }
+      const target = this.#resolve(file, binding.reference, [file], "A11", true);
+      if (target?.file) for (const name of this.#exportedNames(target.file, seen)) if (name !== "default") names.add(name);
+    }
+    seen.delete(file);
+    if (root) this.exportNames.set(file, names);
+    return names;
   }
 
   #registrationIndex(entries) {
@@ -263,12 +789,8 @@ export class StructureChecker {
           this.registeredServices.set(service.key, service);
           const staticTypes = service.classEntry.argumentTypes;
           for (const typeName of staticTypes) {
-            const local = service.module.classes.find((entry) => entry.name === typeName);
-            if (local) this.argumentTypeKeys.add(`${service.file}#${typeName}`);
-            else {
-              const imported = this.#dependencySource(service.module, typeName, true)?.sourceClass;
-              if (imported) this.argumentTypeKeys.add(imported.key);
-            }
+            const type = this.#resolveLocal(service.file, service.module, typeName, new Set(), "A12");
+            if (type) this.argumentTypeKeys.add(type.key);
           }
           const runtimeTypes = registration.ServiceClass.argumentTypes?.map((Type) => Type.name) ?? [];
           if (staticTypes.length !== runtimeTypes.length || staticTypes.some((name, index) => name !== runtimeTypes[index])) {
@@ -320,11 +842,11 @@ export class StructureChecker {
     if (matching.length !== 1) {
       this.#diagnose("A08", file, calls[0]?.token, [file, step.file], `registration has ${matching.length} static Service/prepare/Connector matches for ${registration.stepId}`);
     }
-    const kind = registration.stepId.endsWith("-gate") ? "gate"
-      : registration.stepId.endsWith("-review") ? "review" : "worker";
-    const contractName = `${kind}StepExecutionContract`;
-    const contractSource = kind === "worker" ? "src/flow/lib/worker-execution-admission.js"
-      : "src/flow/lib/execution-admission.js";
+    const shape = this.scope.contract?.executionShapes.find((entry) => entry.matches(registration.executionContract));
+    const kind = this.#executionKind(registration);
+    const adapter = sharedExecutionAdapters.get(kind);
+    const contractName = shape?.contractName ?? adapter?.contractName;
+    const contractSource = shape?.adapterModule ?? adapter?.module;
     const contractReference = module.references.find((reference) => reference.bindings.get(contractName) === contractName);
     const contractTarget = contractReference && this.#resolve(file, contractReference, [file], "A10");
     if (contractTarget?.file !== contractSource) {
@@ -384,14 +906,12 @@ export class StructureChecker {
   #inspectServiceArguments(service, preparationModule, preparationName, trace, seen = new Set()) {
     if (seen.has(preparationName)) return false;
     seen.add(preparationName);
-    const serviceTokens = service.module.declaration(service.classEntry.name)?.tokens ?? [];
-    const expected = [];
-    for (const parameter of ["input", "writer"]) {
-      const index = serviceTokens.findIndex((token, offset) => token.value === parameter
-        && serviceTokens[offset + 1]?.value === "instanceof" && serviceTokens[offset + 2]?.kind === "identifier");
-      expected.push(index >= 0 ? serviceTokens[index + 2].value : null);
-    }
-    if (expected.some((name) => name === null)) {
+    const constructor = readClassMember(service.module, service.classEntry.name, "constructor");
+    const invariants = readTypeInvariants(constructor);
+    const parameters = readParameters(constructor?.tokens ?? []);
+    const expected = parameters.map((parameter) => parameter.length === 1
+      ? invariants.find((entry) => entry.parameter === parameter[0].value)?.typeName ?? null : null);
+    if (expected.length !== 2 || expected.some((name) => name === null)) {
       this.#diagnose("A12", service.file, service.classEntry.token, [service.file], "Service constructor must validate typed input and settlement writer");
       return false;
     }
@@ -417,7 +937,8 @@ export class StructureChecker {
       }
     }
     for (let index = 0; index < tokens.length - 2; index++) {
-      if (tokens[index].value !== "new" || tokens[index + 1]?.value !== expected[0] || tokens[index + 2]?.value !== "(") continue;
+      if (tokens[index].value !== "new" || tokens[index + 2]?.value !== "("
+        || !this.#argumentSubtype(preparationModule, tokens[index + 1]?.value, service, expected[0])) continue;
       let depth = 0;
       let end = index + 2;
       for (; end < tokens.length; end++) {
@@ -462,7 +983,7 @@ export class StructureChecker {
         }
         return end === element.length - 1 ? element[1].value : undefined;
       });
-      if (actual.length !== 2 || actual.some((name, offset) => name !== expected[offset])) {
+      if (actual.length !== 2 || actual.some((name, offset) => !this.#argumentSubtype(preparationModule, name, service, expected[offset]))) {
         this.#diagnose("A12", preparationModule.file, tokens[index], trace,
           `preparation returns ${actual.join(", ")} instead of ${expected.join(", ")}`);
       }
@@ -498,35 +1019,139 @@ export class StructureChecker {
     return found;
   }
 
+  #argumentSubtype(preparation, actualName, service, expectedName) {
+    if (!actualName || !expectedName) return false;
+    const expected = this.#resolveLocal(service.file, service.module, expectedName, new Set(), "A12");
+    let actual = this.#resolveLocal(preparation.file, preparation, actualName, new Set(), "A12");
+    const seen = new Set();
+    while (actual && !seen.has(actual.key)) {
+      if (actual.key === expected?.key) return true;
+      seen.add(actual.key);
+      actual = this.#resolveLocal(actual.file, actual.module, actual.classEntry.parent, new Set(), "A12");
+    }
+    return false;
+  }
+
   #serviceDependencies() {
     for (const service of this.registeredServices.values()) {
       this.#inspectService(service.file, service.classEntry.name, [service.file], new Set());
     }
   }
 
-  #inspectService(file, name, trace, seen, member = null) {
-    const key = `${file}#${name}${member === null ? "" : `.${member}`}`;
+  #trackServiceBinding(file, module, name, trace, seen = new Set()) {
+    const key = `${file}#${name}`;
+    if (this.registeredServices.has(key) || this.argumentTypeKeys.has(key) || seen.has(key)) return false;
+    seen.add(key);
+    const declaration = module.declaration(name);
+    if (!declaration) return false;
+    let callable = declaration.callable;
+    const alias = declaration.referenceInitializer();
+    if (!callable && alias) {
+      const target = this.#resolveLocalBinding(file, module, alias, new Set(), "A08");
+      callable = target !== null && this.#trackServiceBinding(target.file, target.module, target.name,
+        [...trace, ...target.route.filter((entry) => entry !== file)], seen);
+    }
+    if (!callable) return false;
+    if (!this.serviceBindings.has(file)) this.serviceBindings.set(file, new Map());
+    const bindings = this.serviceBindings.get(file);
+    if (!bindings.has(name)) bindings.set(name, trace);
+    return true;
+  }
+
+  #serviceBindingWrites() {
+    for (const [file, bindings] of this.serviceBindings) {
+      const module = this.#module(file, [file], "A08");
+      if (!module) continue;
+      for (const write of module.bindingWrites(bindings.keys())) {
+        this.#diagnose("A08", file, write.token, bindings.get(write.binding.name),
+          `Service dependency binding ${write.binding.name} may be replaced after its declaration`);
+      }
+    }
+  }
+
+  #serviceParent(owner, trace, ancestry = new Set()) {
+    const entry = owner.classEntry;
+    if (!entry.parent) return null;
+    const parent = this.#resolveLocal(owner.file, owner.module, entry.parent, new Set(), "A08");
+    if (!parent) {
+      if (!nativeClassBases.has(entry.parent) || !owner.module.isUnbound(entry.parent, entry.parentToken)) {
+        this.#diagnose("A08", owner.file, entry.parentToken, trace,
+          `cannot resolve Service helper heritage ${entry.parent}`);
+      }
+      return null;
+    }
+    if (ancestry.has(parent.key)) {
+      this.#diagnose("A08", owner.file, entry.parentToken, trace, "cyclic Service helper heritage");
+      return null;
+    }
+    this.#trackServiceBinding(parent.file, parent.module, parent.classEntry.name,
+      parent.file === owner.file ? trace : [...trace, parent.file]);
+    return parent;
+  }
+
+  #serviceMember(module, name, member, trace, receiver) {
+    const members = module.classMembers(name);
+    const unresolved = members?.unresolvedMember(receiver.isStatic);
+    if ((member !== "constructor" || receiver.isStatic) && unresolved) {
+      this.#diagnose("A08", module.file, unresolved, trace, "Service helper has an unresolved computed member declaration");
+    }
+    return members?.member(member, { isStatic: receiver.isStatic }) ?? null;
+  }
+
+  #inspectInstanceInitializers(owner, receiver, trace, seen) {
+    for (const initializer of owner.module.classMembers(owner.classEntry.name)?.instanceInitializers ?? []) {
+      this.#inspectServiceDeclaration(owner.file, owner.module, owner.classEntry.name, initializer, trace, seen, null, receiver);
+    }
+  }
+
+  #inspectService(file, name, trace, seen, member = null, exported = false, receiver = null) {
+    if (exported) {
+      const binding = this.#resolveExportBinding(file, name, new Set(), "A08");
+      if (!binding) {
+        this.#diagnose("A08", file, null, trace, `cannot resolve exported Service dependency ${name}`);
+        return;
+      }
+      trace = [...trace, ...binding.route.filter((entry) => entry !== file)];
+      file = binding.file;
+      name = binding.name;
+    }
+    let module = this.#module(file, trace, "A08");
+    if (!module) return;
+    const ownerClass = member === null ? null : this.#resolveLocal(file, module, name, new Set(), "A08");
+    if (receiver === null && ownerClass) receiver = new ServiceClassReceiver(ownerClass, false);
+    const key = `${file}#${name}${member === null ? "" : `.${member}@${receiver?.key ?? ""}`}`;
     if (seen.has(key)) return;
     seen.add(key);
-    const module = this.#module(file, trace, "A08");
-    if (!module) return;
     this.#inspectTopLevelEffects(file, module, trace);
-    const alias = module.exports.find((entry) => entry.name === name && entry.reference);
-    if (alias) {
-      const target = this.#resolve(file, alias.reference, trace, "A08");
-      if (target?.file) this.#inspectService(target.file, alias.local, [...trace, target.file], seen);
-      return;
+    if (member === "constructor" && !receiver?.isStatic && ownerClass) this.#inspectInstanceInitializers(ownerClass, receiver, trace, seen);
+    let declaration = member === null ? module.declaration(name) : this.#serviceMember(module, name, member, trace, receiver);
+    if (member !== null && !declaration) {
+      let owner = ownerClass;
+      const ancestry = new Set();
+      while (owner && !declaration) {
+        ancestry.add(owner.key);
+        const parent = this.#serviceParent(owner, trace, ancestry);
+        if (!parent) return;
+        owner = parent;
+        if (file !== owner.file) trace = [...trace, owner.file];
+        file = owner.file;
+        name = owner.classEntry.name;
+        module = owner.module;
+        this.#inspectTopLevelEffects(file, module, trace);
+        if (member === "constructor" && !receiver.isStatic) this.#inspectInstanceInitializers(owner, receiver, trace, seen);
+        declaration = this.#serviceMember(module, name, member, trace, receiver);
+      }
     }
-    const declaration = member === null ? module.declaration(name) : readClassMember(module, name, member);
     if (!declaration) {
       if (member !== null) return;
       const reference = module.references.find((entry) => entry.kind === "import" && entry.bindings.has(name));
       if (reference) {
         const target = this.#resolve(file, reference, trace, "A08");
-        if (target?.file) this.#inspectService(target.file, reference.bindings.get(name), [...trace, target.file], seen);
+        if (target?.file) this.#inspectService(target.file, reference.bindings.get(name), [...trace, target.file], seen, null, true);
       } else this.#diagnose("A08", file, null, trace, `cannot resolve Service dependency ${name}`);
       return;
     }
+    if (member === null) this.#trackServiceBinding(file, module, name, trace);
     if (member === null && this.argumentTypeKeys.has(`${file}#${name}`)) {
       const tokens = readClassMember(module, name, "constructor")?.tokens ?? [];
       for (let index = 0; index < tokens.length - 3; index++) {
@@ -546,6 +1171,10 @@ export class StructureChecker {
           `typed input retains unvalidated constructor value ${source}`);
       }
     }
+    this.#inspectServiceDeclaration(file, module, name, declaration, trace, seen, member, receiver);
+  }
+
+  #inspectServiceDeclaration(file, module, name, declaration, trace, seen, member = null, receiver = null) {
     const broadDependencies = new Set(["ctx", "manager", "flowManager", "container"]);
     const broad = declaration.tokens.find((token) => token.kind === "identifier" && broadDependencies.has(token.value));
     if (broad) this.#diagnose("A08", file, broad, trace, `Service or input retains broad dependency ${broad.value}`);
@@ -560,12 +1189,28 @@ export class StructureChecker {
       if (token.kind !== "identifier" || token.value === name || !module.declaration(token.value)) continue;
       this.#inspectService(file, token.value, trace, seen);
     }
-    if (member !== null) {
-      for (let index = 0; index < declaration.tokens.length - 3; index++) {
-        if (declaration.tokens[index].value !== "this" || declaration.tokens[index + 1]?.value !== "."
-          || declaration.tokens[index + 3]?.value !== "(") continue;
-        const next = declaration.tokens[index + 2].value;
-        if (next !== member) this.#inspectService(file, name, trace, seen, next);
+    if (receiver !== null) {
+      for (let index = 0; index < declaration.tokens.length; index++) {
+        const token = declaration.tokens[index];
+        if (!["this", "super"].includes(token.value)) continue;
+        const constructor = token.value === "super" && declaration.tokens[index + 1]?.value === "(";
+        const access = constructor ? null : readMemberAccess(declaration.tokens, index);
+        if (access?.name === null) {
+          this.#diagnose("A08", file, access.token, trace, "Service helper uses unresolved computed member or invocation");
+          continue;
+        }
+        const next = constructor ? "constructor" : access?.name;
+        if (!next) continue;
+        if (token.value === "super") {
+          const owner = this.#resolveLocal(file, module, name, new Set(), "A08");
+          const parent = owner && this.#serviceParent(owner, trace, new Set([owner.key]));
+          if (parent) this.#inspectService(parent.file, parent.classEntry.name,
+            parent.file === file ? trace : [...trace, parent.file], seen, next, false, receiver);
+        } else if (next !== member) {
+          const targetFile = next.startsWith("#") ? file : receiver.value.file;
+          const targetName = next.startsWith("#") ? name : receiver.value.classEntry.name;
+          this.#inspectService(targetFile, targetName, trace, seen, next, false, receiver);
+        }
       }
     }
     for (const reference of module.references) {
@@ -594,77 +1239,47 @@ export class StructureChecker {
         for (const [local, imported] of used) {
           const value = this.#resolveExport(target.file, imported, new Set(), "A08");
           if (role === "forbidden" && value && !/(?:Store|Manager|Registry|Dispatcher|Command)$/.test(value.classEntry.name)) {
-            this.#inspectReferencedClass(value, local, declaration, [...trace, value.file], seen);
+            this.#inspectReferencedClass(value, local, declaration, file, [...trace, value.file], seen);
           } else this.#diagnose("A08", file, reference.token, [...trace, target.file], `Service reaches ${role}`);
         }
       } else if (role === "helper" || role === "service" || role === "contract") {
         for (const [local, imported] of used) {
           const value = this.#resolveExport(target.file, imported, new Set(), "A08");
           if (value && !this.argumentTypeKeys.has(value.key)) {
-            this.#inspectReferencedClass(value, local, declaration, [...trace, value.file], seen);
-          } else this.#inspectService(target.file, imported, [...trace, target.file], seen);
+            this.#inspectReferencedClass(value, local, declaration, file, [...trace, value.file], seen);
+          } else this.#inspectService(target.file, imported, [...trace, target.file], seen, null, true);
         }
       }
     }
   }
 
-  #inspectReferencedClass(value, local, caller, trace, seen) {
+  #inspectReferencedClass(value, local, caller, callerFile, trace, seen) {
+    this.#trackServiceBinding(value.file, value.module, value.classEntry.name, trace);
     const tokens = caller.tokens;
+    const classUsage = new SourceOriginUsage(caller, [local], { mutableAliases: true });
     const instances = new Set();
-    const classAliases = new Set([local]);
-    let changed;
-    do {
-      changed = false;
-      for (let index = 0; index < tokens.length - 3; index++) {
-        if (!["const", "let"].includes(tokens[index].value) || tokens[index + 2]?.value !== "="
-          || !classAliases.has(tokens[index + 3]?.value) || classAliases.has(tokens[index + 1]?.value)) continue;
-        classAliases.add(tokens[index + 1].value);
-        changed = true;
-      }
-    } while (changed);
-    for (let index = 0; index < tokens.length - 2; index++) {
-      if (tokens[index].value !== "new" || !classAliases.has(tokens[index + 1]?.value)
-        || tokens[index + 2]?.value !== "(") continue;
+    const indexes = new Map(tokens.map((token, index) => [token.offset, index]));
+    const inspect = (access, isStatic) => {
+      if (!access) return;
+      if (access.name === null) this.#diagnose("A08", callerFile, access.token, trace,
+        "Service helper uses unresolved computed member or invocation");
+      else this.#inspectService(value.file, value.classEntry.name, trace, seen, access.name, false, new ServiceClassReceiver(value, isStatic));
+    };
+    for (const invocation of readInvocations(caller)) {
+      if (!invocation.constructed || !classUsage.isOrigin(invocation.token)) continue;
       this.#inspectService(value.file, value.classEntry.name, trace, seen, "constructor");
-      let depth = 0;
-      for (let end = index + 2; end < tokens.length; end++) {
-        if (tokens[end].value === "(") depth++;
-        if (tokens[end].value === ")" && --depth === 0) {
-          if (tokens[end + 1]?.value === ".") {
-            this.#inspectService(value.file, value.classEntry.name, trace, seen, tokens[end + 2]?.value);
-          } else if (tokens[end + 1]?.value === "[") {
-            this.#diagnose("A08", value.file, tokens[end + 1], trace,
-              "Service helper uses unresolved computed instance member");
-          }
-          break;
-        }
-      }
-      if (tokens[index - 1]?.value !== "=") continue;
-      if (tokens[index - 2]?.kind === "identifier") instances.add(tokens[index - 2].value);
+      const start = indexes.get(invocation.token.offset) - 1;
+      inspect(readMemberAccess(tokens, indexes.get(invocation.endToken.offset), start), false);
+      if (tokens[start - 1]?.value === "=" && tokens[start - 2]?.kind === "identifier") instances.add(tokens[start - 2].value);
     }
-    do {
-      changed = false;
-      for (let index = 0; index < tokens.length - 3; index++) {
-        if (!["const", "let"].includes(tokens[index].value) || tokens[index + 2]?.value !== "="
-          || !instances.has(tokens[index + 3]?.value) || instances.has(tokens[index + 1]?.value)) continue;
-        instances.add(tokens[index + 1].value);
-        changed = true;
-      }
-    } while (changed);
-    for (let index = 0; index < tokens.length - 3; index++) {
-      if ((classAliases.has(tokens[index].value) || instances.has(tokens[index].value))
-        && tokens[index + 1]?.value === ".") {
-        this.#inspectService(value.file, value.classEntry.name, trace, seen, tokens[index + 2].value);
-      }
-      if ((classAliases.has(tokens[index].value) || instances.has(tokens[index].value))
-        && tokens[index + 1]?.value === "[") {
-        this.#diagnose("A08", value.file, tokens[index + 1], trace,
-          "Service helper uses unresolved computed member");
-      }
-      if (tokens[index].value === "this" && tokens[index + 1]?.value === "."
-        && instances.has(tokens[index + 2]?.value) && tokens[index + 3]?.value === ".") {
-        this.#inspectService(value.file, value.classEntry.name, trace, seen, tokens[index + 4].value);
-      }
+    const instanceUsage = new SourceOriginUsage(caller, instances, { mutableAliases: true });
+    for (let index = 0; index < tokens.length; index++) {
+      if (!classUsage.isOrigin(tokens[index]) && !instanceUsage.isOrigin(tokens[index])) continue;
+      // Construction was inspected above; its argument list is not a member.
+      if (tokens[index - 1]?.value === "new") continue;
+      const access = readMemberAccess(tokens, index);
+      if (classUsage.isOrigin(tokens[index])) inspect(access, true);
+      if (instanceUsage.isOrigin(tokens[index])) inspect(access, false);
     }
   }
 
@@ -702,9 +1317,9 @@ export class StructureChecker {
         for (const [local, imported] of used) {
           const value = this.#resolveExport(target.file, imported, new Set(), "A08");
           if (value) for (const caller of writerDeclarations.filter((entry) => entry.uses(local))) {
-            this.#inspectReferencedClass(value, local, caller, [...trace, target.file], new Set());
+            this.#inspectReferencedClass(value, local, caller, file, [...trace, target.file], new Set());
           }
-          else this.#inspectService(target.file, imported, [...trace, target.file], new Set());
+          else this.#inspectService(target.file, imported, [...trace, target.file], new Set(), null, true);
         }
       }
     }
@@ -784,6 +1399,14 @@ export class StructureChecker {
   #inspectTopLevelEffects(file, module, trace) {
     if (this.topLevelVisited.has(file)) return;
     this.topLevelVisited.add(file);
+    for (const entry of module.classes) {
+      if (module.declarationHeader(entry.name)?.token.offset !== entry.token.offset) continue;
+      const owner = this.#resolveLocal(file, module, entry.name, new Set(), "A08");
+      for (const initializer of module.classMembers(entry.name)?.moduleInitializers ?? []) {
+        this.#inspectServiceDeclaration(file, module, entry.name, initializer, trace, new Set(), null,
+          owner ? new ServiceClassReceiver(owner, true) : null);
+      }
+    }
     const tokens = module.tokens;
     let depth = 0;
     for (let index = 0; index < tokens.length - 1; index++) {
@@ -995,17 +1618,12 @@ export class StructureChecker {
   }
 
   #sharedExecutionSelections() {
-    const contracts = new Map([
-      ["gate", ["selectGateExecutionAdmission", "projectGateExecutionAdmission", "executeGateSelection", "src/flow/lib/run-gate.js"]],
-      ["review", ["selectReviewExecutionAdmission", "projectReviewExecutionAdmission", "executeReviewSelection", "src/flow/lib/run-review.js"]],
-      ["worker", ["selectWorkerExecutionAdmission", "projectWorkerExecutionAdmission", "executeWorkerExecutionAdmission", "src/flow/lib/run-dispatch.js"]],
-    ]);
+    const contracts = sharedExecutionAdapters;
     const required = new Set();
     for (const registration of this.scope.registrations) {
       if (!registration.ServiceClass) continue;
-      const kind = registration.stepId.endsWith("-gate") ? "gate"
-        : registration.stepId.endsWith("-review") ? "review" : "worker";
-      const [selector, projector, executor] = contracts.get(kind);
+      const kind = this.#executionKind(registration);
+      const { selector, projector, executor } = contracts.get(kind) ?? {};
       const contract = registration.executionContract;
       if (!(contract instanceof StepExecutionContract)
         || contract.selectorName !== selector || contract.projectorName !== projector
@@ -1013,17 +1631,14 @@ export class StructureChecker {
         this.#diagnose("A10", this.scope.registrationModule, null, [this.scope.registrationModule],
           `registration ${registration.stepId} lacks its named ${kind} execution contract`);
       }
-      required.add(kind);
+      if (contracts.has(kind)) required.add(kind);
     }
     for (const kind of required) {
-      const [selector, projector, executor, command] = contracts.get(kind);
+      const { selector, projector, executor, command, module: adapterFile, contractName } = contracts.get(kind);
       this.#contractEntry("src/flow/lib/get-next-action.js", "project", kind);
       this.#contractEntry(command, "execute", kind);
-      const adapterFile = kind === "worker" ? "src/flow/lib/worker-execution-admission.js"
-        : "src/flow/lib/execution-admission.js";
       const adapter = this.#module(adapterFile, [adapterFile], "A10", true);
       if (!adapter) continue;
-      const contractName = `${kind}StepExecutionContract`;
       const declaration = adapter.declaration(contractName);
       const tokens = declaration?.tokens ?? [];
       const pairs = [["select", selector], ["project", projector], ["execute", executor]];
@@ -1173,7 +1788,7 @@ export class StructureChecker {
       if (actualMembership.length !== membership.length
         || !actualMembership.every((token, index) => token.value === membership[index].value
           && token.kind === membership[index].kind)
-        || this.scope.registrations.some((registration) => registration.stepId.endsWith("-review")
+        || this.scope.registrations.some((registration) => this.#executionKind(registration) === "review"
           && !members.has(registration.stepId))) {
         this.#diagnose("A10", file, reviewStep?.token ?? build?.token, [file],
           "registered Review Step is absent from display routing");
@@ -1219,7 +1834,7 @@ export class StructureChecker {
       const gateTokens = gate?.bodyTokens() ?? null;
       const phase = gate?.topLevelInitializer("phase");
       const registration = gate?.topLevelInitializer("registration");
-      for (const candidate of this.scope.registrations.filter((entry) => entry.stepId.endsWith("-gate"))) {
+      for (const candidate of this.scope.registrations.filter((entry) => this.#executionKind(entry) === "gate")) {
         if (!phase?.tokens.some((token, index, all) => token.value === "target"
           && all[index + 1]?.value === "." && all[index + 2]?.value === "stepId"
           && all[index + 3]?.value === "=" && all[index + 4]?.value === "="
@@ -1493,7 +2108,7 @@ export class StructureChecker {
     const registrationIds = [];
     const directRegistrationIds = [];
     for (const compositionFile of this.allFiles.filter((candidate) =>
-      /^src\/flow\/engine\/composition\/[^/]+\.js$/.test(candidate) && candidate !== file)) {
+      [this.scope.registrationModule, "src/flow/engine/composition/draft.js", "src/flow/engine/composition/spec.js"].includes(candidate))) {
       const composition = this.#module(compositionFile, [compositionFile], "A11", true);
       if (!composition) continue;
       for (const call of readInvocations(composition)) {
@@ -1789,6 +2404,6 @@ export class StructureChecker {
   }
 }
 
-export function checkStructure({ root, entry, registrations, registrationModule }) {
-  return new StructureChecker(new StructureScope(root, entry, registrations, registrationModule)).check();
+export function checkStructure({ root, entry, registrations, registrationModule, contract }) {
+  return new StructureChecker(new StructureScope(root, entry, registrations, registrationModule, contract)).check();
 }
